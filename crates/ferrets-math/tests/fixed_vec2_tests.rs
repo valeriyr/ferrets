@@ -6,8 +6,7 @@ use ferrets_math::fixed_vec2::FixedVec2;
 // ─── Determinism ──────────────────────────────────────────────────────────────
 //
 
-/// The same sequence of operations must produce bit-identical results every
-/// time — the core guarantee required for lockstep multiplayer and replays.
+/// The same sequence of operations must produce bit-identical results every time.
 #[test]
 fn arithmetic_results_are_bit_identical() {
     let a = utils::vec2(3, 4);
@@ -36,6 +35,8 @@ fn adding_zero_is_identity() {
 #[test]
 fn scalar_multiplication() {
     assert_eq!(utils::vec2(3, -2) * utils::scalar(4), utils::vec2(12, -8));
+    assert_eq!(utils::vec2(3, -2) * utils::scalar(-1), utils::vec2(-3, 2));
+    assert_eq!(utils::vec2(3, -2) * utils::scalar(0), utils::vec2(0, 0));
 }
 
 /// Negating a vector and adding it back yields zero.
@@ -75,6 +76,15 @@ fn distance_squared_three_four_five() {
     );
 }
 
+/// Distance is symmetric: the direction of measurement does not matter.
+#[test]
+fn distance_squared_is_symmetric() {
+    let a = utils::vec2(10, 5);
+    let b = utils::vec2(3, 1);
+
+    assert_eq!(a.distance_squared(b), b.distance_squared(a));
+}
+
 /// Dot product is positive for same-direction vectors, zero for perpendicular.
 #[test]
 fn dot_product() {
@@ -84,13 +94,4 @@ fn dot_product() {
     assert_eq!(right.dot(right), utils::scalar(1));
     assert_eq!(right.dot(up), utils::scalar(0));
     assert_eq!(right.dot(-right), utils::scalar(-1));
-}
-
-/// Distance is symmetric: the direction of measurement does not matter.
-#[test]
-fn distance_squared_is_symmetric() {
-    let a = utils::vec2(10, 5);
-    let b = utils::vec2(3, 1);
-
-    assert_eq!(a.distance_squared(b), b.distance_squared(a));
 }

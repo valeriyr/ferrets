@@ -1,4 +1,4 @@
-//! 2D fixed-point vector.
+//! 2D signed fixed-point vector.
 
 use std::ops::{Add, AddAssign, Mul, Neg, Sub, SubAssign};
 
@@ -22,8 +22,7 @@ impl FixedVec2 {
         Self { x, y }
     }
 
-    /// Squared distance to `other`. Avoids a square root and is safe to use
-    /// for range comparisons (e.g. `self.distance_squared(target) <= range * range`).
+    /// Squared Euclidean distance to `other`.
     #[inline]
     pub fn distance_squared(self, other: Self) -> FixedI64 {
         let d = self - other;
@@ -40,6 +39,7 @@ impl FixedVec2 {
 
 impl Add for FixedVec2 {
     type Output = Self;
+
     #[inline]
     fn add(self, rhs: Self) -> Self {
         Self::new(self.x + rhs.x, self.y + rhs.y)
@@ -55,6 +55,7 @@ impl AddAssign for FixedVec2 {
 
 impl Sub for FixedVec2 {
     type Output = Self;
+
     #[inline]
     fn sub(self, rhs: Self) -> Self {
         Self::new(self.x - rhs.x, self.y - rhs.y)
@@ -70,6 +71,7 @@ impl SubAssign for FixedVec2 {
 
 impl Mul<FixedI64> for FixedVec2 {
     type Output = Self;
+
     #[inline]
     fn mul(self, rhs: FixedI64) -> Self {
         Self::new(self.x * rhs, self.y * rhs)
@@ -78,6 +80,7 @@ impl Mul<FixedI64> for FixedVec2 {
 
 impl Neg for FixedVec2 {
     type Output = Self;
+
     #[inline]
     fn neg(self) -> Self {
         Self::new(-self.x, -self.y)
