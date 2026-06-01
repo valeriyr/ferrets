@@ -1,0 +1,11 @@
+[package]
+name = "ferrets-replay"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Replay recording and deterministic playback."
+
+[dependencies]
+ferrets-simulation.workspace = true

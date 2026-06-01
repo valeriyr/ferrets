@@ -1,0 +1,11 @@
+[package]
+name = "ferrets-network"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Lockstep P2P networking for deterministic multiplayer."
+
+[dependencies]
+ferrets-simulation.workspace = true

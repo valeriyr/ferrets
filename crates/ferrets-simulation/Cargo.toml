@@ -1,0 +1,11 @@
+[package]
+name = "ferrets-simulation"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Deterministic RTS game simulation as a Bevy plugin."
+
+[dependencies]
+ferrets-math.workspace = true

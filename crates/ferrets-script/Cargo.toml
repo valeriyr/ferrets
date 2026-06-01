@@ -1,0 +1,11 @@
+[package]
+name = "ferrets-script"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Lua scripting runtime and game content loading."
+
+[dependencies]
+ferrets-simulation.workspace = true

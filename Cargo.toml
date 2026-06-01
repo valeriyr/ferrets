@@ -1,0 +1,30 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/ferrets-math",
+    "crates/ferrets-simulation",
+    "crates/ferrets-script",
+    "crates/ferrets-network",
+    "crates/ferrets-replay",
+    "crates/ferrets-steam",
+    "demo",
+]
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+authors = ["Valerii Reutov <valeriy.reutov@gmail.com>"]
+license = "Apache-2.0"
+repository = "https://github.com/valeriyr/ferrets"
+
+[workspace.dependencies]
+# Internal crates
+ferrets-math = { path = "crates/ferrets-math" }
+ferrets-simulation = { path = "crates/ferrets-simulation" }
+ferrets-script = { path = "crates/ferrets-script" }
+ferrets-network = { path = "crates/ferrets-network" }
+ferrets-replay = { path = "crates/ferrets-replay" }
+ferrets-steam = { path = "crates/ferrets-steam" }
+
+# External crates
+fixed = "1"

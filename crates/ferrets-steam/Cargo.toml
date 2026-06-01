@@ -1,0 +1,11 @@
+[package]
+name = "ferrets-steam"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Steam platform integration: achievements and P2P transport."
+
+[dependencies]
+ferrets-network.workspace = true

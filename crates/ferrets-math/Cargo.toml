@@ -1,0 +1,11 @@
+[package]
+name = "ferrets-math"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Fixed-point math primitives for deterministic RTS simulation."
+
+[dependencies]
+fixed.workspace = true
