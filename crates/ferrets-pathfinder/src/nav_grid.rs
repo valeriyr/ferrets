@@ -1,14 +1,12 @@
 //! Stores which positions are passable for each movement layer defined by content.
 
-use bevy::prelude::*;
-
 use super::nav_pos::NavPos;
 
 /// Identifies a movement layer.
 pub type LayerId = u32;
 
 /// Stores per-layer navigation data for each position in the game map.
-#[derive(Resource, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct NavGrid {
     width: u32,
     height: u32,

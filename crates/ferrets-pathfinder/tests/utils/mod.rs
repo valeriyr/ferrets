@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
-use ferrets_simulation::pathfinding::{
+use ferrets_pathfinder::{
     nav_grid::{LayerId, NavGrid},
     nav_pos::NavPos,
 };

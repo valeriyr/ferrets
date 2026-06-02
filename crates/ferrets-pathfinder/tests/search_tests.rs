@@ -1,6 +1,6 @@
 mod utils;
 
-use ferrets_simulation::pathfinding::search;
+use ferrets_pathfinder::search;
 
 //
 // ─── find_nearest_free_pos ────────────────────────────────────────────────────

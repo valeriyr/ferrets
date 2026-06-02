@@ -1,6 +1,6 @@
 mod utils;
 
-use ferrets_simulation::pathfinding::nav_grid::NavGrid;
+use ferrets_pathfinder::nav_grid::NavGrid;
 
 //
 // ─── Layers ───────────────────────────────────────────────────────────────────

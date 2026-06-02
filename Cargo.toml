@@ -5,6 +5,7 @@ members = [
     "crates/ferrets-simulation",
     "crates/ferrets-script",
     "crates/ferrets-network",
+    "crates/ferrets-pathfinder",
     "crates/ferrets-replay",
     "crates/ferrets-steam",
     "demo",
@@ -27,6 +28,7 @@ ferrets-math = { path = "crates/ferrets-math" }
 ferrets-simulation = { path = "crates/ferrets-simulation" }
 ferrets-script = { path = "crates/ferrets-script" }
 ferrets-network = { path = "crates/ferrets-network" }
+ferrets-pathfinder = { path = "crates/ferrets-pathfinder" }
 ferrets-replay = { path = "crates/ferrets-replay" }
 ferrets-steam = { path = "crates/ferrets-steam" }
 

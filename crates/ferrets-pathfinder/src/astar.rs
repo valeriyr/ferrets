@@ -1,7 +1,6 @@
 //! Finds the shortest passable path between two positions, with guaranteed determinism.
 
 use ferrets_math::fixed_uvec2::FixedUVec2;
-use pathfinding::prelude::astar;
 
 use super::{nav_grid::NavGrid, nav_pos::NavPos};
 
@@ -57,7 +56,7 @@ pub fn find_path(
         return Some(vec![]);
     }
 
-    let result = astar(
+    let result = pathfinding::prelude::astar(
         &start,
         |&pos| {
             DIRECTIONS.iter().filter_map(move |&(dx, dy)| {

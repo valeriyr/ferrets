@@ -605,6 +605,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrets-pathfinder"
+version = "0.1.0"
+dependencies = [
+ "ferrets-math",
+ "pathfinding",
+]
+
+[[package]]
 name = "ferrets-replay"
 version = "0.1.0"
 dependencies = [
@@ -624,8 +632,6 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "ferrets-math",
- "fixed",
- "pathfinding",
 ]
 
 [[package]]

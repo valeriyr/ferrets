@@ -1,13 +1,13 @@
 [package]
-name = "ferrets-simulation"
+name = "ferrets-pathfinder"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Deterministic RTS game simulation as a Bevy plugin."
+description = "Deterministic RTS game pathfinding."
 
 [dependencies]
-bevy.workspace = true
+pathfinding = "4.15"
 
 ferrets-math.workspace = true

@@ -1,7 +1,7 @@
 mod utils;
 
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
-use ferrets_simulation::pathfinding::nav_pos::NavPos;
+use ferrets_pathfinder::nav_pos::NavPos;
 
 //
 // ─── From world ───────────────────────────────────────────────────────────────

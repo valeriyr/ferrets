@@ -1,6 +1,6 @@
 mod utils;
 
-use ferrets_simulation::pathfinding::{
+use ferrets_pathfinder::{
     astar::{self, Projection},
     nav_pos::NavPos,
 };
