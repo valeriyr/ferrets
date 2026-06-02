@@ -18,6 +18,10 @@ license = "Apache-2.0"
 repository = "https://github.com/valeriyr/ferrets"
 
 [workspace.dependencies]
+# External crates
+bevy = { version = "0.18", default-features = false }
+fixed = "1.31"
+
 # Internal crates
 ferrets-math = { path = "crates/ferrets-math" }
 ferrets-simulation = { path = "crates/ferrets-simulation" }
@@ -26,5 +30,3 @@ ferrets-network = { path = "crates/ferrets-network" }
 ferrets-replay = { path = "crates/ferrets-replay" }
 ferrets-steam = { path = "crates/ferrets-steam" }
 
-# External crates
-fixed = "1"

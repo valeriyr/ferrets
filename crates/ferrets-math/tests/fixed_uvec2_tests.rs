@@ -6,7 +6,6 @@ use ferrets_math::fixed_uvec2::FixedUVec2;
 // ─── Determinism ──────────────────────────────────────────────────────────────
 //
 
-/// The same sequence of operations must produce bit-identical results every time.
 #[test]
 fn arithmetic_results_are_bit_identical() {
     let a = utils::uvec2(3, 4);
@@ -23,7 +22,6 @@ fn arithmetic_results_are_bit_identical() {
 // ─── Arithmetic ───────────────────────────────────────────────────────────────
 //
 
-/// Zero is the additive identity: adding it changes nothing.
 #[test]
 fn adding_zero_is_identity() {
     let v = utils::uvec2(7, 3);
@@ -31,7 +29,6 @@ fn adding_zero_is_identity() {
     assert_eq!(v + FixedUVec2::ZERO, v);
 }
 
-/// Scalar multiplication scales both components uniformly.
 #[test]
 fn scalar_multiplication() {
     assert_eq!(utils::uvec2(3, 2) * utils::uscalar(4), utils::uvec2(12, 8));
@@ -41,7 +38,6 @@ fn scalar_multiplication() {
 // ─── Compound assignment ──────────────────────────────────────────────────────
 //
 
-/// `+=` modifies in place identically to its non-assigning form.
 #[test]
 fn add_assign() {
     let mut v = utils::uvec2(3, 4);
@@ -54,7 +50,6 @@ fn add_assign() {
 // ─── Subtraction ──────────────────────────────────────────────────────────────
 //
 
-/// Subtracting a smaller vector from a larger one gives a positive direction.
 #[test]
 fn subtraction_yields_positive_direction() {
     let a = utils::uvec2(5, 8);
@@ -63,7 +58,6 @@ fn subtraction_yields_positive_direction() {
     assert_eq!(a - b, utils::vec2(3, 5));
 }
 
-/// Subtracting a larger vector from a smaller one gives a negative direction.
 #[test]
 fn subtraction_yields_negative_direction() {
     let a = utils::uvec2(2, 3);
@@ -85,7 +79,6 @@ fn distance_squared_three_four_five() {
     );
 }
 
-/// Distance is symmetric: the direction of measurement does not matter.
 #[test]
 fn distance_squared_is_symmetric() {
     let a = utils::uvec2(10, 5);

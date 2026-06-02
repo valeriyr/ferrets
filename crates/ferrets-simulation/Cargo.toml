@@ -8,4 +8,9 @@ repository.workspace = true
 description = "Deterministic RTS game simulation as a Bevy plugin."
 
 [dependencies]
+pathfinding = "4.15"
+
+bevy.workspace = true
+fixed.workspace = true
+
 ferrets-math.workspace = true

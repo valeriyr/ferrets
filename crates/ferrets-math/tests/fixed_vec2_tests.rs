@@ -6,7 +6,6 @@ use ferrets_math::fixed_vec2::FixedVec2;
 // ─── Determinism ──────────────────────────────────────────────────────────────
 //
 
-/// The same sequence of operations must produce bit-identical results every time.
 #[test]
 fn arithmetic_results_are_bit_identical() {
     let a = utils::vec2(3, 4);
@@ -23,7 +22,6 @@ fn arithmetic_results_are_bit_identical() {
 // ─── Arithmetic ───────────────────────────────────────────────────────────────
 //
 
-/// Zero is the additive identity: adding it changes nothing.
 #[test]
 fn adding_zero_is_identity() {
     let v = utils::vec2(7, -3);
@@ -31,7 +29,6 @@ fn adding_zero_is_identity() {
     assert_eq!(v + FixedVec2::ZERO, v);
 }
 
-/// Scalar multiplication scales both components uniformly.
 #[test]
 fn scalar_multiplication() {
     assert_eq!(utils::vec2(3, -2) * utils::scalar(4), utils::vec2(12, -8));
@@ -39,7 +36,6 @@ fn scalar_multiplication() {
     assert_eq!(utils::vec2(3, -2) * utils::scalar(0), utils::vec2(0, 0));
 }
 
-/// Negating a vector and adding it back yields zero.
 #[test]
 fn adding_negation_yields_zero() {
     let v = utils::vec2(5, -2);
@@ -51,7 +47,6 @@ fn adding_negation_yields_zero() {
 // ─── Compound assignment ──────────────────────────────────────────────────────
 //
 
-/// `+=` and `-=` modify in place identically to their non-assigning forms.
 #[test]
 fn add_assign_and_sub_assign() {
     let mut v = utils::vec2(3, 4);
@@ -76,7 +71,6 @@ fn distance_squared_three_four_five() {
     );
 }
 
-/// Distance is symmetric: the direction of measurement does not matter.
 #[test]
 fn distance_squared_is_symmetric() {
     let a = utils::vec2(10, 5);
