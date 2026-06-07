@@ -6,8 +6,8 @@ use ferrets_pathfinder::{
     nav_pos::NavPos,
 };
 
-pub const GROUND: LayerId = 1;
-pub const AIR: LayerId = 2;
+pub const GROUND: LayerId = LayerId::new(1);
+pub const AIR: LayerId = LayerId::new(2);
 
 pub fn world(x: u32, y: u32) -> FixedUVec2 {
     FixedUVec2::new(FixedU64::from_num(x), FixedU64::from_num(y))

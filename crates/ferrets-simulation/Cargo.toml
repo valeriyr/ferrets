@@ -5,9 +5,10 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Deterministic RTS game simulation as a Bevy plugin."
+description = "Deterministic RTS game simulation."
 
 [dependencies]
-bevy.workspace = true
+bevy_ecs = "0.18"
 
 ferrets-math.workspace = true
+ferrets-pathfinder.workspace = true

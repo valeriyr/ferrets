@@ -12,7 +12,12 @@ name = "ferrets"
 path = "src/main.rs"
 
 [dependencies]
-ferrets-simulation.workspace = true
-ferrets-script.workspace = true
+bevy.workspace = true
+
+ferrets-bevy.workspace = true
+ferrets-math.workspace = true
 ferrets-network.workspace = true
+ferrets-pathfinder.workspace = true
 ferrets-replay.workspace = true
+ferrets-script.workspace = true
+ferrets-simulation.workspace = true

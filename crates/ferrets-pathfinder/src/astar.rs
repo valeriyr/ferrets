@@ -2,6 +2,8 @@
 
 use ferrets_math::fixed_uvec2::FixedUVec2;
 
+use crate::layer_mask::LayerMask;
+
 use super::{nav_grid::NavGrid, nav_pos::NavPos};
 
 /// Defines movement costs and range metrics for the map type.
@@ -40,11 +42,13 @@ const DIAGONAL_COST: u32 = 14;
 pub fn find_path(
     grid: &NavGrid,
     projection: Projection,
-    layer_mask: u32,
+    layer_mask: impl Into<LayerMask>,
     start: FixedUVec2,
     goal: FixedUVec2,
     stop_distance: u32,
 ) -> Option<Vec<FixedUVec2>> {
+    let layer_mask = layer_mask.into();
+
     let start = NavPos::from(start);
     let goal = NavPos::from(goal);
 
@@ -86,7 +90,7 @@ pub fn find_path(
 
 /// Returns `true` when both cardinal positions adjacent to a diagonal step are
 /// passable, preventing movement through the gap between two diagonal walls.
-fn allows_diagonal(grid: &NavGrid, mask: u32, from: NavPos, to: NavPos) -> bool {
+fn allows_diagonal(grid: &NavGrid, mask: LayerMask, from: NavPos, to: NavPos) -> bool {
     grid.is_passable_by(mask, NavPos::new(to.x, from.y))
         && grid.is_passable_by(mask, NavPos::new(from.x, to.y))
 }

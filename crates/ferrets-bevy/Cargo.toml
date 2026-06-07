@@ -1,11 +1,13 @@
 [package]
-name = "ferrets-math"
+name = "ferrets-bevy"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Fixed-point math primitives for deterministic RTS simulation."
+description = "Bevy integration for the ferrets simulation."
 
 [dependencies]
-fixed = "1.31"
+bevy.workspace = true
+
+ferrets-simulation.workspace = true

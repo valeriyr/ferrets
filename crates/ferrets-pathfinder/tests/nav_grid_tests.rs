@@ -30,21 +30,10 @@ fn add_layer_panics_on_duplicate() {
     grid.add_layer(utils::GROUND);
 }
 
-/// A layer ID of zero panics because it can never be matched by any bitmask.
-#[test]
-#[should_panic]
-fn add_layer_panics_on_zero() {
-    let mut grid = NavGrid::new(5, 5);
-    grid.add_layer(0);
-}
+// The following five tests rely on `debug_assert!` inside `assert_registered` and only
+// fire in debug builds. They are excluded from release-mode test runs.
 
-#[test]
-#[should_panic]
-fn add_layer_panics_on_non_power_of_two() {
-    let mut grid = NavGrid::new(5, 5);
-    grid.add_layer(3);
-}
-
+#[cfg(debug_assertions)]
 #[test]
 #[should_panic]
 fn set_occupied_panics_on_unregistered_layer() {
@@ -53,6 +42,7 @@ fn set_occupied_panics_on_unregistered_layer() {
     grid.set_occupied(utils::AIR, utils::nav(1, 1), true);
 }
 
+#[cfg(debug_assertions)]
 #[test]
 #[should_panic]
 fn is_occupied_panics_on_unregistered_layer() {
@@ -61,6 +51,7 @@ fn is_occupied_panics_on_unregistered_layer() {
     grid.is_occupied(utils::AIR, utils::nav(1, 1));
 }
 
+#[cfg(debug_assertions)]
 #[test]
 #[should_panic]
 fn is_occupied_by_panics_on_unregistered_mask() {
@@ -69,6 +60,7 @@ fn is_occupied_by_panics_on_unregistered_mask() {
     grid.is_occupied_by(utils::GROUND | utils::AIR, utils::nav(1, 1));
 }
 
+#[cfg(debug_assertions)]
 #[test]
 #[should_panic]
 fn is_passable_panics_on_unregistered_layer() {
@@ -77,6 +69,7 @@ fn is_passable_panics_on_unregistered_layer() {
     grid.is_passable(utils::AIR, utils::nav(1, 1));
 }
 
+#[cfg(debug_assertions)]
 #[test]
 #[should_panic]
 fn is_passable_by_panics_on_unregistered_mask() {

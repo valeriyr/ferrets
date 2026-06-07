@@ -12,13 +12,10 @@ pub struct FixedVec2 {
 }
 
 impl FixedVec2 {
-    pub const ZERO: Self = Self {
-        x: FixedI64::ZERO,
-        y: FixedI64::ZERO,
-    };
+    pub const ZERO: Self = Self::new(FixedI64::ZERO, FixedI64::ZERO);
 
     #[inline]
-    pub fn new(x: FixedI64, y: FixedI64) -> Self {
+    pub const fn new(x: FixedI64, y: FixedI64) -> Self {
         Self { x, y }
     }
 

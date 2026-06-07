@@ -2,6 +2,8 @@
 
 use std::collections::{HashSet, VecDeque};
 
+use crate::layer_mask::LayerMask;
+
 use super::{nav_grid::NavGrid, nav_pos::NavPos};
 
 const DIRECTIONS: [(i32, i32); 8] = [
@@ -19,7 +21,13 @@ const DIRECTIONS: [(i32, i32); 8] = [
 ///
 /// Returns `around` itself if it is already passable.
 /// Returns `None` if no passable position exists within the grid.
-pub fn find_nearest_free_pos(grid: &NavGrid, layer_mask: u32, around: NavPos) -> Option<NavPos> {
+pub fn find_nearest_free_pos(
+    grid: &NavGrid,
+    layer_mask: impl Into<LayerMask>,
+    around: NavPos,
+) -> Option<NavPos> {
+    let layer_mask = layer_mask.into();
+
     if grid.is_passable_by(layer_mask, around) {
         return Some(around);
     }

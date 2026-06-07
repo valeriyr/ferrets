@@ -12,13 +12,10 @@ pub struct FixedUVec2 {
 }
 
 impl FixedUVec2 {
-    pub const ZERO: Self = Self {
-        x: FixedU64::ZERO,
-        y: FixedU64::ZERO,
-    };
+    pub const ZERO: Self = Self::new(FixedU64::ZERO, FixedU64::ZERO);
 
     #[inline]
-    pub fn new(x: FixedU64, y: FixedU64) -> Self {
+    pub const fn new(x: FixedU64, y: FixedU64) -> Self {
         Self { x, y }
     }
 

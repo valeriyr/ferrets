@@ -4,6 +4,15 @@ use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_pathfinder::nav_pos::NavPos;
 
 //
+// ─── Default ──────────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn default_is_origin() {
+    assert_eq!(NavPos::default(), NavPos::new(0, 0));
+}
+
+//
 // ─── From world ───────────────────────────────────────────────────────────────
 //
 

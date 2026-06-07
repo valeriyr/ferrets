@@ -1,19 +1,20 @@
 //! Stores which positions are passable for each movement layer defined by content.
 
-use super::nav_pos::NavPos;
+use crate::layer_mask::LayerMask;
 
-/// Identifies a movement layer.
-pub type LayerId = u32;
+pub use crate::layer_id::LayerId;
+
+use super::nav_pos::NavPos;
 
 /// Stores per-layer navigation data for each position in the game map.
 #[derive(Debug, Clone)]
 pub struct NavGrid {
     width: u32,
     height: u32,
-    /// Bitmask of all registered layer IDs.
-    registered: u32,
-    /// `occupancy[y * width + x]` — each set bit indicates an occupied layer.
-    occupancy: Vec<u32>,
+    /// Mask of all registered layers.
+    registered: LayerMask,
+    /// `occupancy[y * width + x]` — the set of layers occupied at that cell.
+    occupancy: Vec<LayerMask>,
 }
 
 impl NavGrid {
@@ -22,32 +23,33 @@ impl NavGrid {
         Self {
             width,
             height,
-            registered: 0,
-            occupancy: vec![0; (width * height) as usize],
+            registered: LayerMask::EMPTY,
+            occupancy: vec![LayerMask::EMPTY; (width * height) as usize],
         }
     }
 
+    /// Returns the grid width in cells.
     pub fn width(&self) -> u32 {
         self.width
     }
 
+    /// Returns the grid height in cells.
     pub fn height(&self) -> u32 {
         self.height
     }
 
-    /// Registers a fully-open layer with the given ID.
+    /// Registers a fully-open layer.
     ///
-    /// `layer` must be a non-zero power of two (e.g. 1, 2, 4, 8 …) so it can serve as its own bitmask.
-    pub fn add_layer(&mut self, layer: LayerId) {
-        assert!(
-            layer > 0 && layer.is_power_of_two(),
-            "layer must be a non-zero power of two"
-        );
+    /// Panics if `layer` is already registered.
+    pub fn add_layer(&mut self, layer: impl Into<LayerId>) {
+        let layer = layer.into();
+
         assert_eq!(
             self.registered & layer,
-            0,
+            LayerMask::EMPTY,
             "layer {layer} is already registered"
         );
+
         self.registered |= layer;
     }
 
@@ -57,7 +59,9 @@ impl NavGrid {
     }
 
     /// Sets whether a position is occupied on all layers matched by `mask`.
-    pub fn set_occupied_by(&mut self, mask: u32, pos: NavPos, occupied: bool) {
+    pub fn set_occupied_by(&mut self, mask: impl Into<LayerMask>, pos: NavPos, occupied: bool) {
+        let mask = mask.into();
+
         self.assert_registered(mask);
 
         let Some(i) = self.index(pos) else { return };
@@ -86,27 +90,28 @@ impl NavGrid {
     /// Returns `true` if the position is occupied on **any** layer in `mask`.
     ///
     /// Out-of-bounds positions always return `true`.
-    pub fn is_occupied_by(&self, mask: u32, pos: NavPos) -> bool {
+    pub fn is_occupied_by(&self, mask: impl Into<LayerMask>, pos: NavPos) -> bool {
+        let mask = mask.into();
+
         self.assert_registered(mask);
 
         self.index(pos)
-            .map(|i| self.occupancy[i] & mask != 0)
+            .map(|i| self.occupancy[i] & mask != LayerMask::EMPTY)
             .unwrap_or(true)
     }
 
     /// Returns `true` if the position is free on **all** layers in `mask`.
     ///
     /// Out-of-bounds positions always return `false`.
-    pub fn is_passable_by(&self, mask: u32, pos: NavPos) -> bool {
+    pub fn is_passable_by(&self, mask: impl Into<LayerMask>, pos: NavPos) -> bool {
         !self.is_occupied_by(mask, pos)
     }
 
     /// Panics in debug builds if `mask` contains any unregistered layer bits.
     #[inline]
-    fn assert_registered(&self, mask: u32) {
-        debug_assert_eq!(
-            mask & !self.registered,
-            0,
+    fn assert_registered(&self, mask: LayerMask) {
+        debug_assert!(
+            mask & !self.registered == LayerMask::EMPTY,
             "mask contains unregistered layers"
         );
     }
