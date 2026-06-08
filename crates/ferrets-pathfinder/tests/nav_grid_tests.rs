@@ -8,12 +8,11 @@ use ferrets_pathfinder::nav_grid::NavGrid;
 
 #[test]
 fn layers_are_independent() {
-    // GROUND layer:    AIR layer:
-    // . . . . .        . . . . .
-    // . . . . .        . . . . .
-    // . . X . .        . . . . .
-    // . . . . .        . . . . .
-    // . . . . .        . . . . .
+    // . . . . .   y=0
+    // . . . . .   y=1
+    // . . X . .   y=2   X = (2,2) blocked on GROUND; AIR layer remains passable
+    // . . . . .   y=3
+    // . . . . .   y=4
     let mut grid = utils::grid(5, 5);
 
     grid.set_occupied(utils::GROUND, utils::nav(2, 2), true);
@@ -106,6 +105,20 @@ fn set_toggles_single_position() {
 }
 
 #[test]
+fn set_occupied_ignores_out_of_bounds() {
+    // . . .   y=0
+    // . . .   y=1
+    // . . .   y=2   all cells passable; OOB writes leave the grid unchanged
+    let mut grid = utils::grid(3, 3);
+
+    grid.set_occupied(utils::GROUND, utils::nav(3, 0), true);
+    grid.set_occupied(utils::GROUND, utils::nav(0, 3), true);
+
+    assert!(grid.is_passable(utils::GROUND, utils::nav(2, 0)));
+    assert!(grid.is_passable(utils::GROUND, utils::nav(0, 2)));
+}
+
+#[test]
 fn out_of_bounds_is_impassable() {
     let mut grid = NavGrid::new(3, 3);
     grid.add_layer(utils::GROUND);
@@ -120,10 +133,11 @@ fn out_of_bounds_is_impassable() {
 
 #[test]
 fn is_passable_by_requires_all_layers() {
-    // GROUND layer:    AIR layer:     GROUND|AIR at (1,1):
-    // . . . . .        . . . . .      blocked (GROUND is occupied)
-    // . X . . .        . . . . .
-    // . . . . .        . . . . .
+    // . . . . .   y=0
+    // . X . . .   y=1   X = (1,1) blocked on GROUND; passable on AIR
+    // . . . . .   y=2
+    // . . . . .   y=3
+    // . . . . .   y=4
     let mut grid = utils::grid(5, 5);
 
     grid.set_occupied(utils::GROUND, utils::nav(1, 1), true);

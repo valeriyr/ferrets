@@ -52,7 +52,7 @@ pub fn find_path(
     let start = NavPos::from(start);
     let goal = NavPos::from(goal);
 
-    if stop_distance == 0 && grid.is_occupied_by(layer_mask, goal) {
+    if stop_distance == 0 && start != goal && grid.is_occupied_by(layer_mask, goal) {
         return None;
     }
 

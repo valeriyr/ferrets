@@ -1,9 +1,6 @@
 //! Navigation grid footprint size.
 
 /// Footprint of an entity on the navigation grid, in whole cells.
-///
-/// Pairs with [`crate::nav_pos::NavPos`] as the anchor cell — the footprint
-/// extends `width` cells in +x and `height` cells in +y from that anchor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct NavSize {
     pub width: u32,

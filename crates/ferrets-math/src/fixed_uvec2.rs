@@ -52,6 +52,7 @@ impl AddAssign for FixedUVec2 {
     }
 }
 
+// Yields FixedVec2 because the delta between two unsigned positions can be negative.
 impl Sub for FixedUVec2 {
     type Output = FixedVec2;
 

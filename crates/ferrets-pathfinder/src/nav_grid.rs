@@ -24,7 +24,7 @@ impl NavGrid {
             width,
             height,
             registered: LayerMask::EMPTY,
-            occupancy: vec![LayerMask::EMPTY; (width * height) as usize],
+            occupancy: vec![LayerMask::EMPTY; width as usize * height as usize],
         }
     }
 
@@ -59,6 +59,8 @@ impl NavGrid {
     }
 
     /// Sets whether a position is occupied on all layers matched by `mask`.
+    ///
+    /// Out-of-bounds positions are silently ignored.
     pub fn set_occupied_by(&mut self, mask: impl Into<LayerMask>, pos: NavPos, occupied: bool) {
         let mask = mask.into();
 
