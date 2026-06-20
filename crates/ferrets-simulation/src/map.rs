@@ -2,15 +2,12 @@
 
 use bevy_ecs::prelude::*;
 use ferrets_pathfinder::{
-    astar::Projection, nav_grid::NavGrid, nav_pos::NavPos, nav_size::NavSize,
+    astar::Projection, nav_grid::NavGrid, nav_pos::NavPos, nav_size::NavSize, search,
 };
 
-use crate::components::location::{LocationComponent, LocationStaticData};
+use crate::components::location::{LocationComponent, LocationStaticData, Solidity};
 
-/// The active game map.
-///
-/// Insert this resource before starting the tick loop alongside [`crate::session::GameSession`].
-/// The caller is responsible for constructing the map from loaded content.
+/// The active game map: its identity, projection, and navigation grid.
 #[derive(Resource)]
 pub struct Map {
     /// A unique map identifier, e.g. a filename or asset path.
@@ -51,12 +48,12 @@ impl Map {
         self.nav_grid.height()
     }
 
-    /// Returns a reference to the navigation grid for pathfinding queries.
+    /// Returns a reference to the navigation grid.
     pub fn nav_grid(&self) -> &NavGrid {
         &self.nav_grid
     }
 
-    /// Returns a mutable reference to the navigation grid, e.g. to mark a building as occupied.
+    /// Returns a mutable reference to the navigation grid.
     pub fn nav_grid_mut(&mut self) -> &mut NavGrid {
         &mut self.nav_grid
     }
@@ -67,19 +64,35 @@ impl Map {
         loc: &LocationComponent,
         static_data: &LocationStaticData,
     ) -> bool {
-        let origin = NavPos::from(loc.position);
-        let NavSize { width, height } = static_data.size();
-        for dy in 0..height {
-            for dx in 0..width {
-                if !self.nav_grid.is_passable_by(
-                    static_data.occupation(),
-                    NavPos::new(origin.x + dx, origin.y + dy),
-                ) {
-                    return false;
-                }
-            }
-        }
-        true
+        self.nav_grid.is_footprint_passable_by(
+            static_data.occupation(),
+            NavPos::from(loc.position),
+            static_data.size(),
+        )
+    }
+
+    /// Finds a free position for an entity with `spawn_data` properties, scanning
+    /// outward from the rectangle of cells at `origin` with the given `size`.
+    ///
+    /// Cells are scanned ring by ring in row-major order, so the result is
+    /// deterministic. Returns `None` when nothing is free within the search radius.
+    pub fn find_placement_near(
+        &self,
+        origin: NavPos,
+        size: NavSize,
+        spawn_data: &LocationStaticData,
+    ) -> Option<NavPos> {
+        /// How far out from the rectangle to search before giving up.
+        const MAX_RADIUS: u32 = 8;
+
+        search::find_placement_near(
+            &self.nav_grid,
+            spawn_data.occupation(),
+            origin,
+            size,
+            spawn_data.size(),
+            MAX_RADIUS,
+        )
     }
 
     /// Marks every cell in the entity's footprint as occupied.
@@ -93,12 +106,18 @@ impl Map {
     }
 
     /// Marks or clears every cell in the entity's footprint as occupied based on the `occupied` parameter.
+    ///
+    /// No-op for [`Solidity::Passable`] entities — they never claim cells.
     fn set_footprint(
         &mut self,
         loc: &LocationComponent,
         static_data: &LocationStaticData,
         occupied: bool,
     ) {
+        if static_data.solidity() == Solidity::Passable {
+            return;
+        }
+
         let origin = NavPos::from(loc.position);
         let NavSize { width, height } = static_data.size();
         for dy in 0..height {

@@ -2,8 +2,8 @@
 //!
 //! Each tick the queue goes through two phases inside a single exclusive Bevy system:
 //!
-//! - [`prepare_tick`] — flush cancelled entries, then transition the front `New` order to
-//!   `InProcessing`.
+//! - [`prepare_tick`] — flush cancelled entries, then transition the front order to
+//!   `InProcessing` (preparing `New` entries and resuming `Suspended` ones).
 //! - [`process_tick`] — advance the front `InProcessing` order by one tick and handle
 //!   `Finished` and `Suspended` transitions.
 //!
@@ -15,26 +15,116 @@
 
 use bevy_ecs::{entity::Entity, world::World};
 
-use super::movement;
+use super::{attack, build, die, follow, harvest, movement, train};
 use crate::{
-    components::order_queue::{OrderQueueComponent, OrderState},
+    components::order_queue::{CancelPolicy, OrderQueueComponent, OrderState},
     order::Order,
 };
 
-/// Flush cancelled entries, then prepare the front `New` order.
+/// Result of advancing an order by one tick.
+pub struct Processing {
+    /// The order's new state.
+    pub state: OrderState,
+    /// A sub-order to execute at the front of the queue before this order resumes.
+    /// Only valid together with [`OrderState::Suspended`].
+    pub sub_order: Option<Order>,
+}
+
+impl Processing {
+    /// A result with no sub-order.
+    pub fn state(state: OrderState) -> Self {
+        Self {
+            state,
+            sub_order: None,
+        }
+    }
+
+    /// Suspends the order until `sub_order` finishes.
+    pub fn suspend(sub_order: Order) -> Self {
+        Self {
+            state: OrderState::Suspended,
+            sub_order: Some(sub_order),
+        }
+    }
+}
+
+fn dispatch_prepare(entity: Entity, order: &Order, world: &mut World) -> OrderState {
+    match order {
+        Order::Move { .. } => movement::prepare(entity, order, world),
+        Order::Attack { .. } => attack::prepare(entity, order, world),
+        Order::Follow { .. } => follow::prepare(entity, order, world),
+        Order::Train => train::prepare(entity, order, world),
+        Order::Build { .. } => build::prepare(entity, order, world),
+        Order::Harvest { .. } => harvest::prepare(entity, order, world),
+        Order::Die => die::prepare(entity, order, world),
+    }
+}
+
+fn dispatch_prepare_suspended(entity: Entity, order: &Order, world: &mut World) -> OrderState {
+    match order {
+        Order::Attack { .. } => attack::prepare_suspended(entity, order, world),
+        Order::Follow { .. } => follow::prepare_suspended(entity, order, world),
+        Order::Build { .. } => build::prepare_suspended(entity, order, world),
+        Order::Harvest { .. } => harvest::prepare_suspended(entity, order, world),
+        Order::Move { .. } => unreachable!("Move orders never suspend"),
+        Order::Train => unreachable!("Train orders never suspend"),
+        Order::Die => unreachable!("Die orders never suspend"),
+    }
+}
+
+fn dispatch_cancel(
+    entity: Entity,
+    order: &Order,
+    policy: CancelPolicy,
+    entry_state: OrderState,
+    world: &mut World,
+) -> OrderState {
+    match order {
+        Order::Move { .. } => {
+            movement::cancel_processing(entity, order, policy, entry_state, world)
+        }
+        Order::Attack { .. } => {
+            attack::cancel_processing(entity, order, policy, entry_state, world)
+        }
+        Order::Follow { .. } => {
+            follow::cancel_processing(entity, order, policy, entry_state, world)
+        }
+        Order::Train => train::cancel_processing(entity, order, policy, entry_state, world),
+        Order::Build { .. } => build::cancel_processing(entity, order, policy, entry_state, world),
+        Order::Harvest { .. } => {
+            harvest::cancel_processing(entity, order, policy, entry_state, world)
+        }
+        Order::Die => die::cancel_processing(entity, order, policy, entry_state, world),
+    }
+}
+
+fn dispatch_process(entity: Entity, order: &Order, world: &mut World) -> Processing {
+    match order {
+        Order::Move { .. } => Processing::state(movement::process(entity, order, world)),
+        Order::Attack { .. } => attack::process(entity, order, world),
+        Order::Follow { .. } => follow::process(entity, order, world),
+        Order::Train => Processing::state(train::process(entity, order, world)),
+        Order::Build { .. } => build::process(entity, order, world),
+        Order::Harvest { .. } => harvest::process(entity, order, world),
+        Order::Die => Processing::state(die::process(entity, order, world)),
+    }
+}
+
+/// Flush cancelled entries, then prepare the front order.
 ///
 /// The caller is responsible for taking `queue` out of the world before this call and
-/// reinserting it after. This keeps the world borrow free so `movement::*` handlers can
+/// reinserting it after. This keeps the world borrow free so per-type handlers can
 /// access and mutate other components (e.g. `MoveComponent`, `LocationComponent`).
 ///
 /// **Flush**: for every entry with a cancel policy, calls the per-type
 /// `cancel_processing` (which handles driver removal). If the result is `Finished`,
-/// removes the entry. Entries whose cancel returns `InProcessing` (Soft cancel accepted)
-/// stay in the queue with their cancel policy cleared.
+/// removes the entry. Entries whose cancel returns `InProcessing` (cancel deferred or
+/// refused) stay in the queue with their cancel policy cleared.
 ///
-/// **Prepare loop**: while the front is `New`, calls the per-type `prepare` (which
-/// handles driver insertion). If it returns `Finished` immediately, removes the entry
-/// and loops to the next. If it returns `InProcessing`, sets the state and stops.
+/// **Prepare loop**: while the front is `New` or `Suspended`, calls the per-type
+/// `prepare` or `prepare_suspended` (which handle driver insertion). If it returns
+/// `Finished` immediately, removes the entry and loops to the next. If it returns
+/// `InProcessing`, sets the state and stops.
 ///
 /// After this call the front entry (if any) is always `InProcessing`.
 pub fn prepare_tick(entity: Entity, queue: &mut OrderQueueComponent, world: &mut World) {
@@ -51,11 +141,7 @@ pub fn prepare_tick(entity: Entity, queue: &mut OrderQueueComponent, world: &mut
         // Clear cancel flag before dispatching — prevents re-cancellation on the next tick.
         queue.0[i].cancel = None;
 
-        let new_state = match &order {
-            Order::Move { .. } => {
-                movement::cancel_processing(entity, &order, policy, entry_state, world)
-            }
-        };
+        let new_state = dispatch_cancel(entity, &order, policy, entry_state, world);
 
         debug_assert!(
             matches!(new_state, OrderState::InProcessing | OrderState::Finished),
@@ -70,23 +156,21 @@ pub fn prepare_tick(entity: Entity, queue: &mut OrderQueueComponent, world: &mut
         }
     }
 
-    // Prepare the front New entry.
+    // Prepare the front entry until it is InProcessing or the queue is empty.
     while let Some(front) = queue.front() {
         let state = front.state;
         let order = front.order.clone();
 
         debug_assert!(
-            matches!(state, OrderState::New | OrderState::InProcessing),
-            "front before prepare must be New or InProcessing, got {:?}",
-            state
+            !matches!(state, OrderState::Finished),
+            "Finished entries must never stay in the queue"
         );
 
-        if state != OrderState::New {
-            break;
-        }
-
-        let new_state = match &order {
-            Order::Move { .. } => movement::prepare(entity, &order, world),
+        let new_state = match state {
+            OrderState::InProcessing => break,
+            OrderState::New => dispatch_prepare(entity, &order, world),
+            OrderState::Suspended => dispatch_prepare_suspended(entity, &order, world),
+            OrderState::Finished => unreachable!(),
         };
 
         debug_assert!(
@@ -117,8 +201,9 @@ pub fn prepare_tick(entity: Entity, queue: &mut OrderQueueComponent, world: &mut
 /// - `InProcessing`: nothing changes.
 /// - `Finished`: pops the entry. The per-type handler is responsible for removing its
 ///   driver component (by not reinserting the taken component).
-/// - `Suspended`: updates state. Suspended resume is handled by the next
-///   [`prepare_tick`] call.
+/// - `Suspended`: updates state and pushes the requested sub-order to the front.
+///   The suspended entry resumes via the next [`prepare_tick`] call after the
+///   sub-order finishes.
 ///
 /// After this call the front entry (if any) is `New`, `InProcessing`, or `Suspended`.
 pub fn process_tick(entity: Entity, queue: &mut OrderQueueComponent, world: &mut World) {
@@ -131,23 +216,29 @@ pub fn process_tick(entity: Entity, queue: &mut OrderQueueComponent, world: &mut
 
     let order = front.order.clone();
 
-    let new_state = match &order {
-        Order::Move { .. } => movement::process(entity, &order, world),
-    };
+    let result = dispatch_process(entity, &order, world);
 
     debug_assert!(
         matches!(
-            new_state,
+            result.state,
             OrderState::InProcessing | OrderState::Finished | OrderState::Suspended
         ),
         "process must return InProcessing, Finished, or Suspended, got {:?}",
-        new_state
+        result.state
+    );
+    debug_assert!(
+        result.sub_order.is_none() || result.state == OrderState::Suspended,
+        "a sub-order is only valid together with Suspended"
     );
 
-    queue.0.front_mut().unwrap().state = new_state;
+    queue.0.front_mut().unwrap().state = result.state;
 
-    if new_state == OrderState::Finished {
+    if result.state == OrderState::Finished {
         queue.0.pop_front();
+    }
+
+    if let Some(sub_order) = result.sub_order {
+        queue.push_front(sub_order);
     }
 
     debug_assert!(

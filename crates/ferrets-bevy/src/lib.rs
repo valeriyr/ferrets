@@ -22,10 +22,15 @@
 //! flush_input        — drain PendingInput into InputFrames (runs while session is active)
 //! command_executor   — translate InputFrames → OrderQueueComponent mutations
 //! [ApplyDeferred]
-//! tick_orders        — exclusive system; full order lifecycle in one entry point:
-//!                        prepare phase: flush cancelled entries, New → InProcessing, insert driver components
-//!                        process phase: advance InProcessing front order, remove driver components on finish
-//! process_dying      — tick dying entities                           [not yet implemented]
+//! process_dying      — exclusive system; advance Die orders, despawn entities that
+//!                      finished dying
+//! tick_orders        — exclusive system; full order lifecycle for alive entities:
+//!                        prepare phase: flush cancelled entries, New → InProcessing,
+//!                          Suspended → resumed, insert driver components
+//!                        process phase: advance InProcessing front order, remove driver
+//!                          components on finish, push chase sub-orders on suspend
+//! process_pending_reveals — exclusive system; retry reappearing entities that finished
+//!                      an order while boxed-in and still await a free cell
 //! process_stats      — HP/mana regen, buff ticks                     [not yet implemented]
 //! process_skills     — skill cooldown counters                        [not yet implemented]
 //! process_entity_ai  — per-entity AI think (throttled, every N ticks) [not yet implemented]
@@ -37,7 +42,7 @@
 mod input;
 mod systems;
 
-pub use ferrets_simulation::spawn::spawn_entity;
+pub use ferrets_simulation::spawn;
 pub use input::PendingInput;
 pub use systems::flush_input;
 
@@ -45,8 +50,9 @@ use std::sync::Mutex;
 
 use bevy::prelude::*;
 use ferrets_simulation::{
-    content::registry::ContentRegistry, input::InputFrames, map::Map, selection::Selection,
-    session::GameSession, simulation_id::SimulationIdGenerator,
+    content::registry::ContentRegistry, entity_index::EntityIndex, input::InputFrames, map::Map,
+    resources::PlayerResources, selection::Selection, session::GameSession,
+    simulation_id::SimulationIdGenerator,
 };
 
 /// System set containing all simulation systems.
@@ -88,8 +94,10 @@ impl Plugin for SimulationPlugin {
         app.insert_resource(session)
             .insert_resource(map)
             .insert_resource(Selection::new(player_count))
+            .insert_resource(PlayerResources::new(player_count))
             .insert_resource(InputFrames::new(player_count))
             .init_resource::<ContentRegistry>()
+            .init_resource::<EntityIndex>()
             .init_resource::<SimulationIdGenerator>()
             .init_resource::<PendingInput>()
             .add_systems(
@@ -106,7 +114,9 @@ impl Plugin for SimulationPlugin {
                 (
                     systems::command_executor,
                     ApplyDeferred,
+                    systems::process_dying,
                     systems::tick_orders,
+                    systems::process_pending_reveals,
                     systems::tick_counter,
                 )
                     .chain()

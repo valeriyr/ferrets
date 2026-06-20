@@ -17,6 +17,27 @@ pub enum PlayerCommand {
     /// Issues a move order to the current selection, targeting `target`.
     /// `flush` cancels existing orders before issuing this one; `false` appends.
     Move { target: FixedUVec2, flush: bool },
+    /// Issues an attack order to the current selection, targeting the entity `target`.
+    /// `flush` cancels existing orders before issuing this one; `false` appends.
+    Attack { target: SimulationId, flush: bool },
+    /// Sends the current selection to the entity `target`, resolving the intent per
+    /// unit: harvest from a source, deliver to a storage, attack an enemy, etc.
+    /// `flush` cancels existing orders before issuing this one; `false` appends.
+    SendToEntity { target: SimulationId, flush: bool },
+    /// Enqueues one unit of `type_name` for production on the `trainer` entity.
+    TrainEntity {
+        trainer: SimulationId,
+        type_name: String,
+    },
+    /// Issues a build order to the `builder` entity: construct a building of
+    /// `type_name` at `position`.
+    /// `flush` cancels existing orders before issuing this one; `false` appends.
+    BuildEntity {
+        builder: SimulationId,
+        type_name: String,
+        position: FixedUVec2,
+        flush: bool,
+    },
     /// Stops the current orders.
     Stop,
 }

@@ -1,19 +1,20 @@
-use bevy::{ecs::system::SystemState, prelude::*};
+use bevy::prelude::*;
 use ferrets_simulation::{
-    components::{
-        dying::DyingComponent, entity_info::EntityInfoComponent, order_queue::OrderQueueComponent,
-    },
+    components::{dying::DyingComponent, order_queue::OrderQueueComponent},
+    entity_index::EntityIndex,
     game_loop,
 };
 
+/// Advances every alive entity's order queue by one tick: first prepares each
+/// front order, then processes it.
 pub fn tick_orders(world: &mut World) {
     prepare(world);
     process(world);
 }
 
-/// Flush cancelled entries and prepare the front `New` order for every alive entity.
+/// Flush cancelled entries and prepare the front order for every alive entity.
 fn prepare(world: &mut World) {
-    for entity in alive_ordered_entities(world) {
+    for entity in alive_entities(world) {
         if world.entity(entity).contains::<DyingComponent>() {
             continue;
         }
@@ -27,7 +28,7 @@ fn prepare(world: &mut World) {
 
 /// Advance the front `InProcessing` order by one tick for every alive entity.
 fn process(world: &mut World) {
-    for entity in alive_ordered_entities(world) {
+    for entity in alive_entities(world) {
         if world.entity(entity).contains::<DyingComponent>() {
             continue;
         }
@@ -39,16 +40,16 @@ fn process(world: &mut World) {
     }
 }
 
-/// Collects alive entities with order queues, sorted by simulation ID for determinism.
+/// Collects alive entities in deterministic simulation-id order.
 ///
-/// Snapshot taken before processing — entities spawned during this tick are not included.
-fn alive_ordered_entities(world: &mut World) -> Vec<Entity> {
-    let mut state = SystemState::<
-        Query<(Entity, &EntityInfoComponent), (With<OrderQueueComponent>, Without<DyingComponent>)>,
-    >::new(world);
-
-    let query = state.get(&*world);
-    let mut items: Vec<_> = query.iter().collect();
-    items.sort_by_key(|(_, info)| info.id());
-    items.into_iter().map(|(e, _)| e).collect()
+/// Snapshot taken before processing — entities spawned during this tick are not
+/// included, and entities destroyed during this tick are skipped via the
+/// `DyingComponent` check in the loops above.
+fn alive_entities(world: &World) -> Vec<Entity> {
+    world
+        .resource::<EntityIndex>()
+        .alive_entries()
+        .into_iter()
+        .map(|(_, entity)| entity)
+        .collect()
 }

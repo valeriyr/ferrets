@@ -2,7 +2,7 @@
 
 use ferrets_math::fixed_uvec2::FixedUVec2;
 
-use crate::layer_mask::LayerMask;
+use crate::{layer_mask::LayerMask, nav_size::NavSize};
 
 use super::{nav_grid::NavGrid, nav_pos::NavPos};
 
@@ -36,7 +36,7 @@ const DIAGONAL_COST: u32 = 14;
 ///
 /// `stop_distance` controls how close the path must get to `goal` — `0` requires
 /// reaching the exact position. The distance metric depends on the projection:
-/// Chebyshev tiles for `Isometric`, Euclidean tiles for `Orthogonal`.
+/// Chebyshev cells for `Isometric`, Euclidean cells for `Orthogonal`.
 ///
 /// Returns the sequence of positions to visit (excluding `start`), or `None` if no path exists.
 pub fn find_path(
@@ -110,7 +110,10 @@ fn step_cost(projection: Projection, is_diagonal: bool) -> u32 {
 }
 
 /// Returns `true` if `from` is within `stop_distance` of `to`.
-fn in_range(projection: Projection, from: NavPos, to: NavPos, stop_distance: u32) -> bool {
+///
+/// The distance metric depends on the projection: Chebyshev cells for
+/// `Isometric`, Euclidean cells for `Orthogonal`.
+pub fn in_range(projection: Projection, from: NavPos, to: NavPos, stop_distance: u32) -> bool {
     match projection {
         Projection::Isometric => chebyshev(from, to) <= stop_distance,
         Projection::Orthogonal => {
@@ -118,6 +121,39 @@ fn in_range(projection: Projection, from: NavPos, to: NavPos, stop_distance: u32
             let dy = from.y.abs_diff(to.y);
 
             dx * dx + dy * dy <= stop_distance * stop_distance
+        }
+    }
+}
+
+/// Returns `true` if `from` is within `stop_distance` of the rectangle of cells
+/// at `origin` with the given `size` (e.g. a building footprint).
+///
+/// The distance is measured to the nearest cell of the rectangle, using the same
+/// metric as [`in_range`].
+pub fn in_range_of_rect(
+    projection: Projection,
+    from: NavPos,
+    origin: NavPos,
+    size: NavSize,
+    stop_distance: u32,
+) -> bool {
+    let nearest = from.clamp_to_rect(origin, size);
+    in_range(projection, from, nearest, stop_distance)
+}
+
+/// Distance from `from` to the nearest cell of the rectangle at `origin` with
+/// the given `size`, using the same metric as [`in_range`].
+///
+/// Comparable only within a single projection: Chebyshev cells for `Isometric`,
+/// squared Euclidean cells for `Orthogonal` — so it is not an absolute cell count.
+pub fn rect_distance(projection: Projection, from: NavPos, origin: NavPos, size: NavSize) -> u32 {
+    let nearest = from.clamp_to_rect(origin, size);
+    match projection {
+        Projection::Isometric => chebyshev(from, nearest),
+        Projection::Orthogonal => {
+            let dx = from.x.abs_diff(nearest.x);
+            let dy = from.y.abs_diff(nearest.y);
+            dx * dx + dy * dy
         }
     }
 }

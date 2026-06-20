@@ -23,4 +23,15 @@ impl Selection {
     pub fn set(&mut self, player: PlayerId, ids: Vec<SimulationId>) {
         self.0[player as usize] = ids;
     }
+
+    /// Removes `id` from every player's selection.
+    ///
+    /// Selections are independent per-player views and not exclusive: several
+    /// players can have the same entity selected at once (an enemy unit being
+    /// inspected, a neutral mine), so all of them are swept.
+    pub fn remove(&mut self, id: SimulationId) {
+        for selection in &mut self.0 {
+            selection.retain(|&selected| selected != id);
+        }
+    }
 }

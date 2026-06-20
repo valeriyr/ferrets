@@ -1,6 +1,8 @@
+//! `NavGrid` layer occupancy and footprint passability.
+
 mod utils;
 
-use ferrets_pathfinder::nav_grid::NavGrid;
+use ferrets_pathfinder::{nav_grid::NavGrid, nav_size::NavSize};
 
 //
 // ─── Layers ───────────────────────────────────────────────────────────────────
@@ -192,4 +194,30 @@ fn set_occupied_by_does_not_affect_unmasked_layers() {
 
     assert!(grid.is_occupied(utils::GROUND, utils::nav(3, 3)));
     assert!(grid.is_passable(utils::AIR, utils::nav(3, 3)));
+}
+
+//
+// ─── is_footprint_passable_by ─────────────────────────────────────────────────
+//
+
+#[test]
+fn footprint_is_passable_when_all_cells_are_free() {
+    let grid = utils::grid(8, 8);
+
+    assert!(grid.is_footprint_passable_by(utils::GROUND, utils::nav(2, 2), NavSize::new(3, 2)));
+}
+
+#[test]
+fn footprint_is_blocked_by_any_occupied_cell() {
+    let mut grid = utils::grid(8, 8);
+    grid.set_occupied(utils::GROUND, utils::nav(3, 3), true);
+
+    assert!(!grid.is_footprint_passable_by(utils::GROUND, utils::nav(2, 2), NavSize::new(3, 2)));
+}
+
+#[test]
+fn footprint_reaching_out_of_bounds_is_blocked() {
+    let grid = utils::grid(8, 8);
+
+    assert!(!grid.is_footprint_passable_by(utils::GROUND, utils::nav(7, 7), NavSize::new(2, 2)));
 }

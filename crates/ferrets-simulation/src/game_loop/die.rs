@@ -1,0 +1,108 @@
+//! Die order implementation.
+//! Called by [`super::orders`] as part of the shared order lifecycle.
+
+use bevy_ecs::{entity::Entity, world::World};
+
+use crate::{
+    components::{
+        dying::{DiedComponent, DyingComponent, DyingStaticData},
+        hidden::HiddenComponent,
+        location::{LocationComponent, LocationStaticData},
+        order_queue::{CancelPolicy, OrderState},
+    },
+    map::Map,
+    order::Order,
+    spawn,
+};
+
+/// Called once when a Die order becomes the front `New` entry.
+///
+/// Asserts the [`DyingComponent`] driver is present and returns `InProcessing`;
+/// the dying phase needs no further setup.
+pub fn prepare(entity: Entity, _order: &Order, world: &mut World) -> OrderState {
+    debug_assert!(
+        world.entity(entity).contains::<DyingComponent>(),
+        "a Die order requires DyingComponent on the entity"
+    );
+    OrderState::InProcessing
+}
+
+/// Called for every Die entry that has a cancel policy.
+///
+/// Dying cannot be cancelled; the entry always stays in the queue.
+pub fn cancel_processing(
+    _entity: Entity,
+    _order: &Order,
+    _policy: CancelPolicy,
+    _entry_state: OrderState,
+    _world: &mut World,
+) -> OrderState {
+    OrderState::InProcessing
+}
+
+/// Advance a Die order by one tick.
+///
+/// Counts down the dying timer. When it expires, [`DyingComponent`] is replaced
+/// with [`DiedComponent`], the configured corpse (if any) is left behind, and
+/// the order finishes.
+pub fn process(entity: Entity, _order: &Order, world: &mut World) -> OrderState {
+    {
+        let mut entity_mut = world.entity_mut(entity);
+        let mut dying = entity_mut
+            .get_mut::<DyingComponent>()
+            .expect("a Die order requires DyingComponent on the entity");
+
+        if dying.ticks_remaining > 0 {
+            dying.ticks_remaining -= 1;
+            return OrderState::InProcessing;
+        }
+
+        entity_mut.remove::<DyingComponent>();
+        entity_mut.insert(DiedComponent);
+    }
+
+    free_footprint(entity, world);
+    leave_corpse(entity, world);
+    OrderState::Finished
+}
+
+/// Frees the footprint the entity has held through its dying phase, so the
+/// remains it leaves behind (or anyone else) can take the cells.
+///
+/// Hidden entities are off the map and hold nothing.
+fn free_footprint(entity: Entity, world: &mut World) {
+    if world.entity(entity).contains::<HiddenComponent>() {
+        return;
+    }
+
+    let location = *world.entity(entity).get::<LocationComponent>().unwrap();
+    let location_data = *world.entity(entity).get::<LocationStaticData>().unwrap();
+    world
+        .resource_mut::<Map>()
+        .displace_entity(&location, &location_data);
+}
+
+/// Leaves the entity's configured corpse at its position, if any.
+///
+/// The corpse is born dying: its own dying phase acts as the decay timer, and a
+/// corpse type with a corpse of its own forms the next decay stage. It claims
+/// its footprint on the navigation grid per its occupation mask, so remains can
+/// block movement (rubble) or lie passable (a corpse layer movers ignore).
+/// When the footprint is blocked — someone took the cell during the death — no
+/// remains are left.
+fn leave_corpse(entity: Entity, world: &mut World) {
+    let Some(corpse_type) = world
+        .entity(entity)
+        .get::<DyingStaticData>()
+        .and_then(|dying| dying.corpse_type().map(String::from))
+    else {
+        return;
+    };
+    let position = world
+        .entity(entity)
+        .get::<LocationComponent>()
+        .unwrap()
+        .position;
+
+    spawn::spawn_corpse_entity(world, &corpse_type, position);
+}

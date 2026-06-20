@@ -3,17 +3,14 @@
 
 use bevy_ecs::{entity::Entity, world::World};
 use ferrets_math::{FixedI64, FixedU64, fixed_uvec2::FixedUVec2, fixed_vec2::FixedVec2};
-use ferrets_pathfinder::{
-    astar::{self, Projection},
-    nav_pos::NavPos,
-};
+use ferrets_pathfinder::{astar, nav_pos::NavPos};
 
 /// Ticks to wait for a blocked cell to clear before recalculating the path.
 const BLOCKED_WAIT_TICKS: u32 = 5;
 
 use crate::{
     components::{
-        location::{LocationComponent, LocationStaticData},
+        location::{LocationComponent, LocationStaticData, Solidity},
         movement::{MoveComponent, MoveStaticData},
         order_queue::{CancelPolicy, OrderState},
     },
@@ -24,17 +21,12 @@ use crate::{
 /// Called once when a Move order becomes the front `New` entry.
 ///
 /// Inserts the driver component and returns `InProcessing` if the move should proceed,
-/// or `Finished` if it can be skipped immediately (e.g. already at target — not yet
-/// checked here, deferred to [`process`]).
+/// or `Finished` immediately if the entity cannot move. Whether the target is already
+/// reached is not checked here — that is deferred to [`process`].
 pub fn prepare(entity: Entity, _order: &Order, world: &mut World) -> OrderState {
-    insert_driver(entity, world);
-    OrderState::InProcessing
-}
-
-/// Called when a Move order resumes from `Suspended` (its sub-order just finished).
-///
-/// Inserts the driver component and returns `InProcessing`.
-pub fn prepare_suspended(entity: Entity, _order: &Order, world: &mut World) -> OrderState {
+    if !world.entity(entity).contains::<MoveStaticData>() {
+        return OrderState::Finished;
+    }
     insert_driver(entity, world);
     OrderState::InProcessing
 }
@@ -59,9 +51,10 @@ pub fn cancel_processing(
         }
         CancelPolicy::Soft => {
             if entry_state == OrderState::InProcessing
-                && let Some(mut mc) = world.entity_mut(entity).get_mut::<MoveComponent>()
+                && let Some(mut move_component) =
+                    world.entity_mut(entity).get_mut::<MoveComponent>()
             {
-                mc.leave_only_current_target();
+                move_component.leave_only_current_target();
                 return OrderState::InProcessing;
             }
             // Order has not started yet — nothing to finish, discard immediately.
@@ -75,8 +68,9 @@ pub fn cancel_processing(
 /// Each tick:
 /// 1. If mid-crossing (position is not at a cell center), continue moving toward
 ///    `path.last()`. Pop the waypoint on arrival; return `Finished` if path is empty.
-/// 2. Otherwise calculate a path if needed, claim the next cell in the nav grid,
-///    and begin the crossing.
+/// 2. Otherwise finish if the goal is within the order's stop distance, or
+///    calculate a path if needed, claim the next cell in the nav grid, and begin
+///    the crossing.
 ///
 /// The nav grid occupation for a cell is claimed when the entity **starts** crossing
 /// into it, not on arrival. `path.last()` is the active crossing target; it is popped
@@ -85,7 +79,7 @@ pub fn cancel_processing(
 /// `MoveComponent` is taken from the entity at the start and reinserted on
 /// `InProcessing`; on `Finished` it is simply dropped (removed by not reinserting).
 pub fn process(entity: Entity, order: &Order, world: &mut World) -> OrderState {
-    let target = order.move_target().expect("Move order must have a target");
+    let (target, range) = order.move_params().expect("Move order must have params");
 
     let position = world
         .entity(entity)
@@ -97,19 +91,16 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> OrderState {
         .get::<MoveStaticData>()
         .unwrap()
         .speed();
-    let occupation = world
-        .entity(entity)
-        .get::<LocationStaticData>()
-        .unwrap()
-        .occupation();
+    let location_data = *world.entity(entity).get::<LocationStaticData>().unwrap();
+    let occupation = location_data.occupation();
 
-    let Some(mut mc) = world.entity_mut(entity).take::<MoveComponent>() else {
+    let Some(mut move_component) = world.entity_mut(entity).take::<MoveComponent>() else {
         return OrderState::Finished;
     };
 
     // Mid-crossing: position is between two cell centers.
     if is_mid_crossing(position) {
-        let target_pos = FixedUVec2::from(*mc.path.last().unwrap());
+        let target_pos = FixedUVec2::from(*move_component.path.last().unwrap());
         let new_pos = step_toward_2d(position, target_pos, speed);
         world
             .entity_mut(entity)
@@ -118,65 +109,72 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> OrderState {
             .position = new_pos;
 
         if new_pos == target_pos {
-            mc.path.pop();
-            if mc.path.is_empty() {
+            move_component.path.pop();
+            if move_component.path.is_empty() {
                 return OrderState::Finished;
             }
         }
-        world.entity_mut(entity).insert(mc);
+        world.entity_mut(entity).insert(move_component);
         return OrderState::InProcessing;
     }
 
     // At rest on a cell — check if the goal is already reached.
-    if NavPos::from(position) == NavPos::from(target) {
+    let projection = world.resource::<Map>().projection();
+    if astar::in_range(
+        projection,
+        NavPos::from(position),
+        NavPos::from(target),
+        range,
+    ) {
         return OrderState::Finished;
     }
 
     // Calculate a path if needed.
-    if mc.path.is_empty() {
+    if move_component.path.is_empty() {
         let found = {
             let map = world.resource::<Map>();
             astar::find_path(
                 map.nav_grid(),
-                Projection::Isometric,
+                projection,
                 occupation,
                 position,
                 target,
-                0,
+                range,
             )
         };
         match found {
             None => return OrderState::Finished,
-            Some(p) if p.is_empty() => return OrderState::Finished,
-            Some(p) => {
+            Some(path) if path.is_empty() => return OrderState::Finished,
+            Some(path) => {
                 // Store reversed so path.last() = next immediate step (pop from back).
-                mc.path = p.into_iter().map(NavPos::from).rev().collect();
+                move_component.path = path.into_iter().map(NavPos::from).rev().collect();
             }
         }
     }
 
     // Start a crossing into the next cell.
-    let next_cell = *mc.path.last().unwrap();
+    let next_cell = *move_component.path.last().unwrap();
 
     if world
         .resource::<Map>()
         .nav_grid()
         .is_occupied_by(occupation, next_cell)
     {
-        if mc.wait_ticks < BLOCKED_WAIT_TICKS {
-            mc.wait_ticks += 1;
+        if move_component.wait_ticks < BLOCKED_WAIT_TICKS {
+            move_component.wait_ticks += 1;
         } else {
-            mc.wait_ticks = 0;
-            mc.path.clear();
+            move_component.wait_ticks = 0;
+            move_component.path.clear();
         }
-        world.entity_mut(entity).insert(mc);
+        world.entity_mut(entity).insert(move_component);
         return OrderState::InProcessing;
     }
-    mc.wait_ticks = 0;
+    move_component.wait_ticks = 0;
 
-    // Claim the next cell and release the current one before any position change.
+    // Claim the next cell and release the current one before any position
+    // change. Passable entities never claim cells.
     let current_cell = NavPos::from(position);
-    {
+    if location_data.solidity() == Solidity::Solid {
         let mut map = world.resource_mut::<Map>();
         map.nav_grid_mut()
             .set_occupied_by(occupation, current_cell, false);
@@ -184,7 +182,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> OrderState {
             .set_occupied_by(occupation, next_cell, true);
     }
 
-    mc.moving_from = current_cell;
+    move_component.moving_from = current_cell;
 
     let next_pos = FixedUVec2::from(next_cell);
     let dx = next_pos.x.to_num::<FixedI64>() - position.x.to_num::<FixedI64>();
@@ -193,19 +191,19 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> OrderState {
 
     {
         let mut entity_mut = world.entity_mut(entity);
-        let mut loc = entity_mut.get_mut::<LocationComponent>().unwrap();
-        loc.facing = FixedVec2::new(dx, dy);
-        loc.position = new_pos;
+        let mut location_component = entity_mut.get_mut::<LocationComponent>().unwrap();
+        location_component.facing = FixedVec2::new(dx, dy);
+        location_component.position = new_pos;
     }
 
     if new_pos == next_pos {
-        mc.path.pop();
-        if mc.path.is_empty() {
+        move_component.path.pop();
+        if move_component.path.is_empty() {
             return OrderState::Finished;
         }
     }
 
-    world.entity_mut(entity).insert(mc);
+    world.entity_mut(entity).insert(move_component);
     OrderState::InProcessing
 }
 

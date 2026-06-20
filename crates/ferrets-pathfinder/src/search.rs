@@ -1,8 +1,8 @@
-//! Grid search utilities: finds the nearest free position around a blocked cell.
+//! Grid search utilities: finds free positions around cells and footprints.
 
 use std::collections::{HashSet, VecDeque};
 
-use crate::layer_mask::LayerMask;
+use crate::{layer_mask::LayerMask, nav_size::NavSize};
 
 use super::{nav_grid::NavGrid, nav_pos::NavPos};
 
@@ -31,6 +31,40 @@ const DIRECTIONS: [(i32, i32); 8] = [
     (-1, 1),
     (1, 1),
 ];
+
+/// Finds a free position for a footprint of `spawn_size` on `layer_mask`,
+/// scanning outward from the rectangle of cells at `around`/`around_size` up to
+/// `max_radius` rings away.
+///
+/// Cells are scanned ring by ring in row-major order, so the result is
+/// deterministic. Returns `None` when nothing is free within the search radius.
+pub fn find_placement_near(
+    grid: &NavGrid,
+    layer_mask: impl Into<LayerMask>,
+    around: NavPos,
+    around_size: NavSize,
+    spawn_size: NavSize,
+    max_radius: u32,
+) -> Option<NavPos> {
+    let layer_mask = layer_mask.into();
+
+    for radius in 0..=max_radius {
+        let min_x = around.x.saturating_sub(radius);
+        let min_y = around.y.saturating_sub(radius);
+        let max_x = (around.x + around_size.width - 1 + radius).min(grid.width() - 1);
+        let max_y = (around.y + around_size.height - 1 + radius).min(grid.height() - 1);
+
+        for y in min_y..=max_y {
+            for x in min_x..=max_x {
+                let candidate = NavPos::new(x, y);
+                if grid.is_footprint_passable_by(layer_mask, candidate, spawn_size) {
+                    return Some(candidate);
+                }
+            }
+        }
+    }
+    None
+}
 
 /// Finds the nearest passable position to `around` using BFS.
 ///

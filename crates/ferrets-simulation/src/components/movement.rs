@@ -40,7 +40,10 @@ impl MoveComponent {
 
 impl MoveStaticData {
     /// Creates a new `MoveStaticData` with the given data.
+    ///
+    /// Panics if `speed` is zero.
     pub fn new(speed: FixedU64) -> Self {
+        assert!(speed > FixedU64::ZERO, "speed must be greater than 0");
         Self { speed }
     }
 

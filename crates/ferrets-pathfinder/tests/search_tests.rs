@@ -1,8 +1,11 @@
+//! Grid search: finding free positions around cells and footprints.
+
 mod utils;
 
 use ferrets_pathfinder::{
     nav_grid::NavGrid,
     nav_pos::NavPos,
+    nav_size::NavSize,
     search::{self, Expansion},
 };
 
@@ -153,6 +156,102 @@ fn layer_mask_filters_obstacles() {
 
     assert_eq!(air_result, Some(utils::nav(2, 2)));
     assert_eq!(ground_result, Some(utils::nav(2, 1)));
+}
+
+//
+// ─── find_placement_near ──────────────────────────────────────────────────────
+//
+
+#[test]
+fn placement_returns_a_free_anchor_cell_first() {
+    // The anchor rectangle itself is scanned first; on an empty grid the
+    // top-left anchor cell wins.
+    let grid = utils::grid(10, 10);
+
+    let found = search::find_placement_near(
+        &grid,
+        utils::GROUND,
+        utils::nav(3, 3),
+        NavSize::new(2, 2),
+        NavSize::ONE,
+        8,
+    );
+
+    assert_eq!(found, Some(utils::nav(3, 3)));
+}
+
+#[test]
+fn placement_skips_an_occupied_anchor_and_picks_the_first_ring_cell() {
+    // . . . . . .   y=2   anchor 2×2 at (3,3) fully occupied → ring 1 spans
+    // . . A A . .   y=3   (2,2)..(5,5); first free cell in row-major order
+    // . . A A . .   y=4   is (2,2).
+    let mut grid = utils::grid(10, 10);
+    for y in 3..5 {
+        for x in 3..5 {
+            grid.set_occupied(utils::GROUND, utils::nav(x, y), true);
+        }
+    }
+
+    let found = search::find_placement_near(
+        &grid,
+        utils::GROUND,
+        utils::nav(3, 3),
+        NavSize::new(2, 2),
+        NavSize::ONE,
+        8,
+    );
+
+    assert_eq!(found, Some(utils::nav(2, 2)));
+}
+
+#[test]
+fn placement_requires_the_whole_spawn_footprint() {
+    // Single free cells are not enough for a 2×2 spawn; the first row-major
+    // position whose whole 2×2 footprint is free wins.
+    let mut grid = utils::grid(8, 8);
+    // Occupy the anchor cell and checker the first ring so no 2×2 fits there.
+    grid.set_occupied(utils::GROUND, utils::nav(3, 3), true);
+    for &(x, y) in &[(2, 2), (4, 2), (2, 4), (4, 4)] {
+        grid.set_occupied(utils::GROUND, utils::nav(x, y), true);
+    }
+
+    let found = search::find_placement_near(
+        &grid,
+        utils::GROUND,
+        utils::nav(3, 3),
+        NavSize::ONE,
+        NavSize::new(2, 2),
+        8,
+    );
+
+    let origin = found.expect("a 2×2 area exists within the radius");
+    for dy in 0..2 {
+        for dx in 0..2 {
+            assert!(grid.is_passable_by(utils::GROUND, utils::nav(origin.x + dx, origin.y + dy)));
+        }
+    }
+}
+
+#[test]
+fn placement_gives_up_beyond_max_radius() {
+    // Everything within radius 1 of the anchor is occupied; radius 1 search fails.
+    let mut grid = utils::grid(10, 10);
+    for y in 2..6 {
+        for x in 2..6 {
+            grid.set_occupied(utils::GROUND, utils::nav(x, y), true);
+        }
+    }
+
+    let found = search::find_placement_near(
+        &grid,
+        utils::GROUND,
+        utils::nav(3, 3),
+        NavSize::new(2, 2),
+        NavSize::ONE,
+        1,
+    );
+
+    assert_eq!(found, None);
 }
 
 //

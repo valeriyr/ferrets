@@ -1,6 +1,6 @@
 //! Stores which positions are passable for each movement layer defined by content.
 
-use crate::layer_mask::LayerMask;
+use crate::{layer_mask::LayerMask, nav_size::NavSize};
 
 pub use crate::layer_id::LayerId;
 
@@ -107,6 +107,29 @@ impl NavGrid {
     /// Out-of-bounds positions always return `false`.
     pub fn is_passable_by(&self, mask: impl Into<LayerMask>, pos: NavPos) -> bool {
         !self.is_occupied_by(mask, pos)
+    }
+
+    /// Returns `true` if every cell of the `size` footprint at `origin` is free
+    /// on **all** layers in `mask`.
+    ///
+    /// Footprints reaching out of bounds always return `false`.
+    pub fn is_footprint_passable_by(
+        &self,
+        mask: impl Into<LayerMask>,
+        origin: NavPos,
+        size: NavSize,
+    ) -> bool {
+        let mask = mask.into();
+        let NavSize { width, height } = size;
+
+        for dy in 0..height {
+            for dx in 0..width {
+                if !self.is_passable_by(mask, NavPos::new(origin.x + dx, origin.y + dy)) {
+                    return false;
+                }
+            }
+        }
+        true
     }
 
     /// Panics in debug builds if `mask` contains any unregistered layer bits.
