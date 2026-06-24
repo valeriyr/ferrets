@@ -161,6 +161,8 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
             Destination::Arrived => {}
         }
 
+        chase::face(world, entity, position);
+
         let owner = world
             .entity(entity)
             .get::<OwnerComponent>()

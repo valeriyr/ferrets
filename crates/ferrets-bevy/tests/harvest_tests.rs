@@ -198,6 +198,10 @@ fn a_boxed_in_cancel_defers_the_reveal_until_a_cell_frees() {
     assert_eq!(utils::cell_of(app.world_mut(), worker), anchor);
 }
 
+//
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+//
+
 /// Marks or clears every cell of the map's ground layer, used to box entities in.
 fn set_all_cells_occupied(world: &mut World, occupied: bool) {
     let mut map = world.resource_mut::<Map>();

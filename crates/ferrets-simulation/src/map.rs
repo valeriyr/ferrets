@@ -6,8 +6,9 @@ use ferrets_pathfinder::{
 };
 
 use crate::components::location::{LocationComponent, LocationStaticData, Solidity};
+use crate::session::player_slot::PlayerId;
 
-/// The active game map: its identity, projection, and navigation grid.
+/// The active game map.
 #[derive(Resource)]
 pub struct Map {
     /// A unique map identifier, e.g. a filename or asset path.
@@ -16,16 +17,36 @@ pub struct Map {
     projection: Projection,
     /// Grid occupancy data. Dimensions define the playable area in cells.
     nav_grid: NavGrid,
+    /// Where each player starts, ordered by player slot id: player `i` starts at
+    /// `start_points[i]`.
+    start_points: Vec<NavPos>,
 }
 
 impl Map {
     /// Creates a map from loaded content.
-    pub fn new(name: impl Into<String>, projection: Projection, nav_grid: NavGrid) -> Self {
+    pub fn new(
+        name: impl Into<String>,
+        projection: Projection,
+        nav_grid: NavGrid,
+        start_points: Vec<NavPos>,
+    ) -> Self {
         Self {
             name: name.into(),
             projection,
             nav_grid,
+            start_points,
         }
+    }
+
+    /// Returns every player start position, ordered by player slot id.
+    pub fn start_points(&self) -> &[NavPos] {
+        &self.start_points
+    }
+
+    /// Returns the start position for the given player, or `None` if the map has
+    /// no start point for that slot.
+    pub fn start_point(&self, player: PlayerId) -> Option<NavPos> {
+        self.start_points.get(player as usize).copied()
     }
 
     /// Returns the unique map identifier.

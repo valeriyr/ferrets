@@ -2,7 +2,6 @@
 //! Called by [`super::orders`] as part of the shared order lifecycle.
 
 use bevy_ecs::{entity::Entity, world::World};
-use ferrets_math::{FixedI64, fixed_vec2::FixedVec2};
 
 use super::chase::{self, Destination};
 use super::orders::Processing;
@@ -123,17 +122,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
         Destination::Arrived => {}
     }
 
-    let facing = FixedVec2::new(
-        target_position.x.to_num::<FixedI64>() - position.x.to_num::<FixedI64>(),
-        target_position.y.to_num::<FixedI64>() - position.y.to_num::<FixedI64>(),
-    );
-    if facing != FixedVec2::ZERO {
-        world
-            .entity_mut(entity)
-            .get_mut::<LocationComponent>()
-            .unwrap()
-            .facing = facing;
-    }
+    chase::face(world, entity, target_position);
 
     attack_component.phase += 1;
 

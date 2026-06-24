@@ -22,7 +22,7 @@ use ferrets_simulation::{
     input::InputFrames,
     map::Map,
     resources::PlayerResources,
-    session::{GameSession, player_slot::PlayerSlot, player_type::PlayerType},
+    session::{FinishPolicy, GameSession, player_slot::PlayerSlot, player_type::PlayerType},
 };
 
 pub const GROUND: LayerId = LayerId::new(1);
@@ -30,15 +30,18 @@ pub const GROUND: LayerId = LayerId::new(1);
 /// Creates an app with the simulation plugin on a 32×32 single-layer map,
 /// with player slot `0` as the local player.
 ///
-/// The caller registers content and starts the session.
+/// The session uses [`FinishPolicy::Endless`] so a lone or unpopulated slot is
+/// never read as a win; a test that exercises the victory condition opts into
+/// [`FinishPolicy::LastStanding`] with `set_finish_policy`. The caller registers
+/// content and starts the session.
 pub fn make_app(slots: Vec<PlayerSlot>) -> App {
     let mut nav_grid = NavGrid::new(32, 32);
     nav_grid.add_layer(GROUND);
 
     let mut app = App::new();
     app.add_plugins(SimulationPlugin::new(
-        GameSession::new(0, slots),
-        Map::new("test", Projection::Isometric, nav_grid),
+        GameSession::new(0, slots, FinishPolicy::Endless),
+        Map::new("test", Projection::Isometric, nav_grid, vec![]),
     ));
     app
 }
@@ -124,7 +127,7 @@ pub fn gold(world: &World) -> u32 {
 /// dying phase) and an immobile dummy that leaves decaying bones — one human
 /// player, session started.
 pub fn combat_app() -> App {
-    let mut app = make_app(vec![PlayerSlot::occupied(0, PlayerType::Human)]);
+    let mut app = make_app(vec![PlayerSlot::occupied(0, PlayerType::Human, None)]);
 
     {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
@@ -149,6 +152,7 @@ pub fn combat_app() -> App {
                 .with_dying(3, Some("bones")),
         );
     }
+    app.world_mut().resource::<ContentRegistry>().validate();
 
     app.world_mut().resource_mut::<GameSession>().start();
     app
@@ -160,8 +164,8 @@ pub fn combat_app() -> App {
 /// movement, follow, and command dispatch.
 pub fn orders_app() -> App {
     let mut app = make_app(vec![
-        PlayerSlot::occupied(0, PlayerType::Human),
-        PlayerSlot::occupied(1, PlayerType::Human),
+        PlayerSlot::occupied(0, PlayerType::Human, None),
+        PlayerSlot::occupied(1, PlayerType::Human, None),
     ]);
 
     {
@@ -244,6 +248,7 @@ pub fn orders_app() -> App {
                 .with_health(20),
         );
     }
+    app.world_mut().resource::<ContentRegistry>().validate();
 
     app.world_mut().resource_mut::<GameSession>().start();
     app

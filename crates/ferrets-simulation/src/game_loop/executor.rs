@@ -29,6 +29,7 @@ use crate::{
     selection::Selection,
     session::player_slot::PlayerId,
     simulation_id::SimulationId,
+    spawn,
 };
 
 /// Processes the frame for `current_tick` if all players have contributed.
@@ -163,6 +164,13 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
                     queue.cancel_all(CancelPolicy::Soft);
                 }
             }
+        }
+        PlayerCommand::Spawn {
+            type_name,
+            position,
+        } => {
+            // Sandbox spawn: no-op if the type is unknown or the cell is blocked.
+            spawn::spawn_entity(world, type_name, *position, Some(player));
         }
     }
 }

@@ -143,7 +143,9 @@ fn attack_order_with_missing_target_finishes() {
         },
     );
 
-    utils::run_ticks(&mut app, 1);
+    // The command dispatches on the 3rd tick (2-tick input latency); the order
+    // is created then and finishes the same tick because the target is gone.
+    utils::run_ticks(&mut app, 3);
     assert!(utils::order_queue_is_empty(app.world_mut(), attacker));
     assert!(app.world_mut().get::<AttackComponent>(attacker).is_none());
 }

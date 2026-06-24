@@ -92,8 +92,11 @@ fn empty_resource_kind_panics() {
 // ─── Production catalogues ────────────────────────────────────────────────────
 //
 
+// Production catalogues (trained/built types) are checked by `validate()`, not at
+// registration, so they may reference each other in any order — including cycles.
+
 #[test]
-fn register_accepts_registered_production_catalogues() {
+fn validate_accepts_registered_production_catalogues() {
     let mut registry = ContentRegistry::default();
 
     registry.register(
@@ -116,24 +119,49 @@ fn register_accepts_registered_production_catalogues() {
             .with_location(GROUND, NavSize::ONE, Solidity::Solid)
             .with_builder(["depot"]),
     );
+
+    registry.validate();
+}
+
+#[test]
+fn validate_accepts_a_production_cycle() {
+    // The town hall trains the worker and the worker builds the town hall — a
+    // legitimate cycle that no registration order can express, but `validate`
+    // accepts because it checks against the complete registry.
+    let mut registry = ContentRegistry::default();
+    registry.register(
+        EntityTypeDef::new("town_hall")
+            .with_location(GROUND, NavSize::new(2, 2), Solidity::Solid)
+            .with_build_time(6)
+            .with_trainer(["worker"]),
+    );
+    registry.register(
+        EntityTypeDef::new("worker")
+            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_train_time(4)
+            .with_builder(["town_hall"]),
+    );
+
+    registry.validate();
 }
 
 #[test]
 #[should_panic(
     expected = "entity type 'barracks' trains 'ghost', which is not a registered trainable type"
 )]
-fn register_rejects_unknown_trained_type() {
+fn validate_rejects_unknown_trained_type() {
     let mut registry = ContentRegistry::default();
     registry.register(
         EntityTypeDef::new("barracks")
             .with_location(GROUND, NavSize::new(2, 2), Solidity::Solid)
             .with_trainer(["ghost"]),
     );
+    registry.validate();
 }
 
 #[test]
 #[should_panic(expected = "trains 'statue', which is not a registered trainable type")]
-fn register_rejects_untrainable_trained_type() {
+fn validate_rejects_untrainable_trained_type() {
     let mut registry = ContentRegistry::default();
     registry.register(EntityTypeDef::new("statue").with_location(
         GROUND,
@@ -145,24 +173,26 @@ fn register_rejects_untrainable_trained_type() {
             .with_location(GROUND, NavSize::new(2, 2), Solidity::Solid)
             .with_trainer(["statue"]),
     );
+    registry.validate();
 }
 
 #[test]
 #[should_panic(
     expected = "entity type 'worker' builds 'nexus', which is not a registered constructible type"
 )]
-fn register_rejects_unknown_built_type() {
+fn validate_rejects_unknown_built_type() {
     let mut registry = ContentRegistry::default();
     registry.register(
         EntityTypeDef::new("worker")
             .with_location(GROUND, NavSize::ONE, Solidity::Solid)
             .with_builder(["nexus"]),
     );
+    registry.validate();
 }
 
 #[test]
 #[should_panic(expected = "builds 'statue', which is not a registered constructible type")]
-fn register_rejects_unconstructible_built_type() {
+fn validate_rejects_unconstructible_built_type() {
     let mut registry = ContentRegistry::default();
     registry.register(EntityTypeDef::new("statue").with_location(
         GROUND,
@@ -174,6 +204,7 @@ fn register_rejects_unconstructible_built_type() {
             .with_location(GROUND, NavSize::ONE, Solidity::Solid)
             .with_builder(["statue"]),
     );
+    registry.validate();
 }
 
 //
@@ -261,6 +292,24 @@ fn register_cannot_form_a_corpse_cycle() {
             .with_location(GROUND, NavSize::ONE, Solidity::Solid)
             .with_dying(2, Some("bones")),
     );
+}
+
+//
+// ─── Race ─────────────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn register_accepts_a_registered_race() {
+    let mut registry = ContentRegistry::default();
+    registry.register_race("human");
+    registry.register(worker().with_race("human"));
+}
+
+#[test]
+#[should_panic(expected = "belongs to unregistered race 'orc'")]
+fn register_rejects_an_unregistered_race() {
+    let mut registry = ContentRegistry::default();
+    registry.register(worker().with_race("orc"));
 }
 
 //

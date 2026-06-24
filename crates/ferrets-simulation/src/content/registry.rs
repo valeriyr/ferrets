@@ -6,27 +6,33 @@ use bevy_ecs::prelude::*;
 
 use super::entity_type_def::EntityTypeDef;
 
-/// Stores every [`EntityTypeDef`], keyed by type name, and every resource kind.
+/// Stores every [`EntityTypeDef`], keyed by type name,
+/// as well as all the other registered content.
 #[derive(Resource, Default)]
 pub struct ContentRegistry {
     entities: HashMap<String, EntityTypeDef>,
     resources: BTreeSet<String>,
+    races: BTreeSet<String>,
 }
 
 impl ContentRegistry {
     /// Registers an entity type definition.
     ///
-    /// Validates the definition against the content already registered, so every
-    /// type it references must be registered first: trained and built types,
-    /// corpse types, and resource kinds. Registration is final — a type cannot
-    /// be replaced — so a validated definition stays consistent and corpse cycles
-    /// are unconstructible (a cycle has no member that can be registered first).
+    /// Validates everything intrinsic to the definition or that must form an
+    /// acyclic hierarchy — so resource kinds it references and any corpse type it
+    /// leaves must be registered first, and corpse cycles stay unconstructible.
+    /// Production catalogues (trained/built types) are *not* checked here because
+    /// they may legitimately reference each other cyclically (a town hall trains a
+    /// worker that builds the town hall); they are validated by [`validate`] once
+    /// all content is registered. Registration is final — a type cannot be
+    /// replaced — so a validated definition stays consistent.
+    ///
+    /// [`validate`]: Self::validate
     ///
     /// Panics if a type with the same name is already registered, or if the
-    /// definition has no location, references an unregistered resource kind,
-    /// trains a type that is not a registered trainable type, builds a type that
-    /// is not a registered constructible type, or leaves a corpse type that is
-    /// unregistered, has no dying phase, or defines live-gameplay data.
+    /// definition has no location, belongs to an unregistered race, references an
+    /// unregistered resource kind, or leaves a corpse type that is unregistered,
+    /// has no dying phase, or defines live-gameplay data.
     pub fn register(&mut self, def: EntityTypeDef) {
         assert!(
             !self.entities.contains_key(&def.name),
@@ -35,12 +41,27 @@ impl ContentRegistry {
         );
 
         self.validate_location(&def);
+        self.validate_race(&def);
         self.validate_resource_kinds(&def);
-        self.validate_trains(&def);
-        self.validate_builds(&def);
         self.validate_corpse(&def);
 
         self.entities.insert(def.name.clone(), def);
+    }
+
+    /// Validates the production catalogues of all registered types. Call once
+    /// after every type has been registered.
+    ///
+    /// These references (trained and built types) may form cycles, so they cannot
+    /// be checked at registration time; this pass checks them against the complete
+    /// registry, in any registration order.
+    ///
+    /// Panics if any type trains a type that is not a registered trainable type,
+    /// or builds a type that is not a registered constructible type.
+    pub fn validate(&self) {
+        for def in self.entities.values() {
+            self.validate_trains(def);
+            self.validate_builds(def);
+        }
     }
 
     /// Returns the definition for the given type name, or `None` if not registered.
@@ -62,6 +83,20 @@ impl ContentRegistry {
         self.resources.contains(kind)
     }
 
+    /// Registers a race (human, orc, …).
+    ///
+    /// Panics if `name` is empty.
+    pub fn register_race(&mut self, name: impl Into<String>) {
+        let name = name.into();
+        assert!(!name.is_empty(), "race name must not be empty");
+        self.races.insert(name);
+    }
+
+    /// Returns `true` if `name` is a registered race.
+    pub fn has_race(&self, name: &str) -> bool {
+        self.races.contains(name)
+    }
+
     /// Checks that the definition has the mandatory location properties.
     fn validate_location(&self, def: &EntityTypeDef) {
         assert!(
@@ -69,6 +104,17 @@ impl ContentRegistry {
             "entity type '{}' has no location",
             def.name
         );
+    }
+
+    /// Checks that the definition's race, if any, is registered.
+    fn validate_race(&self, def: &EntityTypeDef) {
+        if let Some(race) = &def.race {
+            assert!(
+                self.has_race(race),
+                "entity type '{}' belongs to unregistered race '{race}'",
+                def.name
+            );
+        }
     }
 
     /// Checks that every resource kind the definition references is registered.
@@ -153,6 +199,7 @@ impl ContentRegistry {
         let corpse = &self.entities[corpse_type];
 
         let mut allowed = EntityTypeDef::new(corpse.name.clone());
+        allowed.race = corpse.race.clone();
         allowed.location = corpse.location;
         allowed.dying = corpse.dying.clone();
 

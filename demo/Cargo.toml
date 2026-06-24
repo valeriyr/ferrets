@@ -12,7 +12,7 @@ name = "ferrets"
 path = "src/main.rs"
 
 [dependencies]
-bevy.workspace = true
+bevy = { workspace = true, features = ["2d", "ui", "default_font"] }
 
 ferrets-bevy.workspace = true
 ferrets-math.workspace = true

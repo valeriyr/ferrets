@@ -40,4 +40,13 @@ pub enum PlayerCommand {
     },
     /// Stops the current orders.
     Stop,
+    /// Spawns a fully-formed entity of `type_name` for the issuing player at
+    /// `position`, bypassing production. A sandbox/debug and scenario-scripting
+    /// command — it runs through the normal command pipeline (so it stays
+    /// deterministic and replay-safe), unlike scenario setup which spawns
+    /// directly.
+    Spawn {
+        type_name: String,
+        position: FixedUVec2,
+    },
 }

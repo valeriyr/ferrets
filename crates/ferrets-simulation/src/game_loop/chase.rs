@@ -1,11 +1,11 @@
 //! Shared chase logic for orders that walk toward a destination footprint.
 //!
-//! Attack, follow, build, and harvest all close on a destination the same way:
-//! arrive if already in range, otherwise walk toward it, otherwise give up when
-//! the previous walk made no progress.
+//! Orders that close on a destination do it the same way: arrive if already in
+//! range, otherwise walk toward it, otherwise give up when the previous walk made
+//! no progress.
 
 use bevy_ecs::{entity::Entity, world::World};
-use ferrets_math::fixed_uvec2::FixedUVec2;
+use ferrets_math::{FixedI64, fixed_uvec2::FixedUVec2, fixed_vec2::FixedVec2};
 use ferrets_pathfinder::{astar, astar::Projection, nav_pos::NavPos, nav_size::NavSize};
 
 use crate::{
@@ -61,6 +61,38 @@ pub fn advance(
         target: destination,
         range,
     })
+}
+
+/// Turns `entity` to look toward the `target` cell from its current position.
+/// A no-op when they share a cell, so the previous facing is kept rather than
+/// zeroed. Orders call this once in range so a unit faces what it acts on.
+pub fn face(world: &mut World, entity: Entity, target: FixedUVec2) {
+    let position = world
+        .entity(entity)
+        .get::<LocationComponent>()
+        .unwrap()
+        .position;
+    let facing = FixedVec2::new(
+        target.x.to_num::<FixedI64>() - position.x.to_num::<FixedI64>(),
+        target.y.to_num::<FixedI64>() - position.y.to_num::<FixedI64>(),
+    );
+    if facing != FixedVec2::ZERO {
+        world
+            .entity_mut(entity)
+            .get_mut::<LocationComponent>()
+            .unwrap()
+            .facing = facing;
+    }
+}
+
+/// Like [`face`], with the target taken from another entity's location.
+pub fn face_entity(world: &mut World, entity: Entity, target: Entity) {
+    let target_position = world
+        .entity(target)
+        .get::<LocationComponent>()
+        .unwrap()
+        .position;
+    face(world, entity, target_position);
 }
 
 /// Like [`advance`], with the destination taken from a target entity's location.

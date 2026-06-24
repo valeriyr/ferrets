@@ -6,6 +6,7 @@ mod chase;
 pub mod die;
 pub mod executor;
 pub mod follow;
+pub mod game_result;
 pub mod harvest;
 pub mod movement;
 pub mod orders;

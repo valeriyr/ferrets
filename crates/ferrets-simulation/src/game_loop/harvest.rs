@@ -212,6 +212,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
             Destination::Arrived => {}
         }
 
+        chase::face_entity(world, entity, storage);
         world
             .resource_mut::<PlayerResources>()
             .add(player, &kind, carried_amount);
@@ -252,6 +253,8 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
         }
         Destination::Arrived => {}
     }
+
+    chase::face_entity(world, entity, source_entity);
 
     let (source_kind, depletion) = {
         let source_data = world

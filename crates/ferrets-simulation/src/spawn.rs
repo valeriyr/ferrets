@@ -1,7 +1,7 @@
 //! Simulation entity creation, destruction, and map presence.
 
 use bevy_ecs::{entity::Entity, world::World};
-use ferrets_math::{fixed_uvec2::FixedUVec2, fixed_vec2::FixedVec2};
+use ferrets_math::{FixedI64, fixed_uvec2::FixedUVec2, fixed_vec2::FixedVec2};
 use ferrets_pathfinder::{nav_pos::NavPos, nav_size::NavSize};
 
 use crate::{
@@ -27,6 +27,10 @@ use crate::{
     session::player_slot::PlayerId,
     simulation_id::{SimulationId, SimulationIdGenerator},
 };
+
+/// Look direction a freshly spawned entity starts with: south, `+y` (sim `y`
+/// points down), the conventional resting facing toward the viewer.
+const DEFAULT_FACING: FixedVec2 = FixedVec2::new(FixedI64::ZERO, FixedI64::ONE);
 
 /// Spawns an entity of the given type at `position`, owned by `owner`
 /// (`None` spawns a neutral entity).
@@ -67,7 +71,7 @@ pub fn spawn_entity(
         )
     };
 
-    let location = LocationComponent::new(position, FixedVec2::ZERO);
+    let location = LocationComponent::new(position, DEFAULT_FACING);
 
     {
         let map = world.resource::<Map>();
@@ -153,7 +157,7 @@ pub fn spawn_corpse_entity(
         (type_def.location?, type_def.dying.clone())
     };
 
-    let location = LocationComponent::new(position, FixedVec2::ZERO);
+    let location = LocationComponent::new(position, DEFAULT_FACING);
     if !world
         .resource::<Map>()
         .can_place_entity(&location, &location_data)

@@ -34,7 +34,7 @@
 //! process_stats      — HP/mana regen, buff ticks                     [not yet implemented]
 //! process_skills     — skill cooldown counters                        [not yet implemented]
 //! process_entity_ai  — per-entity AI think (throttled, every N ticks) [not yet implemented]
-//! check_game_result  — evaluate victory conditions                    [not yet implemented]
+//! check_game_result  — apply the finish policy; may end the session (e.g. last player standing)
 //! tick_counter       — advance the simulation tick
 //! ```
 //!
@@ -102,26 +102,31 @@ impl Plugin for SimulationPlugin {
             .init_resource::<PendingInput>()
             .add_systems(
                 FixedUpdate,
-                // flush_input runs whenever the session is active so commands are always
-                // drained into InputFrames, even while the sim is blocked waiting for peers.
-                flush_input.in_set(SimulationSet).run_if(session_is_active),
+                // flush_input and command_executor run whenever the session is active
+                // (running OR blocked), so input keeps draining and a blocked tick can
+                // notice its frame became ready and resume. command_executor sets the
+                // blocked/running state from the frame's readiness.
+                (flush_input, systems::command_executor)
+                    .chain()
+                    .in_set(SimulationSet)
+                    .run_if(session_is_active),
             )
             .add_systems(
                 FixedUpdate,
-                // All entity-processing systems run only when the session is fully running.
-                // ApplyDeferred between command_executor and tick_orders ensures any deferred
-                // world mutations from command_executor are visible before order processing.
+                // Entity processing and the tick counter advance only while running — a
+                // blocked tick holds here, freezing the tick until the frame arrives.
+                // ApplyDeferred makes command_executor's deferred mutations visible first.
                 (
-                    systems::command_executor,
                     ApplyDeferred,
                     systems::process_dying,
                     systems::tick_orders,
                     systems::process_pending_reveals,
+                    systems::check_game_result,
                     systems::tick_counter,
                 )
                     .chain()
                     .in_set(SimulationSet)
-                    .after(flush_input)
+                    .after(systems::command_executor)
                     .run_if(session_is_running),
             );
     }

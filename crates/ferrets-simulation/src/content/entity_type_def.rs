@@ -27,6 +27,9 @@ use crate::{
 pub struct EntityTypeDef {
     /// Unique type name used to look up this definition in [`ContentRegistry`].
     pub name: String,
+    /// The race this type belongs to, by registered race name. `None` means the
+    /// type is race-neutral (e.g. resource sources, critters).
+    pub race: Option<String>,
     /// Navigation and footprint properties shared by all instances of this type.
     /// Mandatory for every spawnable type; enforced by
     /// [`ContentRegistry::validate`](crate::content::registry::ContentRegistry::validate).
@@ -70,6 +73,7 @@ impl EntityTypeDef {
 
         Self {
             name,
+            race: None,
             location: None,
             movement: None,
             health: None,
@@ -84,6 +88,16 @@ impl EntityTypeDef {
             resource_carrier: None,
             resource_storage: None,
         }
+    }
+
+    /// Assigns this type to a race, by registered race name. Race-neutral types
+    /// (resource sources, critters) omit this.
+    ///
+    /// The race must be registered before this type — see
+    /// [`ContentRegistry::register`](crate::content::registry::ContentRegistry::register).
+    pub fn with_race(mut self, race: impl Into<String>) -> Self {
+        self.race = Some(race.into());
+        self
     }
 
     /// Sets the navigation and footprint properties: the nav-layer occupation,

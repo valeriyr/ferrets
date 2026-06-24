@@ -104,6 +104,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
             Processing::suspend(move_order)
         }
         Destination::Arrived => {
+            chase::face_entity(world, entity, target);
             world.entity_mut(entity).insert(follow_component);
             Processing::state(OrderState::InProcessing)
         }

@@ -112,6 +112,11 @@ impl InputFrames {
             self.get_or_insert(target_tick).push(player, command);
         }
         self.ensure_idle(player, target_tick);
+        // The local player has no scheduled input for the first `SYNC_LATENCY`
+        // ticks (nothing could have targeted them), so fill the current tick
+        // idle if it is still empty — otherwise the loop blocks at startup. This
+        // is a no-op once commands for the current tick have been received.
+        self.ensure_idle(player, current_tick);
     }
 
     /// Records an empty frame for `player` at `tick` if no input was received yet.
