@@ -1,5 +1,5 @@
-//! Per-tick command dispatch: translates buffered [`InputFrame`]s into order-queue
-//! mutations.
+//! Per-tick command dispatch: translates buffered [`InputFrame`](crate::input::InputFrame)s
+//! into order-queue mutations.
 //!
 //! Commands only ever affect entities owned by the issuing player; selection is
 //! the single exception — any visible entity can be selected.

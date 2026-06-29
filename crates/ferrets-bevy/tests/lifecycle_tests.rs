@@ -39,7 +39,7 @@ fn destroy_entity_starts_dying_and_removes_after_timer() {
 }
 
 #[test]
-fn dying_leaves_a_corpse_that_decays() {
+fn dying_leaves_corpse_that_decays() {
     let mut app = utils::combat_app();
     let world = app.world_mut();
     let (entity, _) = spawn::spawn_entity(world, "dummy", utils::pos(4, 4), None).unwrap();

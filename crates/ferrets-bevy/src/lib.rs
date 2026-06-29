@@ -40,18 +40,29 @@
 //!
 //! Use `.after(SimulationSet)` to read sim state after the tick completes.
 mod input;
+pub mod network;
 mod systems;
 
 pub use ferrets_simulation::spawn;
 pub use input::PendingInput;
+pub use network::{
+    BlockedStreak, DesyncTracker, DropConfig, NetworkActive, NetworkPlugin, NetworkSession,
+    PauseIntent, PendingPause, auto_idle_dropped, detect_drops, install_network_session,
+    net_broadcast, net_checksum, net_pause_control, net_receive,
+};
 pub use systems::flush_input;
 
 use std::sync::Mutex;
 
 use bevy::prelude::*;
 use ferrets_simulation::{
-    content::registry::ContentRegistry, entity_index::EntityIndex, input::InputFrames, map::Map,
-    resources::PlayerResources, selection::Selection, session::GameSession,
+    content::registry::ContentRegistry,
+    entity_index::EntityIndex,
+    input::{InputFrames, PlayerFrame, SYNC_LATENCY},
+    map::Map,
+    resources::PlayerResources,
+    selection::Selection,
+    session::{GameSession, player_slot::PlayerId},
     simulation_id::SimulationIdGenerator,
 };
 
@@ -67,6 +78,33 @@ fn session_is_active(session: Res<GameSession>) -> bool {
 
 fn session_is_running(session: Res<GameSession>) -> bool {
     session.is_running()
+}
+
+fn session_is_not_paused(session: Res<GameSession>) -> bool {
+    !session.is_paused()
+}
+
+/// Builds the input queue with the lockstep warmup pre-seeded: ticks
+/// `0..SYNC_LATENCY` can never be targeted by a source scheduling `SYNC_LATENCY`
+/// ahead, so every slot is recorded idle for them — otherwise the loop would
+/// block at startup. Seeded identically on every peer, so it stays deterministic.
+fn warmup_input_frames(player_count: usize) -> InputFrames {
+    let mut frames = InputFrames::new(player_count);
+    for tick in 0..SYNC_LATENCY {
+        for player in 0..player_count as PlayerId {
+            frames.push_frame(PlayerFrame::idle(player, tick));
+        }
+    }
+    frames
+}
+
+/// (Re)sizes the per-player simulation resources for `player_count`. Call at game
+/// start once the session's slots are finalized (e.g. from a lobby), since the
+/// plugin is built before the real player count is known.
+pub fn install_game_resources(world: &mut World, player_count: usize) {
+    world.insert_resource(Selection::new(player_count));
+    world.insert_resource(PlayerResources::new(player_count));
+    world.insert_resource(warmup_input_frames(player_count));
 }
 
 /// Drives the ferrets simulation from Bevy's `FixedUpdate` schedule.
@@ -95,7 +133,7 @@ impl Plugin for SimulationPlugin {
             .insert_resource(map)
             .insert_resource(Selection::new(player_count))
             .insert_resource(PlayerResources::new(player_count))
-            .insert_resource(InputFrames::new(player_count))
+            .insert_resource(warmup_input_frames(player_count))
             .init_resource::<ContentRegistry>()
             .init_resource::<EntityIndex>()
             .init_resource::<SimulationIdGenerator>()
@@ -109,7 +147,7 @@ impl Plugin for SimulationPlugin {
                 (flush_input, systems::command_executor)
                     .chain()
                     .in_set(SimulationSet)
-                    .run_if(session_is_active),
+                    .run_if(session_is_active.and(session_is_not_paused)),
             )
             .add_systems(
                 FixedUpdate,
@@ -127,7 +165,7 @@ impl Plugin for SimulationPlugin {
                     .chain()
                     .in_set(SimulationSet)
                     .after(systems::command_executor)
-                    .run_if(session_is_running),
+                    .run_if(session_is_running.and(session_is_not_paused)),
             );
     }
 }

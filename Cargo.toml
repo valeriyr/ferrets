@@ -21,7 +21,12 @@ members = [
 
 [workspace.dependencies]
 # External crates
+bcs = "0.2"
 bevy = { version = "0.18", default-features = false }
+crossbeam-channel = "0.5"
+serde = { version = "1.0", features = ["derive"] }
+thiserror = "2.0"
+tokio = { version = "1.52", features = ["full"] }
 
 # Internal crates
 ferrets-bevy = { path = "crates/ferrets-bevy" }

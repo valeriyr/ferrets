@@ -9,6 +9,8 @@ description = "Deterministic RTS game simulation."
 
 [dependencies]
 bevy_ecs = "0.18"
+serde.workspace = true
+xxhash-rust = { version = "0.8", features = ["xxh64"] }
 
 ferrets-math.workspace = true
 ferrets-pathfinder.workspace = true

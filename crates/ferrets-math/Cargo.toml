@@ -8,4 +8,8 @@ repository.workspace = true
 description = "Fixed-point math primitives for deterministic RTS simulation."
 
 [dependencies]
-fixed = "1.31"
+fixed = { version = "1.31", features = ["serde"] }
+serde.workspace = true
+
+[dev-dependencies]
+bcs.workspace = true

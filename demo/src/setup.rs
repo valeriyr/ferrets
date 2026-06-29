@@ -1,47 +1,46 @@
-//! One-time scene setup: assign races, spawn both bases, seed resources, start
+//! One-time scene setup: spawn a base per occupied slot, seed resources, start
 //! the session. Runs on entering the game (`OnEnter(GameState::InGame)`) as an
 //! exclusive system because spawning needs `&mut World`.
 
 use bevy::prelude::*;
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_simulation::{
-    components::resource::ResourceSourceComponent, input::InputFrames, resources::PlayerResources,
-    session::GameSession, session::player_slot::PlayerId, spawn,
+    components::resource::ResourceSourceComponent,
+    input::{InputFrames, PlayerFrame, SYNC_LATENCY},
+    resources::PlayerResources,
+    session::GameSession,
+    session::player_slot::PlayerId,
+    session::player_type::PlayerType,
+    spawn,
 };
 
 use crate::map::{GOLD_MINES, START_POINTS, TREES};
-use crate::states::ChosenRace;
 
 fn cell(x: u32, y: u32) -> FixedUVec2 {
     FixedUVec2::new(FixedU64::from_num(x), FixedU64::from_num(y))
 }
 
-/// The race the local player did not pick, given to the passive enemy.
-fn opposing(race: &str) -> &'static str {
-    if race == "human" { "orc" } else { "human" }
-}
-
-/// Assigns races, spawns the starting scene, and starts the simulation.
+/// Spawns the starting scene from the session's slots (built by the lobby) and
+/// starts the simulation.
 ///
-/// Player 0 (local) plays the race chosen in the menu; player 1 (the passive
-/// enemy) plays the other one. Each base is spawned from its slot's race, so the
-/// scene is driven entirely by session data.
+/// Each occupied slot (human or AI) gets a base playing its chosen race; closed
+/// slots are skipped. The slots are byte-identical on every peer, so the scene is
+/// too.
 pub fn spawn_demo_scene(world: &mut World) {
-    let chosen = world.resource::<ChosenRace>().0.clone();
-    {
-        let mut session = world.resource_mut::<GameSession>();
-        session.set_race(0, chosen.clone());
-        session.set_race(1, opposing(&chosen));
-    }
+    // Occupied slots with their chosen race, gathered before mutating the world.
+    let occupied: Vec<(PlayerId, String)> = {
+        let session = world.resource::<GameSession>();
+        session
+            .slots()
+            .iter()
+            .filter(|slot| slot.player_type().is_some())
+            .filter_map(|slot| slot.race().map(|race| (slot.id(), race.to_string())))
+            .collect()
+    };
 
-    for player in 0..START_POINTS.len() as PlayerId {
-        let race = world
-            .resource::<GameSession>()
-            .slot(player)
-            .and_then(|slot| slot.race())
-            .map(String::from);
-        if let Some(race) = race {
-            spawn_base(world, player, &race, START_POINTS[player as usize]);
+    for (player, race) in &occupied {
+        if (*player as usize) < START_POINTS.len() {
+            spawn_base(world, *player, race, START_POINTS[*player as usize]);
         }
     }
 
@@ -67,25 +66,33 @@ pub fn spawn_demo_scene(world: &mut World) {
 
     {
         let mut resources = world.resource_mut::<PlayerResources>();
-        resources.add(0, "gold", 500);
-        resources.add(0, "wood", 200);
+        for (player, _) in &occupied {
+            resources.add(*player, "gold", 500);
+            resources.add(*player, "wood", 200);
+        }
     }
 
     world.resource_mut::<GameSession>().start();
 }
 
-/// Supplies idle input frames for every non-local player each tick.
+/// The AI/idle frame source: schedules an empty frame `SYNC_LATENCY` ticks ahead
+/// for every slot that has no other input source — AI slots and empty (closed)
+/// slots. The local player's frames come from input, and networked humans' from
+/// the transport, so those are skipped.
 ///
-/// Single-player has no network peer and no AI yet, so without this the lockstep
-/// loop would block forever waiting on player 1's frames. (A real game would
-/// source these from the network or an AI driver.)
+/// There is no AI logic yet, so it always submits idle; a real AI would replace
+/// the empty commands deterministically.
 pub fn supply_ai_input(mut frames: ResMut<InputFrames>, session: Res<GameSession>) {
-    let tick = session.tick();
+    if session.is_paused() {
+        return;
+    }
+    let target_tick = session.tick() + SYNC_LATENCY;
     let local = session.local_player();
     for slot in session.slots() {
-        if slot.id() != local {
-            frames.ensure_idle(slot.id(), tick);
+        if slot.id() == local || slot.player_type() == Some(PlayerType::Human) {
+            continue;
         }
+        frames.push_frame(PlayerFrame::idle(slot.id(), target_tick));
     }
 }
 

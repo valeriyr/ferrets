@@ -351,7 +351,7 @@ fn orthogonal_stops_inside_ring_when_within_stop_distance() {
 //
 
 #[test]
-fn in_range_zero_distance_requires_the_exact_position() {
+fn in_range_zero_distance_requires_exact_position() {
     for projection in [Projection::Isometric, Projection::Orthogonal] {
         assert!(astar::in_range(
             projection,
@@ -478,7 +478,7 @@ fn rect_cardinally_adjacent_position_is_at_distance_one() {
 }
 
 #[test]
-fn rect_distance_is_measured_to_the_nearest_cell_not_the_origin() {
+fn rect_distance_is_measured_to_nearest_cell_not_origin() {
     // (6,4) is 3 from the origin (3,3) but only 2 from the nearest cell (4,4).
     assert!(in_range_of_rect_iso((6, 4), 2));
     assert!(in_range_of_rect_ortho((6, 4), 2));
@@ -535,7 +535,7 @@ fn rect_single_cell_matches_in_range() {
 }
 
 #[test]
-fn rect_wide_clamps_to_the_facing_side() {
+fn rect_wide_clamps_to_facing_side() {
     // 3×1 rectangle: cells (3,3) (4,3) (5,3).
     // (4,5) is below the middle cell (4,3): distance 2 on both metrics.
     let size = NavSize::new(3, 1);
@@ -575,7 +575,7 @@ fn rect_wide_clamps_to_the_facing_side() {
 //
 
 #[test]
-fn rect_distance_is_zero_inside_the_footprint() {
+fn rect_distance_is_zero_inside_footprint() {
     for cell in [(3, 3), (4, 3), (3, 4), (4, 4)] {
         assert_eq!(rect_distance_iso(cell), 0);
         assert_eq!(rect_distance_ortho(cell), 0);
@@ -583,7 +583,7 @@ fn rect_distance_is_zero_inside_the_footprint() {
 }
 
 #[test]
-fn rect_distance_measures_to_the_nearest_cell() {
+fn rect_distance_measures_to_nearest_cell() {
     // (7,4) → nearest cell (4,4): 3 cells away along the x axis.
     assert_eq!(rect_distance_iso((7, 4)), 3); // Chebyshev cells
     assert_eq!(rect_distance_ortho((7, 4)), 9); // squared Euclidean cells

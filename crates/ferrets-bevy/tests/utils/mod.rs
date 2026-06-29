@@ -19,7 +19,7 @@ use ferrets_simulation::{
         resource::{DepletionPolicy, HarvestData, HarvestVisibility},
     },
     content::{entity_type_def::EntityTypeDef, registry::ContentRegistry},
-    input::InputFrames,
+    input::{InputFrames, PlayerFrame},
     map::Map,
     resources::PlayerResources,
     session::{FinishPolicy, GameSession, player_slot::PlayerSlot, player_type::PlayerType},
@@ -74,7 +74,7 @@ pub fn run_ticks(app: &mut App, ticks: u32) {
             if player != local_player {
                 world
                     .resource_mut::<InputFrames>()
-                    .ensure_idle(player, current_tick);
+                    .push_frame(PlayerFrame::idle(player, current_tick));
             }
         }
 

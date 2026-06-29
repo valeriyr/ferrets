@@ -19,7 +19,7 @@ use ferrets_simulation::{
 };
 
 #[test]
-fn collect_harvests_until_the_source_depletes() {
+fn collect_harvests_until_source_depletes() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
     let (worker, worker_id) =
@@ -58,7 +58,7 @@ fn collect_harvests_until_the_source_depletes() {
 }
 
 #[test]
-fn visible_harvest_marks_the_carrier() {
+fn visible_harvest_marks_carrier() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
     let (lumberjack, lumberjack_id) =
@@ -103,7 +103,7 @@ fn visible_harvest_marks_the_carrier() {
 }
 
 #[test]
-fn persistent_source_stays_on_the_map_when_depleted() {
+fn persistent_source_stays_on_map_when_depleted() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
     let (worker, worker_id) =
@@ -139,7 +139,7 @@ fn persistent_source_stays_on_the_map_when_depleted() {
 }
 
 #[test]
-fn a_boxed_in_cancel_defers_the_reveal_until_a_cell_frees() {
+fn boxed_in_cancel_defers_reveal_until_cell_frees() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
     let (worker, worker_id) =

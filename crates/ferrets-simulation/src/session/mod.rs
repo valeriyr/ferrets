@@ -28,6 +28,13 @@ pub enum GameResult {
     Victory { winner: PlayerId },
     /// The game ended with no winner.
     Draw,
+    /// Peers diverged at `tick`; the game cannot continue deterministically.
+    Desynchronization { tick: u32 },
+    /// The local node can no longer participate — it lost the host, or is
+    /// partitioned from every remaining peer. A *local* outcome (the other peers
+    /// drop this node and continue), not a shared result, and never the way a
+    /// winner is decided.
+    Aborted,
 }
 
 /// When a session ends on its own.
@@ -60,6 +67,14 @@ pub struct GameSession {
     finish_policy: FinishPolicy,
     /// How the game ended, once it has. `None` while still in progress.
     result: Option<GameResult>,
+    /// Whether each slot's player has been dropped (a peer whose frames stopped),
+    /// indexed by [`PlayerId`]. A dropped player's input is auto-idled and it is
+    /// excluded from the victory check.
+    dropped: Vec<bool>,
+    /// Whether the session is paused — the tick loop is frozen at the current
+    /// tick. Orthogonal to [`SessionState`]; receiving and buffering peer traffic
+    /// continues so the game can resume.
+    paused: bool,
 }
 
 impl GameSession {
@@ -75,36 +90,40 @@ impl GameSession {
         slots: Vec<PlayerSlot>,
         finish_policy: FinishPolicy,
     ) -> Self {
-        for (expected, slot) in slots.iter().enumerate() {
-            assert_eq!(
-                slot.id() as usize,
-                expected,
-                "slot ids must be contiguous starting from 0, expected {expected} got {}",
-                slot.id()
-            );
-        }
-        assert!(
-            (local_player as usize) < slots.len(),
-            "local_player {local_player} is not in slots (len {})",
-            slots.len()
-        );
+        assert_valid_slots(local_player, &slots);
 
         Self {
             tick: 0,
             state: SessionState::Pending,
+            dropped: vec![false; slots.len()],
             slots,
             local_player,
             finish_policy,
             result: None,
+            paused: false,
         }
+    }
+
+    /// Replaces the player slots and local player before the game starts. A lobby
+    /// builds the running session from its locked configuration this way, mutating
+    /// the pending session in place rather than constructing a new one.
+    ///
+    /// Panics if the session has already started, or if the slot ids are not
+    /// contiguous from `0`, or `local_player` is not a valid slot.
+    pub fn configure(&mut self, local_player: PlayerId, slots: Vec<PlayerSlot>) {
+        assert_eq!(
+            self.state,
+            SessionState::Pending,
+            "configure called after the session started",
+        );
+        assert_valid_slots(local_player, &slots);
+        self.dropped = vec![false; slots.len()];
+        self.slots = slots;
+        self.local_player = local_player;
     }
 
     pub fn start(&mut self) {
         self.state = SessionState::Running;
-    }
-
-    pub fn stop(&mut self) {
-        self.state = SessionState::Finished;
     }
 
     /// Ends the game with the given result and moves the session to
@@ -114,21 +133,6 @@ impl GameSession {
             self.state = SessionState::Finished;
             self.result = Some(result);
         }
-    }
-
-    /// Returns how the game ended, or `None` while it is still in progress.
-    pub fn result(&self) -> Option<GameResult> {
-        self.result
-    }
-
-    /// Sets when this session ends on its own. Configure before starting.
-    pub fn set_finish_policy(&mut self, policy: FinishPolicy) {
-        self.finish_policy = policy;
-    }
-
-    /// Returns when this session ends on its own.
-    pub fn finish_policy(&self) -> FinishPolicy {
-        self.finish_policy
     }
 
     /// Blocks the tick loop (waiting for input) or resumes it. Only toggles
@@ -162,6 +166,32 @@ impl GameSession {
         matches!(self.state, SessionState::Running | SessionState::Blocked)
     }
 
+    /// Pauses or resumes the session. While paused the tick loop is frozen; peer
+    /// traffic is still received and buffered so the game can resume cleanly.
+    pub fn set_paused(&mut self, paused: bool) {
+        self.paused = paused;
+    }
+
+    /// Returns `true` while the session is paused.
+    pub fn is_paused(&self) -> bool {
+        self.paused
+    }
+
+    /// Sets when this session ends on its own. Configure before starting.
+    pub fn set_finish_policy(&mut self, policy: FinishPolicy) {
+        self.finish_policy = policy;
+    }
+
+    /// Returns when this session ends on its own.
+    pub fn finish_policy(&self) -> FinishPolicy {
+        self.finish_policy
+    }
+
+    /// Returns how the game ended, or `None` while it is still in progress.
+    pub fn result(&self) -> Option<GameResult> {
+        self.result
+    }
+
     pub fn tick(&self) -> u32 {
         self.tick
     }
@@ -180,6 +210,11 @@ impl GameSession {
         self.slots.get(id as usize)
     }
 
+    /// Returns the [`PlayerId`] controlled by this client.
+    pub fn local_player(&self) -> PlayerId {
+        self.local_player
+    }
+
     /// Sets the race the given player plays. Lets a menu pick the race after the
     /// session is built.
     ///
@@ -191,8 +226,55 @@ impl GameSession {
             .set_race(race);
     }
 
-    /// Returns the [`PlayerId`] controlled by this client.
-    pub fn local_player(&self) -> PlayerId {
-        self.local_player
+    /// Drops `player` from the session — its frames have stopped. From now on its
+    /// input is auto-idled and it is excluded from the victory check.
+    ///
+    /// Panics if `player` was already dropped: a dropped player is filtered out
+    /// before a drop is decided, so re-dropping one is a logic bug.
+    pub fn drop_player(&mut self, player: PlayerId) {
+        let dropped = &mut self.dropped[player as usize];
+        assert!(
+            !*dropped,
+            "player {player} dropped twice — a dropped player must never be re-dropped",
+        );
+        *dropped = true;
     }
+
+    /// Returns `true` if `player` has been dropped from the session.
+    pub fn is_player_dropped(&self, player: PlayerId) -> bool {
+        self.dropped.get(player as usize).copied().unwrap_or(false)
+    }
+
+    /// The players dropped from the session so far, in ascending id order.
+    pub fn dropped_players(&self) -> impl Iterator<Item = PlayerId> {
+        self.dropped
+            .iter()
+            .enumerate()
+            .filter_map(|(player, &dropped)| dropped.then_some(player as PlayerId))
+    }
+
+    /// The players still active in the session so far, in ascending id order.
+    pub fn active_players(&self) -> impl Iterator<Item = PlayerId> {
+        self.dropped
+            .iter()
+            .enumerate()
+            .filter_map(|(player, &dropped)| (!dropped).then_some(player as PlayerId))
+    }
+}
+
+/// Asserts the slot ids are contiguous from `0` and `local_player` is one of them.
+fn assert_valid_slots(local_player: PlayerId, slots: &[PlayerSlot]) {
+    for (expected, slot) in slots.iter().enumerate() {
+        assert_eq!(
+            slot.id() as usize,
+            expected,
+            "slot ids must be contiguous starting from 0, expected {expected} got {}",
+            slot.id()
+        );
+    }
+    assert!(
+        (local_player as usize) < slots.len(),
+        "local_player {local_player} is not in slots (len {})",
+        slots.len()
+    );
 }

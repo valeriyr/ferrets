@@ -6,7 +6,7 @@ use ferrets_pathfinder::nav_pos::NavPos;
 use ferrets_simulation::{command::PlayerCommand, spawn};
 
 #[test]
-fn follow_tracks_a_moving_target() {
+fn follow_tracks_moving_target() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
     let (follower, follower_id) =

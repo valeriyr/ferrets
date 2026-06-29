@@ -16,7 +16,9 @@ use crate::{
 /// Counts each player's remaining entities — both alive and still dying, so a
 /// player counts as present until their last entity has finished its death and
 /// despawned. The game ends only when two or more players are occupied: the lone
-/// survivor among them wins, and if none survive it is a draw. Under
+/// survivor among them wins, and if none survive it is a draw. Dropped players are
+/// excluded from the survivors (they are still counted as occupied, so a 2-player
+/// game whose other side dropped still resolves), but kept on the map idle. Under
 /// [`FinishPolicy::Endless`] it never ends. Runs at the end of a tick, after
 /// deaths have been resolved.
 pub fn check(world: &mut World) {
@@ -50,9 +52,12 @@ pub fn check(world: &mut World) {
         }
     }
 
+    // A dropped player is never a survivor (its lingering idle units don't count),
+    // but it stays in `occupied` above so a 2-player game still meets the
+    // two-occupied bar and resolves to the other player.
     let remaining: Vec<PlayerId> = occupied
         .into_iter()
-        .filter(|player| surviving.contains(player))
+        .filter(|player| surviving.contains(player) && !session.is_player_dropped(*player))
         .collect();
 
     let result = match remaining.as_slice() {

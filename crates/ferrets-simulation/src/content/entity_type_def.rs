@@ -17,7 +17,7 @@ use crate::{
         },
         train::TrainStaticData,
     },
-    resources::Cost,
+    resources::{self, Cost},
 };
 
 /// Content-level blueprint for an entity type (unit, building, resource, …).
@@ -25,7 +25,8 @@ use crate::{
 /// Holds the static data components that are identical for every instance of this type.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EntityTypeDef {
-    /// Unique type name used to look up this definition in [`ContentRegistry`].
+    /// Unique type name used to look up this definition in
+    /// [`ContentRegistry`](crate::content::registry::ContentRegistry).
     pub name: String,
     /// The race this type belongs to, by registered race name. `None` means the
     /// type is race-neutral (e.g. resource sources, critters).
@@ -157,10 +158,7 @@ impl EntityTypeDef {
     ///
     /// Panics if an entry has an empty resource kind or a zero amount.
     pub fn with_cost(mut self, cost: impl IntoIterator<Item = (impl Into<String>, u32)>) -> Self {
-        let cost: Cost = cost
-            .into_iter()
-            .map(|(kind, amount)| (kind.into(), amount))
-            .collect();
+        let cost = resources::cost(cost);
 
         for (kind, amount) in &cost {
             assert!(!kind.is_empty(), "cost resource kinds must not be empty");

@@ -121,3 +121,30 @@ fn separate_rectangles_do_not_intersect() {
 
     assert!(!a.intersects(b));
 }
+
+//
+// ─── Serialization ──────────────────────────────────────────────────────────
+//
+
+#[test]
+fn round_trips_through_bcs() {
+    let rect = FixedURect::from_corners(utils::uvec2(1, 2), utils::uvec2(5, 6));
+
+    let bytes = bcs::to_bytes(&rect).expect("encode");
+    let decoded: FixedURect = bcs::from_bytes(&bytes).expect("decode");
+
+    assert_eq!(decoded, rect);
+}
+
+// Decoding routes through `new`, whose debug-assert rejects `min > max`. A struct
+// `{ min, max }` and the tuple `(min, max)` encode identically under bcs, so this
+// crafts bytes for a rect whose invariant is violated.
+//
+// Debug-only: the assert is compiled out of release builds.
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic]
+fn deserializing_min_greater_than_max_panics() {
+    let bad = bcs::to_bytes(&(utils::uvec2(5, 5), utils::uvec2(1, 1))).expect("encode");
+    let _: FixedURect = bcs::from_bytes(&bad).expect("decode");
+}

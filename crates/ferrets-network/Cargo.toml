@@ -8,4 +8,11 @@ repository.workspace = true
 description = "Lockstep P2P networking for deterministic multiplayer."
 
 [dependencies]
+bcs.workspace = true
+crossbeam-channel.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+ferrets-math.workspace = true
 ferrets-simulation.workspace = true

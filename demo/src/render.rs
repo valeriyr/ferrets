@@ -58,8 +58,10 @@ fn color_for(owner: Option<&OwnerComponent>, source: Option<&ResourceSourceStati
         };
     }
     match owner.map(|o| o.player()) {
-        Some(0) => Color::srgb(0.35, 0.55, 1.0), // local player — blue
-        Some(1) => Color::srgb(1.0, 0.35, 0.35), // enemy — red
+        Some(0) => Color::srgb(0.35, 0.55, 1.0), // player 0 — blue
+        Some(1) => Color::srgb(1.0, 0.35, 0.35), // player 1 — red
+        Some(2) => Color::srgb(0.4, 0.8, 0.4),   // player 2 — green
+        Some(3) => Color::srgb(0.7, 0.4, 0.9),   // player 3 — purple
         _ => Color::srgb(0.75, 0.7, 0.4),        // neutral — tan
     }
 }

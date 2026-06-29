@@ -3,6 +3,7 @@
 use bevy::input::mouse::AccumulatedMouseScroll;
 use bevy::prelude::*;
 use ferrets_simulation::map::Map;
+use ferrets_simulation::session::GameSession;
 
 use crate::map::START_POINTS;
 use crate::render::CELL_PX;
@@ -12,17 +13,25 @@ const PAN_SPEED: f32 = 700.0;
 const MIN_ZOOM: f32 = 0.7;
 const MAX_ZOOM: f32 = 2.0;
 
-/// Spawns the 2D camera, framed on the local player's start point.
+/// Spawns the 2D camera. It is framed on the local player's base once the game
+/// starts (see [`frame_local_player`]); the local player isn't known yet here.
 pub fn spawn_camera(mut commands: Commands) {
-    let (sx, sy) = START_POINTS[0];
-    commands.spawn((
-        Camera2d,
-        Transform::from_xyz(
-            (sx as f32 + 5.0) * CELL_PX,
-            -(sy as f32 + 5.0) * CELL_PX,
-            0.0,
-        ),
-    ));
+    commands.spawn((Camera2d, Transform::default()));
+}
+
+/// Centers the camera on the local player's start point when the game begins.
+pub fn frame_local_player(
+    session: Res<GameSession>,
+    mut camera: Query<&mut Transform, With<Camera2d>>,
+) {
+    let Some(&(sx, sy)) = START_POINTS.get(session.local_player() as usize) else {
+        return;
+    };
+    let Ok(mut transform) = camera.single_mut() else {
+        return;
+    };
+    transform.translation.x = (sx as f32 + 5.0) * CELL_PX;
+    transform.translation.y = -(sy as f32 + 5.0) * CELL_PX;
 }
 
 /// Pans the camera with WASD/arrows and zooms with the scroll wheel, keeping the

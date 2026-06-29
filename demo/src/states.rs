@@ -1,18 +1,26 @@
-//! Top-level game flow: the race-select menu, then the running game.
+//! The demo's top-level flow, modelled as Bevy states.
 
 use bevy::prelude::*;
 
 /// Which screen the demo is showing.
 #[derive(States, Default, Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum GameState {
-    /// Race-select menu, shown before the game starts.
+    /// The main menu: pick local, host, or join.
     #[default]
     Menu,
+    /// The lobby: configure slots and start the game.
+    Lobby,
     /// The game is running.
     InGame,
 }
 
-/// The race the local player picked in the menu (a registered race id, e.g.
-/// `"human"`).
-#[derive(Resource, Default)]
-pub struct ChosenRace(pub String);
+/// Which flavour of lobby the player entered from the menu.
+#[derive(Resource, Clone, Copy, PartialEq, Eq, Debug)]
+pub enum LobbyMode {
+    /// A local game against AI; no networking.
+    Local,
+    /// Hosting a network game.
+    Host,
+    /// Joining a hosted network game.
+    Client,
+}

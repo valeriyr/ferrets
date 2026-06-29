@@ -10,6 +10,16 @@ use crate::session::player_slot::PlayerId;
 /// A price in one or more resource kinds, e.g. `{"gold": 100, "wood": 50}`.
 pub type Cost = BTreeMap<String, u32>;
 
+/// Builds a [`Cost`] from `(kind, amount)` entries, converting keys to owned
+/// strings. Does not validate amounts or kinds — the caller decides what counts
+/// as valid.
+pub fn cost(entries: impl IntoIterator<Item = (impl Into<String>, u32)>) -> Cost {
+    entries
+        .into_iter()
+        .map(|(kind, amount)| (kind.into(), amount))
+        .collect()
+}
+
 /// Resource stockpiles for all players in the session, indexed by [`PlayerId`].
 #[derive(Resource)]
 pub struct PlayerResources(Vec<BTreeMap<String, u32>>);
@@ -23,6 +33,16 @@ impl PlayerResources {
     /// Returns the amount of `kind` the player currently has.
     pub fn amount(&self, player: PlayerId, kind: &str) -> u32 {
         self.0[player as usize].get(kind).copied().unwrap_or(0)
+    }
+
+    /// Iterates every `(player, kind, amount)` in deterministic order — ascending
+    /// player, then kind.
+    pub fn iter(&self) -> impl Iterator<Item = (PlayerId, &str, u32)> {
+        self.0.iter().enumerate().flat_map(|(player, stock)| {
+            stock
+                .iter()
+                .map(move |(kind, &amount)| (player as PlayerId, kind.as_str(), amount))
+        })
     }
 
     /// Adds `amount` of `kind` to the player's stockpile, saturating at

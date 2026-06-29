@@ -4,7 +4,7 @@
 
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
-use ferrets_bevy::PendingInput;
+use ferrets_bevy::{NetworkActive, PauseIntent, PendingInput};
 use ferrets_math::{FixedU64, fixed_urect::FixedURect, fixed_uvec2::FixedUVec2};
 use ferrets_pathfinder::nav_pos::NavPos;
 use ferrets_simulation::{
@@ -28,6 +28,26 @@ use crate::render::CELL_PX;
 
 /// Drag below this many pixels is treated as a click, not a box-select.
 const CLICK_SLOP: f32 = 4.0;
+
+/// Toggles pause on the `P` key. In a network game this records the local intent,
+/// which the host turns into a tick-aligned pause every node applies together (a
+/// client forwards it to the host); a local game pauses its session immediately.
+pub fn pause_input(
+    keys: Res<ButtonInput<KeyCode>>,
+    networked: Option<Res<NetworkActive>>,
+    mut intent: ResMut<PauseIntent>,
+    mut session: ResMut<GameSession>,
+) {
+    if !keys.just_pressed(KeyCode::KeyP) {
+        return;
+    }
+    let want_paused = !session.is_paused();
+    if networked.is_some() {
+        intent.0 = Some(want_paused);
+    } else {
+        session.set_paused(want_paused);
+    }
+}
 
 /// What the next left-click does.
 #[derive(Resource, Default)]

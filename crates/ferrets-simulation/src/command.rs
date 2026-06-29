@@ -1,14 +1,15 @@
 //! Player commands — the atomic inputs that drive the simulation.
 //!
-//! Commands reference entities by [`SimulationId`] rather than Bevy's [`Entity`] so they
+//! Commands reference entities by [`SimulationId`] rather than Bevy's `Entity` so they
 //! are identical across all peers and survive serialization to replay files.
 
 use ferrets_math::{fixed_urect::FixedURect, fixed_uvec2::FixedUVec2};
+use serde::{Deserialize, Serialize};
 
 use crate::simulation_id::SimulationId;
 
 /// A player command.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PlayerCommand {
     /// Replaces the player's selection with the given entity.
     SelectById { id: SimulationId },

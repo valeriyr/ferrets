@@ -5,7 +5,7 @@ mod utils;
 use ferrets_simulation::command::PlayerCommand;
 
 #[test]
-fn spawn_command_creates_an_entity() {
+fn spawn_command_creates_entity() {
     let mut app = utils::orders_app();
     assert_eq!(utils::count_of_type(app.world_mut(), "soldier"), 0);
 

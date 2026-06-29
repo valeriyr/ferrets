@@ -163,7 +163,7 @@ fn layer_mask_filters_obstacles() {
 //
 
 #[test]
-fn placement_returns_a_free_anchor_cell_first() {
+fn placement_returns_free_anchor_cell_first() {
     // The anchor rectangle itself is scanned first; on an empty grid the
     // top-left anchor cell wins.
     let grid = utils::grid(10, 10);
@@ -181,7 +181,7 @@ fn placement_returns_a_free_anchor_cell_first() {
 }
 
 #[test]
-fn placement_skips_an_occupied_anchor_and_picks_the_first_ring_cell() {
+fn placement_skips_occupied_anchor_and_picks_first_ring_cell() {
     // . . . . . .   y=2   anchor 2×2 at (3,3) fully occupied → ring 1 spans
     // . . A A . .   y=3   (2,2)..(5,5); first free cell in row-major order
     // . . A A . .   y=4   is (2,2).
@@ -205,7 +205,7 @@ fn placement_skips_an_occupied_anchor_and_picks_the_first_ring_cell() {
 }
 
 #[test]
-fn placement_requires_the_whole_spawn_footprint() {
+fn placement_requires_whole_spawn_footprint() {
     // Single free cells are not enough for a 2×2 spawn; the first row-major
     // position whose whole 2×2 footprint is free wins.
     let mut grid = utils::grid(8, 8);

@@ -2,10 +2,12 @@
 
 use std::ops::{Add, AddAssign, Mul, Sub};
 
+use serde::{Deserialize, Serialize};
+
 use crate::{FixedI64, FixedU64, fixed_vec2::FixedVec2};
 
 /// 2D unsigned vector with [`FixedU64`] components.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub struct FixedUVec2 {
     pub x: FixedU64,
     pub y: FixedU64,

@@ -18,7 +18,7 @@ use ferrets_simulation::{
 
 #[test]
 #[should_panic(expected = "entity type 'worker' is already registered")]
-fn register_rejects_a_duplicate_type() {
+fn register_rejects_duplicate_type() {
     let mut registry = ContentRegistry::default();
     registry.register(worker());
     registry.register(worker());
@@ -124,7 +124,7 @@ fn validate_accepts_registered_production_catalogues() {
 }
 
 #[test]
-fn validate_accepts_a_production_cycle() {
+fn validate_accepts_production_cycle() {
     // The town hall trains the worker and the worker builds the town hall — a
     // legitimate cycle that no registration order can express, but `validate`
     // accepts because it checks against the complete registry.
@@ -281,7 +281,7 @@ fn register_rejects_corpse_with_live_gameplay_data() {
 
 #[test]
 #[should_panic(expected = "leaves an unregistered corpse type 'bones'")]
-fn register_cannot_form_a_corpse_cycle() {
+fn register_cannot_form_corpse_cycle() {
     let mut registry = ContentRegistry::default();
 
     // A corpse cycle is unconstructible: a corpse type must be registered before
@@ -299,7 +299,7 @@ fn register_cannot_form_a_corpse_cycle() {
 //
 
 #[test]
-fn register_accepts_a_registered_race() {
+fn register_accepts_registered_race() {
     let mut registry = ContentRegistry::default();
     registry.register_race("human");
     registry.register(worker().with_race("human"));
@@ -307,7 +307,7 @@ fn register_accepts_a_registered_race() {
 
 #[test]
 #[should_panic(expected = "belongs to unregistered race 'orc'")]
-fn register_rejects_an_unregistered_race() {
+fn register_rejects_unregistered_race() {
     let mut registry = ContentRegistry::default();
     registry.register(worker().with_race("orc"));
 }

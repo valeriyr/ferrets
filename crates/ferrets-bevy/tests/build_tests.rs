@@ -17,7 +17,7 @@ use ferrets_simulation::{
 };
 
 #[test]
-fn build_constructs_a_building() {
+fn build_constructs_building() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
     let (worker, worker_id) =
@@ -82,7 +82,7 @@ fn build_constructs_a_building() {
 }
 
 #[test]
-fn cancelling_a_build_refunds_and_restores_the_builder() {
+fn cancelling_build_refunds_and_restores_builder() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
     let (worker, worker_id) =

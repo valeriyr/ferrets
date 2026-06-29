@@ -5,7 +5,7 @@ use ferrets_pathfinder::{layer_id::LayerId, layer_mask::LayerMask};
 //
 
 #[test]
-fn new_stores_the_bit_value() {
+fn new_stores_bit_value() {
     assert_eq!(*LayerId::new(1), 1u32);
     assert_eq!(*LayerId::new(4), 4u32);
     assert_eq!(*LayerId::new(1 << 31), 1 << 31);

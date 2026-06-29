@@ -1,13 +1,14 @@
 //! Deterministic simulation identifier, stable across all peers and replays.
 
 use bevy_ecs::prelude::*;
+use serde::{Deserialize, Serialize};
 
 /// A monotonically increasing identifier assigned to every simulation entity at spawn time.
 ///
 /// Unlike Bevy's [`Entity`], [`SimulationId`] is identical on all clients because entities are
 /// spawned in the same deterministic order everywhere. Use [`SimulationId`] in commands and replays;
 /// use [`Entity`] for internal ECS queries.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct SimulationId(pub u32);
 
 /// Tracks the next [`SimulationId`] to assign.

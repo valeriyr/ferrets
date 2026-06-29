@@ -202,6 +202,8 @@ pub fn update_game_over(session: Res<GameSession>, mut text: Query<&mut Text, Wi
     let message = match session.result() {
         None => "",
         Some(GameResult::Draw) => "Draw",
+        Some(GameResult::Desynchronization { .. }) => "Desynchronization!",
+        Some(GameResult::Aborted) => "Aborted",
         Some(GameResult::Victory { winner }) if winner == session.local_player() => "Victory!",
         Some(GameResult::Victory { .. }) => "Defeat",
     };

@@ -108,7 +108,7 @@ pub fn cancel_processing(
 
 /// Advance a Build order by one tick.
 ///
-/// Until the building is placed: walk to within [`BUILD_DISTANCE`] of the site
+/// Until the building is placed: walk to within `BUILD_DISTANCE` of the site
 /// (suspending on a chase move), then pay the cost, hide the builder inside the
 /// site, and spawn the building under construction. The order finishes early if
 /// the site is blocked or the cost cannot be paid.

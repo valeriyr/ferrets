@@ -1,11 +1,13 @@
 //! Axis-aligned signed fixed-point rectangle.
 
+use serde::{Deserialize, Deserializer, Serialize};
+
 use crate::FixedI64;
 
 use crate::fixed_vec2::FixedVec2;
 
 /// Axis-aligned bounding rectangle with [`FixedI64`] coordinates.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct FixedRect {
     min: FixedVec2,
     max: FixedVec2,
@@ -66,5 +68,17 @@ impl FixedRect {
             && self.max.x >= other.min.x
             && self.min.y <= other.max.y
             && self.max.y >= other.min.y
+    }
+}
+
+// Deserialization is hand-written rather than derived so decoded data is routed
+// through `new`, enforcing the `min <= max` invariant the same way as every other
+// construction path (a derive would bypass it). bcs encodes a two-field struct
+// and a two-tuple identically, so reading `(min, max)` matches the derived
+// `Serialize`.
+impl<'de> Deserialize<'de> for FixedRect {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let (min, max) = <(FixedVec2, FixedVec2)>::deserialize(deserializer)?;
+        Ok(Self::new(min, max))
     }
 }

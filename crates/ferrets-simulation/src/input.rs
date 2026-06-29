@@ -2,22 +2,34 @@
 
 use std::collections::BTreeMap;
 
-/// How many ticks ahead commands are scheduled, giving all peers time to
-/// receive them before they must execute. Commands from the UI or network
-/// target `session.tick() + SYNC_LATENCY`.
-const SYNC_LATENCY: u32 = 2;
-
 use bevy_ecs::prelude::*;
+use serde::{Deserialize, Serialize};
 
 use crate::{command::PlayerCommand, session::player_slot::PlayerId};
 
+/// How many ticks ahead commands are scheduled, giving all peers time to
+/// receive them before they must execute. Commands from the UI or network
+/// target `session.tick() + SYNC_LATENCY`.
+pub const SYNC_LATENCY: u32 = 2;
+
 /// One player's commands for a single tick.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlayerFrame {
     pub player: PlayerId,
     pub tick: u32,
     /// Commands issued this tick. Empty means the player was idle.
     pub commands: Vec<PlayerCommand>,
+}
+
+impl PlayerFrame {
+    /// A frame carrying no commands — the player did nothing this tick.
+    pub fn idle(player: PlayerId, tick: u32) -> Self {
+        Self {
+            player,
+            tick,
+            commands: Vec::new(),
+        }
+    }
 }
 
 /// All players' commands for one tick, indexed by [`PlayerId`].
@@ -38,6 +50,11 @@ impl InputFrame {
         self.slots.iter().all(|s| s.is_some())
     }
 
+    /// Returns `true` if `player` has contributed a frame for this tick.
+    fn has(&self, player: PlayerId) -> bool {
+        self.slots[player as usize].is_some()
+    }
+
     /// Iterates over `(PlayerId, commands)` pairs.
     pub fn iter(&self) -> impl Iterator<Item = (PlayerId, &[PlayerCommand])> {
         self.slots.iter().enumerate().map(|(i, s)| {
@@ -49,21 +66,18 @@ impl InputFrame {
         })
     }
 
-    /// Returns `true` if commands for `player` have been received.
-    fn is_received(&self, player: PlayerId) -> bool {
-        self.slots[player as usize].is_some()
-    }
-
-    /// Sets the commands for `player`.
-    fn set(&mut self, player: PlayerId, commands: Vec<PlayerCommand>) {
-        self.slots[player as usize] = Some(commands);
-    }
-
-    /// Adds a single command for `player`.
-    fn push(&mut self, player: PlayerId, command: PlayerCommand) {
-        match &mut self.slots[player as usize] {
-            Some(existing) => existing.push(command),
-            slot => *slot = Some(vec![command]),
+    /// Records `commands` for `player`, the first time wins. A repeat for an
+    /// already-recorded slot must be byte-identical (a redundant copy); a
+    /// *differing* one is a determinism bug, so it is asserted in debug builds and
+    /// ignored in release (keeping the committed input immutable).
+    fn record(&mut self, player: PlayerId, commands: Vec<PlayerCommand>) {
+        let slot = &mut self.slots[player as usize];
+        match slot {
+            Some(existing) => debug_assert!(
+                *existing == commands,
+                "conflicting input for player {player}: input is immutable once recorded",
+            ),
+            None => *slot = Some(commands),
         }
     }
 }
@@ -89,46 +103,40 @@ impl InputFrames {
         self.frames.get(&tick).filter(|f| f.is_ready())
     }
 
-    /// Adds a frame from a network peer.
-    /// No-op if a frame from that player for that tick was already received.
-    pub fn push_player_frame(&mut self, frame: PlayerFrame) {
-        let input_frame = self.get_or_insert(frame.tick);
-
-        if !input_frame.is_received(frame.player) {
-            input_frame.set(frame.player, frame.commands);
-        }
+    /// Returns `true` if `player` has a frame recorded for `tick` — used to find
+    /// which slot is holding up a blocked tick.
+    pub fn has_frame(&self, player: PlayerId, tick: u32) -> bool {
+        self.frames.get(&tick).is_some_and(|f| f.has(player))
     }
 
-    /// Schedules local player commands for `current_tick + SYNC_LATENCY` and
-    /// records an idle frame if no commands were submitted.
-    pub fn push_local(
-        &mut self,
-        player: PlayerId,
-        current_tick: u32,
-        commands: impl Iterator<Item = PlayerCommand>,
-    ) {
-        let target_tick = current_tick + SYNC_LATENCY;
-        for command in commands {
-            self.get_or_insert(target_tick).push(player, command);
+    /// Clones every recorded frame whose tick is in `[from, to]` (inclusive),
+    /// ascending by tick then player. The networking layer reads this window to
+    /// (re)broadcast; it then selects which players' frames actually go on the
+    /// wire (the queue itself holds locally-synthesized fills too).
+    pub fn frames_in_range(&self, from: u32, to: u32) -> Vec<PlayerFrame> {
+        let mut frames = Vec::new();
+        for (&tick, frame) in self.frames.range(from..=to) {
+            for (player, slot) in frame.slots.iter().enumerate() {
+                if let Some(commands) = slot {
+                    frames.push(PlayerFrame {
+                        player: player as PlayerId,
+                        tick,
+                        commands: commands.clone(),
+                    });
+                }
+            }
         }
-        self.ensure_idle(player, target_tick);
-        // The local player has no scheduled input for the first `SYNC_LATENCY`
-        // ticks (nothing could have targeted them), so fill the current tick
-        // idle if it is still empty — otherwise the loop blocks at startup. This
-        // is a no-op once commands for the current tick have been received.
-        self.ensure_idle(player, current_tick);
+        frames
     }
 
-    /// Records an empty frame for `player` at `tick` if no input was received yet.
-    pub fn ensure_idle(&mut self, player: PlayerId, tick: u32) {
-        let is_received = self
-            .frames
-            .get(&tick)
-            .is_some_and(|f| f.is_received(player));
-
-        if !is_received {
-            self.get_or_insert(tick).set(player, vec![]);
-        }
+    /// Records a player's frame for its tick — the single way input enters the
+    /// queue. Idempotent: re-recording the same `(player, tick)` is a no-op, so
+    /// redundant copies (the resend window, relay hops) are safe; for an idle
+    /// player pass [`PlayerFrame::idle`]. A *differing* repeat is a determinism
+    /// bug — asserted in debug builds, ignored in release.
+    pub fn push_frame(&mut self, frame: PlayerFrame) {
+        self.get_or_insert(frame.tick)
+            .record(frame.player, frame.commands);
     }
 
     /// Returns a mutable reference to the frame for `tick`, creating it if necessary.

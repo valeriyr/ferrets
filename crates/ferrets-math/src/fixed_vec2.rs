@@ -2,10 +2,12 @@
 
 use std::ops::{Add, AddAssign, Mul, Neg, Sub, SubAssign};
 
+use serde::{Deserialize, Serialize};
+
 use crate::FixedI64;
 
 /// 2D vector with [`FixedI64`] components.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub struct FixedVec2 {
     pub x: FixedI64,
     pub y: FixedI64,
