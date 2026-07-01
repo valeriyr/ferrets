@@ -14,7 +14,7 @@ use crate::message::control::ControlMessage;
 use crate::message::error::MessageError;
 use crate::message::gameplay::GameplayMessage;
 
-/// The result type related to messages.
+/// A result whose error is a [`MessageError`].
 pub type Result<T> = std::result::Result<T, MessageError>;
 
 /// One message exchanged between peers, tagged by the channel it belongs to.

@@ -1,0 +1,215 @@
+//! Replay file IO for the demo: record every game to disk, and watch one back
+//! through a native file-open dialog.
+//!
+//! The engine-side recording and playback systems live in `ferrets-bevy`; this
+//! module supplies the files they read and write, and the menu/teardown plumbing
+//! around them.
+
+use std::fs::File;
+use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use bevy::prelude::*;
+use ferrets_bevy::{
+    BlockedStreak, DesyncTracker, NetworkActive, NetworkSession, PauseIntent, PendingPause,
+    ReplayPlayback, ReplayRecorder, install_game_resources, install_replay_playback,
+    install_replay_recorder,
+};
+use ferrets_replay::header::ReplayHeader;
+use ferrets_replay::recorder::Recorder;
+use ferrets_replay::replay::Replay;
+use ferrets_simulation::{
+    entity_index::EntityIndex,
+    session::{GameResult, GameSession},
+    simulation_id::SimulationIdGenerator,
+};
+
+use crate::states::{GameState, InGameUi};
+
+/// Set by the menu to ask for a replay to be opened; consumed by
+/// [`start_watching`].
+#[derive(Resource)]
+pub struct WatchReplayRequested;
+
+/// Where the current game's replay is being written, kept so the path can be
+/// reported when the game ends.
+#[derive(Resource)]
+struct RecordingPath(PathBuf);
+
+/// Begins recording the game just started, unless it is itself a replay being
+/// watched. Reads the configured session for the header. Runs on entering the
+/// game.
+pub fn start_recording(world: &mut World) {
+    if world.get_resource::<ReplayPlayback>().is_some() {
+        return;
+    }
+
+    let header = {
+        let session = world.resource::<GameSession>();
+        ReplayHeader::new(session.slots().to_vec(), session.finish_policy())
+    };
+
+    let path = match new_replay_path() {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("failed to prepare the replays directory: {error}");
+            return;
+        }
+    };
+    let file = match File::create(&path) {
+        Ok(file) => file,
+        Err(error) => {
+            eprintln!("failed to create replay {}: {error}", path.display());
+            return;
+        }
+    };
+    match Recorder::new(file, &header) {
+        Ok(recorder) => {
+            install_replay_recorder(world, recorder);
+            world.insert_resource(RecordingPath(path));
+        }
+        Err(error) => eprintln!("failed to start replay recording: {error}"),
+    }
+}
+
+/// Opens a replay through the file dialog, configures the session from its
+/// header, and enters the game in playback. Runs in the menu; a no-op unless a
+/// watch was requested, and a no-op if the dialog is cancelled.
+pub fn start_watching(world: &mut World) {
+    if world.remove_resource::<WatchReplayRequested>().is_none() {
+        return;
+    }
+
+    let Some(path) = rfd::FileDialog::new()
+        .add_filter("ferrets replay", &["frep"])
+        .set_directory(replays_dir())
+        .pick_file()
+    else {
+        return;
+    };
+
+    let replay = match open_replay(&path) {
+        Ok(replay) => replay,
+        Err(error) => {
+            eprintln!("failed to load replay {}: {error}", path.display());
+            return;
+        }
+    };
+
+    let current = ferrets_simulation::VERSION;
+    if replay.header().engine_version != current {
+        eprintln!(
+            "warning: replay recorded by engine {} but this build is {current}; it may not replay faithfully",
+            replay.header().engine_version,
+        );
+    }
+
+    // Owned setup, taken before the replay is moved into playback.
+    let (slots, finish_policy, player_count) = {
+        let header = replay.header();
+        (
+            header.slots.clone(),
+            header.finish_policy,
+            header.slots.len(),
+        )
+    };
+
+    // The viewer is a spectator; follow the first occupied slot for the camera.
+    let viewer = slots
+        .iter()
+        .find(|slot| slot.player_type().is_some())
+        .map_or(0, |slot| slot.id());
+
+    {
+        let mut session = world.resource_mut::<GameSession>();
+        session.configure(viewer, slots);
+        session.set_finish_policy(finish_policy);
+    }
+    install_game_resources(world, player_count);
+    install_replay_playback(world, replay);
+    world
+        .resource_mut::<NextState<GameState>>()
+        .set(GameState::InGame);
+}
+
+/// Tears the game down when returning to the menu: reports the recorded replay,
+/// despawns every simulation entity (their sprites go with them), and resets the
+/// session and replay/network state to pending. Runs on leaving the game.
+pub fn teardown_session(world: &mut World) {
+    if let Some(path) = world.get_resource::<RecordingPath>() {
+        let path = path.0.clone();
+        let note = match world.resource::<GameSession>().result() {
+            Some(GameResult::Desynchronization { tick }) => format!(" (desync at tick {tick})"),
+            Some(GameResult::Aborted) => String::from(" (aborted)"),
+            _ => String::new(),
+        };
+        println!("replay saved to {}{note}", path.display());
+    }
+
+    let entities: Vec<Entity> = {
+        let index = world.resource::<EntityIndex>();
+        index
+            .alive_entries()
+            .into_iter()
+            .chain(index.dying_entries())
+            .map(|(_, entity)| entity)
+            .collect()
+    };
+    for entity in entities {
+        world.despawn(entity);
+    }
+
+    // Despawn the in-game HUD/overlay (sprites despawn with their sim entities above).
+    let ui: Vec<Entity> = world
+        .query_filtered::<Entity, With<InGameUi>>()
+        .iter(world)
+        .collect();
+    for entity in ui {
+        world.despawn(entity);
+    }
+
+    world.insert_resource(EntityIndex::default());
+    world.insert_resource(SimulationIdGenerator::default());
+    world.insert_resource(GameSession::default());
+    // Despawning entities does not release the cells they occupied, so rebuild the
+    // map to clear its occupation grid for the next game.
+    world.insert_resource(crate::map::build());
+
+    world.remove_non_send_resource::<NetworkSession>();
+    world.remove_resource::<NetworkActive>();
+    world.remove_non_send_resource::<ReplayRecorder>();
+    world.remove_resource::<ReplayPlayback>();
+    world.remove_resource::<RecordingPath>();
+
+    // These network resources live for the app's lifetime, so reset (not remove)
+    // their per-game state — stale checksums or a pending pause would otherwise
+    // bleed into the next network game.
+    world.insert_resource(DesyncTracker::default());
+    world.insert_resource(BlockedStreak::default());
+    world.insert_resource(PendingPause::default());
+    world.insert_resource(PauseIntent::default());
+}
+
+/// Opens and reads a replay file.
+fn open_replay(path: &PathBuf) -> ferrets_replay::Result<Replay> {
+    let file = File::open(path)?;
+    Replay::read(std::io::BufReader::new(file))
+}
+
+/// A fresh, timestamped replay path, creating the replays directory if needed.
+fn new_replay_path() -> std::io::Result<PathBuf> {
+    let dir = replays_dir();
+    std::fs::create_dir_all(&dir)?;
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis())
+        .unwrap_or(0);
+    Ok(dir.join(format!("{stamp}.frep")))
+}
+
+/// The directory replays are written to and opened from.
+fn replays_dir() -> PathBuf {
+    std::env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join("replays")
+}

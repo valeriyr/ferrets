@@ -14,7 +14,7 @@ use bevy::prelude::*;
 use ferrets_network::message::control::{ControlMessage, InGameMessage};
 use ferrets_network::session::NetSession;
 use ferrets_simulation::{
-    checksum::state_checksum,
+    checksum::{CHECKSUM_INTERVAL, state_checksum},
     input::{InputFrames, PlayerFrame, SYNC_LATENCY},
     session::{GameResult, GameSession, player_slot::PlayerId},
 };
@@ -27,10 +27,6 @@ use crate::{SimulationSet, session_is_active, session_is_not_paused, session_is_
 /// reaches it and freezes there. A resume needs no delay: all nodes are already
 /// frozen at the same tick, so it applies immediately.
 const PAUSE_DELAY: u32 = SYNC_LATENCY * 2;
-
-/// How often (in ticks) peers exchange a state checksum. Cheap enough to do
-/// often; small enough that a desync surfaces quickly.
-const CHECKSUM_INTERVAL: u32 = 8;
 
 /// How long the tick may stay blocked on a player before that player is dropped
 /// — the reconnection grace window, measured in blocked `FixedUpdate` steps (not

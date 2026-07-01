@@ -17,6 +17,7 @@ use ferrets_simulation::{
 
 use crate::input::InputMode;
 use crate::render::CELL_PX;
+use crate::states::InGameUi;
 
 /// Toggleable debug options.
 #[derive(Resource)]
@@ -42,6 +43,7 @@ pub struct DebugText;
 /// Spawns the debug readout line.
 pub fn setup_debug(mut commands: Commands) {
     commands.spawn((
+        InGameUi,
         DebugText,
         Text::new(""),
         TextFont {

@@ -2,6 +2,7 @@
 
 use bevy::prelude::*;
 
+use crate::replay::WatchReplayRequested;
 use crate::states::{GameState, LobbyMode};
 
 const NORMAL: Color = Color::srgb(0.20, 0.20, 0.24);
@@ -12,9 +13,14 @@ const PRESSED: Color = Color::srgb(0.35, 0.55, 0.35);
 #[derive(Component)]
 pub struct MenuRoot;
 
-/// Tags a button with the lobby it opens.
+/// Tags a button with the action it triggers.
 #[derive(Component, Clone, Copy)]
-pub struct MenuButton(LobbyMode);
+pub enum MenuButton {
+    /// Opens the lobby in the given mode.
+    Lobby(LobbyMode),
+    /// Opens a replay file to watch.
+    WatchReplay,
+}
 
 /// Builds the main menu.
 pub fn setup_menu(mut commands: Commands) {
@@ -39,16 +45,20 @@ pub fn setup_menu(mut commands: Commands) {
                 },
                 TextColor(Color::srgb(0.95, 0.95, 0.9)),
             ),
-            menu_button("Local Game", LobbyMode::Local),
-            menu_button("Create Network Game", LobbyMode::Host),
-            menu_button("Connect To Network Game", LobbyMode::Client),
+            menu_button("Local Game", MenuButton::Lobby(LobbyMode::Local)),
+            menu_button("Create Network Game", MenuButton::Lobby(LobbyMode::Host)),
+            menu_button(
+                "Connect To Network Game",
+                MenuButton::Lobby(LobbyMode::Client)
+            ),
+            menu_button("Watch Replay", MenuButton::WatchReplay),
         ],
     ));
 }
 
-fn menu_button(label: &str, mode: LobbyMode) -> impl Bundle {
+fn menu_button(label: &str, button: MenuButton) -> impl Bundle {
     (
-        MenuButton(mode),
+        button,
         Button,
         Node {
             width: px(380),
@@ -79,8 +89,16 @@ pub fn menu_buttons(
         match interaction {
             Interaction::Pressed => {
                 *color = BackgroundColor(PRESSED);
-                commands.insert_resource(button.0);
-                next.set(GameState::Lobby);
+                match button {
+                    MenuButton::Lobby(mode) => {
+                        commands.insert_resource(*mode);
+                        next.set(GameState::Lobby);
+                    }
+                    // The dialog is opened (and the game entered) by start_watching,
+                    // which runs in the menu; staying here keeps the menu responsive
+                    // if the dialog is cancelled.
+                    MenuButton::WatchReplay => commands.insert_resource(WatchReplayRequested),
+                }
             }
             Interaction::Hovered => *color = BackgroundColor(HOVERED),
             Interaction::None => *color = BackgroundColor(NORMAL),

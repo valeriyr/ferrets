@@ -47,10 +47,13 @@ pub struct UdpEntry {
 /// A lobby-coordination message, exchanged while configuring the session.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LobbyMessage {
-    /// Client → host on connect: announces the UDP port the client will receive
-    /// gameplay on for a direct mesh (`None` if it offers none — used only when the
-    /// host picks a mesh topology) and an optional preferred race.
+    /// Client → host on connect: the client's build identity (the host refuses a
+    /// mismatch — see [`ferrets_simulation::PROTOCOL_VERSION`]), the UDP port the
+    /// client will receive gameplay on for a direct mesh (`None` if it offers none
+    /// — used only when the host picks a mesh topology), and an optional preferred
+    /// race.
     Join {
+        protocol_version: String,
         advertised_udp_port: Option<u16>,
         race: Option<String>,
     },
@@ -62,6 +65,9 @@ pub enum LobbyMessage {
         slots: Vec<SlotInfo>,
         topology: Topology,
     },
+    /// Host → all: the named peer was refused (e.g. a build mismatch). Only the
+    /// rejected client acts on it; the others ignore it.
+    Rejected { peer: PeerId, reason: String },
     /// Client → host: a request to set a slot's race. The host validates it and
     /// re-broadcasts [`LobbyState`](Self::LobbyState).
     RequestRace { slot: PlayerId, race: String },

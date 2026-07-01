@@ -24,6 +24,10 @@ use crate::{
     resources::PlayerResources,
 };
 
+/// How often, in ticks, a state checksum is sampled: often enough that a
+/// divergence surfaces quickly, infrequent enough to stay cheap.
+pub const CHECKSUM_INTERVAL: u32 = 8;
+
 /// Fixed seed for the checksum hash. Any constant works as long as all peers
 /// agree; `0` is the conventional choice.
 const CHECKSUM_SEED: u64 = 0;

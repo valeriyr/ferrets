@@ -72,7 +72,7 @@ impl LobbyHost {
                 ControlEvent::Connected(peer) => changed |= self.seat(peer),
                 ControlEvent::Disconnected(peer) => changed |= self.unseat(peer),
                 ControlEvent::Message { from, message } => {
-                    changed |= self.apply(from, message);
+                    changed |= self.apply(from, message)?;
                 }
             }
         }
@@ -159,36 +159,53 @@ impl LobbyHost {
     }
 
     /// Applies a client's control message.
-    fn apply(&mut self, from: PeerId, message: ControlMessage) -> bool {
+    fn apply(&mut self, from: PeerId, message: ControlMessage) -> crate::Result<bool> {
         let ControlMessage::Lobby(message) = message else {
             // In-game pause control is irrelevant before the game starts.
-            return false;
+            return Ok(false);
         };
         match message {
             LobbyMessage::Join {
+                protocol_version,
                 advertised_udp_port,
                 race,
             } => {
+                if protocol_version != ferrets_simulation::PROTOCOL_VERSION {
+                    // A different build would desync; refuse it and free its slot.
+                    let reason = format!(
+                        "build mismatch: host is {}, client is {protocol_version}",
+                        ferrets_simulation::PROTOCOL_VERSION,
+                    );
+                    let reopened = self.unseat(from);
+                    self.control
+                        .send(&ControlMessage::Lobby(LobbyMessage::Rejected {
+                            peer: from,
+                            reason,
+                        }))?;
+                    return Ok(reopened);
+                }
                 if let Some(port) = advertised_udp_port {
                     self.udp_ports.insert(from, port);
                 }
                 if let (Some(race), Some(info)) = (race, self.slot_of_mut(from)) {
                     info.race = Some(race);
                 }
-                true
+                Ok(true)
             }
             LobbyMessage::RequestRace { slot, race } => {
                 // A client may only set the race of the slot it occupies.
                 match self.slots.get_mut(slot as usize) {
                     Some(info) if info.occupant == (Occupant::Human { peer: from }) => {
                         info.race = Some(race);
-                        true
+                        Ok(true)
                     }
-                    _ => false,
+                    _ => Ok(false),
                 }
             }
-            // The host originates state and start; clients never send them.
-            LobbyMessage::LobbyState { .. } | LobbyMessage::Start { .. } => false,
+            // The host originates these; a client never sends them to the host.
+            LobbyMessage::LobbyState { .. }
+            | LobbyMessage::Start { .. }
+            | LobbyMessage::Rejected { .. } => Ok(false),
         }
     }
 

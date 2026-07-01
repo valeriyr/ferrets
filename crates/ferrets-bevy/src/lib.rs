@@ -41,6 +41,7 @@
 //! Use `.after(SimulationSet)` to read sim state after the tick completes.
 mod input;
 pub mod network;
+pub mod replay;
 mod systems;
 
 pub use ferrets_simulation::spawn;
@@ -49,6 +50,10 @@ pub use network::{
     BlockedStreak, DesyncTracker, DropConfig, NetworkActive, NetworkPlugin, NetworkSession,
     PauseIntent, PendingPause, auto_idle_dropped, detect_drops, install_network_session,
     net_broadcast, net_checksum, net_pause_control, net_receive,
+};
+pub use replay::{
+    ReplayPlayback, ReplayPlugin, ReplayRecorder, install_replay_playback, install_replay_recorder,
+    record_input, supply_replay_input, verify_replay_checksum,
 };
 pub use systems::flush_input;
 
@@ -144,7 +149,14 @@ impl Plugin for SimulationPlugin {
                 // (running OR blocked), so input keeps draining and a blocked tick can
                 // notice its frame became ready and resume. command_executor sets the
                 // blocked/running state from the frame's readiness.
-                (flush_input, systems::command_executor)
+                //
+                // flush_input is the local player's frame source, so it is silenced
+                // during replay playback — the replay drives every slot itself, and a
+                // second local frame would collide with the recorded one.
+                (
+                    flush_input.run_if(not(resource_exists::<replay::ReplayPlayback>)),
+                    systems::command_executor,
+                )
                     .chain()
                     .in_set(SimulationSet)
                     .run_if(session_is_active.and(session_is_not_paused)),

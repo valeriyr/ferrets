@@ -12,7 +12,7 @@ pub mod udp;
 
 use crate::{peer::PeerId, transport::error::TransportError};
 
-/// The result type related to transports.
+/// A result whose error is a [`TransportError`].
 pub type Result<T> = std::result::Result<T, TransportError>;
 
 /// Aggregate connection status, for gating the start of a session.

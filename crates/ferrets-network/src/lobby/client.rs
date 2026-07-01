@@ -14,6 +14,17 @@ pub struct Started {
     pub udp_table: Option<Vec<UdpEntry>>,
 }
 
+/// What a [`poll`](LobbyClient::poll) surfaced this tick.
+#[derive(Debug)]
+pub enum PollOutcome {
+    /// Still in the lobby; `changed` is true if the mirrored state was updated.
+    Waiting { changed: bool },
+    /// The host refused this client, with the reason (e.g. a build mismatch).
+    Rejected(String),
+    /// The host's connection dropped, so the lobby cannot continue.
+    HostLost,
+}
+
 /// The client side of the lobby: mirrors the host's broadcast state.
 pub struct LobbyClient {
     control: ControlChannel,
@@ -21,8 +32,6 @@ pub struct LobbyClient {
     topology: Topology,
     /// The host's start signal, set once it arrives.
     started: Option<Started>,
-    /// Set once the host's connection drops; the lobby can't continue.
-    host_lost: bool,
 }
 
 impl LobbyClient {
@@ -33,12 +42,12 @@ impl LobbyClient {
             slots: Vec::new(),
             topology: Topology::HostStar,
             started: None,
-            host_lost: false,
         }
     }
 
-    /// Announces this client to the host: the UDP port it offers for a direct mesh
-    /// (`None` if it offers none) and an optional preferred race.
+    /// Announces this client to the host: its build version (so the host can
+    /// refuse a mismatch), the UDP port it offers for a direct mesh (`None` if it
+    /// offers none), and an optional preferred race.
     pub fn join(
         &mut self,
         advertised_udp_port: Option<u16>,
@@ -46,6 +55,7 @@ impl LobbyClient {
     ) -> crate::Result<()> {
         self.control
             .send(&ControlMessage::Lobby(LobbyMessage::Join {
+                protocol_version: ferrets_simulation::PROTOCOL_VERSION.to_string(),
                 advertised_udp_port,
                 race: race.map(str::to_string),
             }))
@@ -63,8 +73,9 @@ impl LobbyClient {
         Ok(())
     }
 
-    /// Drains control events. Returns `true` if the mirrored state changed.
-    pub fn poll(&mut self) -> bool {
+    /// Drains control events, applying lobby state to the mirror and surfacing
+    /// the host's refusal or disconnect to the caller.
+    pub fn poll(&mut self) -> PollOutcome {
         let mut changed = false;
         for event in self.control.poll() {
             match event {
@@ -81,22 +92,19 @@ impl LobbyClient {
                         self.started = Some(Started { udp_table });
                         changed = true;
                     }
+                    LobbyMessage::Rejected { peer, reason }
+                        if peer == self.control.local_peer() =>
+                    {
+                        return PollOutcome::Rejected(reason);
+                    }
                     _ => {}
                 },
                 // A client only ever connects to the host, so any disconnect is it.
-                ControlEvent::Disconnected(_) => {
-                    self.host_lost = true;
-                    changed = true;
-                }
+                ControlEvent::Disconnected(_) => return PollOutcome::HostLost,
                 _ => {}
             }
         }
-        changed
-    }
-
-    /// Whether the host's connection has dropped, so the lobby can't continue.
-    pub fn host_lost(&self) -> bool {
-        self.host_lost
+        PollOutcome::Waiting { changed }
     }
 
     /// The latest mirrored slot list (empty until the first state arrives).

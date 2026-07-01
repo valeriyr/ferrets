@@ -1,6 +1,7 @@
 //! Minimal HUD: a resource bar and a context line for the current selection.
 
 use bevy::prelude::*;
+use ferrets_bevy::ReplayPlayback;
 use ferrets_simulation::{
     components::{
         build::BuilderStaticData,
@@ -14,6 +15,11 @@ use ferrets_simulation::{
     session::{GameResult, GameSession},
 };
 
+use crate::states::{GameState, InGameUi};
+
+const BUTTON_NORMAL: Color = Color::srgb(0.20, 0.20, 0.24);
+const BUTTON_HOVERED: Color = Color::srgb(0.30, 0.30, 0.38);
+
 #[derive(Component)]
 pub struct ResourceText;
 
@@ -26,9 +32,18 @@ pub struct SelectionText;
 #[derive(Component)]
 pub struct GameOverText;
 
+/// A line shown during replay playback (its end, or a determinism mismatch).
+#[derive(Component)]
+pub struct ReplayNote;
+
+/// The button that returns to the main menu.
+#[derive(Component)]
+pub struct LeaveButton;
+
 /// Spawns the HUD text nodes.
 pub fn setup_hud(mut commands: Commands) {
     commands.spawn((
+        InGameUi,
         ResourceText,
         Text::new("Gold: 0   Wood: 0"),
         TextFont {
@@ -44,6 +59,7 @@ pub fn setup_hud(mut commands: Commands) {
         },
     ));
     commands.spawn((
+        InGameUi,
         HelpText,
         Text::new(""),
         TextFont {
@@ -59,6 +75,7 @@ pub fn setup_hud(mut commands: Commands) {
         },
     ));
     commands.spawn((
+        InGameUi,
         SelectionText,
         Text::new(""),
         TextFont {
@@ -75,6 +92,7 @@ pub fn setup_hud(mut commands: Commands) {
     ));
     // A centered banner shown only once the game ends.
     commands.spawn((
+        InGameUi,
         Node {
             position_type: PositionType::Absolute,
             width: Val::Percent(100.0),
@@ -92,6 +110,85 @@ pub fn setup_hud(mut commands: Commands) {
             TextColor(Color::srgb(1.0, 0.95, 0.7)),
         )],
     ));
+    // A note shown during replay playback, below the game-over banner.
+    commands.spawn((
+        InGameUi,
+        ReplayNote,
+        Text::new(""),
+        TextFont {
+            font_size: 20.0,
+            ..default()
+        },
+        TextColor(Color::srgb(0.85, 0.9, 1.0)),
+        Node {
+            position_type: PositionType::Absolute,
+            width: Val::Percent(100.0),
+            top: Val::Percent(52.0),
+            justify_content: JustifyContent::Center,
+            ..default()
+        },
+    ));
+    // Returns to the main menu.
+    commands.spawn((
+        InGameUi,
+        LeaveButton,
+        Button,
+        Node {
+            position_type: PositionType::Absolute,
+            bottom: Val::Px(8.0),
+            right: Val::Px(12.0),
+            width: Val::Px(96.0),
+            height: Val::Px(34.0),
+            align_items: AlignItems::Center,
+            justify_content: JustifyContent::Center,
+            ..default()
+        },
+        BackgroundColor(BUTTON_NORMAL),
+        children![(
+            Text::new("Leave"),
+            TextFont {
+                font_size: 18.0,
+                ..default()
+            },
+            TextColor(Color::srgb(0.9, 0.9, 0.95)),
+        )],
+    ));
+}
+
+/// Highlights the Leave button and returns to the menu when it is pressed.
+pub fn leave_button(
+    mut buttons: Query<
+        (&Interaction, &mut BackgroundColor),
+        (Changed<Interaction>, With<LeaveButton>),
+    >,
+    mut next: ResMut<NextState<GameState>>,
+) {
+    for (interaction, mut color) in &mut buttons {
+        match interaction {
+            Interaction::Pressed => next.set(GameState::Menu),
+            Interaction::Hovered => *color = BackgroundColor(BUTTON_HOVERED),
+            Interaction::None => *color = BackgroundColor(BUTTON_NORMAL),
+        }
+    }
+}
+
+/// Shows replay-playback status: nothing during a live game, an "ended" note once
+/// playback freezes, or a divergence warning if a recorded checksum failed.
+pub fn update_replay_note(
+    playback: Option<Res<ReplayPlayback>>,
+    mut text: Query<&mut Text, With<ReplayNote>>,
+) {
+    let message = match playback {
+        Some(playback) if playback.mismatch().is_some() => {
+            format!("Replay diverged at tick {}", playback.mismatch().unwrap())
+        }
+        Some(playback) if playback.is_done() => String::from("Replay ended"),
+        _ => String::new(),
+    };
+
+    if let Ok(mut text) = text.single_mut() {
+        **text = message;
+    }
 }
 
 /// Updates the resource bar from the local player's stockpile.

@@ -1,12 +1,14 @@
 //! A player slot which can be either free or occupied by a player.
 
+use serde::{Deserialize, Serialize};
+
 use crate::session::player_type::PlayerType;
 
 /// A player unique ID, used to identify players in the simulation and replays.
 pub type PlayerId = u8;
 
 /// A player slot which can be either free or occupied by a player.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlayerSlot {
     /// A unique slot identifier.
     id: PlayerId,

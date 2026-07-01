@@ -1,0 +1,160 @@
+//! Writing a replay to a stream and reading it back: round-trips, end-of-stream
+//! handling, and the format and version guards.
+
+use std::io::{self, Write};
+use std::sync::{Arc, Mutex};
+
+use ferrets_replay::error::ReplayError;
+use ferrets_replay::header::{FORMAT_VERSION, ReplayHeader};
+use ferrets_replay::record::TickRecord;
+use ferrets_replay::recorder::Recorder;
+use ferrets_replay::replay::Replay;
+use ferrets_simulation::command::PlayerCommand;
+use ferrets_simulation::session::FinishPolicy;
+use ferrets_simulation::session::player_slot::{PlayerId, PlayerSlot};
+use ferrets_simulation::session::player_type::PlayerType;
+
+#[test]
+fn round_trips_header_and_records() {
+    let buffer = SharedBuf::default();
+    {
+        let mut recorder = Recorder::new(buffer.clone(), &header()).expect("start recording");
+        recorder.record(&record(0, &[], None)).expect("record 0");
+        recorder
+            .record(&record(1, &[commands(0)], Some(42)))
+            .expect("record 1");
+    }
+
+    let replay = Replay::read(buffer.bytes().as_slice()).expect("read replay");
+
+    assert_eq!(replay.header().slots.len(), 2);
+    assert_eq!(replay.last_tick(), Some(1));
+    assert_eq!(replay.inputs_at(1), &[commands(0)]);
+    assert_eq!(replay.checksum_at(1), Some(42));
+}
+
+#[test]
+fn drops_truncated_trailing_record() {
+    let buffer = SharedBuf::default();
+    {
+        let mut recorder = Recorder::new(buffer.clone(), &header()).expect("start recording");
+        recorder
+            .record(&record(0, &[commands(0)], None))
+            .expect("record 0");
+        recorder
+            .record(&record(1, &[commands(1)], None))
+            .expect("record 1");
+    }
+    // Simulate a crash mid-write by lopping bytes off the final record.
+    let mut bytes = buffer.bytes();
+    bytes.truncate(bytes.len() - 3);
+
+    let replay = Replay::read(bytes.as_slice()).expect("read truncated replay");
+
+    // The complete record survives; the half-written one is discarded.
+    assert_eq!(replay.last_tick(), Some(0));
+    assert_eq!(replay.inputs_at(0), &[commands(0)]);
+}
+
+#[test]
+fn inputs_at_is_empty_for_unrecorded_or_idle_ticks() {
+    let buffer = SharedBuf::default();
+    {
+        let mut recorder = Recorder::new(buffer.clone(), &header()).expect("start recording");
+        recorder
+            .record(&record(0, &[], None))
+            .expect("record idle tick");
+    }
+
+    let replay = Replay::read(buffer.bytes().as_slice()).expect("read replay");
+
+    assert!(replay.inputs_at(0).is_empty());
+    assert!(replay.inputs_at(99).is_empty());
+}
+
+#[test]
+fn rejects_stream_without_magic_prelude() {
+    let error = Replay::read(b"not a replay at all".as_slice()).expect_err("must reject");
+
+    assert!(matches!(error, ReplayError::BadMagic));
+}
+
+#[test]
+fn rejects_unsupported_format_version() {
+    let future = ReplayHeader {
+        format_version: FORMAT_VERSION + 1,
+        ..header()
+    };
+    let bytes = craft_prelude(&future);
+
+    let error = Replay::read(bytes.as_slice()).expect_err("must reject");
+
+    assert!(matches!(
+        error,
+        ReplayError::UnsupportedVersion { found, expected }
+            if found == FORMAT_VERSION + 1 && expected == FORMAT_VERSION
+    ));
+}
+
+//
+// ─── Helpers ────────────────────────────────────────────────────────────────
+//
+
+/// An owned, `Send + 'static` byte sink a [`Recorder`] can write into while a
+/// clone is kept to read the bytes back out.
+#[derive(Clone, Default)]
+struct SharedBuf(Arc<Mutex<Vec<u8>>>);
+
+impl SharedBuf {
+    fn bytes(&self) -> Vec<u8> {
+        self.0.lock().unwrap().clone()
+    }
+}
+
+impl Write for SharedBuf {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+/// A two-slot header to record against.
+fn header() -> ReplayHeader {
+    let slots = vec![
+        PlayerSlot::occupied(0, PlayerType::Human, Some("human")),
+        PlayerSlot::occupied(1, PlayerType::Ai, Some("orc")),
+    ];
+    ReplayHeader::new(slots, FinishPolicy::LastStanding)
+}
+
+/// A tick record with the given per-player inputs and optional checksum.
+fn record(
+    tick: u32,
+    inputs: &[(PlayerId, Vec<PlayerCommand>)],
+    checksum: Option<u64>,
+) -> TickRecord {
+    TickRecord {
+        tick,
+        inputs: inputs.to_vec(),
+        checksum,
+    }
+}
+
+/// A player's input carrying a single command, so it is distinguishable from idle.
+fn commands(player: PlayerId) -> (PlayerId, Vec<PlayerCommand>) {
+    (player, vec![PlayerCommand::Stop])
+}
+
+/// Hand-encodes the magic prelude and header, the way the writer would, so a
+/// header this build would never produce (e.g. a future version) can be tested.
+fn craft_prelude(header: &ReplayHeader) -> Vec<u8> {
+    let body = bcs::to_bytes(header).expect("encode header");
+    let mut bytes = b"FREP".to_vec();
+    bytes.extend_from_slice(&(body.len() as u32).to_le_bytes());
+    bytes.extend_from_slice(&body);
+    bytes
+}

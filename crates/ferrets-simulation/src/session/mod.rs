@@ -4,6 +4,7 @@ pub mod player_slot;
 pub mod player_type;
 
 use bevy_ecs::prelude::*;
+use serde::{Deserialize, Serialize};
 
 use crate::session::player_slot::{PlayerId, PlayerSlot};
 
@@ -38,7 +39,7 @@ pub enum GameResult {
 }
 
 /// When a session ends on its own.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum FinishPolicy {
     /// End the game once only one player (or none) still has entities. The
     /// default for an ordinary match.

@@ -10,7 +10,7 @@ use std::net::SocketAddr;
 use bevy::input::ButtonInput;
 use bevy::prelude::*;
 use ferrets_bevy::{install_game_resources, install_network_session};
-use ferrets_network::lobby::client::LobbyClient;
+use ferrets_network::lobby::client::{LobbyClient, PollOutcome};
 use ferrets_network::message::control::Occupant;
 use ferrets_network::session::NetSession;
 use ferrets_network::topology::Topology;
@@ -249,23 +249,28 @@ pub fn poll_lobby_link(
             let _ = host.poll();
             mirror(&mut config, host.slots(), host.topology());
         }
-        LobbyLink::Client(client) => {
-            if client.poll() && !client.slots().is_empty() {
-                mirror(&mut config, client.slots(), client.topology());
-                config.status = "connected".to_string();
+        LobbyLink::Client(client) => match client.poll() {
+            PollOutcome::Waiting { changed } => {
+                if changed && !client.slots().is_empty() {
+                    mirror(&mut config, client.slots(), client.topology());
+                    config.status = "connected".to_string();
+                }
+                if let Some(slot) = client.local_player() {
+                    config.local_slot = slot;
+                }
+                if client.started().is_some() {
+                    config.status = "starting…".to_string();
+                    commands.insert_resource(StartRequested);
+                }
             }
-            if let Some(slot) = client.local_player() {
-                config.local_slot = slot;
-            }
-            if client.host_lost() {
-                // The host is gone; the lobby can't continue. Back to the menu
-                // (OnExit(Lobby) drops the connection).
+            // The host refused this client (e.g. a build mismatch) or is gone; the
+            // lobby can't continue. Back to the menu (OnExit(Lobby) drops the link).
+            PollOutcome::Rejected(reason) => {
+                eprintln!("host refused the connection: {reason}");
                 next.set(GameState::Menu);
-            } else if client.started().is_some() {
-                config.status = "starting…".to_string();
-                commands.insert_resource(StartRequested);
             }
-        }
+            PollOutcome::HostLost => next.set(GameState::Menu),
+        },
     }
 }
 

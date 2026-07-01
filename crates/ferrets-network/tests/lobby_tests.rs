@@ -1,10 +1,10 @@
 //! The host-coordinated lobby state machine, driven over the in-process loopback
 //! transport (host = endpoint 0, clients linked only to the host).
 
-use ferrets_network::control::ControlChannel;
-use ferrets_network::lobby::client::LobbyClient;
+use ferrets_network::control::{ControlChannel, ControlEvent};
+use ferrets_network::lobby::client::{LobbyClient, PollOutcome};
 use ferrets_network::lobby::host::LobbyHost;
-use ferrets_network::message::control::Occupant;
+use ferrets_network::message::control::{ControlMessage, LobbyMessage, Occupant};
 use ferrets_network::topology::Topology;
 use ferrets_network::transport::loopback::LoopbackTransport;
 
@@ -51,6 +51,58 @@ fn client_race_request_updates_every_node() {
     assert!(changed);
     assert_eq!(host.slots()[1].race.as_deref(), Some("orc"));
     assert_eq!(c2.slots()[1].race.as_deref(), Some("orc"));
+}
+
+#[test]
+fn host_keeps_client_on_matching_version() {
+    let (mut host, mut c1, _c2) = star(3);
+    host.poll().expect("seat on connect");
+    c1.poll();
+
+    // join() sends this build's PROTOCOL_VERSION, which matches the host.
+    c1.join(None, None).expect("join");
+    host.poll().expect("host applies join");
+
+    assert_eq!(host.slots()[1].occupant, human(1));
+    // The client keeps its seat: the host re-broadcasts state rather than refusing.
+    assert!(matches!(c1.poll(), PollOutcome::Waiting { .. }));
+}
+
+#[test]
+fn host_rejects_client_on_version_mismatch() {
+    let mut endpoints = LoopbackTransport::partial_mesh(2, [(0, 1)]).into_iter();
+    let ep0 = endpoints.next().expect("host endpoint");
+    let ep1 = endpoints.next().expect("client endpoint");
+    let mut host = LobbyHost::new(
+        ControlChannel::new(Box::new(ep0)),
+        Topology::HostStar,
+        2,
+        "human",
+    );
+    let mut client = ControlChannel::new(Box::new(ep1));
+
+    host.poll().expect("seat the client on connect");
+    client
+        .send(&ControlMessage::Lobby(LobbyMessage::Join {
+            protocol_version: "99.0".to_string(),
+            advertised_udp_port: None,
+            race: None,
+        }))
+        .expect("send mismatched join");
+    host.poll().expect("host processes the join");
+
+    // The slot the client briefly held is reopened, and it is told why.
+    assert_eq!(host.slots()[1].occupant, Occupant::Open);
+    let rejected = client.poll().into_iter().any(|event| {
+        matches!(
+            event,
+            ControlEvent::Message {
+                message: ControlMessage::Lobby(LobbyMessage::Rejected { .. }),
+                ..
+            }
+        )
+    });
+    assert!(rejected);
 }
 
 #[test]

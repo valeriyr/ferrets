@@ -5,7 +5,7 @@
 #![allow(clippy::type_complexity, clippy::too_many_arguments)]
 
 use bevy::prelude::*;
-use ferrets_bevy::{NetworkPlugin, SimulationPlugin};
+use ferrets_bevy::{NetworkPlugin, ReplayPlayback, ReplayPlugin, SimulationPlugin};
 use ferrets_simulation::session::GameSession;
 
 use crate::states::GameState;
@@ -19,6 +19,7 @@ mod lobby;
 mod map;
 mod menu;
 mod render;
+mod replay;
 mod setup;
 mod states;
 mod time;
@@ -32,6 +33,7 @@ fn main() {
     app.add_plugins(DefaultPlugins)
         .add_plugins(SimulationPlugin::new(session, map::build()))
         .add_plugins(NetworkPlugin)
+        .add_plugins(ReplayPlugin)
         .init_state::<GameState>()
         .insert_resource(Time::<Fixed>::from_hz(20.0))
         .insert_resource(ClearColor(Color::srgb(0.18, 0.32, 0.16)))
@@ -45,7 +47,12 @@ fn main() {
         // Main menu.
         .add_systems(OnEnter(GameState::Menu), menu::setup_menu)
         .add_systems(OnExit(GameState::Menu), menu::teardown_menu)
-        .add_systems(Update, menu::menu_buttons.run_if(in_state(GameState::Menu)))
+        .add_systems(
+            Update,
+            (menu::menu_buttons, replay::start_watching)
+                .chain()
+                .run_if(in_state(GameState::Menu)),
+        )
         // Lobby.
         .add_systems(
             OnEnter(GameState::Lobby),
@@ -73,14 +80,22 @@ fn main() {
                 hud::setup_hud,
                 debug::setup_debug,
                 setup::spawn_demo_scene,
+                replay::start_recording,
             )
                 .chain(),
         )
+        .add_systems(OnExit(GameState::InGame), replay::teardown_session)
         // Tick-synced time: bracket each fixed step to measure and scale it, and
         // snapshot positions before the simulation advances (for interpolation).
         .add_systems(
             FixedFirst,
-            (time::mark_tick_start, setup::supply_ai_input).run_if(in_state(GameState::InGame)),
+            (
+                time::mark_tick_start,
+                // The AI/idle frame source is silenced during replay playback; the
+                // replay drives every slot itself.
+                setup::supply_ai_input.run_if(not(resource_exists::<ReplayPlayback>)),
+            )
+                .run_if(in_state(GameState::InGame)),
         )
         .add_systems(
             FixedPreUpdate,
@@ -90,22 +105,35 @@ fn main() {
             FixedLast,
             time::scale_time_to_ticks.run_if(in_state(GameState::InGame)),
         )
+        // Command-producing input only when a live player is at the controls; during
+        // replay playback the recorded frames are the sole input, so stray clicks
+        // must not enter the queue.
         .add_systems(
             Update,
             (
-                camera::pan_zoom,
                 input::pause_input,
                 input::selection_input,
                 input::order_input,
                 input::train_input,
                 input::build_input,
                 input::placement_input,
+                // F2 sandbox spawn issues a Spawn command, so it counts as input too.
+                debug::spawn_debug,
+            )
+                .run_if(in_state(GameState::InGame).and(not(resource_exists::<ReplayPlayback>))),
+        )
+        // Viewing, HUD, debug, and rendering run for both live games and playback.
+        .add_systems(
+            Update,
+            (
+                camera::pan_zoom,
                 hud::update_resources,
                 hud::update_help,
                 hud::update_selection,
                 hud::update_game_over,
+                hud::update_replay_note,
+                hud::leave_button,
                 debug::toggle_debug,
-                debug::spawn_debug,
                 debug::debug_readout,
                 render::draw_grid,
                 (

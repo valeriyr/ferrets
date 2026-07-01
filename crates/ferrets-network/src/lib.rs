@@ -22,5 +22,5 @@ pub mod transport;
 
 use crate::error::NetworkError;
 
-/// The result type related to network.
+/// A result whose error is a [`NetworkError`].
 pub type Result<T> = std::result::Result<T, NetworkError>;

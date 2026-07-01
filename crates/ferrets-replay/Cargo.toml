@@ -9,3 +9,7 @@ description = "Replay recording and deterministic playback."
 
 [dependencies]
 ferrets-simulation.workspace = true
+
+bcs.workspace = true
+serde.workspace = true
+thiserror.workspace = true

@@ -14,6 +14,11 @@ pub enum GameState {
     InGame,
 }
 
+/// Tags UI spawned for the in-game screen, so it can be torn down together when
+/// the game returns to the menu.
+#[derive(Component)]
+pub struct InGameUi;
+
 /// Which flavour of lobby the player entered from the menu.
 #[derive(Resource, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum LobbyMode {
