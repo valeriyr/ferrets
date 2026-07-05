@@ -168,16 +168,13 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
 
-      # System libraries + Cargo cache (see .github/actions/setup). The
-      # `nightly-` prefix keeps this cache separate from the CI caches: release
-      # artifacts (target/release) would ride along inside the CI entries and
-      # roughly double their size, evicting hot caches out of the repository's
-      # cache quota sooner. Debug and release outputs live in separate target/
-      # subdirectories, so separation is about entry size, not correctness.
+      # System libraries + Cargo cache; see .github/actions/setup. The
+      # distinct prefix keeps this release-profile cache namespace apart from
+      # the CI debug caches structurally, without relying on job ids staying
+      # unique across workflows.
       - uses: ./.github/actions/setup
         with:
-          cache-key: nightly-${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: nightly-${{ runner.os }}-cargo-
+          prefix-key: v0-rust-nightly
 
       # --release    optimize for speed (opt-level 3, no debug info).
       # --locked     fail if Cargo.lock is out of sync with Cargo.toml (reproducible builds).

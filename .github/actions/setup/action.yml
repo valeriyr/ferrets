@@ -1,16 +1,17 @@
 # Shared job setup: the Linux system libraries Bevy links against, plus the
 # Cargo cache. Used by every job that compiles the workspace, so a new system
-# dependency or cache path is added in exactly one place.
+# dependency or a caching change is made in exactly one place.
 name: Setup build environment
 description: Install Linux build dependencies and restore the Cargo cache.
 
 inputs:
-  cache-key:
-    description: Exact cache key for this job.
-    required: true
-  restore-keys:
-    description: Newline-separated fallback key prefixes, most specific first.
-    required: true
+  prefix-key:
+    description: >-
+      Cache key prefix. Jobs that must never share a cache namespace (e.g.
+      release builds vs the CI debug jobs) pass a distinct prefix instead of
+      relying on their job ids staying unique across workflows.
+    required: false
+    default: v0-rust
 
 runs:
   using: composite
@@ -27,19 +28,26 @@ runs:
         sudo apt-get install -y --no-install-recommends \
           libasound2-dev libudev-dev libx11-dev libxkbcommon-dev libwayland-dev
 
-    # Restore the Cargo cache from a previous run so dependencies are not
-    # redownloaded and recompiled from scratch every time.
+    # Rust-aware caching instead of a raw actions/cache over target/: a full
+    # target directory for this workspace is far too large to archive (the
+    # post-job save can take tens of minutes on Windows and exceeds GitHub's
+    # 10 GB per-repository cache quota). rust-cache prunes the cache down to
+    # dependency artifacts — workspace crates recompile in seconds once the
+    # dependencies are warm — and its automatic key already includes the job
+    # id, the OS and architecture, the toolchain, and the lockfile hash, so
+    # every job on every platform gets its own cache with no hand-written
+    # keys. It also disables incremental compilation, which only bloats CI
+    # artifacts.
     #
-    # `key` is the exact cache identifier; callers include a hash of all
-    # Cargo.lock files so the cache is invalidated whenever any dependency
-    # version changes. `restore-keys` are prefix fallbacks: when no entry
-    # matches the exact key, the most-recent entry with a matching prefix is
-    # used — an older cache is still far faster than a cold build.
-    - uses: actions/cache@v4
+    # Known trade-off: restore is strictly per-job (there is no cross-job
+    # fallback), so a job whose own cache is missing — quota eviction, a new
+    # job, a toolchain bump — starts cold instead of borrowing a sibling's
+    # downloaded dependencies. That costs one registry download on a rare
+    # event; the alternative (a shared key) would make concurrent jobs race
+    # to save one immutable entry and permanently starve whichever loses.
+    - uses: Swatinem/rust-cache@v2
       with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ inputs.cache-key }}
-        restore-keys: ${{ inputs.restore-keys }}
+        prefix-key: ${{ inputs.prefix-key }}
+        # Save the cache even when a later step fails, so a red run still
+        # warms the dependency build for the fix-up run that follows it.
+        cache-on-failure: true

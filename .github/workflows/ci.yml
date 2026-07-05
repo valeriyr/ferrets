@@ -15,12 +15,11 @@
 #                all of the above pass; add "CI / All Checks" to branch protection rules
 #
 # fmt intentionally has no cache because it never compiles anything.
-# clippy and test keep per-job cache keys: actions/cache only saves on an exact
-# key miss, so a shared key would persist whichever job finished first — and
-# clippy's check-only artifacts are useless to test, which needs fully compiled
-# ones. The cross-job restore prefix (`<os>-cargo-`) still lets either job
-# bootstrap from the other's downloaded dependencies, and allows a partial hit
-# when Cargo.lock changes.
+# clippy and test cache through the shared setup action (rust-cache), whose
+# automatic key includes the platform and the job id — clippy's check-only
+# artifacts and test's fully compiled ones never collide — and which prunes
+# the cache down to dependency artifacts so entries stay small enough to save
+# quickly and fit the repository cache quota.
 
 name: CI
 
@@ -102,18 +101,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # System libraries + Cargo cache (see .github/actions/setup). The job
-      # name in the key keeps clippy's check-only artifacts separate from
-      # test's fully compiled ones; the plain `<os>-cargo-` fallback lets this
-      # job still bootstrap from the other's downloaded dependencies.
-      # ${{ runner.os }} expands to "Linux", "macOS", or "Windows", keeping the
-      # caches separate so artifacts from different platforms never mix.
+      # System libraries + Cargo cache; see .github/actions/setup.
       - uses: ./.github/actions/setup
-        with:
-          cache-key: ${{ runner.os }}-cargo-clippy-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-clippy-
-            ${{ runner.os }}-cargo-
 
       # --workspace   — lint every crate in the workspace, not just the root
       # --all-features — enable all optional Cargo features while linting
@@ -140,15 +129,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Mirror of the clippy job's setup with a test-flavored cache key: this
-      # job's fully compiled artifacts must persist independently, or every
-      # run would restore clippy's check-only cache and rebuild the workspace.
+      # System libraries + Cargo cache; see .github/actions/setup.
       - uses: ./.github/actions/setup
-        with:
-          cache-key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-test-
-            ${{ runner.os }}-cargo-
 
       - name: Test
         run: cargo test --workspace --all-features --locked
