@@ -20,7 +20,7 @@ use ferrets_replay::recorder::Recorder;
 use ferrets_replay::replay::Replay;
 use ferrets_simulation::{
     entity_index::EntityIndex,
-    session::{GameResult, GameSession},
+    session::{GameResult, GameSession, ai_hosting::AiHosting},
     simulation_id::SimulationIdGenerator,
 };
 
@@ -122,7 +122,9 @@ pub fn start_watching(world: &mut World) {
 
     {
         let mut session = world.resource_mut::<GameSession>();
-        session.configure(viewer, slots);
+        // Playback never runs AI (the replay is the sole frame source), so
+        // the hosting mode is irrelevant.
+        session.configure(viewer, slots, AiHosting::default());
         session.set_finish_policy(finish_policy);
     }
     install_game_resources(world, player_count);
@@ -177,6 +179,7 @@ pub fn teardown_session(world: &mut World) {
 
     world.remove_non_send_resource::<NetworkSession>();
     world.remove_resource::<NetworkActive>();
+    ferrets_bevy::ai::remove_ai_runtimes(world);
     world.remove_non_send_resource::<ReplayRecorder>();
     world.remove_resource::<ReplayPlayback>();
     world.remove_resource::<RecordingPath>();

@@ -1,118 +1,109 @@
-//! Demo content: two races (human, orc) plus neutral resource sources.
+//! Demo content: two races (human, orc) plus neutral resource sources, authored
+//! in Lua and loaded at startup.
 //!
 //! Times are in ticks (20 Hz), tuned short so mechanics are quick to test.
 
 use bevy::prelude::*;
-use ferrets_math::FixedU64;
-use ferrets_pathfinder::nav_size::NavSize;
-use ferrets_simulation::{
-    components::{
-        location::Solidity,
-        resource::{DepletionPolicy, HarvestData, HarvestVisibility},
-    },
-    content::{entity_type_def::EntityTypeDef, registry::ContentRegistry},
-};
+use ferrets_script::{content, engine::lua::LuaEngine};
+use ferrets_simulation::content::registry::ContentRegistry;
 
-use crate::map::GROUND;
+/// The demo's content, as a Lua script. `occupation = 1` is the single ground
+/// navigation layer (`GROUND` in [`crate::map`]). Fractional stats are decimal
+/// strings so they parse straight to fixed-point (no `f64`).
+pub const CONTENT: &str = r#"
+    local GROUND = 1
 
-const SPEED: f32 = 0.3;
+    define_race("human")
+    define_race("orc")
 
-/// Registers every race, resource kind, and entity type, then validates the
-/// production catalogues. Runs at startup.
+    define_resource("gold")
+    define_resource("wood")
+
+    -- Neutral resource sources.
+    define_entity("gold_mine", {
+        location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
+        resource_source = { kind = "gold", depletion = "persist" },
+    })
+    define_entity("tree", {
+        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        resource_source = { kind = "wood", depletion = "destroy" },
+    })
+
+    local function worker(name, race, builds)
+        define_entity(name, {
+            race = race,
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            movement = { speed = "0.3" },
+            health = 30,
+            dying = { time = 2 },
+            cost = { gold = 50 },
+            train_time = 40,
+            builder = builds,
+            resource_carrier = {
+                gold = { capacity = 5, time = 20, visibility = "hidden" },
+                wood = { capacity = 5, time = 20, visibility = "visible" },
+            },
+        })
+    end
+
+    local function main_hall(name, race, trains)
+        define_entity(name, {
+            race = race,
+            location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
+            health = 800,
+            dying = { time = 2 },
+            cost = { gold = 400 },
+            build_time = 200,
+            trainer = { trains },
+            resource_storage = { "gold", "wood" },
+        })
+    end
+
+    local function barracks(name, race, trains)
+        define_entity(name, {
+            race = race,
+            location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
+            health = 500,
+            dying = { time = 2 },
+            cost = { gold = 200, wood = 100 },
+            build_time = 120,
+            trainer = { trains },
+        })
+    end
+
+    -- Human: worker, base, barracks, and a ranged unit.
+    worker("peasant", "human", { "town_hall", "barracks" })
+    main_hall("town_hall", "human", "peasant")
+    barracks("barracks", "human", "archer")
+    define_entity("archer", {
+        race = "human",
+        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        movement = { speed = "0.3" },
+        health = 40,
+        dying = { time = 2 },
+        attack = { damage = 6, range = 4, aiming = 3, reloading = 4 },
+        cost = { gold = 80 },
+        train_time = 60,
+    })
+
+    -- Orc: worker, base, barracks, and a melee unit.
+    worker("peon", "orc", { "great_hall", "orc_barracks" })
+    main_hall("great_hall", "orc", "peon")
+    barracks("orc_barracks", "orc", "grunt")
+    define_entity("grunt", {
+        race = "orc",
+        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        movement = { speed = "0.3" },
+        health = 60,
+        dying = { time = 2 },
+        attack = { damage = 10, range = 1, aiming = 3, reloading = 3 },
+        cost = { gold = 90 },
+        train_time = 70,
+    })
+"#;
+
+/// Loads all demo content from Lua into the registry, then validates it. Runs at
+/// startup; a content error is a bug in the script above, so it panics.
 pub fn register_all(mut registry: ResMut<ContentRegistry>) {
-    registry.register_race("human");
-    registry.register_race("orc");
-    registry.register_resource("gold");
-    registry.register_resource("wood");
-
-    register_neutral(&mut registry);
-    register_human(&mut registry);
-    register_orc(&mut registry);
-
-    registry.validate();
-}
-
-fn register_neutral(registry: &mut ContentRegistry) {
-    registry.register(
-        EntityTypeDef::new("gold_mine")
-            .with_location(GROUND, NavSize::new(2, 2), Solidity::Solid)
-            .with_resource_source("gold", DepletionPolicy::Persist),
-    );
-    registry.register(
-        EntityTypeDef::new("tree")
-            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
-            .with_resource_source("wood", DepletionPolicy::Destroy),
-    );
-}
-
-fn worker(name: &str, builds: [&str; 2]) -> EntityTypeDef {
-    EntityTypeDef::new(name)
-        .with_location(GROUND, NavSize::ONE, Solidity::Solid)
-        .with_movement(FixedU64::from_num(SPEED))
-        .with_health(30)
-        .with_dying(2, None)
-        .with_cost([("gold", 50)])
-        .with_train_time(40)
-        .with_builder(builds)
-        .with_resource_carrier([
-            ("gold", HarvestData::new(5, 20, HarvestVisibility::Hidden)),
-            ("wood", HarvestData::new(5, 20, HarvestVisibility::Visible)),
-        ])
-}
-
-fn main_hall(name: &str, worker_name: &str) -> EntityTypeDef {
-    EntityTypeDef::new(name)
-        .with_location(GROUND, NavSize::new(3, 3), Solidity::Solid)
-        .with_health(800)
-        .with_dying(2, None)
-        .with_cost([("gold", 400)])
-        .with_build_time(200)
-        .with_trainer([worker_name])
-        .with_resource_storage(["gold", "wood"])
-}
-
-fn barracks(name: &str, unit_name: &str) -> EntityTypeDef {
-    EntityTypeDef::new(name)
-        .with_location(GROUND, NavSize::new(3, 3), Solidity::Solid)
-        .with_health(500)
-        .with_dying(2, None)
-        .with_cost([("gold", 200), ("wood", 100)])
-        .with_build_time(120)
-        .with_trainer([unit_name])
-}
-
-fn register_human(registry: &mut ContentRegistry) {
-    registry.register(worker("peasant", ["town_hall", "barracks"]).with_race("human"));
-    registry.register(main_hall("town_hall", "peasant").with_race("human"));
-    registry.register(barracks("barracks", "archer").with_race("human"));
-    // Ranged unit.
-    registry.register(
-        EntityTypeDef::new("archer")
-            .with_race("human")
-            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
-            .with_movement(FixedU64::from_num(SPEED))
-            .with_health(40)
-            .with_dying(2, None)
-            .with_attack(6, 4, 3, 4)
-            .with_cost([("gold", 80)])
-            .with_train_time(60),
-    );
-}
-
-fn register_orc(registry: &mut ContentRegistry) {
-    registry.register(worker("peon", ["great_hall", "orc_barracks"]).with_race("orc"));
-    registry.register(main_hall("great_hall", "peon").with_race("orc"));
-    registry.register(barracks("orc_barracks", "grunt").with_race("orc"));
-    // Melee unit.
-    registry.register(
-        EntityTypeDef::new("grunt")
-            .with_race("orc")
-            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
-            .with_movement(FixedU64::from_num(SPEED))
-            .with_health(60)
-            .with_dying(2, None)
-            .with_attack(10, 1, 3, 3)
-            .with_cost([("gold", 90)])
-            .with_train_time(70),
-    );
+    *registry = content::load(&LuaEngine, CONTENT).expect("demo content must load");
 }

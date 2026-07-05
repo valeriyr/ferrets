@@ -7,6 +7,7 @@ use ferrets_network::lobby::host::LobbyHost;
 use ferrets_network::message::control::{ControlMessage, LobbyMessage, Occupant};
 use ferrets_network::topology::Topology;
 use ferrets_network::transport::loopback::LoopbackTransport;
+use ferrets_simulation::session::ai_hosting::AiHosting;
 
 //
 // ─── Seating and live sync ──────────────────────────────────────────────────
@@ -76,6 +77,7 @@ fn host_rejects_client_on_version_mismatch() {
     let mut host = LobbyHost::new(
         ControlChannel::new(Box::new(ep0)),
         Topology::HostStar,
+        AiHosting::Replicated,
         2,
         "human",
     );
@@ -97,12 +99,27 @@ fn host_rejects_client_on_version_mismatch() {
         matches!(
             event,
             ControlEvent::Message {
-                message: ControlMessage::Lobby(LobbyMessage::Rejected { .. }),
+                message: ControlMessage::Lobby(LobbyMessage::Rejected { reason, .. }),
                 ..
-            }
+            } if reason.contains("build mismatch")
         )
     });
     assert!(rejected);
+}
+
+#[test]
+fn clients_mirror_ai_hosting_changes() {
+    let (mut host, mut c1, _c2) = star(3);
+    host.poll().expect("seat two clients");
+    c1.poll();
+
+    assert_eq!(c1.ai_hosting(), AiHosting::Replicated);
+
+    host.set_ai_hosting(AiHosting::HostOnly)
+        .expect("set the mode");
+    c1.poll();
+
+    assert_eq!(c1.ai_hosting(), AiHosting::HostOnly);
 }
 
 #[test]
@@ -131,6 +148,7 @@ fn star(capacity: usize) -> (LobbyHost, LobbyClient, LobbyClient) {
     let host = LobbyHost::new(
         ControlChannel::new(Box::new(ep0)),
         Topology::HostStar,
+        AiHosting::Replicated,
         capacity,
         "human",
     );

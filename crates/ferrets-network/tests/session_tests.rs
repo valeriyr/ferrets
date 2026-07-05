@@ -4,10 +4,11 @@
 use ferrets_network::control::ControlChannel;
 use ferrets_network::lobby::client::LobbyClient;
 use ferrets_network::lobby::host::LobbyHost;
-use ferrets_network::message::control::{ControlMessage, InGameMessage};
+use ferrets_network::message::control::{ControlMessage, InGameMessage, Occupant};
 use ferrets_network::session::NetSession;
 use ferrets_network::topology::Topology;
 use ferrets_network::transport::loopback::LoopbackTransport;
+use ferrets_simulation::session::ai_hosting::AiHosting;
 
 //
 // ─── Host-star start ──────────────────────────────────────────────────────────
@@ -20,6 +21,7 @@ fn host_star_start_builds_gameplay_channel_mapped_from_slots() {
     let host = LobbyHost::new(
         ControlChannel::new(Box::new(ep0)),
         Topology::HostStar,
+        AiHosting::Replicated,
         3,
         "human",
     );
@@ -39,6 +41,29 @@ fn host_star_start_builds_gameplay_channel_mapped_from_slots() {
     assert!(session.is_control_host());
 }
 
+#[test]
+fn ai_slots_are_networked_only_under_host_only_hosting() {
+    for (mode, networked) in [(AiHosting::Replicated, false), (AiHosting::HostOnly, true)] {
+        let mut endpoints = LoopbackTransport::partial_mesh(2, [(0, 1)]).into_iter();
+        let ep0 = endpoints.next().expect("host endpoint");
+        let mut host = LobbyHost::new(
+            ControlChannel::new(Box::new(ep0)),
+            Topology::HostStar,
+            mode,
+            3,
+            "human",
+        );
+        host.poll().expect("seat the connected client");
+        host.set_occupant(2, Occupant::Ai).expect("slot 2 is an ai");
+
+        let bind = "127.0.0.1:0".parse().expect("addr");
+        let mut session = NetSession::start_host(host, bind).expect("start host");
+
+        assert_eq!(session.gameplay().is_networked(2), networked, "{mode:?}");
+        assert!(session.gameplay().is_networked(1), "{mode:?}");
+    }
+}
+
 //
 // ─── In-game control over a shared host-star socket ────────────────────────────
 //
@@ -52,6 +77,7 @@ fn control_flows_both_ways_after_host_star_game_starts() {
     let mut host = LobbyHost::new(
         ControlChannel::new(Box::new(ep0)),
         Topology::HostStar,
+        AiHosting::Replicated,
         2,
         "human",
     );

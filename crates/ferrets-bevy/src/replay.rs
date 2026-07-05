@@ -16,7 +16,7 @@ use ferrets_replay::record::TickRecord;
 use ferrets_replay::recorder::Recorder;
 use ferrets_replay::replay::Replay;
 use ferrets_simulation::{
-    checksum::{CHECKSUM_INTERVAL, state_checksum},
+    checksum::{self, CHECKSUM_INTERVAL},
     command::PlayerCommand,
     input::{InputFrames, PlayerFrame, SYNC_LATENCY},
     session::{GameSession, player_slot::PlayerId},
@@ -168,7 +168,7 @@ pub fn record_input(world: &mut World) {
         // The world holds the state after the most-recently-completed tick, so a
         // checksum is only valid for that one.
         let checksum = (tick == current - 1 && tick.is_multiple_of(CHECKSUM_INTERVAL))
-            .then(|| state_checksum(world));
+            .then(|| checksum::state_checksum(world));
         let record = TickRecord {
             tick,
             inputs,
@@ -200,7 +200,7 @@ pub fn verify_replay_checksum(world: &mut World) {
     let Some(expected) = playback.replay.checksum_at(completed) else {
         return;
     };
-    let actual = state_checksum(world);
+    let actual = checksum::state_checksum(world);
     if actual != expected {
         eprintln!(
             "replay desync at tick {completed}: recorded checksum {expected:#x}, replayed {actual:#x}",

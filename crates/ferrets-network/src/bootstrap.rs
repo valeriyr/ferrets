@@ -7,6 +7,8 @@
 
 use std::net::ToSocketAddrs;
 
+use ferrets_simulation::session::ai_hosting::AiHosting;
+
 use crate::control::ControlChannel;
 use crate::lobby::client::LobbyClient;
 use crate::lobby::host::LobbyHost;
@@ -19,12 +21,19 @@ use crate::transport::tcp::TcpTransport;
 pub fn open_lobby(
     addr: impl ToSocketAddrs,
     topology: Topology,
+    ai_hosting: AiHosting,
     capacity: usize,
     default_race: &str,
 ) -> crate::Result<LobbyHost> {
     let transport = TcpTransport::host_open(addr)?;
     let control = ControlChannel::new(Box::new(transport));
-    Ok(LobbyHost::new(control, topology, capacity, default_race))
+    Ok(LobbyHost::new(
+        control,
+        topology,
+        ai_hosting,
+        capacity,
+        default_race,
+    ))
 }
 
 /// Joins a host's lobby as a client, blocking only until the host assigns this

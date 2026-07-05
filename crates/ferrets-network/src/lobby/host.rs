@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 
+use ferrets_simulation::session::ai_hosting::AiHosting;
 use ferrets_simulation::session::player_slot::PlayerId;
 
 use crate::control::{ControlChannel, ControlEvent};
@@ -14,6 +15,7 @@ use crate::topology::Topology;
 pub struct LobbyHost {
     control: ControlChannel,
     topology: Topology,
+    ai_hosting: AiHosting,
     slots: Vec<SlotInfo>,
     /// The UDP port each client advertised in its `Join` (for a mesh game).
     udp_ports: HashMap<PeerId, u16>,
@@ -25,6 +27,7 @@ impl LobbyHost {
     pub fn new(
         control: ControlChannel,
         topology: Topology,
+        ai_hosting: AiHosting,
         capacity: usize,
         default_race: &str,
     ) -> Self {
@@ -43,6 +46,7 @@ impl LobbyHost {
         Self {
             control,
             topology,
+            ai_hosting,
             slots,
             udp_ports: HashMap::new(),
         }
@@ -61,6 +65,11 @@ impl LobbyHost {
     /// The chosen in-game topology.
     pub fn topology(&self) -> Topology {
         self.topology
+    }
+
+    /// The chosen AI hosting mode.
+    pub fn ai_hosting(&self) -> AiHosting {
+        self.ai_hosting
     }
 
     /// Drains control events, updating the lobby. Returns `true` if the state
@@ -96,6 +105,13 @@ impl LobbyHost {
     /// clients mirror it.
     pub fn set_topology(&mut self, topology: Topology) -> crate::Result<()> {
         self.topology = topology;
+        self.broadcast_state()
+    }
+
+    /// Changes the AI hosting mode before the game starts. Re-broadcasts so
+    /// clients mirror it.
+    pub fn set_ai_hosting(&mut self, ai_hosting: AiHosting) -> crate::Result<()> {
+        self.ai_hosting = ai_hosting;
         self.broadcast_state()
     }
 
@@ -220,6 +236,7 @@ impl LobbyHost {
             .send(&ControlMessage::Lobby(LobbyMessage::LobbyState {
                 slots: self.slots.clone(),
                 topology: self.topology,
+                ai_hosting: self.ai_hosting,
             }))
     }
 }

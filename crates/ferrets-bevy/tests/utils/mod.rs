@@ -22,7 +22,10 @@ use ferrets_simulation::{
     input::{InputFrames, PlayerFrame},
     map::Map,
     resources::PlayerResources,
-    session::{FinishPolicy, GameSession, player_slot::PlayerSlot, player_type::PlayerType},
+    session::{
+        FinishPolicy, GameSession, ai_hosting::AiHosting, player_slot::PlayerSlot,
+        player_type::PlayerType,
+    },
 };
 
 pub const GROUND: LayerId = LayerId::new(1);
@@ -40,7 +43,7 @@ pub fn make_app(slots: Vec<PlayerSlot>) -> App {
 
     let mut app = App::new();
     app.add_plugins(SimulationPlugin::new(
-        GameSession::new(0, slots, FinishPolicy::Endless),
+        GameSession::new(0, slots, AiHosting::Replicated, FinishPolicy::Endless),
         Map::new("test", Projection::Isometric, nav_grid, vec![]),
     ));
     app
@@ -79,6 +82,14 @@ pub fn run_ticks(app: &mut App, ticks: u32) {
         }
 
         world.run_schedule(FixedUpdate);
+    }
+}
+
+/// Runs exactly `steps` fixed updates without synthesizing any input frames —
+/// for suites whose registered frame sources already feed every slot.
+pub fn run_steps(app: &mut App, steps: u32) {
+    for _ in 0..steps {
+        app.world_mut().run_schedule(FixedUpdate);
     }
 }
 
@@ -167,7 +178,13 @@ pub fn orders_app() -> App {
         PlayerSlot::occupied(0, PlayerType::Human, None),
         PlayerSlot::occupied(1, PlayerType::Human, None),
     ]);
+    register_orders_content(&mut app);
+    app.world_mut().resource_mut::<GameSession>().start();
+    app
+}
 
+/// Registers the economy content roster ([`orders_app`]'s) and validates it.
+pub fn register_orders_content(app: &mut App) {
     {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
         registry.register_resource("gold");
@@ -249,7 +266,4 @@ pub fn orders_app() -> App {
         );
     }
     app.world_mut().resource::<ContentRegistry>().validate();
-
-    app.world_mut().resource_mut::<GameSession>().start();
-    app
 }

@@ -24,7 +24,7 @@ fn layers_are_independent() {
 }
 
 #[test]
-#[should_panic]
+#[should_panic(expected = "is already registered")]
 fn add_layer_panics_on_duplicate() {
     let mut grid = NavGrid::new(5, 5);
     grid.add_layer(utils::GROUND);
@@ -36,7 +36,7 @@ fn add_layer_panics_on_duplicate() {
 
 #[cfg(debug_assertions)]
 #[test]
-#[should_panic]
+#[should_panic(expected = "mask contains unregistered layers")]
 fn set_occupied_panics_on_unregistered_layer() {
     let mut grid = NavGrid::new(5, 5);
     grid.add_layer(utils::GROUND);
@@ -45,7 +45,7 @@ fn set_occupied_panics_on_unregistered_layer() {
 
 #[cfg(debug_assertions)]
 #[test]
-#[should_panic]
+#[should_panic(expected = "mask contains unregistered layers")]
 fn is_occupied_panics_on_unregistered_layer() {
     let mut grid = NavGrid::new(5, 5);
     grid.add_layer(utils::GROUND);
@@ -54,7 +54,7 @@ fn is_occupied_panics_on_unregistered_layer() {
 
 #[cfg(debug_assertions)]
 #[test]
-#[should_panic]
+#[should_panic(expected = "mask contains unregistered layers")]
 fn is_occupied_by_panics_on_unregistered_mask() {
     let mut grid = NavGrid::new(5, 5);
     grid.add_layer(utils::GROUND);
@@ -63,7 +63,7 @@ fn is_occupied_by_panics_on_unregistered_mask() {
 
 #[cfg(debug_assertions)]
 #[test]
-#[should_panic]
+#[should_panic(expected = "mask contains unregistered layers")]
 fn is_passable_panics_on_unregistered_layer() {
     let mut grid = NavGrid::new(5, 5);
     grid.add_layer(utils::GROUND);
@@ -72,7 +72,7 @@ fn is_passable_panics_on_unregistered_layer() {
 
 #[cfg(debug_assertions)]
 #[test]
-#[should_panic]
+#[should_panic(expected = "mask contains unregistered layers")]
 fn is_passable_by_panics_on_unregistered_mask() {
     let mut grid = NavGrid::new(5, 5);
     grid.add_layer(utils::GROUND);

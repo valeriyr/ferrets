@@ -12,6 +12,7 @@
 //! The crate reads and writes over any [`Read`](std::io::Read) /
 //! [`Write`](std::io::Write); opening files is left to the caller.
 
+pub mod buffer;
 pub mod error;
 mod format;
 pub mod header;

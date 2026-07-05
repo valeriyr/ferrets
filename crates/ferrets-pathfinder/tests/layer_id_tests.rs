@@ -12,13 +12,13 @@ fn new_stores_bit_value() {
 }
 
 #[test]
-#[should_panic]
+#[should_panic(expected = "non-zero power of two")]
 fn new_panics_on_zero() {
     LayerId::new(0);
 }
 
 #[test]
-#[should_panic]
+#[should_panic(expected = "non-zero power of two")]
 fn new_panics_on_non_power_of_two() {
     LayerId::new(3);
 }
@@ -35,13 +35,13 @@ fn from_u32_is_equivalent_to_new() {
 }
 
 #[test]
-#[should_panic]
+#[should_panic(expected = "non-zero power of two")]
 fn from_u32_panics_on_zero() {
     let _ = LayerId::from(0u32);
 }
 
 #[test]
-#[should_panic]
+#[should_panic(expected = "non-zero power of two")]
 fn from_u32_panics_on_non_power_of_two() {
     let _ = LayerId::from(3u32);
 }

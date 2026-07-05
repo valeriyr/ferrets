@@ -8,4 +8,9 @@ repository.workspace = true
 description = "Lua scripting runtime and game content loading."
 
 [dependencies]
+mlua = { version = "0.11", features = ["vendored", "lua54"] }
+thiserror.workspace = true
+
+ferrets-math.workspace = true
+ferrets-pathfinder.workspace = true
 ferrets-simulation.workspace = true

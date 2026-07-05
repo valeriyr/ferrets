@@ -1,12 +1,15 @@
 //! Manages the lifecycle and participants of a running game.
 
+pub mod ai_hosting;
 pub mod player_slot;
 pub mod player_type;
 
 use bevy_ecs::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::session::ai_hosting::AiHosting;
 use crate::session::player_slot::{PlayerId, PlayerSlot};
+use crate::session::player_type::PlayerType;
 
 /// Lifecycle state of the simulation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -64,6 +67,8 @@ pub struct GameSession {
     slots: Vec<PlayerSlot>,
     /// The slot controlled by the local client.
     local_player: PlayerId,
+    /// How AI player input is computed.
+    ai_hosting: AiHosting,
     /// When this session ends on its own.
     finish_policy: FinishPolicy,
     /// How the game ended, once it has. `None` while still in progress.
@@ -81,14 +86,16 @@ pub struct GameSession {
 impl GameSession {
     /// Creates a session from the given player slots.
     ///
-    /// `local_player` is the [`PlayerId`] controlled by this client, and
-    /// `finish_policy` decides when the session ends on its own.
+    /// `local_player` is the [`PlayerId`] controlled by this client,
+    /// `ai_hosting` says how AI player input is computed, and `finish_policy`
+    /// decides when the session ends on its own.
     ///
     /// Panics if the ids are not sorted and contiguous starting from `0` (i.e. `0, 1, 2, …`).
     /// Panics if `local_player` is not in `slots`.
     pub fn new(
         local_player: PlayerId,
         slots: Vec<PlayerSlot>,
+        ai_hosting: AiHosting,
         finish_policy: FinishPolicy,
     ) -> Self {
         assert_valid_slots(local_player, &slots);
@@ -99,19 +106,26 @@ impl GameSession {
             dropped: vec![false; slots.len()],
             slots,
             local_player,
+            ai_hosting,
             finish_policy,
             result: None,
             paused: false,
         }
     }
 
-    /// Replaces the player slots and local player before the game starts. A lobby
-    /// builds the running session from its locked configuration this way, mutating
-    /// the pending session in place rather than constructing a new one.
+    /// Replaces the player slots, local player, and AI hosting before the game
+    /// starts. A lobby builds the running session from its locked configuration
+    /// this way, mutating the pending session in place rather than constructing
+    /// a new one.
     ///
     /// Panics if the session has already started, or if the slot ids are not
     /// contiguous from `0`, or `local_player` is not a valid slot.
-    pub fn configure(&mut self, local_player: PlayerId, slots: Vec<PlayerSlot>) {
+    pub fn configure(
+        &mut self,
+        local_player: PlayerId,
+        slots: Vec<PlayerSlot>,
+        ai_hosting: AiHosting,
+    ) {
         assert_eq!(
             self.state,
             SessionState::Pending,
@@ -121,6 +135,7 @@ impl GameSession {
         self.dropped = vec![false; slots.len()];
         self.slots = slots;
         self.local_player = local_player;
+        self.ai_hosting = ai_hosting;
     }
 
     pub fn start(&mut self) {
@@ -176,6 +191,29 @@ impl GameSession {
     /// Returns `true` while the session is paused.
     pub fn is_paused(&self) -> bool {
         self.paused
+    }
+
+    /// Returns how AI player input is computed.
+    pub fn ai_hosting(&self) -> AiHosting {
+        self.ai_hosting
+    }
+
+    /// Returns `true` when this node is responsible for producing input frames
+    /// for `slot`. `is_host` says whether this node is the session host; a
+    /// local game's single node is its own host.
+    ///
+    /// Unoccupied slots are sourced by every node (an idle fill is identical
+    /// everywhere), a human slot by the node the human plays on, and an AI slot
+    /// according to the session's [`AiHosting`].
+    pub fn sources_locally(&self, slot: &PlayerSlot, is_host: bool) -> bool {
+        match slot.player_type() {
+            None => true,
+            Some(PlayerType::Human) => slot.id() == self.local_player,
+            Some(PlayerType::Ai) => match self.ai_hosting {
+                AiHosting::Replicated => true,
+                AiHosting::HostOnly => is_host,
+            },
+        }
     }
 
     /// Sets when this session ends on its own. Configure before starting.

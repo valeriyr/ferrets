@@ -13,8 +13,9 @@ use std::collections::BTreeMap;
 use bevy::prelude::*;
 use ferrets_network::message::control::{ControlMessage, InGameMessage};
 use ferrets_network::session::NetSession;
+use ferrets_simulation::checksum;
 use ferrets_simulation::{
-    checksum::{CHECKSUM_INTERVAL, state_checksum},
+    checksum::CHECKSUM_INTERVAL,
     input::{InputFrames, PlayerFrame, SYNC_LATENCY},
     session::{GameResult, GameSession, player_slot::PlayerId},
 };
@@ -371,26 +372,31 @@ pub fn auto_idle_dropped(mut frames: ResMut<InputFrames>, session: Res<GameSessi
 /// (Re)broadcasts the frame window read from `InputFrames` — the single source of
 /// truth — around the current tick.
 ///
-/// Selects only what belongs on the wire: network-backed players' frames
-/// (`is_networked` excludes AI, which every node computes locally), never dropped
-/// players' (their idle is synthesized locally everywhere — broadcasting it could
-/// race a late real frame), and on a non-relay node only the local player's.
-/// Re-reading the `[tick-SYNC_LATENCY, tick+SYNC_LATENCY]` window each tick is the
-/// redundancy resend; idempotent `push_frame` makes duplicates harmless.
+/// Selects only what belongs on the wire: network-backed players' frames (which
+/// players those are depends on the session's AI hosting mode — a replicated
+/// AI is computed on every node and never relayed), never dropped players'
+/// (their idle is synthesized locally everywhere — broadcasting it could race a
+/// late real frame), and on a non-relay node only the players this node sources
+/// (its own input, plus any AIs it computes for the others). Re-reading the
+/// `[tick-SYNC_LATENCY, tick+SYNC_LATENCY]` window each tick is the redundancy
+/// resend; idempotent `push_frame` makes duplicates harmless.
 pub fn net_broadcast(
     mut net: NonSendMut<NetworkSession>,
     frames: Res<InputFrames>,
     session: Res<GameSession>,
 ) {
     let tick = session.tick();
-    let local = session.local_player();
     let relays = net.0.relays();
+    let is_host = net.0.is_control_host();
 
     let mut window = frames.frames_in_range(tick.saturating_sub(SYNC_LATENCY), tick + SYNC_LATENCY);
     window.retain(|frame| {
+        let sourced = session
+            .slot(frame.player)
+            .is_some_and(|slot| session.sources_locally(slot, is_host));
         net.0.is_networked(frame.player)
             && !session.is_player_dropped(frame.player)
-            && (relays || frame.player == local)
+            && (relays || sourced)
     });
 
     if let Err(error) = net.0.broadcast_frames(window) {
@@ -405,7 +411,7 @@ pub fn net_checksum(world: &mut World) {
     let tick = world.resource::<GameSession>().tick();
 
     if tick.is_multiple_of(CHECKSUM_INTERVAL) {
-        let hash = state_checksum(world);
+        let hash = checksum::state_checksum(world);
         world
             .resource_mut::<DesyncTracker>()
             .local

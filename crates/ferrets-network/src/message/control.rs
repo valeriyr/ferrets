@@ -6,6 +6,7 @@
 
 use std::net::SocketAddr;
 
+use ferrets_simulation::session::ai_hosting::AiHosting;
 use ferrets_simulation::session::player_slot::PlayerId;
 use serde::{Deserialize, Serialize};
 
@@ -19,7 +20,10 @@ pub enum Occupant {
     Open,
     /// A networked human, identified by the peer that controls it.
     Human { peer: PeerId },
-    /// A locally-computed AI; no peer, no presence on the wire.
+    /// An AI player. Whether its frames appear on the wire depends on the
+    /// session's [`AiHosting`]: computed on every node and never relayed, or
+    /// computed on the host node, which sends the AI's frames under the AI's
+    /// own player id.
     Ai,
     /// A disabled slot: no player, no base, excluded from the running game.
     Closed,
@@ -64,6 +68,7 @@ pub enum LobbyMessage {
     LobbyState {
         slots: Vec<SlotInfo>,
         topology: Topology,
+        ai_hosting: AiHosting,
     },
     /// Host → all: the named peer was refused (e.g. a build mismatch). Only the
     /// rejected client acts on it; the others ignore it.

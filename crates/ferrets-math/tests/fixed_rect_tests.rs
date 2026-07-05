@@ -143,7 +143,7 @@ fn round_trips_through_bcs() {
 // Debug-only: the assert is compiled out of release builds.
 #[cfg(debug_assertions)]
 #[test]
-#[should_panic]
+#[should_panic(expected = "min.x <= max.x")]
 fn deserializing_min_greater_than_max_panics() {
     let bad = bcs::to_bytes(&(utils::vec2(5, 5), utils::vec2(-1, -1))).expect("encode");
     let _: FixedRect = bcs::from_bytes(&bad).expect("decode");

@@ -10,6 +10,7 @@
 use std::net::SocketAddr;
 
 use ferrets_simulation::input::PlayerFrame;
+use ferrets_simulation::session::ai_hosting::AiHosting;
 use ferrets_simulation::session::player_slot::PlayerId;
 
 use crate::control::{ControlChannel, ControlEvent};
@@ -130,7 +131,7 @@ impl NetSession {
     /// `local_udp_bind` is where the host's gameplay socket binds for a mesh game
     /// (ignored for host-star).
     pub fn start_host(mut host: LobbyHost, local_udp_bind: SocketAddr) -> crate::Result<Self> {
-        let roster = roster_from_slots(host.slots());
+        let roster = roster_from_slots(host.slots(), host.ai_hosting());
         match host.topology() {
             Topology::HostStar => {
                 host.start(None)?;
@@ -158,7 +159,7 @@ impl NetSession {
             .ok_or_else(|| internal("client has not received the start signal"))?
             .udp_table
             .clone();
-        let roster = roster_from_slots(client.slots());
+        let roster = roster_from_slots(client.slots(), client.ai_hosting());
         let local = client.control_peer();
 
         match client.topology() {
@@ -180,15 +181,21 @@ impl NetSession {
 /// The host's peer id.
 const HOST_PEER: PeerId = 0;
 
-/// Builds the roster from the locked slots: a human slot maps to its peer; an AI,
-/// open, or closed slot has no network peer. The slot index is its [`PlayerId`].
-fn roster_from_slots(slots: &[SlotInfo]) -> Roster {
+/// Builds the roster from the locked slots: a human slot maps to its peer; an
+/// open or closed slot has no network peer. An AI slot depends on the hosting
+/// mode — no peer when every node computes it locally, the host peer when the
+/// host computes it and broadcasts its frames. The slot index is its [`PlayerId`].
+fn roster_from_slots(slots: &[SlotInfo], ai_hosting: AiHosting) -> Roster {
     Roster::from_slots(
         slots
             .iter()
             .map(|info| match info.occupant {
                 Occupant::Human { peer } => Some(peer),
-                Occupant::Open | Occupant::Ai | Occupant::Closed => None,
+                Occupant::Ai => match ai_hosting {
+                    AiHosting::Replicated => None,
+                    AiHosting::HostOnly => Some(HOST_PEER),
+                },
+                Occupant::Open | Occupant::Closed => None,
             })
             .collect(),
     )

@@ -11,6 +11,7 @@ use ferrets_network::message::{Message, decode, encode};
 use ferrets_network::topology::Topology;
 use ferrets_simulation::command::PlayerCommand;
 use ferrets_simulation::input::PlayerFrame;
+use ferrets_simulation::session::ai_hosting::AiHosting;
 use ferrets_simulation::simulation_id::SimulationId;
 
 //
@@ -53,6 +54,7 @@ fn lobby_state_control_round_trips() {
             },
         ],
         topology: Topology::Mesh,
+        ai_hosting: AiHosting::HostOnly,
     }));
     assert_eq!(decode(&encode(&message).unwrap()).unwrap(), message);
 }

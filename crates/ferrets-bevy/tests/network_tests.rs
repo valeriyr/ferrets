@@ -22,7 +22,8 @@ use ferrets_simulation::{
     content::{entity_type_def::EntityTypeDef, registry::ContentRegistry},
     map::Map,
     session::{
-        FinishPolicy, GameResult, GameSession, player_slot::PlayerSlot, player_type::PlayerType,
+        FinishPolicy, GameResult, GameSession, ai_hosting::AiHosting, player_slot::PlayerSlot,
+        player_type::PlayerType,
     },
     spawn,
 };
@@ -44,7 +45,7 @@ fn net_app(transport: LoopbackTransport, players: usize) -> App {
     let slots = (0..players)
         .map(|i| PlayerSlot::occupied(i as u8, PlayerType::Human, None))
         .collect();
-    let session = GameSession::new(local, slots, FinishPolicy::Endless);
+    let session = GameSession::new(local, slots, AiHosting::Replicated, FinishPolicy::Endless);
 
     let mut app = App::new();
     app.add_plugins(SimulationPlugin::new(

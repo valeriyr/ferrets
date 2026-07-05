@@ -19,6 +19,8 @@
 //! The order mirrors a classic RTS tick loop:
 //!
 //! ```text
+//! supply_unmanned_input — idle frames for locally-sourced slots with no brain
+//! supply_ai_input    — scripted AI frame source (thinks on its cadence)
 //! flush_input        — drain PendingInput into InputFrames (runs while session is active)
 //! command_executor   — translate InputFrames → OrderQueueComponent mutations
 //! [ApplyDeferred]
@@ -39,6 +41,8 @@
 //! ```
 //!
 //! Use `.after(SimulationSet)` to read sim state after the tick completes.
+
+pub mod ai;
 mod input;
 pub mod network;
 pub mod replay;

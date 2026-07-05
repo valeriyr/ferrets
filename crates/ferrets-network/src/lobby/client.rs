@@ -1,5 +1,6 @@
 //! The client side of the lobby: mirrors the host's broadcast state.
 
+use ferrets_simulation::session::ai_hosting::AiHosting;
 use ferrets_simulation::session::player_slot::PlayerId;
 
 use crate::control::{ControlChannel, ControlEvent};
@@ -30,6 +31,7 @@ pub struct LobbyClient {
     control: ControlChannel,
     slots: Vec<SlotInfo>,
     topology: Topology,
+    ai_hosting: AiHosting,
     /// The host's start signal, set once it arrives.
     started: Option<Started>,
 }
@@ -41,6 +43,7 @@ impl LobbyClient {
             control,
             slots: Vec::new(),
             topology: Topology::HostStar,
+            ai_hosting: AiHosting::default(),
             started: None,
         }
     }
@@ -83,9 +86,14 @@ impl LobbyClient {
                     message: ControlMessage::Lobby(message),
                     ..
                 } => match message {
-                    LobbyMessage::LobbyState { slots, topology } => {
+                    LobbyMessage::LobbyState {
+                        slots,
+                        topology,
+                        ai_hosting,
+                    } => {
                         self.slots = slots;
                         self.topology = topology;
+                        self.ai_hosting = ai_hosting;
                         changed = true;
                     }
                     LobbyMessage::Start { udp_table } => {
@@ -115,6 +123,11 @@ impl LobbyClient {
     /// The host's chosen topology.
     pub fn topology(&self) -> Topology {
         self.topology
+    }
+
+    /// The host's chosen AI hosting mode.
+    pub fn ai_hosting(&self) -> AiHosting {
+        self.ai_hosting
     }
 
     /// This client's own peer handle (assigned by the host on connect).

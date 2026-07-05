@@ -1,9 +1,7 @@
 //! Writing a replay to a stream and reading it back: round-trips, end-of-stream
 //! handling, and the format and version guards.
 
-use std::io::{self, Write};
-use std::sync::{Arc, Mutex};
-
+use ferrets_replay::buffer::SharedBuffer;
 use ferrets_replay::error::ReplayError;
 use ferrets_replay::header::{FORMAT_VERSION, ReplayHeader};
 use ferrets_replay::record::TickRecord;
@@ -16,7 +14,7 @@ use ferrets_simulation::session::player_type::PlayerType;
 
 #[test]
 fn round_trips_header_and_records() {
-    let buffer = SharedBuf::default();
+    let buffer = SharedBuffer::default();
     {
         let mut recorder = Recorder::new(buffer.clone(), &header()).expect("start recording");
         recorder.record(&record(0, &[], None)).expect("record 0");
@@ -35,7 +33,7 @@ fn round_trips_header_and_records() {
 
 #[test]
 fn drops_truncated_trailing_record() {
-    let buffer = SharedBuf::default();
+    let buffer = SharedBuffer::default();
     {
         let mut recorder = Recorder::new(buffer.clone(), &header()).expect("start recording");
         recorder
@@ -58,7 +56,7 @@ fn drops_truncated_trailing_record() {
 
 #[test]
 fn inputs_at_is_empty_for_unrecorded_or_idle_ticks() {
-    let buffer = SharedBuf::default();
+    let buffer = SharedBuffer::default();
     {
         let mut recorder = Recorder::new(buffer.clone(), &header()).expect("start recording");
         recorder
@@ -99,28 +97,6 @@ fn rejects_unsupported_format_version() {
 //
 // ─── Helpers ────────────────────────────────────────────────────────────────
 //
-
-/// An owned, `Send + 'static` byte sink a [`Recorder`] can write into while a
-/// clone is kept to read the bytes back out.
-#[derive(Clone, Default)]
-struct SharedBuf(Arc<Mutex<Vec<u8>>>);
-
-impl SharedBuf {
-    fn bytes(&self) -> Vec<u8> {
-        self.0.lock().unwrap().clone()
-    }
-}
-
-impl Write for SharedBuf {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        self.0.lock().unwrap().extend_from_slice(bytes);
-        Ok(bytes.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
 
 /// A two-slot header to record against.
 fn header() -> ReplayHeader {

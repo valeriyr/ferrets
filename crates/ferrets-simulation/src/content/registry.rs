@@ -1,6 +1,6 @@
 //! Registry of all content-defined entity types and resource kinds.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 
 use bevy_ecs::prelude::*;
 
@@ -8,9 +8,12 @@ use super::entity_type_def::EntityTypeDef;
 
 /// Stores every [`EntityTypeDef`], keyed by type name,
 /// as well as all the other registered content.
+///
+/// Everything is held in ordered containers, so iteration over the registry is
+/// deterministic.
 #[derive(Resource, Default)]
 pub struct ContentRegistry {
-    entities: HashMap<String, EntityTypeDef>,
+    entities: BTreeMap<String, EntityTypeDef>,
     resources: BTreeSet<String>,
     races: BTreeSet<String>,
 }
@@ -67,6 +70,16 @@ impl ContentRegistry {
     /// Returns the definition for the given type name, or `None` if not registered.
     pub fn entity(&self, name: &str) -> Option<&EntityTypeDef> {
         self.entities.get(name)
+    }
+
+    /// Returns every registered entity type definition, in ascending name order.
+    pub fn entities(&self) -> impl Iterator<Item = &EntityTypeDef> {
+        self.entities.values()
+    }
+
+    /// Returns the registered resource kinds, in ascending order.
+    pub fn resources(&self) -> impl Iterator<Item = &str> {
+        self.resources.iter().map(String::as_str)
     }
 
     /// Registers a resource kind (gold, wood, …).
