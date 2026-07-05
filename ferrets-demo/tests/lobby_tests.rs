@@ -1,6 +1,6 @@
 //! The lobby's dial-address parsing.
 
-use demo::lobby::dial_addr;
+use ferrets_demo::lobby::dial_addr;
 
 #[test]
 fn dial_addr_appends_default_port_when_omitted() {

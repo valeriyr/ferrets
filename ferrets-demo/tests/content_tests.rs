@@ -1,6 +1,6 @@
 //! The demo's embedded content script: it loads and validates.
 
-use demo::content::CONTENT;
+use ferrets_demo::content::CONTENT;
 use ferrets_script::{content, engine::lua::LuaEngine};
 
 #[test]

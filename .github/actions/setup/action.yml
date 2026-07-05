@@ -1,0 +1,45 @@
+# Shared job setup: the Linux system libraries Bevy links against, plus the
+# Cargo cache. Used by every job that compiles the workspace, so a new system
+# dependency or cache path is added in exactly one place.
+name: Setup build environment
+description: Install Linux build dependencies and restore the Cargo cache.
+
+inputs:
+  cache-key:
+    description: Exact cache key for this job.
+    required: true
+  restore-keys:
+    description: Newline-separated fallback key prefixes, most specific first.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    # Bevy links against system libraries on Linux (audio via ALSA, device
+    # events via udev, windowing via X11/Wayland). GitHub's Ubuntu runners do
+    # not ship the development headers, so compiling the workspace fails
+    # without them. macOS and Windows runners need nothing extra.
+    - name: Install Linux dependencies
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          libasound2-dev libudev-dev libx11-dev libxkbcommon-dev libwayland-dev
+
+    # Restore the Cargo cache from a previous run so dependencies are not
+    # redownloaded and recompiled from scratch every time.
+    #
+    # `key` is the exact cache identifier; callers include a hash of all
+    # Cargo.lock files so the cache is invalidated whenever any dependency
+    # version changes. `restore-keys` are prefix fallbacks: when no entry
+    # matches the exact key, the most-recent entry with a matching prefix is
+    # used — an older cache is still far faster than a cold build.
+    - uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ inputs.cache-key }}
+        restore-keys: ${{ inputs.restore-keys }}

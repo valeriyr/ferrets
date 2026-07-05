@@ -1,5 +1,5 @@
 [package]
-name = "demo"
+name = "ferrets-demo"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -8,7 +8,7 @@ repository.workspace = true
 description = "ferrets demo game."
 
 [[bin]]
-name = "ferrets"
+name = "demo"
 path = "src/main.rs"
 
 [dependencies]

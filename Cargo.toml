@@ -16,7 +16,7 @@ members = [
     "crates/ferrets-script",
     "crates/ferrets-simulation",
     "crates/ferrets-steam",
-    "demo",
+    "ferrets-demo",
 ]
 
 [workspace.dependencies]

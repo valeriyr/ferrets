@@ -2,11 +2,13 @@
 //! headless game, builds its economy and army.
 
 use bevy::prelude::*;
-use demo::ai::{AI_SCRIPT, install_demo_ai};
-use demo::content::CONTENT;
 use ferrets_bevy::SimulationPlugin;
 use ferrets_bevy::ai::AiPlugin;
+use ferrets_demo::ai::{AI_SCRIPT, install_demo_ai};
+use ferrets_demo::content::CONTENT;
+use ferrets_demo::{map, setup};
 use ferrets_script::ai::view::content::ContentView;
+use ferrets_script::content;
 use ferrets_script::engine::ScriptEngine;
 use ferrets_script::engine::lua::LuaEngine;
 use ferrets_simulation::components::entity_info::EntityInfoComponent;
@@ -21,7 +23,7 @@ use ferrets_simulation::session::{
 
 #[test]
 fn ai_script_loads() {
-    let registry = ferrets_script::content::load(&LuaEngine, CONTENT).expect("demo content");
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content");
     let content = ContentView::from_registry(&registry);
 
     let runtime = LuaEngine
@@ -43,14 +45,14 @@ fn ai_builds_economy_and_army() {
     let mut app = App::new();
     app.add_plugins(SimulationPlugin::new(
         GameSession::new(0, slots, AiHosting::Replicated, FinishPolicy::Endless),
-        demo::map::build(),
+        map::build(),
     ));
     app.add_plugins(AiPlugin);
     {
         let world = app.world_mut();
         *world.resource_mut::<ContentRegistry>() =
-            ferrets_script::content::load(&LuaEngine, CONTENT).expect("demo content");
-        demo::setup::spawn_demo_scene(world);
+            content::load(&LuaEngine, CONTENT).expect("demo content");
+        setup::spawn_demo_scene(world);
         install_demo_ai(world);
     }
 
