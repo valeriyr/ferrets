@@ -8,7 +8,7 @@ use ferrets_replay::record::TickRecord;
 use ferrets_replay::recorder::Recorder;
 use ferrets_replay::replay::Replay;
 use ferrets_simulation::command::PlayerCommand;
-use ferrets_simulation::session::FinishPolicy;
+use ferrets_simulation::session::finish_policy::FinishPolicy;
 use ferrets_simulation::session::player_slot::{PlayerId, PlayerSlot};
 use ferrets_simulation::session::player_type::PlayerType;
 
@@ -52,6 +52,27 @@ fn drops_truncated_trailing_record() {
     // The complete record survives; the half-written one is discarded.
     assert_eq!(replay.last_tick(), Some(0));
     assert_eq!(replay.inputs_at(0), &[commands(0)]);
+}
+
+#[test]
+fn round_trips_dropped_players() {
+    let buffer = SharedBuffer::default();
+    {
+        let mut recorder = Recorder::new(buffer.clone(), &header()).expect("start recording");
+        recorder
+            .record(&record(0, &[commands(1)], None))
+            .expect("record 0");
+        let mut drop_tick = record(1, &[], None);
+        drop_tick.dropped = vec![1];
+        recorder.record(&drop_tick).expect("record 1");
+    }
+
+    let replay = Replay::read(buffer.bytes().as_slice()).expect("read replay");
+
+    // The drop is carried on its tick and absent everywhere else.
+    assert_eq!(replay.drops_at(1), &[1]);
+    assert!(replay.drops_at(0).is_empty());
+    assert!(replay.drops_at(99).is_empty());
 }
 
 #[test]
@@ -107,7 +128,8 @@ fn header() -> ReplayHeader {
     ReplayHeader::new(slots, FinishPolicy::LastStanding)
 }
 
-/// A tick record with the given per-player inputs and optional checksum.
+/// A tick record with the given per-player inputs and optional checksum, and no
+/// drops.
 fn record(
     tick: u32,
     inputs: &[(PlayerId, Vec<PlayerCommand>)],
@@ -116,6 +138,7 @@ fn record(
     TickRecord {
         tick,
         inputs: inputs.to_vec(),
+        dropped: Vec::new(),
         checksum,
     }
 }

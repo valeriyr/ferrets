@@ -10,7 +10,8 @@ use ferrets_simulation::{
     components::location::Solidity,
     content::{entity_type_def::EntityTypeDef, registry::ContentRegistry},
     session::{
-        FinishPolicy, GameResult, GameSession, player_slot::PlayerSlot, player_type::PlayerType,
+        GameResult, GameSession, finish_policy::FinishPolicy, player_slot::PlayerSlot,
+        player_type::PlayerType,
     },
     simulation_id::SimulationId,
     spawn,
@@ -72,7 +73,10 @@ fn dropped_player_is_excluded_so_game_resolves_among_rest() {
 
     // Player 2 drops. Two players still field units, so the game continues —
     // player 2's lingering unit does not keep the game alive.
-    app.world_mut().resource_mut::<GameSession>().drop_player(2);
+    let tick = app.world().resource::<GameSession>().tick();
+    app.world_mut()
+        .resource_mut::<GameSession>()
+        .drop_player(2, tick);
     utils::run_ticks(&mut app, 1);
     assert_eq!(app.world().resource::<GameSession>().result(), None);
 

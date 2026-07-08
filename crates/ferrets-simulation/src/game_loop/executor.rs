@@ -1,5 +1,5 @@
-//! Per-tick command dispatch: translates buffered [`InputFrame`](crate::input::InputFrame)s
-//! into order-queue mutations.
+//! Per-tick command dispatch: translates the buffered input of
+//! [`InputFrames`](crate::input::InputFrames) into order-queue mutations.
 //!
 //! Commands only ever affect entities owned by the issuing player; selection is
 //! the single exception — any visible entity can be selected.
@@ -27,21 +27,28 @@ use crate::{
     order::Order,
     resources::PlayerResources,
     selection::Selection,
-    session::player_slot::PlayerId,
+    session::{GameSession, player_slot::PlayerId},
     simulation_id::SimulationId,
     spawn,
 };
 
-/// Processes the frame for `current_tick` if all players have contributed.
+/// Processes the frame for `current_tick` once every player the tick requires
+/// (see [`GameSession::required_players`]) has contributed.
 ///
 /// Returns `true` if the frame was ready and processed, `false` if the tick should block.
 pub fn tick(world: &mut World, current_tick: u32) -> bool {
-    let Some(frame) = world.resource::<InputFrames>().get_ready(current_tick) else {
+    let required = world
+        .resource::<GameSession>()
+        .required_players(current_tick);
+    let Some(ready) = world
+        .resource::<InputFrames>()
+        .ready_commands(current_tick, &required)
+    else {
         return false;
     };
 
-    let commands: Vec<(PlayerId, Vec<PlayerCommand>)> = frame
-        .iter()
+    let commands: Vec<(PlayerId, Vec<PlayerCommand>)> = ready
+        .into_iter()
         .map(|(player, commands)| (player, commands.to_vec()))
         .collect();
 

@@ -6,11 +6,12 @@
 
 use std::net::SocketAddr;
 
-use ferrets_simulation::session::ai_hosting::AiHosting;
 use ferrets_simulation::session::player_slot::PlayerId;
 use serde::{Deserialize, Serialize};
 
-use crate::{peer::PeerId, topology::Topology};
+use crate::{peer::PeerId, session_mode::SessionMode};
+use ferrets_simulation::session::drop_policy::DropPolicy;
+use ferrets_simulation::session::finish_policy::FinishPolicy;
 
 /// Who occupies a player slot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -21,7 +22,7 @@ pub enum Occupant {
     /// A networked human, identified by the peer that controls it.
     Human { peer: PeerId },
     /// An AI player. Whether its frames appear on the wire depends on the
-    /// session's [`AiHosting`]: computed on every node and never relayed, or
+    /// session mode's AI hosting: computed on every node and never relayed, or
     /// computed on the host node, which sends the AI's frames under the AI's
     /// own player id.
     Ai,
@@ -40,8 +41,21 @@ pub struct SlotInfo {
     pub race: Option<String>,
 }
 
+/// Everything the host decides and every client mirrors: the slot list plus
+/// the session-wide choices. One value on the wire and in the mirrors, so
+/// "what the lobby agreed" always travels — and is absent — as a whole.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LobbyState {
+    pub slots: Vec<SlotInfo>,
+    pub mode: SessionMode,
+    pub drop_policy: DropPolicy,
+    pub finish_policy: FinishPolicy,
+}
+
 /// A peer's gameplay (UDP) endpoint, distributed to every peer before a mesh game
-/// starts so each can address the others directly.
+/// starts so each can address the others directly. An unspecified IP (`0.0.0.0`)
+/// means the peer could only report its bind address; a receiver substitutes the
+/// address it actually reached that peer at.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UdpEntry {
     pub peer: PeerId,
@@ -52,45 +66,71 @@ pub struct UdpEntry {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LobbyMessage {
     /// Client → host on connect: the client's build identity (the host refuses a
-    /// mismatch — see [`ferrets_simulation::PROTOCOL_VERSION`]), the UDP port the
-    /// client will receive gameplay on for a direct mesh (`None` if it offers none
-    /// — used only when the host picks a mesh topology), and an optional preferred
-    /// race.
+    /// mismatch — see [`ferrets_simulation::PROTOCOL_VERSION`]), the ports the
+    /// client will accept direct traffic on for a mesh — UDP for gameplay, TCP
+    /// for the decentralized control mesh (`None` if it offers none; each is
+    /// used only when the host picks a mode that needs it), and an optional
+    /// preferred race.
     Join {
         protocol_version: String,
         advertised_udp_port: Option<u16>,
+        advertised_control_port: Option<u16>,
         race: Option<String>,
     },
-    /// Host → all, re-sent on every change: the authoritative lobby state. A
-    /// client finds its own slot by the peer id it was assigned on connect. Peers
-    /// mirror it so their view is always current and their config is built before
-    /// the game starts.
-    LobbyState {
-        slots: Vec<SlotInfo>,
-        topology: Topology,
-        ai_hosting: AiHosting,
-    },
+    /// Host → all, re-sent on every change: the authoritative [`LobbyState`].
+    /// A client finds its own slot by the peer id it was assigned on connect.
+    /// Peers mirror it so their view is always current and their config is
+    /// built before the game starts.
+    State(LobbyState),
     /// Host → all: the named peer was refused (e.g. a build mismatch). Only the
     /// rejected client acts on it; the others ignore it.
     Rejected { peer: PeerId, reason: String },
     /// Client → host: a request to set a slot's race. The host validates it and
-    /// re-broadcasts [`LobbyState`](Self::LobbyState).
+    /// re-broadcasts the [`State`](Self::State).
     RequestRace { slot: PlayerId, race: String },
     /// Host → all: lock the lobby and begin. The state is already synced, so this
-    /// carries only what the lobby broadcasts did not — the UDP endpoint table,
-    /// present only for a mesh game.
-    Start { udp_table: Option<Vec<UdpEntry>> },
+    /// carries only what the lobby broadcasts did not — the endpoint tables:
+    /// UDP gameplay endpoints for a mesh game, and TCP control endpoints for a
+    /// decentralized one.
+    Start {
+        udp_table: Option<Vec<UdpEntry>>,
+        control_table: Option<Vec<UdpEntry>>,
+    },
 }
 
-/// An in-game control message, exchanged while the session runs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// An in-game control message, exchanged while the session runs. These are
+/// commands, not continuously re-spread state, so they only ever ride the
+/// reliable control links — never the (possibly lossy) gameplay channel.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum InGameMessage {
-    /// Any node → host: a request to pause (`true`) or resume (`false`). The host
-    /// turns it into an authoritative [`PauseAt`](Self::PauseAt).
+    /// Under host authority, host → all: `player` contributes no input from
+    /// `tick` on — the authoritative drop of a stalled player. Applying it is
+    /// `GameSession::drop_player`; a receiver that has not reached `tick` yet
+    /// applies it all the same (the requirement is per tick, not per moment).
+    DropAt { player: PlayerId, tick: u32 },
+    /// Under peer authority, one node's observation of a stalled tick: it is
+    /// blocked at `tick` and the players in `missing` have not delivered
+    /// their frames for it. The drop commits once every live player outside
+    /// `missing` reports the same observation. `voter` is the originator.
+    StallVote {
+        voter: PlayerId,
+        tick: u32,
+        missing: Vec<PlayerId>,
+    },
+    /// Under host authority, any node → host: a request to pause (`true`) or
+    /// resume (`false`). The host turns it into an authoritative
+    /// [`PauseAt`](Self::PauseAt).
     PauseRequest { paused: bool },
-    /// Host → all: pause (`true`) or resume (`false`) the session, effective at
-    /// `tick` on every node so the change is deterministic.
-    PauseAt { tick: u32, paused: bool },
+    /// Pause (`true`) or resume (`false`) the session, effective at `tick` on
+    /// every node so the change is deterministic. Under host authority only
+    /// the host emits it; under peer authority any node may propose, and
+    /// proposals colliding on the same tick resolve by lowest
+    /// `(proposer, paused)` everywhere.
+    PauseAt {
+        proposer: PlayerId,
+        tick: u32,
+        paused: bool,
+    },
 }
 
 /// A message on the control channel, before or during the game.

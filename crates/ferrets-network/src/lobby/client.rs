@@ -1,18 +1,25 @@
 //! The client side of the lobby: mirrors the host's broadcast state.
 
-use ferrets_simulation::session::ai_hosting::AiHosting;
+use std::net::{TcpListener, UdpSocket};
+
 use ferrets_simulation::session::player_slot::PlayerId;
 
 use crate::control::{ControlChannel, ControlEvent};
-use crate::message::control::{ControlMessage, LobbyMessage, Occupant, SlotInfo, UdpEntry};
+use crate::message::control::{
+    ControlMessage, LobbyMessage, LobbyState, Occupant, SlotInfo, UdpEntry,
+};
 use crate::peer::PeerId;
-use crate::topology::Topology;
 
-/// The host's start signal, surfaced to the client once the game begins. Carries
-/// the mesh UDP endpoint table; empty for a host-star game.
+use crate::transport::error::TransportError;
+
+/// The host's start signal, surfaced to the client once the game begins.
+/// Carries the endpoint tables the mode needs: UDP gameplay endpoints for a
+/// mesh game, TCP control endpoints for a decentralized one; both empty for a
+/// host-star game.
 #[derive(Debug, Clone, Default)]
 pub struct Started {
     pub udp_table: Option<Vec<UdpEntry>>,
+    pub control_table: Option<Vec<UdpEntry>>,
 }
 
 /// What a [`poll`](LobbyClient::poll) surfaced this tick.
@@ -29,9 +36,16 @@ pub enum PollOutcome {
 /// The client side of the lobby: mirrors the host's broadcast state.
 pub struct LobbyClient {
     control: ControlChannel,
-    slots: Vec<SlotInfo>,
-    topology: Topology,
-    ai_hosting: AiHosting,
+    /// The host's authoritative state, `None` until the first broadcast
+    /// arrives — a client honestly does not know it before that.
+    state: Option<LobbyState>,
+    /// The gameplay socket bound at [`join`](Self::join) so its real port
+    /// could be advertised; consumed when a mesh game starts, dropped for a
+    /// host-star game.
+    udp: Option<UdpSocket>,
+    /// The control listener bound at [`join`](Self::join) for the same
+    /// reason; consumed when a decentralized game starts, dropped otherwise.
+    control_listener: Option<TcpListener>,
     /// The host's start signal, set once it arrives.
     started: Option<Started>,
 }
@@ -41,25 +55,38 @@ impl LobbyClient {
     pub fn new(control: ControlChannel) -> Self {
         Self {
             control,
-            slots: Vec::new(),
-            topology: Topology::HostStar,
-            ai_hosting: AiHosting::default(),
+            state: None,
+            udp: None,
+            control_listener: None,
             started: None,
         }
     }
 
     /// Announces this client to the host: its build version (so the host can
-    /// refuse a mismatch), the UDP port it offers for a direct mesh (`None` if it
-    /// offers none), and an optional preferred race.
-    pub fn join(
-        &mut self,
-        advertised_udp_port: Option<u16>,
-        race: Option<&str>,
-    ) -> crate::Result<()> {
+    /// refuse a mismatch), the ports it offers for direct mesh traffic, and an
+    /// optional preferred race.
+    ///
+    /// The gameplay socket and the control listener are bound here so the
+    /// advertised ports are always the real ones; both are kept until the game
+    /// starts. An explicit `udp_port` is used exactly as given (an occupied
+    /// port is an error — a configured port must not be silently substituted);
+    /// `None` binds an ephemeral port. The control listener is always
+    /// ephemeral.
+    pub fn join(&mut self, udp_port: Option<u16>, race: Option<&str>) -> crate::Result<()> {
+        let udp =
+            crate::transport::udp::bind_gameplay_socket(udp_port).map_err(TransportError::from)?;
+        let advertised_udp_port = Some(udp.local_addr().map_err(TransportError::from)?.port());
+        self.udp = Some(udp);
+        let listener = TcpListener::bind((std::net::Ipv4Addr::UNSPECIFIED, 0))
+            .map_err(TransportError::from)?;
+        let advertised_control_port =
+            Some(listener.local_addr().map_err(TransportError::from)?.port());
+        self.control_listener = Some(listener);
         self.control
             .send(&ControlMessage::Lobby(LobbyMessage::Join {
                 protocol_version: ferrets_simulation::PROTOCOL_VERSION.to_string(),
                 advertised_udp_port,
+                advertised_control_port,
                 race: race.map(str::to_string),
             }))
     }
@@ -86,18 +113,18 @@ impl LobbyClient {
                     message: ControlMessage::Lobby(message),
                     ..
                 } => match message {
-                    LobbyMessage::LobbyState {
-                        slots,
-                        topology,
-                        ai_hosting,
-                    } => {
-                        self.slots = slots;
-                        self.topology = topology;
-                        self.ai_hosting = ai_hosting;
+                    LobbyMessage::State(state) => {
+                        self.state = Some(state);
                         changed = true;
                     }
-                    LobbyMessage::Start { udp_table } => {
-                        self.started = Some(Started { udp_table });
+                    LobbyMessage::Start {
+                        udp_table,
+                        control_table,
+                    } => {
+                        self.started = Some(Started {
+                            udp_table,
+                            control_table,
+                        });
                         changed = true;
                     }
                     LobbyMessage::Rejected { peer, reason }
@@ -117,17 +144,13 @@ impl LobbyClient {
 
     /// The latest mirrored slot list (empty until the first state arrives).
     pub fn slots(&self) -> &[SlotInfo] {
-        &self.slots
+        self.state.as_ref().map_or(&[], |state| &state.slots)
     }
 
-    /// The host's chosen topology.
-    pub fn topology(&self) -> Topology {
-        self.topology
-    }
-
-    /// The host's chosen AI hosting mode.
-    pub fn ai_hosting(&self) -> AiHosting {
-        self.ai_hosting
+    /// The host's authoritative state, `None` until the first broadcast
+    /// arrives.
+    pub fn state(&self) -> Option<&LobbyState> {
+        self.state.as_ref()
     }
 
     /// This client's own peer handle (assigned by the host on connect).
@@ -138,7 +161,7 @@ impl LobbyClient {
     /// This client's own slot, found by the peer id it was assigned on connect.
     pub fn local_player(&self) -> Option<PlayerId> {
         let me = self.control.local_peer();
-        self.slots
+        self.slots()
             .iter()
             .find(|info| info.occupant == Occupant::Human { peer: me })
             .map(|info| info.slot)
@@ -149,8 +172,10 @@ impl LobbyClient {
         self.started.as_ref()
     }
 
-    /// Surrenders the control channel for a host-star gameplay channel.
-    pub fn into_control(self) -> ControlChannel {
-        self.control
+    /// Surrenders the control channel, the gameplay socket, and the control
+    /// listener bound at [`join`](Self::join) (`None` when the client never
+    /// joined).
+    pub fn into_parts(self) -> (ControlChannel, Option<UdpSocket>, Option<TcpListener>) {
+        (self.control, self.udp, self.control_listener)
     }
 }

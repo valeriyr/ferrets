@@ -20,50 +20,36 @@ use crate::error::NetworkError;
 use crate::lobby::client::LobbyClient;
 use crate::lobby::host::LobbyHost;
 use crate::message::control::{ControlMessage, Occupant, SlotInfo, UdpEntry};
-use crate::peer::PeerId;
+use crate::peer::{HOST_PEER, PeerId};
 use crate::role::Role;
 use crate::roster::Roster;
-use crate::topology::Topology;
+use crate::session_mode::SessionMode;
 use crate::transport::NetworkTransport;
 use crate::transport::error::TransportError;
+use crate::transport::tcp::TcpTransport;
 use crate::transport::udp::UdpTransport;
 
 /// A live networked session.
 pub struct NetSession {
     gameplay: LockstepDriver,
     control: ControlChannel,
-    /// Whether this node is the control-plane host (peer `0`). The control plane is
-    /// a host-coordinated star in every topology, so the host is the authoritative
-    /// emitter of [`PauseAt`](crate::message::control::InGameMessage::PauseAt) and
-    /// the like.
-    control_host: bool,
 }
 
 impl NetSession {
     /// Builds a session from a gameplay driver and a control channel that are
     /// already on their own sockets (a mesh game).
-    pub fn new(gameplay: LockstepDriver, control: ControlChannel, control_host: bool) -> Self {
-        Self {
-            gameplay,
-            control,
-            control_host,
-        }
+    pub fn new(gameplay: LockstepDriver, control: ControlChannel) -> Self {
+        Self { gameplay, control }
     }
 
     /// Builds a session whose control and gameplay channels share one socket (a
     /// host-star game), splitting it into the two channels. `role` is the gameplay
     /// driver's relay role.
-    pub fn over_shared(
-        transport: Box<dyn NetworkTransport>,
-        role: Role,
-        roster: Roster,
-        control_host: bool,
-    ) -> Self {
+    pub fn over_shared(transport: Box<dyn NetworkTransport>, role: Role, roster: Roster) -> Self {
         let (control, gameplay) = demux::split(transport);
         Self::new(
             LockstepDriver::new(gameplay, role, roster),
             ControlChannel::new(control),
-            control_host,
         )
     }
 
@@ -87,6 +73,30 @@ impl NetSession {
         self.gameplay.is_networked(player)
     }
 
+    /// The player controlled by the session host's node, if that slot exists.
+    pub fn host_player(&self) -> Option<PlayerId> {
+        self.gameplay.host_player()
+    }
+
+    /// The player controlled by transport `peer`, if that slot exists.
+    pub fn player_of(&self, peer: PeerId) -> Option<PlayerId> {
+        self.gameplay.player_of(peer)
+    }
+
+    /// Whether `peer` is the session host's node.
+    pub fn is_host_peer(&self, peer: PeerId) -> bool {
+        self.gameplay.is_host_peer(peer)
+    }
+
+    /// Whether this node holds a direct control link to `player`. False when
+    /// `player` is reachable only through a relay — a partial mesh where the
+    /// link was never present, or one that has since gone down.
+    pub fn has_control_link(&self, player: PlayerId) -> bool {
+        self.gameplay
+            .peer_of(player)
+            .is_some_and(|peer| self.control.peers().contains(&peer))
+    }
+
     /// Broadcasts the given frames on the gameplay channel.
     pub fn broadcast_frames(&mut self, frames: Vec<PlayerFrame>) -> crate::Result<()> {
         self.gameplay.broadcast_frames(frames)
@@ -102,10 +112,11 @@ impl NetSession {
         self.gameplay.drain_received()
     }
 
-    /// Whether this node is the control-plane host (the authoritative emitter of
-    /// in-game control like pause).
-    pub fn is_control_host(&self) -> bool {
-        self.control_host
+    /// Whether this node is the session host's node ([`HOST_PEER`] — the one
+    /// that opened the lobby). What that means in-game depends on the session's
+    /// authority; under peer authority it means nothing once the game starts.
+    pub fn is_host_node(&self) -> bool {
+        self.gameplay.is_host_node()
     }
 
     /// Sends a control message. A client reaches the host; the host reaches every
@@ -114,72 +125,175 @@ impl NetSession {
         self.control.send(message)
     }
 
-    /// Takes the control messages received since the last call.
-    pub fn drain_control(&mut self) -> Vec<ControlMessage> {
-        self.control
-            .poll()
-            .into_iter()
-            .filter_map(|event| match event {
-                ControlEvent::Message { message, .. } => Some(message),
-                _ => None,
-            })
-            .collect()
+    /// Takes everything the control links carried since the last call: the
+    /// messages, plus the players whose control link went down. A control
+    /// link is TCP, so its death is a definite event — unlike gameplay
+    /// silence — and the session must react to it (an unreachable player can
+    /// neither receive decisions nor take part in consensus).
+    pub fn drain_control(&mut self) -> ReceivedControl {
+        let mut received = ReceivedControl::default();
+        for event in self.control.poll() {
+            match event {
+                ControlEvent::Message { from, message } => received.messages.push((from, message)),
+                ControlEvent::Disconnected(peer) => {
+                    if let Some(player) = self.gameplay.player_of(peer) {
+                        received.lost.push(player);
+                    }
+                }
+                _ => {}
+            }
+        }
+        received
     }
 
     /// Builds the host's session and tells the clients to start.
     ///
-    /// `local_udp_bind` is where the host's gameplay socket binds for a mesh game
-    /// (ignored for host-star).
-    pub fn start_host(mut host: LobbyHost, local_udp_bind: SocketAddr) -> crate::Result<Self> {
-        let roster = roster_from_slots(host.slots(), host.ai_hosting());
-        match host.topology() {
-            Topology::HostStar => {
-                host.start(None)?;
+    /// For a mesh game the host's gameplay socket binds here. An explicit
+    /// `udp_port` is used exactly as given (an occupied port is an error — a
+    /// configured port must not be silently substituted); `None` binds an
+    /// ephemeral port. The real address rides in the distributed endpoint
+    /// table either way.
+    pub fn start_host(mut host: LobbyHost, udp_port: Option<u16>) -> crate::Result<Self> {
+        let mode = host.mode();
+        let roster = roster_from_slots(host.slots(), mode.ai_hosting());
+        match mode {
+            SessionMode::HostStar { .. } => {
+                host.start(None, None)?;
                 let transport = host.into_control().into_transport();
-                Ok(Self::over_shared(transport, Role::Host, roster, true))
+                Ok(Self::over_shared(transport, Role::Host, roster))
             }
-            Topology::Mesh => {
-                let table = host_udp_table(&host, local_udp_bind)?;
-                host.start(Some(table.clone()))?;
+            SessionMode::MeshHosted { .. } => {
+                let socket = crate::transport::udp::bind_gameplay_socket(udp_port)
+                    .map_err(TransportError::from)?;
+                let local_addr = socket.local_addr().map_err(TransportError::from)?;
+                let table =
+                    host_endpoint_table(&host, local_addr, |peer| host.client_udp_addr(peer))?;
+                host.start(Some(table.clone()), None)?;
                 let peers = peers_excluding(&table, HOST_PEER);
-                let udp = UdpTransport::bind(HOST_PEER, local_udp_bind, peers)?;
+                let udp = UdpTransport::from_socket(HOST_PEER, socket, peers)?;
                 let gameplay = LockstepDriver::new(Box::new(udp), Role::Peer, roster);
-                Ok(Self::new(gameplay, host.into_control(), true))
+                Ok(Self::new(gameplay, host.into_control()))
+            }
+            SessionMode::MeshDecentralized => {
+                let socket = crate::transport::udp::bind_gameplay_socket(udp_port)
+                    .map_err(TransportError::from)?;
+                let local_addr = socket.local_addr().map_err(TransportError::from)?;
+                let udp_table =
+                    host_endpoint_table(&host, local_addr, |peer| host.client_udp_addr(peer))?;
+                // The host takes part in the control mesh like anyone else: it
+                // binds its own listener and distributes the endpoint table.
+                let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::UNSPECIFIED, 0))
+                    .map_err(TransportError::from)?;
+                let listener_addr = listener.local_addr().map_err(TransportError::from)?;
+                let control_table = host_endpoint_table(&host, listener_addr, |peer| {
+                    host.client_control_addr(peer)
+                })?;
+                host.start(Some(udp_table.clone()), Some(control_table.clone()))?;
+                // The lobby star has served its purpose; the mesh replaces it.
+                drop(host.into_control());
+                let dial = peers_excluding(&control_table, HOST_PEER);
+                // The host holds the lowest id, so it dials every client and
+                // accepts none.
+                let mesh = TcpTransport::mesh(HOST_PEER, listener, dial, Vec::new())?;
+                let control = ControlChannel::new(Box::new(mesh));
+                let peers = peers_excluding(&udp_table, HOST_PEER);
+                let udp = UdpTransport::from_socket(HOST_PEER, socket, peers)?;
+                let gameplay = LockstepDriver::new(Box::new(udp), Role::Peer, roster);
+                Ok(Self::new(gameplay, control))
             }
         }
     }
 
     /// Builds a client's session once it has received the host's start signal.
     ///
-    /// `local_udp_bind` is where this client's gameplay socket binds for a mesh
-    /// game (ignored for host-star); it must match the port advertised on join.
-    pub fn start_client(client: LobbyClient, local_udp_bind: SocketAddr) -> crate::Result<Self> {
-        let udp_table = client
+    /// A mesh game reuses the gameplay socket bound at
+    /// [`join`](LobbyClient::join), whose port the host already distributed.
+    pub fn start_client(client: LobbyClient) -> crate::Result<Self> {
+        let started = client
             .started()
             .ok_or_else(|| internal("client has not received the start signal"))?
-            .udp_table
             .clone();
-        let roster = roster_from_slots(client.slots(), client.ai_hosting());
+        let mode = client
+            .state()
+            .ok_or_else(|| internal("client has not received the lobby state"))?
+            .mode;
+        let roster = roster_from_slots(client.slots(), mode.ai_hosting());
         let local = client.control_peer();
 
-        match client.topology() {
-            Topology::HostStar => {
-                let transport = client.into_control().into_transport();
-                Ok(Self::over_shared(transport, Role::Client, roster, false))
+        match mode {
+            SessionMode::HostStar { .. } => {
+                // Gameplay shares the control socket; the offered UDP socket
+                // and control listener are unused and drop here.
+                let (control, _udp, _listener) = client.into_parts();
+                Ok(Self::over_shared(
+                    control.into_transport(),
+                    Role::Client,
+                    roster,
+                ))
             }
-            Topology::Mesh => {
-                let table = udp_table.ok_or_else(|| internal("mesh start carried no udp table"))?;
-                let peers = peers_excluding(&table, local);
-                let udp = UdpTransport::bind(local, local_udp_bind, peers)?;
+            SessionMode::MeshHosted { .. } => {
+                let table = started
+                    .udp_table
+                    .ok_or_else(|| internal("mesh start carried no udp table"))?;
+                let (control, socket, _listener) = client.into_parts();
+                let peers = resolve_udp_peers(&table, local, |peer| control.observed_addr(peer));
+                let socket = socket
+                    .ok_or_else(|| internal("client joined without offering a udp socket"))?;
+                let udp = UdpTransport::from_socket(local, socket, peers)?;
                 let gameplay = LockstepDriver::new(Box::new(udp), Role::Peer, roster);
-                Ok(Self::new(gameplay, client.into_control(), false))
+                Ok(Self::new(gameplay, control))
+            }
+            SessionMode::MeshDecentralized => {
+                let udp_table = started
+                    .udp_table
+                    .ok_or_else(|| internal("mesh start carried no udp table"))?;
+                let control_table = started
+                    .control_table
+                    .ok_or_else(|| internal("decentralized start carried no control table"))?;
+                let (star, socket, listener) = client.into_parts();
+                let udp_peers =
+                    resolve_udp_peers(&udp_table, local, |peer| star.observed_addr(peer));
+                let control_peers =
+                    resolve_udp_peers(&control_table, local, |peer| star.observed_addr(peer));
+                // The lobby star has served its purpose; the mesh replaces it.
+                drop(star);
+                let listener = listener
+                    .ok_or_else(|| internal("client joined without offering a control listener"))?;
+                // The lower peer id dials: this node dials the higher ids and
+                // accepts one link from each lower one.
+                let dial: Vec<_> = control_peers
+                    .iter()
+                    .copied()
+                    .filter(|&(peer, _)| peer > local)
+                    .collect();
+                let accept: Vec<PeerId> = control_peers
+                    .iter()
+                    .filter(|&&(peer, _)| peer < local)
+                    .map(|&(peer, _)| peer)
+                    .collect();
+                let mesh = TcpTransport::mesh(local, listener, dial, accept)?;
+                let control = ControlChannel::new(Box::new(mesh));
+                let socket = socket
+                    .ok_or_else(|| internal("client joined without offering a udp socket"))?;
+                let udp = UdpTransport::from_socket(local, socket, udp_peers)?;
+                let gameplay = LockstepDriver::new(Box::new(udp), Role::Peer, roster);
+                Ok(Self::new(gameplay, control))
             }
         }
     }
 }
 
-/// The host's peer id.
-const HOST_PEER: PeerId = 0;
+/// Everything the control links carried in one drain.
+#[derive(Debug, Default)]
+pub struct ReceivedControl {
+    /// The control messages with the transport peer that actually sent each,
+    /// in arrival order. The sender is authenticated by the link it arrived
+    /// on, so a decider can reject a message a peer is not entitled to send
+    /// (e.g. a client forging an authoritative drop).
+    pub messages: Vec<(PeerId, ControlMessage)>,
+    /// Players whose control link went down during this drain.
+    pub lost: Vec<PlayerId>,
+}
 
 /// Builds the roster from the locked slots: a human slot maps to its peer; an
 /// open or closed slot has no network peer. An AI slot depends on the hosting
@@ -193,7 +307,7 @@ fn roster_from_slots(slots: &[SlotInfo], ai_hosting: AiHosting) -> Roster {
                 Occupant::Human { peer } => Some(peer),
                 Occupant::Ai => match ai_hosting {
                     AiHosting::Replicated => None,
-                    AiHosting::HostOnly => Some(HOST_PEER),
+                    AiHosting::Host => Some(HOST_PEER),
                 },
                 Occupant::Open | Occupant::Closed => None,
             })
@@ -201,9 +315,15 @@ fn roster_from_slots(slots: &[SlotInfo], ai_hosting: AiHosting) -> Roster {
     )
 }
 
-/// The UDP endpoint table for a mesh game: the host's own address plus every
-/// connected client's. Fails if a client's endpoint is not yet known.
-fn host_udp_table(host: &LobbyHost, host_addr: SocketAddr) -> crate::Result<Vec<UdpEntry>> {
+/// The endpoint table for a mesh game: the host's own `host_addr` plus every
+/// connected client's, each looked up through `client_addr` (its gameplay UDP
+/// endpoint, or its control-mesh listener). Fails if a client's endpoint is
+/// not yet known.
+fn host_endpoint_table(
+    host: &LobbyHost,
+    host_addr: SocketAddr,
+    client_addr: impl Fn(PeerId) -> Option<SocketAddr>,
+) -> crate::Result<Vec<UdpEntry>> {
     let mut table = vec![UdpEntry {
         peer: HOST_PEER,
         addr: host_addr,
@@ -213,9 +333,8 @@ fn host_udp_table(host: &LobbyHost, host_addr: SocketAddr) -> crate::Result<Vec<
             if peer == HOST_PEER {
                 continue;
             }
-            let addr = host
-                .client_udp_addr(peer)
-                .ok_or_else(|| internal("missing udp endpoint for a connected client"))?;
+            let addr = client_addr(peer)
+                .ok_or_else(|| internal("missing endpoint for a connected client"))?;
             table.push(UdpEntry { peer, addr });
         }
     }
@@ -229,6 +348,32 @@ fn peers_excluding(table: &[UdpEntry], local: PeerId) -> Vec<(PeerId, SocketAddr
         .iter()
         .filter(|entry| entry.peer != local)
         .map(|entry| (entry.peer, entry.addr))
+        .collect()
+}
+
+/// Like [`peers_excluding`], additionally resolving entries advertised with an
+/// unspecified IP (a peer that could only report its bind address, e.g.
+/// `0.0.0.0`): the datagram transport both dials peers and accepts traffic by
+/// these exact addresses, so an unroutable entry silently severs the link in
+/// both directions. The proven-reachable substitute is the address this node
+/// observed for that peer on the control channel.
+fn resolve_udp_peers(
+    table: &[UdpEntry],
+    local: PeerId,
+    observed: impl Fn(PeerId) -> Option<SocketAddr>,
+) -> Vec<(PeerId, SocketAddr)> {
+    table
+        .iter()
+        .filter(|entry| entry.peer != local)
+        .map(|entry| {
+            let mut addr = entry.addr;
+            if addr.ip().is_unspecified()
+                && let Some(reached) = observed(entry.peer)
+            {
+                addr.set_ip(reached.ip());
+            }
+            (entry.peer, addr)
+        })
         .collect()
 }
 

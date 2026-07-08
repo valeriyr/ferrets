@@ -20,6 +20,16 @@ use crate::peer::PeerId;
 /// Generous upper bound for one datagram; a frame batch is far smaller.
 const MAX_DATAGRAM: usize = 64 * 1024;
 
+/// Binds a gameplay socket. An explicit `port` is used exactly as given — a
+/// player who configured a port (a firewall rule, a forwarded port) must play
+/// on that port or learn why not, so an occupied port is an error, never a
+/// silent substitute. `None` binds an ephemeral port, letting any number of
+/// instances share a machine; peers learn the real port through the lobby
+/// either way.
+pub(crate) fn bind_gameplay_socket(port: Option<u16>) -> std::io::Result<std::net::UdpSocket> {
+    std::net::UdpSocket::bind((std::net::Ipv4Addr::UNSPECIFIED, port.unwrap_or(0)))
+}
+
 /// One endpoint of a UDP peer group.
 pub struct UdpTransport(SocketIo);
 

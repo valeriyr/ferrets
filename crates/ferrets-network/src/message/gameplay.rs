@@ -1,4 +1,5 @@
-//! Gameplay traffic: the lockstep frames and desync checksums.
+//! Gameplay traffic: the lockstep frames and desync checksums —
+//! continuously re-spread state that tolerates a lossy transport.
 //!
 //! These ride the gameplay channel. The lobby/control protocol is a separate
 //! concern ([`ControlMessage`](super::control::ControlMessage)).

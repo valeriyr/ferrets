@@ -1,8 +1,8 @@
 //! The UDP transport: two endpoints exchanging datagrams over localhost.
 
+mod utils;
+
 use std::net::UdpSocket;
-use std::thread;
-use std::time::Duration;
 
 use ferrets_network::transport::udp::UdpTransport;
 use ferrets_network::transport::{NetworkTransport, TransportEvent};
@@ -37,13 +37,10 @@ fn two_endpoints_exchange_datagrams_both_ways() {
 /// after a budget. UDP can drop, so the sender's redundancy normally handles
 /// loss; on loopback a single send is reliable enough for the test.
 fn poll_for_message(transport: &mut UdpTransport) -> (u64, Vec<u8>) {
-    for _ in 0..200 {
-        for event in transport.poll() {
-            if let TransportEvent::Message { from, bytes } = event {
-                return (from, bytes);
-            }
-        }
-        thread::sleep(Duration::from_millis(5));
-    }
-    panic!("no message received within the time budget");
+    utils::wait_for("message to arrive", || {
+        transport.poll().into_iter().find_map(|event| match event {
+            TransportEvent::Message { from, bytes } => Some((from, bytes)),
+            _ => None,
+        })
+    })
 }

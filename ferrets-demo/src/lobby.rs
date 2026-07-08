@@ -5,7 +5,6 @@
 //! [`LobbyHost`]/[`LobbyClient`], the authoritative state is mirrored into the
 //! config each frame for display, and edits go through the host.
 
-use std::net::SocketAddr;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 
@@ -15,11 +14,13 @@ use ferrets_bevy::{install_game_resources, install_network_session};
 use ferrets_network::lobby::client::{LobbyClient, PollOutcome};
 use ferrets_network::message::control::Occupant;
 use ferrets_network::session::NetSession;
-use ferrets_network::topology::Topology;
+use ferrets_network::session_mode::SessionMode;
 use ferrets_network::{bootstrap, lobby::host::LobbyHost};
 use ferrets_simulation::session::{
     GameSession,
     ai_hosting::AiHosting,
+    drop_policy::DropPolicy,
+    finish_policy::FinishPolicy,
     player_slot::{PlayerId, PlayerSlot},
     player_type::PlayerType,
 };
@@ -31,8 +32,6 @@ use crate::states::{GameState, LobbyMode};
 const SLOTS: usize = START_POINTS.len();
 /// The TCP port the host binds and clients dial.
 const TCP_PORT: u16 = 4000;
-/// The UDP port used for gameplay in a mesh game (per machine).
-const UDP_PORT: u16 = 4001;
 
 const NORMAL: Color = Color::srgb(0.20, 0.20, 0.24);
 const HOVERED: Color = Color::srgb(0.30, 0.30, 0.38);
@@ -102,6 +101,17 @@ impl SlotKind {
     }
 }
 
+/// An editable text field of the lobby.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum LobbyField {
+    /// The host address a client dials.
+    Addr,
+    /// The TCP port the host's lobby listens on.
+    TcpPort,
+    /// This node's gameplay (UDP) port for a mesh game.
+    UdpPort,
+}
+
 /// One slot's configuration as shown in the lobby.
 #[derive(Clone, Copy)]
 pub struct SlotView {
@@ -113,13 +123,22 @@ pub struct SlotView {
 #[derive(Resource)]
 pub struct LobbyConfig {
     pub slots: Vec<SlotView>,
-    pub topology: Topology,
-    pub ai_hosting: AiHosting,
+    pub mode: SessionMode,
     /// Which slot the local human controls (local games).
     pub local_slot: PlayerId,
     /// The host address a client dials: `ip` or `ip:port` (the port defaults
     /// to [`TCP_PORT`] when omitted).
     pub host_addr: String,
+    /// The TCP port the host's lobby listens on, as typed. Empty means the
+    /// default ([`TCP_PORT`]); anything else must parse as a port and is used
+    /// exactly (see [`parse_tcp_port`]). Editing it reopens the lobby.
+    pub tcp_port: String,
+    /// This node's gameplay (UDP) port for a mesh game, as typed. Empty means
+    /// an ephemeral port; anything else must parse as a port and is used
+    /// exactly (see [`parse_udp_port`]).
+    pub udp_port: String,
+    /// The field keyboard input currently edits.
+    pub focused: LobbyField,
     /// A line of status/help shown under the title.
     pub status: String,
 }
@@ -139,10 +158,17 @@ impl LobbyConfig {
             .collect();
         Self {
             slots,
-            topology: Topology::HostStar,
-            ai_hosting: AiHosting::HostOnly,
+            mode: SessionMode::HostStar {
+                ai_hosting: AiHosting::Host,
+            },
             local_slot: 0,
             host_addr: "127.0.0.1".to_string(),
+            tcp_port: String::new(),
+            udp_port: String::new(),
+            focused: match mode {
+                LobbyMode::Host => LobbyField::TcpPort,
+                _ => LobbyField::Addr,
+            },
             status: String::new(),
         }
     }
@@ -164,6 +190,10 @@ pub struct PendingConnect {
     result: Receiver<ferrets_network::Result<LobbyClient>>,
 }
 
+/// The TCP port the host's lobby listener is currently bound on.
+#[derive(Resource)]
+pub struct HostTcpPort(u16);
+
 /// Set by the Start button; consumed by the exclusive `start_game` system.
 #[derive(Resource)]
 struct StartRequested;
@@ -180,8 +210,9 @@ pub enum LobbyButton {
     Kind(u8),
     Race(u8),
     Claim(u8),
-    Topology,
+    Mode,
     AiHosting,
+    Focus(LobbyField),
     Back,
     Start,
 }
@@ -190,13 +221,19 @@ pub enum LobbyButton {
 pub struct StatusText;
 
 #[derive(Component)]
-pub struct TopologyText;
+pub struct ModeText;
 
 #[derive(Component)]
 pub struct AiHostingText;
 
 #[derive(Component)]
 pub struct AddrText;
+
+#[derive(Component)]
+pub struct TcpPortText;
+
+#[derive(Component)]
+pub struct UdpPortText;
 
 #[derive(Component)]
 pub struct SlotText(u8);
@@ -209,10 +246,11 @@ pub struct SlotText(u8);
 pub fn enter_lobby(mut commands: Commands, mode: Res<LobbyMode>) {
     let mut config = LobbyConfig::for_mode(*mode);
     match *mode {
-        LobbyMode::Host => match open_host(config.topology) {
+        LobbyMode::Host => match open_host(config.mode, TCP_PORT) {
             Ok(host) => {
                 config.status =
                     format!("hosting on port {TCP_PORT} - clients dial this machine's ip");
+                commands.insert_resource(HostTcpPort(TCP_PORT));
                 commands.queue(move |world: &mut World| {
                     world.insert_non_send_resource(LobbyLink::Host(host));
                 });
@@ -236,15 +274,18 @@ pub fn exit_lobby(mut commands: Commands, roots: Query<Entity, With<LobbyRoot>>)
         world.remove_non_send_resource::<LobbyLink>();
         world.remove_non_send_resource::<PendingConnect>();
     });
+    commands.remove_resource::<HostTcpPort>();
     commands.remove_resource::<StartRequested>();
 }
 
-fn open_host(topology: Topology) -> ferrets_network::Result<LobbyHost> {
-    // The demo defaults to host-only AI; the lobby button toggles it.
+fn open_host(mode: SessionMode, tcp_port: u16) -> ferrets_network::Result<LobbyHost> {
+    // The demo's game decisions beyond the lobby-editable mode: drops resolve
+    // on the timeout (no wait dialog yet) and a match ends by elimination.
     bootstrap::open_lobby(
-        ("0.0.0.0", TCP_PORT),
-        topology,
-        AiHosting::HostOnly,
+        ("0.0.0.0", tcp_port),
+        mode,
+        DropPolicy::Automatic,
+        FinishPolicy::LastStanding,
         SLOTS,
         Race::Human.id(),
     )
@@ -269,22 +310,15 @@ pub fn poll_lobby_link(
             // Process joins/requests (re-broadcasting on change), then always
             // mirror the authoritative state so the host's own edits show too.
             let _ = host.poll();
-            mirror(
-                &mut config,
-                host.slots(),
-                host.topology(),
-                host.ai_hosting(),
-            );
+            mirror(&mut config, host.slots(), host.mode());
         }
         LobbyLink::Client(client) => match client.poll() {
             PollOutcome::Waiting { changed } => {
-                if changed && !client.slots().is_empty() {
-                    mirror(
-                        &mut config,
-                        client.slots(),
-                        client.topology(),
-                        client.ai_hosting(),
-                    );
+                if changed
+                    && let Some(state) = client.state()
+                    && !state.slots.is_empty()
+                {
+                    mirror(&mut config, &state.slots, state.mode);
                     config.status = "connected".to_string();
                 }
                 if let Some(slot) = client.local_player() {
@@ -309,8 +343,7 @@ pub fn poll_lobby_link(
 fn mirror(
     config: &mut LobbyConfig,
     slots: &[ferrets_network::message::control::SlotInfo],
-    topology: Topology,
-    ai_hosting: AiHosting,
+    mode: SessionMode,
 ) {
     config.slots = slots
         .iter()
@@ -324,43 +357,88 @@ fn mirror(
             race: Race::from_id(info.race.as_deref()),
         })
         .collect();
-    config.topology = topology;
-    config.ai_hosting = ai_hosting;
+    config.mode = mode;
 }
 
 //
 // ─── Input ────────────────────────────────────────────────────────────────────
 //
 
-/// Captures typing into the host-address field (client mode, before connecting):
-/// addresses, host names, and an optional `:port`.
-pub fn lobby_addr_input(
+/// Captures typing into the focused lobby field: the host address (addresses,
+/// host names, an optional `:port`) or this node's gameplay port (digits).
+pub fn lobby_field_input(
     mode: Res<LobbyMode>,
     link: Option<NonSend<LobbyLink>>,
     mut input: MessageReader<KeyboardInput>,
     mut config: ResMut<LobbyConfig>,
 ) {
-    if *mode != LobbyMode::Client || link.is_some() {
-        return;
+    match *mode {
+        // A local game has no fields; a connected client's fields are spent.
+        LobbyMode::Local => return,
+        LobbyMode::Client if link.is_some() => return,
+        _ => {}
     }
     for event in input.read() {
         if !event.state.is_pressed() {
             continue;
         }
+        let field = match config.focused {
+            LobbyField::Addr => &mut config.host_addr,
+            LobbyField::TcpPort => &mut config.tcp_port,
+            LobbyField::UdpPort => &mut config.udp_port,
+        };
         match &event.logical_key {
             Key::Backspace => {
-                config.host_addr.pop();
+                field.pop();
             }
-            Key::Character(typed) => {
-                config.host_addr.extend(
-                    typed
-                        .chars()
-                        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | ':' | '-')),
-                );
-            }
+            Key::Character(typed) => match config.focused {
+                LobbyField::Addr => {
+                    config.host_addr.extend(
+                        typed
+                            .chars()
+                            .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | ':' | '-')),
+                    );
+                }
+                LobbyField::TcpPort => {
+                    let room = 5usize.saturating_sub(config.tcp_port.len());
+                    config
+                        .tcp_port
+                        .extend(typed.chars().filter(char::is_ascii_digit).take(room));
+                }
+                LobbyField::UdpPort => {
+                    let room = 5usize.saturating_sub(config.udp_port.len());
+                    config
+                        .udp_port
+                        .extend(typed.chars().filter(char::is_ascii_digit).take(room));
+                }
+            },
             _ => {}
         }
     }
+}
+
+/// Parses the TCP-port field: empty means the default ([`TCP_PORT`]);
+/// anything else must be a valid non-zero port, used exactly as given.
+pub fn parse_tcp_port(input: &str) -> Result<u16, String> {
+    if input.is_empty() {
+        return Ok(TCP_PORT);
+    }
+    match input.parse::<u16>() {
+        Ok(0) | Err(_) => Err(format!("invalid tcp port '{input}'")),
+        Ok(port) => Ok(port),
+    }
+}
+
+/// Parses the UDP-port field: empty means "pick an ephemeral port" (`None`);
+/// anything else must be a valid port number, used exactly as given.
+pub fn parse_udp_port(input: &str) -> Result<Option<u16>, String> {
+    if input.is_empty() {
+        return Ok(None);
+    }
+    input
+        .parse::<u16>()
+        .map(Some)
+        .map_err(|_| format!("invalid udp port '{input}'"))
 }
 
 /// The socket address `input` dials: as typed when it carries a port, with
@@ -401,8 +479,9 @@ pub fn lobby_buttons(
                     claim_local(&mut config, *slot);
                 }
             }
-            LobbyButton::Topology => toggle_topology(link.as_deref_mut(), &mut config),
+            LobbyButton::Mode => toggle_mode(link.as_deref_mut(), &mut config),
             LobbyButton::AiHosting => toggle_ai_hosting(link.as_deref_mut(), &mut config),
+            LobbyButton::Focus(field) => config.focused = *field,
             LobbyButton::Back => next.set(GameState::Menu),
             LobbyButton::Start => {
                 if can_start(&mode, link.as_deref()) {
@@ -468,30 +547,49 @@ fn claim_local(config: &mut LobbyConfig, slot: u8) {
     config.local_slot = slot;
 }
 
-fn toggle_topology(link: Option<&mut LobbyLink>, config: &mut LobbyConfig) {
-    // Only the host chooses the topology; a client just mirrors it.
+fn toggle_mode(link: Option<&mut LobbyLink>, config: &mut LobbyConfig) {
+    // Only the host chooses the session mode; a client just mirrors it.
     let Some(LobbyLink::Host(host)) = link else {
         return;
     };
-    let next = match config.topology {
-        Topology::HostStar => Topology::Mesh,
-        Topology::Mesh => Topology::HostStar,
+    // Cycle the three modes, keeping the AI hosting choice where the next
+    // mode has one.
+    let next = match config.mode {
+        SessionMode::HostStar { ai_hosting } => SessionMode::MeshHosted { ai_hosting },
+        SessionMode::MeshHosted { .. } => SessionMode::MeshDecentralized,
+        SessionMode::MeshDecentralized => SessionMode::HostStar {
+            ai_hosting: AiHosting::Host,
+        },
     };
-    config.topology = next;
-    let _ = host.set_topology(next);
+    config.mode = next;
+    let _ = host.set_mode(next);
 }
 
 fn toggle_ai_hosting(link: Option<&mut LobbyLink>, config: &mut LobbyConfig) {
-    // Only the host chooses the AI hosting mode; a client just mirrors it.
+    // Only the host chooses the AI hosting mode; a client just mirrors it. A
+    // decentralized session has no host to compute AI, so there is nothing to
+    // toggle.
     let Some(LobbyLink::Host(host)) = link else {
         return;
     };
-    let next = match config.ai_hosting {
-        AiHosting::HostOnly => AiHosting::Replicated,
-        AiHosting::Replicated => AiHosting::HostOnly,
+    let next = match config.mode {
+        SessionMode::HostStar { ai_hosting } => SessionMode::HostStar {
+            ai_hosting: other_hosting(ai_hosting),
+        },
+        SessionMode::MeshHosted { ai_hosting } => SessionMode::MeshHosted {
+            ai_hosting: other_hosting(ai_hosting),
+        },
+        SessionMode::MeshDecentralized => return,
     };
-    config.ai_hosting = next;
-    let _ = host.set_ai_hosting(next);
+    config.mode = next;
+    let _ = host.set_mode(next);
+}
+
+fn other_hosting(ai_hosting: AiHosting) -> AiHosting {
+    match ai_hosting {
+        AiHosting::Host => AiHosting::Replicated,
+        AiHosting::Replicated => AiHosting::Host,
+    }
 }
 
 /// Retries connecting at most this often (in frames) while a client is not yet
@@ -529,8 +627,17 @@ pub fn auto_connect_client(
                 commands.queue(|world: &mut World| {
                     world.remove_non_send_resource::<PendingConnect>();
                 });
-                // Announce this build, the offered mesh port, and a race.
-                if let Err(error) = client.join(Some(UDP_PORT), Some(Race::Human.id())) {
+                // Announce this build, the offered mesh port, and a race. An
+                // invalid or occupied configured port fails here; the status
+                // guides the player and the dial retries once it is fixed.
+                let udp_port = match parse_udp_port(&config.udp_port) {
+                    Ok(port) => port,
+                    Err(message) => {
+                        config.status = message;
+                        return;
+                    }
+                };
+                if let Err(error) = client.join(udp_port, Some(Race::Human.id())) {
                     config.status = format!("join failed: {error}");
                     return;
                 }
@@ -573,6 +680,62 @@ pub fn auto_connect_client(
             addr: field,
             result,
         });
+    });
+}
+
+/// Reopens the host's lobby listener once the edited TCP port settles on a
+/// value it is not bound on. Reopening resets the lobby (connected clients
+/// are dropped and reconnect by dialing the new port), so the change waits a
+/// debounce, not each keystroke.
+pub fn host_rebind(
+    mode: Res<LobbyMode>,
+    bound: Option<Res<HostTcpPort>>,
+    mut config: ResMut<LobbyConfig>,
+    mut commands: Commands,
+    mut last: Local<Option<u16>>,
+    mut cooldown: Local<u32>,
+) {
+    if *mode != LobbyMode::Host {
+        return;
+    }
+    let desired = match parse_tcp_port(&config.tcp_port) {
+        Ok(port) => port,
+        Err(message) => {
+            config.status = message;
+            return;
+        }
+    };
+    if bound.map(|bound| bound.0) == Some(desired) {
+        *last = Some(desired);
+        return;
+    }
+    if *last != Some(desired) {
+        // The value just changed: restart the debounce.
+        *last = Some(desired);
+        *cooldown = CONNECT_RETRY_FRAMES;
+        return;
+    }
+    if *cooldown > 0 {
+        *cooldown -= 1;
+        return;
+    }
+    *cooldown = CONNECT_RETRY_FRAMES;
+
+    let mode = config.mode;
+    commands.queue(move |world: &mut World| {
+        world.remove_non_send_resource::<LobbyLink>();
+        world.remove_resource::<HostTcpPort>();
+        match open_host(mode, desired) {
+            Ok(host) => {
+                world.insert_non_send_resource(LobbyLink::Host(host));
+                world.insert_resource(HostTcpPort(desired));
+                world.resource_mut::<LobbyConfig>().status =
+                    format!("hosting on port {desired} - clients dial this machine's ip");
+            }
+            Err(error) => {
+                world.resource_mut::<LobbyConfig>().status = format!("host failed: {error}");
+            }
+        }
     });
 }
 
@@ -636,13 +799,13 @@ pub fn setup_lobby(mut commands: Commands, mode: Res<LobbyMode>) {
         if !matches!(*mode, LobbyMode::Local) {
             let is_host = matches!(*mode, LobbyMode::Host);
             parent.spawn(row_node()).with_children(|row| {
-                label(row, "Topology:");
+                label(row, "Mode:");
                 // Only the host chooses it; a client just sees the choice.
                 if is_host {
-                    spawn_button(row, "Toggle", LobbyButton::Topology);
+                    spawn_button(row, "Toggle", LobbyButton::Mode);
                 }
                 row.spawn((
-                    TopologyText,
+                    ModeText,
                     Text::new("Host-star"),
                     text_font(),
                     TextColor(Color::srgb(0.9, 0.9, 0.95)),
@@ -687,8 +850,33 @@ pub fn setup_lobby(mut commands: Commands, mode: Res<LobbyMode>) {
         if is_client {
             parent.spawn(row_node()).with_children(|row| {
                 label(row, "Host address (auto-connecting):");
+                spawn_button(row, "Edit", LobbyButton::Focus(LobbyField::Addr));
                 row.spawn((
                     AddrText,
+                    Text::new(String::new()),
+                    text_font(),
+                    TextColor(Color::srgb(0.9, 0.95, 0.9)),
+                ));
+            });
+        }
+        if !is_client && !matches!(*mode, LobbyMode::Local) {
+            parent.spawn(row_node()).with_children(|row| {
+                label(row, "TCP port (lobby):");
+                spawn_button(row, "Edit", LobbyButton::Focus(LobbyField::TcpPort));
+                row.spawn((
+                    TcpPortText,
+                    Text::new(String::new()),
+                    text_font(),
+                    TextColor(Color::srgb(0.9, 0.95, 0.9)),
+                ));
+            });
+        }
+        if !matches!(*mode, LobbyMode::Local) {
+            parent.spawn(row_node()).with_children(|row| {
+                label(row, "UDP port (mesh):");
+                spawn_button(row, "Edit", LobbyButton::Focus(LobbyField::UdpPort));
+                row.spawn((
+                    UdpPortText,
                     Text::new(String::new()),
                     text_font(),
                     TextColor(Color::srgb(0.9, 0.95, 0.9)),
@@ -756,24 +944,47 @@ pub fn update_lobby_view(
     mut slots: Query<
         (&SlotText, &mut Text),
         (
-            Without<TopologyText>,
+            Without<ModeText>,
             Without<AiHostingText>,
             Without<StatusText>,
             Without<AddrText>,
+            Without<TcpPortText>,
+            Without<UdpPortText>,
         ),
     >,
-    mut topology: Query<
+    mut mode_text: Query<
         &mut Text,
         (
-            With<TopologyText>,
+            With<ModeText>,
             Without<AiHostingText>,
             Without<StatusText>,
             Without<AddrText>,
+            Without<TcpPortText>,
+            Without<UdpPortText>,
         ),
     >,
-    mut ai_hosting: Query<&mut Text, (With<AiHostingText>, Without<StatusText>, Without<AddrText>)>,
-    mut status: Query<&mut Text, (With<StatusText>, Without<AddrText>)>,
-    mut addr: Query<&mut Text, With<AddrText>>,
+    mut ai_hosting: Query<
+        &mut Text,
+        (
+            With<AiHostingText>,
+            Without<StatusText>,
+            Without<AddrText>,
+            Without<TcpPortText>,
+            Without<UdpPortText>,
+        ),
+    >,
+    mut status: Query<
+        &mut Text,
+        (
+            With<StatusText>,
+            Without<AddrText>,
+            Without<TcpPortText>,
+            Without<UdpPortText>,
+        ),
+    >,
+    mut addr: Query<&mut Text, (With<AddrText>, Without<TcpPortText>, Without<UdpPortText>)>,
+    mut tcp_port: Query<&mut Text, (With<TcpPortText>, Without<UdpPortText>)>,
+    mut udp_port: Query<&mut Text, With<UdpPortText>>,
     mut buttons: Query<(&LobbyButton, &mut Node)>,
 ) {
     // A client may only set its own slot's race, so hide every other Race button.
@@ -800,15 +1011,16 @@ pub fn update_lobby_view(
             view.race.label(),
         ));
     }
-    if let Ok(mut text) = topology.single_mut() {
-        *text = Text::new(match config.topology {
-            Topology::HostStar => "Host-star",
-            Topology::Mesh => "Mesh",
+    if let Ok(mut text) = mode_text.single_mut() {
+        *text = Text::new(match config.mode {
+            SessionMode::HostStar { .. } => "Host-star",
+            SessionMode::MeshHosted { .. } => "Mesh (hosted)",
+            SessionMode::MeshDecentralized => "Mesh (decentralized)",
         });
     }
     if let Ok(mut text) = ai_hosting.single_mut() {
-        *text = Text::new(match config.ai_hosting {
-            AiHosting::HostOnly => "Host",
+        *text = Text::new(match config.mode.ai_hosting() {
+            AiHosting::Host => "Host",
             AiHosting::Replicated => "All peers",
         });
     }
@@ -816,7 +1028,36 @@ pub fn update_lobby_view(
         *text = Text::new(config.status.clone());
     }
     if let Ok(mut text) = addr.single_mut() {
-        *text = Text::new(config.host_addr.clone());
+        *text = Text::new(field_view(
+            &config.host_addr,
+            config.focused == LobbyField::Addr,
+        ));
+    }
+    if let Ok(mut text) = tcp_port.single_mut() {
+        let default = TCP_PORT.to_string();
+        let value = if config.tcp_port.is_empty() {
+            &default
+        } else {
+            &config.tcp_port
+        };
+        *text = Text::new(field_view(value, config.focused == LobbyField::TcpPort));
+    }
+    if let Ok(mut text) = udp_port.single_mut() {
+        let value = if config.udp_port.is_empty() {
+            "auto"
+        } else {
+            &config.udp_port
+        };
+        *text = Text::new(field_view(value, config.focused == LobbyField::UdpPort));
+    }
+}
+
+/// A field's display text, with a cursor on the focused one.
+fn field_view(value: &str, focused: bool) -> String {
+    if focused {
+        format!("{value}_")
+    } else {
+        value.to_string()
     }
 }
 
@@ -834,17 +1075,40 @@ pub fn start_game(world: &mut World) {
 
     let mode = *world.resource::<LobbyMode>();
     let slots = player_slots(world.resource::<LobbyConfig>());
-    // Mirrored from the host's authoritative state, so identical on every node.
-    let ai_hosting = world.resource::<LobbyConfig>().ai_hosting;
 
-    let (local_player, net) = match mode {
-        LobbyMode::Local => (world.resource::<LobbyConfig>().local_slot, None),
+    let (local_player, choices, net) = match mode {
+        LobbyMode::Local => {
+            let config = world.resource::<LobbyConfig>();
+            let choices = (
+                config.mode.authority(),
+                DropPolicy::Automatic,
+                FinishPolicy::LastStanding,
+            );
+            (config.local_slot, choices, None)
+        }
         LobbyMode::Host => {
+            // Validate before consuming the lobby link, so a bad port leaves
+            // the lobby alive to fix it.
+            let udp_port = match parse_udp_port(&world.resource::<LobbyConfig>().udp_port) {
+                Ok(port) => port,
+                Err(message) => {
+                    world.resource_mut::<LobbyConfig>().status = message;
+                    return;
+                }
+            };
             let Some(LobbyLink::Host(host)) = world.remove_non_send_resource::<LobbyLink>() else {
                 return;
             };
-            match NetSession::start_host(host, udp_bind()) {
-                Ok(net) => (0, Some(net)),
+            // The choices the lobby broadcast, captured before the link is
+            // consumed — identical on every node.
+            let state = host.state();
+            let choices = (
+                state.mode.authority(),
+                state.drop_policy,
+                state.finish_policy,
+            );
+            match NetSession::start_host(host, udp_port) {
+                Ok(net) => (0, choices, Some(net)),
                 Err(error) => {
                     eprintln!("failed to start host: {error}");
                     return;
@@ -857,8 +1121,17 @@ pub fn start_game(world: &mut World) {
                 return;
             };
             let local = client.local_player().unwrap_or(0);
-            match NetSession::start_client(client, udp_bind()) {
-                Ok(net) => (local, Some(net)),
+            let Some(choices) = client.state().map(|state| {
+                (
+                    state.mode.authority(),
+                    state.drop_policy,
+                    state.finish_policy,
+                )
+            }) else {
+                return;
+            };
+            match NetSession::start_client(client) {
+                Ok(net) => (local, choices, Some(net)),
                 Err(error) => {
                     eprintln!("failed to start client: {error}");
                     return;
@@ -867,12 +1140,12 @@ pub fn start_game(world: &mut World) {
         }
     };
 
-    let player_count = slots.len();
     {
         let mut session = world.resource_mut::<GameSession>();
-        session.configure(local_player, slots, ai_hosting);
+        let (authority, drop_policy, finish_policy) = choices;
+        session.configure(local_player, slots, authority, drop_policy, finish_policy);
     }
-    install_game_resources(world, player_count);
+    install_game_resources(world);
     if let Some(net) = net {
         install_network_session(world, net);
     }
@@ -899,8 +1172,4 @@ fn player_slots(config: &LobbyConfig) -> Vec<PlayerSlot> {
             }
         })
         .collect()
-}
-
-fn udp_bind() -> SocketAddr {
-    SocketAddr::from(([0, 0, 0, 0], UDP_PORT))
 }

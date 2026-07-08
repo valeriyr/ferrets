@@ -3,22 +3,25 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 
-use ferrets_simulation::session::ai_hosting::AiHosting;
+use ferrets_simulation::session::drop_policy::DropPolicy;
+use ferrets_simulation::session::finish_policy::FinishPolicy;
 use ferrets_simulation::session::player_slot::PlayerId;
 
 use crate::control::{ControlChannel, ControlEvent};
-use crate::message::control::{ControlMessage, LobbyMessage, Occupant, SlotInfo, UdpEntry};
+use crate::message::control::{
+    ControlMessage, LobbyMessage, LobbyState, Occupant, SlotInfo, UdpEntry,
+};
 use crate::peer::PeerId;
-use crate::topology::Topology;
+use crate::session_mode::SessionMode;
 
 /// The host side of the lobby.
 pub struct LobbyHost {
     control: ControlChannel,
-    topology: Topology,
-    ai_hosting: AiHosting,
-    slots: Vec<SlotInfo>,
+    state: LobbyState,
     /// The UDP port each client advertised in its `Join` (for a mesh game).
     udp_ports: HashMap<PeerId, u16>,
+    /// The TCP control port each client advertised (for a decentralized game).
+    control_ports: HashMap<PeerId, u16>,
 }
 
 impl LobbyHost {
@@ -26,8 +29,9 @@ impl LobbyHost {
     /// start [`Open`](Occupant::Open) with `default_race`.
     pub fn new(
         control: ControlChannel,
-        topology: Topology,
-        ai_hosting: AiHosting,
+        mode: SessionMode,
+        drop_policy: DropPolicy,
+        finish_policy: FinishPolicy,
         capacity: usize,
         default_race: &str,
     ) -> Self {
@@ -45,10 +49,14 @@ impl LobbyHost {
             .collect();
         Self {
             control,
-            topology,
-            ai_hosting,
-            slots,
+            state: LobbyState {
+                slots,
+                mode,
+                drop_policy,
+                finish_policy,
+            },
             udp_ports: HashMap::new(),
+            control_ports: HashMap::new(),
         }
     }
 
@@ -59,17 +67,17 @@ impl LobbyHost {
 
     /// The current slot list.
     pub fn slots(&self) -> &[SlotInfo] {
-        &self.slots
+        &self.state.slots
     }
 
-    /// The chosen in-game topology.
-    pub fn topology(&self) -> Topology {
-        self.topology
+    /// The chosen session mode.
+    pub fn mode(&self) -> SessionMode {
+        self.state.mode
     }
 
-    /// The chosen AI hosting mode.
-    pub fn ai_hosting(&self) -> AiHosting {
-        self.ai_hosting
+    /// The authoritative lobby state this host broadcasts.
+    pub fn state(&self) -> &LobbyState {
+        &self.state
     }
 
     /// Drains control events, updating the lobby. Returns `true` if the state
@@ -94,47 +102,70 @@ impl LobbyHost {
     /// Sets a slot the host controls to `occupant` (e.g. opening, closing, or
     /// making it an AI). Re-broadcasts.
     pub fn set_occupant(&mut self, slot: PlayerId, occupant: Occupant) -> crate::Result<()> {
-        if let Some(info) = self.slots.get_mut(slot as usize) {
+        if let Some(info) = self.state.slots.get_mut(slot as usize) {
             info.occupant = occupant;
             self.broadcast_state()?;
         }
         Ok(())
     }
 
-    /// Changes the in-game topology before the game starts. Re-broadcasts so
+    /// Changes the session mode before the game starts. Re-broadcasts so
     /// clients mirror it.
-    pub fn set_topology(&mut self, topology: Topology) -> crate::Result<()> {
-        self.topology = topology;
+    pub fn set_mode(&mut self, mode: SessionMode) -> crate::Result<()> {
+        self.state.mode = mode;
         self.broadcast_state()
     }
 
-    /// Changes the AI hosting mode before the game starts. Re-broadcasts so
+    /// Changes the drop policy before the game starts. Re-broadcasts so
     /// clients mirror it.
-    pub fn set_ai_hosting(&mut self, ai_hosting: AiHosting) -> crate::Result<()> {
-        self.ai_hosting = ai_hosting;
+    pub fn set_drop_policy(&mut self, drop_policy: DropPolicy) -> crate::Result<()> {
+        self.state.drop_policy = drop_policy;
+        self.broadcast_state()
+    }
+
+    /// Changes the finish policy before the game starts. Re-broadcasts so
+    /// clients mirror it.
+    pub fn set_finish_policy(&mut self, finish_policy: FinishPolicy) -> crate::Result<()> {
+        self.state.finish_policy = finish_policy;
         self.broadcast_state()
     }
 
     /// Sets a slot's race. Re-broadcasts.
     pub fn set_race(&mut self, slot: PlayerId, race: &str) -> crate::Result<()> {
-        if let Some(info) = self.slots.get_mut(slot as usize) {
+        if let Some(info) = self.state.slots.get_mut(slot as usize) {
             info.race = Some(race.to_string());
             self.broadcast_state()?;
         }
         Ok(())
     }
 
-    /// Locks the lobby and tells every client to start, carrying `udp_table` (only
-    /// meaningful for a mesh game).
-    pub fn start(&mut self, udp_table: Option<Vec<UdpEntry>>) -> crate::Result<()> {
+    /// Locks the lobby and tells every client to start, carrying the endpoint
+    /// tables the mode needs (`udp_table` for a mesh game, `control_table` for
+    /// a decentralized one).
+    pub fn start(
+        &mut self,
+        udp_table: Option<Vec<UdpEntry>>,
+        control_table: Option<Vec<UdpEntry>>,
+    ) -> crate::Result<()> {
         self.control
-            .send(&ControlMessage::Lobby(LobbyMessage::Start { udp_table }))
+            .send(&ControlMessage::Lobby(LobbyMessage::Start {
+                udp_table,
+                control_table,
+            }))
     }
 
     /// The UDP endpoint a client will receive gameplay on: its observed IP paired
     /// with the port it advertised. `None` until both are known.
     pub fn client_udp_addr(&self, peer: PeerId) -> Option<SocketAddr> {
         let port = *self.udp_ports.get(&peer)?;
+        let ip = self.control.observed_addr(peer)?.ip();
+        Some(SocketAddr::new(ip, port))
+    }
+
+    /// The TCP endpoint a client accepts control-mesh links on: its observed
+    /// IP paired with the port it advertised. `None` until both are known.
+    pub fn client_control_addr(&self, peer: PeerId) -> Option<SocketAddr> {
+        let port = *self.control_ports.get(&peer)?;
         let ip = self.control.observed_addr(peer)?.ip();
         Some(SocketAddr::new(ip, port))
     }
@@ -148,6 +179,7 @@ impl LobbyHost {
     /// Seats a newly-connected peer in the first open slot.
     fn seat(&mut self, peer: PeerId) -> bool {
         if let Some(info) = self
+            .state
             .slots
             .iter_mut()
             .find(|info| info.occupant == Occupant::Open)
@@ -162,7 +194,9 @@ impl LobbyHost {
     /// Reopens whatever slot a departed peer held.
     fn unseat(&mut self, peer: PeerId) -> bool {
         self.udp_ports.remove(&peer);
+        self.control_ports.remove(&peer);
         if let Some(info) = self
+            .state
             .slots
             .iter_mut()
             .find(|info| info.occupant == Occupant::Human { peer })
@@ -184,6 +218,7 @@ impl LobbyHost {
             LobbyMessage::Join {
                 protocol_version,
                 advertised_udp_port,
+                advertised_control_port,
                 race,
             } => {
                 if protocol_version != ferrets_simulation::PROTOCOL_VERSION {
@@ -203,6 +238,9 @@ impl LobbyHost {
                 if let Some(port) = advertised_udp_port {
                     self.udp_ports.insert(from, port);
                 }
+                if let Some(port) = advertised_control_port {
+                    self.control_ports.insert(from, port);
+                }
                 if let (Some(race), Some(info)) = (race, self.slot_of_mut(from)) {
                     info.race = Some(race);
                 }
@@ -210,7 +248,7 @@ impl LobbyHost {
             }
             LobbyMessage::RequestRace { slot, race } => {
                 // A client may only set the race of the slot it occupies.
-                match self.slots.get_mut(slot as usize) {
+                match self.state.slots.get_mut(slot as usize) {
                     Some(info) if info.occupant == (Occupant::Human { peer: from }) => {
                         info.race = Some(race);
                         Ok(true)
@@ -219,24 +257,23 @@ impl LobbyHost {
                 }
             }
             // The host originates these; a client never sends them to the host.
-            LobbyMessage::LobbyState { .. }
+            LobbyMessage::State { .. }
             | LobbyMessage::Start { .. }
             | LobbyMessage::Rejected { .. } => Ok(false),
         }
     }
 
     fn slot_of_mut(&mut self, peer: PeerId) -> Option<&mut SlotInfo> {
-        self.slots
+        self.state
+            .slots
             .iter_mut()
             .find(|info| info.occupant == Occupant::Human { peer })
     }
 
     fn broadcast_state(&mut self) -> crate::Result<()> {
         self.control
-            .send(&ControlMessage::Lobby(LobbyMessage::LobbyState {
-                slots: self.slots.clone(),
-                topology: self.topology,
-                ai_hosting: self.ai_hosting,
-            }))
+            .send(&ControlMessage::Lobby(LobbyMessage::State(
+                self.state.clone(),
+            )))
     }
 }

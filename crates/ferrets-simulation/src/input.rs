@@ -33,7 +33,7 @@ impl PlayerFrame {
 }
 
 /// All players' commands for one tick, indexed by [`PlayerId`].
-pub struct InputFrame {
+struct InputFrame {
     slots: Vec<Option<Vec<PlayerCommand>>>,
 }
 
@@ -45,25 +45,9 @@ impl InputFrame {
         }
     }
 
-    /// Returns `true` when every player slot has contributed commands for this tick.
-    pub fn is_ready(&self) -> bool {
-        self.slots.iter().all(|s| s.is_some())
-    }
-
     /// Returns `true` if `player` has contributed a frame for this tick.
     fn has(&self, player: PlayerId) -> bool {
         self.slots[player as usize].is_some()
-    }
-
-    /// Iterates over `(PlayerId, commands)` pairs.
-    pub fn iter(&self) -> impl Iterator<Item = (PlayerId, &[PlayerCommand])> {
-        self.slots.iter().enumerate().map(|(i, s)| {
-            (
-                i as PlayerId,
-                s.as_deref()
-                    .expect("InputFrame::iter called on incomplete frame"),
-            )
-        })
     }
 
     /// Records `commands` for `player`, the first time wins. A repeat for an
@@ -98,9 +82,27 @@ impl InputFrames {
         }
     }
 
-    /// Returns the frame for `tick` if all players have contributed, `None` otherwise.
-    pub fn get_ready(&self, tick: u32) -> Option<&InputFrame> {
-        self.frames.get(&tick).filter(|f| f.is_ready())
+    /// Returns `(player, commands)` for each of `players` at `tick`, in the
+    /// given order, or `None` while any of them has yet to contribute.
+    ///
+    /// The caller decides whose input the tick requires; frames recorded for
+    /// other players neither hold the tick up nor appear in the result. That
+    /// is what keeps a dropped player's unexecuted remainder inert: whichever
+    /// of its final frames happened to reach this node, nothing reads them
+    /// once the player stops being required.
+    pub fn ready_commands(
+        &self,
+        tick: u32,
+        players: &[PlayerId],
+    ) -> Option<Vec<(PlayerId, &[PlayerCommand])>> {
+        let frame = self.frames.get(&tick)?;
+        players
+            .iter()
+            .map(|&player| {
+                let commands = frame.slots.get(player as usize)?.as_deref()?;
+                Some((player, commands))
+            })
+            .collect()
     }
 
     /// Returns `true` if `player` has a frame recorded for `tick` — used to find

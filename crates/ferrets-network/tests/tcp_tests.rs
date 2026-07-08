@@ -1,9 +1,10 @@
 //! The TCP star transport: a host and a client exchanging messages over a real
 //! localhost socket.
 
+mod utils;
+
 use std::net::TcpListener;
-use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ferrets_network::transport::tcp::TcpTransport;
 use ferrets_network::transport::{NetworkTransport, TransportEvent};
@@ -66,42 +67,51 @@ fn open_host_accepts_clients_live_with_ascending_ids() {
 }
 
 //
+// ─── Teardown ─────────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn dropping_connecting_mesh_does_not_wait_out_timeout() {
+    // A mesh node awaiting an inbound link that never comes would otherwise hold
+    // its teardown for the whole connect timeout; the cancellation makes the
+    // drop return at once.
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let transport = TcpTransport::mesh(0, listener, Vec::new(), vec![1]).expect("mesh");
+
+    let start = Instant::now();
+    drop(transport);
+    assert!(
+        start.elapsed() < Duration::from_secs(5),
+        "drop waited out the connect timeout ({:?})",
+        start.elapsed(),
+    );
+}
+
+//
 // ─── Helpers ────────────────────────────────────────────────────────────────
 //
 
 /// Joins `addr`, retrying until the host's listener is up.
 fn join_retrying(addr: std::net::SocketAddr) -> TcpTransport {
-    loop {
-        match TcpTransport::join(addr) {
-            Ok(client) => break client,
-            Err(_) => thread::sleep(Duration::from_millis(20)),
-        }
-    }
+    utils::wait_for("host listener to accept", || TcpTransport::join(addr).ok())
 }
 
 /// Blocks until a `PeerConnected` event arrives, returning the new peer id.
 fn poll_for_connect(transport: &mut TcpTransport) -> u64 {
-    for _ in 0..200 {
-        for event in transport.poll() {
-            if let TransportEvent::PeerConnected(peer) = event {
-                return peer;
-            }
-        }
-        thread::sleep(Duration::from_millis(5));
-    }
-    panic!("no peer connected within the time budget");
+    utils::wait_for("peer to connect", || {
+        transport.poll().into_iter().find_map(|event| match event {
+            TransportEvent::PeerConnected(peer) => Some(peer),
+            _ => None,
+        })
+    })
 }
 
-/// Blocks until a message event arrives, returning `(from, bytes)`, or panics
-/// after a budget.
+/// Blocks until a message event arrives, returning `(from, bytes)`.
 fn poll_for_message(transport: &mut TcpTransport) -> (u64, Vec<u8>) {
-    for _ in 0..200 {
-        for event in transport.poll() {
-            if let TransportEvent::Message { from, bytes } = event {
-                return (from, bytes);
-            }
-        }
-        thread::sleep(Duration::from_millis(5));
-    }
-    panic!("no message received within the time budget");
+    utils::wait_for("message to arrive", || {
+        transport.poll().into_iter().find_map(|event| match event {
+            TransportEvent::Message { from, bytes } => Some((from, bytes)),
+            _ => None,
+        })
+    })
 }

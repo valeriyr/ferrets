@@ -20,7 +20,10 @@ use ferrets_replay::recorder::Recorder;
 use ferrets_replay::replay::Replay;
 use ferrets_simulation::{
     entity_index::EntityIndex,
-    session::{GameResult, GameSession, ai_hosting::AiHosting},
+    session::{
+        GameResult, GameSession, ai_hosting::AiHosting, authority::Authority,
+        drop_policy::DropPolicy,
+    },
     simulation_id::SimulationIdGenerator,
 };
 
@@ -105,13 +108,9 @@ pub fn start_watching(world: &mut World) {
     }
 
     // Owned setup, taken before the replay is moved into playback.
-    let (slots, finish_policy, player_count) = {
+    let (slots, finish_policy) = {
         let header = replay.header();
-        (
-            header.slots.clone(),
-            header.finish_policy,
-            header.slots.len(),
-        )
+        (header.slots.clone(), header.finish_policy)
     };
 
     // The viewer is a spectator; follow the first occupied slot for the camera.
@@ -123,11 +122,19 @@ pub fn start_watching(world: &mut World) {
     {
         let mut session = world.resource_mut::<GameSession>();
         // Playback never runs AI (the replay is the sole frame source), so
-        // the hosting mode is irrelevant.
-        session.configure(viewer, slots, AiHosting::default());
-        session.set_finish_policy(finish_policy);
+        // the hosting mode is irrelevant; the finish policy replays the
+        // recorded game's.
+        session.configure(
+            viewer,
+            slots,
+            Authority::Host {
+                ai_hosting: AiHosting::Replicated,
+            },
+            DropPolicy::Automatic,
+            finish_policy,
+        );
     }
-    install_game_resources(world, player_count);
+    install_game_resources(world);
     install_replay_playback(world, replay);
     world
         .resource_mut::<NextState<GameState>>()
@@ -172,7 +179,7 @@ pub fn teardown_session(world: &mut World) {
 
     world.insert_resource(EntityIndex::default());
     world.insert_resource(SimulationIdGenerator::default());
-    world.insert_resource(GameSession::default());
+    world.insert_resource(GameSession::pending());
     // Despawning entities does not release the cells they occupied, so rebuild the
     // map to clear its occupation grid for the next game.
     world.insert_resource(crate::map::build());

@@ -3,12 +3,14 @@
 //! Bridges the [`NetSession`] to the simulation each `FixedUpdate`: [`net_receive`]
 //! injects remote players' frames, [`flush_input`](crate::flush_input) records the
 //! local frame, [`net_broadcast`] (re)broadcasts the frame window, [`net_checksum`]
-//! exchanges per-tick state hashes to catch desyncs, and [`net_pause_control`]
-//! applies tick-aligned pauses. Add it alongside
+//! exchanges per-tick state hashes to catch desyncs, and [`net_control`]
+//! applies tick-aligned pauses and drops decided by the session's
+//! [`Authority`]. Add it alongside
 //! [`SimulationPlugin`](crate::SimulationPlugin) for every game: the systems run
 //! only once a [`NetworkSession`] is installed, which a local game never does.
 
-use std::collections::BTreeMap;
+use std::collections::btree_map::Entry;
+use std::collections::{BTreeMap, BTreeSet};
 
 use bevy::prelude::*;
 use ferrets_network::message::control::{ControlMessage, InGameMessage};
@@ -16,8 +18,11 @@ use ferrets_network::session::NetSession;
 use ferrets_simulation::checksum;
 use ferrets_simulation::{
     checksum::CHECKSUM_INTERVAL,
-    input::{InputFrames, PlayerFrame, SYNC_LATENCY},
-    session::{GameResult, GameSession, player_slot::PlayerId},
+    input::{InputFrames, SYNC_LATENCY},
+    session::{
+        GameResult, GameSession, authority::Authority, drop_policy::DropPolicy,
+        player_slot::PlayerId,
+    },
 };
 
 use crate::{SimulationSet, session_is_active, session_is_not_paused, session_is_running, systems};
@@ -29,10 +34,10 @@ use crate::{SimulationSet, session_is_active, session_is_not_paused, session_is_
 /// frozen at the same tick, so it applies immediately.
 const PAUSE_DELAY: u32 = SYNC_LATENCY * 2;
 
-/// How long the tick may stay blocked on a player before that player is dropped
-/// — the reconnection grace window, measured in blocked `FixedUpdate` steps (not
-/// wall-clock, so it is testable and only gates *when* a node acts). Generous
-/// enough to ride out a link blip; the freeze lasts this long on a genuine drop.
+/// The reconnection grace window before a stall becomes a drop, in blocked
+/// `FixedUpdate` steps (not wall-clock, so it is testable and only gates *when*
+/// a node acts — generous enough to ride out a link blip). Whether the stall
+/// becomes a decision at all is the session's [`DropPolicy`].
 #[derive(Resource)]
 pub struct DropConfig {
     pub timeout_steps: u32,
@@ -40,10 +45,49 @@ pub struct DropConfig {
 
 impl Default for DropConfig {
     fn default() -> Self {
-        // ~4 s at 20 Hz.
-        Self { timeout_steps: 80 }
+        Self {
+            // ~4 s at 20 Hz.
+            timeout_steps: 80,
+        }
     }
 }
+
+/// The stall currently blocking the tick, surfaced for the game's UI (a
+/// wait-for-player dialog under [`DropPolicy::Manual`], a "connection lost"
+/// toast otherwise). `None` while lockstep flows.
+#[derive(Resource, Default)]
+pub struct Stall(pub Option<StallInfo>);
+
+/// One blocked tick's stall: which players are holding it up and for how long.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StallInfo {
+    pub tick: u32,
+    pub missing: Vec<PlayerId>,
+    pub steps: u32,
+}
+
+/// The stalled players the local game has approved dropping, under
+/// [`DropPolicy::Manual`]. The decision fires once every currently-missing
+/// player is approved; cleared when it does.
+#[derive(Resource, Default)]
+pub struct DropIntent(pub Vec<PlayerId>);
+
+/// The players whose control link to this node has gone down. A control link
+/// is TCP, so this is definite knowledge, not a timeout guess: such a player
+/// can neither receive decisions nor deliver its consensus vote here, so the
+/// commit rules stop waiting for it. A genuinely dead peer loses its links to
+/// every node at once, which is what keeps the exclusions converging.
+#[derive(Resource, Default)]
+pub struct ControlLinks {
+    pub lost: BTreeSet<PlayerId>,
+}
+
+/// The stall observations known to this node under peer authority, by voter:
+/// the blocked tick and the players the voter saw missing there. Each arrives
+/// once over the reliable control mesh (a voter re-sends only when its
+/// observation changes); cleared whenever the tick moves on.
+#[derive(Resource, Default)]
+pub struct StallVotes(pub BTreeMap<PlayerId, (u32, Vec<PlayerId>)>);
 
 /// Tracks how many consecutive `FixedUpdate` steps the tick has been blocked at a
 /// given tick, so [`detect_drops`] can fire once the grace window elapses.
@@ -72,15 +116,40 @@ pub struct NetworkSession(pub NetSession);
 pub struct NetworkActive;
 
 /// A pause/resume scheduled to take effect at an agreed tick, identical on every
-/// node so the change is deterministic. Applied by [`net_pause_control`] when the
-/// tick arrives.
+/// node so the change is deterministic. Applied (and discarded) by
+/// [`net_control`] when each change's tick arrives; the control links are
+/// reliable, so a proposal is sent exactly once.
 #[derive(Resource, Default)]
-pub struct PendingPause(Option<(u32, bool)>);
+pub struct PendingPause(BTreeMap<u32, (PlayerId, bool)>);
+
+impl PendingPause {
+    /// Merges a proposal, returning whether it changed what is pending.
+    /// Proposals for the same tick resolve identically on every node whatever
+    /// their arrival order: the smallest `(player, paused)` wins.
+    fn propose(&mut self, tick: u32, player: PlayerId, paused: bool) -> bool {
+        match self.0.entry(tick) {
+            Entry::Vacant(entry) => {
+                entry.insert((player, paused));
+                true
+            }
+            Entry::Occupied(mut entry) => {
+                if (player, paused) < *entry.get() {
+                    entry.insert((player, paused));
+                    true
+                } else {
+                    false
+                }
+            }
+        }
+    }
+}
 
 /// The local player's pending pause/resume request (`Some(paused)`), set by the
-/// frontend on a pause key. [`net_pause_control`] turns it into an authoritative
-/// [`PauseAt`](InGameMessage::PauseAt) on the host, or forwards it to the host on
-/// a client. (A local game pauses its session directly and ignores this.)
+/// frontend on a pause key. Under host authority [`net_control`] turns it into
+/// an authoritative [`PauseAt`](InGameMessage::PauseAt) on the host or forwards
+/// it to the host on a client; under peer authority it becomes this node's own
+/// tick-stamped proposal on the control mesh. (A local game pauses its
+/// session directly and ignores this.)
 #[derive(Resource, Default)]
 pub struct PauseIntent(pub Option<bool>);
 
@@ -149,12 +218,15 @@ impl Plugin for NetworkPlugin {
         app.init_resource::<BlockedStreak>();
         app.init_resource::<PendingPause>();
         app.init_resource::<PauseIntent>();
-        // Order within the active tick: receive remote frames, then resolve drops
-        // and auto-idle dropped slots, record the local frame (flush_input),
-        // broadcast the window, then checksum — all before command_executor
-        // consumes the input.
-        // `net_receive` and `net_pause_control` run even while paused, so frames
-        // and control keep buffering and a resume can be received; everything that
+        app.init_resource::<Stall>();
+        app.init_resource::<DropIntent>();
+        app.init_resource::<StallVotes>();
+        app.init_resource::<ControlLinks>();
+        // Order within the active tick: receive remote frames, then resolve
+        // drops, record the local frame (flush_input), broadcast the window,
+        // then checksum — all before command_executor consumes the input.
+        // `net_receive` and `net_control` run even while paused, so frames and
+        // control keep buffering and a resume can be received; everything that
         // advances the simulation is additionally gated on `session_is_not_paused`.
         app.add_systems(
             FixedUpdate,
@@ -165,7 +237,7 @@ impl Plugin for NetworkPlugin {
         );
         app.add_systems(
             FixedUpdate,
-            net_pause_control
+            net_control
                 .in_set(SimulationSet)
                 .after(net_receive)
                 .before(systems::flush_input)
@@ -173,10 +245,9 @@ impl Plugin for NetworkPlugin {
         );
         app.add_systems(
             FixedUpdate,
-            (detect_drops, auto_idle_dropped)
-                .chain()
+            detect_drops
                 .in_set(SimulationSet)
-                .after(net_receive)
+                .after(net_control)
                 .before(systems::command_executor)
                 .run_if(
                     session_is_active
@@ -211,67 +282,233 @@ impl Plugin for NetworkPlugin {
     }
 }
 
-/// Receives in-game control and applies pauses deterministically.
+/// Applies the in-game control plane: tick-aligned pauses and player drops,
+/// routed and decided according to the session's [`Authority`].
 ///
-/// A client's [`PauseRequest`](InGameMessage::PauseRequest) is forwarded by the
-/// host as an authoritative [`PauseAt`](InGameMessage::PauseAt) at a tick far
-/// enough ahead that every node learns of it first; each node then pauses/resumes
-/// exactly when its tick reaches that value, so all freeze at the same tick. Runs
-/// while paused (it must still receive the resume).
-pub fn net_pause_control(
+/// Under host authority the host is the single decider: it turns pause
+/// requests into [`PauseAt`](InGameMessage::PauseAt) and stall decisions into
+/// [`DropAt`](InGameMessage::DropAt) on the reliable control channel, and every
+/// other node applies what arrives. Under peer authority there is no host to
+/// relay through: a local pause intent becomes this node's tick-stamped
+/// proposal on the control mesh (colliding proposals resolve by lowest
+/// player id), and drops commit by consensus in [`detect_drops`].
+///
+/// Pending pause changes apply once their tick arrives, idempotently re-applied
+/// and re-sent for a short tail so an unreliable transport still delivers them.
+#[allow(clippy::too_many_arguments)]
+pub fn net_control(
     mut net: NonSendMut<NetworkSession>,
     mut session: ResMut<GameSession>,
     mut pending: ResMut<PendingPause>,
     mut streak: ResMut<BlockedStreak>,
+    mut votes: ResMut<StallVotes>,
+    mut links: ResMut<ControlLinks>,
     mut intent: ResMut<PauseIntent>,
 ) {
-    let host = net.0.is_control_host();
+    let host = net.0.is_host_node();
+    let authority = session.authority();
     let tick = session.tick();
+    let local = session.local_player();
 
-    // Pause/resume requests to act on: the local player's, plus (on the host) any
-    // a client sent over the wire. A `PauseAt` is the host's decision — apply it.
+    // Drain the control links. Each message is judged against the peer that
+    // actually sent it: a `PauseAt` schedules; a `DropAt` from the host node is
+    // its authoritative drop — apply it, even for a tick this node has not
+    // reached yet (but one for a tick already executed signals a divergence and
+    // ends the game); a `StallVote` joins the known observations if the sender is
+    // entitled to cast it; a `PauseRequest` (host authority only) queues for
+    // the decision below. Under peer authority a vote or pause that taught this
+    // node something new is forwarded once, so control commands cross a broken
+    // link through the peers that still have one (duplicates change nothing and
+    // are not re-forwarded, which ends the flood).
     let mut requests: Vec<bool> = intent.0.take().into_iter().collect();
-    for message in net.0.drain_control() {
+    let received = net.0.drain_control();
+    // Record downed links before reading the messages, so a peer lost this same
+    // drain is already known when its relayed vote is judged below.
+    links.lost.extend(received.lost.iter().copied());
+    for (from, message) in received.messages {
         if let ControlMessage::InGame(message) = message {
             match message {
                 InGameMessage::PauseRequest { paused } => requests.push(paused),
-                InGameMessage::PauseAt { tick, paused } => pending.0 = Some((tick, paused)),
+                InGameMessage::PauseAt {
+                    proposer,
+                    tick: effective,
+                    paused,
+                } => {
+                    // An echo of this node's own proposal teaches nobody
+                    // anything (the original already went to every link), and
+                    // a proposal for a tick already passed is a stale copy of
+                    // an applied-and-discarded change — re-learning either
+                    // would resurrect it in the apply loop. Legitimate traffic
+                    // always targets the present or future: the effective tick
+                    // leads the proposer by more than the lockstep skew.
+                    if proposer == local || effective < tick {
+                        continue;
+                    }
+                    let news = pending.propose(effective, proposer, paused);
+                    if news && authority == Authority::Peers {
+                        forward(
+                            &mut net,
+                            InGameMessage::PauseAt {
+                                proposer,
+                                tick: effective,
+                                paused,
+                            },
+                        );
+                    }
+                }
+                InGameMessage::DropAt { player, tick: at } => {
+                    // The authoritative drop, valid only under host authority
+                    // and only from the host's own node. A client cannot drop a
+                    // player by sending this, and under peer authority drops
+                    // never travel this way — they commit by `StallVote`
+                    // consensus in `detect_drops`.
+                    if !matches!(authority, Authority::Host { .. })
+                        || !net.0.is_host_peer(from)
+                        || session.is_player_dropped(player)
+                    {
+                        continue;
+                    }
+                    if at < tick {
+                        // The drop takes effect from a tick this node has
+                        // already executed with the player's input. Drops are
+                        // deterministic only because every survivor blocks at
+                        // the same first unfillable tick before one is decided,
+                        // so a drop older than the current tick means that
+                        // convergence did not hold and our state past `at`
+                        // disagrees with the authority's. Stop here rather than
+                        // silently apply it and diverge further.
+                        session.finish(GameResult::Desynchronization { tick: at });
+                        continue;
+                    }
+                    session.drop_player(player, at);
+                    streak.reset();
+                }
+                InGameMessage::StallVote {
+                    voter,
+                    tick,
+                    missing,
+                } => {
+                    if voter == local {
+                        continue;
+                    }
+                    // Only the voter may originate its own vote. A relayed copy
+                    // (the sender is not the voter) is the flood that carries a
+                    // vote across a link this node lacks, so it is trusted only
+                    // for a voter this node cannot hear directly — no direct
+                    // control link, or one that has gone down. A relay about a
+                    // voter on a live direct link is forged and dropped.
+                    let relayed = net.0.player_of(from) != Some(voter);
+                    let heard_directly =
+                        net.0.has_control_link(voter) && !links.lost.contains(&voter);
+                    if relayed && heard_directly {
+                        continue;
+                    }
+                    let news = votes.0.get(&voter) != Some(&(tick, missing.clone()));
+                    if news {
+                        votes.0.insert(voter, (tick, missing.clone()));
+                        if authority == Authority::Peers {
+                            forward(
+                                &mut net,
+                                InGameMessage::StallVote {
+                                    voter,
+                                    tick,
+                                    missing,
+                                },
+                            );
+                        }
+                    }
+                }
             }
         }
     }
 
+    // A downed control link is definite: the player behind it can no longer be
+    // steered or consulted from here. Losing the host means losing the session
+    // authority; losing every peer means this node cannot take part in any
+    // decision — either way the session is unsteerable and ends locally.
+    let unsteerable = match authority {
+        Authority::Host { .. } => {
+            !host
+                && net
+                    .0
+                    .host_player()
+                    .is_some_and(|player| links.lost.contains(&player))
+        }
+        Authority::Peers => {
+            let others: Vec<PlayerId> = session
+                .slots()
+                .iter()
+                .filter(|slot| slot.player_type().is_some())
+                .map(|slot| slot.id())
+                .filter(|&player| {
+                    player != local
+                        && !session.is_player_dropped(player)
+                        && net.0.is_networked(player)
+                })
+                .collect();
+            !others.is_empty() && others.iter().all(|player| links.lost.contains(player))
+        }
+    };
+    if unsteerable {
+        session.finish(GameResult::Aborted);
+        return;
+    }
+
     for paused in requests {
-        let message = if host {
-            // Authoritative: pausing takes effect a margin ahead so every node
-            // freezes at the same tick; resuming applies at the current (already
-            // frozen) tick. The host also schedules its own pending change.
-            let effective = if session.is_paused() {
-                tick
-            } else {
-                tick + PAUSE_DELAY
-            };
-            pending.0 = Some((effective, paused));
-            InGameMessage::PauseAt {
+        // Pausing takes effect a margin ahead so every node freezes at the same
+        // tick; resuming applies at the current (already frozen) tick.
+        let effective = if session.is_paused() {
+            tick
+        } else {
+            tick + PAUSE_DELAY
+        };
+        let proposal = match authority {
+            Authority::Host { .. } if host => InGameMessage::PauseAt {
+                proposer: local,
                 tick: effective,
                 paused,
+            },
+            Authority::Host { .. } => {
+                // A client asks the host to decide; it applies on the resulting
+                // PauseAt.
+                InGameMessage::PauseRequest { paused }
             }
-        } else {
-            // A client asks the host to decide; it applies on the resulting PauseAt.
-            InGameMessage::PauseRequest { paused }
+            // No host to ask: any node proposes directly, and colliding
+            // proposals resolve identically everywhere in `propose`.
+            Authority::Peers => InGameMessage::PauseAt {
+                proposer: local,
+                tick: effective,
+                paused,
+            },
         };
-        if let Err(error) = net.0.send_control(&ControlMessage::InGame(message)) {
+        if let InGameMessage::PauseAt { tick, paused, .. } = proposal {
+            let _ = pending.propose(tick, local, paused);
+        }
+        if let Err(error) = net.0.send_control(&ControlMessage::InGame(proposal)) {
             eprintln!("failed to send pause control: {error}");
         }
     }
 
-    if let Some((effective, paused)) = pending.0
-        && session.tick() >= effective
-    {
+    // Apply every change whose tick has arrived, in tick order, then discard
+    // it — the control links are reliable, so nothing needs a resend tail.
+    let mut applied = false;
+    for (_, &(_, paused)) in pending.0.range(..=tick) {
         session.set_paused(paused);
+        applied = true;
+    }
+    if applied {
         // Clear any blocked-streak accrued across the pause boundary so a resume
         // does not immediately trip a drop.
         streak.reset();
-        pending.0 = None;
+        pending.0.retain(|&effective, _| effective > tick);
+    }
+}
+
+/// Re-sends a just-learned control command on this node's own links (the
+/// flooding step of peer-authority control).
+fn forward(net: &mut NetworkSession, message: InGameMessage) {
+    if let Err(error) = net.0.send_control(&ControlMessage::InGame(message)) {
+        eprintln!("failed to forward control: {error}");
     }
 }
 
@@ -298,23 +535,46 @@ pub fn net_receive(
     }
 }
 
-/// Drops players whose frames have stopped, once the tick has been blocked on
-/// them for longer than the grace window — or aborts locally if *every* other
-/// live player is missing (this node is partitioned).
+/// Resolves stalled players: once the tick has been blocked on them past the
+/// grace window (or the game approved the drop under [`DropPolicy::Manual`]),
+/// the session's [`Authority`] decides the drop — or the node aborts locally if
+/// *every* other live player is missing (this node is partitioned) or the
+/// deciding host is itself the one that stalled.
 ///
-/// Deterministic in effect: a truly-gone player produces no frame for the blocked
-/// tick `B` on any node, so every still-connected node computes the same missing
-/// set at the same `B` and drops it; the grace counter only gates *when*. (If a
-/// frame does arrive, `command_executor` advances the tick and the streak resets
-/// before the timeout — the automatic veto against dropping a merely-laggy player.)
+/// Deterministic in effect however it is decided: relay nodes rebroadcast the
+/// whole frame window they hold every step (see [`net_broadcast`]), so a dying
+/// player's final frames spread to every survivor well inside the grace window
+/// — all survivors therefore advance to, and block at, the same first tick `B`
+/// that nobody can fill, and compute the same missing set there. Dropping as of
+/// `B` stops the tick from requiring the player's input, so ticks before `B`
+/// executed its real frames everywhere and ticks from `B` on ignore it
+/// everywhere — including any final frames that reached only some nodes. The
+/// grace counter only gates *when* a node acts. (If a frame does arrive,
+/// `command_executor` advances the tick and the streak resets before the
+/// timeout — the automatic veto against dropping a merely-laggy player.)
+///
+/// Under host authority the drop is the host's [`DropAt`](InGameMessage::DropAt)
+/// announcement; other nodes only apply it (in [`net_control`]). Under peer
+/// authority each node casts its stall observation over the reliable control
+/// mesh and the drop commits once every live player outside the missing set
+/// reports the same one — unanimity that the relay convergence above makes
+/// reachable.
+// A Bevy system's parameters are its resource accesses, not an API surface.
+#[allow(clippy::too_many_arguments)]
 pub fn detect_drops(
+    mut net: NonSendMut<NetworkSession>,
     frames: Res<InputFrames>,
     config: Res<DropConfig>,
     mut streak: ResMut<BlockedStreak>,
+    mut stall: ResMut<Stall>,
+    mut votes: ResMut<StallVotes>,
+    mut intent: ResMut<DropIntent>,
     mut session: ResMut<GameSession>,
 ) {
     if !session.is_blocked() {
         streak.reset();
+        stall.0 = None;
+        votes.0.clear();
         return;
     }
 
@@ -324,9 +584,11 @@ pub fn detect_drops(
     } else {
         streak.tick = Some(tick);
         streak.steps = 1;
-    }
-    if streak.steps < config.timeout_steps {
-        return;
+        // Observations of an earlier blocked tick are stale, but a peer's vote
+        // for *this* tick may already have arrived in `net_control` earlier
+        // this step (it re-sends only on change, so dropping it would strand
+        // the consensus). Keep those; discard the rest.
+        votes.0.retain(|_, (voted_tick, _)| *voted_tick == tick);
     }
 
     let local = session.local_player();
@@ -344,28 +606,103 @@ pub fn detect_drops(
         .collect();
 
     if missing.is_empty() {
+        stall.0 = None;
         return;
     }
+    stall.0 = Some(StallInfo {
+        tick,
+        missing: missing.clone(),
+        steps: streak.steps,
+    });
+
+    let grace_expired = streak.steps >= config.timeout_steps;
     if missing.len() == live_others.len() {
         // Missing everyone reachable → this node is the one cut off; it cannot
-        // determine a global tail, so it ends locally rather than dropping all.
-        session.finish(GameResult::Aborted);
-    } else {
-        for player in missing {
-            session.drop_player(player);
+        // determine a global tail (and no decision can reach it), so it ends
+        // locally rather than dropping all — whatever the policy or authority.
+        if grace_expired {
+            session.finish(GameResult::Aborted);
+            streak.reset();
         }
+        return;
     }
-    streak.reset();
-}
 
-/// Supplies an idle frame for each dropped player at the current tick, so the
-/// gone slot no longer blocks lockstep. Runs after [`net_receive`] (a real frame
-/// wins, first-write) and before `command_executor`; deterministic because the
-/// dropped set and tick are identical on every node.
-pub fn auto_idle_dropped(mut frames: ResMut<InputFrames>, session: Res<GameSession>) {
-    let tick = session.tick();
-    for player in session.dropped_players() {
-        frames.push_frame(PlayerFrame::idle(player, tick));
+    let decided = match session.drop_policy() {
+        DropPolicy::Automatic => grace_expired,
+        DropPolicy::Manual => missing.iter().all(|player| intent.0.contains(player)),
+    };
+
+    match session.authority() {
+        Authority::Host { .. } if net.0.is_host_node() => {
+            if !decided {
+                return;
+            }
+            for &player in &missing {
+                let message = InGameMessage::DropAt { player, tick };
+                if let Err(error) = net.0.send_control(&ControlMessage::InGame(message)) {
+                    eprintln!("failed to send drop control: {error}");
+                }
+                session.drop_player(player, tick);
+            }
+            intent.0.clear();
+            streak.reset();
+        }
+        Authority::Host { .. } => {
+            // Not this node's decision. But if the authority itself is the one
+            // that stalled, no decision can ever arrive: the session cannot be
+            // steered without its host, so it ends here.
+            if grace_expired
+                && net
+                    .0
+                    .host_player()
+                    .is_some_and(|player| missing.contains(&player))
+            {
+                session.finish(GameResult::Aborted);
+                streak.reset();
+            }
+        }
+        Authority::Peers => {
+            // Cast (or update) this node's observation, announcing it over the
+            // reliable control mesh only when it changes.
+            if decided {
+                let mine = (tick, missing.clone());
+                if votes.0.get(&local) != Some(&mine) {
+                    votes.0.insert(local, mine);
+                    let message = InGameMessage::StallVote {
+                        voter: local,
+                        tick,
+                        missing: missing.clone(),
+                    };
+                    if let Err(error) = net.0.send_control(&ControlMessage::InGame(message)) {
+                        eprintln!("failed to send stall vote: {error}");
+                    }
+                }
+            }
+            // Unanimity: every live player outside the missing set — this node
+            // included — reports exactly this stall. A voter behind a single
+            // broken link still reaches here via the flood; a voter whose
+            // control died entirely aborts itself, its frames stop, and it
+            // joins the missing set — where its vote was never required.
+            let committed = live_others
+                .iter()
+                .copied()
+                .filter(|player| !missing.contains(player))
+                .chain(std::iter::once(local))
+                .all(|player| {
+                    votes
+                        .0
+                        .get(&player)
+                        .is_some_and(|(t, m)| *t == tick && *m == missing)
+                });
+            if committed {
+                for &player in &missing {
+                    session.drop_player(player, tick);
+                }
+                intent.0.clear();
+                votes.0.clear();
+                streak.reset();
+            }
+        }
     }
 }
 
@@ -375,11 +712,16 @@ pub fn auto_idle_dropped(mut frames: ResMut<InputFrames>, session: Res<GameSessi
 /// Selects only what belongs on the wire: network-backed players' frames (which
 /// players those are depends on the session's AI hosting mode — a replicated
 /// AI is computed on every node and never relayed), never dropped players'
-/// (their idle is synthesized locally everywhere — broadcasting it could race a
-/// late real frame), and on a non-relay node only the players this node sources
+/// (nothing requires their input any more, so their leftover frames are dead
+/// weight), and on a non-relay node only the players this node sources
 /// (its own input, plus any AIs it computes for the others). Re-reading the
 /// `[tick-SYNC_LATENCY, tick+SYNC_LATENCY]` window each tick is the redundancy
 /// resend; idempotent `push_frame` makes duplicates harmless.
+///
+/// The relay is also what makes player drops land deterministically: a dying
+/// player's final frames may reach nodes unevenly, and the relayed window
+/// spreads them to every survivor, so all block at the same first unfillable
+/// tick before the drop grace expires (see [`detect_drops`]).
 pub fn net_broadcast(
     mut net: NonSendMut<NetworkSession>,
     frames: Res<InputFrames>,
@@ -387,7 +729,7 @@ pub fn net_broadcast(
 ) {
     let tick = session.tick();
     let relays = net.0.relays();
-    let is_host = net.0.is_control_host();
+    let is_host = net.0.is_host_node();
 
     let mut window = frames.frames_in_range(tick.saturating_sub(SYNC_LATENCY), tick + SYNC_LATENCY);
     window.retain(|frame| {

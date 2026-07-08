@@ -17,6 +17,7 @@ pub mod peer;
 pub mod role;
 pub mod roster;
 pub mod session;
+pub mod session_mode;
 pub mod topology;
 pub mod transport;
 

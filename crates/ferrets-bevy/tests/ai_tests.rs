@@ -22,7 +22,8 @@ use ferrets_simulation::{
     input::{InputFrames, PlayerFrame, SYNC_LATENCY},
     resources::PlayerResources,
     session::{
-        FinishPolicy, GameSession,
+        GameSession,
+        finish_policy::FinishPolicy,
         player_slot::{PlayerId, PlayerSlot},
         player_type::PlayerType,
     },
@@ -33,7 +34,7 @@ use ferrets_simulation::{
 //
 
 #[test]
-fn unmanned_and_ai_slots_without_runtimes_get_idle_frames() {
+fn ai_slots_without_runtimes_get_idle_frames_and_free_slots_get_none() {
     let mut app = utils::make_app(vec![
         PlayerSlot::occupied(0, PlayerType::Human, None),
         PlayerSlot::occupied(1, PlayerType::Ai, Some("human")),
@@ -47,8 +48,11 @@ fn unmanned_and_ai_slots_without_runtimes_get_idle_frames() {
     let world = app.world_mut();
     assert_eq!(world.resource::<GameSession>().tick(), 10);
     let frames = world.resource::<InputFrames>().frames_in_range(5, 5);
-    assert_eq!(frames.len(), 3);
+    // The human (local input) and the brainless AI idle along; the free slot
+    // contributes nothing — no tick requires its input.
+    assert_eq!(frames.len(), 2);
     assert!(frames.iter().all(|frame| frame.commands.is_empty()));
+    assert!(frames.iter().all(|frame| frame.player != 2));
 }
 
 #[test]

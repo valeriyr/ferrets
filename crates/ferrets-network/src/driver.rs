@@ -12,6 +12,7 @@ use ferrets_simulation::{input::PlayerFrame, session::player_slot::PlayerId};
 
 use crate::{
     message::{self, Message, gameplay::GameplayMessage},
+    peer::{HOST_PEER, PeerId},
     role::Role,
     roster::Roster,
     transport::{ConnectionState, NetworkTransport, TransportEvent},
@@ -71,6 +72,32 @@ impl LockstepDriver {
     /// The simulation slot this client controls.
     pub fn local_player(&self) -> PlayerId {
         self.local_player
+    }
+
+    /// The player controlled by the session host's node ([`HOST_PEER`]), if
+    /// that slot exists in the roster.
+    pub fn host_player(&self) -> Option<PlayerId> {
+        self.roster.player_of(HOST_PEER)
+    }
+
+    /// Whether this node is the session host's node.
+    pub fn is_host_node(&self) -> bool {
+        self.is_host_peer(self.transport.local_peer())
+    }
+
+    /// Whether `peer` is the session host's node.
+    pub fn is_host_peer(&self, peer: PeerId) -> bool {
+        peer == HOST_PEER
+    }
+
+    /// The player controlled by transport peer `peer`, if any.
+    pub fn player_of(&self, peer: PeerId) -> Option<PlayerId> {
+        self.roster.player_of(peer)
+    }
+
+    /// The transport peer that controls `player`, if the slot has one.
+    pub fn peer_of(&self, player: PlayerId) -> Option<PeerId> {
+        self.roster.peer_of(player)
     }
 
     /// The number of player slots in the session.
@@ -141,7 +168,7 @@ impl LockstepDriver {
     }
 
     /// Decodes one message and folds it into `received`.
-    fn handle_message(&mut self, from: crate::peer::PeerId, bytes: &[u8], received: &mut Received) {
+    fn handle_message(&mut self, from: PeerId, bytes: &[u8], received: &mut Received) {
         match message::decode(bytes) {
             Ok(Message::Gameplay(GameplayMessage::Frames(frames))) => {
                 for frame in frames {

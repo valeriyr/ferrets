@@ -15,6 +15,7 @@ use std::thread::JoinHandle;
 
 use crossbeam_channel::Receiver;
 use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::oneshot;
 
 use super::{ConnectionState, TransportEvent};
 use crate::peer::PeerId;
@@ -60,6 +61,10 @@ pub(crate) struct SocketIo {
     inbound: Receiver<TransportEvent>,
     state: SharedState,
     observed: ObservedAddrs,
+    /// Dropped on shutdown to abort a task still in a blocking setup phase (a
+    /// mesh awaiting links that may never come), so teardown need not wait out
+    /// a connect timeout. `None` for a task whose setup does not block.
+    cancel: Option<oneshot::Sender<()>>,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -80,8 +85,16 @@ impl SocketIo {
             inbound,
             state,
             observed,
+            cancel: None,
             thread: Some(thread),
         }
+    }
+
+    /// Registers a cancellation channel whose sender is dropped on shutdown,
+    /// letting a task still in a blocking setup phase select on it and return
+    /// at once instead of waiting out a timeout.
+    pub(crate) fn set_cancel(&mut self, cancel: oneshot::Sender<()>) {
+        self.cancel = Some(cancel);
     }
 
     pub(crate) fn local_peer(&self) -> PeerId {
@@ -118,9 +131,12 @@ impl SocketIo {
 
 impl Drop for SocketIo {
     fn drop(&mut self) {
-        // Dropping the only outbound sender closes the channel; the I/O task's
-        // `recv` then returns `None` and the task exits. Join so the runtime and
-        // socket are torn down before we return.
+        // Signal a still-connecting task to stop, then drop the only outbound
+        // sender so a serving task's `recv` returns `None`. Either way the task
+        // exits promptly — without the cancel, a mesh still awaiting its links
+        // would hold the join until the connect timeout. Both must fire before
+        // the join, so do them here rather than leave it to field drop order.
+        self.cancel = None;
         self.outbound = None;
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();

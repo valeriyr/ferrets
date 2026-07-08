@@ -7,7 +7,7 @@ use bevy_ecs::world::World;
 use crate::{
     components::owner::OwnerComponent,
     entity_index::EntityIndex,
-    session::{FinishPolicy, GameResult, GameSession, player_slot::PlayerId},
+    session::{GameResult, GameSession, finish_policy::FinishPolicy, player_slot::PlayerId},
 };
 
 /// Ends the session, under [`FinishPolicy::LastStanding`], once at most one

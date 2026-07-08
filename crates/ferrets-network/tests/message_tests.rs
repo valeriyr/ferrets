@@ -4,14 +4,15 @@ use ferrets_math::FixedU64;
 use ferrets_math::fixed_urect::FixedURect;
 use ferrets_math::fixed_uvec2::FixedUVec2;
 use ferrets_network::message::control::{
-    ControlMessage, LobbyMessage, Occupant, SlotInfo, UdpEntry,
+    ControlMessage, LobbyMessage, LobbyState, Occupant, SlotInfo, UdpEntry,
 };
 use ferrets_network::message::gameplay::GameplayMessage;
 use ferrets_network::message::{Message, decode, encode};
-use ferrets_network::topology::Topology;
+use ferrets_network::session_mode::SessionMode;
 use ferrets_simulation::command::PlayerCommand;
 use ferrets_simulation::input::PlayerFrame;
-use ferrets_simulation::session::ai_hosting::AiHosting;
+use ferrets_simulation::session::drop_policy::DropPolicy;
+use ferrets_simulation::session::finish_policy::FinishPolicy;
 use ferrets_simulation::simulation_id::SimulationId;
 
 //
@@ -35,7 +36,7 @@ fn sync_round_trips() {
 
 #[test]
 fn lobby_state_control_round_trips() {
-    let message = Message::Control(ControlMessage::Lobby(LobbyMessage::LobbyState {
+    let message = Message::Control(ControlMessage::Lobby(LobbyMessage::State(LobbyState {
         slots: vec![
             SlotInfo {
                 slot: 0,
@@ -53,9 +54,10 @@ fn lobby_state_control_round_trips() {
                 race: None,
             },
         ],
-        topology: Topology::Mesh,
-        ai_hosting: AiHosting::HostOnly,
-    }));
+        mode: SessionMode::MeshDecentralized,
+        drop_policy: DropPolicy::Manual,
+        finish_policy: FinishPolicy::Endless,
+    })));
     assert_eq!(decode(&encode(&message).unwrap()).unwrap(), message);
 }
 
@@ -73,6 +75,10 @@ fn start_with_socket_addr_table_round_trips() {
                 addr: "[::1]:4001".parse().unwrap(),
             },
         ]),
+        control_table: Some(vec![UdpEntry {
+            peer: 2,
+            addr: "10.0.0.7:35001".parse().unwrap(),
+        }]),
     }));
     assert_eq!(decode(&encode(&message).unwrap()).unwrap(), message);
 }

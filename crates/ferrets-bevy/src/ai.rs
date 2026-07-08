@@ -1,7 +1,7 @@
 //! Bevy wiring for scripted AI players.
 //!
 //! Bridges live AI runtimes to the simulation each `FixedUpdate`:
-//! [`supply_unmanned_input`] idles every locally-sourced slot that has no brain,
+//! [`supply_unmanned_input`] idles every locally-sourced AI slot with no brain,
 //! and [`supply_ai_input`] runs each locally-sourced AI player's think on its
 //! cadence, committing the returned commands into the input queue like any other
 //! frame source. Which nodes source an AI slot is the session's
@@ -73,7 +73,7 @@ pub fn remove_ai_runtimes(world: &mut World) {
 pub fn is_session_host(world: &World) -> bool {
     world
         .get_non_send_resource::<NetworkSession>()
-        .is_none_or(|net| net.0.is_control_host())
+        .is_none_or(|net| net.0.is_host_node())
 }
 
 /// The AI players this node sources, with their races, in ascending id order.
@@ -132,28 +132,24 @@ impl Plugin for AiPlugin {
     }
 }
 
-/// Supplies idle frames for every locally-sourced slot that has no brain to
-/// think for it: unoccupied slots always, and AI slots while no [`AiRuntimes`]
-/// is installed (so a failed script degrades to an idle AI instead of stalling
-/// lockstep).
+/// Supplies idle frames for every locally-sourced AI slot while no
+/// [`AiRuntimes`] is installed, so a failed script degrades to an idle AI
+/// instead of stalling lockstep. Unoccupied slots need nothing: no tick
+/// requires their input.
 pub fn supply_unmanned_input(
     mut frames: ResMut<InputFrames>,
     session: Res<GameSession>,
     net: Option<NonSend<NetworkSession>>,
     ai_active: Option<Res<AiActive>>,
 ) {
-    let is_host = net.is_none_or(|net| net.0.is_control_host());
+    let is_host = net.is_none_or(|net| net.0.is_host_node());
     let target = session.tick() + SYNC_LATENCY;
 
     for slot in session.slots() {
         if !session.sources_locally(slot, is_host) {
             continue;
         }
-        let unmanned = match slot.player_type() {
-            None => true,
-            Some(PlayerType::Ai) => ai_active.is_none(),
-            Some(PlayerType::Human) => false,
-        };
+        let unmanned = slot.player_type() == Some(PlayerType::Ai) && ai_active.is_none();
         if unmanned {
             frames.push_frame(PlayerFrame::idle(slot.id(), target));
         }

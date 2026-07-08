@@ -30,7 +30,7 @@ mod time;
 pub fn run() {
     // The session starts empty and pending; the lobby configures it (slots, races,
     // local player) and starts it when the game begins.
-    let session = GameSession::default();
+    let session = GameSession::pending();
 
     let mut app = App::new();
     app.add_plugins(DefaultPlugins)
@@ -67,8 +67,9 @@ pub fn run() {
             Update,
             (
                 lobby::auto_connect_client,
+                lobby::host_rebind,
                 lobby::poll_lobby_link,
-                lobby::lobby_addr_input,
+                lobby::lobby_field_input,
                 lobby::lobby_buttons,
                 lobby::update_lobby_view,
                 lobby::start_game,

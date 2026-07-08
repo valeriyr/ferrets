@@ -1,15 +1,19 @@
 //! Manages the lifecycle and participants of a running game.
 
 pub mod ai_hosting;
+pub mod authority;
+pub mod drop_policy;
+pub mod finish_policy;
 pub mod player_slot;
 pub mod player_type;
 
-use bevy_ecs::prelude::*;
-use serde::{Deserialize, Serialize};
-
 use crate::session::ai_hosting::AiHosting;
+use crate::session::authority::Authority;
+use crate::session::drop_policy::DropPolicy;
+use crate::session::finish_policy::FinishPolicy;
 use crate::session::player_slot::{PlayerId, PlayerSlot};
 use crate::session::player_type::PlayerType;
+use bevy_ecs::prelude::*;
 
 /// Lifecycle state of the simulation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -41,23 +45,10 @@ pub enum GameResult {
     Aborted,
 }
 
-/// When a session ends on its own.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub enum FinishPolicy {
-    /// End the game once only one player (or none) still has entities. The
-    /// default for an ordinary match.
-    #[default]
-    LastStanding,
-    /// Never end the game automatically — it runs until stopped explicitly.
-    /// Suited to sandboxes and tests, where a lone or unpopulated player slot
-    /// must not be read as a win.
-    Endless,
-}
-
 /// Active game session.
 ///
 /// Insert this resource to configure a game before starting the tick loop.
-#[derive(Resource, Default)]
+#[derive(Resource)]
 pub struct GameSession {
     /// Fixed ticks completed since the session started.
     tick: u32,
@@ -67,16 +58,19 @@ pub struct GameSession {
     slots: Vec<PlayerSlot>,
     /// The slot controlled by the local client.
     local_player: PlayerId,
-    /// How AI player input is computed.
-    ai_hosting: AiHosting,
+    /// Who resolves session-level decisions (drops, pauses), and the
+    /// host-dependent choices that come with a host.
+    authority: Authority,
+    /// When a deciding node turns a stall into a drop.
+    drop_policy: DropPolicy,
     /// When this session ends on its own.
     finish_policy: FinishPolicy,
     /// How the game ended, once it has. `None` while still in progress.
     result: Option<GameResult>,
-    /// Whether each slot's player has been dropped (a peer whose frames stopped),
-    /// indexed by [`PlayerId`]. A dropped player's input is auto-idled and it is
-    /// excluded from the victory check.
-    dropped: Vec<bool>,
+    /// The tick from which each slot's player contributes no further input (a
+    /// peer whose frames stopped), indexed by [`PlayerId`]. `None` while the
+    /// player is live.
+    dropped: Vec<Option<u32>>,
     /// Whether the session is paused — the tick loop is frozen at the current
     /// tick. Orthogonal to [`SessionState`]; receiving and buffering peer traffic
     /// continues so the game can resume.
@@ -84,39 +78,49 @@ pub struct GameSession {
 }
 
 impl GameSession {
-    /// Creates a session from the given player slots.
+    /// Creates a session from an already-decided configuration: the slots and
+    /// session-level choices a lobby would otherwise install via
+    /// [`configure`](Self::configure).
     ///
-    /// `local_player` is the [`PlayerId`] controlled by this client,
-    /// `ai_hosting` says how AI player input is computed, and `finish_policy`
-    /// decides when the session ends on its own.
+    /// `local_player` is the [`PlayerId`] controlled by this client; the
+    /// remaining choices are the session-level agreement, each valid in any
+    /// combination by construction.
     ///
     /// Panics if the ids are not sorted and contiguous starting from `0` (i.e. `0, 1, 2, …`).
     /// Panics if `local_player` is not in `slots`.
-    pub fn new(
+    pub fn configured(
         local_player: PlayerId,
         slots: Vec<PlayerSlot>,
-        ai_hosting: AiHosting,
+        authority: Authority,
+        drop_policy: DropPolicy,
         finish_policy: FinishPolicy,
     ) -> Self {
         assert_valid_slots(local_player, &slots);
-
-        Self {
-            tick: 0,
-            state: SessionState::Pending,
-            dropped: vec![false; slots.len()],
-            slots,
-            local_player,
-            ai_hosting,
-            finish_policy,
-            result: None,
-            paused: false,
-        }
+        Self::new(local_player, slots, authority, drop_policy, finish_policy)
     }
 
-    /// Replaces the player slots, local player, and AI hosting before the game
-    /// starts. A lobby builds the running session from its locked configuration
-    /// this way, mutating the pending session in place rather than constructing
-    /// a new one.
+    /// The inert pre-configuration placeholder: a game inserts the resource
+    /// before its lobby has decided anything, then
+    /// [`configure`](Self::configure) installs the real slots and choices.
+    /// Every value here is fabricated and unread — the session has no slots
+    /// and stays [`Pending`](SessionState::Pending), so nothing runs until it
+    /// is configured and started.
+    pub fn pending() -> Self {
+        Self::new(
+            0,
+            Vec::new(),
+            Authority::Host {
+                ai_hosting: AiHosting::Replicated,
+            },
+            DropPolicy::Automatic,
+            FinishPolicy::LastStanding,
+        )
+    }
+
+    /// Replaces the player slots, local player, and session-level choices
+    /// before the game starts. A lobby builds the running session from its
+    /// locked configuration this way, mutating the pending session in place
+    /// rather than constructing a new one.
     ///
     /// Panics if the session has already started, or if the slot ids are not
     /// contiguous from `0`, or `local_player` is not a valid slot.
@@ -124,7 +128,9 @@ impl GameSession {
         &mut self,
         local_player: PlayerId,
         slots: Vec<PlayerSlot>,
-        ai_hosting: AiHosting,
+        authority: Authority,
+        drop_policy: DropPolicy,
+        finish_policy: FinishPolicy,
     ) {
         assert_eq!(
             self.state,
@@ -132,10 +138,12 @@ impl GameSession {
             "configure called after the session started",
         );
         assert_valid_slots(local_player, &slots);
-        self.dropped = vec![false; slots.len()];
+        self.dropped = vec![None; slots.len()];
         self.slots = slots;
         self.local_player = local_player;
-        self.ai_hosting = ai_hosting;
+        self.authority = authority;
+        self.drop_policy = drop_policy;
+        self.finish_policy = finish_policy;
     }
 
     pub fn start(&mut self) {
@@ -195,23 +203,40 @@ impl GameSession {
 
     /// Returns how AI player input is computed.
     pub fn ai_hosting(&self) -> AiHosting {
-        self.ai_hosting
+        self.authority.ai_hosting()
+    }
+
+    /// Returns who resolves session-level decisions.
+    pub fn authority(&self) -> Authority {
+        self.authority
+    }
+
+    /// Returns when a deciding node turns a stall into a drop.
+    pub fn drop_policy(&self) -> DropPolicy {
+        self.drop_policy
+    }
+
+    /// Sets when a deciding node turns a stall into a drop. Read live each time
+    /// a stall is resolved, so it takes effect whenever it is set.
+    pub fn set_drop_policy(&mut self, policy: DropPolicy) {
+        self.drop_policy = policy;
     }
 
     /// Returns `true` when this node is responsible for producing input frames
     /// for `slot`. `is_host` says whether this node is the session host; a
     /// local game's single node is its own host.
     ///
-    /// Unoccupied slots are sourced by every node (an idle fill is identical
-    /// everywhere), a human slot by the node the human plays on, and an AI slot
-    /// according to the session's [`AiHosting`].
+    /// Unoccupied slots are sourced by nobody — there is no player, so no
+    /// tick requires their input. A human slot is sourced by the node the
+    /// human plays on, and an AI slot according to the session's
+    /// [`AiHosting`].
     pub fn sources_locally(&self, slot: &PlayerSlot, is_host: bool) -> bool {
         match slot.player_type() {
-            None => true,
+            None => false,
             Some(PlayerType::Human) => slot.id() == self.local_player,
-            Some(PlayerType::Ai) => match self.ai_hosting {
+            Some(PlayerType::Ai) => match self.ai_hosting() {
                 AiHosting::Replicated => true,
-                AiHosting::HostOnly => is_host,
+                AiHosting::Host => is_host,
             },
         }
     }
@@ -265,23 +290,48 @@ impl GameSession {
             .set_race(race);
     }
 
-    /// Drops `player` from the session — its frames have stopped. From now on its
-    /// input is auto-idled and it is excluded from the victory check.
+    /// Drops `player` from the session: from tick `from` on it contributes no
+    /// input and it is excluded from the victory check; ticks before `from`
+    /// keep the input it already contributed. `from` must be agreed by every
+    /// node (it decides which of the player's final frames still execute), so
+    /// it is passed in rather than read from the local tick.
     ///
     /// Panics if `player` was already dropped: a dropped player is filtered out
     /// before a drop is decided, so re-dropping one is a logic bug.
-    pub fn drop_player(&mut self, player: PlayerId) {
+    pub fn drop_player(&mut self, player: PlayerId, from: u32) {
         let dropped = &mut self.dropped[player as usize];
         assert!(
-            !*dropped,
+            dropped.is_none(),
             "player {player} dropped twice — a dropped player must never be re-dropped",
         );
-        *dropped = true;
+        *dropped = Some(from);
+    }
+
+    /// The tick from which `player` contributes no further input, or `None`
+    /// while the player is live.
+    pub fn drop_tick(&self, player: PlayerId) -> Option<u32> {
+        self.dropped.get(player as usize).copied().flatten()
     }
 
     /// Returns `true` if `player` has been dropped from the session.
     pub fn is_player_dropped(&self, player: PlayerId) -> bool {
-        self.dropped.get(player as usize).copied().unwrap_or(false)
+        self.dropped
+            .get(player as usize)
+            .is_some_and(|dropped| dropped.is_some())
+    }
+
+    /// The players whose input `tick` needs before it can execute, in ascending
+    /// id order: every occupied slot whose player was still live at that tick.
+    /// A dropped player stops counting at its drop tick, so a past tick keeps
+    /// requiring — and a recording of it keeps carrying — the input the player
+    /// contributed before dropping.
+    pub fn required_players(&self, tick: u32) -> Vec<PlayerId> {
+        self.slots
+            .iter()
+            .filter(|slot| slot.player_type().is_some())
+            .map(|slot| slot.id())
+            .filter(|&player| self.dropped[player as usize].is_none_or(|dropped| tick < dropped))
+            .collect()
     }
 
     /// The players dropped from the session so far, in ascending id order.
@@ -289,7 +339,7 @@ impl GameSession {
         self.dropped
             .iter()
             .enumerate()
-            .filter_map(|(player, &dropped)| dropped.then_some(player as PlayerId))
+            .filter_map(|(player, dropped)| dropped.map(|_| player as PlayerId))
     }
 
     /// The players still active in the session so far, in ascending id order.
@@ -297,7 +347,32 @@ impl GameSession {
         self.dropped
             .iter()
             .enumerate()
-            .filter_map(|(player, &dropped)| (!dropped).then_some(player as PlayerId))
+            .filter_map(|(player, dropped)| dropped.is_none().then_some(player as PlayerId))
+    }
+
+    /// The one place the fields are initialized. Validation belongs to the
+    /// public constructors: [`configured`](Self::configured) demands a
+    /// coherent slot list, while [`pending`](Self::pending) is deliberately
+    /// slotless.
+    fn new(
+        local_player: PlayerId,
+        slots: Vec<PlayerSlot>,
+        authority: Authority,
+        drop_policy: DropPolicy,
+        finish_policy: FinishPolicy,
+    ) -> Self {
+        Self {
+            tick: 0,
+            state: SessionState::Pending,
+            dropped: vec![None; slots.len()],
+            slots,
+            local_player,
+            authority,
+            drop_policy,
+            finish_policy,
+            result: None,
+            paused: false,
+        }
     }
 }
 

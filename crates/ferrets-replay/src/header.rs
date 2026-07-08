@@ -1,7 +1,8 @@
 //! The replay header: everything needed to set up a game before its recorded
 //! input is replayed.
 
-use ferrets_simulation::session::{FinishPolicy, player_slot::PlayerSlot};
+use ferrets_simulation::session::finish_policy::FinishPolicy;
+use ferrets_simulation::session::player_slot::PlayerSlot;
 use serde::{Deserialize, Serialize};
 
 /// The replay file format this build writes and reads. Bumped whenever the

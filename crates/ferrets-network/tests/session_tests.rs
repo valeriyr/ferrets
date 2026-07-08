@@ -1,14 +1,27 @@
 //! Building a [`NetSession`] when the lobby starts a host-star game, over the
 //! in-process loopback transport.
 
-use ferrets_network::control::ControlChannel;
-use ferrets_network::lobby::client::LobbyClient;
-use ferrets_network::lobby::host::LobbyHost;
+mod utils;
+
+use ferrets_network::bootstrap;
 use ferrets_network::message::control::{ControlMessage, InGameMessage, Occupant};
+use ferrets_network::peer::{HOST_PEER, PeerId};
 use ferrets_network::session::NetSession;
-use ferrets_network::topology::Topology;
+use ferrets_network::session_mode::SessionMode;
 use ferrets_network::transport::loopback::LoopbackTransport;
+use ferrets_simulation::input::PlayerFrame;
 use ferrets_simulation::session::ai_hosting::AiHosting;
+use ferrets_simulation::session::drop_policy::DropPolicy;
+use ferrets_simulation::session::finish_policy::FinishPolicy;
+use ferrets_simulation::session::player_slot::PlayerId;
+
+/// The peer the host assigns to the one client that joins these two-node tests
+/// (the host is [`HOST_PEER`]).
+const CLIENT: PeerId = 1;
+
+/// The player slot the host controls in these tests (the proposer of a
+/// host-driven pause).
+const HOST_PLAYER: PlayerId = 0;
 
 //
 // ─── Host-star start ──────────────────────────────────────────────────────────
@@ -18,19 +31,18 @@ use ferrets_simulation::session::ai_hosting::AiHosting;
 fn host_star_start_builds_gameplay_channel_mapped_from_slots() {
     let mut endpoints = LoopbackTransport::partial_mesh(3, [(0, 1), (0, 2)]).into_iter();
     let ep0 = endpoints.next().expect("host endpoint");
-    let host = LobbyHost::new(
-        ControlChannel::new(Box::new(ep0)),
-        Topology::HostStar,
-        AiHosting::Replicated,
+    let host = utils::lobby_host(
+        ep0,
+        SessionMode::HostStar {
+            ai_hosting: AiHosting::Replicated,
+        },
         3,
-        "human",
     );
 
     let mut host = host;
     host.poll().expect("seat the two connected clients");
 
-    let bind = "127.0.0.1:0".parse().expect("addr");
-    let mut session = NetSession::start_host(host, bind).expect("start host");
+    let mut session = NetSession::start_host(host, None).expect("start host");
 
     let gameplay = session.gameplay();
     assert_eq!(gameplay.local_player(), 0);
@@ -38,30 +50,174 @@ fn host_star_start_builds_gameplay_channel_mapped_from_slots() {
     assert!(gameplay.is_networked(1));
     assert!(gameplay.is_networked(2));
     // The host is the control-plane host in every topology.
-    assert!(session.is_control_host());
+    assert!(session.is_host_node());
 }
 
 #[test]
 fn ai_slots_are_networked_only_under_host_only_hosting() {
-    for (mode, networked) in [(AiHosting::Replicated, false), (AiHosting::HostOnly, true)] {
+    for (ai_hosting, networked) in [(AiHosting::Replicated, false), (AiHosting::Host, true)] {
         let mut endpoints = LoopbackTransport::partial_mesh(2, [(0, 1)]).into_iter();
         let ep0 = endpoints.next().expect("host endpoint");
-        let mut host = LobbyHost::new(
-            ControlChannel::new(Box::new(ep0)),
-            Topology::HostStar,
-            mode,
-            3,
-            "human",
-        );
+        let mut host = utils::lobby_host(ep0, SessionMode::HostStar { ai_hosting }, 3);
         host.poll().expect("seat the connected client");
         host.set_occupant(2, Occupant::Ai).expect("slot 2 is an ai");
 
-        let bind = "127.0.0.1:0".parse().expect("addr");
-        let mut session = NetSession::start_host(host, bind).expect("start host");
+        let mut session = NetSession::start_host(host, None).expect("start host");
 
-        assert_eq!(session.gameplay().is_networked(2), networked, "{mode:?}");
-        assert!(session.gameplay().is_networked(1), "{mode:?}");
+        assert_eq!(
+            session.gameplay().is_networked(2),
+            networked,
+            "{ai_hosting:?}"
+        );
+        assert!(session.gameplay().is_networked(1), "{ai_hosting:?}");
     }
+}
+
+//
+// ─── Mesh start over real sockets ─────────────────────────────────────────────
+//
+
+#[test]
+fn decentralized_start_builds_control_mesh_outliving_lobby_star() {
+    const TCP: u16 = 43119;
+
+    let mut host = bootstrap::open_lobby(
+        ("127.0.0.1", TCP),
+        SessionMode::MeshDecentralized,
+        DropPolicy::Automatic,
+        FinishPolicy::LastStanding,
+        2,
+        "human",
+    )
+    .expect("open lobby");
+    let mut client = bootstrap::join_lobby(("127.0.0.1", TCP)).expect("join lobby");
+    client.join(None, Some("orc")).expect("announce client");
+    utils::wait_until("client is seated with its ports", || {
+        host.poll().expect("host poll");
+        host.client_udp_addr(CLIENT).is_some() && host.client_control_addr(CLIENT).is_some()
+    });
+    client.poll();
+
+    // Starting drops the lobby star on both sides and links the peers'
+    // control listeners directly; in-game control must flow over those links.
+    // The host's side completes on its own: its dial lands in the client's
+    // already-bound listener backlog.
+    let mut host_session = NetSession::start_host(host, None).expect("start host");
+    utils::wait_until("client received the start signal", || {
+        client.poll();
+        client.started().is_some()
+    });
+    let mut client_session = NetSession::start_client(client).expect("start client");
+
+    let vote = InGameMessage::StallVote {
+        voter: 1,
+        tick: 4,
+        missing: vec![0],
+    };
+    client_session
+        .send_control(&ControlMessage::InGame(vote.clone()))
+        .expect("client sends over the mesh");
+    let mut received = Vec::new();
+    utils::wait_until("host receives the vote over the mesh", || {
+        received.extend(host_session.drain_control().messages);
+        !received.is_empty()
+    });
+    // The host learns who sent it from the link itself, not the message body.
+    assert_eq!(received, vec![(CLIENT, ControlMessage::InGame(vote))]);
+
+    let pause = InGameMessage::PauseAt {
+        proposer: HOST_PLAYER,
+        tick: 12,
+        paused: true,
+    };
+    host_session
+        .send_control(&ControlMessage::InGame(pause.clone()))
+        .expect("host sends over the mesh");
+    let mut received = Vec::new();
+    utils::wait_until("client receives the pause over the mesh", || {
+        received.extend(client_session.drain_control().messages);
+        !received.is_empty()
+    });
+    assert_eq!(received, vec![(HOST_PEER, ControlMessage::InGame(pause))]);
+}
+
+#[test]
+fn mesh_start_exchanges_frames_both_ways_despite_unspecified_host_bind() {
+    // Only the control (TCP) port must be fixed — the lobby is dialed by
+    // address; both gameplay sockets bind ephemeral ports on their own.
+    const TCP: u16 = 43117;
+
+    let mut host = bootstrap::open_lobby(
+        ("127.0.0.1", TCP),
+        SessionMode::MeshHosted {
+            ai_hosting: AiHosting::Host,
+        },
+        DropPolicy::Automatic,
+        FinishPolicy::LastStanding,
+        2,
+        "human",
+    )
+    .expect("open lobby");
+    let mut client = bootstrap::join_lobby(("127.0.0.1", TCP)).expect("join lobby");
+    client.join(None, Some("orc")).expect("announce client");
+    utils::wait_until("client is seated with its port", || {
+        host.poll().expect("host poll");
+        host.client_udp_addr(CLIENT).is_some()
+    });
+    client.poll();
+
+    // The host's gameplay socket binds the unspecified address — the
+    // advertised table then carries `0.0.0.0`, which the client must resolve
+    // to the address it reached the host at over the control channel.
+    let mut host_session = NetSession::start_host(host, None).expect("start host");
+    utils::wait_until("client received the start signal", || {
+        client.poll();
+        client.started().is_some()
+    });
+    let mut client_session = NetSession::start_client(client).expect("start client");
+
+    // Host → client: a host-sourced frame (an AI's, under host-only hosting)
+    // must reach the client even though the host advertised `0.0.0.0`.
+    let ai_frame = PlayerFrame {
+        player: 1,
+        tick: 7,
+        commands: Vec::new(),
+    };
+    let mut received = None;
+    utils::wait_until("client receives the host's frame", || {
+        host_session
+            .broadcast_frames(vec![ai_frame.clone()])
+            .expect("host broadcast");
+        let frames = client_session.drain_received().frames;
+        if let Some(frame) = frames.into_iter().next() {
+            received = Some(frame);
+            true
+        } else {
+            false
+        }
+    });
+    assert_eq!(received.expect("frame"), ai_frame);
+
+    // Client → host: the reply direction crosses the resolved address.
+    let client_frame = PlayerFrame {
+        player: 1,
+        tick: 9,
+        commands: Vec::new(),
+    };
+    let mut received = None;
+    utils::wait_until("host receives the client's frame", || {
+        client_session
+            .broadcast_frames(vec![client_frame.clone()])
+            .expect("client broadcast");
+        let frames = host_session.drain_received().frames;
+        if let Some(frame) = frames.into_iter().next() {
+            received = Some(frame);
+            true
+        } else {
+            false
+        }
+    });
+    assert_eq!(received.expect("frame"), client_frame);
 }
 
 //
@@ -74,21 +230,20 @@ fn control_flows_both_ways_after_host_star_game_starts() {
     let ep0 = endpoints.next().expect("host endpoint");
     let ep1 = endpoints.next().expect("client endpoint");
 
-    let mut host = LobbyHost::new(
-        ControlChannel::new(Box::new(ep0)),
-        Topology::HostStar,
-        AiHosting::Replicated,
+    let mut host = utils::lobby_host(
+        ep0,
+        SessionMode::HostStar {
+            ai_hosting: AiHosting::Replicated,
+        },
         2,
-        "human",
     );
-    let mut client = LobbyClient::new(ControlChannel::new(Box::new(ep1)));
+    let mut client = utils::lobby_client(ep1);
 
     host.poll().expect("seat the client");
     client.poll();
-    let bind = "127.0.0.1:0".parse().expect("addr");
-    let mut host = NetSession::start_host(host, bind).expect("start host");
+    let mut host = NetSession::start_host(host, None).expect("start host");
     client.poll(); // receive the host's start signal
-    let mut client = NetSession::start_client(client, bind).expect("start client");
+    let mut client = NetSession::start_client(client).expect("start client");
 
     // Client → host: a pause request reaches the host over the shared socket.
     client
@@ -98,24 +253,30 @@ fn control_flows_both_ways_after_host_star_game_starts() {
         .expect("client sends");
     host.drain_received(); // fills the control buffer from the shared socket
     assert_eq!(
-        host.drain_control(),
-        vec![ControlMessage::InGame(InGameMessage::PauseRequest {
-            paused: true
-        })],
+        host.drain_control().messages,
+        vec![(
+            CLIENT,
+            ControlMessage::InGame(InGameMessage::PauseRequest { paused: true })
+        )],
     );
 
     // Host → client: the authoritative pause reaches the client.
     host.send_control(&ControlMessage::InGame(InGameMessage::PauseAt {
+        proposer: HOST_PLAYER,
         tick: 50,
         paused: true,
     }))
     .expect("host sends");
     client.drain_received();
     assert_eq!(
-        client.drain_control(),
-        vec![ControlMessage::InGame(InGameMessage::PauseAt {
-            tick: 50,
-            paused: true
-        })],
+        client.drain_control().messages,
+        vec![(
+            HOST_PEER,
+            ControlMessage::InGame(InGameMessage::PauseAt {
+                proposer: HOST_PLAYER,
+                tick: 50,
+                paused: true
+            })
+        )],
     );
 }

@@ -48,6 +48,12 @@ impl Replay {
         self.ticks.get(&tick).map_or(&[], |record| &record.inputs)
     }
 
+    /// The players whose drop took effect at `tick`; empty if none dropped
+    /// there or the tick was not recorded.
+    pub fn drops_at(&self, tick: u32) -> &[PlayerId] {
+        self.ticks.get(&tick).map_or(&[], |record| &record.dropped)
+    }
+
     /// The state checksum recorded for `tick`, if one was sampled there.
     pub fn checksum_at(&self, tick: u32) -> Option<u64> {
         self.ticks.get(&tick).and_then(|record| record.checksum)

@@ -51,6 +51,12 @@ impl ControlChannel {
         self.transport.observed_addr(peer)
     }
 
+    /// The peers this endpoint holds a direct link to (those it can reach
+    /// without a relay hop).
+    pub fn peers(&self) -> &[PeerId] {
+        self.transport.peers()
+    }
+
     /// Sends a control message to every connected peer (a host reaches its
     /// clients; a client reaches its host).
     pub fn send(&mut self, message: &ControlMessage) -> crate::Result<()> {

@@ -15,8 +15,11 @@ use ferrets_simulation::components::entity_info::EntityInfoComponent;
 use ferrets_simulation::components::owner::OwnerComponent;
 use ferrets_simulation::content::registry::ContentRegistry;
 use ferrets_simulation::session::{
-    FinishPolicy, GameSession,
+    GameSession,
     ai_hosting::AiHosting,
+    authority::Authority,
+    drop_policy::DropPolicy,
+    finish_policy::FinishPolicy,
     player_slot::{PlayerId, PlayerSlot},
     player_type::PlayerType,
 };
@@ -44,7 +47,15 @@ fn ai_builds_economy_and_army() {
     ];
     let mut app = App::new();
     app.add_plugins(SimulationPlugin::new(
-        GameSession::new(0, slots, AiHosting::Replicated, FinishPolicy::Endless),
+        GameSession::configured(
+            0,
+            slots,
+            Authority::Host {
+                ai_hosting: AiHosting::Replicated,
+            },
+            DropPolicy::Automatic,
+            FinishPolicy::Endless,
+        ),
         map::build(),
     ));
     app.add_plugins(AiPlugin);

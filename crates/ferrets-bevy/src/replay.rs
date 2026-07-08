@@ -22,7 +22,7 @@ use ferrets_simulation::{
     session::{GameSession, player_slot::PlayerId},
 };
 
-use crate::{SimulationSet, session_is_active, session_is_not_paused, session_is_running, systems};
+use crate::{SimulationSet, session_is_active, session_is_not_paused, systems};
 
 /// The active recording.
 ///
@@ -108,18 +108,26 @@ impl Plugin for ReplayPlugin {
         // present) and/or verify its checksum against the recording (playback
         // present). Both read the post-tick world, so they share an anchor and a
         // recorded checksum compares like-for-like.
+        //
+        // Gated only on not-paused, not on `running`: the tick whose result ends
+        // the game (a drop or a last-standing win) has already been executed and
+        // its counter advanced, but `check_game_result` moved the session to
+        // Finished before this runs. Recording only while running would drop that
+        // final tick — and the outcome that rides on it — from the replay. Both
+        // systems catch up to the current tick and then idle, so running past the
+        // finish is a bounded no-op.
         app.add_systems(
             FixedLast,
             (record_input, verify_replay_checksum)
                 .chain()
-                .run_if(session_is_running.and(session_is_not_paused)),
+                .run_if(session_is_not_paused),
         );
     }
 }
 
-/// The replay frame source during playback: supplies every slot's recorded frame
-/// (or idle) `SYNC_LATENCY` ticks ahead, and freezes the session once the final
-/// recorded tick has been played.
+/// The replay frame source during playback: supplies every live slot's recorded
+/// frame (or idle) `SYNC_LATENCY` ticks ahead, re-applies the drops the recording
+/// saw, and freezes the session once the final recorded tick has been played.
 pub fn supply_replay_input(
     mut playback: ResMut<ReplayPlayback>,
     mut frames: ResMut<InputFrames>,
@@ -135,10 +143,24 @@ pub fn supply_replay_input(
         return;
     }
 
+    // Re-apply the drops that took effect at this tick before sourcing input, so
+    // the session's required set and the victory check exclude a dropped player
+    // exactly as the live game did — not replay it as idle but present.
+    for &player in playback.replay.drops_at(now) {
+        if !session.is_player_dropped(player) {
+            session.drop_player(player, now);
+        }
+    }
+
     let target = now + SYNC_LATENCY;
     let recorded = playback.replay.inputs_at(target);
     for slot in session.slots() {
         let player = slot.id();
+        // A dropped player is required for no tick from its drop on, so it has no
+        // recorded frame and needs none.
+        if session.is_player_dropped(player) {
+            continue;
+        }
         match recorded.iter().find(|(recorded, _)| *recorded == player) {
             Some((_, commands)) => frames.push_frame(PlayerFrame {
                 player,
@@ -164,7 +186,8 @@ pub fn record_input(world: &mut World) {
         if tick >= current {
             break;
         }
-        let inputs = realized_inputs(world.resource::<InputFrames>(), tick);
+        let inputs = realized_inputs(world, tick);
+        let dropped = dropped_at(world, tick);
         // The world holds the state after the most-recently-completed tick, so a
         // checksum is only valid for that one.
         let checksum = (tick == current - 1 && tick.is_multiple_of(CHECKSUM_INTERVAL))
@@ -172,6 +195,7 @@ pub fn record_input(world: &mut World) {
         let record = TickRecord {
             tick,
             inputs,
+            dropped,
             checksum,
         };
         let mut recorder = world.non_send_resource_mut::<ReplayRecorder>();
@@ -209,14 +233,32 @@ pub fn verify_replay_checksum(world: &mut World) {
     }
 }
 
-/// The per-player commands of a completed tick, idle players omitted.
-fn realized_inputs(frames: &InputFrames, tick: u32) -> Vec<(PlayerId, Vec<PlayerCommand>)> {
-    let Some(frame) = frames.get_ready(tick) else {
+/// The per-player commands of a completed tick, idle players omitted. Reads
+/// the players the tick required *at execution* — a player dropped since still
+/// contributes to the ticks it was live for, and a dropped player's unexecuted
+/// leftovers never enter the recording.
+fn realized_inputs(world: &World, tick: u32) -> Vec<(PlayerId, Vec<PlayerCommand>)> {
+    let required = world.resource::<GameSession>().required_players(tick);
+    let Some(ready) = world
+        .resource::<InputFrames>()
+        .ready_commands(tick, &required)
+    else {
         return Vec::new();
     };
-    frame
-        .iter()
+    ready
+        .into_iter()
         .filter(|(_, commands)| !commands.is_empty())
         .map(|(player, commands)| (player, commands.to_vec()))
+        .collect()
+}
+
+/// The players whose drop took effect exactly at `tick` — those playback must
+/// re-apply there so the dropped set (and the outcome that turns on it) tracks
+/// the recorded game.
+fn dropped_at(world: &World, tick: u32) -> Vec<PlayerId> {
+    let session = world.resource::<GameSession>();
+    session
+        .dropped_players()
+        .filter(|&player| session.drop_tick(player) == Some(tick))
         .collect()
 }

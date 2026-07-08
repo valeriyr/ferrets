@@ -1,11 +1,15 @@
 //! The host-coordinated lobby state machine, driven over the in-process loopback
 //! transport (host = endpoint 0, clients linked only to the host).
 
+mod utils;
+
 use ferrets_network::control::{ControlChannel, ControlEvent};
+use ferrets_network::error::NetworkError;
 use ferrets_network::lobby::client::{LobbyClient, PollOutcome};
 use ferrets_network::lobby::host::LobbyHost;
 use ferrets_network::message::control::{ControlMessage, LobbyMessage, Occupant};
-use ferrets_network::topology::Topology;
+use ferrets_network::session_mode::SessionMode;
+use ferrets_network::transport::error::TransportError;
 use ferrets_network::transport::loopback::LoopbackTransport;
 use ferrets_simulation::session::ai_hosting::AiHosting;
 
@@ -33,7 +37,12 @@ fn clients_mirror_broadcast_state_and_find_own_slot() {
 
     assert_eq!(c1.local_player(), Some(1));
     assert_eq!(c2.local_player(), Some(2));
-    assert_eq!(c1.topology(), Topology::HostStar);
+    assert_eq!(
+        c1.state().map(|s| s.mode),
+        Some(SessionMode::HostStar {
+            ai_hosting: AiHosting::Replicated
+        }),
+    );
     assert_eq!(c1.slots().len(), 3);
 }
 
@@ -74,12 +83,12 @@ fn host_rejects_client_on_version_mismatch() {
     let mut endpoints = LoopbackTransport::partial_mesh(2, [(0, 1)]).into_iter();
     let ep0 = endpoints.next().expect("host endpoint");
     let ep1 = endpoints.next().expect("client endpoint");
-    let mut host = LobbyHost::new(
-        ControlChannel::new(Box::new(ep0)),
-        Topology::HostStar,
-        AiHosting::Replicated,
+    let mut host = utils::lobby_host(
+        ep0,
+        SessionMode::HostStar {
+            ai_hosting: AiHosting::Replicated,
+        },
         2,
-        "human",
     );
     let mut client = ControlChannel::new(Box::new(ep1));
 
@@ -88,6 +97,7 @@ fn host_rejects_client_on_version_mismatch() {
         .send(&ControlMessage::Lobby(LobbyMessage::Join {
             protocol_version: "99.0".to_string(),
             advertised_udp_port: None,
+            advertised_control_port: None,
             race: None,
         }))
         .expect("send mismatched join");
@@ -113,13 +123,45 @@ fn clients_mirror_ai_hosting_changes() {
     host.poll().expect("seat two clients");
     c1.poll();
 
-    assert_eq!(c1.ai_hosting(), AiHosting::Replicated);
+    assert_eq!(
+        c1.state().map(|s| s.mode.ai_hosting()),
+        Some(AiHosting::Replicated)
+    );
 
-    host.set_ai_hosting(AiHosting::HostOnly)
-        .expect("set the mode");
+    host.set_mode(SessionMode::HostStar {
+        ai_hosting: AiHosting::Host,
+    })
+    .expect("set the mode");
     c1.poll();
 
-    assert_eq!(c1.ai_hosting(), AiHosting::HostOnly);
+    assert_eq!(
+        c1.state().map(|s| s.mode.ai_hosting()),
+        Some(AiHosting::Host)
+    );
+}
+
+#[test]
+fn join_fails_when_requested_udp_port_is_taken() {
+    // A player-configured port must be used exactly or fail loudly — never
+    // silently substituted, or their firewall setup stops matching reality.
+    let taken = std::net::UdpSocket::bind((std::net::Ipv4Addr::UNSPECIFIED, 0)).expect("bind");
+    let port = taken.local_addr().expect("addr").port();
+    let (mut host, mut c1, _c2) = star(3);
+    host.poll().expect("seat two clients");
+    c1.poll();
+
+    let Err(error) = c1.join(Some(port), None) else {
+        panic!("must reject the occupied port");
+    };
+
+    assert!(
+        matches!(
+            &error,
+            NetworkError::TransportError(TransportError::IoError(io))
+                if io.kind() == std::io::ErrorKind::AddrInUse
+        ),
+        "got {error:?}"
+    );
 }
 
 #[test]
@@ -145,16 +187,14 @@ fn star(capacity: usize) -> (LobbyHost, LobbyClient, LobbyClient) {
     let ep1 = endpoints.next().expect("client 1 endpoint");
     let ep2 = endpoints.next().expect("client 2 endpoint");
 
-    let host = LobbyHost::new(
-        ControlChannel::new(Box::new(ep0)),
-        Topology::HostStar,
-        AiHosting::Replicated,
+    let host = utils::lobby_host(
+        ep0,
+        SessionMode::HostStar {
+            ai_hosting: AiHosting::Replicated,
+        },
         capacity,
-        "human",
     );
-    let c1 = LobbyClient::new(ControlChannel::new(Box::new(ep1)));
-    let c2 = LobbyClient::new(ControlChannel::new(Box::new(ep2)));
-    (host, c1, c2)
+    (host, utils::lobby_client(ep1), utils::lobby_client(ep2))
 }
 
 fn human(peer: u64) -> Occupant {

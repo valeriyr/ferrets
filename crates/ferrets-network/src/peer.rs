@@ -9,3 +9,9 @@
 /// `CSteamID` — without keeping its own mapping table. (Wider/non-numeric ids,
 /// e.g. a WebRTC UUID, are mapped down to a `u64` by that transport.)
 pub type PeerId = u64;
+
+/// The session host's peer id: the node that opens the lobby takes this handle
+/// and assigns every joiner an ascending one, so it is the single fixed point
+/// every node agrees on for which peer is the host. The one definition of that
+/// fact — everything that asks "is this the host" resolves back to here.
+pub const HOST_PEER: PeerId = 0;

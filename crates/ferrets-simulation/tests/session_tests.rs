@@ -1,7 +1,9 @@
 //! The game session: lifecycle and participants.
 
+use ferrets_simulation::session::drop_policy::DropPolicy;
+use ferrets_simulation::session::finish_policy::FinishPolicy;
 use ferrets_simulation::session::{
-    FinishPolicy, GameResult, GameSession, ai_hosting::AiHosting, player_slot::PlayerSlot,
+    GameResult, GameSession, ai_hosting::AiHosting, authority::Authority, player_slot::PlayerSlot,
     player_type::PlayerType,
 };
 
@@ -11,37 +13,25 @@ use ferrets_simulation::session::{
 
 #[test]
 #[should_panic(expected = "contiguous")]
-fn new_panics_on_non_contiguous_slot_ids() {
-    GameSession::new(
+fn configured_panics_on_non_contiguous_slot_ids() {
+    configured(
         0,
         vec![
             PlayerSlot::occupied(0, PlayerType::Human, None),
             PlayerSlot::occupied(2, PlayerType::Human, None),
         ],
-        AiHosting::Replicated,
-        FinishPolicy::LastStanding,
     );
 }
 
 #[test]
 #[should_panic(expected = "local_player")]
-fn new_panics_when_local_player_is_out_of_range() {
-    GameSession::new(
-        3,
-        vec![PlayerSlot::occupied(0, PlayerType::Human, None)],
-        AiHosting::Replicated,
-        FinishPolicy::LastStanding,
-    );
+fn configured_panics_when_local_player_is_out_of_range() {
+    configured(3, humans(1));
 }
 
 #[test]
 fn configure_replaces_slots_and_local_player_while_pending() {
-    let mut session = GameSession::new(
-        0,
-        vec![PlayerSlot::occupied(0, PlayerType::Human, None)],
-        AiHosting::Replicated,
-        FinishPolicy::LastStanding,
-    );
+    let mut session = configured(0, humans(1));
 
     session.configure(
         1,
@@ -50,13 +40,17 @@ fn configure_replaces_slots_and_local_player_while_pending() {
             PlayerSlot::occupied(1, PlayerType::Human, Some("orc")),
             PlayerSlot::free(2),
         ],
-        AiHosting::HostOnly,
+        Authority::Host {
+            ai_hosting: AiHosting::Host,
+        },
+        DropPolicy::Automatic,
+        FinishPolicy::LastStanding,
     );
 
     assert_eq!(session.slots().len(), 3);
     assert_eq!(session.local_player(), 1);
     assert_eq!(session.slot(1).and_then(|s| s.race()), Some("orc"));
-    assert_eq!(session.ai_hosting(), AiHosting::HostOnly);
+    assert_eq!(session.ai_hosting(), AiHosting::Host);
     // The dropped tracking resized to the new slot count.
     assert!(!session.is_player_dropped(2));
 }
@@ -69,7 +63,11 @@ fn configure_panics_after_start() {
     session.configure(
         0,
         vec![PlayerSlot::occupied(0, PlayerType::Human, None)],
-        AiHosting::Replicated,
+        Authority::Host {
+            ai_hosting: AiHosting::Replicated,
+        },
+        DropPolicy::Automatic,
+        FinishPolicy::LastStanding,
     );
 }
 
@@ -78,7 +76,7 @@ fn configure_panics_after_start() {
 //
 
 #[test]
-fn new_session_is_pending() {
+fn configured_session_starts_pending() {
     let session = pending(2);
 
     assert!(!session.is_active());
@@ -232,7 +230,7 @@ fn fresh_session_has_no_dropped_players() {
 fn drop_player_marks_only_that_player() {
     let mut session = session(3);
 
-    session.drop_player(1);
+    session.drop_player(1, 0);
 
     assert!(!session.is_player_dropped(0));
     assert!(session.is_player_dropped(1));
@@ -247,8 +245,8 @@ fn dropped_and_active_players_partition_slots_by_id() {
     let mut session = session(4);
 
     // Drop out of order to prove iteration is by id, not drop order.
-    session.drop_player(2);
-    session.drop_player(0);
+    session.drop_player(2, 0);
+    session.drop_player(0, 0);
 
     assert_eq!(session.dropped_players().collect::<Vec<_>>(), vec![0, 2]);
     assert_eq!(session.active_players().collect::<Vec<_>>(), vec![1, 3]);
@@ -267,8 +265,36 @@ fn is_player_dropped_is_false_for_unknown_player() {
 fn dropping_player_twice_panics() {
     let mut session = session(2);
 
-    session.drop_player(1);
-    session.drop_player(1);
+    session.drop_player(1, 0);
+    session.drop_player(1, 1);
+}
+
+#[test]
+fn required_players_stops_including_player_at_its_drop_tick() {
+    let mut session = session(3);
+
+    session.drop_player(1, 5);
+
+    // Ticks the player was live for keep requiring its input; from the drop
+    // tick on it no longer counts.
+    assert_eq!(session.required_players(4), vec![0, 1, 2]);
+    assert_eq!(session.required_players(5), vec![0, 2]);
+    assert_eq!(session.required_players(9), vec![0, 2]);
+}
+
+#[test]
+fn required_players_skips_free_slots() {
+    let mut session = configured(
+        0,
+        vec![
+            PlayerSlot::occupied(0, PlayerType::Human, None),
+            PlayerSlot::free(1),
+            PlayerSlot::occupied(2, PlayerType::Ai, None),
+        ],
+    );
+    session.start();
+
+    assert_eq!(session.required_players(0), vec![0, 2]);
 }
 
 //
@@ -276,12 +302,29 @@ fn dropping_player_twice_panics() {
 //
 
 #[test]
-fn ai_hosting_defaults_to_replicated_and_is_set_at_construction() {
-    assert_eq!(GameSession::default().ai_hosting(), AiHosting::Replicated);
+fn ai_hosting_is_set_at_construction() {
     assert_eq!(
-        mixed_session(AiHosting::HostOnly).ai_hosting(),
-        AiHosting::HostOnly
+        mixed_session(AiHosting::Replicated).ai_hosting(),
+        AiHosting::Replicated,
     );
+    assert_eq!(mixed_session(AiHosting::Host).ai_hosting(), AiHosting::Host);
+}
+
+#[test]
+#[should_panic(expected = "local_player 0 is not in slots (len 0)")]
+fn configured_panics_on_empty_slots() {
+    // A slotless session exists only as the pending placeholder; the public
+    // constructor demands a coherent slot list.
+    configured(0, Vec::new());
+}
+
+#[test]
+fn pending_session_is_inert_until_configured() {
+    let session = GameSession::pending();
+
+    assert!(session.slots().is_empty());
+    assert!(!session.is_active());
+    assert_eq!(session.tick(), 0);
 }
 
 #[test]
@@ -293,13 +336,13 @@ fn replicated_sources_ai_and_free_slots_on_every_node() {
         assert!(session.sources_locally(&slots[0], is_host), "local human");
         assert!(!session.sources_locally(&slots[1], is_host), "remote human");
         assert!(session.sources_locally(&slots[2], is_host), "ai");
-        assert!(session.sources_locally(&slots[3], is_host), "free");
+        assert!(!session.sources_locally(&slots[3], is_host), "free");
     }
 }
 
 #[test]
-fn host_only_sources_ai_slots_on_the_host_only() {
-    let session = mixed_session(AiHosting::HostOnly);
+fn host_only_sources_ai_slots_on_host_only() {
+    let session = mixed_session(AiHosting::Host);
     let slots = session.slots();
 
     assert!(session.sources_locally(&slots[2], true), "ai on the host");
@@ -308,7 +351,7 @@ fn host_only_sources_ai_slots_on_the_host_only() {
     for is_host in [true, false] {
         assert!(session.sources_locally(&slots[0], is_host), "local human");
         assert!(!session.sources_locally(&slots[1], is_host), "remote human");
-        assert!(session.sources_locally(&slots[3], is_host), "free");
+        assert!(!session.sources_locally(&slots[3], is_host), "free");
     }
 }
 
@@ -318,7 +361,7 @@ fn host_only_sources_ai_slots_on_the_host_only() {
 
 /// A session with a local human, a remote human, an AI, and a free slot.
 fn mixed_session(ai_hosting: AiHosting) -> GameSession {
-    GameSession::new(
+    GameSession::configured(
         0,
         vec![
             PlayerSlot::occupied(0, PlayerType::Human, Some("human")),
@@ -326,17 +369,37 @@ fn mixed_session(ai_hosting: AiHosting) -> GameSession {
             PlayerSlot::occupied(2, PlayerType::Ai, Some("orc")),
             PlayerSlot::free(3),
         ],
-        ai_hosting,
+        Authority::Host { ai_hosting },
+        DropPolicy::Automatic,
         FinishPolicy::LastStanding,
     )
 }
 
+/// A session over `slots` with the suite's baseline choices: host authority
+/// with replicated AI, automatic drops, last-standing finish. Tests that vary
+/// one of the choices construct explicitly instead.
+fn configured(local_player: u8, slots: Vec<PlayerSlot>) -> GameSession {
+    GameSession::configured(
+        local_player,
+        slots,
+        Authority::Host {
+            ai_hosting: AiHosting::Replicated,
+        },
+        DropPolicy::Automatic,
+        FinishPolicy::LastStanding,
+    )
+}
+
+/// `count` occupied raceless human slots with contiguous ids.
+fn humans(count: usize) -> Vec<PlayerSlot> {
+    (0..count)
+        .map(|id| PlayerSlot::occupied(id as u8, PlayerType::Human, None))
+        .collect()
+}
+
 /// A `players`-slot pending session of human players, local slot `0`.
 fn pending(players: usize) -> GameSession {
-    let slots = (0..players)
-        .map(|id| PlayerSlot::occupied(id as u8, PlayerType::Human, None))
-        .collect();
-    GameSession::new(0, slots, AiHosting::Replicated, FinishPolicy::LastStanding)
+    configured(0, humans(players))
 }
 
 /// Like [`pending`] but already started (running).

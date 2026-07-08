@@ -23,8 +23,8 @@ use ferrets_simulation::{
     map::Map,
     resources::PlayerResources,
     session::{
-        FinishPolicy, GameSession, ai_hosting::AiHosting, player_slot::PlayerSlot,
-        player_type::PlayerType,
+        GameSession, ai_hosting::AiHosting, authority::Authority, drop_policy::DropPolicy,
+        finish_policy::FinishPolicy, player_slot::PlayerSlot, player_type::PlayerType,
     },
 };
 
@@ -43,7 +43,15 @@ pub fn make_app(slots: Vec<PlayerSlot>) -> App {
 
     let mut app = App::new();
     app.add_plugins(SimulationPlugin::new(
-        GameSession::new(0, slots, AiHosting::Replicated, FinishPolicy::Endless),
+        GameSession::configured(
+            0,
+            slots,
+            Authority::Host {
+                ai_hosting: AiHosting::Replicated,
+            },
+            DropPolicy::Automatic,
+            FinishPolicy::Endless,
+        ),
         Map::new("test", Projection::Isometric, nav_grid, vec![]),
     ));
     app
