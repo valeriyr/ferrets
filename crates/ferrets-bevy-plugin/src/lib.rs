@@ -4,7 +4,7 @@
 //!
 //! ```ignore
 //! use bevy::prelude::*;
-//! use ferrets_bevy::SimulationPlugin;
+//! use ferrets_bevy_plugin::SimulationPlugin;
 //! use ferrets_simulation::{map::Map, session::GameSession};
 //!
 //! App::new()

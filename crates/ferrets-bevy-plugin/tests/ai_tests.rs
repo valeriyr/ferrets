@@ -7,8 +7,8 @@ mod utils;
 use std::collections::BTreeMap;
 
 use bevy::prelude::*;
-use ferrets_bevy::ai::{AiPlugin, AiRuntimes, game_view, install_ai_runtimes};
-use ferrets_bevy::{install_replay_playback, spawn};
+use ferrets_bevy_plugin::ai::{AiPlugin, AiRuntimes, game_view, install_ai_runtimes};
+use ferrets_bevy_plugin::{install_replay_playback, spawn};
 use ferrets_replay::buffer::SharedBuffer;
 use ferrets_replay::{header::ReplayHeader, recorder::Recorder, replay::Replay};
 use ferrets_script::ai::view::content::ContentView;

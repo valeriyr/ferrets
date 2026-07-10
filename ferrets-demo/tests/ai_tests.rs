@@ -2,8 +2,8 @@
 //! headless game, builds its economy and army.
 
 use bevy::prelude::*;
-use ferrets_bevy::SimulationPlugin;
-use ferrets_bevy::ai::AiPlugin;
+use ferrets_bevy_plugin::SimulationPlugin;
+use ferrets_bevy_plugin::ai::AiPlugin;
 use ferrets_demo::ai::{AI_SCRIPT, install_demo_ai};
 use ferrets_demo::content::CONTENT;
 use ferrets_demo::{map, setup};

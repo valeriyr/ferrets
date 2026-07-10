@@ -4,7 +4,7 @@
 mod utils;
 
 use bevy::prelude::*;
-use ferrets_bevy::{
+use ferrets_bevy_plugin::{
     DropConfig, NetworkPlugin, NetworkSession, ReplayPlugin, SimulationPlugin,
     install_network_session,
 };
@@ -353,7 +353,7 @@ fn drop_stops_requiring_dropped_players_frames() {
     world.resource_mut::<DropConfig>().timeout_steps = 1;
 
     world
-        .run_system_once(ferrets_bevy::detect_drops)
+        .run_system_once(ferrets_bevy_plugin::detect_drops)
         .expect("run detect_drops");
 
     // The drop stops the tick from requiring player 1's input: the blocked
@@ -504,7 +504,7 @@ fn losing_control_link_to_host_aborts_client() {
     let mut host = net_app(a, 2);
     let mut peer = net_app(b, 2);
     peer.world_mut()
-        .resource_mut::<ferrets_bevy::ControlLinks>()
+        .resource_mut::<ferrets_bevy_plugin::ControlLinks>()
         .lost
         .insert(0);
 
@@ -524,7 +524,7 @@ fn losing_every_control_link_aborts_decentralized_node() {
     let mut host = net_app_configured(a, roster.clone(), Authority::Peers);
     let mut peer = net_app_configured(b, roster, Authority::Peers);
     host.world_mut()
-        .resource_mut::<ferrets_bevy::ControlLinks>()
+        .resource_mut::<ferrets_bevy_plugin::ControlLinks>()
         .lost
         .insert(1);
 
@@ -618,7 +618,7 @@ fn manual_policy_holds_drop_until_game_approves() {
     // Well past the grace window: still stalled, still nobody dropped.
     assert!(!host.world().resource::<GameSession>().is_player_dropped(2));
     assert!(!peer.world().resource::<GameSession>().is_player_dropped(2));
-    let stall = host.world().resource::<ferrets_bevy::Stall>();
+    let stall = host.world().resource::<ferrets_bevy_plugin::Stall>();
     assert_eq!(
         stall.0.as_ref().map(|info| info.missing.clone()),
         Some(vec![2]),
@@ -626,7 +626,7 @@ fn manual_policy_holds_drop_until_game_approves() {
 
     // The game approves the drop on the deciding node; both nodes apply it.
     host.world_mut()
-        .resource_mut::<ferrets_bevy::DropIntent>()
+        .resource_mut::<ferrets_bevy_plugin::DropIntent>()
         .0
         .push(2);
     step_both(&mut host, &mut peer, 10);
@@ -648,7 +648,7 @@ fn peer_authority_pause_freezes_and_resumes_both_at_same_tick() {
 
     // The NON-host proposes the pause: there is no authority to ask.
     peer.world_mut()
-        .resource_mut::<ferrets_bevy::PauseIntent>()
+        .resource_mut::<ferrets_bevy_plugin::PauseIntent>()
         .0 = Some(true);
     step_both(&mut host, &mut peer, 12);
 
@@ -661,7 +661,7 @@ fn peer_authority_pause_freezes_and_resumes_both_at_same_tick() {
     assert_eq!(host.world().resource::<GameSession>().tick(), frozen);
 
     peer.world_mut()
-        .resource_mut::<ferrets_bevy::PauseIntent>()
+        .resource_mut::<ferrets_bevy_plugin::PauseIntent>()
         .0 = Some(false);
     step_both(&mut host, &mut peer, 12);
 
@@ -687,14 +687,14 @@ fn stale_pause_proposal_does_not_resurrect_after_its_tick_passed() {
     step_both(&mut host, &mut peer, 4);
 
     peer.world_mut()
-        .resource_mut::<ferrets_bevy::PauseIntent>()
+        .resource_mut::<ferrets_bevy_plugin::PauseIntent>()
         .0 = Some(true);
     step_both(&mut host, &mut peer, 12);
     let frozen = tick(&host);
     assert!(host.world().resource::<GameSession>().is_paused());
 
     peer.world_mut()
-        .resource_mut::<ferrets_bevy::PauseIntent>()
+        .resource_mut::<ferrets_bevy_plugin::PauseIntent>()
         .0 = Some(false);
     step_both(&mut host, &mut peer, 12);
     assert!(!peer.world().resource::<GameSession>().is_paused());
@@ -733,7 +733,7 @@ fn game_with_mid_game_drop_records_and_replays_identically() {
     let buffer = SharedBuffer::default();
     let header = ReplayHeader::new(three_human_slots(), FinishPolicy::Endless);
     let recorder = Recorder::new(buffer.clone(), &header).expect("start recording");
-    ferrets_bevy::install_replay_recorder(host.world_mut(), recorder);
+    ferrets_bevy_plugin::install_replay_recorder(host.world_mut(), recorder);
 
     host.world_mut()
         .resource_mut::<InputFrames>()
@@ -764,7 +764,7 @@ fn game_with_mid_game_drop_records_and_replays_identically() {
         registry.register(harness_soldier());
         registry.validate();
     }
-    ferrets_bevy::install_replay_playback(playback.world_mut(), replay);
+    ferrets_bevy_plugin::install_replay_playback(playback.world_mut(), replay);
     playback.world_mut().resource_mut::<GameSession>().start();
 
     for _ in 0..70 {
@@ -772,7 +772,9 @@ fn game_with_mid_game_drop_records_and_replays_identically() {
         playback.world_mut().run_schedule(FixedLast);
     }
 
-    let watched = playback.world().resource::<ferrets_bevy::ReplayPlayback>();
+    let watched = playback
+        .world()
+        .resource::<ferrets_bevy_plugin::ReplayPlayback>();
     assert!(
         watched.is_done(),
         "playback should reach the recording's end"
@@ -815,7 +817,7 @@ fn drop_decided_victory_replays_to_same_result() {
     let buffer = SharedBuffer::default();
     let header = ReplayHeader::new(three_human_slots(), FinishPolicy::LastStanding);
     let recorder = Recorder::new(buffer.clone(), &header).expect("start recording");
-    ferrets_bevy::install_replay_recorder(host.world_mut(), recorder);
+    ferrets_bevy_plugin::install_replay_recorder(host.world_mut(), recorder);
 
     // The phantom sends nothing, so the host blocks, waits out the grace window,
     // and drops it — ending the game as a win for player 0.
@@ -846,7 +848,7 @@ fn drop_decided_victory_replays_to_same_result() {
         registry.validate();
     }
     spawn_starting_units(&mut playback);
-    ferrets_bevy::install_replay_playback(playback.world_mut(), replay);
+    ferrets_bevy_plugin::install_replay_playback(playback.world_mut(), replay);
     playback.world_mut().resource_mut::<GameSession>().start();
 
     for _ in 0..70 {
@@ -865,7 +867,7 @@ fn drop_decided_victory_replays_to_same_result() {
     assert_eq!(
         playback
             .world()
-            .resource::<ferrets_bevy::ReplayPlayback>()
+            .resource::<ferrets_bevy_plugin::ReplayPlayback>()
             .mismatch(),
         None,
     );
@@ -888,7 +890,7 @@ fn non_drop_victory_replays_to_same_result() {
     let buffer = SharedBuffer::default();
     let header = ReplayHeader::new(two_human_slots(), FinishPolicy::LastStanding);
     let recorder = Recorder::new(buffer.clone(), &header).expect("start recording");
-    ferrets_bevy::install_replay_recorder(record_app.world_mut(), recorder);
+    ferrets_bevy_plugin::install_replay_recorder(record_app.world_mut(), recorder);
 
     let (attacker, enemy) = spawn_combatants(&mut record_app);
     utils::push_command(&mut record_app, PlayerCommand::SelectById { id: attacker });
@@ -909,7 +911,7 @@ fn non_drop_victory_replays_to_same_result() {
     let mut playback = combat_victory_app();
     playback.add_plugins(ReplayPlugin);
     spawn_combatants(&mut playback);
-    ferrets_bevy::install_replay_playback(playback.world_mut(), replay);
+    ferrets_bevy_plugin::install_replay_playback(playback.world_mut(), replay);
 
     for _ in 0..90 {
         if playback
@@ -927,7 +929,7 @@ fn non_drop_victory_replays_to_same_result() {
     assert_eq!(
         playback
             .world()
-            .resource::<ferrets_bevy::ReplayPlayback>()
+            .resource::<ferrets_bevy_plugin::ReplayPlayback>()
             .mismatch(),
         None,
     );

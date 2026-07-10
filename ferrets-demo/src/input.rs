@@ -4,7 +4,7 @@
 
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
-use ferrets_bevy::{NetworkActive, PauseIntent, PendingInput};
+use ferrets_bevy_plugin::{NetworkActive, PauseIntent, PendingInput};
 use ferrets_math::{FixedU64, fixed_urect::FixedURect, fixed_uvec2::FixedUVec2};
 use ferrets_pathfinder::nav_pos::NavPos;
 use ferrets_simulation::{

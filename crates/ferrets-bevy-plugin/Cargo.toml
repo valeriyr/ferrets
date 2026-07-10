@@ -1,5 +1,5 @@
 [package]
-name = "ferrets-bevy"
+name = "ferrets-bevy-plugin"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

@@ -1,7 +1,7 @@
 //! Replay file IO for the demo: record every game to disk, and watch one back
 //! through a native file-open dialog.
 //!
-//! The engine-side recording and playback systems live in `ferrets-bevy`; this
+//! The engine-side recording and playback systems live in `ferrets-bevy-plugin`; this
 //! module supplies the files they read and write, and the menu/teardown plumbing
 //! around them.
 
@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use bevy::prelude::*;
-use ferrets_bevy::{
+use ferrets_bevy_plugin::{
     BlockedStreak, DesyncTracker, NetworkActive, NetworkSession, PauseIntent, PendingPause,
     ReplayPlayback, ReplayRecorder, install_game_resources, install_replay_playback,
     install_replay_recorder,
@@ -186,7 +186,7 @@ pub fn teardown_session(world: &mut World) {
 
     world.remove_non_send_resource::<NetworkSession>();
     world.remove_resource::<NetworkActive>();
-    ferrets_bevy::ai::remove_ai_runtimes(world);
+    ferrets_bevy_plugin::ai::remove_ai_runtimes(world);
     world.remove_non_send_resource::<ReplayRecorder>();
     world.remove_resource::<ReplayPlayback>();
     world.remove_resource::<RecordingPath>();

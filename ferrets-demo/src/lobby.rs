@@ -10,7 +10,7 @@ use std::thread;
 
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
-use ferrets_bevy::{install_game_resources, install_network_session};
+use ferrets_bevy_plugin::{install_game_resources, install_network_session};
 use ferrets_network::lobby::client::{LobbyClient, PollOutcome};
 use ferrets_network::message::control::Occupant;
 use ferrets_network::session::NetSession;

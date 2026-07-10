@@ -2,7 +2,7 @@
 
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
-use ferrets_bevy::PendingInput;
+use ferrets_bevy_plugin::PendingInput;
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_simulation::{
     command::PlayerCommand,

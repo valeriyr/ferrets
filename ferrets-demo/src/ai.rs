@@ -7,7 +7,7 @@
 use std::collections::BTreeMap;
 
 use bevy::prelude::*;
-use ferrets_bevy::ai::{AiRuntimes, install_ai_runtimes, sourced_ai_players};
+use ferrets_bevy_plugin::ai::{AiRuntimes, install_ai_runtimes, sourced_ai_players};
 use ferrets_script::ai::view::content::ContentView;
 use ferrets_script::engine::ScriptEngine;
 use ferrets_script::engine::lua::LuaEngine;

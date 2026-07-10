@@ -1,7 +1,7 @@
 //! Minimal HUD: a resource bar and a context line for the current selection.
 
 use bevy::prelude::*;
-use ferrets_bevy::ReplayPlayback;
+use ferrets_bevy_plugin::ReplayPlayback;
 use ferrets_simulation::{
     components::{
         build::BuilderStaticData,

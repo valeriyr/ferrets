@@ -2,7 +2,7 @@
 
 use bevy::ecs::entity::EntityNotSpawnedError;
 use bevy::prelude::*;
-use ferrets_bevy::{PendingInput, SimulationPlugin};
+use ferrets_bevy_plugin::{PendingInput, SimulationPlugin};
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_pathfinder::{
     astar::Projection,

@@ -2347,7 +2347,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "ferrets-bevy"
+name = "ferrets-bevy-plugin"
 version = "0.1.0"
 dependencies = [
  "bevy",
@@ -2364,7 +2364,7 @@ name = "ferrets-demo"
 version = "0.1.0"
 dependencies = [
  "bevy",
- "ferrets-bevy",
+ "ferrets-bevy-plugin",
  "ferrets-math",
  "ferrets-network",
  "ferrets-pathfinder",

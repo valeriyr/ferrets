@@ -5,8 +5,8 @@
 #![allow(clippy::type_complexity, clippy::too_many_arguments)]
 
 use bevy::prelude::*;
-use ferrets_bevy::ai::AiPlugin;
-use ferrets_bevy::{NetworkPlugin, ReplayPlayback, ReplayPlugin, SimulationPlugin};
+use ferrets_bevy_plugin::ai::AiPlugin;
+use ferrets_bevy_plugin::{NetworkPlugin, ReplayPlayback, ReplayPlugin, SimulationPlugin};
 use ferrets_simulation::session::GameSession;
 
 use crate::states::GameState;
