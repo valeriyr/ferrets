@@ -302,7 +302,7 @@ fn reports_fractional_number_as_command_error() {
 }
 
 #[test]
-fn malformed_element_fails_the_whole_batch() {
+fn malformed_element_fails_whole_batch() {
     // A valid command before the bad one must not survive the batch.
     let source = r#"
         define_ai("mixed", {
@@ -323,7 +323,7 @@ fn malformed_element_fails_the_whole_batch() {
 }
 
 #[test]
-fn returning_a_non_table_is_a_command_error() {
+fn returning_non_table_is_command_error() {
     let error = think_error("return 42");
 
     assert!(

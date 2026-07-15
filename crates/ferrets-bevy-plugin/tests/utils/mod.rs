@@ -46,6 +46,7 @@ pub fn make_app(slots: Vec<PlayerSlot>) -> App {
         GameSession::configured(
             0,
             slots,
+            "test",
             Authority::Host {
                 ai_hosting: AiHosting::Replicated,
             },

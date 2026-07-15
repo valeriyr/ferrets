@@ -36,7 +36,8 @@
 //! process_stats      — HP/mana regen, buff ticks                     [not yet implemented]
 //! process_skills     — skill cooldown counters                        [not yet implemented]
 //! process_entity_ai  — per-entity AI think (throttled, every N ticks) [not yet implemented]
-//! check_game_result  — apply the finish policy; may end the session (e.g. last player standing)
+//! check_game_result  — apply the finish policy; may end the session (last player
+//!                      standing, or a scripted scenario's verdict)
 //! tick_counter       — advance the simulation tick
 //! ```
 //!
@@ -44,12 +45,15 @@
 
 pub mod ai;
 mod input;
+pub mod map;
 pub mod network;
 pub mod replay;
+pub mod scenario;
 mod systems;
 
 pub use ferrets_simulation::spawn;
 pub use input::PendingInput;
+pub use map::instantiate_map;
 pub use network::{
     BlockedStreak, ControlLinks, DesyncTracker, DropConfig, DropIntent, NetworkActive,
     NetworkPlugin, NetworkSession, PauseIntent, PendingPause, Stall, StallInfo, StallVotes,
@@ -58,6 +62,10 @@ pub use network::{
 pub use replay::{
     ReplayPlayback, ReplayPlugin, ReplayRecorder, install_replay_playback, install_replay_recorder,
     record_input, supply_replay_input, verify_replay_checksum,
+};
+pub use scenario::{
+    ScenarioObjectives, ScenarioRuntimes, install_scenario_runtime, instantiate_scenario,
+    remove_scenario_runtime,
 };
 pub use systems::flush_input;
 

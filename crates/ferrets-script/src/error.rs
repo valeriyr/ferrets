@@ -15,4 +15,6 @@ pub enum ScriptError {
     EngineError(String),
     #[error("invalid number: {0}")]
     NumberError(String),
+    #[error("scenario error: {0}")]
+    ScenarioError(String),
 }

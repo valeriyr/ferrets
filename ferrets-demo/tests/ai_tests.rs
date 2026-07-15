@@ -50,6 +50,7 @@ fn ai_builds_economy_and_army() {
         GameSession::configured(
             0,
             slots,
+            map::NAME,
             Authority::Host {
                 ai_hosting: AiHosting::Replicated,
             },

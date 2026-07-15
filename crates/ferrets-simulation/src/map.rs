@@ -1,4 +1,4 @@
-//! Map data for the active game.
+//! The live map grid of the active game.
 
 use bevy_ecs::prelude::*;
 use ferrets_pathfinder::{
@@ -6,6 +6,7 @@ use ferrets_pathfinder::{
 };
 
 use crate::components::location::{LocationComponent, LocationStaticData, Solidity};
+use crate::map_data::MapData;
 use crate::session::player_slot::PlayerId;
 
 /// The active game map.
@@ -23,6 +24,21 @@ pub struct Map {
 }
 
 impl Map {
+    /// Builds the live map a [`MapData`] describes: a fresh grid with the
+    /// declared layers registered and nothing occupied yet.
+    pub fn from_data(data: &MapData) -> Self {
+        let mut nav_grid = NavGrid::new(data.width, data.height);
+        for &layer in &data.layers {
+            nav_grid.add_layer(layer);
+        }
+        let start_points = data
+            .start_points
+            .iter()
+            .map(|&(x, y)| NavPos::new(x, y))
+            .collect();
+        Self::new(data.name.as_str(), data.projection, nav_grid, start_points)
+    }
+
     /// Creates a map from loaded content.
     pub fn new(
         name: impl Into<String>,

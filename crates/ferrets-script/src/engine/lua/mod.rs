@@ -9,6 +9,7 @@
 mod ai;
 mod command;
 mod content;
+mod scenario;
 mod view;
 
 use std::cell::RefCell;
@@ -20,6 +21,7 @@ use crate::ai::view::content::ContentView;
 use crate::content::Definition;
 use crate::engine::ScriptEngine;
 use crate::engine::lua::ai::LuaAiRuntime;
+use crate::engine::lua::scenario::LuaScenarioRuntime;
 use crate::error::ScriptError;
 
 /// Loads content and AI scripts authored in Lua.
@@ -45,6 +47,14 @@ impl ScriptEngine for LuaEngine {
     ) -> crate::Result<Box<dyn crate::ai::AiRuntime>> {
         Ok(Box::new(LuaAiRuntime::new(source, content)?))
     }
+
+    fn load_scenario(
+        &self,
+        source: &str,
+        content: &ContentView,
+    ) -> crate::Result<Box<dyn crate::scenario::ScenarioRuntime>> {
+        Ok(Box::new(LuaScenarioRuntime::new(source, content)?))
+    }
 }
 
 /// Strips the ambient-state stdlib from a fresh state: `os` and `io` are
@@ -68,6 +78,26 @@ fn harden(lua: &Lua) -> mlua::Result<()> {
 
 fn engine_error(error: mlua::Error) -> ScriptError {
     ScriptError::EngineError(error.to_string())
+}
+
+/// Reads the positive-integer `period` a definition declares, raising via
+/// `error` on anything else.
+fn parse_period(options: &Table, error: impl Fn(&str) -> mlua::Error) -> mlua::Result<u32> {
+    match options.get::<Value>("period")? {
+        Value::Integer(period) if period >= 1 => {
+            u32::try_from(period).map_err(|_| error(&format!("'period' {period} out of range")))
+        }
+        // Integral floats pass everywhere else on the boundary (integer
+        // division yields floats), so they pass here too.
+        Value::Number(period)
+            if period.fract() == 0.0 && (1.0..=u32::MAX as f64).contains(&period) =>
+        {
+            Ok(period as u32)
+        }
+        other => Err(error(&format!(
+            "'period' must be a positive integer, got {other:?}"
+        ))),
+    }
 }
 
 /// Recovers a [`ScriptError`] thrown from a host-function callback, or reports

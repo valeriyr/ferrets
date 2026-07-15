@@ -8,11 +8,14 @@ pub mod entity_index;
 pub mod game_loop;
 pub mod input;
 pub mod map;
+pub mod map_data;
 pub mod order;
 pub mod resources;
+pub mod scenario;
 pub mod selection;
 pub mod session;
 pub mod simulation_id;
+pub mod skirmish;
 pub mod spawn;
 
 /// The full build version, `major.minor.patch`.

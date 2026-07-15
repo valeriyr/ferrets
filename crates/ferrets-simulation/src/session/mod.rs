@@ -34,6 +34,9 @@ pub enum SessionState {
 pub enum GameResult {
     /// `winner` won the game.
     Victory { winner: PlayerId },
+    /// A scenario's failure condition was met. A shared verdict, identical on
+    /// every node — not a statement about the local player.
+    Defeat,
     /// The game ended with no winner.
     Draw,
     /// Peers diverged at `tick`; the game cannot continue deterministically.
@@ -56,6 +59,9 @@ pub struct GameSession {
     state: SessionState,
     /// Player slots in this session.
     slots: Vec<PlayerSlot>,
+    /// The map this session plays on, by name — the session holds the
+    /// agreement, not the map itself.
+    map: String,
     /// The slot controlled by the local client.
     local_player: PlayerId,
     /// Who resolves session-level decisions (drops, pauses), and the
@@ -91,12 +97,20 @@ impl GameSession {
     pub fn configured(
         local_player: PlayerId,
         slots: Vec<PlayerSlot>,
+        map: impl Into<String>,
         authority: Authority,
         drop_policy: DropPolicy,
         finish_policy: FinishPolicy,
     ) -> Self {
         assert_valid_slots(local_player, &slots);
-        Self::new(local_player, slots, authority, drop_policy, finish_policy)
+        Self::new(
+            local_player,
+            slots,
+            map,
+            authority,
+            drop_policy,
+            finish_policy,
+        )
     }
 
     /// The inert pre-configuration placeholder: a game inserts the resource
@@ -109,6 +123,7 @@ impl GameSession {
         Self::new(
             0,
             Vec::new(),
+            String::new(),
             Authority::Host {
                 ai_hosting: AiHosting::Replicated,
             },
@@ -128,6 +143,7 @@ impl GameSession {
         &mut self,
         local_player: PlayerId,
         slots: Vec<PlayerSlot>,
+        map: impl Into<String>,
         authority: Authority,
         drop_policy: DropPolicy,
         finish_policy: FinishPolicy,
@@ -140,6 +156,7 @@ impl GameSession {
         assert_valid_slots(local_player, &slots);
         self.dropped = vec![None; slots.len()];
         self.slots = slots;
+        self.map = map.into();
         self.local_player = local_player;
         self.authority = authority;
         self.drop_policy = drop_policy;
@@ -269,6 +286,11 @@ impl GameSession {
         &self.slots
     }
 
+    /// The map this session plays on, by name.
+    pub fn map(&self) -> &str {
+        &self.map
+    }
+
     /// Returns the slot with the given id, or `None` if out of range.
     pub fn slot(&self, id: PlayerId) -> Option<&PlayerSlot> {
         self.slots.get(id as usize)
@@ -357,6 +379,7 @@ impl GameSession {
     fn new(
         local_player: PlayerId,
         slots: Vec<PlayerSlot>,
+        map: impl Into<String>,
         authority: Authority,
         drop_policy: DropPolicy,
         finish_policy: FinishPolicy,
@@ -366,6 +389,7 @@ impl GameSession {
             state: SessionState::Pending,
             dropped: vec![None; slots.len()],
             slots,
+            map: map.into(),
             local_player,
             authority,
             drop_policy,

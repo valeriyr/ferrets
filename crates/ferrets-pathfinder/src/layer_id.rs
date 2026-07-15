@@ -5,13 +5,15 @@ use std::{
     ops::{BitAnd, BitOr, Deref},
 };
 
+use serde::{Deserialize, Serialize};
+
 use crate::layer_mask::LayerMask;
 
 /// Identifies a single navigation layer.
 ///
 /// Each value is a non-zero power of two. Use `|` to union layers into a [`LayerMask`],
 /// or `&` to intersect them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct LayerId(u32);
 
 impl LayerId {

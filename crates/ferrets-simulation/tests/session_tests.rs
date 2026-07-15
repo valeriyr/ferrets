@@ -40,6 +40,7 @@ fn configure_replaces_slots_and_local_player_while_pending() {
             PlayerSlot::occupied(1, PlayerType::Human, Some("orc")),
             PlayerSlot::free(2),
         ],
+        "test",
         Authority::Host {
             ai_hosting: AiHosting::Host,
         },
@@ -63,6 +64,7 @@ fn configure_panics_after_start() {
     session.configure(
         0,
         vec![PlayerSlot::occupied(0, PlayerType::Human, None)],
+        "test",
         Authority::Host {
             ai_hosting: AiHosting::Replicated,
         },
@@ -369,6 +371,7 @@ fn mixed_session(ai_hosting: AiHosting) -> GameSession {
             PlayerSlot::occupied(2, PlayerType::Ai, Some("orc")),
             PlayerSlot::free(3),
         ],
+        "test",
         Authority::Host { ai_hosting },
         DropPolicy::Automatic,
         FinishPolicy::LastStanding,
@@ -382,6 +385,7 @@ fn configured(local_player: u8, slots: Vec<PlayerSlot>) -> GameSession {
     GameSession::configured(
         local_player,
         slots,
+        "test",
         Authority::Host {
             ai_hosting: AiHosting::Replicated,
         },

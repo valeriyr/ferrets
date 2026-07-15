@@ -22,6 +22,7 @@ pub mod map;
 mod menu;
 mod render;
 mod replay;
+pub mod scenario;
 pub mod setup;
 mod states;
 mod time;
@@ -53,7 +54,11 @@ pub fn run() {
         .add_systems(OnExit(GameState::Menu), menu::teardown_menu)
         .add_systems(
             Update,
-            (menu::menu_buttons, replay::start_watching)
+            (
+                menu::menu_buttons,
+                scenario::start_scenario,
+                replay::start_watching,
+            )
                 .chain()
                 .run_if(in_state(GameState::Menu)),
         )
@@ -81,10 +86,14 @@ pub fn run() {
         .add_systems(
             OnEnter(GameState::InGame),
             (
-                camera::frame_local_player,
                 hud::setup_hud,
                 debug::setup_debug,
-                setup::spawn_demo_scene,
+                // Exactly one spawner runs: the scenario one when a scenario is
+                // loaded, the symmetric demo scene otherwise. The camera frames
+                // afterwards, off whichever map the spawner installed.
+                setup::spawn_demo_scene.run_if(not(resource_exists::<scenario::CurrentScenario>)),
+                scenario::spawn_scenario_scene.run_if(resource_exists::<scenario::CurrentScenario>),
+                camera::frame_local_player,
                 replay::start_recording,
             )
                 .chain(),
@@ -129,6 +138,7 @@ pub fn run() {
                 hud::update_resources,
                 hud::update_help,
                 hud::update_selection,
+                hud::update_objectives,
                 hud::update_game_over,
                 hud::update_replay_note,
                 hud::leave_button,

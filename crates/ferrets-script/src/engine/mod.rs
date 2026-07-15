@@ -12,6 +12,7 @@ pub mod lua;
 use crate::ai::AiRuntime;
 use crate::ai::view::content::ContentView;
 use crate::content::Definition;
+use crate::scenario::ScenarioRuntime;
 
 /// A scripting runtime: one loader per script-facing layer of the game.
 pub trait ScriptEngine {
@@ -25,4 +26,15 @@ pub trait ScriptEngine {
     /// Errors if the script fails, does not declare exactly one brain, or
     /// declares an invalid one.
     fn load_ai(&self, source: &str, content: &ContentView) -> crate::Result<Box<dyn AiRuntime>>;
+
+    /// Evaluates a scenario script against the static `content` catalogue,
+    /// returning the live evaluator it declared.
+    ///
+    /// Errors if the script fails, does not declare exactly one scenario, or
+    /// declares an invalid one.
+    fn load_scenario(
+        &self,
+        source: &str,
+        content: &ContentView,
+    ) -> crate::Result<Box<dyn ScenarioRuntime>>;
 }

@@ -9,5 +9,6 @@ description = "Deterministic RTS game pathfinding."
 
 [dependencies]
 pathfinding = "4.15"
+serde.workspace = true
 
 ferrets-math.workspace = true

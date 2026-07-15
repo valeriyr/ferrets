@@ -1,13 +1,14 @@
 //! Finds the shortest passable path between two positions, with guaranteed determinism.
 
 use ferrets_math::fixed_uvec2::FixedUVec2;
+use serde::{Deserialize, Serialize};
 
 use crate::{layer_mask::LayerMask, nav_size::NavSize};
 
 use super::{nav_grid::NavGrid, nav_pos::NavPos};
 
 /// Defines movement costs and range metrics for the map type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Projection {
     /// Isometric projection — all 8 directions cost equally and appear the same distance on screen.
     Isometric,

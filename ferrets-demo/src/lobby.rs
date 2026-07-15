@@ -1143,7 +1143,15 @@ pub fn start_game(world: &mut World) {
     {
         let mut session = world.resource_mut::<GameSession>();
         let (authority, drop_policy, finish_policy) = choices;
-        session.configure(local_player, slots, authority, drop_policy, finish_policy);
+        // The map every lobby game plays on; the demo has exactly one to choose.
+        session.configure(
+            local_player,
+            slots,
+            crate::map::NAME,
+            authority,
+            drop_policy,
+            finish_policy,
+        );
     }
     install_game_resources(world);
     if let Some(net) = net {

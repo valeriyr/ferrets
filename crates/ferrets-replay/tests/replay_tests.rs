@@ -3,7 +3,7 @@
 
 use ferrets_replay::buffer::SharedBuffer;
 use ferrets_replay::error::ReplayError;
-use ferrets_replay::header::{FORMAT_VERSION, ReplayHeader};
+use ferrets_replay::header::{FORMAT_VERSION, RecordedGame, ReplayHeader};
 use ferrets_replay::record::TickRecord;
 use ferrets_replay::recorder::Recorder;
 use ferrets_replay::replay::Replay;
@@ -11,12 +11,16 @@ use ferrets_simulation::command::PlayerCommand;
 use ferrets_simulation::session::finish_policy::FinishPolicy;
 use ferrets_simulation::session::player_slot::{PlayerId, PlayerSlot};
 use ferrets_simulation::session::player_type::PlayerType;
+use ferrets_simulation::skirmish::Skirmish;
 
 #[test]
 fn round_trips_header_and_records() {
     let buffer = SharedBuffer::default();
+    // A skirmish header, so the spelled-out definition — slots, map, finish
+    // policy — is proven to survive the round-trip.
+    let header = header();
     {
-        let mut recorder = Recorder::new(buffer.clone(), &header()).expect("start recording");
+        let mut recorder = Recorder::new(buffer.clone(), &header).expect("start recording");
         recorder.record(&record(0, &[], None)).expect("record 0");
         recorder
             .record(&record(1, &[commands(0)], Some(42)))
@@ -25,10 +29,26 @@ fn round_trips_header_and_records() {
 
     let replay = Replay::read(buffer.bytes().as_slice()).expect("read replay");
 
-    assert_eq!(replay.header().slots.len(), 2);
+    assert_eq!(replay.header(), &header);
     assert_eq!(replay.last_tick(), Some(1));
     assert_eq!(replay.inputs_at(1), &[commands(0)]);
     assert_eq!(replay.checksum_at(1), Some(42));
+}
+
+#[test]
+fn round_trips_scenario_header() {
+    let buffer = SharedBuffer::default();
+    // A scenario game is recorded by name alone; the name is what playback
+    // rebuilds the whole game from, so it must survive verbatim.
+    let header = ReplayHeader::new(RecordedGame::Scenario("build_army".to_string()));
+    {
+        let mut recorder = Recorder::new(buffer.clone(), &header).expect("start recording");
+        recorder.record(&record(0, &[], None)).expect("record 0");
+    }
+
+    let replay = Replay::read(buffer.bytes().as_slice()).expect("read replay");
+
+    assert_eq!(replay.header(), &header);
 }
 
 #[test]
@@ -125,7 +145,11 @@ fn header() -> ReplayHeader {
         PlayerSlot::occupied(0, PlayerType::Human, Some("human")),
         PlayerSlot::occupied(1, PlayerType::Ai, Some("orc")),
     ];
-    ReplayHeader::new(slots, FinishPolicy::LastStanding)
+    ReplayHeader::new(RecordedGame::Skirmish(Skirmish {
+        slots,
+        map: "demo".to_string(),
+        finish_policy: FinishPolicy::LastStanding,
+    }))
 }
 
 /// A tick record with the given per-player inputs and optional checksum, and no

@@ -17,7 +17,7 @@ use ferrets_network::transport::NetworkTransport;
 use ferrets_network::transport::loopback::LoopbackTransport;
 use ferrets_pathfinder::{astar::Projection, nav_grid::NavGrid, nav_size::NavSize};
 use ferrets_replay::buffer::SharedBuffer;
-use ferrets_replay::header::ReplayHeader;
+use ferrets_replay::header::{RecordedGame, ReplayHeader};
 use ferrets_replay::recorder::Recorder;
 use ferrets_replay::replay::Replay;
 use ferrets_simulation::{
@@ -33,6 +33,7 @@ use ferrets_simulation::{
         player_type::PlayerType,
     },
     simulation_id::SimulationId,
+    skirmish::Skirmish,
     spawn,
 };
 
@@ -731,7 +732,11 @@ fn game_with_mid_game_drop_records_and_replays_identically() {
     peer.world_mut().resource_mut::<DropConfig>().timeout_steps = 10;
 
     let buffer = SharedBuffer::default();
-    let header = ReplayHeader::new(three_human_slots(), FinishPolicy::Endless);
+    let header = ReplayHeader::new(RecordedGame::Skirmish(Skirmish {
+        slots: three_human_slots(),
+        map: "test".to_string(),
+        finish_policy: FinishPolicy::Endless,
+    }));
     let recorder = Recorder::new(buffer.clone(), &header).expect("start recording");
     ferrets_bevy_plugin::install_replay_recorder(host.world_mut(), recorder);
 
@@ -815,7 +820,11 @@ fn drop_decided_victory_replays_to_same_result() {
     }
 
     let buffer = SharedBuffer::default();
-    let header = ReplayHeader::new(three_human_slots(), FinishPolicy::LastStanding);
+    let header = ReplayHeader::new(RecordedGame::Skirmish(Skirmish {
+        slots: three_human_slots(),
+        map: "test".to_string(),
+        finish_policy: FinishPolicy::LastStanding,
+    }));
     let recorder = Recorder::new(buffer.clone(), &header).expect("start recording");
     ferrets_bevy_plugin::install_replay_recorder(host.world_mut(), recorder);
 
@@ -888,7 +897,11 @@ fn non_drop_victory_replays_to_same_result() {
     let mut record_app = combat_victory_app();
     record_app.add_plugins(ReplayPlugin);
     let buffer = SharedBuffer::default();
-    let header = ReplayHeader::new(two_human_slots(), FinishPolicy::LastStanding);
+    let header = ReplayHeader::new(RecordedGame::Skirmish(Skirmish {
+        slots: two_human_slots(),
+        map: "test".to_string(),
+        finish_policy: FinishPolicy::LastStanding,
+    }));
     let recorder = Recorder::new(buffer.clone(), &header).expect("start recording");
     ferrets_bevy_plugin::install_replay_recorder(record_app.world_mut(), recorder);
 
@@ -981,6 +994,7 @@ fn net_app_configured(transport: LoopbackTransport, roster: Roster, authority: A
     let session = GameSession::configured(
         local,
         slots,
+        "test",
         authority,
         DropPolicy::Automatic,
         FinishPolicy::Endless,

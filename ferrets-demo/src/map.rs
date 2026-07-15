@@ -17,28 +17,30 @@
 //! ```
 //!
 //! `#` start/base, `$` gold mine. Each corner also has a small tree grove, and
-//! four trees flank the centre mine. The camera opens framed on the local
-//! player's start point.
+//! four trees flank the centre mine. The mines and groves are neutral map
+//! placements; each slot's base is spawned by the game for its occupant. The
+//! camera opens framed on the local player's start point.
 
-use ferrets_pathfinder::{
-    astar::Projection,
-    nav_grid::{LayerId, NavGrid},
-    nav_pos::NavPos,
-};
+use ferrets_pathfinder::{astar::Projection, nav_grid::LayerId};
 use ferrets_simulation::map::Map;
+use ferrets_simulation::map_data::{MapData, Placement};
+
+/// The demo map's name — the session and replays reference it by this.
+pub const NAME: &str = "demo";
 
 /// The single ground navigation layer used by the demo.
 pub const GROUND: LayerId = LayerId::new(1);
-pub const WIDTH: u32 = 64;
-pub const HEIGHT: u32 = 64;
+
+const WIDTH: u32 = 64;
+const HEIGHT: u32 = 64;
 
 /// Player start cells, one per corner, indexed by slot id.
 pub const START_POINTS: [(u32, u32); 4] = [(8, 8), (52, 52), (8, 52), (52, 8)];
 /// Gold mine cells: one near each start point, plus a contested one in the center.
-pub const GOLD_MINES: [(u32, u32); 5] = [(14, 8), (46, 52), (14, 52), (46, 8), (31, 31)];
+const GOLD_MINES: [(u32, u32); 5] = [(14, 8), (46, 52), (14, 52), (46, 8), (31, 31)];
 /// Tree cells (1×1 wood sources): a grove near each start plus a few flanking the
 /// center mine.
-pub const TREES: &[(u32, u32)] = &[
+const TREES: &[(u32, u32)] = &[
     // Grove near player 0.
     (4, 12),
     (5, 12),
@@ -74,15 +76,46 @@ pub const TREES: &[(u32, u32)] = &[
     (34, 32),
 ];
 
-/// Builds the demo map.
+/// Looks up a map this game knows by name. The session names its map — like
+/// scenarios, maps are content the game must already have — and the scene
+/// spawner and replay playback resolve the name here.
+pub fn by_name(name: &str) -> Option<MapData> {
+    (name == NAME).then(data)
+}
+
+/// The demo map as data: the field, the corner start points, and the neutral
+/// mines and groves.
+pub fn data() -> MapData {
+    let mut placements = Vec::new();
+    for &cell in &GOLD_MINES {
+        placements.push(Placement {
+            type_name: "gold_mine".to_string(),
+            cell,
+            owner: None,
+            amount: Some(5000),
+        });
+    }
+    for &cell in TREES {
+        placements.push(Placement {
+            type_name: "tree".to_string(),
+            cell,
+            owner: None,
+            amount: Some(400),
+        });
+    }
+
+    MapData {
+        name: NAME.to_string(),
+        projection: Projection::Isometric,
+        width: WIDTH,
+        height: HEIGHT,
+        layers: vec![GROUND],
+        start_points: START_POINTS.to_vec(),
+        placements,
+    }
+}
+
+/// Builds the live demo map, empty of placements.
 pub fn build() -> Map {
-    let mut nav_grid = NavGrid::new(WIDTH, HEIGHT);
-    nav_grid.add_layer(GROUND);
-
-    let start_points = START_POINTS
-        .iter()
-        .map(|&(x, y)| NavPos::new(x, y))
-        .collect();
-
-    Map::new("demo", Projection::Isometric, nav_grid, start_points)
+    Map::from_data(&data())
 }

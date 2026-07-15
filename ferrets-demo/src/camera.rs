@@ -5,7 +5,6 @@ use bevy::prelude::*;
 use ferrets_simulation::map::Map;
 use ferrets_simulation::session::GameSession;
 
-use crate::map::START_POINTS;
 use crate::render::CELL_PX;
 
 const PAN_SPEED: f32 = 700.0;
@@ -20,18 +19,20 @@ pub fn spawn_camera(mut commands: Commands) {
 }
 
 /// Centers the camera on the local player's start point when the game begins.
+/// Runs after the scene spawners so it reads the map the game actually opens on.
 pub fn frame_local_player(
     session: Res<GameSession>,
+    map: Res<Map>,
     mut camera: Query<&mut Transform, With<Camera2d>>,
 ) {
-    let Some(&(sx, sy)) = START_POINTS.get(session.local_player() as usize) else {
+    let Some(start) = map.start_point(session.local_player()) else {
         return;
     };
     let Ok(mut transform) = camera.single_mut() else {
         return;
     };
-    transform.translation.x = (sx as f32 + 5.0) * CELL_PX;
-    transform.translation.y = -(sy as f32 + 5.0) * CELL_PX;
+    transform.translation.x = (start.x as f32 + 5.0) * CELL_PX;
+    transform.translation.y = -(start.y as f32 + 5.0) * CELL_PX;
 }
 
 /// Pans the camera with WASD/arrows and zooms with the scroll wheel, keeping the

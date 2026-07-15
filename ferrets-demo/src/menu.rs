@@ -3,6 +3,7 @@
 use bevy::prelude::*;
 
 use crate::replay::WatchReplayRequested;
+use crate::scenario::ScenarioRequested;
 use crate::states::{GameState, LobbyMode};
 
 const NORMAL: Color = Color::srgb(0.20, 0.20, 0.24);
@@ -18,6 +19,8 @@ pub struct MenuRoot;
 pub enum MenuButton {
     /// Opens the lobby in the given mode.
     Lobby(LobbyMode),
+    /// Starts the scripted story mission.
+    Scenario,
     /// Opens a replay file to watch.
     WatchReplay,
 }
@@ -51,6 +54,7 @@ pub fn setup_menu(mut commands: Commands) {
                 "Connect To Network Game",
                 MenuButton::Lobby(LobbyMode::Client)
             ),
+            menu_button("Scenario", MenuButton::Scenario),
             menu_button("Watch Replay", MenuButton::WatchReplay),
         ],
     ));
@@ -94,6 +98,10 @@ pub fn menu_buttons(
                         commands.insert_resource(*mode);
                         next.set(GameState::Lobby);
                     }
+                    // The session is configured and entered by start_scenario, which
+                    // runs in the menu; staying here keeps the menu responsive if the
+                    // scenario fails to load.
+                    MenuButton::Scenario => commands.insert_resource(ScenarioRequested),
                     // The dialog is opened (and the game entered) by start_watching,
                     // which runs in the menu; staying here keeps the menu responsive
                     // if the dialog is cancelled.

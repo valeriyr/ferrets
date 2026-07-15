@@ -1,7 +1,7 @@
 //! Minimal HUD: a resource bar and a context line for the current selection.
 
 use bevy::prelude::*;
-use ferrets_bevy_plugin::ReplayPlayback;
+use ferrets_bevy_plugin::{ReplayPlayback, ScenarioObjectives};
 use ferrets_simulation::{
     components::{
         build::BuilderStaticData,
@@ -31,6 +31,10 @@ pub struct SelectionText;
 
 #[derive(Component)]
 pub struct GameOverText;
+
+/// The scenario objectives checklist, shown only during a scripted mission.
+#[derive(Component)]
+pub struct ObjectivesText;
 
 /// A line shown during replay playback (its end, or a determinism mismatch).
 #[derive(Component)]
@@ -87,6 +91,24 @@ pub fn setup_hud(mut commands: Commands) {
             position_type: PositionType::Absolute,
             top: Val::Px(8.0),
             right: Val::Px(12.0),
+            ..default()
+        },
+    ));
+    // Scenario objectives, top-left below the resource bar. Empty (and invisible)
+    // outside a scripted mission.
+    commands.spawn((
+        InGameUi,
+        ObjectivesText,
+        Text::new(""),
+        TextFont {
+            font_size: 17.0,
+            ..default()
+        },
+        TextColor(Color::srgb(0.9, 0.95, 0.85)),
+        Node {
+            position_type: PositionType::Absolute,
+            top: Val::Px(40.0),
+            left: Val::Px(10.0),
             ..default()
         },
     ));
@@ -294,6 +316,32 @@ pub fn update_selection(
     }
 }
 
+/// Refreshes the scenario objectives checklist. Blank outside a scripted
+/// mission, so an ordinary game shows nothing.
+pub fn update_objectives(
+    objectives: Option<Res<ScenarioObjectives>>,
+    mut text: Query<&mut Text, With<ObjectivesText>>,
+) {
+    let Ok(mut text) = text.single_mut() else {
+        return;
+    };
+    let message = match objectives {
+        Some(objectives) if !objectives.0.is_empty() => {
+            let mut lines = vec![String::from("Objectives:")];
+            lines.extend(objectives.0.iter().map(|objective| {
+                format!(
+                    "[{}] {}",
+                    if objective.done { "x" } else { " " },
+                    objective.label
+                )
+            }));
+            lines.join("\n")
+        }
+        _ => String::new(),
+    };
+    **text = message;
+}
+
 /// Shows a Victory/Defeat/Draw banner once the session has finished.
 pub fn update_game_over(session: Res<GameSession>, mut text: Query<&mut Text, With<GameOverText>>) {
     let message = match session.result() {
@@ -301,6 +349,7 @@ pub fn update_game_over(session: Res<GameSession>, mut text: Query<&mut Text, Wi
         Some(GameResult::Draw) => "Draw",
         Some(GameResult::Desynchronization { .. }) => "Desynchronization!",
         Some(GameResult::Aborted) => "Aborted",
+        Some(GameResult::Defeat) => "Defeat",
         Some(GameResult::Victory { winner }) if winner == session.local_player() => "Victory!",
         Some(GameResult::Victory { .. }) => "Defeat",
     };

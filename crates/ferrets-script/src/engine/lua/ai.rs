@@ -107,22 +107,7 @@ fn register_define_ai(lua: &Lua, sink: &Rc<RefCell<Option<AiDefinition>>>) -> ml
                 )));
             }
         };
-        let period = match options.get::<Value>("period")? {
-            Value::Integer(period) if period >= 1 => u32::try_from(period)
-                .map_err(|_| ai_error(&format!("'period' {period} out of range")))?,
-            // Integral floats pass everywhere else on the boundary (integer
-            // division yields floats), so they pass here too.
-            Value::Number(period)
-                if period.fract() == 0.0 && (1.0..=u32::MAX as f64).contains(&period) =>
-            {
-                period as u32
-            }
-            other => {
-                return Err(ai_error(&format!(
-                    "'period' must be a positive integer, got {other:?}"
-                )));
-            }
-        };
+        let period = lua::parse_period(&options, ai_error)?;
 
         *slot = Some(AiDefinition {
             name,

@@ -4,11 +4,24 @@
 use std::collections::BTreeMap;
 
 use bevy_ecs::prelude::*;
+use serde::{Deserialize, Serialize};
 
 use crate::session::player_slot::PlayerId;
 
 /// A price in one or more resource kinds, e.g. `{"gold": 100, "wood": 50}`.
 pub type Cost = BTreeMap<String, u32>;
+
+/// One player's starting amount of one resource, as declared data seeding the
+/// live stockpile.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StartingStock {
+    /// The player whose stockpile is seeded.
+    pub player: PlayerId,
+    /// The resource to seed, by content name.
+    pub resource: String,
+    /// The amount the stockpile starts with.
+    pub amount: u32,
+}
 
 /// Builds a [`Cost`] from `(kind, amount)` entries, converting keys to owned
 /// strings. Does not validate amounts or kinds — the caller decides what counts

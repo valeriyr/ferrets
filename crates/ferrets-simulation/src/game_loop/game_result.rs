@@ -19,11 +19,11 @@ use crate::{
 /// survivor among them wins, and if none survive it is a draw. Dropped players are
 /// excluded from the survivors (they are still counted as occupied, so a 2-player
 /// game whose other side dropped still resolves), but kept on the map idle. Under
-/// [`FinishPolicy::Endless`] it never ends. Runs at the end of a tick, after
-/// deaths have been resolved.
+/// any other [`FinishPolicy`] it stands aside — the outcome is decided elsewhere.
+/// Runs at the end of a tick, after deaths have been resolved.
 pub fn check(world: &mut World) {
     let session = world.resource::<GameSession>();
-    if !session.is_active() || session.finish_policy() == FinishPolicy::Endless {
+    if !session.is_active() || session.finish_policy() != FinishPolicy::LastStanding {
         return;
     }
 

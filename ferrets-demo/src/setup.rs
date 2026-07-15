@@ -1,26 +1,27 @@
-//! One-time scene setup: spawn a base per occupied slot, seed resources, start
-//! the session. Runs on entering the game (`OnEnter(GameState::InGame)`) as an
-//! exclusive system because spawning needs `&mut World`.
+//! One-time scene setup: build the map with its neutral placements, spawn a
+//! base per occupied slot, seed resources, start the session. Runs on entering
+//! the game (`OnEnter(GameState::InGame)`) as an exclusive system because
+//! spawning needs `&mut World`.
 
 use bevy::prelude::*;
+use ferrets_bevy_plugin::instantiate_map;
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_simulation::{
-    components::resource::ResourceSourceComponent, resources::PlayerResources,
-    session::GameSession, session::player_slot::PlayerId, spawn,
+    map::Map, resources::PlayerResources, session::GameSession, session::player_slot::PlayerId,
+    spawn,
 };
-
-use crate::map::{GOLD_MINES, START_POINTS, TREES};
 
 fn cell(x: u32, y: u32) -> FixedUVec2 {
     FixedUVec2::new(FixedU64::from_num(x), FixedU64::from_num(y))
 }
 
-/// Spawns the starting scene from the session's slots (built by the lobby) and
-/// starts the simulation.
+/// Spawns the starting scene from the chosen map and the session's slots
+/// (built by the lobby), and starts the simulation.
 ///
-/// Each occupied slot (human or AI) gets a base playing its chosen race; closed
-/// slots are skipped. The slots are byte-identical on every peer, so the scene is
-/// too.
+/// The map contributes its own placements (the neutral mines and groves); each
+/// occupied slot (human or AI) then gets a base playing its chosen race at its
+/// start point, and closed slots are skipped. The slots are byte-identical on
+/// every peer, so the scene is too.
 pub fn spawn_demo_scene(world: &mut World) {
     // Occupied slots with their chosen race, gathered before mutating the world.
     let occupied: Vec<(PlayerId, String)> = {
@@ -33,29 +34,16 @@ pub fn spawn_demo_scene(world: &mut World) {
             .collect()
     };
 
+    // The session names the map; every entry path validated the name, so a
+    // miss here is a configuration bug, not user input.
+    let name = world.resource::<GameSession>().map().to_string();
+    let map = crate::map::by_name(&name)
+        .unwrap_or_else(|| panic!("the session names an unknown map '{name}'"));
+    instantiate_map(world, &map);
+
     for (player, race) in &occupied {
-        if (*player as usize) < START_POINTS.len() {
-            spawn_base(world, *player, race, START_POINTS[*player as usize]);
-        }
-    }
-
-    for &(x, y) in &GOLD_MINES {
-        if let Some((entity, _)) = spawn::spawn_entity(world, "gold_mine", cell(x, y), None)
-            && let Some(mut source) = world
-                .entity_mut(entity)
-                .get_mut::<ResourceSourceComponent>()
-        {
-            source.amount = 5000;
-        }
-    }
-
-    for &(x, y) in TREES {
-        if let Some((entity, _)) = spawn::spawn_entity(world, "tree", cell(x, y), None)
-            && let Some(mut source) = world
-                .entity_mut(entity)
-                .get_mut::<ResourceSourceComponent>()
-        {
-            source.amount = 400;
+        if let Some(start) = world.resource::<Map>().start_point(*player) {
+            spawn_base(world, *player, race, (start.x, start.y));
         }
     }
 
@@ -76,8 +64,9 @@ fn spawn_base(world: &mut World, player: PlayerId, race: &str, (x, y): (u32, u32
         _ => ("great_hall", "peon"),
     };
     let mut place = |type_name: &str, x: u32, y: u32| {
-        spawn::spawn_entity(world, type_name, cell(x, y), Some(player))
-            .unwrap_or_else(|| panic!("base cell ({x},{y}) for '{type_name}' must be free"));
+        if spawn::spawn_entity(world, type_name, cell(x, y), Some(player)).is_none() {
+            eprintln!("base cell ({x},{y}) cannot host '{type_name}'; spawn skipped");
+        }
     };
     place(hall, x, y);
     place(worker, x + 3, y);
