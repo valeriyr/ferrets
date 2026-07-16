@@ -142,8 +142,8 @@ fn rejects_unsupported_format_version() {
 /// A two-slot header to record against.
 fn header() -> ReplayHeader {
     let slots = vec![
-        PlayerSlot::occupied(0, PlayerType::Human, Some("human")),
-        PlayerSlot::occupied(1, PlayerType::Ai, Some("orc")),
+        PlayerSlot::occupied(0, PlayerType::Human, Some("human"), None),
+        PlayerSlot::occupied(1, PlayerType::Ai, Some("orc"), None),
     ];
     ReplayHeader::new(RecordedGame::Skirmish(Skirmish {
         slots,

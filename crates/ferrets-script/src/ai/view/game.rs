@@ -13,6 +13,8 @@ pub struct GameView {
     /// Stockpile per resource kind, in ascending kind order.
     pub resources: Vec<(String, u32)>,
     pub my_entities: Vec<EntityView>,
+    /// Entities owned by allied players (teammates), excluding the viewer's own.
+    pub ally_entities: Vec<EntityView>,
     pub enemy_entities: Vec<EntityView>,
     pub neutral_entities: Vec<EntityView>,
 }

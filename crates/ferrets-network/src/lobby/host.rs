@@ -5,7 +5,7 @@ use std::net::SocketAddr;
 
 use ferrets_simulation::session::drop_policy::DropPolicy;
 use ferrets_simulation::session::finish_policy::FinishPolicy;
-use ferrets_simulation::session::player_slot::PlayerId;
+use ferrets_simulation::session::player_slot::{PlayerId, TeamId};
 
 use crate::control::{ControlChannel, ControlEvent};
 use crate::message::control::{
@@ -45,6 +45,7 @@ impl LobbyHost {
                     Occupant::Open
                 },
                 race: Some(default_race.to_string()),
+                team: None,
             })
             .collect();
         Self {
@@ -134,6 +135,15 @@ impl LobbyHost {
     pub fn set_race(&mut self, slot: PlayerId, race: &str) -> crate::Result<()> {
         if let Some(info) = self.state.slots.get_mut(slot as usize) {
             info.race = Some(race.to_string());
+            self.broadcast_state()?;
+        }
+        Ok(())
+    }
+
+    /// Sets a slot's team (`None` = no team). Re-broadcasts.
+    pub fn set_team(&mut self, slot: PlayerId, team: Option<TeamId>) -> crate::Result<()> {
+        if let Some(info) = self.state.slots.get_mut(slot as usize) {
+            info.team = team;
             self.broadcast_state()?;
         }
         Ok(())
@@ -251,6 +261,16 @@ impl LobbyHost {
                 match self.state.slots.get_mut(slot as usize) {
                     Some(info) if info.occupant == (Occupant::Human { peer: from }) => {
                         info.race = Some(race);
+                        Ok(true)
+                    }
+                    _ => Ok(false),
+                }
+            }
+            LobbyMessage::RequestTeam { slot, team } => {
+                // A client may only set the team of the slot it occupies.
+                match self.state.slots.get_mut(slot as usize) {
+                    Some(info) if info.occupant == (Occupant::Human { peer: from }) => {
+                        info.team = team;
                         Ok(true)
                     }
                     _ => Ok(false),

@@ -5,17 +5,31 @@ use std::collections::{BTreeMap, BTreeSet};
 use bevy_ecs::prelude::*;
 
 use super::entity_type_def::EntityTypeDef;
+use crate::components::tags;
 
 /// Stores every [`EntityTypeDef`], keyed by type name,
 /// as well as all the other registered content.
 ///
 /// Everything is held in ordered containers, so iteration over the registry is
 /// deterministic.
-#[derive(Resource, Default)]
+#[derive(Resource)]
 pub struct ContentRegistry {
     entities: BTreeMap<String, EntityTypeDef>,
     resources: BTreeSet<String>,
     races: BTreeSet<String>,
+    tags: BTreeSet<String>,
+}
+
+impl Default for ContentRegistry {
+    /// A fresh registry already carries the engine's reserved tags.
+    fn default() -> Self {
+        Self {
+            entities: BTreeMap::new(),
+            resources: BTreeSet::new(),
+            races: BTreeSet::new(),
+            tags: BTreeSet::from([tags::BUILDING.to_string()]),
+        }
+    }
 }
 
 impl ContentRegistry {
@@ -34,8 +48,8 @@ impl ContentRegistry {
     ///
     /// Panics if a type with the same name is already registered, or if the
     /// definition has no location, belongs to an unregistered race, references an
-    /// unregistered resource kind, or leaves a corpse type that is unregistered,
-    /// has no dying phase, or defines live-gameplay data.
+    /// unregistered resource kind or tag, or leaves a corpse type that is
+    /// unregistered, has no dying phase, or defines live-gameplay data.
     pub fn register(&mut self, def: EntityTypeDef) {
         assert!(
             !self.entities.contains_key(&def.name),
@@ -46,6 +60,7 @@ impl ContentRegistry {
         self.validate_location(&def);
         self.validate_race(&def);
         self.validate_resource_kinds(&def);
+        self.validate_tags(&def);
         self.validate_corpse(&def);
 
         self.entities.insert(def.name.clone(), def);
@@ -110,6 +125,20 @@ impl ContentRegistry {
         self.races.contains(name)
     }
 
+    /// Registers a classification tag (building, …).
+    ///
+    /// Panics if `tag` is empty.
+    pub fn register_tag(&mut self, tag: impl Into<String>) {
+        let tag = tag.into();
+        assert!(!tag.is_empty(), "tag must not be empty");
+        self.tags.insert(tag);
+    }
+
+    /// Returns `true` if `tag` is a registered tag.
+    pub fn has_tag(&self, tag: &str) -> bool {
+        self.tags.contains(tag)
+    }
+
     /// Checks that the definition has the mandatory location properties.
     fn validate_location(&self, def: &EntityTypeDef) {
         assert!(
@@ -155,6 +184,17 @@ impl ContentRegistry {
             for kind in storage.kinds() {
                 check_kind(kind, "resource storage");
             }
+        }
+    }
+
+    /// Checks that every tag the definition carries is registered.
+    fn validate_tags(&self, def: &EntityTypeDef) {
+        for tag in &def.tags {
+            assert!(
+                self.has_tag(tag),
+                "entity type '{}' references unregistered tag '{tag}'",
+                def.name
+            );
         }
     }
 

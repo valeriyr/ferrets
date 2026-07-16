@@ -515,6 +515,7 @@ fn view_at_tick(tick: u32) -> GameView {
         map_height: 64,
         resources: Vec::new(),
         my_entities: Vec::new(),
+        ally_entities: Vec::new(),
         enemy_entities: Vec::new(),
         neutral_entities: Vec::new(),
     }
@@ -557,6 +558,7 @@ fn populated_view(tick: u32) -> GameView {
                 resource_amount: None,
             },
         ],
+        ally_entities: Vec::new(),
         enemy_entities: Vec::new(),
         neutral_entities: vec![EntityView {
             id: 3,

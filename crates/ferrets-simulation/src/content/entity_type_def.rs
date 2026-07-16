@@ -1,5 +1,7 @@
 //! Definition of a single entity type — the content-level blueprint for spawning.
 
+use std::collections::BTreeSet;
+
 use ferrets_math::FixedU64;
 use ferrets_pathfinder::{layer_mask::LayerMask, nav_size::NavSize};
 
@@ -62,6 +64,9 @@ pub struct EntityTypeDef {
     pub resource_carrier: Option<ResourceCarrierStaticData>,
     /// Resource kinds accepted for delivery. `None` means the entity is not a storage.
     pub resource_storage: Option<ResourceStorageStaticData>,
+    /// Content-declared classification tags (e.g. `building`). Each must be a
+    /// registered tag.
+    pub tags: BTreeSet<String>,
 }
 
 impl EntityTypeDef {
@@ -88,6 +93,7 @@ impl EntityTypeDef {
             resource_source: None,
             resource_carrier: None,
             resource_storage: None,
+            tags: BTreeSet::new(),
         }
     }
 
@@ -225,6 +231,18 @@ impl EntityTypeDef {
         carries: impl IntoIterator<Item = (impl Into<String>, HarvestData)>,
     ) -> Self {
         self.resource_carrier = Some(ResourceCarrierStaticData::new(carries));
+        self
+    }
+
+    /// Adds classification tags to this type (see [`tags`](Self::tags)).
+    ///
+    /// Panics if any tag name is empty.
+    pub fn with_tags(mut self, tags: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        for tag in tags {
+            let tag = tag.into();
+            assert!(!tag.is_empty(), "tag names must not be empty");
+            self.tags.insert(tag);
+        }
         self
     }
 

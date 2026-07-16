@@ -6,7 +6,7 @@
 
 use std::net::SocketAddr;
 
-use ferrets_simulation::session::player_slot::PlayerId;
+use ferrets_simulation::session::player_slot::{PlayerId, TeamId};
 use serde::{Deserialize, Serialize};
 
 use crate::{peer::PeerId, session_mode::SessionMode};
@@ -39,6 +39,9 @@ pub struct SlotInfo {
     pub occupant: Occupant,
     /// The chosen race id, if any.
     pub race: Option<String>,
+    /// The team the slot belongs to. `None` means no team — the player is
+    /// hostile to everyone.
+    pub team: Option<TeamId>,
 }
 
 /// Everything the host decides and every client mirrors: the slot list plus
@@ -88,6 +91,12 @@ pub enum LobbyMessage {
     /// Client → host: a request to set a slot's race. The host validates it and
     /// re-broadcasts the [`State`](Self::State).
     RequestRace { slot: PlayerId, race: String },
+    /// Client → host: a request to set a slot's team (`None` = no team). The
+    /// host validates it and re-broadcasts the [`State`](Self::State).
+    RequestTeam {
+        slot: PlayerId,
+        team: Option<TeamId>,
+    },
     /// Host → all: lock the lobby and begin. The state is already synced, so this
     /// carries only what the lobby broadcasts did not — the endpoint tables:
     /// UDP gameplay endpoints for a mesh game, and TCP control endpoints for a

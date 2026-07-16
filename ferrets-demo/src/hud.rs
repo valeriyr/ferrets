@@ -107,7 +107,7 @@ pub fn setup_hud(mut commands: Commands) {
         TextColor(Color::srgb(0.9, 0.95, 0.85)),
         Node {
             position_type: PositionType::Absolute,
-            top: Val::Px(40.0),
+            top: Val::Px(80.0),
             left: Val::Px(10.0),
             ..default()
         },
@@ -350,7 +350,12 @@ pub fn update_game_over(session: Res<GameSession>, mut text: Query<&mut Text, Wi
         Some(GameResult::Desynchronization { .. }) => "Desynchronization!",
         Some(GameResult::Aborted) => "Aborted",
         Some(GameResult::Defeat) => "Defeat",
-        Some(GameResult::Victory { winner }) if winner == session.local_player() => "Victory!",
+        // Victory for the winning side; every other player sees a defeat.
+        Some(GameResult::Victory { winner })
+            if session.is_winner(session.local_player(), winner) =>
+        {
+            "Victory!"
+        }
         Some(GameResult::Victory { .. }) => "Defeat",
     };
 

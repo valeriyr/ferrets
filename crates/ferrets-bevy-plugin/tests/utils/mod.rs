@@ -147,7 +147,7 @@ pub fn gold(world: &World) -> u32 {
 /// dying phase) and an immobile dummy that leaves decaying bones — one human
 /// player, session started.
 pub fn combat_app() -> App {
-    let mut app = make_app(vec![PlayerSlot::occupied(0, PlayerType::Human, None)]);
+    let mut app = make_app(vec![PlayerSlot::occupied(0, PlayerType::Human, None, None)]);
 
     {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
@@ -184,8 +184,8 @@ pub fn combat_app() -> App {
 /// movement, follow, and command dispatch.
 pub fn orders_app() -> App {
     let mut app = make_app(vec![
-        PlayerSlot::occupied(0, PlayerType::Human, None),
-        PlayerSlot::occupied(1, PlayerType::Human, None),
+        PlayerSlot::occupied(0, PlayerType::Human, None, None),
+        PlayerSlot::occupied(1, PlayerType::Human, None, None),
     ]);
     register_orders_content(&mut app);
     app.world_mut().resource_mut::<GameSession>().start();

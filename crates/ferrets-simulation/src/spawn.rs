@@ -16,6 +16,7 @@ use crate::{
         owner::OwnerComponent,
         pending_reveal::PendingRevealComponent,
         resource::{ResourceCarrierComponent, ResourceSourceComponent},
+        tags::TagsComponent,
         train::TrainQueueComponent,
     },
     content::registry::ContentRegistry,
@@ -54,6 +55,7 @@ pub fn spawn_entity(
         resource_source,
         resource_carrier,
         resource_storage,
+        tags,
     ) = {
         let registry = world.resource::<ContentRegistry>();
         let type_def = registry.entity(type_name)?;
@@ -68,6 +70,7 @@ pub fn spawn_entity(
             type_def.resource_source.clone(),
             type_def.resource_carrier.clone(),
             type_def.resource_storage.clone(),
+            type_def.tags.clone(),
         )
     };
 
@@ -117,6 +120,9 @@ pub fn spawn_entity(
     }
     if let Some(storage_data) = resource_storage {
         entity_mut.insert(storage_data);
+    }
+    if !tags.is_empty() {
+        entity_mut.insert(TagsComponent::new(tags));
     }
     let entity = entity_mut.id();
 

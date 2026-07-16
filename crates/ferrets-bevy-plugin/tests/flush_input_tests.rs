@@ -13,9 +13,9 @@ use ferrets_simulation::{
 #[test]
 fn commands_issued_while_blocked_flush_once_tick_resumes() {
     let mut app = utils::make_app(vec![
-        PlayerSlot::occupied(0, PlayerType::Human, None),
+        PlayerSlot::occupied(0, PlayerType::Human, None, None),
         // A remote human with no frame source: the loop blocks at tick 2.
-        PlayerSlot::occupied(1, PlayerType::Human, None),
+        PlayerSlot::occupied(1, PlayerType::Human, None, None),
     ]);
     app.world_mut().resource_mut::<GameSession>().start();
     utils::run_steps(&mut app, 3);

@@ -22,7 +22,7 @@ use ferrets_simulation::{
     resources::{PlayerResources, StartingStock},
     scenario::Scenario,
     session::{
-        GameResult, GameSession, finish_policy::FinishPolicy, player_slot::PlayerSlot,
+        GameResult, GameSession, Winner, finish_policy::FinishPolicy, player_slot::PlayerSlot,
         player_type::PlayerType,
     },
     spawn,
@@ -50,7 +50,9 @@ fn victory_once_objectives_are_met() {
 
     assert_eq!(
         app.world().resource::<GameSession>().result(),
-        Some(GameResult::Victory { winner: 0 }),
+        Some(GameResult::Victory {
+            winner: Winner::Player(0)
+        }),
     );
 }
 
@@ -198,7 +200,7 @@ fn placement_on_occupied_cell_is_skipped() {
 #[test]
 fn placements_of_unoccupied_slots_are_skipped() {
     let mut app = utils::make_app(vec![
-        PlayerSlot::occupied(0, PlayerType::Human, None),
+        PlayerSlot::occupied(0, PlayerType::Human, None, None),
         PlayerSlot::free(1),
     ]);
     utils::register_orders_content(&mut app);
@@ -300,7 +302,7 @@ fn scene_map() -> MapData {
 fn scene_scenario() -> Scenario {
     Scenario {
         name: "mission".to_string(),
-        slots: vec![PlayerSlot::occupied(0, PlayerType::Human, None)],
+        slots: vec![PlayerSlot::occupied(0, PlayerType::Human, None, None)],
         judged_player: 0,
         map: scene_map(),
         stockpile: vec![StartingStock {

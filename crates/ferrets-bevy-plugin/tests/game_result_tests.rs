@@ -1,133 +1,247 @@
-//! Victory condition: under `LastStanding` the session ends when one player's
-//! entities are all gone; under `Endless` it never ends on its own.
+//! Victory condition under `LastStanding`: the last team (or lone player) with a
+//! building standing wins, a player whose buildings are all gone is defeated, and
+//! the local player hears of its own elimination even while other teams fight on.
+//! Under `Endless` the session never ends on its own.
 
 mod utils;
 
-use ferrets_math::FixedU64;
+use bevy::prelude::{App, Entity};
 use ferrets_pathfinder::nav_size::NavSize;
 use ferrets_simulation::{
-    command::PlayerCommand,
     components::location::Solidity,
     content::{entity_type_def::EntityTypeDef, registry::ContentRegistry},
     session::{
-        GameResult, GameSession, finish_policy::FinishPolicy, player_slot::PlayerSlot,
+        GameResult, GameSession, Winner,
+        finish_policy::FinishPolicy,
+        player_slot::{PlayerId, PlayerSlot, TeamId},
         player_type::PlayerType,
     },
-    simulation_id::SimulationId,
     spawn,
 };
 
 use utils::GROUND;
 
 #[test]
-fn last_standing_wins_when_only_opponent_is_destroyed() {
-    let mut app = utils::orders_app();
-    app.world_mut()
-        .resource_mut::<GameSession>()
-        .set_finish_policy(FinishPolicy::LastStanding);
+fn last_standing_wins_when_only_opponent_base_is_destroyed() {
+    let (mut app, bases) = bases_app(&[None, None]);
 
-    let world = app.world_mut();
-    let (_, attacker_id) =
-        spawn::spawn_entity(world, "soldier", utils::pos(5, 5), Some(0)).unwrap();
-    let (_, enemy_id) = spawn::spawn_entity(world, "soldier", utils::pos(7, 5), Some(1)).unwrap();
-
-    // Both players still field a unit, so the game is in progress.
+    // Both players hold a base, so the game is in progress.
     utils::run_ticks(&mut app, 1);
-    assert_eq!(app.world().resource::<GameSession>().result(), None);
+    assert_eq!(result(&app), None);
 
-    // Player 1's only unit is chased down, killed, and despawned — player 0 wins.
-    attack(&mut app, attacker_id, enemy_id, 18);
+    // Player 1's base falls — player 0 is the last one standing and wins.
+    destroy(&mut app, bases[1]);
+    utils::run_ticks(&mut app, 1);
     assert_eq!(
-        app.world().resource::<GameSession>().result(),
-        Some(GameResult::Victory { winner: 0 }),
+        result(&app),
+        Some(GameResult::Victory {
+            winner: Winner::Player(0)
+        })
     );
 }
 
 #[test]
-fn endless_never_finishes_even_when_player_is_wiped_out() {
-    // orders_app uses the Endless policy: destroying every opposing unit must not
-    // end the game.
-    let mut app = utils::orders_app();
+fn surviving_unit_does_not_save_player_whose_last_building_falls() {
+    let (mut app, bases) = bases_app(&[None, None]);
+
+    // Player 1 keeps a soldier on the field, but only buildings count.
     let world = app.world_mut();
-    let (_, attacker_id) =
-        spawn::spawn_entity(world, "soldier", utils::pos(5, 5), Some(0)).unwrap();
-    let (_, enemy_id) = spawn::spawn_entity(world, "soldier", utils::pos(7, 5), Some(1)).unwrap();
+    spawn::spawn_entity(world, "soldier", utils::pos(20, 20), Some(1)).unwrap();
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(result(&app), None);
 
-    attack(&mut app, attacker_id, enemy_id, 18);
+    destroy(&mut app, bases[1]);
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(
+        result(&app),
+        Some(GameResult::Victory {
+            winner: Winner::Player(0)
+        })
+    );
+}
 
-    assert_eq!(app.world().resource::<GameSession>().result(), None);
+#[test]
+fn endless_never_finishes_even_when_a_base_is_destroyed() {
+    let (mut app, bases) = bases_app(&[None, None]);
+    app.world_mut()
+        .resource_mut::<GameSession>()
+        .set_finish_policy(FinishPolicy::Endless);
+
+    destroy(&mut app, bases[1]);
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(result(&app), None);
 }
 
 #[test]
 fn dropped_player_is_excluded_so_game_resolves_among_rest() {
-    let mut app = three_player_soldier_app();
-    let world = app.world_mut();
-    let (_, p0) = spawn::spawn_entity(world, "soldier", utils::pos(5, 5), Some(0)).unwrap();
-    let (_, p1) = spawn::spawn_entity(world, "soldier", utils::pos(7, 5), Some(1)).unwrap();
-    // Player 2's unit sits far away and never moves.
-    spawn::spawn_entity(world, "soldier", utils::pos(20, 20), Some(2)).unwrap();
+    let (mut app, bases) = bases_app(&[None, None, None]);
 
-    // All three present → in progress.
+    // All three hold a base → in progress.
     utils::run_ticks(&mut app, 1);
-    assert_eq!(app.world().resource::<GameSession>().result(), None);
+    assert_eq!(result(&app), None);
 
-    // Player 2 drops. Two players still field units, so the game continues —
-    // player 2's lingering unit does not keep the game alive.
+    // Player 2 drops; its base lingers but it no longer counts as a survivor,
+    // and players 0 and 1 are still in it.
     let tick = app.world().resource::<GameSession>().tick();
     app.world_mut()
         .resource_mut::<GameSession>()
         .drop_player(2, tick);
     utils::run_ticks(&mut app, 1);
-    assert_eq!(app.world().resource::<GameSession>().result(), None);
+    assert_eq!(result(&app), None);
 
-    // Player 0 wipes player 1. Only player 0 (non-dropped) survives → it wins,
-    // even though player 2's idle unit is still on the map.
-    attack(&mut app, p0, p1, 18);
+    // Player 1's base falls; only player 0 remains, even though player 2's base
+    // still stands on the map.
+    destroy(&mut app, bases[1]);
+    utils::run_ticks(&mut app, 1);
     assert_eq!(
-        app.world().resource::<GameSession>().result(),
-        Some(GameResult::Victory { winner: 0 }),
+        result(&app),
+        Some(GameResult::Victory {
+            winner: Winner::Player(0)
+        })
     );
+}
+
+#[test]
+fn local_player_is_eliminated_when_its_base_falls_while_others_fight() {
+    // A free-for-all: the local player 0 against two others, no teams.
+    let (mut app, bases) = bases_app(&[None, None, None]);
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(result(&app), None);
+
+    // The local player's base is destroyed while players 1 and 2 keep theirs.
+    // Two teams remain, so there is no winner yet — but the local player learns
+    // of its own defeat at once, instead of spectating forever.
+    destroy(&mut app, bases[0]);
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(result(&app), Some(GameResult::Defeat));
+}
+
+#[test]
+fn allied_team_wins_when_the_other_team_is_eliminated() {
+    // Two-on-two: players 0 and 1 on team 1, players 2 and 3 on team 2.
+    let (mut app, bases) = bases_app(&[Some(1), Some(1), Some(2), Some(2)]);
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(result(&app), None);
+
+    // Team 2's bases both fall; team 1 wins as a team.
+    destroy(&mut app, bases[2]);
+    destroy(&mut app, bases[3]);
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(
+        result(&app),
+        Some(GameResult::Victory {
+            winner: Winner::Team(1)
+        })
+    );
+}
+
+#[test]
+fn one_team_standing_wins_when_member_has_fallen() {
+    // Two-on-two: destroy one whole team plus one member of the other.
+    let (mut app, bases) = bases_app(&[Some(1), Some(1), Some(2), Some(2)]);
+    utils::run_ticks(&mut app, 1);
+
+    destroy(&mut app, bases[1]);
+    destroy(&mut app, bases[2]);
+    destroy(&mut app, bases[3]);
+    utils::run_ticks(&mut app, 1);
+    // Only team 1 remains, through player 0.
+    assert_eq!(
+        result(&app),
+        Some(GameResult::Victory {
+            winner: Winner::Team(1)
+        })
+    );
+}
+
+#[test]
+fn all_allied_lineup_wins_at_once() {
+    // Both players on the same team: with no opposing side they are already the
+    // last team standing, so the team wins immediately. (A game meant to run on
+    // without a verdict uses the Endless policy.)
+    let (mut app, _) = bases_app(&[Some(1), Some(1)]);
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(
+        result(&app),
+        Some(GameResult::Victory {
+            winner: Winner::Team(1)
+        })
+    );
+}
+
+#[test]
+fn draw_when_last_teams_fall_together() {
+    let (mut app, bases) = bases_app(&[None, None]);
+    utils::run_ticks(&mut app, 1);
+
+    destroy(&mut app, bases[0]);
+    destroy(&mut app, bases[1]);
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(result(&app), Some(GameResult::Draw));
 }
 
 //
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 //
 
-/// A 3-player `LastStanding` app with a minimal `soldier` roster, started.
-fn three_player_soldier_app() -> bevy::prelude::App {
-    let mut app = utils::make_app(vec![
-        PlayerSlot::occupied(0, PlayerType::Human, None),
-        PlayerSlot::occupied(1, PlayerType::Human, None),
-        PlayerSlot::occupied(2, PlayerType::Human, None),
-    ]);
+/// A started `LastStanding` app seating one player per entry in `teams` (each a
+/// team id, or `None` for no team), with the local player at slot `0`. The roster
+/// is one building type, `base`, and one `soldier`; every player is given a base,
+/// and the bases are returned indexed by player id.
+fn bases_app(teams: &[Option<TeamId>]) -> (App, Vec<Entity>) {
+    let slots = teams
+        .iter()
+        .enumerate()
+        .map(|(id, team)| PlayerSlot::occupied(id as PlayerId, PlayerType::Human, None, *team))
+        .collect();
+    let mut app = utils::make_app(slots);
     app.world_mut()
         .resource_mut::<GameSession>()
         .set_finish_policy(FinishPolicy::LastStanding);
     {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
         registry.register(
-            EntityTypeDef::new("soldier")
+            EntityTypeDef::new("base")
                 .with_location(GROUND, NavSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5))
                 .with_health(30)
                 .with_dying(2, None)
-                .with_attack(10, 1, 2, 2),
+                .with_tags(["building"]),
+        );
+        registry.register(
+            EntityTypeDef::new("soldier")
+                .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+                .with_health(30)
+                .with_dying(2, None),
         );
         registry.validate();
     }
+    let bases = {
+        let world = app.world_mut();
+        teams
+            .iter()
+            .enumerate()
+            .map(|(id, _)| {
+                let (entity, _) = spawn::spawn_entity(
+                    world,
+                    "base",
+                    utils::pos(2 + id as u32 * 4, 2),
+                    Some(id as PlayerId),
+                )
+                .expect("base placement");
+                entity
+            })
+            .collect()
+    };
     app.world_mut().resource_mut::<GameSession>().start();
-    app
+    (app, bases)
 }
 
-/// Issues an attack from `attacker` onto `target` and runs `ticks` ticks.
-fn attack(app: &mut bevy::prelude::App, attacker: SimulationId, target: SimulationId, ticks: u32) {
-    utils::push_command(app, PlayerCommand::SelectById { id: attacker });
-    utils::push_command(
-        app,
-        PlayerCommand::SendToEntity {
-            target,
-            flush: true,
-        },
-    );
-    utils::run_ticks(app, ticks);
+/// Starts the given entity's dying phase, taking it out of the standing-building
+/// count on the next check.
+fn destroy(app: &mut App, entity: Entity) {
+    spawn::destroy_entity(app.world_mut(), entity);
+}
+
+fn result(app: &App) -> Option<GameResult> {
+    app.world().resource::<GameSession>().result()
 }

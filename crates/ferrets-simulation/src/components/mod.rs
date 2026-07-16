@@ -16,4 +16,5 @@ pub mod order_queue;
 pub mod owner;
 pub mod pending_reveal;
 pub mod resource;
+pub mod tags;
 pub mod train;

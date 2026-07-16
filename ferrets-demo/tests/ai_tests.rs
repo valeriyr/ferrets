@@ -40,9 +40,9 @@ fn ai_script_loads() {
 fn ai_builds_economy_and_army() {
     let slots = vec![
         // An idle human, so the AIs have something to attack eventually.
-        PlayerSlot::occupied(0, PlayerType::Human, Some("human")),
-        PlayerSlot::occupied(1, PlayerType::Ai, Some("human")),
-        PlayerSlot::occupied(2, PlayerType::Ai, Some("orc")),
+        PlayerSlot::occupied(0, PlayerType::Human, Some("human"), None),
+        PlayerSlot::occupied(1, PlayerType::Ai, Some("human"), None),
+        PlayerSlot::occupied(2, PlayerType::Ai, Some("orc"), None),
         PlayerSlot::free(3),
     ];
     let mut app = App::new();

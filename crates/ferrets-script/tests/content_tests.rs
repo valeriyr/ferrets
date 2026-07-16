@@ -63,6 +63,37 @@ fn wires_production_catalogues_across_entities() {
 }
 
 //
+// ─── Tags ─────────────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn loads_declared_tags_onto_entities() {
+    let source = r#"
+        define_tag("flying")
+        define_entity("gryphon", {
+            location = { occupation = 1, size = 1, solidity = "solid" },
+            tags = { "flying" },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("load content");
+
+    assert!(registry.has_tag("flying"));
+    assert!(registry.entity("gryphon").unwrap().tags.contains("flying"));
+}
+
+#[test]
+#[should_panic(expected = "references unregistered tag 'flying'")]
+fn undeclared_tag_panics_on_load() {
+    let source = r#"
+        define_entity("gryphon", {
+            location = { occupation = 1, size = 1, solidity = "solid" },
+            tags = { "flying" },
+        })
+    "#;
+    let _ = content::load(&engine(), source);
+}
+
+//
 // ─── Errors, not panics ──────────────────────────────────────────────────────
 //
 

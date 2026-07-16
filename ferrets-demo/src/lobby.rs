@@ -21,7 +21,7 @@ use ferrets_simulation::session::{
     ai_hosting::AiHosting,
     drop_policy::DropPolicy,
     finish_policy::FinishPolicy,
-    player_slot::{PlayerId, PlayerSlot},
+    player_slot::{PlayerId, PlayerSlot, TeamId},
     player_type::PlayerType,
 };
 
@@ -117,6 +117,25 @@ pub enum LobbyField {
 pub struct SlotView {
     pub kind: SlotKind,
     pub race: Race,
+    /// The team the slot plays on, or `None` for no team (a free-for-all
+    /// player, hostile to everyone).
+    pub team: Option<TeamId>,
+}
+
+/// The team a slot cycles to after `team`: no team → 1 → 2 → … →
+/// [`SLOTS`](SLOTS) → no team. Enough distinct teams for every slot to pick
+/// its own.
+fn next_team(team: Option<TeamId>) -> Option<TeamId> {
+    match team {
+        None => Some(1),
+        Some(current) if (current as usize) < SLOTS => Some(current + 1),
+        Some(_) => None,
+    }
+}
+
+/// A team's short label for the slot row: a number, or `-` for no team.
+fn team_label(team: Option<TeamId>) -> String {
+    team.map_or_else(|| "-".to_string(), |team| team.to_string())
 }
 
 /// The lobby's working configuration.
@@ -154,6 +173,7 @@ impl LobbyConfig {
                     (LobbyMode::Client, _) => SlotKind::Open,
                 },
                 race: if i % 2 == 0 { Race::Human } else { Race::Orc },
+                team: None,
             })
             .collect();
         Self {
@@ -209,6 +229,7 @@ pub struct LobbyRoot;
 pub enum LobbyButton {
     Kind(u8),
     Race(u8),
+    Team(u8),
     Claim(u8),
     Mode,
     AiHosting,
@@ -355,6 +376,7 @@ fn mirror(
                 Occupant::Closed => SlotKind::Closed,
             },
             race: Race::from_id(info.race.as_deref()),
+            team: info.team,
         })
         .collect();
     config.mode = mode;
@@ -474,6 +496,7 @@ pub fn lobby_buttons(
         match button {
             LobbyButton::Kind(slot) => cycle_kind(&mode, link.as_deref_mut(), &mut config, *slot),
             LobbyButton::Race(slot) => toggle_race(&mode, link.as_deref_mut(), &mut config, *slot),
+            LobbyButton::Team(slot) => cycle_team(&mode, link.as_deref_mut(), &mut config, *slot),
             LobbyButton::Claim(slot) => {
                 if *mode == LobbyMode::Local {
                     claim_local(&mut config, *slot);
@@ -535,6 +558,23 @@ fn toggle_race(mode: &LobbyMode, link: Option<&mut LobbyLink>, config: &mut Lobb
             }
         }
         (LobbyMode::Local, _) => config.slots[slot as usize].race = race,
+        _ => {}
+    }
+}
+
+fn cycle_team(mode: &LobbyMode, link: Option<&mut LobbyLink>, config: &mut LobbyConfig, slot: u8) {
+    let team = next_team(config.slots[slot as usize].team);
+    match (mode, link) {
+        // The host arranges every slot's team; a client may only set its own.
+        (LobbyMode::Host, Some(LobbyLink::Host(host))) => {
+            let _ = host.set_team(slot, team);
+        }
+        (LobbyMode::Client, Some(LobbyLink::Client(client))) => {
+            if client.local_player() == Some(slot) {
+                let _ = client.request_team(team);
+            }
+        }
+        (LobbyMode::Local, _) => config.slots[slot as usize].team = team,
         _ => {}
     }
 }
@@ -841,6 +881,7 @@ pub fn setup_lobby(mut commands: Commands, mode: Res<LobbyMode>) {
                     spawn_button(row, "Kind", LobbyButton::Kind(slot));
                 }
                 spawn_button(row, "Race", LobbyButton::Race(slot));
+                spawn_button(row, "Team", LobbyButton::Team(slot));
                 if matches!(*mode, LobbyMode::Local) {
                     spawn_button(row, "Play here", LobbyButton::Claim(slot));
                 }
@@ -987,9 +1028,9 @@ pub fn update_lobby_view(
     mut udp_port: Query<&mut Text, With<UdpPortText>>,
     mut buttons: Query<(&LobbyButton, &mut Node)>,
 ) {
-    // A client may only set its own slot's race, so hide every other Race button.
+    // A client may only edit its own slot, so hide every other Race/Team button.
     for (button, mut node) in &mut buttons {
-        if let LobbyButton::Race(slot) = button {
+        if let LobbyButton::Race(slot) | LobbyButton::Team(slot) = button {
             let show = *mode != LobbyMode::Client || *slot == config.local_slot;
             node.display = if show { Display::Flex } else { Display::None };
         }
@@ -1005,10 +1046,11 @@ pub fn update_lobby_view(
             ""
         };
         *text = Text::new(format!(
-            "Slot {}: {} - {}{you}",
+            "Slot {}: {} - {} - Team {}{you}",
             slot.0,
             view.kind.label(),
             view.race.label(),
+            team_label(view.team),
         ));
     }
     if let Ok(mut text) = mode_text.single_mut() {
@@ -1173,9 +1215,11 @@ fn player_slots(config: &LobbyConfig) -> Vec<PlayerSlot> {
             let id = i as PlayerId;
             match view.kind {
                 SlotKind::Human => {
-                    PlayerSlot::occupied(id, PlayerType::Human, Some(view.race.id()))
+                    PlayerSlot::occupied(id, PlayerType::Human, Some(view.race.id()), view.team)
                 }
-                SlotKind::Ai => PlayerSlot::occupied(id, PlayerType::Ai, Some(view.race.id())),
+                SlotKind::Ai => {
+                    PlayerSlot::occupied(id, PlayerType::Ai, Some(view.race.id()), view.team)
+                }
                 SlotKind::Open | SlotKind::Closed => PlayerSlot::free(id),
             }
         })

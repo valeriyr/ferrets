@@ -3,8 +3,8 @@
 use ferrets_simulation::session::drop_policy::DropPolicy;
 use ferrets_simulation::session::finish_policy::FinishPolicy;
 use ferrets_simulation::session::{
-    GameResult, GameSession, ai_hosting::AiHosting, authority::Authority, player_slot::PlayerSlot,
-    player_type::PlayerType,
+    GameResult, GameSession, Winner, ai_hosting::AiHosting, authority::Authority,
+    player_slot::PlayerSlot, player_type::PlayerType,
 };
 
 //
@@ -17,8 +17,8 @@ fn configured_panics_on_non_contiguous_slot_ids() {
     configured(
         0,
         vec![
-            PlayerSlot::occupied(0, PlayerType::Human, None),
-            PlayerSlot::occupied(2, PlayerType::Human, None),
+            PlayerSlot::occupied(0, PlayerType::Human, None, None),
+            PlayerSlot::occupied(2, PlayerType::Human, None, None),
         ],
     );
 }
@@ -36,8 +36,8 @@ fn configure_replaces_slots_and_local_player_while_pending() {
     session.configure(
         1,
         vec![
-            PlayerSlot::occupied(0, PlayerType::Human, Some("human")),
-            PlayerSlot::occupied(1, PlayerType::Human, Some("orc")),
+            PlayerSlot::occupied(0, PlayerType::Human, Some("human"), None),
+            PlayerSlot::occupied(1, PlayerType::Human, Some("orc"), None),
             PlayerSlot::free(2),
         ],
         "test",
@@ -63,7 +63,7 @@ fn configure_panics_after_start() {
     session.start();
     session.configure(
         0,
-        vec![PlayerSlot::occupied(0, PlayerType::Human, None)],
+        vec![PlayerSlot::occupied(0, PlayerType::Human, None, None)],
         "test",
         Authority::Host {
             ai_hosting: AiHosting::Replicated,
@@ -170,11 +170,18 @@ fn finish_records_result_and_deactivates() {
 fn finish_keeps_first_result() {
     let mut session = session(2);
 
-    session.finish(GameResult::Victory { winner: 0 });
+    session.finish(GameResult::Victory {
+        winner: Winner::Player(0),
+    });
     // A later finish (e.g. a desync racing a victory) must not overwrite it.
     session.finish(GameResult::Aborted);
 
-    assert_eq!(session.result(), Some(GameResult::Victory { winner: 0 }));
+    assert_eq!(
+        session.result(),
+        Some(GameResult::Victory {
+            winner: Winner::Player(0)
+        })
+    );
 }
 
 #[test]
@@ -193,7 +200,7 @@ fn finish_policy_round_trips() {
 
 #[test]
 fn slot_race_round_trips() {
-    let slot = PlayerSlot::occupied(0, PlayerType::Human, Some("human"));
+    let slot = PlayerSlot::occupied(0, PlayerType::Human, Some("human"), None);
     assert_eq!(slot.race(), Some("human"));
 
     let free = PlayerSlot::free(1);
@@ -210,6 +217,65 @@ fn set_race_updates_slot() {
 
     assert_eq!(session.slot(0).unwrap().race(), Some("orc"));
     assert_eq!(session.slot(1).unwrap().race(), Some("human"));
+}
+
+//
+// ─── Teams ──────────────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn slot_team_round_trips() {
+    let slot = PlayerSlot::occupied(0, PlayerType::Human, None, Some(2));
+    assert_eq!(slot.team(), Some(2));
+
+    // A slot starts on no team, whether occupied or free.
+    assert_eq!(
+        PlayerSlot::occupied(1, PlayerType::Ai, None, None).team(),
+        None
+    );
+    assert_eq!(PlayerSlot::free(2).team(), None);
+}
+
+#[test]
+fn set_team_updates_slot() {
+    let mut slot = PlayerSlot::occupied(0, PlayerType::Human, None, None);
+    slot.set_team(Some(3));
+    assert_eq!(slot.team(), Some(3));
+
+    slot.set_team(None);
+    assert_eq!(slot.team(), None);
+}
+
+#[test]
+fn same_team_allies_players_different_teams_do_not() {
+    let session = teams(&[Some(1), Some(1), Some(2)]);
+    // Same team → allied, symmetrically.
+    assert!(session.are_allied(0, 1));
+    assert!(session.are_allied(1, 0));
+    // Different teams → not allied.
+    assert!(!session.are_allied(0, 2));
+}
+
+#[test]
+fn player_with_no_team_is_allied_with_no_one_but_itself() {
+    let session = teams(&[None, None, Some(1)]);
+    // Teamless players are hostile to everyone, including other teamless ones.
+    assert!(!session.are_allied(0, 1));
+    assert!(!session.are_allied(0, 2));
+    // A player is always allied with itself.
+    assert!(session.are_allied(0, 0));
+}
+
+#[test]
+fn is_winner_covers_the_whole_team_or_the_lone_player() {
+    let session = teams(&[Some(1), Some(1), None]);
+    // A team victory: every member of that team shares it, no one else.
+    assert!(session.is_winner(0, Winner::Team(1)));
+    assert!(session.is_winner(1, Winner::Team(1)));
+    assert!(!session.is_winner(2, Winner::Team(1)));
+    // A lone-player victory: only that player.
+    assert!(session.is_winner(2, Winner::Player(2)));
+    assert!(!session.is_winner(0, Winner::Player(2)));
 }
 
 //
@@ -289,9 +355,9 @@ fn required_players_skips_free_slots() {
     let mut session = configured(
         0,
         vec![
-            PlayerSlot::occupied(0, PlayerType::Human, None),
+            PlayerSlot::occupied(0, PlayerType::Human, None, None),
             PlayerSlot::free(1),
-            PlayerSlot::occupied(2, PlayerType::Ai, None),
+            PlayerSlot::occupied(2, PlayerType::Ai, None, None),
         ],
     );
     session.start();
@@ -366,9 +432,9 @@ fn mixed_session(ai_hosting: AiHosting) -> GameSession {
     GameSession::configured(
         0,
         vec![
-            PlayerSlot::occupied(0, PlayerType::Human, Some("human")),
-            PlayerSlot::occupied(1, PlayerType::Human, Some("orc")),
-            PlayerSlot::occupied(2, PlayerType::Ai, Some("orc")),
+            PlayerSlot::occupied(0, PlayerType::Human, Some("human"), None),
+            PlayerSlot::occupied(1, PlayerType::Human, Some("orc"), None),
+            PlayerSlot::occupied(2, PlayerType::Ai, Some("orc"), None),
             PlayerSlot::free(3),
         ],
         "test",
@@ -397,8 +463,19 @@ fn configured(local_player: u8, slots: Vec<PlayerSlot>) -> GameSession {
 /// `count` occupied raceless human slots with contiguous ids.
 fn humans(count: usize) -> Vec<PlayerSlot> {
     (0..count)
-        .map(|id| PlayerSlot::occupied(id as u8, PlayerType::Human, None))
+        .map(|id| PlayerSlot::occupied(id as u8, PlayerType::Human, None, None))
         .collect()
+}
+
+/// A session seating one human per entry in `assignments` (each entry that
+/// player's team, `None` for no team), with the local player at slot `0`.
+fn teams(assignments: &[Option<u8>]) -> GameSession {
+    let slots = assignments
+        .iter()
+        .enumerate()
+        .map(|(id, team)| PlayerSlot::occupied(id as u8, PlayerType::Human, None, *team))
+        .collect();
+    configured(0, slots)
 }
 
 /// A `players`-slot pending session of human players, local slot `0`.

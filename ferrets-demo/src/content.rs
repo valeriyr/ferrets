@@ -56,6 +56,7 @@ pub const CONTENT: &str = r#"
             build_time = 200,
             trainer = { trains },
             resource_storage = { "gold", "wood" },
+            tags = { "building" },
         })
     end
 
@@ -68,6 +69,7 @@ pub const CONTENT: &str = r#"
             cost = { gold = 200, wood = 100 },
             build_time = 120,
             trainer = { trains },
+            tags = { "building" },
         })
     end
 

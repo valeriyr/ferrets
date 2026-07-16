@@ -8,6 +8,7 @@ use ferrets_simulation::{
     components::{
         location::Solidity,
         resource::{DepletionPolicy, HarvestData, HarvestVisibility},
+        tags,
     },
     content::{entity_type_def::EntityTypeDef, registry::ContentRegistry},
 };
@@ -310,6 +311,38 @@ fn register_accepts_registered_race() {
 fn register_rejects_unregistered_race() {
     let mut registry = ContentRegistry::default();
     registry.register(worker().with_race("orc"));
+}
+
+//
+// ─── Tags ─────────────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn register_accepts_registered_tag() {
+    let mut registry = ContentRegistry::default();
+    registry.register_tag("flying");
+    registry.register(worker().with_tags(["flying"]));
+}
+
+#[test]
+#[should_panic(expected = "references unregistered tag 'flying'")]
+fn register_rejects_unregistered_tag() {
+    let mut registry = ContentRegistry::default();
+    registry.register(worker().with_tags(["flying"]));
+}
+
+#[test]
+#[should_panic(expected = "tag must not be empty")]
+fn empty_tag_panics() {
+    ContentRegistry::default().register_tag("");
+}
+
+#[test]
+fn reserved_building_tag_is_registered_by_default() {
+    let mut registry = ContentRegistry::default();
+    assert!(registry.has_tag(tags::BUILDING));
+    // Undeclared by content, yet an entity may carry it.
+    registry.register(worker().with_tags([tags::BUILDING]));
 }
 
 //

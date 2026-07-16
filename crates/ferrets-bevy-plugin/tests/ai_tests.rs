@@ -41,8 +41,8 @@ use ferrets_simulation::{
 #[test]
 fn ai_slots_without_runtimes_get_idle_frames_and_free_slots_get_none() {
     let mut app = utils::make_app(vec![
-        PlayerSlot::occupied(0, PlayerType::Human, None),
-        PlayerSlot::occupied(1, PlayerType::Ai, Some("human")),
+        PlayerSlot::occupied(0, PlayerType::Human, None, None),
+        PlayerSlot::occupied(1, PlayerType::Ai, Some("human"), None),
         PlayerSlot::free(2),
     ]);
     app.add_plugins(AiPlugin);
@@ -63,9 +63,9 @@ fn ai_slots_without_runtimes_get_idle_frames_and_free_slots_get_none() {
 #[test]
 fn ai_commands_land_only_on_staggered_think_ticks() {
     let mut app = utils::make_app(vec![
-        PlayerSlot::occupied(0, PlayerType::Human, None),
-        PlayerSlot::occupied(1, PlayerType::Ai, Some("human")),
-        PlayerSlot::occupied(2, PlayerType::Ai, Some("orc")),
+        PlayerSlot::occupied(0, PlayerType::Human, None, None),
+        PlayerSlot::occupied(1, PlayerType::Ai, Some("human"), None),
+        PlayerSlot::occupied(2, PlayerType::Ai, Some("orc"), None),
     ]);
     app.add_plugins(AiPlugin);
     install_ai(&mut app, &[(1, STOPPER), (2, STOPPER)]);
@@ -99,10 +99,10 @@ fn ai_commands_land_only_on_staggered_think_ticks() {
 #[test]
 fn blocked_ticks_do_not_rethink() {
     let mut app = utils::make_app(vec![
-        PlayerSlot::occupied(0, PlayerType::Human, None),
+        PlayerSlot::occupied(0, PlayerType::Human, None, None),
         // A remote human with no frame source: the loop blocks at tick 2.
-        PlayerSlot::occupied(1, PlayerType::Human, None),
-        PlayerSlot::occupied(2, PlayerType::Ai, Some("human")),
+        PlayerSlot::occupied(1, PlayerType::Human, None, None),
+        PlayerSlot::occupied(2, PlayerType::Ai, Some("human"), None),
     ]);
     app.add_plugins(AiPlugin);
     install_ai(&mut app, &[(2, COUNTER)]);
@@ -142,8 +142,8 @@ fn blocked_ticks_do_not_rethink() {
 #[test]
 fn replay_playback_gates_ai_sources_off() {
     let mut app = utils::make_app(vec![
-        PlayerSlot::occupied(0, PlayerType::Human, None),
-        PlayerSlot::occupied(1, PlayerType::Ai, Some("human")),
+        PlayerSlot::occupied(0, PlayerType::Human, None, None),
+        PlayerSlot::occupied(1, PlayerType::Ai, Some("human"), None),
         PlayerSlot::free(2),
     ]);
     app.add_plugins(AiPlugin);
@@ -167,8 +167,8 @@ fn replay_playback_gates_ai_sources_off() {
 #[test]
 fn game_view_classifies_and_snapshots_entities() {
     let mut app = utils::make_app(vec![
-        PlayerSlot::occupied(0, PlayerType::Human, None),
-        PlayerSlot::occupied(1, PlayerType::Ai, Some("human")),
+        PlayerSlot::occupied(0, PlayerType::Human, None, None),
+        PlayerSlot::occupied(1, PlayerType::Ai, Some("human"), None),
     ]);
     utils::register_orders_content(&mut app);
     let world = app.world_mut();
@@ -286,9 +286,9 @@ fn install_ai(app: &mut App, scripts: &[(PlayerId, &str)]) {
 /// One full AI-vs-AI session, sampling the state checksum at every interval.
 fn run_ai_session() -> Vec<u64> {
     let mut app = utils::make_app(vec![
-        PlayerSlot::occupied(0, PlayerType::Human, None),
-        PlayerSlot::occupied(1, PlayerType::Ai, Some("human")),
-        PlayerSlot::occupied(2, PlayerType::Ai, Some("orc")),
+        PlayerSlot::occupied(0, PlayerType::Human, None, None),
+        PlayerSlot::occupied(1, PlayerType::Ai, Some("human"), None),
+        PlayerSlot::occupied(2, PlayerType::Ai, Some("orc"), None),
     ]);
     app.add_plugins(AiPlugin);
     utils::register_orders_content(&mut app);
@@ -320,8 +320,8 @@ fn empty_replay() -> Replay {
     let buffer = SharedBuffer::default();
     let header = ReplayHeader::new(RecordedGame::Skirmish(Skirmish {
         slots: vec![
-            PlayerSlot::occupied(0, PlayerType::Human, None),
-            PlayerSlot::occupied(1, PlayerType::Ai, Some("human")),
+            PlayerSlot::occupied(0, PlayerType::Human, None, None),
+            PlayerSlot::occupied(1, PlayerType::Ai, Some("human"), None),
             PlayerSlot::free(2),
         ],
         map: "test".to_string(),

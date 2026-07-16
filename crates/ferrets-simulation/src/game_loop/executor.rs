@@ -106,6 +106,10 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
             }
         }
         PlayerCommand::Attack { target, flush } => {
+            // An explicit attack is honored as given — including force-attacking an
+            // own or allied unit. Only the smart send-to-entity order below refuses
+            // to attack a non-hostile target; whether friendly-fire damage lands is
+            // a game-rules concern, not the command executor's.
             for entity in commanded_selection_excluding(world, player, *target) {
                 push_order(
                     world,
@@ -202,21 +206,29 @@ fn resolve_send_to_entity(world: &World, entity: Entity, target_id: SimulationId
     let carried = entity_ref
         .get::<ResourceCarrierComponent>()
         .map_or(0, |carrier| carrier.amount);
+    // Only a storage the carrier itself owns is a drop-off — not an ally's or a
+    // neutral one (matches the storage the delivery actually resolves to, see
+    // `resolve_storage`). Being non-hostile is not enough now that allies exist.
+    let own_storage = matches!(
+        (
+            entity_ref.get::<OwnerComponent>(),
+            target_ref.get::<OwnerComponent>(),
+        ),
+        (Some(carrier), Some(storage)) if carrier.player() == storage.player()
+    );
     let accepts_delivery = carried > 0
+        && own_storage
         && entity_ref
             .get::<ResourceCarrierComponent>()
             .and_then(|carrier| carrier.kind.as_deref())
             .zip(target_ref.get::<ResourceStorageStaticData>())
-            .is_some_and(|(kind, storage)| storage.accepts(kind))
-        && !owner::are_hostile(
-            entity_ref.get::<OwnerComponent>(),
-            target_ref.get::<OwnerComponent>(),
-        );
+            .is_some_and(|(kind, storage)| storage.accepts(kind));
     if accepts_delivery {
         return Some(Order::Harvest { target: target_id });
     }
 
     let hostile = owner::are_hostile(
+        world.resource::<GameSession>(),
         entity_ref.get::<OwnerComponent>(),
         target_ref.get::<OwnerComponent>(),
     );

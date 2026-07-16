@@ -64,6 +64,37 @@ fn client_race_request_updates_every_node() {
 }
 
 #[test]
+fn client_team_request_updates_every_node() {
+    let (mut host, mut c1, mut c2) = star(3);
+    host.poll().expect("seat");
+    c1.poll();
+    c2.poll();
+
+    c1.request_team(Some(2)).expect("request team");
+    let changed = host.poll().expect("host applies request");
+    c1.poll();
+    c2.poll();
+
+    assert!(changed);
+    assert_eq!(host.slots()[1].team, Some(2));
+    assert_eq!(c2.slots()[1].team, Some(2));
+}
+
+#[test]
+fn host_sets_a_slots_team_for_every_node() {
+    let (mut host, _c1, mut c2) = star(3);
+    host.poll().expect("seat");
+    c2.poll();
+
+    // The host arranges an AI slot's team; a client sees it on the next poll.
+    host.set_team(2, Some(1)).expect("host sets team");
+    c2.poll();
+
+    assert_eq!(host.slots()[2].team, Some(1));
+    assert_eq!(c2.slots()[2].team, Some(1));
+}
+
+#[test]
 fn host_keeps_client_on_matching_version() {
     let (mut host, mut c1, _c2) = star(3);
     host.poll().expect("seat on connect");

@@ -114,6 +114,7 @@ pub fn builtin_mission() -> Scenario {
             PLAYER,
             PlayerType::Human,
             Some("human"),
+            None,
         )],
         judged_player: PLAYER,
         map: MapData {

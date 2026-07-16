@@ -2,12 +2,17 @@
 
 mod utils;
 
-use ferrets_pathfinder::nav_pos::NavPos;
+use ferrets_math::FixedU64;
+use ferrets_pathfinder::{nav_pos::NavPos, nav_size::NavSize};
 use ferrets_simulation::{
     command::PlayerCommand,
-    components::{attack::AttackComponent, dying::DyingComponent, health::HealthComponent},
+    components::{
+        attack::AttackComponent, dying::DyingComponent, health::HealthComponent, location::Solidity,
+    },
+    content::{entity_type_def::EntityTypeDef, registry::ContentRegistry},
     entity_index::EntityIndex,
     map::Map,
+    session::{GameSession, player_slot::PlayerSlot, player_type::PlayerType},
     simulation_id::SimulationId,
     spawn,
 };
@@ -125,6 +130,53 @@ fn stop_cancels_attack() {
     let health = world.get::<HealthComponent>(target).unwrap();
     assert!(health.current() > 0);
     assert!(world.get::<DyingComponent>(target).is_none());
+}
+
+#[test]
+fn send_to_entity_does_not_attack_ally() {
+    // Players 0 and 1 share team 1. A right-click (SendToEntity) from player 0's
+    // soldier onto its adjacent ally resolves to Follow, not Attack, so the ally
+    // takes no damage. (An explicit Attack command would still be honored — that
+    // is force-fire, a separate path.)
+    let mut app = utils::make_app(vec![
+        PlayerSlot::occupied(0, PlayerType::Human, None, Some(1)),
+        PlayerSlot::occupied(1, PlayerType::Human, None, Some(1)),
+    ]);
+    {
+        let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
+        registry.register(
+            EntityTypeDef::new("soldier")
+                .with_location(utils::GROUND, NavSize::ONE, Solidity::Solid)
+                .with_movement(FixedU64::from_num(0.5))
+                .with_health(30)
+                .with_dying(2, None)
+                .with_attack(10, 1, 2, 2),
+        );
+        registry.validate();
+    }
+    app.world_mut().resource_mut::<GameSession>().start();
+
+    let world = app.world_mut();
+    let (_, actor_id) = spawn::spawn_entity(world, "soldier", utils::pos(5, 5), Some(0)).unwrap();
+    let (ally, ally_id) = spawn::spawn_entity(world, "soldier", utils::pos(6, 5), Some(1)).unwrap();
+
+    utils::push_command(&mut app, PlayerCommand::SelectById { id: actor_id });
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SendToEntity {
+            target: ally_id,
+            flush: true,
+        },
+    );
+
+    utils::run_ticks(&mut app, 6);
+    // The ally kept full health — the right-click never became an attack.
+    assert_eq!(
+        app.world_mut()
+            .get::<HealthComponent>(ally)
+            .map(|h| h.current()),
+        Some(30),
+    );
 }
 
 #[test]

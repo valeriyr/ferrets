@@ -28,7 +28,7 @@ use ferrets_simulation::{
     input::{InputFrames, PlayerFrame},
     map::Map,
     session::{
-        GameResult, GameSession, ai_hosting::AiHosting, authority::Authority,
+        GameResult, GameSession, Winner, ai_hosting::AiHosting, authority::Authority,
         drop_policy::DropPolicy, finish_policy::FinishPolicy, player_slot::PlayerSlot,
         player_type::PlayerType,
     },
@@ -841,7 +841,9 @@ fn drop_decided_victory_replays_to_same_result() {
     assert!(host.world().resource::<GameSession>().is_player_dropped(2));
     assert_eq!(
         host.world().resource::<GameSession>().result(),
-        Some(GameResult::Victory { winner: 0 }),
+        Some(GameResult::Victory {
+            winner: Winner::Player(0)
+        }),
     );
 
     let replay = Replay::read(buffer.bytes().as_slice()).expect("read replay");
@@ -854,6 +856,7 @@ fn drop_decided_victory_replays_to_same_result() {
     {
         let mut registry = playback.world_mut().resource_mut::<ContentRegistry>();
         registry.register(harness_soldier());
+        registry.register(harness_base());
         registry.validate();
     }
     spawn_starting_units(&mut playback);
@@ -882,7 +885,9 @@ fn drop_decided_victory_replays_to_same_result() {
     );
     assert_eq!(
         playback.world().resource::<GameSession>().result(),
-        Some(GameResult::Victory { winner: 0 }),
+        Some(GameResult::Victory {
+            winner: Winner::Player(0)
+        }),
         "the replay must reach the same drop-decided victory",
     );
 }
@@ -890,8 +895,8 @@ fn drop_decided_victory_replays_to_same_result() {
 #[test]
 fn non_drop_victory_replays_to_same_result() {
     // A plain last-standing win with no drop involved: player 0's soldier
-    // destroys player 1's, ending the game by elimination. The tick whose kill
-    // ends the game is the final one recorded, so this exercises the same
+    // destroys player 1's base, ending the game by elimination. The tick whose
+    // kill ends the game is the final one recorded, so this exercises the same
     // final-tick recording as the drop case for an ordinary outcome — the replay
     // must reach the same Victory.
     let mut record_app = combat_victory_app();
@@ -917,7 +922,9 @@ fn non_drop_victory_replays_to_same_result() {
     step_local_recording(&mut record_app, 80);
     assert_eq!(
         record_app.world().resource::<GameSession>().result(),
-        Some(GameResult::Victory { winner: 0 }),
+        Some(GameResult::Victory {
+            winner: Winner::Player(0)
+        }),
     );
 
     let replay = Replay::read(buffer.bytes().as_slice()).expect("read replay");
@@ -948,7 +955,9 @@ fn non_drop_victory_replays_to_same_result() {
     );
     assert_eq!(
         playback.world().resource::<GameSession>().result(),
-        Some(GameResult::Victory { winner: 0 }),
+        Some(GameResult::Victory {
+            winner: Winner::Player(0)
+        }),
         "a non-drop last-standing win must replay to the same result",
     );
 }
@@ -989,7 +998,7 @@ fn net_app_configured(transport: LoopbackTransport, roster: Roster, authority: A
     let mut nav_grid = NavGrid::new(32, 32);
     nav_grid.add_layer(GROUND);
     let slots = (0..players)
-        .map(|i| PlayerSlot::occupied(i as u8, PlayerType::Human, None))
+        .map(|i| PlayerSlot::occupied(i as u8, PlayerType::Human, None, None))
         .collect();
     let session = GameSession::configured(
         local,
@@ -1011,13 +1020,14 @@ fn net_app_configured(transport: LoopbackTransport, roster: Roster, authority: A
     {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
         registry.register(harness_soldier());
+        registry.register(harness_base());
         registry.validate();
     }
     app.world_mut().resource_mut::<GameSession>().start();
     app
 }
 
-/// The one entity type the harness games use.
+/// The one mobile entity type the harness games use.
 fn harness_soldier() -> EntityTypeDef {
     EntityTypeDef::new("soldier")
         .with_location(GROUND, NavSize::ONE, Solidity::Solid)
@@ -1026,10 +1036,20 @@ fn harness_soldier() -> EntityTypeDef {
         .with_dying(2, None)
 }
 
+/// A standing building — the presence the `LastStanding` rule counts. Immobile,
+/// destructible, no combat of its own.
+fn harness_base() -> EntityTypeDef {
+    EntityTypeDef::new("base")
+        .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+        .with_health(30)
+        .with_dying(2, None)
+        .with_tags(["building"])
+}
+
 /// Three occupied human slots — the harness roster as session slots.
 fn three_human_slots() -> Vec<PlayerSlot> {
     (0..3)
-        .map(|i| PlayerSlot::occupied(i, PlayerType::Human, None))
+        .map(|i| PlayerSlot::occupied(i, PlayerType::Human, None, None))
         .collect()
 }
 
@@ -1094,18 +1114,18 @@ fn step_some(apps: &mut [App], indices: &[usize], ticks: u32) {
     }
 }
 
-/// Places player 0's and the phantom player 2's starting units, in a fixed
+/// Places player 0's and the phantom player 2's starting bases, in a fixed
 /// order so their [`SimulationId`]s — and thus the state checksum — match across
-/// every node and the replay.
+/// every node and the replay. A base is the presence the win rule counts.
 fn spawn_starting_units(app: &mut App) {
     let world = app.world_mut();
-    spawn::spawn_entity(world, "soldier", utils::pos(5, 5), Some(0)).expect("player 0 unit");
-    spawn::spawn_entity(world, "soldier", utils::pos(20, 20), Some(2)).expect("phantom unit");
+    spawn::spawn_entity(world, "base", utils::pos(5, 5), Some(0)).expect("player 0 base");
+    spawn::spawn_entity(world, "base", utils::pos(20, 20), Some(2)).expect("phantom base");
 }
 
 fn two_human_slots() -> Vec<PlayerSlot> {
     (0..2)
-        .map(|i| PlayerSlot::occupied(i, PlayerType::Human, None))
+        .map(|i| PlayerSlot::occupied(i, PlayerType::Human, None, None))
         .collect()
 }
 
@@ -1123,6 +1143,7 @@ fn combat_victory_app() -> App {
                 .with_dying(2, None)
                 .with_attack(10, 1, 2, 2),
         );
+        registry.register(harness_base());
         registry.validate();
     }
     let mut session = app.world_mut().resource_mut::<GameSession>();
@@ -1131,16 +1152,20 @@ fn combat_victory_app() -> App {
     app
 }
 
-/// Spawns player 0's attacker and player 1's target one cell apart (within the
-/// soldier's range), in a fixed order so their ids match across record and
-/// replay. Returns their [`SimulationId`]s.
+/// Sets up a last-standing combat: player 0 keeps a base and an attacking
+/// soldier next to player 1's base, the target. Spawned in a fixed order so ids
+/// match across record and replay. Returns the attacker and the target base
+/// [`SimulationId`]s. Destroying the target leaves player 0 the last one with a
+/// building standing.
 fn spawn_combatants(app: &mut App) -> (SimulationId, SimulationId) {
     let world = app.world_mut();
+    // Player 0's own base keeps it in the game after the kill.
+    spawn::spawn_entity(world, "base", utils::pos(5, 8), Some(0)).expect("player 0 base");
     let (_, attacker) =
         spawn::spawn_entity(world, "soldier", utils::pos(5, 5), Some(0)).expect("attacker");
-    let (_, enemy) =
-        spawn::spawn_entity(world, "soldier", utils::pos(6, 5), Some(1)).expect("enemy");
-    (attacker, enemy)
+    let (_, enemy_base) =
+        spawn::spawn_entity(world, "base", utils::pos(6, 5), Some(1)).expect("enemy base");
+    (attacker, enemy_base)
 }
 
 /// Advances a local recording app up to `ticks` ticks (stopping once the game

@@ -11,7 +11,7 @@ use crate::session::ai_hosting::AiHosting;
 use crate::session::authority::Authority;
 use crate::session::drop_policy::DropPolicy;
 use crate::session::finish_policy::FinishPolicy;
-use crate::session::player_slot::{PlayerId, PlayerSlot};
+use crate::session::player_slot::{PlayerId, PlayerSlot, TeamId};
 use crate::session::player_type::PlayerType;
 use bevy_ecs::prelude::*;
 
@@ -29,13 +29,24 @@ pub enum SessionState {
     Finished,
 }
 
+/// The side that won a [`Victory`](GameResult::Victory): a whole team, or a lone
+/// player on no team.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Winner {
+    Team(TeamId),
+    Player(PlayerId),
+}
+
 /// How a finished game ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GameResult {
     /// `winner` won the game.
-    Victory { winner: PlayerId },
-    /// A scenario's failure condition was met. A shared verdict, identical on
-    /// every node — not a statement about the local player.
+    Victory { winner: Winner },
+    /// The local player was defeated — a scenario's failure condition was met, or
+    /// their team was wiped out in a last-standing match. Not how a winner is
+    /// chosen, and not necessarily identical on every node: while other teams
+    /// fight on there is no shared result yet, so this is what tells this node's
+    /// player they are out.
     Defeat,
     /// The game ended with no winner.
     Draw,
@@ -299,6 +310,31 @@ impl GameSession {
     /// Returns the [`PlayerId`] controlled by this client.
     pub fn local_player(&self) -> PlayerId {
         self.local_player
+    }
+
+    /// Returns `true` when `a` and `b` are allies: the same player, or two
+    /// players sharing a team. Players on no team (and unknown slot ids) are
+    /// allied with no one but themselves.
+    pub fn are_allied(&self, a: PlayerId, b: PlayerId) -> bool {
+        if a == b {
+            return true;
+        }
+        match (
+            self.slot(a).and_then(PlayerSlot::team),
+            self.slot(b).and_then(PlayerSlot::team),
+        ) {
+            (Some(team_a), Some(team_b)) => team_a == team_b,
+            _ => false,
+        }
+    }
+
+    /// Returns `true` when `player` is on the winning side named by `winner`: the
+    /// same lone player, or a member of the winning team.
+    pub fn is_winner(&self, player: PlayerId, winner: Winner) -> bool {
+        match winner {
+            Winner::Team(team) => self.slot(player).and_then(PlayerSlot::team) == Some(team),
+            Winner::Player(id) => player == id,
+        }
     }
 
     /// Sets the race the given player plays. Lets a menu pick the race after the

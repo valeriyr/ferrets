@@ -221,7 +221,9 @@ pub fn game_view(world: &World, player: PlayerId, race: &str) -> GameView {
         .map(|(_, kind, amount)| (kind.to_string(), amount))
         .collect();
 
+    let session = world.resource::<GameSession>();
     let mut my_entities = Vec::new();
+    let mut ally_entities = Vec::new();
     let mut enemy_entities = Vec::new();
     let mut neutral_entities = Vec::new();
     for (id, entity) in world.resource::<EntityIndex>().alive_entries() {
@@ -239,19 +241,21 @@ pub fn game_view(world: &World, player: PlayerId, race: &str) -> GameView {
         let view = entity_view(&entity_ref, id, hidden);
         match owner {
             Some(owner) if owner == player => my_entities.push(view),
+            Some(owner) if session.are_allied(player, owner) => ally_entities.push(view),
             Some(_) => enemy_entities.push(view),
             None => neutral_entities.push(view),
         }
     }
 
     GameView {
-        tick: world.resource::<GameSession>().tick(),
+        tick: session.tick(),
         player: u32::from(player),
         race: race.to_string(),
         map_width: map.width(),
         map_height: map.height(),
         resources,
         my_entities,
+        ally_entities,
         enemy_entities,
         neutral_entities,
     }

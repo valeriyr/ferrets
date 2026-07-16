@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use ferrets_script::scenario::Outcome;
 use ferrets_simulation::game_loop;
-use ferrets_simulation::session::{GameResult, GameSession, finish_policy::FinishPolicy};
+use ferrets_simulation::session::{GameResult, GameSession, Winner, finish_policy::FinishPolicy};
 
 use crate::scenario::{ScenarioObjectives, ScenarioRuntimes};
 
@@ -59,7 +59,9 @@ fn check_scenario(world: &mut World) {
                 Ok(status) => {
                     world.insert_resource(ScenarioObjectives(status.objectives));
                     let result = match status.outcome {
-                        Outcome::Victory => Some(GameResult::Victory { winner: player }),
+                        Outcome::Victory => Some(GameResult::Victory {
+                            winner: Winner::Player(player),
+                        }),
                         Outcome::Defeat => Some(GameResult::Defeat),
                         Outcome::Ongoing => None,
                     };

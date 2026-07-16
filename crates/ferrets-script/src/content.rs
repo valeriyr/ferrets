@@ -13,6 +13,7 @@ use crate::error::ScriptError;
 pub enum Definition {
     Race(String),
     Resource(String),
+    Tag(String),
     Entity(Box<EntityTypeDef>),
 }
 
@@ -30,6 +31,7 @@ pub fn load(engine: &dyn ScriptEngine, source: &str) -> crate::Result<ContentReg
         match definition {
             Definition::Race(name) => registry.register_race(name),
             Definition::Resource(kind) => registry.register_resource(kind),
+            Definition::Tag(tag) => registry.register_tag(tag),
             Definition::Entity(def) => registry.register(*def),
         }
     }

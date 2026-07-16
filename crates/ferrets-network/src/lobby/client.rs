@@ -2,7 +2,7 @@
 
 use std::net::{TcpListener, UdpSocket};
 
-use ferrets_simulation::session::player_slot::PlayerId;
+use ferrets_simulation::session::player_slot::{PlayerId, TeamId};
 
 use crate::control::{ControlChannel, ControlEvent};
 use crate::message::control::{
@@ -98,6 +98,18 @@ impl LobbyClient {
                 .send(&ControlMessage::Lobby(LobbyMessage::RequestRace {
                     slot,
                     race: race.to_string(),
+                }))?;
+        }
+        Ok(())
+    }
+
+    /// Requests that this client's slot join `team` (`None` = no team).
+    pub fn request_team(&mut self, team: Option<TeamId>) -> crate::Result<()> {
+        if let Some(slot) = self.local_player() {
+            self.control
+                .send(&ControlMessage::Lobby(LobbyMessage::RequestTeam {
+                    slot,
+                    team,
                 }))?;
         }
         Ok(())

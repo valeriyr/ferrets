@@ -34,6 +34,15 @@ pub(super) fn register(lua: &Lua, sink: &Rc<RefCell<Vec<Definition>>>) -> mlua::
         })?,
     )?;
 
+    let tags = Rc::clone(sink);
+    globals.set(
+        "define_tag",
+        lua.create_function(move |_, tag: String| {
+            tags.borrow_mut().push(Definition::Tag(tag));
+            Ok(())
+        })?,
+    )?;
+
     let entities = Rc::clone(sink);
     globals.set(
         "define_entity",
@@ -112,6 +121,9 @@ fn build_entity(name: &str, table: &Table) -> crate::Result<EntityTypeDef> {
     }
     if let Some(storage) = optional::<Vec<String>>(table, "resource_storage")? {
         def = def.with_resource_storage(storage);
+    }
+    if let Some(tags) = optional::<Vec<String>>(table, "tags")? {
+        def = def.with_tags(tags);
     }
 
     Ok(def)
