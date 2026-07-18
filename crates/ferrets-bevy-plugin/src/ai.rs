@@ -77,7 +77,9 @@ pub fn is_session_host(world: &World) -> bool {
 }
 
 /// The AI players this node sources, with their races, in ascending id order.
-/// Which nodes source an AI slot follows the session's hosting mode.
+/// Which nodes source an AI slot follows the session's hosting mode. An AI
+/// that is out of the game needs no input for any tick, so its brain stops
+/// thinking.
 pub fn sourced_ai_players(world: &World) -> Vec<(PlayerId, String)> {
     let is_host = is_session_host(world);
     let session = world.resource::<GameSession>();
@@ -85,6 +87,7 @@ pub fn sourced_ai_players(world: &World) -> Vec<(PlayerId, String)> {
         .slots()
         .iter()
         .filter(|slot| slot.player_type() == Some(PlayerType::Ai))
+        .filter(|slot| !session.is_player_out(slot.id()))
         .filter(|slot| session.sources_locally(slot, is_host))
         .map(|slot| (slot.id(), slot.race().unwrap_or_default().to_string()))
         .collect()
@@ -134,8 +137,8 @@ impl Plugin for AiPlugin {
 
 /// Supplies idle frames for every locally-sourced AI slot while no
 /// [`AiRuntimes`] is installed, so a failed script degrades to an idle AI
-/// instead of stalling lockstep. Unoccupied slots need nothing: no tick
-/// requires their input.
+/// instead of stalling lockstep. Unoccupied slots and players out of the game
+/// need nothing: no tick requires their input.
 pub fn supply_unmanned_input(
     mut frames: ResMut<InputFrames>,
     session: Res<GameSession>,
@@ -146,7 +149,7 @@ pub fn supply_unmanned_input(
     let target = session.tick() + SYNC_LATENCY;
 
     for slot in session.slots() {
-        if !session.sources_locally(slot, is_host) {
+        if session.is_player_out(slot.id()) || !session.sources_locally(slot, is_host) {
             continue;
         }
         let unmanned = slot.player_type() == Some(PlayerType::Ai) && ai_active.is_none();

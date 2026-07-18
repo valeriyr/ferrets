@@ -19,12 +19,19 @@ use crate::{
 /// holding a building are all on one side.
 ///
 /// A player survives while they own at least one standing building; losing the
-/// last one is defeat, independent of any surviving units.
+/// last one is defeat, independent of any surviving units. A defeated player is
+/// eliminated as of the next tick: every node derives the same elimination from
+/// its own simulation, so from that tick on no node requires the player's input
+/// — the survivors keep playing instead of stalling on frames the defeated
+/// player's node will never send.
 /// The game ends when every survivor is allied with all the others — one side
 /// left, winning as a team or as a lone player — or none survive (a draw).
 /// While two unallied survivors stand the match continues, but the local player
 /// is told of its own [`Defeat`](GameResult::Defeat) the moment it is out.
-/// Dropped players never count as survivors. A lineup with only one side — a
+/// A player whose drop has taken effect never counts as a survivor (a drop
+/// decided for a tick still ahead leaves them playing until it arrives), and
+/// an eliminated player stays out even if a leftover order finishes a new
+/// building for them. A lineup with only one side — a
 /// single team, or a lone player — has no opponent to outlast and so wins at
 /// once; a game meant to run without a last-standing verdict uses
 /// [`FinishPolicy::Endless`]. Under any other [`FinishPolicy`] this stands aside.
@@ -61,17 +68,28 @@ pub fn check(world: &mut World) {
         }
     }
 
-    let session = world.resource::<GameSession>();
-    // A player survives while it holds a building and has not dropped.
+    let mut session = world.resource_mut::<GameSession>();
+
+    // A player out of buildings is eliminated as of the next tick: this tick
+    // still executed its input on every node, the next requires none of it.
+    let eliminated_from = session.tick() + 1;
+    for &player in &occupied {
+        if !with_building.contains(&player) && !session.is_player_out(player) {
+            session.eliminate_player(player, eliminated_from);
+        }
+    }
+
+    // A player survives while it holds a building and is not out of the game —
+    // a building finished by a leftover order does not revive an eliminated
+    // player.
     let survivors: Vec<PlayerId> = occupied
         .iter()
         .copied()
-        .filter(|player| with_building.contains(player) && !session.is_player_dropped(*player))
+        .filter(|player| with_building.contains(player) && !session.is_player_out(*player))
         .collect();
 
-    // Read out the local outcome before taking the mutable borrow below.
     let local = session.local_player();
-    let local_out = !survivors.contains(&local) && !session.is_player_dropped(local);
+    let local_out = !survivors.contains(&local) && !session.is_player_out(local);
 
     let result = match survivors.as_slice() {
         // Everyone was wiped out on the same tick.
@@ -93,5 +111,5 @@ pub fn check(world: &mut World) {
         _ => return,
     };
 
-    world.resource_mut::<GameSession>().finish(result);
+    session.finish(result);
 }

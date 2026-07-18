@@ -156,9 +156,11 @@ pub fn supply_replay_input(
     let recorded = playback.replay.inputs_at(target);
     for slot in session.slots() {
         let player = slot.id();
-        // A dropped player is required for no tick from its drop on, so it has no
-        // recorded frame and needs none.
-        if session.is_player_dropped(player) {
+        // A player who is out is required for no tick from its drop or
+        // elimination on, so it has no recorded frame and needs none. (A drop
+        // is re-applied from the recording above; an elimination the replayed
+        // simulation re-derives on its own.)
+        if session.is_player_out(player) {
             continue;
         }
         match recorded.iter().find(|(recorded, _)| *recorded == player) {

@@ -351,6 +351,36 @@ fn required_players_stops_including_player_at_its_drop_tick() {
 }
 
 #[test]
+fn dropped_player_is_not_out_until_its_drop_tick_arrives() {
+    // A drop decided for a tick ahead of this node is pending: the mark is
+    // visible, but the player keeps playing until the tick arrives.
+    let mut session = session(2);
+
+    session.drop_player(1, 2);
+    session.advance_tick();
+
+    assert_eq!(session.drop_tick(1), Some(2));
+    assert!(!session.is_player_dropped(1));
+    assert!(!session.is_player_out(1));
+    assert_eq!(session.required_players(1), vec![0, 1]);
+
+    session.advance_tick();
+
+    assert!(session.is_player_dropped(1));
+    assert!(session.is_player_out(1));
+}
+
+#[test]
+#[should_panic(expected = "behind the current tick")]
+fn dropping_player_from_executed_tick_panics() {
+    // Executed ticks keep the input they ran with; a drop never rewrites one.
+    let mut session = session(2);
+
+    session.advance_tick();
+    session.drop_player(1, 0);
+}
+
+#[test]
 fn required_players_skips_free_slots() {
     let mut session = configured(
         0,
@@ -363,6 +393,151 @@ fn required_players_skips_free_slots() {
     session.start();
 
     assert_eq!(session.required_players(0), vec![0, 2]);
+}
+
+//
+// ─── Player elimination ─────────────────────────────────────────────────────────
+//
+
+#[test]
+fn eliminate_player_marks_only_that_player() {
+    let mut session = session(3);
+
+    session.eliminate_player(1, 1);
+    session.advance_tick();
+
+    assert!(!session.is_player_eliminated(0));
+    assert!(session.is_player_eliminated(1));
+    assert!(!session.is_player_eliminated(2));
+}
+
+#[test]
+fn eliminated_player_is_not_out_until_its_elimination_tick_arrives() {
+    // An elimination is marked for the next tick: the tick that detected the
+    // defeat executed with the player's input and still counts it as playing.
+    let mut session = session(2);
+
+    session.eliminate_player(1, 1);
+
+    assert!(!session.is_player_eliminated(1));
+    assert!(!session.is_player_out(1));
+    assert_eq!(session.required_players(0), vec![0, 1]);
+
+    session.advance_tick();
+
+    assert!(session.is_player_eliminated(1));
+    assert!(session.is_player_out(1));
+}
+
+#[test]
+fn is_player_eliminated_is_false_for_unknown_player() {
+    let session = session(2);
+
+    // Out of range never panics (it just reports "not eliminated").
+    assert!(!session.is_player_eliminated(9));
+}
+
+#[test]
+#[should_panic(expected = "eliminated twice")]
+fn eliminating_player_twice_panics() {
+    let mut session = session(2);
+
+    session.eliminate_player(1, 5);
+    session.eliminate_player(1, 6);
+}
+
+#[test]
+#[should_panic(expected = "not ahead of the current tick")]
+fn eliminating_player_at_current_tick_panics() {
+    // The current tick executed with the player's input on every node and
+    // must keep requiring it — an elimination applies only to future ticks.
+    let mut session = session(2);
+
+    session.eliminate_player(1, 0);
+}
+
+#[test]
+fn required_players_stops_including_player_at_its_elimination_tick() {
+    let mut session = session(3);
+
+    session.eliminate_player(1, 5);
+
+    // Ticks the player played keep requiring its input; from the elimination
+    // tick on it no longer counts.
+    assert_eq!(session.required_players(4), vec![0, 1, 2]);
+    assert_eq!(session.required_players(5), vec![0, 2]);
+    assert_eq!(session.required_players(9), vec![0, 2]);
+}
+
+#[test]
+fn eliminated_player_can_still_be_dropped() {
+    // A defeated player's node may also vanish: the two exclusions are
+    // independent marks, not a conflict.
+    let mut session = session(3);
+
+    session.eliminate_player(1, 5);
+    session.drop_player(1, 8);
+    for _ in 0..8 {
+        session.advance_tick();
+    }
+
+    assert!(session.is_player_eliminated(1));
+    assert!(session.is_player_dropped(1));
+    assert_eq!(session.required_players(4), vec![0, 1, 2]);
+    assert_eq!(session.required_players(9), vec![0, 2]);
+}
+
+#[test]
+fn is_player_out_covers_dropped_and_eliminated() {
+    let mut session = session(3);
+
+    session.drop_player(0, 1);
+    session.eliminate_player(1, 1);
+    session.advance_tick();
+
+    assert!(session.is_player_out(0));
+    assert!(session.is_player_out(1));
+    assert!(!session.is_player_out(2));
+}
+
+#[test]
+fn elimination_does_not_mark_player_dropped() {
+    let mut session = session(2);
+
+    session.eliminate_player(1, 5);
+
+    assert!(!session.is_player_dropped(1));
+    assert_eq!(session.dropped_players().count(), 0);
+}
+
+#[test]
+fn is_player_required_follows_drop_and_elimination_ticks() {
+    let mut session = session(3);
+
+    session.drop_player(1, 5);
+    session.eliminate_player(2, 3);
+
+    assert!(session.is_player_required(1, 4));
+    assert!(!session.is_player_required(1, 5));
+    assert!(session.is_player_required(2, 2));
+    assert!(!session.is_player_required(2, 3));
+    assert!(session.is_player_required(0, 9));
+    // An unknown slot is required by no tick.
+    assert!(!session.is_player_required(9, 0));
+}
+
+#[test]
+fn active_players_excludes_player_once_eliminated() {
+    let mut session = session(3);
+
+    session.eliminate_player(1, 1);
+
+    // Still in the game until the elimination tick arrives...
+    assert_eq!(session.active_players().collect::<Vec<_>>(), vec![0, 1, 2]);
+
+    session.advance_tick();
+
+    assert_eq!(session.active_players().collect::<Vec<_>>(), vec![0, 2]);
 }
 
 //

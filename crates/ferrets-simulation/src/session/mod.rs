@@ -85,9 +85,17 @@ pub struct GameSession {
     /// How the game ended, once it has. `None` while still in progress.
     result: Option<GameResult>,
     /// The tick from which each slot's player contributes no further input (a
-    /// peer whose frames stopped), indexed by [`PlayerId`]. `None` while the
-    /// player is live.
+    /// peer whose frames stopped), indexed by [`PlayerId`]. `None` while no
+    /// drop has been decided; a decided drop may name a tick still ahead, in
+    /// effect only once that tick arrives.
     dropped: Vec<Option<u32>>,
+    /// The tick from which each slot's player is out of the game — defeated by
+    /// the finish rule, contributing no further input — indexed by
+    /// [`PlayerId`]. `None` while the player is still in the game. A separate
+    /// exclusion from `dropped`: a defeat is derived from the simulation
+    /// identically on every node, while a drop is a networking decision, and
+    /// one player may end up marked with both.
+    eliminated: Vec<Option<u32>>,
     /// Whether the session is paused — the tick loop is frozen at the current
     /// tick. Orthogonal to [`SessionState`]; receiving and buffering peer traffic
     /// continues so the game can resume.
@@ -166,6 +174,7 @@ impl GameSession {
         );
         assert_valid_slots(local_player, &slots);
         self.dropped = vec![None; slots.len()];
+        self.eliminated = vec![None; slots.len()];
         self.slots = slots;
         self.map = map.into();
         self.local_player = local_player;
@@ -352,11 +361,20 @@ impl GameSession {
     /// input and it is excluded from the victory check; ticks before `from`
     /// keep the input it already contributed. `from` must be agreed by every
     /// node (it decides which of the player's final frames still execute), so
-    /// it is passed in rather than read from the local tick.
+    /// it is passed in rather than read from the local tick — the current
+    /// (not yet executed) tick or any tick ahead of it.
     ///
-    /// Panics if `player` was already dropped: a dropped player is filtered out
-    /// before a drop is decided, so re-dropping one is a logic bug.
+    /// Panics if `from` lies behind the current tick: executed ticks keep the
+    /// input they ran with, so a drop never rewrites one. Panics if `player`
+    /// was already dropped: a dropped player is filtered out before a drop is
+    /// decided, so re-dropping one is a logic bug.
     pub fn drop_player(&mut self, player: PlayerId, from: u32) {
+        assert!(
+            from >= self.tick,
+            "player {player} dropped from tick {from} behind the current tick {} — a drop \
+             applies only from the current tick on",
+            self.tick,
+        );
         let dropped = &mut self.dropped[player as usize];
         assert!(
             dropped.is_none(),
@@ -366,33 +384,97 @@ impl GameSession {
     }
 
     /// The tick from which `player` contributes no further input, or `None`
-    /// while the player is live.
+    /// while no drop has been decided. Present as soon as the drop is decided,
+    /// even when the named tick still lies ahead.
     pub fn drop_tick(&self, player: PlayerId) -> Option<u32> {
         self.dropped.get(player as usize).copied().flatten()
     }
 
-    /// Returns `true` if `player` has been dropped from the session.
+    /// Returns `true` if `player` is dropped as of the current tick. A drop
+    /// decided for a tick still ahead is pending, not yet in effect: the
+    /// player keeps playing — and keeps being required — until that tick
+    /// arrives ([`drop_tick`](Self::drop_tick) reports the pending mark).
     pub fn is_player_dropped(&self, player: PlayerId) -> bool {
-        self.dropped
+        self.mark_arrived(&self.dropped, player)
+    }
+
+    /// Eliminates `player` from the session: from tick `from` on it contributes
+    /// no input. A defeat is derived from the simulation, so every node marks
+    /// it at the same tick on its own — no message carries it. Independent of
+    /// [`drop_player`](Self::drop_player): a defeated player whose node also
+    /// vanishes may carry both marks.
+    ///
+    /// Panics if `from` is not ahead of the current tick: the present tick
+    /// executed with the player's input on every node and must keep requiring
+    /// it, so an elimination applies only to future ticks. Panics if `player`
+    /// was already eliminated: a defeat is detected once, so re-eliminating a
+    /// player is a logic bug.
+    pub fn eliminate_player(&mut self, player: PlayerId, from: u32) {
+        assert!(
+            from > self.tick,
+            "player {player} eliminated from tick {from}, not ahead of the current tick {} — an \
+             elimination applies only to future ticks",
+            self.tick,
+        );
+        let eliminated = &mut self.eliminated[player as usize];
+        assert!(
+            eliminated.is_none(),
+            "player {player} eliminated twice — an eliminated player must never be re-eliminated",
+        );
+        *eliminated = Some(from);
+    }
+
+    /// Returns `true` if `player` is eliminated as of the current tick. An
+    /// elimination is always marked ahead of the current tick, so this turns
+    /// `true` exactly when the elimination takes effect.
+    pub fn is_player_eliminated(&self, player: PlayerId) -> bool {
+        self.mark_arrived(&self.eliminated, player)
+    }
+
+    /// Returns `true` if `player` is out of the game as of the current tick —
+    /// dropped or eliminated — and so contributes no further input.
+    pub fn is_player_out(&self, player: PlayerId) -> bool {
+        self.is_player_dropped(player) || self.is_player_eliminated(player)
+    }
+
+    /// Whether the tick `player` is marked with in `marks` has arrived — the
+    /// exclusion is in effect, not merely decided for a tick still ahead.
+    fn mark_arrived(&self, marks: &[Option<u32>], player: PlayerId) -> bool {
+        marks
             .get(player as usize)
-            .is_some_and(|dropped| dropped.is_some())
+            .copied()
+            .flatten()
+            .is_some_and(|from| from <= self.tick)
+    }
+
+    /// Returns `true` when `tick` needs `player`'s input before it can
+    /// execute: the slot is occupied and neither the player's drop nor its
+    /// elimination has taken effect by that tick. The exclusion ticks are
+    /// derived or agreed identically on every node, so every node answers
+    /// this identically for any tick — past, present, or future.
+    pub fn is_player_required(&self, player: PlayerId, tick: u32) -> bool {
+        let occupied = self
+            .slot(player)
+            .is_some_and(|slot| slot.player_type().is_some());
+        let live_at = |marks: &[Option<u32>]| marks[player as usize].is_none_or(|from| tick < from);
+        occupied && live_at(&self.dropped) && live_at(&self.eliminated)
     }
 
     /// The players whose input `tick` needs before it can execute, in ascending
-    /// id order: every occupied slot whose player was still live at that tick.
-    /// A dropped player stops counting at its drop tick, so a past tick keeps
-    /// requiring — and a recording of it keeps carrying — the input the player
-    /// contributed before dropping.
+    /// id order: every occupied slot whose player was still in the game at that
+    /// tick. A dropped or eliminated player stops counting at its drop or
+    /// elimination tick, so a past tick keeps requiring — and a recording of it
+    /// keeps carrying — the input the player contributed while it played.
     pub fn required_players(&self, tick: u32) -> Vec<PlayerId> {
         self.slots
             .iter()
-            .filter(|slot| slot.player_type().is_some())
             .map(|slot| slot.id())
-            .filter(|&player| self.dropped[player as usize].is_none_or(|dropped| tick < dropped))
+            .filter(|&player| self.is_player_required(player, tick))
             .collect()
     }
 
-    /// The players dropped from the session so far, in ascending id order.
+    /// The players with a drop decided so far — in effect or naming a tick
+    /// still ahead — in ascending id order.
     pub fn dropped_players(&self) -> impl Iterator<Item = PlayerId> {
         self.dropped
             .iter()
@@ -400,12 +482,12 @@ impl GameSession {
             .filter_map(|(player, dropped)| dropped.map(|_| player as PlayerId))
     }
 
-    /// The players still active in the session so far, in ascending id order.
+    /// The players still in the game as of the current tick — neither dropped
+    /// nor eliminated — in ascending id order.
     pub fn active_players(&self) -> impl Iterator<Item = PlayerId> {
-        self.dropped
-            .iter()
-            .enumerate()
-            .filter_map(|(player, dropped)| dropped.is_none().then_some(player as PlayerId))
+        (0..self.dropped.len())
+            .map(|player| player as PlayerId)
+            .filter(|&player| !self.is_player_out(player))
     }
 
     /// The one place the fields are initialized. Validation belongs to the
@@ -424,6 +506,7 @@ impl GameSession {
             tick: 0,
             state: SessionState::Pending,
             dropped: vec![None; slots.len()],
+            eliminated: vec![None; slots.len()],
             slots,
             map: map.into(),
             local_player,

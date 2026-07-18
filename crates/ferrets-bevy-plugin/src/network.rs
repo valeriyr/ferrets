@@ -361,10 +361,12 @@ pub fn net_control(
                     // and only from the host's own node. A client cannot drop a
                     // player by sending this, and under peer authority drops
                     // never travel this way — they commit by `StallVote`
-                    // consensus in `detect_drops`.
+                    // consensus in `detect_drops`. A player with a drop already
+                    // decided — even one for a tick still ahead — is never
+                    // re-dropped.
                     if !matches!(authority, Authority::Host { .. })
                         || !net.0.is_host_peer(from)
-                        || session.is_player_dropped(player)
+                        || session.drop_tick(player).is_some()
                     {
                         continue;
                     }
@@ -435,15 +437,15 @@ pub fn net_control(
                     .is_some_and(|player| links.lost.contains(&player))
         }
         Authority::Peers => {
+            // A player out of the game steers nothing — its node is expected
+            // to be gone, so a lost link to it proves no partition.
             let others: Vec<PlayerId> = session
                 .slots()
                 .iter()
                 .filter(|slot| slot.player_type().is_some())
                 .map(|slot| slot.id())
                 .filter(|&player| {
-                    player != local
-                        && !session.is_player_dropped(player)
-                        && net.0.is_networked(player)
+                    player != local && !session.is_player_out(player) && net.0.is_networked(player)
                 })
                 .collect();
             !others.is_empty() && others.iter().all(|player| links.lost.contains(player))
@@ -592,12 +594,20 @@ pub fn detect_drops(
     }
 
     let local = session.local_player();
+    // A player with a drop already decided — even one taking effect at a tick
+    // still ahead — is handled and never re-considered. An eliminated player
+    // is no stall either: nothing requires its frames, so it neither blocks
+    // the tick nor owes a consensus vote — its node is expected to be gone.
     let live_others: Vec<PlayerId> = session
         .slots()
         .iter()
         .filter(|slot| slot.player_type().is_some())
         .map(|slot| slot.id())
-        .filter(|&player| player != local && !session.is_player_dropped(player))
+        .filter(|&player| {
+            player != local
+                && session.drop_tick(player).is_none()
+                && !session.is_player_eliminated(player)
+        })
         .collect();
     let missing: Vec<PlayerId> = live_others
         .iter()
@@ -711,9 +721,11 @@ pub fn detect_drops(
 ///
 /// Selects only what belongs on the wire: network-backed players' frames (which
 /// players those are depends on the session's AI hosting mode — a replicated
-/// AI is computed on every node and never relayed), never dropped players'
-/// (nothing requires their input any more, so their leftover frames are dead
-/// weight), and on a non-relay node only the players this node sources
+/// AI is computed on every node and never relayed), only frames some tick still
+/// requires — a player's drop or elimination tick is known on every node, so a
+/// frame at or past it is dead weight nothing will read, while the earlier
+/// frames keep relaying until they leave the window (a lagging peer may still
+/// need them) — and on a non-relay node only the players this node sources
 /// (its own input, plus any AIs it computes for the others). Re-reading the
 /// `[tick-SYNC_LATENCY, tick+SYNC_LATENCY]` window each tick is the redundancy
 /// resend; idempotent `push_frame` makes duplicates harmless.
@@ -737,7 +749,7 @@ pub fn net_broadcast(
             .slot(frame.player)
             .is_some_and(|slot| session.sources_locally(slot, is_host));
         net.0.is_networked(frame.player)
-            && !session.is_player_dropped(frame.player)
+            && session.is_player_required(frame.player, frame.tick)
             && (relays || sourced)
     });
 

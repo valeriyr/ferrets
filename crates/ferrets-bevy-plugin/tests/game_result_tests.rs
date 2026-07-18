@@ -117,6 +117,55 @@ fn local_player_is_eliminated_when_its_base_falls_while_others_fight() {
 }
 
 #[test]
+fn building_less_player_is_eliminated_from_next_tick() {
+    // Free-for-all: player 1's base falls while players 0 and 2 fight on. The
+    // elimination is derived from the simulation itself, so from the next tick
+    // on no input is required from player 1 — the survivors keep playing
+    // without waiting for frames its node will never send, and without a drop.
+    let (mut app, bases) = bases_app(&[None, None, None]);
+    utils::run_ticks(&mut app, 1);
+
+    destroy(&mut app, bases[1]);
+    utils::run_ticks(&mut app, 1);
+
+    let session = app.world().resource::<GameSession>();
+    assert_eq!(session.result(), None);
+    assert!(session.is_player_eliminated(1));
+    assert!(!session.is_player_dropped(1));
+    assert_eq!(session.required_players(session.tick()), vec![0, 2]);
+}
+
+#[test]
+fn eliminated_player_regaining_building_stays_out() {
+    // Elimination is permanent: a building finished by a leftover order after
+    // the defeat does not bring the player back into the match, and cannot win
+    // it for them.
+    let (mut app, bases) = bases_app(&[None, None, None]);
+    utils::run_ticks(&mut app, 1);
+
+    destroy(&mut app, bases[1]);
+    utils::run_ticks(&mut app, 1);
+    assert!(
+        app.world()
+            .resource::<GameSession>()
+            .is_player_eliminated(1)
+    );
+
+    // A new building appears for the eliminated player — as a build order
+    // still in flight at the defeat would place one.
+    spawn::spawn_entity(app.world_mut(), "base", utils::pos(14, 2), Some(1)).expect("late base");
+    destroy(&mut app, bases[2]);
+    utils::run_ticks(&mut app, 1);
+
+    assert_eq!(
+        result(&app),
+        Some(GameResult::Victory {
+            winner: Winner::Player(0)
+        })
+    );
+}
+
+#[test]
 fn allied_team_wins_when_the_other_team_is_eliminated() {
     // Two-on-two: players 0 and 1 on team 1, players 2 and 3 on team 2.
     let (mut app, bases) = bases_app(&[Some(1), Some(1), Some(2), Some(2)]);
