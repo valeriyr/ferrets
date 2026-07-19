@@ -99,11 +99,7 @@ pub fn state_checksum(world: &World) -> u64 {
     // likely to diverge. Alive then dying, each sorted by SimulationId.
     let index = world.resource::<EntityIndex>();
 
-    let entities = index
-        .alive_entries()
-        .into_iter()
-        .chain(index.dying_entries());
-    for (id, entity) in entities {
+    for (id, entity) in index.all_entries() {
         hasher.write_u32(id.0);
 
         let entity = world.entity(entity);

@@ -35,6 +35,12 @@ use crate::{
 /// single team, or a lone player — has no opponent to outlast and so wins at
 /// once; a game meant to run without a last-standing verdict uses
 /// [`FinishPolicy::Endless`]. Under any other [`FinishPolicy`] this stands aside.
+///
+/// Only [`Participation::Player`](crate::session::player_slot::Participation)
+/// slots enter the accounting: an environment combatant is never eliminated,
+/// never survives as a side, and never blocks another side's victory — it is
+/// part of the environment, and its buildings count for no one.
+///
 /// Runs at the end of a tick, after deaths have been resolved.
 pub fn check(world: &mut World) {
     let session = world.resource::<GameSession>();
@@ -42,12 +48,7 @@ pub fn check(world: &mut World) {
         return;
     }
 
-    let occupied: Vec<PlayerId> = session
-        .slots()
-        .iter()
-        .filter(|slot| slot.player_type().is_some())
-        .map(|slot| slot.id())
-        .collect();
+    let occupied: Vec<PlayerId> = session.player_slots().map(PlayerSlot::id).collect();
 
     // Players that still hold at least one standing building this tick. A
     // building that has begun dying no longer counts — it is rubble.

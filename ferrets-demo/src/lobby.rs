@@ -21,15 +21,17 @@ use ferrets_simulation::session::{
     ai_hosting::AiHosting,
     drop_policy::DropPolicy,
     finish_policy::FinishPolicy,
-    player_slot::{PlayerId, PlayerSlot, TeamId},
+    player_slot::{self, PlayerId, PlayerSlot, TeamId},
     player_type::PlayerType,
 };
 
-use crate::map::START_POINTS;
+use ferrets_simulation::map_data::MapData;
+use ferrets_simulation::skirmish::Skirmish;
+
+use crate::map;
+use crate::skirmish::CurrentSkirmish;
 use crate::states::{GameState, LobbyMode};
 
-/// Player-slot capacity, one per map start point.
-const SLOTS: usize = START_POINTS.len();
 /// The TCP port the host binds and clients dial.
 const TCP_PORT: u16 = 4000;
 
@@ -122,15 +124,20 @@ pub struct SlotView {
     pub team: Option<TeamId>,
 }
 
-/// The team a slot cycles to after `team`: no team → 1 → 2 → … →
-/// [`SLOTS`](SLOTS) → no team. Enough distinct teams for every slot to pick
-/// its own.
-fn next_team(team: Option<TeamId>) -> Option<TeamId> {
+/// The team a slot cycles to after `team`: no team → 1 → 2 → … → `seats` →
+/// no team. Enough distinct teams for every slot to pick its own.
+fn next_team(team: Option<TeamId>, seats: usize) -> Option<TeamId> {
     match team {
         None => Some(1),
-        Some(current) if (current as usize) < SLOTS => Some(current + 1),
+        Some(current) if (current as usize) < seats => Some(current + 1),
         Some(_) => None,
     }
+}
+
+/// The chosen map's declaration. The lobby is driven by it: seats become
+/// rows, and the started skirmish is composed from it.
+fn map_data(name: &str) -> MapData {
+    map::by_name(name).unwrap_or_else(|| panic!("the lobby names an unknown map '{name}'"))
 }
 
 /// A team's short label for the slot row: a number, or `-` for no team.
@@ -141,6 +148,9 @@ fn team_label(team: Option<TeamId>) -> String {
 /// The lobby's working configuration.
 #[derive(Resource)]
 pub struct LobbyConfig {
+    /// The map the game is played on, by name — the demo has exactly one; a
+    /// map picker would write this.
+    pub map: String,
     pub slots: Vec<SlotView>,
     pub mode: SessionMode,
     /// Which slot the local human controls (local games).
@@ -164,7 +174,10 @@ pub struct LobbyConfig {
 
 impl LobbyConfig {
     fn for_mode(mode: LobbyMode) -> Self {
-        let slots = (0..SLOTS)
+        // One configurable row per player seat the chosen map declares.
+        let map = map::NAME.to_string();
+        let seats = map_data(&map).player_seats().count();
+        let slots = (0..seats)
             .map(|i| SlotView {
                 kind: match (mode, i) {
                     (LobbyMode::Local, 0) | (LobbyMode::Host, 0) => SlotKind::Human,
@@ -177,6 +190,7 @@ impl LobbyConfig {
             })
             .collect();
         Self {
+            map,
             slots,
             mode: SessionMode::HostStar {
                 ai_hosting: AiHosting::Host,
@@ -267,7 +281,7 @@ pub struct SlotText(u8);
 pub fn enter_lobby(mut commands: Commands, mode: Res<LobbyMode>) {
     let mut config = LobbyConfig::for_mode(*mode);
     match *mode {
-        LobbyMode::Host => match open_host(config.mode, TCP_PORT) {
+        LobbyMode::Host => match open_host(config.mode, TCP_PORT, config.slots.len()) {
             Ok(host) => {
                 config.status =
                     format!("hosting on port {TCP_PORT} - clients dial this machine's ip");
@@ -299,7 +313,7 @@ pub fn exit_lobby(mut commands: Commands, roots: Query<Entity, With<LobbyRoot>>)
     commands.remove_resource::<StartRequested>();
 }
 
-fn open_host(mode: SessionMode, tcp_port: u16) -> ferrets_network::Result<LobbyHost> {
+fn open_host(mode: SessionMode, tcp_port: u16, seats: usize) -> ferrets_network::Result<LobbyHost> {
     // The demo's game decisions beyond the lobby-editable mode: drops resolve
     // on the timeout (no wait dialog yet) and a match ends by elimination.
     bootstrap::open_lobby(
@@ -307,7 +321,7 @@ fn open_host(mode: SessionMode, tcp_port: u16) -> ferrets_network::Result<LobbyH
         mode,
         DropPolicy::Automatic,
         FinishPolicy::LastStanding,
-        SLOTS,
+        seats,
         Race::Human.id(),
     )
 }
@@ -563,7 +577,7 @@ fn toggle_race(mode: &LobbyMode, link: Option<&mut LobbyLink>, config: &mut Lobb
 }
 
 fn cycle_team(mode: &LobbyMode, link: Option<&mut LobbyLink>, config: &mut LobbyConfig, slot: u8) {
-    let team = next_team(config.slots[slot as usize].team);
+    let team = next_team(config.slots[slot as usize].team, config.slots.len());
     match (mode, link) {
         // The host arranges every slot's team; a client may only set its own.
         (LobbyMode::Host, Some(LobbyLink::Host(host))) => {
@@ -762,10 +776,11 @@ pub fn host_rebind(
     *cooldown = CONNECT_RETRY_FRAMES;
 
     let mode = config.mode;
+    let seats = config.slots.len();
     commands.queue(move |world: &mut World| {
         world.remove_non_send_resource::<LobbyLink>();
         world.remove_resource::<HostTcpPort>();
-        match open_host(mode, desired) {
+        match open_host(mode, desired, seats) {
             Ok(host) => {
                 world.insert_non_send_resource(LobbyLink::Host(host));
                 world.insert_resource(HostTcpPort(desired));
@@ -793,7 +808,7 @@ fn can_start(mode: &LobbyMode, link: Option<&LobbyLink>) -> bool {
 //
 
 /// Builds the lobby UI for the current mode.
-pub fn setup_lobby(mut commands: Commands, mode: Res<LobbyMode>) {
+pub fn setup_lobby(mut commands: Commands, mode: Res<LobbyMode>, config: Res<LobbyConfig>) {
     let is_client = *mode == LobbyMode::Client;
     let title = match *mode {
         LobbyMode::Local => "Local Game",
@@ -867,7 +882,7 @@ pub fn setup_lobby(mut commands: Commands, mode: Res<LobbyMode>) {
             });
         }
 
-        for slot in 0..SLOTS as u8 {
+        for slot in 0..config.slots.len() as u8 {
             parent.spawn(row_node()).with_children(|row| {
                 row.spawn((
                     SlotText(slot),
@@ -885,6 +900,18 @@ pub fn setup_lobby(mut commands: Commands, mode: Res<LobbyMode>) {
                 if matches!(*mode, LobbyMode::Local) {
                     spawn_button(row, "Play here", LobbyButton::Claim(slot));
                 }
+            });
+        }
+
+        // The environment combatants the map seats beyond the lobby's slots —
+        // shown so every player knows, configured by no one.
+        for seat in map_data(&config.map).environment_seats() {
+            parent.spawn(row_node()).with_children(|row| {
+                row.spawn((
+                    Text::new(format!("Slot {seat}: Environment")),
+                    text_font(),
+                    TextColor(Color::srgb(0.65, 0.65, 0.7)),
+                ));
             });
         }
 
@@ -1116,17 +1143,30 @@ pub fn start_game(world: &mut World) {
     }
 
     let mode = *world.resource::<LobbyMode>();
-    let slots = player_slots(world.resource::<LobbyConfig>());
 
-    let (local_player, choices, net) = match mode {
+    // The lobby's decisions land on the stored definition: who sits in its
+    // player seats, and — for a network game — the finish rule it broadcast.
+    let mut skirmish = vacant_skirmish(world.resource::<LobbyConfig>());
+    for slot in player_slots(world.resource::<LobbyConfig>()) {
+        // Composed from the map's seats in id order, so a slot's id is its index.
+        let seat = slot.id() as usize;
+        assert_eq!(
+            skirmish.slots[seat],
+            PlayerSlot::free(slot.id()),
+            "lobby row {seat} must land on one of the map's player seats",
+        );
+        skirmish.slots[seat] = slot;
+    }
+
+    let (local_player, authority, drop_policy, net) = match mode {
         LobbyMode::Local => {
             let config = world.resource::<LobbyConfig>();
-            let choices = (
+            (
+                config.local_slot,
                 config.mode.authority(),
                 DropPolicy::Automatic,
-                FinishPolicy::LastStanding,
-            );
-            (config.local_slot, choices, None)
+                None,
+            )
         }
         LobbyMode::Host => {
             // Validate before consuming the lobby link, so a bad port leaves
@@ -1144,13 +1184,10 @@ pub fn start_game(world: &mut World) {
             // The choices the lobby broadcast, captured before the link is
             // consumed — identical on every node.
             let state = host.state();
-            let choices = (
-                state.mode.authority(),
-                state.drop_policy,
-                state.finish_policy,
-            );
-            match NetSession::start_host(host, udp_port) {
-                Ok(net) => (0, choices, Some(net)),
+            let (authority, drop_policy) = (state.mode.authority(), state.drop_policy);
+            skirmish.finish_policy = state.finish_policy;
+            match NetSession::start_host(host, udp_port, &skirmish.slots) {
+                Ok(net) => (0, authority, drop_policy, Some(net)),
                 Err(error) => {
                     eprintln!("failed to start host: {error}");
                     return;
@@ -1163,17 +1200,13 @@ pub fn start_game(world: &mut World) {
                 return;
             };
             let local = client.local_player().unwrap_or(0);
-            let Some(choices) = client.state().map(|state| {
-                (
-                    state.mode.authority(),
-                    state.drop_policy,
-                    state.finish_policy,
-                )
-            }) else {
+            let Some(state) = client.state() else {
                 return;
             };
-            match NetSession::start_client(client) {
-                Ok(net) => (local, choices, Some(net)),
+            let (authority, drop_policy) = (state.mode.authority(), state.drop_policy);
+            skirmish.finish_policy = state.finish_policy;
+            match NetSession::start_client(client, &skirmish.slots) {
+                Ok(net) => (local, authority, drop_policy, Some(net)),
                 Err(error) => {
                     eprintln!("failed to start client: {error}");
                     return;
@@ -1184,17 +1217,16 @@ pub fn start_game(world: &mut World) {
 
     {
         let mut session = world.resource_mut::<GameSession>();
-        let (authority, drop_policy, finish_policy) = choices;
-        // The map every lobby game plays on; the demo has exactly one to choose.
         session.configure(
             local_player,
-            slots,
-            crate::map::NAME,
+            skirmish.slots.clone(),
+            skirmish.map.as_str(),
             authority,
             drop_policy,
-            finish_policy,
+            skirmish.finish_policy,
         );
     }
+    world.insert_resource(CurrentSkirmish(skirmish));
     install_game_resources(world);
     if let Some(net) = net {
         install_network_session(world, net);
@@ -1206,6 +1238,17 @@ pub fn start_game(world: &mut World) {
         .set(GameState::InGame);
 }
 
+/// The vacant skirmish for the lobby's chosen map: one slot per map seat —
+/// player seats free, environment seats seated — and the default finish rule.
+fn vacant_skirmish(config: &LobbyConfig) -> Skirmish {
+    Skirmish {
+        slots: player_slot::vacant_slots(&map_data(&config.map)),
+        map: config.map.clone(),
+        finish_policy: FinishPolicy::LastStanding,
+    }
+}
+
+/// The session slots the lobby's rows configure; the skirmish seats them.
 fn player_slots(config: &LobbyConfig) -> Vec<PlayerSlot> {
     config
         .slots

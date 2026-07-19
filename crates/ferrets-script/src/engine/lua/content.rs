@@ -7,50 +7,77 @@ use std::rc::Rc;
 use ferrets_pathfinder::nav_size::NavSize;
 use ferrets_simulation::components::resource::HarvestData;
 use ferrets_simulation::content::entity_type_def::EntityTypeDef;
+use ferrets_simulation::content::registry::ContentRegistry;
 use mlua::{Lua, Table, Value};
 
-use crate::content::{self, Definition};
+use crate::content;
 use crate::error::ScriptError;
 
-/// Installs the `define_*` globals, each pushing into `sink`.
-pub(super) fn register(lua: &Lua, sink: &Rc<RefCell<Vec<Definition>>>) -> mlua::Result<()> {
+/// Installs the `define_*` globals, each registering into `registry` — the one
+/// assigner of every derived id, so what a script observes (the layer id
+/// `define_layer` returns) is what the finished registry holds.
+pub(super) fn register(lua: &Lua, registry: &Rc<RefCell<ContentRegistry>>) -> mlua::Result<()> {
     let globals = lua.globals();
 
-    let races = Rc::clone(sink);
+    let races = Rc::clone(registry);
     globals.set(
         "define_race",
         lua.create_function(move |_, name: String| {
-            races.borrow_mut().push(Definition::Race(name));
+            races.borrow_mut().register_race(name);
             Ok(())
         })?,
     )?;
 
-    let resources = Rc::clone(sink);
+    let resources = Rc::clone(registry);
     globals.set(
         "define_resource",
         lua.create_function(move |_, kind: String| {
-            resources.borrow_mut().push(Definition::Resource(kind));
+            resources.borrow_mut().register_resource(kind);
             Ok(())
         })?,
     )?;
 
-    let tags = Rc::clone(sink);
+    let tags = Rc::clone(registry);
     globals.set(
         "define_tag",
         lua.create_function(move |_, tag: String| {
-            tags.borrow_mut().push(Definition::Tag(tag));
+            tags.borrow_mut().register_tag(tag);
             Ok(())
         })?,
     )?;
 
-    let entities = Rc::clone(sink);
+    let layers = Rc::clone(registry);
+    globals.set(
+        "define_layer",
+        lua.create_function(move |_, name: String| Ok(*layers.borrow_mut().register_layer(name)))?,
+    )?;
+
+    let lookup = Rc::clone(registry);
+    globals.set(
+        "layer_id",
+        lua.create_function(move |_, name: String| match lookup.borrow().layer(&name) {
+            Some(id) => Ok(*id),
+            None => Err(mlua::Error::external(ScriptError::ContentError(format!(
+                "layer '{name}' is not defined"
+            )))),
+        })?,
+    )?;
+
+    let terrains = Rc::clone(registry);
+    globals.set(
+        "define_terrain",
+        lua.create_function(move |_, (name, passable): (String, u32)| {
+            terrains.borrow_mut().register_terrain(name, passable);
+            Ok(())
+        })?,
+    )?;
+
+    let entities = Rc::clone(registry);
     globals.set(
         "define_entity",
         lua.create_function(move |_, (name, table): (String, Table)| {
             let def = build_entity(&name, &table).map_err(mlua::Error::external)?;
-            entities
-                .borrow_mut()
-                .push(Definition::Entity(Box::new(def)));
+            entities.borrow_mut().register(def);
             Ok(())
         })?,
     )?;

@@ -7,17 +7,40 @@ use bevy::prelude::*;
 use ferrets_script::{content, engine::lua::LuaEngine};
 use ferrets_simulation::content::registry::ContentRegistry;
 
-/// The demo's content, as a Lua script. `occupation = 1` is the single ground
-/// navigation layer (`GROUND` in [`crate::map`]). Fractional stats are decimal
+/// The demo's content, as a Lua script. It declares the ground and water
+/// navigation layers (named by [`crate::map::GROUND`] and
+/// [`crate::map::WATER`]) and a terrain for each. Fractional stats are decimal
 /// strings so they parse straight to fixed-point (no `f64`).
 pub const CONTENT: &str = r#"
-    local GROUND = 1
+    local GROUND = define_layer("ground")
+    local WATER = define_layer("water")
+
+    define_terrain("grass", GROUND)
+    define_terrain("water", WATER)
 
     define_race("human")
     define_race("orc")
 
     define_resource("gold")
     define_resource("wood")
+
+    -- The lake boss: a raceless water fortress spawning free ships. Ships are
+    -- ranged so they shell shore targets; the fortress is the boss's building.
+    define_entity("ship", {
+        location = { occupation = WATER, size = 1, solidity = "solid" },
+        movement = { speed = "0.25" },
+        health = 80,
+        dying = { time = 2 },
+        attack = { damage = 12, range = 5, aiming = 4, reloading = 6 },
+        train_time = 100,
+    })
+    define_entity("sea_fortress", {
+        location = { occupation = WATER, size = { 3, 3 }, solidity = "solid" },
+        health = 1500,
+        dying = { time = 2 },
+        trainer = { "ship" },
+        tags = { "building" },
+    })
 
     -- Neutral resource sources.
     define_entity("gold_mine", {

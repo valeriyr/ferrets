@@ -18,19 +18,18 @@ use ferrets_simulation::{
     content::registry::ContentRegistry,
     map_data::{MapData, Placement},
     resources::StartingStock,
-    scenario::Scenario,
+    scenario::{Scenario, ScenarioPlayer},
     session::{
         GameSession,
         ai_hosting::AiHosting,
         authority::Authority,
         drop_policy::DropPolicy,
         finish_policy::FinishPolicy,
-        player_slot::{PlayerId, PlayerSlot},
+        player_slot::{self, PlayerId},
         player_type::PlayerType,
     },
 };
 
-use crate::map::GROUND;
 use crate::states::GameState;
 
 /// The scenario script. The engine holds the objective list (id + label,
@@ -96,36 +95,35 @@ pub struct CurrentScenario(pub Scenario);
 /// and train three archers (240 gold) without harvesting, so the objective is
 /// the point rather than the economy.
 pub fn builtin_mission() -> Scenario {
+    let mut map = MapData::new("build_army", Projection::Isometric, 32, 32);
+    map.fill_terrain("grass");
+    map.add_player_slot(START);
+
     // The mission's authored base, plus a gold mine within reach and a small
     // wood grove.
-    let mut placements = vec![
-        place("town_hall", START, Some(PLAYER), None),
-        place("peasant", (START.0 + 3, START.1), Some(PLAYER), None),
-        place("peasant", (START.0 + 3, START.1 + 1), Some(PLAYER), None),
-        place("gold_mine", (13, 6), None, Some(5000)),
-    ];
+    map.add_placement(place("town_hall", START, Some(PLAYER), None));
+    map.add_placement(place("peasant", (START.0 + 3, START.1), Some(PLAYER), None));
+    map.add_placement(place(
+        "peasant",
+        (START.0 + 3, START.1 + 1),
+        Some(PLAYER),
+        None,
+    ));
+    map.add_placement(place("gold_mine", (13, 6), None, Some(5000)));
     for cell in [(5, 13), (6, 13), (5, 14), (6, 14)] {
-        placements.push(place("tree", cell, None, Some(400)));
+        map.add_placement(place("tree", cell, None, Some(400)));
     }
 
     Scenario {
         name: "build_army".to_string(),
-        slots: vec![PlayerSlot::occupied(
-            PLAYER,
-            PlayerType::Human,
-            Some("human"),
-            None,
-        )],
+        players: vec![ScenarioPlayer {
+            seat: PLAYER,
+            player_type: PlayerType::Human,
+            race: Some("human".to_string()),
+            team: None,
+        }],
         judged_player: PLAYER,
-        map: MapData {
-            name: "build_army".to_string(),
-            projection: Projection::Isometric,
-            width: 32,
-            height: 32,
-            layers: vec![GROUND],
-            start_points: vec![START],
-            placements,
-        },
+        map,
         stockpile: vec![
             StartingStock {
                 player: PLAYER,
@@ -164,8 +162,8 @@ pub fn start_scenario(world: &mut World) {
         let mut session = world.resource_mut::<GameSession>();
         session.configure(
             scenario.judged_player,
-            scenario.slots.clone(),
-            scenario.map.name.as_str(),
+            player_slot::scenario_slots(&scenario),
+            scenario.map.name(),
             Authority::Host {
                 ai_hosting: AiHosting::Replicated,
             },

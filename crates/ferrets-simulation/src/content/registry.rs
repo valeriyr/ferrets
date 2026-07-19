@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use bevy_ecs::prelude::*;
+use ferrets_pathfinder::{layer_id::LayerId, layer_mask::LayerMask};
 
 use super::entity_type_def::EntityTypeDef;
 use crate::components::tags;
@@ -18,6 +19,8 @@ pub struct ContentRegistry {
     resources: BTreeSet<String>,
     races: BTreeSet<String>,
     tags: BTreeSet<String>,
+    layers: BTreeMap<String, LayerId>,
+    terrains: BTreeMap<String, LayerMask>,
 }
 
 impl Default for ContentRegistry {
@@ -28,6 +31,8 @@ impl Default for ContentRegistry {
             resources: BTreeSet::new(),
             races: BTreeSet::new(),
             tags: BTreeSet::from([tags::BUILDING.to_string()]),
+            layers: BTreeMap::new(),
+            terrains: BTreeMap::new(),
         }
     }
 }
@@ -61,6 +66,7 @@ impl ContentRegistry {
         self.validate_race(&def);
         self.validate_resource_kinds(&def);
         self.validate_tags(&def);
+        self.validate_layers(&def);
         self.validate_corpse(&def);
 
         self.entities.insert(def.name.clone(), def);
@@ -139,6 +145,94 @@ impl ContentRegistry {
         self.tags.contains(tag)
     }
 
+    /// Registers a navigation layer (ground, air, …) and returns its assigned
+    /// [`LayerId`].
+    ///
+    /// Ids are assigned in registration order, so identical content registered
+    /// in the same order resolves to identical ids everywhere. Re-registering a
+    /// name returns its existing id.
+    ///
+    /// Panics if `name` is empty or all layer ids are already assigned.
+    pub fn register_layer(&mut self, name: impl Into<String>) -> LayerId {
+        let name = name.into();
+        assert!(!name.is_empty(), "layer name must not be empty");
+
+        if let Some(&id) = self.layers.get(&name) {
+            return id;
+        }
+
+        let bit = u32::try_from(self.layers.len()).unwrap();
+        assert!(
+            bit < u32::BITS,
+            "all {} layer ids are already assigned",
+            u32::BITS
+        );
+        let id = LayerId::new(1 << bit);
+        self.layers.insert(name, id);
+        id
+    }
+
+    /// Returns `true` if `name` is a registered navigation layer.
+    pub fn has_layer(&self, name: &str) -> bool {
+        self.layers.contains_key(name)
+    }
+
+    /// Returns the id assigned to the given layer name, or `None` if not
+    /// registered.
+    pub fn layer(&self, name: &str) -> Option<LayerId> {
+        self.layers.get(name).copied()
+    }
+
+    /// Returns every registered navigation layer with its assigned id, in
+    /// ascending name order.
+    pub fn layers(&self) -> impl Iterator<Item = (&str, LayerId)> {
+        self.layers.iter().map(|(name, &id)| (name.as_str(), id))
+    }
+
+    /// Registers a terrain type (grass, water, …): a name and the mask of
+    /// navigation layers passable on cells of that terrain. An empty mask means
+    /// the terrain is impassable on every layer.
+    ///
+    /// The passable layers must be registered first.
+    ///
+    /// Panics if `name` is empty, the terrain is already registered, or the
+    /// mask includes an unregistered layer.
+    pub fn register_terrain(&mut self, name: impl Into<String>, passable: impl Into<LayerMask>) {
+        let name = name.into();
+        let passable = passable.into();
+
+        assert!(!name.is_empty(), "terrain name must not be empty");
+        assert!(
+            !self.terrains.contains_key(&name),
+            "terrain '{name}' is already registered"
+        );
+        let unregistered = passable & !self.registered_layers();
+        assert!(
+            unregistered == LayerMask::EMPTY,
+            "terrain '{name}' passes unregistered layers {unregistered}"
+        );
+
+        self.terrains.insert(name, passable);
+    }
+
+    /// Returns `true` if `name` is a registered terrain type.
+    pub fn has_terrain(&self, name: &str) -> bool {
+        self.terrains.contains_key(name)
+    }
+
+    /// Returns the mask of layers passable on the given terrain, or `None` if
+    /// not registered.
+    pub fn terrain(&self, name: &str) -> Option<LayerMask> {
+        self.terrains.get(name).copied()
+    }
+
+    /// Returns the mask of every registered navigation layer.
+    pub fn registered_layers(&self) -> LayerMask {
+        self.layers
+            .values()
+            .fold(LayerMask::EMPTY, |mask, &id| mask | id)
+    }
+
     /// Checks that the definition has the mandatory location properties.
     fn validate_location(&self, def: &EntityTypeDef) {
         assert!(
@@ -196,6 +290,20 @@ impl ContentRegistry {
                 def.name
             );
         }
+    }
+
+    /// Checks that the definition occupies only registered navigation layers.
+    fn validate_layers(&self, def: &EntityTypeDef) {
+        let Some(location) = &def.location else {
+            return;
+        };
+
+        let unregistered = location.occupation() & !self.registered_layers();
+        assert!(
+            unregistered == LayerMask::EMPTY,
+            "entity type '{}' occupies unregistered layers {unregistered}",
+            def.name
+        );
     }
 
     /// Checks that every type in the definition's train catalogue is a

@@ -230,6 +230,63 @@ fn draw_when_last_teams_fall_together() {
 }
 
 //
+// ─── Environment slots ────────────────────────────────────────────────────────
+//
+
+#[test]
+fn environment_base_does_not_block_victory() {
+    // Two unallied players plus an environment combatant holding its own base.
+    let (mut app, bases, _) = bases_app_with_environment(&[None, None]);
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(result(&app), None);
+
+    // Player 1 falls. The environment's base still stands, yet player 0 wins —
+    // an environment is not surviving opposition.
+    destroy(&mut app, bases[1]);
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(
+        result(&app),
+        Some(GameResult::Victory {
+            winner: Winner::Player(0)
+        })
+    );
+}
+
+#[test]
+fn environment_without_building_is_not_eliminated() {
+    // The environment slot loses its only building; the building-less
+    // elimination sweep must pass it by, and it keeps feeding input.
+    let (mut app, _, environment_base) = bases_app_with_environment(&[None, None]);
+    let environment = environment_id(&[None, None]);
+    destroy(&mut app, environment_base);
+    utils::run_ticks(&mut app, 3);
+
+    let session = app.world().resource::<GameSession>();
+    assert_eq!(session.result(), None);
+    assert!(!session.is_player_eliminated(environment));
+    assert!(
+        session
+            .required_players(session.tick())
+            .contains(&environment)
+    );
+}
+
+#[test]
+fn lone_player_beside_environment_wins_at_once() {
+    // A single lobby player has no opposing side to outlast — the environment
+    // does not count as one — so the lineup wins immediately, like any other
+    // one-sided lineup under `LastStanding`.
+    let (mut app, _, _) = bases_app_with_environment(&[None]);
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(
+        result(&app),
+        Some(GameResult::Victory {
+            winner: Winner::Player(0)
+        })
+    );
+}
+
+//
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 //
 
@@ -247,23 +304,7 @@ fn bases_app(teams: &[Option<TeamId>]) -> (App, Vec<Entity>) {
     app.world_mut()
         .resource_mut::<GameSession>()
         .set_finish_policy(FinishPolicy::LastStanding);
-    {
-        let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
-        registry.register(
-            EntityTypeDef::new("base")
-                .with_location(GROUND, NavSize::ONE, Solidity::Solid)
-                .with_health(30)
-                .with_dying(2, None)
-                .with_tags(["building"]),
-        );
-        registry.register(
-            EntityTypeDef::new("soldier")
-                .with_location(GROUND, NavSize::ONE, Solidity::Solid)
-                .with_health(30)
-                .with_dying(2, None),
-        );
-        registry.validate();
-    }
+    register_bases_content(&mut app);
     let bases = {
         let world = app.world_mut();
         teams
@@ -283,6 +324,71 @@ fn bases_app(teams: &[Option<TeamId>]) -> (App, Vec<Entity>) {
     };
     app.world_mut().resource_mut::<GameSession>().start();
     (app, bases)
+}
+
+/// Like [`bases_app`], with one extra environment AI slot seated after the
+/// lobby players, holding its own base (returned last).
+fn bases_app_with_environment(teams: &[Option<TeamId>]) -> (App, Vec<Entity>, Entity) {
+    let environment = environment_id(teams);
+    let mut slots: Vec<PlayerSlot> = teams
+        .iter()
+        .enumerate()
+        .map(|(id, team)| PlayerSlot::occupied(id as PlayerId, PlayerType::Human, None, *team))
+        .collect();
+    slots.push(PlayerSlot::environment(environment));
+
+    let mut app = utils::make_app(slots);
+    app.world_mut()
+        .resource_mut::<GameSession>()
+        .set_finish_policy(FinishPolicy::LastStanding);
+    register_bases_content(&mut app);
+
+    let world = app.world_mut();
+    let bases: Vec<Entity> = teams
+        .iter()
+        .enumerate()
+        .map(|(id, _)| {
+            let (entity, _) = spawn::spawn_entity(
+                world,
+                "base",
+                utils::pos(2 + id as u32 * 4, 2),
+                Some(id as PlayerId),
+            )
+            .expect("base placement");
+            entity
+        })
+        .collect();
+    let (environment_base, _) =
+        spawn::spawn_entity(world, "base", utils::pos(2, 8), Some(environment))
+            .expect("environment base placement");
+
+    app.world_mut().resource_mut::<GameSession>().start();
+    (app, bases, environment_base)
+}
+
+/// The slot id the environment player takes: the one past the lobby players.
+fn environment_id(teams: &[Option<TeamId>]) -> PlayerId {
+    teams.len() as PlayerId
+}
+
+/// Registers the roster the suite uses: one building type, `base`, and one
+/// non-building `soldier`.
+fn register_bases_content(app: &mut App) {
+    let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
+    registry.register(
+        EntityTypeDef::new("base")
+            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_health(30)
+            .with_dying(2, None)
+            .with_tags(["building"]),
+    );
+    registry.register(
+        EntityTypeDef::new("soldier")
+            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_health(30)
+            .with_dying(2, None),
+    );
+    registry.validate();
 }
 
 /// Starts the given entity's dying phase, taking it out of the standing-building

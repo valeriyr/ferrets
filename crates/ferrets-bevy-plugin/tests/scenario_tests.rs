@@ -20,7 +20,7 @@ use ferrets_simulation::{
     map::Map,
     map_data::{MapData, Placement},
     resources::{PlayerResources, StartingStock},
-    scenario::Scenario,
+    scenario::{Scenario, ScenarioPlayer},
     session::{
         GameResult, GameSession, Winner, finish_policy::FinishPolicy, player_slot::PlayerSlot,
         player_type::PlayerType,
@@ -179,7 +179,7 @@ fn placement_on_occupied_cell_is_skipped() {
     let mut scenario = scene_scenario();
     // Two entities declared on the same cell: the second cannot be hosted, so
     // it is skipped — identically on every node, since all build the same data.
-    scenario.map.placements.push(Placement {
+    scenario.map.add_placement(Placement {
         type_name: "barracks".to_string(),
         cell: (2, 2),
         owner: Some(0),
@@ -205,11 +205,13 @@ fn placements_of_unoccupied_slots_are_skipped() {
     ]);
     utils::register_orders_content(&mut app);
     let mut data = scene_map();
-    // A barracks declared for the free slot: nobody owns it, so it must not
-    // spawn — on any node, since the slots are identical everywhere.
-    data.placements.push(Placement {
+    // A barracks declared for a second seat the session leaves free: nobody
+    // owns it, so it must not spawn — on any node, since the slots are
+    // identical everywhere.
+    data.add_player_slot((10, 10));
+    data.add_placement(Placement {
         type_name: "barracks".to_string(),
-        cell: (10, 10),
+        cell: (12, 12),
         owner: Some(1),
         amount: None,
     });
@@ -274,35 +276,33 @@ fn install_army(app: &mut App) {
 /// A map placing types the orders roster defines: an owned base and a neutral
 /// resource source with an overridden amount.
 fn scene_map() -> MapData {
-    MapData {
-        name: "mission".to_string(),
-        projection: Projection::Isometric,
-        width: 16,
-        height: 16,
-        layers: vec![utils::GROUND],
-        start_points: vec![(2, 2)],
-        placements: vec![
-            Placement {
-                type_name: "barracks".to_string(),
-                cell: (2, 2),
-                owner: Some(0),
-                amount: None,
-            },
-            Placement {
-                type_name: "mine".to_string(),
-                cell: (8, 8),
-                owner: None,
-                amount: Some(500),
-            },
-        ],
-    }
+    let mut data = MapData::new("mission", Projection::Isometric, 16, 16);
+    data.add_player_slot((2, 2));
+    data.add_placement(Placement {
+        type_name: "barracks".to_string(),
+        cell: (2, 2),
+        owner: Some(0),
+        amount: None,
+    });
+    data.add_placement(Placement {
+        type_name: "mine".to_string(),
+        cell: (8, 8),
+        owner: None,
+        amount: Some(500),
+    });
+    data
 }
 
 /// A scenario on the [`scene_map`] with a starting stockpile.
 fn scene_scenario() -> Scenario {
     Scenario {
         name: "mission".to_string(),
-        slots: vec![PlayerSlot::occupied(0, PlayerType::Human, None, None)],
+        players: vec![ScenarioPlayer {
+            seat: 0,
+            player_type: PlayerType::Human,
+            race: None,
+            team: None,
+        }],
         judged_player: 0,
         map: scene_map(),
         stockpile: vec![StartingStock {

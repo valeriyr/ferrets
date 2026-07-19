@@ -23,7 +23,6 @@ use ferrets_simulation::{
     simulation_id::SimulationId,
 };
 
-use crate::map::GROUND;
 use crate::render::CELL_PX;
 
 /// Drag below this many pixels is treated as a click, not a box-select.
@@ -342,18 +341,17 @@ pub fn placement_input(
     let Some((cx, cy)) = world_to_cell(cursor) else {
         return;
     };
-    let Some(size) = registry
-        .entity(&type_name)
-        .and_then(|def| def.location)
-        .map(|loc| loc.size())
-    else {
+    let Some(location_data) = registry.entity(&type_name).and_then(|def| def.location) else {
         *mode = InputMode::Normal;
         return;
     };
+    let size = location_data.size();
 
-    let passable = map
-        .nav_grid()
-        .is_footprint_passable_by(GROUND, NavPos::new(cx, cy), size);
+    let passable = map.nav_grid().is_footprint_passable_by(
+        location_data.occupation(),
+        NavPos::new(cx, cy),
+        size,
+    );
     let center = Vec2::new(
         (cx as f32 + size.width as f32 / 2.0) * CELL_PX,
         -(cy as f32 + size.height as f32 / 2.0) * CELL_PX,

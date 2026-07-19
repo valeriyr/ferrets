@@ -3,19 +3,10 @@
 use ferrets_math::FixedU64;
 use ferrets_simulation::components::location::Solidity;
 use ferrets_simulation::components::resource::{DepletionPolicy, HarvestVisibility};
-use ferrets_simulation::content::entity_type_def::EntityTypeDef;
 use ferrets_simulation::content::registry::ContentRegistry;
 
 use crate::engine::ScriptEngine;
 use crate::error::ScriptError;
-
-/// One content declaration produced by a script.
-pub enum Definition {
-    Race(String),
-    Resource(String),
-    Tag(String),
-    Entity(Box<EntityTypeDef>),
-}
 
 /// Loads content from `source` with the given engine, returning a validated
 /// registry.
@@ -24,17 +15,7 @@ pub enum Definition {
 /// returned. Content-consistency errors (an unregistered race, an invalid
 /// production catalogue) panic, matching the registry's Rust API.
 pub fn load(engine: &dyn ScriptEngine, source: &str) -> crate::Result<ContentRegistry> {
-    let definitions = engine.load_content(source)?;
-
-    let mut registry = ContentRegistry::default();
-    for definition in definitions {
-        match definition {
-            Definition::Race(name) => registry.register_race(name),
-            Definition::Resource(kind) => registry.register_resource(kind),
-            Definition::Tag(tag) => registry.register_tag(tag),
-            Definition::Entity(def) => registry.register(*def),
-        }
-    }
+    let registry = engine.load_content(source)?;
     registry.validate();
     Ok(registry)
 }

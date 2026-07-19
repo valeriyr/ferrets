@@ -11,7 +11,7 @@ use crate::session::ai_hosting::AiHosting;
 use crate::session::authority::Authority;
 use crate::session::drop_policy::DropPolicy;
 use crate::session::finish_policy::FinishPolicy;
-use crate::session::player_slot::{PlayerId, PlayerSlot, TeamId};
+use crate::session::player_slot::{Participation, PlayerId, PlayerSlot, TeamId};
 use crate::session::player_type::PlayerType;
 use bevy_ecs::prelude::*;
 
@@ -304,6 +304,34 @@ impl GameSession {
 
     pub fn slots(&self) -> &[PlayerSlot] {
         &self.slots
+    }
+
+    /// Returns every occupied slot, of any participation.
+    pub fn occupied_slots(&self) -> impl Iterator<Item = &PlayerSlot> {
+        self.slots
+            .iter()
+            .filter(|slot| slot.participation().is_some())
+    }
+
+    /// Returns every slot occupied as [`Participation::Player`].
+    pub fn player_slots(&self) -> impl Iterator<Item = &PlayerSlot> {
+        self.slots
+            .iter()
+            .filter(|slot| slot.participation() == Some(Participation::Player))
+    }
+
+    /// Returns every slot occupied as [`Participation::Environment`].
+    pub fn environment_slots(&self) -> impl Iterator<Item = &PlayerSlot> {
+        self.slots
+            .iter()
+            .filter(|slot| slot.participation() == Some(Participation::Environment))
+    }
+
+    /// Returns `true` if `player`'s slot is occupied as
+    /// [`Participation::Environment`].
+    pub fn is_environment_slot(&self, player: PlayerId) -> bool {
+        self.slot(player)
+            .is_some_and(|slot| slot.participation() == Some(Participation::Environment))
     }
 
     /// The map this session plays on, by name.

@@ -24,6 +24,7 @@ mod render;
 mod replay;
 pub mod scenario;
 pub mod setup;
+pub mod skirmish;
 mod states;
 mod time;
 
@@ -41,7 +42,9 @@ pub fn run() {
         .add_plugins(AiPlugin)
         .init_state::<GameState>()
         .insert_resource(Time::<Fixed>::from_hz(20.0))
-        .insert_resource(ClearColor(Color::srgb(0.18, 0.32, 0.16)))
+        // The void outside the playable field; the field itself is drawn as
+        // terrain tiles.
+        .insert_resource(ClearColor(Color::srgb(0.09, 0.09, 0.11)))
         .init_resource::<time::TickTimer>()
         .init_resource::<input::DragStart>()
         .init_resource::<input::InputMode>()
@@ -93,6 +96,7 @@ pub fn run() {
                 // afterwards, off whichever map the spawner installed.
                 setup::spawn_demo_scene.run_if(not(resource_exists::<scenario::CurrentScenario>)),
                 scenario::spawn_scenario_scene.run_if(resource_exists::<scenario::CurrentScenario>),
+                render::spawn_terrain_tiles,
                 camera::frame_local_player,
                 replay::start_recording,
             )

@@ -3,8 +3,11 @@
 use ferrets_simulation::session::drop_policy::DropPolicy;
 use ferrets_simulation::session::finish_policy::FinishPolicy;
 use ferrets_simulation::session::{
-    GameResult, GameSession, Winner, ai_hosting::AiHosting, authority::Authority,
-    player_slot::PlayerSlot, player_type::PlayerType,
+    GameResult, GameSession, Winner,
+    ai_hosting::AiHosting,
+    authority::Authority,
+    player_slot::{Participation, PlayerSlot},
+    player_type::PlayerType,
 };
 
 //
@@ -246,6 +249,76 @@ fn set_team_updates_slot() {
     assert_eq!(slot.team(), None);
 }
 
+//
+// ─── Environment slots ──────────────────────────────────────────────────────────
+//
+
+#[test]
+fn environment_slot_is_an_occupied_raceless_teamless_ai() {
+    let slot = PlayerSlot::environment(4);
+
+    assert_eq!(slot.participation(), Some(Participation::Environment));
+    assert_eq!(slot.player_type(), Some(PlayerType::Ai));
+    assert_eq!(slot.race(), None);
+    assert_eq!(slot.team(), None);
+}
+
+#[test]
+fn occupied_lobby_slot_participates_as_player_and_free_slot_as_nothing() {
+    assert_eq!(
+        PlayerSlot::occupied(1, PlayerType::Ai, None, None).participation(),
+        Some(Participation::Player)
+    );
+    assert_eq!(PlayerSlot::free(0).participation(), None);
+}
+
+#[test]
+fn is_environment_slot_answers_only_for_environment_occupancy() {
+    let session = configured(
+        0,
+        vec![
+            PlayerSlot::occupied(0, PlayerType::Human, None, None),
+            PlayerSlot::free(1),
+            PlayerSlot::environment(2),
+        ],
+    );
+
+    assert!(!session.is_environment_slot(0));
+    assert!(!session.is_environment_slot(1));
+    assert!(session.is_environment_slot(2));
+    assert!(!session.is_environment_slot(9));
+}
+
+#[test]
+fn slot_accessors_partition_by_participation() {
+    let session = configured(
+        0,
+        vec![
+            PlayerSlot::occupied(0, PlayerType::Human, None, None),
+            PlayerSlot::free(1),
+            PlayerSlot::occupied(2, PlayerType::Ai, None, None),
+            PlayerSlot::environment(3),
+        ],
+    );
+
+    let ids = |slots: Vec<&PlayerSlot>| slots.iter().map(|s| s.id()).collect::<Vec<_>>();
+    assert_eq!(ids(session.occupied_slots().collect()), vec![0, 2, 3]);
+    assert_eq!(ids(session.player_slots().collect()), vec![0, 2]);
+    assert_eq!(ids(session.environment_slots().collect()), vec![3]);
+}
+
+#[test]
+#[should_panic(expected = "only an occupied lobby player slot can change team")]
+fn setting_team_on_environment_slot_panics() {
+    PlayerSlot::environment(4).set_team(Some(1));
+}
+
+#[test]
+#[should_panic(expected = "only an occupied lobby player slot can change race")]
+fn setting_race_on_free_slot_panics() {
+    PlayerSlot::free(0).set_race("orc");
+}
+
 #[test]
 fn same_team_allies_players_different_teams_do_not() {
     let session = teams(&[Some(1), Some(1), Some(2)]);
@@ -472,7 +545,7 @@ fn required_players_stops_including_player_at_its_elimination_tick() {
 #[test]
 fn eliminated_player_can_still_be_dropped() {
     // A defeated player's node may also vanish: the two exclusions are
-    // independent marks, not a conflict.
+    // separate marks, not a conflict.
     let mut session = session(3);
 
     session.eliminate_player(1, 5);

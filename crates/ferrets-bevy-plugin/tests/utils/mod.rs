@@ -28,6 +28,9 @@ use ferrets_simulation::{
     },
 };
 
+/// The single navigation layer the harness content declares.
+pub const GROUND_LAYER: &str = "ground";
+/// The id [`GROUND_LAYER`] resolves to — it is the first registered layer.
 pub const GROUND: LayerId = LayerId::new(1);
 
 /// Creates an app with the simulation plugin on a 32×32 single-layer map,
@@ -36,8 +39,12 @@ pub const GROUND: LayerId = LayerId::new(1);
 /// The session uses [`FinishPolicy::Endless`] so a lone or unpopulated slot is
 /// never read as a win; a test that exercises the victory condition opts into
 /// [`FinishPolicy::LastStanding`] with `set_finish_policy`. The caller registers
-/// content and starts the session.
+/// content and starts the session; the registry already declares
+/// [`GROUND_LAYER`], matching the map's grid.
 pub fn make_app(slots: Vec<PlayerSlot>) -> App {
+    let mut registry = ContentRegistry::default();
+    assert_eq!(registry.register_layer(GROUND_LAYER), GROUND);
+
     let mut nav_grid = NavGrid::new(32, 32);
     nav_grid.add_layer(GROUND);
 
@@ -55,6 +62,7 @@ pub fn make_app(slots: Vec<PlayerSlot>) -> App {
         ),
         Map::new("test", Projection::Isometric, nav_grid, vec![]),
     ));
+    app.insert_resource(registry);
     app
 }
 

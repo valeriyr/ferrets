@@ -17,8 +17,9 @@ use std::rc::Rc;
 
 use mlua::{Lua, Table, Value, Variadic};
 
+use ferrets_simulation::content::registry::ContentRegistry;
+
 use crate::ai::view::content::ContentView;
-use crate::content::Definition;
 use crate::engine::ScriptEngine;
 use crate::engine::lua::ai::LuaAiRuntime;
 use crate::engine::lua::scenario::LuaScenarioRuntime;
@@ -28,16 +29,26 @@ use crate::error::ScriptError;
 pub struct LuaEngine;
 
 impl ScriptEngine for LuaEngine {
-    fn load_content(&self, source: &str) -> crate::Result<Vec<Definition>> {
+    fn load_content(&self, source: &str) -> crate::Result<ContentRegistry> {
         let lua = Lua::new();
         harden(&lua).map_err(engine_error)?;
-        let sink: Rc<RefCell<Vec<Definition>>> = Rc::new(RefCell::new(Vec::new()));
+        // The `define_*` registrations reject inconsistent content by
+        // panicking, and a panic must abort the whole load — a script
+        // catching one via `pcall` would end up with definitions silently
+        // missing from the registry.
+        forbid_error_catching(&lua).map_err(engine_error)?;
+        let registry = Rc::new(RefCell::new(ContentRegistry::default()));
 
-        content::register(&lua, &sink).map_err(engine_error)?;
+        content::register(&lua, &registry).map_err(engine_error)?;
         lua.load(source).exec().map_err(from_lua_error)?;
 
-        let definitions = sink.borrow_mut().drain(..).collect();
-        Ok(definitions)
+        // The `define_*` closures hold the only other handles; they die with
+        // the Lua state, leaving the registry solely ours.
+        drop(lua);
+        let registry = Rc::try_unwrap(registry)
+            .unwrap_or_else(|_| unreachable!("the dropped Lua state held the remaining handles"))
+            .into_inner();
+        Ok(registry)
     }
 
     fn load_ai(
@@ -73,6 +84,23 @@ fn harden(lua: &Lua) -> mlua::Result<()> {
     })?;
     math.set("random", unavailable.clone())?;
     math.set("randomseed", unavailable)?;
+    Ok(())
+}
+
+/// Replaces `pcall`/`xpcall` with raising stubs and removes the `coroutine`
+/// library (its `resume` catches errors the same way), so a script cannot
+/// intercept the errors and panics its declarations raise.
+fn forbid_error_catching(lua: &Lua) -> mlua::Result<()> {
+    let globals = lua.globals();
+    let unavailable = lua.create_function(|_, _: Variadic<Value>| -> mlua::Result<()> {
+        Err(mlua::Error::external(ScriptError::EngineError(
+            "error catching is unavailable in content scripts; a content error must abort the load"
+                .to_string(),
+        )))
+    })?;
+    globals.set("pcall", unavailable.clone())?;
+    globals.set("xpcall", unavailable)?;
+    globals.set("coroutine", Value::Nil)?;
     Ok(())
 }
 

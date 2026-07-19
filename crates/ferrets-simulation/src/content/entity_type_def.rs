@@ -111,6 +111,9 @@ impl EntityTypeDef {
     /// the footprint size in grid cells, and whether instances claim the cells
     /// they stand on.
     ///
+    /// The occupation layers must be registered before this type — see
+    /// [`ContentRegistry::register`](crate::content::registry::ContentRegistry::register).
+    ///
     /// Panics if `occupation` is empty or `size` has a zero dimension.
     pub fn with_location(
         mut self,

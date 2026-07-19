@@ -4,7 +4,7 @@
 //! [`engine`] picks the binding the suite runs against.
 
 use ferrets_math::FixedU64;
-use ferrets_pathfinder::nav_size::NavSize;
+use ferrets_pathfinder::{nav_grid::LayerId, nav_size::NavSize};
 use ferrets_script::content;
 use ferrets_script::engine::ScriptEngine;
 use ferrets_script::engine::lua::LuaEngine;
@@ -22,10 +22,11 @@ fn loads_races_resources_and_entities() {
 
     assert!(registry.has_race("human"));
     assert!(registry.has_resource("gold"));
+    assert!(registry.has_layer("ground"));
 
     let expected = EntityTypeDef::new("archer")
         .with_race("human")
-        .with_location(1u32, NavSize::ONE, Solidity::Solid)
+        .with_location(LayerId::new(1), NavSize::ONE, Solidity::Solid)
         .with_movement(FixedU64::from_str("0.3").unwrap())
         .with_health(40)
         .with_dying(2, None)
@@ -69,9 +70,10 @@ fn wires_production_catalogues_across_entities() {
 #[test]
 fn loads_declared_tags_onto_entities() {
     let source = r#"
+        local ground = define_layer("ground")
         define_tag("flying")
         define_entity("gryphon", {
-            location = { occupation = 1, size = 1, solidity = "solid" },
+            location = { occupation = ground, size = 1, solidity = "solid" },
             tags = { "flying" },
         })
     "#;
@@ -85,9 +87,130 @@ fn loads_declared_tags_onto_entities() {
 #[should_panic(expected = "references unregistered tag 'flying'")]
 fn undeclared_tag_panics_on_load() {
     let source = r#"
+        local ground = define_layer("ground")
         define_entity("gryphon", {
-            location = { occupation = 1, size = 1, solidity = "solid" },
+            location = { occupation = ground, size = 1, solidity = "solid" },
             tags = { "flying" },
+        })
+    "#;
+    let _ = content::load(&engine(), source);
+}
+
+//
+// ─── Layers ───────────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn define_layer_returns_ids_in_declaration_order() {
+    let source = r#"
+        local ground = define_layer("ground")
+        local air = define_layer("air")
+        assert(ground == 1)
+        assert(air == 2)
+        assert(define_layer("ground") == 1)
+    "#;
+    let registry = content::load(&engine(), source).expect("load content");
+
+    assert!(registry.has_layer("ground"));
+    assert!(registry.has_layer("air"));
+}
+
+#[test]
+fn loads_occupation_of_several_layers_combined_with_bitwise_or() {
+    let source = r#"
+        local ground = define_layer("ground")
+        local air = define_layer("air")
+        define_entity("gryphon", {
+            location = { occupation = ground | air, size = 1, solidity = "solid" },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("load content");
+
+    let expected = EntityTypeDef::new("gryphon").with_location(
+        LayerId::new(1) | LayerId::new(2),
+        NavSize::ONE,
+        Solidity::Solid,
+    );
+    assert_eq!(registry.entity("gryphon"), Some(&expected));
+}
+
+#[test]
+fn layer_id_looks_up_defined_layer() {
+    let source = r#"
+        define_layer("ground")
+        define_layer("air")
+        define_entity("gryphon", {
+            location = { occupation = layer_id("air"), size = 1, solidity = "solid" },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("load content");
+
+    let expected =
+        EntityTypeDef::new("gryphon").with_location(LayerId::new(2), NavSize::ONE, Solidity::Solid);
+    assert_eq!(registry.entity("gryphon"), Some(&expected));
+}
+
+#[test]
+fn reports_undefined_layer_lookup_as_content_error() {
+    let source = r#"
+        define_entity("gryphon", {
+            location = { occupation = layer_id("ground"), size = 1, solidity = "solid" },
+        })
+    "#;
+
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject undefined layer lookup");
+    };
+
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("layer 'ground' is not defined")),
+        "got {error:?}"
+    );
+}
+
+//
+// ─── Terrains ─────────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn loads_declared_terrains() {
+    let source = r#"
+        local ground = define_layer("ground")
+        local water = define_layer("water")
+        define_terrain("grass", ground)
+        define_terrain("shore", ground | water)
+    "#;
+    let registry = content::load(&engine(), source).expect("load content");
+
+    assert_eq!(
+        registry.terrain("grass"),
+        Some(LayerId::new(1).into()),
+        "grass passes ground only"
+    );
+    assert_eq!(
+        registry.terrain("shore"),
+        Some(LayerId::new(1) | LayerId::new(2)),
+        "shore passes both layers"
+    );
+}
+
+#[test]
+#[should_panic(expected = "terrain 'water' passes unregistered layers")]
+fn terrain_passing_undeclared_layer_panics_on_load() {
+    let source = r#"
+        define_layer("ground")
+        define_terrain("water", 2)
+    "#;
+    let _ = content::load(&engine(), source);
+}
+
+#[test]
+#[should_panic(expected = "entity type 'gryphon' occupies unregistered layers")]
+fn undeclared_occupation_layer_panics_on_load() {
+    let source = r#"
+        define_layer("ground")
+        define_entity("gryphon", {
+            location = { occupation = 8, size = 1, solidity = "solid" },
         })
     "#;
     let _ = content::load(&engine(), source);
@@ -156,6 +279,44 @@ fn reports_ambient_state_use_as_engine_error() {
 }
 
 #[test]
+fn reports_error_catching_as_engine_error() {
+    // A content script must not swallow a failed declaration: catching the
+    // error would let the load succeed with the definition silently missing.
+    for source in [
+        r#"pcall(define_tag, "")"#,
+        r#"xpcall(define_tag, function() end, "")"#,
+    ] {
+        let Err(error) = content::load(&engine(), source) else {
+            panic!("must reject error catching: {source}");
+        };
+
+        assert!(
+            matches!(&error, ScriptError::EngineError(m) if m.contains("error catching is unavailable")),
+            "{source}: got {error:?}"
+        );
+    }
+}
+
+#[test]
+fn rejects_catching_errors_through_coroutines() {
+    // `coroutine.resume` returns a failed body as `(false, error)` instead of
+    // raising, so the library as a whole is withdrawn from content scripts.
+    let source = r#"coroutine.resume(coroutine.create(function() define_tag("") end))"#;
+
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject error catching through a coroutine");
+    };
+
+    let ScriptError::EngineError(message) = &error else {
+        panic!("expected an engine error, got {error:?}");
+    };
+    assert!(
+        message.contains("coroutine"),
+        "unexpected message: {message}"
+    );
+}
+
+#[test]
 fn reports_lua_syntax_error_as_engine_error() {
     let Err(error) = content::load(&engine(), "this is not valid lua ]]}}") else {
         panic!("must reject invalid lua");
@@ -173,13 +334,15 @@ fn reports_lua_syntax_error_as_engine_error() {
 
 /// One self-contained ranged unit (no production catalogue).
 const ARCHER: &str = r#"
+    local GROUND = define_layer("ground")
+
     define_race("human")
 
     define_resource("gold")
 
     define_entity("archer", {
         race = "human",
-        location = { occupation = 1, size = 1, solidity = "solid" },
+        location = { occupation = GROUND, size = 1, solidity = "solid" },
         movement = { speed = "0.3" },
         health = 40,
         dying = { time = 2 },
@@ -191,6 +354,8 @@ const ARCHER: &str = r#"
 
 /// A worker and a hall referencing each other's catalogues.
 const BASE: &str = r#"
+    local GROUND = define_layer("ground")
+
     define_race("human")
 
     define_resource("gold")
@@ -198,7 +363,7 @@ const BASE: &str = r#"
 
     define_entity("peasant", {
         race = "human",
-        location = { occupation = 1, size = 1, solidity = "solid" },
+        location = { occupation = GROUND, size = 1, solidity = "solid" },
         movement = { speed = "0.3" },
         health = 30,
         dying = { time = 2 },
@@ -213,7 +378,7 @@ const BASE: &str = r#"
 
     define_entity("town_hall", {
         race = "human",
-        location = { occupation = 1, size = { 3, 3 }, solidity = "solid" },
+        location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
         health = 800,
         dying = { time = 2 },
         cost = { gold = 400 },

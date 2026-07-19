@@ -22,13 +22,14 @@ use ferrets_simulation::{
     entity_index::EntityIndex,
     session::{
         GameResult, GameSession, ai_hosting::AiHosting, authority::Authority,
-        drop_policy::DropPolicy, finish_policy::FinishPolicy,
+        drop_policy::DropPolicy, finish_policy::FinishPolicy, player_slot,
     },
     simulation_id::SimulationIdGenerator,
-    skirmish::Skirmish,
 };
 
+use crate::map;
 use crate::scenario::CurrentScenario;
+use crate::skirmish::CurrentSkirmish;
 use crate::states::{GameState, InGameUi};
 
 /// Set by the menu to ask for a replay to be opened; consumed by
@@ -50,19 +51,19 @@ pub fn start_recording(world: &mut World) {
     }
 
     // A scenario game is recorded by its name — the scenario defines the rest.
-    // A skirmish has no name of its own, so its definition is spelled out from
-    // the session; playback rebuilds either from content the game already
-    // knows.
-    let game = match world.get_resource::<CurrentScenario>() {
-        Some(scenario) => RecordedGame::Scenario(scenario.0.name.clone()),
-        None => {
-            let session = world.resource::<GameSession>();
-            RecordedGame::Skirmish(Skirmish {
-                slots: session.slots().to_vec(),
-                map: session.map().to_string(),
-                finish_policy: session.finish_policy(),
-            })
-        }
+    // A skirmish has no name of its own, so its definition is embedded whole;
+    // playback rebuilds either from content the game already knows.
+    let game = match (
+        world.get_resource::<CurrentScenario>(),
+        world.get_resource::<CurrentSkirmish>(),
+    ) {
+        (Some(scenario), None) => RecordedGame::Scenario(scenario.0.name.clone()),
+        (None, Some(skirmish)) => RecordedGame::Skirmish(skirmish.0.clone()),
+        // Exactly one definition describes the game; recording is the
+        // crash-safety net, so a game its entry path described ambiguously or
+        // not at all cannot be recorded faithfully, and must not start.
+        (Some(_), Some(_)) => panic!("a game was entered with both a scenario and a skirmish"),
+        (None, None) => panic!("a game was entered with no scenario or skirmish installed"),
     };
     let header = ReplayHeader::new(game);
 
@@ -135,14 +136,14 @@ pub fn start_watching(world: &mut World) {
                 return;
             }
             (
-                mission.slots.clone(),
-                mission.map.name.clone(),
+                player_slot::scenario_slots(&mission),
+                mission.map.name().to_string(),
                 FinishPolicy::Scripted,
                 Some(mission),
             )
         }
         RecordedGame::Skirmish(skirmish) => {
-            if crate::map::by_name(&skirmish.map).is_none() {
+            if map::by_name(&skirmish.map).is_none() {
                 eprintln!("the replay needs unknown map '{}'", skirmish.map);
                 return;
             }
@@ -203,9 +204,8 @@ pub fn teardown_session(world: &mut World) {
     let entities: Vec<Entity> = {
         let index = world.resource::<EntityIndex>();
         index
-            .alive_entries()
+            .all_entries()
             .into_iter()
-            .chain(index.dying_entries())
             .map(|(_, entity)| entity)
             .collect()
     };
@@ -234,6 +234,7 @@ pub fn teardown_session(world: &mut World) {
     ferrets_bevy_plugin::ai::remove_ai_runtimes(world);
     ferrets_bevy_plugin::remove_scenario_runtime(world);
     world.remove_resource::<CurrentScenario>();
+    world.remove_resource::<CurrentSkirmish>();
     world.remove_non_send_resource::<ReplayRecorder>();
     world.remove_resource::<ReplayPlayback>();
     world.remove_resource::<RecordingPath>();

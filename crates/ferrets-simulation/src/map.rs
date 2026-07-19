@@ -6,7 +6,8 @@ use ferrets_pathfinder::{
 };
 
 use crate::components::location::{LocationComponent, LocationStaticData, Solidity};
-use crate::map_data::MapData;
+use crate::content::registry::ContentRegistry;
+use crate::map_data::{MapData, MapSlot};
 use crate::session::player_slot::PlayerId;
 
 /// The active game map.
@@ -18,25 +19,73 @@ pub struct Map {
     projection: Projection,
     /// Grid occupancy data. Dimensions define the playable area in cells.
     nav_grid: NavGrid,
-    /// Where each player starts, ordered by player slot id: player `i` starts at
-    /// `start_points[i]`.
-    start_points: Vec<NavPos>,
+    /// Where each player starts, indexed by player slot id; `None` for a seat
+    /// with no start position (an environment combatant's).
+    start_points: Vec<Option<NavPos>>,
 }
 
 impl Map {
-    /// Builds the live map a [`MapData`] describes: a fresh grid with the
-    /// declared layers registered and nothing occupied yet.
-    pub fn from_data(data: &MapData) -> Self {
-        let mut nav_grid = NavGrid::new(data.width, data.height);
-        for &layer in &data.layers {
+    /// Builds the live map a [`MapData`] describes: a fresh grid with every
+    /// layer of the registered vocabulary, and each cell blocked on the layers
+    /// its terrain is not passable on. A map declaring no terrain starts fully
+    /// open; entity occupancy composes on top either way.
+    ///
+    /// Panics if the terrain palette references an unregistered terrain, a cell
+    /// indexes past the palette, or the cell count does not match the grid.
+    pub fn from_data(data: &MapData, registry: &ContentRegistry) -> Self {
+        let mut nav_grid = NavGrid::new(data.width(), data.height());
+        for (_, layer) in registry.layers() {
             nav_grid.add_layer(layer);
         }
+
+        if !data.terrain_cells().is_empty() {
+            Self::seed_terrain(&mut nav_grid, data, registry);
+        }
+
+        // Start positions indexed by slot id; environment seats have none.
         let start_points = data
-            .start_points
+            .slots()
             .iter()
-            .map(|&(x, y)| NavPos::new(x, y))
+            .map(|slot| match slot {
+                MapSlot::Player { start: (x, y) } => Some(NavPos::new(*x, *y)),
+                MapSlot::Environment => None,
+            })
             .collect();
-        Self::new(data.name.as_str(), data.projection, nav_grid, start_points)
+        Self::new(data.name(), data.projection(), nav_grid, start_points)
+    }
+
+    /// Marks each cell occupied on the layers its terrain leaves impassable.
+    fn seed_terrain(nav_grid: &mut NavGrid, data: &MapData, registry: &ContentRegistry) {
+        assert_eq!(
+            data.terrain_cells().len(),
+            data.width() as usize * data.height() as usize,
+            "map '{}' terrain must cover every cell",
+            data.name()
+        );
+
+        let blocked_per_terrain: Vec<_> = data
+            .terrains()
+            .iter()
+            .map(|name| {
+                let passable = registry.terrain(name).unwrap_or_else(|| {
+                    panic!("map '{}' uses unregistered terrain '{name}'", data.name())
+                });
+                registry.registered_layers() & !passable
+            })
+            .collect();
+
+        for (i, &terrain) in data.terrain_cells().iter().enumerate() {
+            let blocked = *blocked_per_terrain
+                .get(terrain as usize)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "map '{}' cell {i} indexes past the terrain palette",
+                        data.name()
+                    )
+                });
+            let pos = NavPos::new(i as u32 % data.width(), i as u32 / data.width());
+            nav_grid.set_occupied_by(blocked, pos, true);
+        }
     }
 
     /// Creates a map from loaded content.
@@ -44,7 +93,7 @@ impl Map {
         name: impl Into<String>,
         projection: Projection,
         nav_grid: NavGrid,
-        start_points: Vec<NavPos>,
+        start_points: Vec<Option<NavPos>>,
     ) -> Self {
         Self {
             name: name.into(),
@@ -54,15 +103,10 @@ impl Map {
         }
     }
 
-    /// Returns every player start position, ordered by player slot id.
-    pub fn start_points(&self) -> &[NavPos] {
-        &self.start_points
-    }
-
-    /// Returns the start position for the given player, or `None` if the map has
-    /// no start point for that slot.
+    /// Returns the start position for the given player, or `None` if the map
+    /// has none for that slot.
     pub fn start_point(&self, player: PlayerId) -> Option<NavPos> {
-        self.start_points.get(player as usize).copied()
+        self.start_points.get(player as usize).copied().flatten()
     }
 
     /// Returns the unique map identifier.

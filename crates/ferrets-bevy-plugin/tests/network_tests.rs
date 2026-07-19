@@ -37,7 +37,7 @@ use ferrets_simulation::{
     spawn,
 };
 
-use utils::GROUND;
+use utils::{GROUND, GROUND_LAYER};
 
 #[test]
 fn spawn_command_on_one_peer_executes_on_both() {
@@ -272,6 +272,37 @@ fn two_peer_disconnect_aborts_remaining_peer() {
 }
 
 #[test]
+fn host_with_local_ai_drops_lone_silent_client() {
+    // The silent client is the host's only remote player, but a locally
+    // hosted AI keeps playing: the host is the drop authority and still has a
+    // game to steer, so it drops the client instead of aborting.
+    let (a, b) = LoopbackTransport::pair();
+    let roster = Roster::from_slots(vec![Some(0), Some(1), None]);
+    let slots = vec![
+        PlayerSlot::occupied(0, PlayerType::Human, None, None),
+        PlayerSlot::occupied(1, PlayerType::Human, None, None),
+        PlayerSlot::occupied(2, PlayerType::Ai, None, None),
+    ];
+    let authority = Authority::Host {
+        ai_hosting: AiHosting::Replicated,
+    };
+    let mut host = net_app_with_slots(a, roster.clone(), authority, slots.clone());
+    let mut peer = net_app_with_slots(b, roster, authority, slots);
+    host.world_mut()
+        .insert_resource(DropConfig { timeout_steps: 3 });
+
+    step_both(&mut host, &mut peer, 6);
+    // The client goes silent; pump only the host past the grace window.
+    for _ in 0..40 {
+        host.world_mut().run_schedule(FixedUpdate);
+    }
+
+    let session = host.world().resource::<GameSession>();
+    assert!(session.is_player_dropped(1));
+    assert_eq!(session.result(), None);
+}
+
+#[test]
 fn briefly_silent_peer_is_not_dropped() {
     let mut apps: Vec<App> = LoopbackTransport::mesh(3)
         .into_iter()
@@ -462,6 +493,39 @@ fn peer_authority_drops_silent_player_by_consensus() {
     align_ticks(&mut host, &mut peer);
     let tick = host.world().resource::<GameSession>().tick();
     assert!(tick > 3, "the survivors kept playing past the drop");
+    assert_eq!(
+        state_checksum(host.world_mut()),
+        state_checksum(peer.world_mut()),
+    );
+}
+
+#[test]
+fn peer_consensus_drops_silent_player_despite_environment_slot() {
+    // An environment slot's frames are computed on every node, so it can
+    // neither stall the tick nor cast a consensus vote — the survivors'
+    // unanimity must not wait for one.
+    let (a, b) = LoopbackTransport::pair();
+    let roster = Roster::from_slots(vec![Some(0), Some(1), Some(99), None]);
+    let slots = vec![
+        PlayerSlot::occupied(0, PlayerType::Human, None, None),
+        PlayerSlot::occupied(1, PlayerType::Human, None, None),
+        PlayerSlot::occupied(2, PlayerType::Human, None, None),
+        PlayerSlot::environment(3),
+    ];
+    let mut host = net_app_with_slots(a, roster.clone(), Authority::Peers, slots.clone());
+    let mut peer = net_app_with_slots(b, roster, Authority::Peers, slots);
+    host.world_mut().resource_mut::<DropConfig>().timeout_steps = 10;
+    peer.world_mut().resource_mut::<DropConfig>().timeout_steps = 10;
+
+    step_both(&mut host, &mut peer, 60);
+
+    assert!(host.world().resource::<GameSession>().is_player_dropped(2));
+    assert!(peer.world().resource::<GameSession>().is_player_dropped(2));
+    assert!(
+        !host.world().resource::<GameSession>().is_player_dropped(3),
+        "the environment slot is not a stall"
+    );
+    align_ticks(&mut host, &mut peer);
     assert_eq!(
         state_checksum(host.world_mut()),
         state_checksum(peer.world_mut()),
@@ -1278,10 +1342,14 @@ fn net_app_with_slots(
         Map::new("test", Projection::Isometric, nav_grid, vec![]),
     ));
     app.add_plugins(NetworkPlugin);
+    // Supplies idle frames for AI slots with no installed runtime, as in a
+    // real game; a no-op for the all-human rosters.
+    app.add_plugins(ferrets_bevy_plugin::ai::AiPlugin);
     install_network_session(app.world_mut(), net);
 
     {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
+        assert_eq!(registry.register_layer(GROUND_LAYER), GROUND);
         registry.register(harness_soldier());
         registry.register(harness_base());
         registry.validate();
@@ -1411,6 +1479,7 @@ fn combat_victory_app() -> App {
     let mut app = utils::make_app(two_human_slots());
     {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
+        assert_eq!(registry.register_layer(GROUND_LAYER), GROUND);
         registry.register(harness_soldier());
         registry.register(harness_base());
         registry.validate();
@@ -1428,6 +1497,7 @@ fn ffa_elimination_app() -> App {
     let mut app = utils::make_app(three_human_slots());
     {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
+        assert_eq!(registry.register_layer(GROUND_LAYER), GROUND);
         registry.register(harness_soldier());
         registry.register(harness_base());
         registry.validate();

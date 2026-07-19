@@ -7,6 +7,7 @@ use ferrets_simulation::{
         build::BuilderStaticData,
         entity_info::EntityInfoComponent,
         health::{HealthComponent, HealthStaticData},
+        owner::OwnerComponent,
         resource::{ResourceCarrierComponent, ResourceSourceComponent, ResourceSourceStaticData},
         train::TrainStaticData,
     },
@@ -229,12 +230,15 @@ pub fn update_resources(
     }
 }
 
-/// Updates the context line with the selection's train/build options.
+/// Updates the context line with the selection's train/build options. The
+/// options only appear for the local player's own producers — a selected
+/// enemy building shows what it is, not orders it would refuse.
 pub fn update_help(
     session: Res<GameSession>,
     selection: Res<Selection>,
     producers: Query<(
         &EntityInfoComponent,
+        Option<&OwnerComponent>,
         Option<&TrainStaticData>,
         Option<&BuilderStaticData>,
     )>,
@@ -243,8 +247,11 @@ pub fn update_help(
     let mut message =
         String::from("LMB select | drag box-select | RMB move/harvest/attack | F1 grid | F2 spawn");
 
-    if let Some(&id) = selection.get(session.local_player()).first()
-        && let Some((_, trainer, builder)) = producers.iter().find(|(info, ..)| info.id() == id)
+    let local = session.local_player();
+    if let Some(&id) = selection.get(local).first()
+        && let Some((_, _, trainer, builder)) = producers.iter().find(|(info, owner, ..)| {
+            info.id() == id && owner.is_some_and(|owner| owner.player() == local)
+        })
     {
         if let Some(trainer) = trainer {
             let opts: Vec<String> = trainer

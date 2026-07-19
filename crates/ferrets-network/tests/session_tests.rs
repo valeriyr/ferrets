@@ -13,7 +13,8 @@ use ferrets_simulation::input::PlayerFrame;
 use ferrets_simulation::session::ai_hosting::AiHosting;
 use ferrets_simulation::session::drop_policy::DropPolicy;
 use ferrets_simulation::session::finish_policy::FinishPolicy;
-use ferrets_simulation::session::player_slot::PlayerId;
+use ferrets_simulation::session::player_slot::{PlayerId, PlayerSlot};
+use ferrets_simulation::session::player_type::PlayerType;
 
 /// The peer the host assigns to the one client that joins these two-node tests
 /// (the host is [`HOST_PEER`]).
@@ -42,7 +43,7 @@ fn host_star_start_builds_gameplay_channel_mapped_from_slots() {
     let mut host = host;
     host.poll().expect("seat the two connected clients");
 
-    let mut session = NetSession::start_host(host, None).expect("start host");
+    let mut session = NetSession::start_host(host, None, &humans(3)).expect("start host");
 
     let gameplay = session.gameplay();
     assert_eq!(gameplay.local_player(), 0);
@@ -62,7 +63,9 @@ fn ai_slots_are_networked_only_under_host_only_hosting() {
         host.poll().expect("seat the connected client");
         host.set_occupant(2, Occupant::Ai).expect("slot 2 is an ai");
 
-        let mut session = NetSession::start_host(host, None).expect("start host");
+        let mut slots = humans(2);
+        slots.push(PlayerSlot::occupied(2, PlayerType::Ai, None, None));
+        let mut session = NetSession::start_host(host, None, &slots).expect("start host");
 
         assert_eq!(
             session.gameplay().is_networked(2),
@@ -71,6 +74,30 @@ fn ai_slots_are_networked_only_under_host_only_hosting() {
         );
         assert!(session.gameplay().is_networked(1), "{ai_hosting:?}");
     }
+}
+
+#[test]
+fn start_rejects_human_slot_without_connected_peer() {
+    // The session claims two humans, but nobody joined the lobby: slot 1 has
+    // no peer to feed its frames, and the error must say which seat disagrees.
+    let mut endpoints = LoopbackTransport::partial_mesh(1, []).into_iter();
+    let ep0 = endpoints.next().expect("host endpoint");
+    let host = utils::lobby_host(
+        ep0,
+        SessionMode::HostStar {
+            ai_hosting: AiHosting::Replicated,
+        },
+        2,
+    );
+
+    let Err(error) = NetSession::start_host(host, None, &humans(2)) else {
+        panic!("must reject a human slot without a connected peer");
+    };
+
+    assert_eq!(
+        error.to_string(),
+        "transport error: internal error: human session slot 1 has no connected peer in the lobby",
+    );
 }
 
 //
@@ -102,12 +129,12 @@ fn decentralized_start_builds_control_mesh_outliving_lobby_star() {
     // control listeners directly; in-game control must flow over those links.
     // The host's side completes on its own: its dial lands in the client's
     // already-bound listener backlog.
-    let mut host_session = NetSession::start_host(host, None).expect("start host");
+    let mut host_session = NetSession::start_host(host, None, &humans(2)).expect("start host");
     utils::wait_until("client received the start signal", || {
         client.poll();
         client.started().is_some()
     });
-    let mut client_session = NetSession::start_client(client).expect("start client");
+    let mut client_session = NetSession::start_client(client, &humans(2)).expect("start client");
 
     let vote = InGameMessage::StallVote {
         voter: 1,
@@ -169,12 +196,12 @@ fn mesh_start_exchanges_frames_both_ways_despite_unspecified_host_bind() {
     // The host's gameplay socket binds the unspecified address — the
     // advertised table then carries `0.0.0.0`, which the client must resolve
     // to the address it reached the host at over the control channel.
-    let mut host_session = NetSession::start_host(host, None).expect("start host");
+    let mut host_session = NetSession::start_host(host, None, &humans(2)).expect("start host");
     utils::wait_until("client received the start signal", || {
         client.poll();
         client.started().is_some()
     });
-    let mut client_session = NetSession::start_client(client).expect("start client");
+    let mut client_session = NetSession::start_client(client, &humans(2)).expect("start client");
 
     // Host → client: a host-sourced frame (an AI's, under host-only hosting)
     // must reach the client even though the host advertised `0.0.0.0`.
@@ -241,9 +268,9 @@ fn control_flows_both_ways_after_host_star_game_starts() {
 
     host.poll().expect("seat the client");
     client.poll();
-    let mut host = NetSession::start_host(host, None).expect("start host");
+    let mut host = NetSession::start_host(host, None, &humans(2)).expect("start host");
     client.poll(); // receive the host's start signal
-    let mut client = NetSession::start_client(client).expect("start client");
+    let mut client = NetSession::start_client(client, &humans(2)).expect("start client");
 
     // Client → host: a pause request reaches the host over the shared socket.
     client
@@ -279,4 +306,11 @@ fn control_flows_both_ways_after_host_star_game_starts() {
             })
         )],
     );
+}
+
+/// Occupied human session slots `0..n`, matching a lobby the same size.
+fn humans(n: usize) -> Vec<PlayerSlot> {
+    (0..n)
+        .map(|i| PlayerSlot::occupied(i as PlayerId, PlayerType::Human, None, None))
+        .collect()
 }

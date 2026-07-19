@@ -3,6 +3,7 @@
 use bevy::prelude::*;
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_simulation::components::resource::ResourceSourceComponent;
+use ferrets_simulation::content::registry::ContentRegistry;
 use ferrets_simulation::map::Map;
 use ferrets_simulation::map_data::MapData;
 use ferrets_simulation::session::GameSession;
@@ -17,9 +18,10 @@ use ferrets_simulation::spawn;
 /// when its cell cannot host its entity. Every node builds from the same data
 /// and slots, so the skips are identical everywhere.
 pub fn instantiate_map(world: &mut World, data: &MapData) {
-    world.insert_resource(Map::from_data(data));
+    let map = Map::from_data(data, world.resource::<ContentRegistry>());
+    world.insert_resource(map);
 
-    for placement in &data.placements {
+    for placement in data.placements() {
         if let Some(owner) = placement.owner {
             let occupied = world
                 .resource::<GameSession>()

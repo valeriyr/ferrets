@@ -12,6 +12,8 @@ use ferrets_script::ai::view::content::ContentView;
 use ferrets_script::engine::ScriptEngine;
 use ferrets_script::engine::lua::LuaEngine;
 use ferrets_simulation::content::registry::ContentRegistry;
+use ferrets_simulation::session::GameSession;
+use ferrets_simulation::session::player_slot::PlayerId;
 
 /// The demo AI, one brain per AI slot. Thinks once a second (20 Hz ticks):
 /// keeps a small worker line training and harvesting, puts up one barracks,
@@ -182,8 +184,66 @@ pub const AI_SCRIPT: &str = r#"
     })
 "#;
 
+/// The boss brain, for the environment slot holding the lake. Thinks once a
+/// second: keeps the fleet manned from the fortress and shells the nearest
+/// enemy within aggro range with every idle ship. Ships never wander — an
+/// unreachable or out-of-range target simply leaves them guarding the lake.
+pub const BOSS_AI_SCRIPT: &str = r#"
+    local AGGRO_SQ = 100
+    local MAX_SHIPS = 4
+    local MAX_QUEUE = 2
+
+    define_ai("default", {
+        period = 20,
+        think = function(state, view)
+            local commands = {}
+
+            local ships, fortresses = {}, {}
+            for _, e in ipairs(view.my_entities) do
+                if e.type_name == "ship" then ships[#ships + 1] = e
+                elseif e.type_name == "sea_fortress" then fortresses[#fortresses + 1] = e
+                end
+            end
+
+            -- Keep the fleet manned.
+            local queued = 0
+            for _, f in ipairs(fortresses) do queued = queued + #f.train_queue end
+            for _, f in ipairs(fortresses) do
+                if not f.under_construction and #ships + queued < MAX_SHIPS
+                    and #f.train_queue < MAX_QUEUE then
+                    commands[#commands + 1] =
+                        { kind = "train", trainer = f.id, type_name = "ship" }
+                    queued = queued + 1
+                end
+            end
+
+            -- Each idle ship shells the nearest enemy within aggro range.
+            for _, s in ipairs(ships) do
+                if s.idle then
+                    local best, best_distance = nil, nil
+                    for _, e in ipairs(view.enemy_entities) do
+                        local dx, dy = e.x - s.x, e.y - s.y
+                        local distance = dx * dx + dy * dy
+                        if distance <= AGGRO_SQ
+                            and (best == nil or distance < best_distance) then
+                            best, best_distance = e, distance
+                        end
+                    end
+                    if best ~= nil then
+                        commands[#commands + 1] = { kind = "select", id = s.id }
+                        commands[#commands + 1] = { kind = "attack", target = best.id }
+                    end
+                end
+            end
+
+            return commands
+        end,
+    })
+"#;
+
 /// Builds one demo-AI runtime per AI slot this node sources (which nodes those
-/// are follows the session's AI hosting mode) and installs them. A script
+/// are follows the session's AI hosting mode) and installs them: the boss brain
+/// for environment slots, the economy-army brain for the rest. A script
 /// failure degrades to idle AI slots — logged, never a stalled game.
 pub fn install_demo_ai(world: &mut World) {
     let ai_players = sourced_ai_players(world);
@@ -191,10 +251,20 @@ pub fn install_demo_ai(world: &mut World) {
         return;
     }
 
+    let environments: Vec<PlayerId> = {
+        let session = world.resource::<GameSession>();
+        session.environment_slots().map(|slot| slot.id()).collect()
+    };
+
     let content = ContentView::from_registry(world.resource::<ContentRegistry>());
     let mut runtimes = BTreeMap::new();
     for (player, _) in ai_players {
-        match LuaEngine.load_ai(AI_SCRIPT, &content) {
+        let script = if environments.contains(&player) {
+            BOSS_AI_SCRIPT
+        } else {
+            AI_SCRIPT
+        };
+        match LuaEngine.load_ai(script, &content) {
             Ok(runtime) => {
                 runtimes.insert(player, runtime);
             }

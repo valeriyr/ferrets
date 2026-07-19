@@ -11,6 +11,8 @@ use ferrets_simulation::{
     spawn,
 };
 
+use crate::map;
+
 fn cell(x: u32, y: u32) -> FixedUVec2 {
     FixedUVec2::new(FixedU64::from_num(x), FixedU64::from_num(y))
 }
@@ -27,9 +29,7 @@ pub fn spawn_demo_scene(world: &mut World) {
     let occupied: Vec<(PlayerId, String)> = {
         let session = world.resource::<GameSession>();
         session
-            .slots()
-            .iter()
-            .filter(|slot| slot.player_type().is_some())
+            .occupied_slots()
             .filter_map(|slot| slot.race().map(|race| (slot.id(), race.to_string())))
             .collect()
     };
@@ -37,8 +37,8 @@ pub fn spawn_demo_scene(world: &mut World) {
     // The session names the map; every entry path validated the name, so a
     // miss here is a configuration bug, not user input.
     let name = world.resource::<GameSession>().map().to_string();
-    let map = crate::map::by_name(&name)
-        .unwrap_or_else(|| panic!("the session names an unknown map '{name}'"));
+    let map =
+        map::by_name(&name).unwrap_or_else(|| panic!("the session names an unknown map '{name}'"));
     instantiate_map(world, &map);
 
     for (player, race) in &occupied {

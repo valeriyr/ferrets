@@ -440,9 +440,7 @@ pub fn net_control(
             // A player out of the game steers nothing — its node is expected
             // to be gone, so a lost link to it proves no partition.
             let others: Vec<PlayerId> = session
-                .slots()
-                .iter()
-                .filter(|slot| slot.player_type().is_some())
+                .occupied_slots()
                 .map(|slot| slot.id())
                 .filter(|&player| {
                     player != local && !session.is_player_out(player) && net.0.is_networked(player)
@@ -540,8 +538,9 @@ pub fn net_receive(
 /// Resolves stalled players: once the tick has been blocked on them past the
 /// grace window (or the game approved the drop under [`DropPolicy::Manual`]),
 /// the session's [`Authority`] decides the drop — or the node aborts locally if
-/// *every* other live player is missing (this node is partitioned) or the
-/// deciding host is itself the one that stalled.
+/// *every* other live player is missing (this node is partitioned — unless it
+/// is the deciding host with live locally-sourced players left to steer) or
+/// the deciding host is itself the one that stalled.
 ///
 /// Deterministic in effect however it is decided: relay nodes rebroadcast the
 /// whole frame window they hold every step (see [`net_broadcast`]), so a dying
@@ -594,20 +593,16 @@ pub fn detect_drops(
     }
 
     let local = session.local_player();
-    // A player with a drop already decided — even one taking effect at a tick
-    // still ahead — is handled and never re-considered. An eliminated player
-    // is no stall either: nothing requires its frames, so it neither blocks
-    // the tick nor owes a consensus vote — its node is expected to be gone.
+    let is_host = net.0.is_host_node();
+    // Only players whose frames must cross the network can stall this node: a
+    // locally sourced slot (the local human, a replicated or host-side AI)
+    // always has its frames, is never missing, and its node casts no vote of
+    // its own — counting it would deadlock consensus and mask a partition.
     let live_others: Vec<PlayerId> = session
-        .slots()
-        .iter()
-        .filter(|slot| slot.player_type().is_some())
+        .occupied_slots()
+        .filter(|slot| !session.sources_locally(slot, is_host))
         .map(|slot| slot.id())
-        .filter(|&player| {
-            player != local
-                && session.drop_tick(player).is_none()
-                && !session.is_player_eliminated(player)
-        })
+        .filter(|&player| awaits_frames(&session, player))
         .collect();
     let missing: Vec<PlayerId> = live_others
         .iter()
@@ -626,10 +621,13 @@ pub fn detect_drops(
     });
 
     let grace_expired = streak.steps >= config.timeout_steps;
-    if missing.len() == live_others.len() {
+    if missing.len() == live_others.len() && !steers_local_players(&session, &net, is_host) {
         // Missing everyone reachable → this node is the one cut off; it cannot
         // determine a global tail (and no decision can reach it), so it ends
         // locally rather than dropping all — whatever the policy or authority.
+        // The exception is a deciding host still fielding live locally-sourced
+        // players: it has both the authority to drop and a game left to steer,
+        // so it falls through to decide as usual.
         if grace_expired {
             session.finish(GameResult::Aborted);
             streak.reset();
@@ -785,6 +783,32 @@ pub fn net_checksum(world: &mut World) {
     } else {
         world.resource_mut::<DesyncTracker>().prune_compared();
     }
+}
+
+/// A player whose frames the stall detector still waits for: no drop has been
+/// decided (even one taking effect at a tick still ahead — that stall is
+/// already handled), and the player is not eliminated as of the current tick —
+/// an eliminated player's frames are required by nothing, so it neither blocks
+/// the tick nor owes a consensus vote.
+///
+/// Not the negation of [`GameSession::is_player_out`]: that check is tick-aware
+/// on both halves, so a player with a decided-but-pending drop is not yet out,
+/// while this already treats their stall as handled.
+fn awaits_frames(session: &GameSession, player: PlayerId) -> bool {
+    session.drop_tick(player).is_none() && !session.is_player_eliminated(player)
+}
+
+/// Whether this node is the drop authority and still fields a live player
+/// besides its own — a locally hosted AI or an environment slot — whose game
+/// continues even with every remote player missing.
+fn steers_local_players(session: &GameSession, net: &NetworkSession, is_host: bool) -> bool {
+    matches!(session.authority(), Authority::Host { .. })
+        && net.0.is_host_node()
+        && session.occupied_slots().any(|slot| {
+            slot.id() != session.local_player()
+                && session.sources_locally(slot, is_host)
+                && awaits_frames(session, slot.id())
+        })
 }
 
 #[cfg(test)]

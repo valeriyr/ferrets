@@ -1,4 +1,4 @@
-//! A mission described as data: the session it runs with, the map it is
+//! A mission described as data: the cast it is played by, the map it is
 //! played on, and the script that judges its objectives and outcome.
 //!
 //! A [`Scenario`] is plain serializable data — it carries its script as
@@ -11,17 +11,32 @@ use serde::{Deserialize, Serialize};
 
 use crate::map_data::MapData;
 use crate::resources::StartingStock;
-use crate::session::player_slot::{PlayerId, PlayerSlot};
+use crate::session::player_slot::{PlayerId, TeamId};
+use crate::session::player_type::PlayerType;
 
-/// A mission: the session it runs with, the map it opens on, and the script
+/// One authored cast assignment: who occupies one of the map's player seats.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScenarioPlayer {
+    /// The map player seat the assignment fills.
+    pub seat: PlayerId,
+    /// Who controls the seat.
+    pub player_type: PlayerType,
+    /// The race played, by registered race name.
+    pub race: Option<String>,
+    /// The team played on, or `None` for no team.
+    pub team: Option<TeamId>,
+}
+
+/// A mission: the cast that plays it, the map it opens on, and the script
 /// that judges it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Scenario {
     /// A unique scenario identifier.
     pub name: String,
-    /// The player slots the mission runs with.
-    pub slots: Vec<PlayerSlot>,
-    /// The slot whose progress the script judges.
+    /// The authored cast, one entry per occupied player seat. Seats the cast
+    /// leaves out stay free; the map's environment seats need no entry.
+    pub players: Vec<ScenarioPlayer>,
+    /// The seat whose progress the script judges.
     pub judged_player: PlayerId,
     /// The map the mission is played on, placements included.
     pub map: MapData,

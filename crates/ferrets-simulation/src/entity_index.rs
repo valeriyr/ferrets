@@ -68,4 +68,12 @@ impl EntityIndex {
     pub fn dying_entries(&self) -> Vec<(SimulationId, Entity)> {
         self.dying.iter().map(|(&id, &e)| (id, e)).collect()
     }
+
+    /// Returns every simulation entity — alive, then dying — with their ids,
+    /// each group in ascending [`SimulationId`] order.
+    pub fn all_entries(&self) -> Vec<(SimulationId, Entity)> {
+        let mut entries = self.alive_entries();
+        entries.extend(self.dying_entries());
+        entries
+    }
 }

@@ -3,7 +3,7 @@
 //! inconsistency, so a referenced type must be registered before the type that
 //! references it.
 
-use ferrets_pathfinder::{nav_grid::LayerId, nav_size::NavSize};
+use ferrets_pathfinder::{layer_mask::LayerMask, nav_grid::LayerId, nav_size::NavSize};
 use ferrets_simulation::{
     components::{
         location::Solidity,
@@ -20,7 +20,7 @@ use ferrets_simulation::{
 #[test]
 #[should_panic(expected = "entity type 'worker' is already registered")]
 fn register_rejects_duplicate_type() {
-    let mut registry = ContentRegistry::default();
+    let mut registry = ground_registry();
     registry.register(worker());
     registry.register(worker());
 }
@@ -41,7 +41,7 @@ fn register_rejects_missing_location() {
 
 #[test]
 fn register_accepts_definitions_without_resources() {
-    let mut registry = ContentRegistry::default();
+    let mut registry = ground_registry();
     registry.register(worker());
 }
 
@@ -98,7 +98,7 @@ fn empty_resource_kind_panics() {
 
 #[test]
 fn validate_accepts_registered_production_catalogues() {
-    let mut registry = ContentRegistry::default();
+    let mut registry = ground_registry();
 
     registry.register(
         EntityTypeDef::new("soldier")
@@ -129,7 +129,7 @@ fn validate_accepts_production_cycle() {
     // The town hall trains the worker and the worker builds the town hall — a
     // legitimate cycle that no registration order can express, but `validate`
     // accepts because it checks against the complete registry.
-    let mut registry = ContentRegistry::default();
+    let mut registry = ground_registry();
     registry.register(
         EntityTypeDef::new("town_hall")
             .with_location(GROUND, NavSize::new(2, 2), Solidity::Solid)
@@ -151,7 +151,7 @@ fn validate_accepts_production_cycle() {
     expected = "entity type 'barracks' trains 'ghost', which is not a registered trainable type"
 )]
 fn validate_rejects_unknown_trained_type() {
-    let mut registry = ContentRegistry::default();
+    let mut registry = ground_registry();
     registry.register(
         EntityTypeDef::new("barracks")
             .with_location(GROUND, NavSize::new(2, 2), Solidity::Solid)
@@ -163,7 +163,7 @@ fn validate_rejects_unknown_trained_type() {
 #[test]
 #[should_panic(expected = "trains 'statue', which is not a registered trainable type")]
 fn validate_rejects_untrainable_trained_type() {
-    let mut registry = ContentRegistry::default();
+    let mut registry = ground_registry();
     registry.register(EntityTypeDef::new("statue").with_location(
         GROUND,
         NavSize::ONE,
@@ -182,7 +182,7 @@ fn validate_rejects_untrainable_trained_type() {
     expected = "entity type 'worker' builds 'nexus', which is not a registered constructible type"
 )]
 fn validate_rejects_unknown_built_type() {
-    let mut registry = ContentRegistry::default();
+    let mut registry = ground_registry();
     registry.register(
         EntityTypeDef::new("worker")
             .with_location(GROUND, NavSize::ONE, Solidity::Solid)
@@ -194,7 +194,7 @@ fn validate_rejects_unknown_built_type() {
 #[test]
 #[should_panic(expected = "builds 'statue', which is not a registered constructible type")]
 fn validate_rejects_unconstructible_built_type() {
-    let mut registry = ContentRegistry::default();
+    let mut registry = ground_registry();
     registry.register(EntityTypeDef::new("statue").with_location(
         GROUND,
         NavSize::ONE,
@@ -214,7 +214,7 @@ fn validate_rejects_unconstructible_built_type() {
 
 #[test]
 fn register_accepts_terminating_corpse_chains() {
-    let mut registry = ContentRegistry::default();
+    let mut registry = ground_registry();
 
     registry.register(
         EntityTypeDef::new("bones")
@@ -236,7 +236,7 @@ fn register_accepts_terminating_corpse_chains() {
 #[test]
 #[should_panic(expected = "entity type 'soldier' leaves an unregistered corpse type 'ghost'")]
 fn register_rejects_unknown_corpse_type() {
-    let mut registry = ContentRegistry::default();
+    let mut registry = ground_registry();
     registry.register(
         EntityTypeDef::new("soldier")
             .with_location(GROUND, NavSize::ONE, Solidity::Solid)
@@ -247,7 +247,7 @@ fn register_rejects_unknown_corpse_type() {
 #[test]
 #[should_panic(expected = "leaves a corpse type 'statue' that has no dying phase")]
 fn register_rejects_corpse_without_dying_phase() {
-    let mut registry = ContentRegistry::default();
+    let mut registry = ground_registry();
     registry.register(EntityTypeDef::new("statue").with_location(
         GROUND,
         NavSize::ONE,
@@ -265,7 +265,7 @@ fn register_rejects_corpse_without_dying_phase() {
     expected = "uses 'bones' as a corpse type, but 'bones' defines live-gameplay data that remains never use"
 )]
 fn register_rejects_corpse_with_live_gameplay_data() {
-    let mut registry = ContentRegistry::default();
+    let mut registry = ground_registry();
     registry.register(
         EntityTypeDef::new("bones")
             .with_location(GROUND, NavSize::ONE, Solidity::Solid)
@@ -283,7 +283,7 @@ fn register_rejects_corpse_with_live_gameplay_data() {
 #[test]
 #[should_panic(expected = "leaves an unregistered corpse type 'bones'")]
 fn register_cannot_form_corpse_cycle() {
-    let mut registry = ContentRegistry::default();
+    let mut registry = ground_registry();
 
     // A corpse cycle is unconstructible: a corpse type must be registered before
     // the type that leaves it, so the first member of any cycle fails because
@@ -301,7 +301,7 @@ fn register_cannot_form_corpse_cycle() {
 
 #[test]
 fn register_accepts_registered_race() {
-    let mut registry = ContentRegistry::default();
+    let mut registry = ground_registry();
     registry.register_race("human");
     registry.register(worker().with_race("human"));
 }
@@ -309,7 +309,7 @@ fn register_accepts_registered_race() {
 #[test]
 #[should_panic(expected = "belongs to unregistered race 'orc'")]
 fn register_rejects_unregistered_race() {
-    let mut registry = ContentRegistry::default();
+    let mut registry = ground_registry();
     registry.register(worker().with_race("orc"));
 }
 
@@ -319,7 +319,7 @@ fn register_rejects_unregistered_race() {
 
 #[test]
 fn register_accepts_registered_tag() {
-    let mut registry = ContentRegistry::default();
+    let mut registry = ground_registry();
     registry.register_tag("flying");
     registry.register(worker().with_tags(["flying"]));
 }
@@ -327,7 +327,7 @@ fn register_accepts_registered_tag() {
 #[test]
 #[should_panic(expected = "references unregistered tag 'flying'")]
 fn register_rejects_unregistered_tag() {
-    let mut registry = ContentRegistry::default();
+    let mut registry = ground_registry();
     registry.register(worker().with_tags(["flying"]));
 }
 
@@ -339,10 +339,136 @@ fn empty_tag_panics() {
 
 #[test]
 fn reserved_building_tag_is_registered_by_default() {
-    let mut registry = ContentRegistry::default();
+    let mut registry = ground_registry();
     assert!(registry.has_tag(tags::BUILDING));
     // Undeclared by content, yet an entity may carry it.
     registry.register(worker().with_tags([tags::BUILDING]));
+}
+
+//
+// ─── Layers ───────────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn register_layer_assigns_ids_in_registration_order() {
+    let mut registry = ContentRegistry::default();
+
+    assert_eq!(registry.register_layer("ground"), LayerId::new(1));
+    assert_eq!(registry.register_layer("air"), LayerId::new(2));
+    assert_eq!(registry.register_layer("water"), LayerId::new(4));
+}
+
+#[test]
+fn registered_layer_round_trips_and_keeps_its_id_on_re_registration() {
+    let mut registry = ContentRegistry::default();
+
+    let ground = registry.register_layer("ground");
+    registry.register_layer("air");
+
+    assert_eq!(registry.layer("ground"), Some(ground));
+    assert!(registry.has_layer("ground"));
+    assert_eq!(registry.register_layer("ground"), ground);
+
+    assert_eq!(registry.layer("water"), None);
+    assert!(!registry.has_layer("water"));
+}
+
+#[test]
+#[should_panic(expected = "layer name must not be empty")]
+fn empty_layer_name_panics() {
+    ContentRegistry::default().register_layer("");
+}
+
+#[test]
+#[should_panic(expected = "all 32 layer ids are already assigned")]
+fn register_layer_rejects_exhausted_ids() {
+    let mut registry = ContentRegistry::default();
+    for n in 0..=32 {
+        registry.register_layer(format!("layer_{n}"));
+    }
+}
+
+#[test]
+#[should_panic(expected = "entity type 'worker' occupies unregistered layers")]
+fn register_rejects_unregistered_occupation_layer() {
+    ContentRegistry::default().register(worker());
+}
+
+#[test]
+fn register_accepts_occupation_of_several_registered_layers() {
+    let mut registry = ContentRegistry::default();
+    let ground = registry.register_layer("ground");
+    let air = registry.register_layer("air");
+    registry.register(EntityTypeDef::new("griffon_rider").with_location(
+        ground | air,
+        NavSize::ONE,
+        Solidity::Solid,
+    ));
+
+    let location = registry.entity("griffon_rider").unwrap().location.unwrap();
+    assert_eq!(location.occupation(), ground | air);
+}
+
+#[test]
+#[should_panic(expected = "entity type 'griffon_rider' occupies unregistered layers")]
+fn register_rejects_occupation_mixing_in_unregistered_layer() {
+    let mut registry = ContentRegistry::default();
+    let ground = registry.register_layer("ground");
+    registry.register(EntityTypeDef::new("griffon_rider").with_location(
+        ground | LayerId::new(2),
+        NavSize::ONE,
+        Solidity::Solid,
+    ));
+}
+
+//
+// ─── Terrains ─────────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn register_terrain_accepts_registered_layer_masks() {
+    let mut registry = ContentRegistry::default();
+    let ground = registry.register_layer("ground");
+    let water = registry.register_layer("water");
+    registry.register_terrain("grass", ground);
+    registry.register_terrain("shore", ground | water);
+
+    assert_eq!(registry.terrain("grass"), Some(ground.into()));
+    assert_eq!(registry.terrain("shore"), Some(ground | water));
+    assert!(registry.has_terrain("grass"));
+    assert!(!registry.has_terrain("water"));
+}
+
+#[test]
+fn register_terrain_accepts_impassable_terrain() {
+    let mut registry = ContentRegistry::default();
+    registry.register_layer("ground");
+    registry.register_terrain("void", LayerMask::EMPTY);
+
+    assert_eq!(registry.terrain("void"), Some(LayerMask::EMPTY));
+}
+
+#[test]
+#[should_panic(expected = "terrain 'water' passes unregistered layers")]
+fn register_terrain_rejects_unregistered_layer() {
+    let mut registry = ContentRegistry::default();
+    registry.register_layer("ground");
+    registry.register_terrain("water", LayerId::new(2));
+}
+
+#[test]
+#[should_panic(expected = "terrain 'grass' is already registered")]
+fn register_terrain_rejects_duplicate_name() {
+    let mut registry = ContentRegistry::default();
+    let ground = registry.register_layer("ground");
+    registry.register_terrain("grass", ground);
+    registry.register_terrain("grass", ground);
+}
+
+#[test]
+#[should_panic(expected = "terrain name must not be empty")]
+fn empty_terrain_name_panics() {
+    ContentRegistry::default().register_terrain("", LayerMask::EMPTY);
 }
 
 //
@@ -351,9 +477,16 @@ fn reserved_building_tag_is_registered_by_default() {
 
 const GROUND: LayerId = LayerId::new(1);
 
+/// A fresh registry that already knows the "ground" navigation layer.
+fn ground_registry() -> ContentRegistry {
+    let mut registry = ContentRegistry::default();
+    registry.register_layer("ground");
+    registry
+}
+
 /// Registers `def` into a registry that already knows the "gold" resource kind.
 fn gold_registry_with(def: EntityTypeDef) {
-    let mut registry = ContentRegistry::default();
+    let mut registry = ground_registry();
     registry.register_resource("gold");
     registry.register(def);
 }

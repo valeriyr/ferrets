@@ -10,6 +10,8 @@
 use std::f32::consts::FRAC_PI_2;
 
 use bevy::prelude::*;
+
+use crate::{debug::DebugState, map, scenario::CurrentScenario, states::InGameUi};
 use ferrets_math::{fixed_uvec2::FixedUVec2, fixed_vec2::FixedVec2};
 use ferrets_pathfinder::{nav_pos::NavPos, nav_size::NavSize};
 use ferrets_simulation::{
@@ -20,6 +22,7 @@ use ferrets_simulation::{
         owner::OwnerComponent,
         resource::ResourceSourceStaticData,
     },
+    content::registry::ContentRegistry,
     map::Map,
     selection::Selection,
     session::GameSession,
@@ -48,7 +51,11 @@ fn world_center(position: FixedUVec2, size: NavSize) -> Vec3 {
     Vec3::new(cx * CELL_PX, -cy * CELL_PX, 1.0)
 }
 
-fn color_for(owner: Option<&OwnerComponent>, source: Option<&ResourceSourceStaticData>) -> Color {
+fn color_for(
+    owner: Option<&OwnerComponent>,
+    source: Option<&ResourceSourceStaticData>,
+    session: &GameSession,
+) -> Color {
     // Resource sources are colored by what they yield, regardless of ownership.
     if let Some(source) = source {
         return match source.kind() {
@@ -56,6 +63,10 @@ fn color_for(owner: Option<&OwnerComponent>, source: Option<&ResourceSourceStati
             "gold" => Color::srgb(0.85, 0.7, 0.2),   // gold mine — yellow
             _ => Color::srgb(0.75, 0.7, 0.4),        // other source — tan
         };
+    }
+    // Environment combatants share one color, whichever slot seats them.
+    if owner.is_some_and(|owner| session.is_environment_slot(owner.player())) {
+        return Color::srgb(0.2, 0.22, 0.26); // dark slate
     }
     match owner.map(|o| o.player()) {
         Some(0) => Color::srgb(0.35, 0.55, 1.0), // player 0 — blue
@@ -72,8 +83,12 @@ enum Shape {
     Triangle,
     /// Workers — a circle.
     Circle,
+    /// Ships — a hull with a triangular bow pointing where it faces.
+    Ship,
     /// Barracks — a hexagon, distinct from the main hall.
     Hexagon,
+    /// The sea fortress — an octagon with an inner keep.
+    Fortress,
     /// Main buildings and resource sources — a square.
     Square,
 }
@@ -83,7 +98,9 @@ fn shape_for(type_name: &str) -> Shape {
     match type_name {
         "archer" | "grunt" => Shape::Triangle,
         "peasant" | "peon" => Shape::Circle,
+        "ship" => Shape::Ship,
         "barracks" | "orc_barracks" => Shape::Hexagon,
+        "sea_fortress" => Shape::Fortress,
         _ => Shape::Square,
     }
 }
@@ -95,6 +112,7 @@ fn shape_for(type_name: &str) -> Shape {
 /// their look direction.
 pub fn attach_sprites(
     mut commands: Commands,
+    session: Res<GameSession>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     query: Query<
@@ -112,7 +130,7 @@ pub fn attach_sprites(
     for (entity, info, location, location_data, owner, source) in &query {
         let size = location_data.size();
         let center = world_center(location.position, size);
-        let color = color_for(owner, source);
+        let color = color_for(owner, source, &session);
         let radius = size.width.min(size.height) as f32 * CELL_PX * 0.45;
 
         let mut entity = commands.entity(entity);
@@ -131,11 +149,51 @@ pub fn attach_sprites(
                     Directional,
                 ));
             }
+            Shape::Ship => {
+                // A hull with a triangular bow whose base matches the hull's
+                // width, sitting flush on the forward (+Y at rest) edge; the
+                // whole silhouette rotates with the facing.
+                let hull = Vec2::new(0.55, 0.65) * CELL_PX;
+                // An equilateral triangle with side `s` has circumradius
+                // `s/√3` and inradius `s/(2√3)` — the base offset below its
+                // center.
+                let circumradius = hull.x / 3f32.sqrt();
+                let bow = meshes.add(RegularPolygon::new(circumradius, 3));
+                let material = materials.add(color);
+                entity.insert((Sprite::from_color(color, hull), Directional));
+                entity.with_children(|parent| {
+                    parent.spawn((
+                        Mesh2d(bow),
+                        MeshMaterial2d(material),
+                        Transform::from_translation(Vec3::new(
+                            0.0,
+                            hull.y / 2.0 + circumradius / 2.0,
+                            0.1,
+                        )),
+                    ));
+                });
+            }
             Shape::Hexagon => {
                 entity.insert((
                     Mesh2d(meshes.add(RegularPolygon::new(radius, 6))),
                     MeshMaterial2d(materials.add(color)),
                 ));
+            }
+            Shape::Fortress => {
+                // An octagonal wall with a lighter inner keep.
+                let keep = meshes.add(RegularPolygon::new(radius * 0.45, 8));
+                let keep_color = materials.add(color.lighter(0.12));
+                entity.insert((
+                    Mesh2d(meshes.add(RegularPolygon::new(radius, 8))),
+                    MeshMaterial2d(materials.add(color)),
+                ));
+                entity.with_children(|parent| {
+                    parent.spawn((
+                        Mesh2d(keep),
+                        MeshMaterial2d(keep_color),
+                        Transform::from_translation(Vec3::new(0.0, 0.0, 0.1)),
+                    ));
+                });
             }
             Shape::Square => {
                 let px = Vec2::new(size.width as f32, size.height as f32) * CELL_PX * 0.85;
@@ -259,9 +317,54 @@ pub fn draw_facing(
     }
 }
 
+/// The tile color for a terrain, by content name.
+fn terrain_color(terrain: &str) -> Color {
+    match terrain {
+        "grass" => Color::srgb(0.20, 0.34, 0.17),
+        "water" => Color::srgb(0.15, 0.35, 0.6),
+        _ => Color::srgb(0.35, 0.33, 0.30), // unknown terrain — bare dirt
+    }
+}
+
+/// Spawns a colored tile per cell from the map's terrain, so the whole
+/// playable field is drawn and the void outside it stays the clear color.
+/// Terrain is static, so the tiles spawn once on entering the game; they
+/// despawn with the in-game overlay on teardown.
+pub fn spawn_terrain_tiles(
+    mut commands: Commands,
+    session: Res<GameSession>,
+    scenario: Option<Res<CurrentScenario>>,
+) {
+    let map = match &scenario {
+        Some(scenario) => scenario.0.map.clone(),
+        None => match map::by_name(session.map()) {
+            Some(map) => map,
+            None => return,
+        },
+    };
+
+    for (i, &terrain) in map.terrain_cells().iter().enumerate() {
+        let Some(name) = map.terrains().get(terrain as usize) else {
+            continue;
+        };
+        let (x, y) = (i as u32 % map.width(), i as u32 / map.width());
+        let center = Vec3::new((x as f32 + 0.5) * CELL_PX, -(y as f32 + 0.5) * CELL_PX, 0.0);
+        commands.spawn((
+            Sprite::from_color(terrain_color(name), Vec2::splat(CELL_PX)),
+            Transform::from_translation(center),
+            InGameUi,
+        ));
+    }
+}
+
 /// Draws a faint grid over the playable area, tinting occupied ground cells
 /// (run in `Update`), when enabled.
-pub fn draw_grid(mut gizmos: Gizmos, map: Res<Map>, debug: Res<crate::debug::DebugState>) {
+pub fn draw_grid(
+    mut gizmos: Gizmos,
+    map: Res<Map>,
+    registry: Res<ContentRegistry>,
+    debug: Res<DebugState>,
+) {
     if !debug.grid {
         return;
     }
@@ -270,10 +373,12 @@ pub fn draw_grid(mut gizmos: Gizmos, map: Res<Map>, debug: Res<crate::debug::Deb
 
     // Fill occupied cells so the nav grid's occupancy is visible at a glance.
     let nav_grid = map.nav_grid();
-    for y in 0..map.height() {
-        for x in 0..map.width() {
-            if nav_grid.is_occupied(crate::map::GROUND, NavPos::new(x, y)) {
-                fill_cell(&mut gizmos, x, y);
+    if let Some(ground) = registry.layer(map::GROUND) {
+        for y in 0..map.height() {
+            for x in 0..map.width() {
+                if nav_grid.is_occupied(ground, NavPos::new(x, y)) {
+                    fill_cell(&mut gizmos, x, y);
+                }
             }
         }
     }

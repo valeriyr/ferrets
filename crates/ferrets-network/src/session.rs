@@ -11,7 +11,8 @@ use std::net::SocketAddr;
 
 use ferrets_simulation::input::PlayerFrame;
 use ferrets_simulation::session::ai_hosting::AiHosting;
-use ferrets_simulation::session::player_slot::PlayerId;
+use ferrets_simulation::session::player_slot::{PlayerId, PlayerSlot};
+use ferrets_simulation::session::player_type::PlayerType;
 
 use crate::control::{ControlChannel, ControlEvent};
 use crate::demux;
@@ -153,9 +154,17 @@ impl NetSession {
     /// configured port must not be silently substituted); `None` binds an
     /// ephemeral port. The real address rides in the distributed endpoint
     /// table either way.
-    pub fn start_host(mut host: LobbyHost, udp_port: Option<u16>) -> crate::Result<Self> {
+    ///
+    /// `slots` is the session's final slot list — the lobby's seats plus any
+    /// the game itself adds. Every node starts from the same list, so the
+    /// rosters route every slot's frames identically.
+    pub fn start_host(
+        mut host: LobbyHost,
+        udp_port: Option<u16>,
+        slots: &[PlayerSlot],
+    ) -> crate::Result<Self> {
         let mode = host.mode();
-        let roster = roster_from_slots(host.slots(), mode.ai_hosting());
+        let roster = roster_for_session(host.slots(), mode.ai_hosting(), slots)?;
         match mode {
             SessionMode::HostStar { .. } => {
                 host.start(None, None)?;
@@ -208,7 +217,11 @@ impl NetSession {
     ///
     /// A mesh game reuses the gameplay socket bound at
     /// [`join`](LobbyClient::join), whose port the host already distributed.
-    pub fn start_client(client: LobbyClient) -> crate::Result<Self> {
+    ///
+    /// `slots` is the session's final slot list — the lobby's seats plus any
+    /// the game itself adds. Every node starts from the same list, so the
+    /// rosters route every slot's frames identically.
+    pub fn start_client(client: LobbyClient, slots: &[PlayerSlot]) -> crate::Result<Self> {
         let started = client
             .started()
             .ok_or_else(|| internal("client has not received the start signal"))?
@@ -217,7 +230,7 @@ impl NetSession {
             .state()
             .ok_or_else(|| internal("client has not received the lobby state"))?
             .mode;
-        let roster = roster_from_slots(client.slots(), mode.ai_hosting());
+        let roster = roster_for_session(client.slots(), mode.ai_hosting(), slots)?;
         let local = client.control_peer();
 
         match mode {
@@ -295,24 +308,43 @@ pub struct ReceivedControl {
     pub lost: Vec<PlayerId>,
 }
 
-/// Builds the roster from the locked slots: a human slot maps to its peer; an
-/// open or closed slot has no network peer. An AI slot depends on the hosting
-/// mode — no peer when every node computes it locally, the host peer when the
-/// host computes it and broadcasts its frames. The slot index is its [`PlayerId`].
-fn roster_from_slots(slots: &[SlotInfo], ai_hosting: AiHosting) -> Roster {
-    Roster::from_slots(
-        slots
-            .iter()
-            .map(|info| match info.occupant {
-                Occupant::Human { peer } => Some(peer),
-                Occupant::Ai => match ai_hosting {
-                    AiHosting::Replicated => None,
-                    AiHosting::Host => Some(HOST_PEER),
-                },
-                Occupant::Open | Occupant::Closed => None,
-            })
-            .collect(),
-    )
+/// The roster for the session's slot list: the peer that feeds each slot's
+/// frames. A human slot's peer comes from the lobby's matching entry; an AI
+/// slot — lobby-configured, or seated by the game after the lobby's — follows
+/// the session's AI hosting; a free slot has no peer.
+///
+/// Errors if a human slot has no connected peer in the lobby — the session
+/// and the lobby disagree about who is seated.
+fn roster_for_session(
+    lobby: &[SlotInfo],
+    ai_hosting: AiHosting,
+    slots: &[PlayerSlot],
+) -> crate::Result<Roster> {
+    let peers = slots
+        .iter()
+        .map(|slot| match slot.player_type() {
+            None => Ok(None),
+            Some(PlayerType::Ai) => Ok(match ai_hosting {
+                AiHosting::Replicated => None,
+                AiHosting::Host => Some(HOST_PEER),
+            }),
+            Some(PlayerType::Human) => lobby
+                .iter()
+                .find(|info| info.slot == slot.id())
+                .and_then(|info| match info.occupant {
+                    Occupant::Human { peer } => Some(peer),
+                    _ => None,
+                })
+                .map(Some)
+                .ok_or_else(|| {
+                    internal(&format!(
+                        "human session slot {} has no connected peer in the lobby",
+                        slot.id(),
+                    ))
+                }),
+        })
+        .collect::<crate::Result<Vec<_>>>()?;
+    Ok(Roster::from_slots(peers))
 }
 
 /// The endpoint table for a mesh game: the host's own `host_addr` plus every
