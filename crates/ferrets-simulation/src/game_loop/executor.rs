@@ -15,6 +15,7 @@ use crate::{
         location::LocationComponent,
         order_queue::{CancelPolicy, OrderQueueComponent},
         owner::{self, OwnerComponent},
+        rally::{RallyPointComponent, RallyTarget},
         resource::{
             ResourceCarrierComponent, ResourceCarrierStaticData, ResourceSourceComponent,
             ResourceSourceStaticData, ResourceStorageStaticData,
@@ -136,6 +137,25 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
         PlayerCommand::TrainEntity { trainer, type_name } => {
             train_entity(world, player, *trainer, type_name);
         }
+        PlayerCommand::SetRallyPoint { entity, target } => {
+            let Some(entity) = find_owned_interactable(world, player, *entity) else {
+                return;
+            };
+            // An entity target must exist when the rally point is set, matching
+            // the send-to-entity rule; it may be gone again by the time a unit
+            // spawns, which spawn-time resolution handles.
+            if let Some(RallyTarget::Entity(id)) = target
+                && world
+                    .resource::<EntityIndex>()
+                    .interactable(world, *id)
+                    .is_none()
+            {
+                return;
+            }
+            if let Some(mut rally) = world.entity_mut(entity).get_mut::<RallyPointComponent>() {
+                rally.0 = *target;
+            }
+        }
         PlayerCommand::BuildEntity {
             builder,
             type_name,
@@ -188,7 +208,11 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
 
 /// Resolves a send-to-entity intent for one unit, by priority: harvest from a
 /// source, deliver carried resources to an own storage, attack a hostile, follow.
-fn resolve_send_to_entity(world: &World, entity: Entity, target_id: SimulationId) -> Option<Order> {
+pub(super) fn resolve_send_to_entity(
+    world: &World,
+    entity: Entity,
+    target_id: SimulationId,
+) -> Option<Order> {
     let target = world
         .resource::<EntityIndex>()
         .interactable(world, target_id)?;

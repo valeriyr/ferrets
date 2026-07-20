@@ -14,8 +14,9 @@ use ferrets_simulation::{
     command::PlayerCommand,
     components::{
         entity_info::EntityInfoComponent,
-        location::{LocationComponent, Solidity},
+        location::{LocationComponent, LocationStaticData, Solidity},
         order_queue::OrderQueueComponent,
+        owner::OwnerComponent,
         resource::{DepletionPolicy, HarvestData, HarvestVisibility},
     },
     content::{entity_type_def::EntityTypeDef, registry::ContentRegistry},
@@ -23,8 +24,13 @@ use ferrets_simulation::{
     map::Map,
     resources::PlayerResources,
     session::{
-        GameSession, ai_hosting::AiHosting, authority::Authority, drop_policy::DropPolicy,
-        finish_policy::FinishPolicy, player_slot::PlayerSlot, player_type::PlayerType,
+        GameSession,
+        ai_hosting::AiHosting,
+        authority::Authority,
+        drop_policy::DropPolicy,
+        finish_policy::FinishPolicy,
+        player_slot::{PlayerId, PlayerSlot},
+        player_type::PlayerType,
     },
 };
 
@@ -135,6 +141,44 @@ pub fn cell_of(world: &mut World, entity: Entity) -> NavPos {
 /// Chebyshev distance — maximum of horizontal and vertical distances.
 pub fn chebyshev(a: NavPos, b: NavPos) -> u32 {
     a.x.abs_diff(b.x).max(a.y.abs_diff(b.y))
+}
+
+/// The entities of the given content type owned by `player`.
+pub fn owned_of_type(world: &mut World, type_name: &str, player: PlayerId) -> Vec<Entity> {
+    world
+        .query::<(Entity, &EntityInfoComponent, &OwnerComponent)>()
+        .iter(world)
+        .filter(|(_, info, owner)| info.type_name() == type_name && owner.player() == player)
+        .map(|(entity, ..)| entity)
+        .collect()
+}
+
+/// The single entity of the given content type owned by `player`.
+///
+/// Panics when there is not exactly one.
+pub fn single_owned_of_type(world: &mut World, type_name: &str, player: PlayerId) -> Entity {
+    let entities = owned_of_type(world, type_name, player);
+    assert_eq!(
+        entities.len(),
+        1,
+        "expected exactly one {type_name} owned by player {player}"
+    );
+    entities[0]
+}
+
+/// Asserts `unit` stands within one cell of `building`'s footprint.
+pub fn assert_adjacent_to_footprint(world: &mut World, unit: Entity, building: Entity) {
+    let origin = cell_of(world, building);
+    let size = world.get::<LocationStaticData>(building).unwrap().size();
+    let unit_cell = cell_of(world, unit);
+    let nearest = NavPos::new(
+        unit_cell.x.clamp(origin.x, origin.x + size.width - 1),
+        unit_cell.y.clamp(origin.y, origin.y + size.height - 1),
+    );
+    assert!(
+        chebyshev(unit_cell, nearest) <= 1,
+        "expected {unit_cell:?} adjacent to the footprint at {origin:?}"
+    );
 }
 
 /// Counts the entities of the given content type in the world.

@@ -10,6 +10,7 @@ use ferrets_network::message::gameplay::GameplayMessage;
 use ferrets_network::message::{Message, decode, encode};
 use ferrets_network::session_mode::SessionMode;
 use ferrets_simulation::command::PlayerCommand;
+use ferrets_simulation::components::rally::RallyTarget;
 use ferrets_simulation::input::PlayerFrame;
 use ferrets_simulation::session::drop_policy::DropPolicy;
 use ferrets_simulation::session::finish_policy::FinishPolicy;
@@ -141,6 +142,18 @@ fn every_command_frames() -> Message {
             PlayerCommand::TrainEntity {
                 trainer: SimulationId(4),
                 type_name: "peasant".into(),
+            },
+            PlayerCommand::SetRallyPoint {
+                entity: SimulationId(4),
+                target: Some(RallyTarget::Position(pos(3, 9))),
+            },
+            PlayerCommand::SetRallyPoint {
+                entity: SimulationId(4),
+                target: Some(RallyTarget::Entity(SimulationId(6))),
+            },
+            PlayerCommand::SetRallyPoint {
+                entity: SimulationId(4),
+                target: None,
             },
             PlayerCommand::BuildEntity {
                 builder: SimulationId(4),

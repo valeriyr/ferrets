@@ -8,11 +8,13 @@ use ferrets_pathfinder::nav_pos::NavPos;
 use crate::{
     components::{
         location::{LocationComponent, LocationStaticData},
-        order_queue::{CancelPolicy, OrderState},
+        order_queue::{CancelPolicy, OrderQueueComponent, OrderState},
         owner::OwnerComponent,
+        rally::{RallyPointComponent, RallyTarget},
         train::{TrainComponent, TrainQueueComponent, TrainStaticData},
     },
     content::registry::ContentRegistry,
+    game_loop::executor,
     map::Map,
     order::Order,
     resources::PlayerResources,
@@ -162,7 +164,11 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> OrderState 
                 .entity(entity)
                 .get::<OwnerComponent>()
                 .map(|o| o.player());
-            spawn::spawn_entity(world, &type_name, FixedUVec2::from(cell), owner);
+            if let Some((unit, _)) =
+                spawn::spawn_entity(world, &type_name, FixedUVec2::from(cell), owner)
+            {
+                send_to_rally(entity, unit, world);
+            }
 
             let mut entity_mut = world.entity_mut(entity);
             let mut queue = entity_mut.get_mut::<TrainQueueComponent>().unwrap();
@@ -177,4 +183,32 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> OrderState 
 
     world.entity_mut(entity).insert(train_component);
     OrderState::InProcessing
+}
+
+/// Sends a freshly spawned unit toward the trainer's rally point, if one is set.
+///
+/// A position rallies as a plain move; an entity resolves like a send-to-entity
+/// intent from the unit's own perspective (e.g. a worker harvests a source, a
+/// soldier attacks a hostile). A rally target gone by spawn time issues nothing.
+fn send_to_rally(trainer: Entity, unit: Entity, world: &mut World) {
+    let Some(target) = world
+        .entity(trainer)
+        .get::<RallyPointComponent>()
+        .and_then(|rally| rally.0)
+    else {
+        return;
+    };
+
+    let order = match target {
+        RallyTarget::Position(position) => Some(Order::Move {
+            target: position,
+            range: 0,
+        }),
+        RallyTarget::Entity(id) => executor::resolve_send_to_entity(world, unit, id),
+    };
+    if let Some(order) = order
+        && let Some(mut queue) = world.entity_mut(unit).get_mut::<OrderQueueComponent>()
+    {
+        queue.push(order, None);
+    }
 }

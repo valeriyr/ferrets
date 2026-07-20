@@ -2,14 +2,7 @@
 
 mod utils;
 
-use bevy::prelude::*;
-use ferrets_pathfinder::nav_pos::NavPos;
-use ferrets_simulation::{
-    command::PlayerCommand,
-    components::{entity_info::EntityInfoComponent, location::LocationComponent},
-    resources::PlayerResources,
-    spawn,
-};
+use ferrets_simulation::{command::PlayerCommand, resources::PlayerResources, spawn};
 
 #[test]
 fn train_spawns_units_and_deducts_cost() {
@@ -62,18 +55,7 @@ fn train_spawns_units_and_deducts_cost() {
 
     // Every trained unit appeared adjacent to the barracks footprint.
     let world = app.world_mut();
-    let origin = utils::cell_of(world, barracks);
-    let positions: Vec<NavPos> = world
-        .query::<(&EntityInfoComponent, &LocationComponent)>()
-        .iter(world)
-        .filter(|(info, _)| info.type_name() == "soldier")
-        .map(|(_, loc)| NavPos::from(loc.position))
-        .collect();
-    for unit_cell in positions {
-        let nearest = NavPos::new(
-            unit_cell.x.clamp(origin.x, origin.x + 1),
-            unit_cell.y.clamp(origin.y, origin.y + 1),
-        );
-        assert!(utils::chebyshev(unit_cell, nearest) <= 1);
+    for soldier in utils::owned_of_type(world, "soldier", 0) {
+        utils::assert_adjacent_to_footprint(world, soldier, barracks);
     }
 }

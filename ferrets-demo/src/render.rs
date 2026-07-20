@@ -20,6 +20,7 @@ use ferrets_simulation::{
         hidden::HiddenComponent,
         location::{LocationComponent, LocationStaticData},
         owner::OwnerComponent,
+        rally::{RallyPointComponent, RallyTarget},
         resource::ResourceSourceStaticData,
     },
     content::registry::ContentRegistry,
@@ -295,6 +296,61 @@ pub fn draw_selection(
                 Color::srgb(0.2, 1.0, 0.4),
             );
         }
+    }
+}
+
+/// Draws the rally point of each selected own producer: a line from the
+/// building to the target and a circle marking it (run in `Update`).
+pub fn draw_rally(
+    mut gizmos: Gizmos,
+    session: Res<GameSession>,
+    selection: Res<Selection>,
+    holders: Query<(
+        &EntityInfoComponent,
+        &LocationComponent,
+        &LocationStaticData,
+        &OwnerComponent,
+        &RallyPointComponent,
+    )>,
+    targets: Query<
+        (
+            &EntityInfoComponent,
+            &LocationComponent,
+            &LocationStaticData,
+        ),
+        Without<HiddenComponent>,
+    >,
+) {
+    const COLOR: Color = Color::srgb(1.0, 0.65, 0.2);
+
+    let local = session.local_player();
+    for (info, location, location_data, owner, rally) in &holders {
+        if owner.player() != local || !selection.get(local).contains(&info.id()) {
+            continue;
+        }
+        let Some(target) = rally.0 else {
+            continue;
+        };
+        let end = match target {
+            // The move lands in the cell containing the position, so mark that
+            // cell's center rather than the raw sub-cell position.
+            RallyTarget::Position(position) => {
+                world_center(FixedUVec2::from(NavPos::from(position)), NavSize::ONE)
+            }
+            RallyTarget::Entity(id) => {
+                // A vanished target leaves nothing to point at.
+                let Some((_, target_location, target_data)) = targets
+                    .iter()
+                    .find(|(target_info, ..)| target_info.id() == id)
+                else {
+                    continue;
+                };
+                world_center(target_location.position, target_data.size())
+            }
+        };
+        let start = world_center(location.position, location_data.size());
+        gizmos.line_2d(start.truncate(), end.truncate(), COLOR);
+        gizmos.circle_2d(end.truncate(), CELL_PX * 0.3, COLOR);
     }
 }
 

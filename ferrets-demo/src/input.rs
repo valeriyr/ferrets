@@ -14,6 +14,8 @@ use ferrets_simulation::{
         build::BuilderStaticData,
         hidden::HiddenComponent,
         location::{LocationComponent, LocationStaticData},
+        owner::OwnerComponent,
+        rally::{RallyPointComponent, RallyTarget},
         train::TrainStaticData,
     },
     content::registry::ContentRegistry,
@@ -201,10 +203,14 @@ pub fn selection_input(
 
 /// Right click sends the selection to the entity under the cursor, or moves it
 /// to the clicked cell. Holding Shift appends instead of replacing orders.
+/// When the selection is entirely own producers, the click re-targets their
+/// rally points instead — clicking one of the selected producers clears them.
 pub fn order_input(
     mode: Res<InputMode>,
     mouse: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
+    session: Res<GameSession>,
+    selection: Res<Selection>,
     mut pending: ResMut<PendingInput>,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
@@ -216,6 +222,7 @@ pub fn order_input(
         ),
         Without<HiddenComponent>,
     >,
+    rally_holders: Query<(&EntityInfoComponent, &OwnerComponent), With<RallyPointComponent>>,
 ) {
     if !mouse.just_pressed(MouseButton::Right) || !matches!(*mode, InputMode::Normal) {
         return;
@@ -230,6 +237,32 @@ pub fn order_input(
     let flush = !(keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight));
 
     let target = world_to_cell(cursor).and_then(|cell| entity_at(cell, &entities));
+
+    // Only an all-producer selection captures the click; a mixed selection
+    // keeps ordering its units around normally.
+    let local = session.local_player();
+    let selected = selection.get(local);
+    let all_producers = !selected.is_empty()
+        && selected.iter().all(|&id| {
+            rally_holders
+                .iter()
+                .any(|(info, owner)| info.id() == id && owner.player() == local)
+        });
+    if all_producers {
+        let target = match target {
+            Some(id) if selected.contains(&id) => None,
+            Some(id) => Some(RallyTarget::Entity(id)),
+            None => Some(RallyTarget::Position(world_to_pos(cursor))),
+        };
+        for &producer in selected {
+            pending.push(PlayerCommand::SetRallyPoint {
+                entity: producer,
+                target,
+            });
+        }
+        return;
+    }
+
     match target {
         Some(target) => pending.push(PlayerCommand::SendToEntity { target, flush }),
         None => pending.push(PlayerCommand::Move {

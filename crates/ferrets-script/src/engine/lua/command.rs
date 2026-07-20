@@ -9,6 +9,7 @@ use ferrets_math::fixed_urect::FixedURect;
 use ferrets_math::fixed_uvec2::FixedUVec2;
 use ferrets_pathfinder::nav_pos::NavPos;
 use ferrets_simulation::command::PlayerCommand;
+use ferrets_simulation::components::rally::RallyTarget;
 use ferrets_simulation::simulation_id::SimulationId;
 use mlua::{Table, Value};
 
@@ -80,6 +81,10 @@ fn command(table: &Table, index: usize) -> crate::Result<PlayerCommand> {
             trainer: SimulationId(integer(table, index, "trainer")?),
             type_name: field(table, index, "type_name")?,
         }),
+        "rally" => Ok(PlayerCommand::SetRallyPoint {
+            entity: SimulationId(integer(table, index, "entity")?),
+            target: rally_target(table, index)?,
+        }),
         "build" => Ok(PlayerCommand::BuildEntity {
             builder: SimulationId(integer(table, index, "builder")?),
             type_name: field(table, index, "type_name")?,
@@ -96,6 +101,24 @@ fn cell(x: u32, y: u32) -> FixedUVec2 {
     FixedUVec2::from(NavPos::new(x, y))
 }
 
+/// The rally target of a `rally` command: `target` names an entity, `x`/`y` a
+/// cell, and neither clears the rally point. Mixing the two forms is an error.
+fn rally_target(table: &Table, index: usize) -> crate::Result<Option<RallyTarget>> {
+    let target = optional_integer(table, index, "target")?;
+    let x = optional_integer(table, index, "x")?;
+    let y = optional_integer(table, index, "y")?;
+    match (target, x, y) {
+        (Some(_), Some(_), _) | (Some(_), _, Some(_)) => Err(element_error(
+            index,
+            "rally takes either a target or a cell, not both",
+        )),
+        (Some(id), None, None) => Ok(Some(RallyTarget::Entity(SimulationId(id)))),
+        (None, Some(x), Some(y)) => Ok(Some(RallyTarget::Position(cell(x, y)))),
+        (None, None, None) => Ok(None),
+        (None, _, _) => Err(element_error(index, "rally cell needs both x and y")),
+    }
+}
+
 /// A required field converted through `mlua`'s conversions.
 fn field<T: mlua::FromLua>(table: &Table, index: usize, name: &str) -> crate::Result<T> {
     table
@@ -107,23 +130,30 @@ fn field<T: mlua::FromLua>(table: &Table, index: usize, name: &str) -> crate::Re
 /// a script yields floats); fractional values mean real float math leaked to
 /// the boundary and are rejected.
 fn integer(table: &Table, index: usize, name: &str) -> crate::Result<u32> {
+    optional_integer(table, index, name)?.ok_or_else(|| field_error(index, name, "missing"))
+}
+
+/// An optional integer field: absent (`nil`) is `None`, present values follow
+/// the same rules as [`integer`].
+fn optional_integer(table: &Table, index: usize, name: &str) -> crate::Result<Option<u32>> {
     let value: Value = table
         .raw_get(name)
         .map_err(|error| field_error(index, name, &error.to_string()))?;
     match value {
+        Value::Nil => Ok(None),
         Value::Integer(integer) => u32::try_from(integer)
+            .map(Some)
             .map_err(|_| field_error(index, name, &format!("{integer} out of range"))),
         Value::Number(number)
             if number.fract() == 0.0 && (0.0..=u32::MAX as f64).contains(&number) =>
         {
-            Ok(number as u32)
+            Ok(Some(number as u32))
         }
         Value::Number(number) => Err(field_error(
             index,
             name,
             &format!("{number} is not a whole number in range"),
         )),
-        Value::Nil => Err(field_error(index, name, "missing")),
         other => Err(field_error(
             index,
             name,

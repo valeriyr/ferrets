@@ -15,6 +15,7 @@ use crate::{
         order_queue::{CancelPolicy, OrderQueueComponent},
         owner::OwnerComponent,
         pending_reveal::PendingRevealComponent,
+        rally::RallyPointComponent,
         resource::{ResourceCarrierComponent, ResourceSourceComponent},
         tags::TagsComponent,
         train::TrainQueueComponent,
@@ -107,7 +108,11 @@ pub fn spawn_entity(
         entity_mut.insert(attack_data);
     }
     if let Some(train_data) = trainer {
-        entity_mut.insert((train_data, TrainQueueComponent::default()));
+        entity_mut.insert((
+            train_data,
+            TrainQueueComponent::default(),
+            RallyPointComponent::default(),
+        ));
     }
     if let Some(builder_data) = builder {
         entity_mut.insert(builder_data);

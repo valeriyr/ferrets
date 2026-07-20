@@ -259,7 +259,10 @@ pub fn update_help(
                 .enumerate()
                 .map(|(i, name)| format!("{}) {name}", i + 1))
                 .collect();
-            message = format!("Train:  {}", opts.join("   "));
+            message = format!(
+                "Train:  {}   |   RMB set rally (on self clears)",
+                opts.join("   ")
+            );
         }
         if let Some(builder) = builder {
             let opts: Vec<&str> = builder.builds().collect();

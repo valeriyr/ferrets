@@ -13,6 +13,7 @@ use ferrets_script::engine::ScriptEngine;
 use ferrets_script::engine::lua::LuaEngine;
 use ferrets_script::error::ScriptError;
 use ferrets_simulation::command::PlayerCommand;
+use ferrets_simulation::components::rally::RallyTarget;
 use ferrets_simulation::simulation_id::SimulationId;
 
 //
@@ -33,6 +34,9 @@ fn think_returns_commands_as_player_commands() {
                     { kind = "send", target = 9 },
                     { kind = "train", trainer = 10, type_name = "peasant" },
                     { kind = "build", builder = 11, type_name = "barracks", x = 12, y = 13 },
+                    { kind = "rally", entity = 14, x = 15, y = 16 },
+                    { kind = "rally", entity = 17, target = 18 },
+                    { kind = "rally", entity = 19 },
                     { kind = "stop" },
                 }
             end,
@@ -78,6 +82,18 @@ fn think_returns_commands_as_player_commands() {
                 type_name: "barracks".to_string(),
                 position: cell(12, 13),
                 flush: true,
+            },
+            PlayerCommand::SetRallyPoint {
+                entity: SimulationId(14),
+                target: Some(RallyTarget::Position(cell(15, 16))),
+            },
+            PlayerCommand::SetRallyPoint {
+                entity: SimulationId(17),
+                target: Some(RallyTarget::Entity(SimulationId(18))),
+            },
+            PlayerCommand::SetRallyPoint {
+                entity: SimulationId(19),
+                target: None,
             },
             PlayerCommand::Stop,
         ]
@@ -297,6 +313,27 @@ fn reports_fractional_number_as_command_error() {
 
     assert!(
         matches!(&error, ScriptError::CommandError(m) if m.contains("1.5 is not a whole number")),
+        "got {error:?}"
+    );
+}
+
+#[test]
+fn reports_rally_with_target_and_cell_as_command_error() {
+    let error =
+        think_error(r#"return { { kind = "rally", entity = 1, target = 2, x = 3, y = 4 } }"#);
+
+    assert!(
+        matches!(&error, ScriptError::CommandError(m) if m == "element 1: rally takes either a target or a cell, not both"),
+        "got {error:?}"
+    );
+}
+
+#[test]
+fn reports_rally_with_half_cell_as_command_error() {
+    let error = think_error(r#"return { { kind = "rally", entity = 1, x = 3 } }"#);
+
+    assert!(
+        matches!(&error, ScriptError::CommandError(m) if m == "element 1: rally cell needs both x and y"),
         "got {error:?}"
     );
 }

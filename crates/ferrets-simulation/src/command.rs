@@ -6,6 +6,7 @@
 use ferrets_math::{fixed_urect::FixedURect, fixed_uvec2::FixedUVec2};
 use serde::{Deserialize, Serialize};
 
+use crate::components::rally::RallyTarget;
 use crate::simulation_id::SimulationId;
 
 /// A player command.
@@ -29,6 +30,12 @@ pub enum PlayerCommand {
     TrainEntity {
         trainer: SimulationId,
         type_name: String,
+    },
+    /// Sets or clears the rally point of the `entity`: units it emits take an
+    /// order toward the target when they spawn. `None` clears.
+    SetRallyPoint {
+        entity: SimulationId,
+        target: Option<RallyTarget>,
     },
     /// Issues a build order to the `builder` entity: construct a building of
     /// `type_name` at `position`.

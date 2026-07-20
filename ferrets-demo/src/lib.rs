@@ -154,6 +154,7 @@ pub fn run() {
                     render::interpolate_sprites,
                     render::draw_selection,
                     render::draw_facing,
+                    render::draw_rally,
                 )
                     .chain(),
             )
