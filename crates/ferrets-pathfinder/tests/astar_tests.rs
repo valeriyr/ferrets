@@ -618,6 +618,17 @@ fn rect_distance_ranks_diagonal_vs_cardinal_by_projection() {
 }
 
 //
+// ─── Chebyshev distance ─────────────────────────────────────────────────────
+//
+
+#[test]
+fn chebyshev_takes_maximum_of_axis_distances() {
+    assert_eq!(astar::chebyshev(NavPos::new(2, 3), NavPos::new(2, 3)), 0);
+    assert_eq!(astar::chebyshev(NavPos::new(0, 0), NavPos::new(3, 1)), 3);
+    assert_eq!(astar::chebyshev(NavPos::new(5, 2), NavPos::new(1, 9)), 7);
+}
+
+//
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 //
 

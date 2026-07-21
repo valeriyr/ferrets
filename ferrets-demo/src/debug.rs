@@ -1,30 +1,37 @@
-//! Debug overlay: a live input/sim readout, nav-grid toggle, and sandbox spawn.
+//! Debug overlay: a live input/sim readout, gizmos, and sandbox spawn.
 
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use ferrets_bevy_plugin::PendingInput;
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
+use ferrets_pathfinder::{nav_pos::NavPos, nav_size::NavSize};
 use ferrets_simulation::{
     command::PlayerCommand,
     components::{
         entity_info::EntityInfoComponent,
         hidden::HiddenComponent,
         location::{LocationComponent, LocationStaticData},
+        order_queue::OrderQueueComponent,
+        patrol::PatrolComponent,
     },
+    content::registry::ContentRegistry,
+    map::Map,
+    order::Order,
     selection::Selection,
     session::GameSession,
 };
 
 use crate::input::InputMode;
-use crate::render::CELL_PX;
+use crate::map;
+use crate::render::{CELL_PX, world_center};
 use crate::states::InGameUi;
 
 /// Toggleable debug options.
 #[derive(Resource)]
 pub struct DebugState {
-    /// Draw the nav grid (F1).
+    /// Draw the debug overlay — nav grid and order lines.
     pub grid: bool,
-    /// Type spawned by F2.
+    /// Type spawned.
     pub spawn_type: String,
 }
 
@@ -72,14 +79,14 @@ fn cursor_cell(
     (x >= 0.0 && y >= 0.0).then_some((x as u32, y as u32))
 }
 
-/// F1 toggles the grid.
+/// Toggles the debug overlay.
 pub fn toggle_debug(keys: Res<ButtonInput<KeyCode>>, mut debug: ResMut<DebugState>) {
     if keys.just_pressed(KeyCode::F1) {
         debug.grid = !debug.grid;
     }
 }
 
-/// F2 spawns the debug unit for the local player at the cursor cell, via the
+/// Spawns the debug unit for the local player at the cursor cell, via the
 /// `Spawn` command (deterministic command pipeline).
 pub fn spawn_debug(
     keys: Res<ButtonInput<KeyCode>>,
@@ -137,6 +144,7 @@ pub fn debug_readout(
     let mode_str = match &*mode {
         InputMode::Normal => "normal",
         InputMode::PlacingBuild(_) => "placing",
+        InputMode::Targeting(_) => "targeting",
     };
 
     if let Ok(mut text) = text.single_mut() {
@@ -150,5 +158,132 @@ pub fn debug_readout(
             selected,
             mode_str,
         );
+    }
+}
+
+/// Draws a faint grid over the playable area, tinting occupied ground cells
+/// (run in `Update`), when enabled.
+pub fn draw_grid(
+    mut gizmos: Gizmos,
+    map: Res<Map>,
+    registry: Res<ContentRegistry>,
+    debug: Res<DebugState>,
+) {
+    if !debug.grid {
+        return;
+    }
+    let (w, h) = (map.width() as f32, map.height() as f32);
+    let line = Color::srgba(0.0, 0.0, 0.0, 0.15);
+
+    // Fill occupied cells so the nav grid's occupancy is visible at a glance.
+    let nav_grid = map.nav_grid();
+    if let Some(ground) = registry.layer(map::GROUND) {
+        for y in 0..map.height() {
+            for x in 0..map.width() {
+                if nav_grid.is_occupied(ground, NavPos::new(x, y)) {
+                    fill_cell(&mut gizmos, x, y);
+                }
+            }
+        }
+    }
+
+    for x in 0..=map.width() {
+        let xp = x as f32 * CELL_PX;
+        gizmos.line_2d(Vec2::new(xp, 0.0), Vec2::new(xp, -h * CELL_PX), line);
+    }
+    for y in 0..=map.height() {
+        let yp = -(y as f32) * CELL_PX;
+        gizmos.line_2d(Vec2::new(0.0, yp), Vec2::new(w * CELL_PX, yp), line);
+    }
+}
+
+/// Draws every unit's order queue while the debug overlay is on: a line per
+/// order from the unit to its target, colored by kind — moves green, combat
+/// red, guard/follow cyan, harvest gold, build blue (run in `Update`).
+pub fn draw_orders(
+    mut gizmos: Gizmos,
+    debug: Res<DebugState>,
+    units: Query<
+        (
+            &LocationComponent,
+            &LocationStaticData,
+            &OrderQueueComponent,
+            Option<&PatrolComponent>,
+        ),
+        Without<HiddenComponent>,
+    >,
+    targets: Query<
+        (
+            &EntityInfoComponent,
+            &LocationComponent,
+            &LocationStaticData,
+        ),
+        Without<HiddenComponent>,
+    >,
+) {
+    const MOVE: Color = Color::srgb(0.3, 0.85, 0.4);
+    const COMBAT: Color = Color::srgb(1.0, 0.35, 0.25);
+    const GUARD: Color = Color::srgb(0.3, 0.9, 0.9);
+    const HARVEST: Color = Color::srgb(0.85, 0.7, 0.2);
+    const BUILD: Color = Color::srgb(0.35, 0.55, 1.0);
+
+    if !debug.grid {
+        return;
+    }
+
+    let cell_center = |position: FixedUVec2| {
+        world_center(FixedUVec2::from(NavPos::from(position)), NavSize::ONE).truncate()
+    };
+    let entity_center = |id| {
+        targets
+            .iter()
+            .find(|(info, ..)| info.id() == id)
+            .map(|(_, location, data)| world_center(location.position, data.size()).truncate())
+    };
+
+    for (location, location_data, queue, patrol) in &units {
+        let start = world_center(location.position, location_data.size()).truncate();
+        for entry in &queue.0 {
+            let (end, color) = match &entry.order {
+                Order::Move { target, .. } => (Some(cell_center(*target)), MOVE),
+                Order::AttackMove { target } => (Some(cell_center(*target)), COMBAT),
+                Order::Attack { target, .. } => (entity_center(*target), COMBAT),
+                Order::Guard { target } => (entity_center(*target), GUARD),
+                Order::Follow { target } => (entity_center(*target), GUARD),
+                Order::Harvest { target } => (entity_center(*target), HARVEST),
+                Order::Build { position, .. } => (Some(cell_center(*position)), BUILD),
+                Order::Patrol { target } => {
+                    // Both patrol endpoints; before the order starts, the
+                    // return point is where the unit stands.
+                    let end = cell_center(*target);
+                    let home = cell_center(patrol.map_or(location.position, |p| p.home));
+                    gizmos.line_2d(home, end, COMBAT);
+                    gizmos.circle_2d(end, CELL_PX * 0.25, COMBAT);
+                    gizmos.circle_2d(home, CELL_PX * 0.25, COMBAT);
+                    continue;
+                }
+                Order::Train | Order::Die => continue,
+            };
+            // A vanished target leaves nothing to point at.
+            let Some(end) = end else { continue };
+            gizmos.line_2d(start, end, color);
+            gizmos.circle_2d(end, CELL_PX * 0.25, color);
+        }
+    }
+}
+
+/// Tints a single cell red by stacking translucent lines (gizmos have no fill).
+fn fill_cell(gizmos: &mut Gizmos, x: u32, y: u32) {
+    const STEP_PX: f32 = 4.0;
+    let fill = Color::srgba(1.0, 0.2, 0.2, 0.35);
+    let left = x as f32 * CELL_PX;
+    let right = left + CELL_PX;
+    let top = -(y as f32) * CELL_PX;
+
+    let mut offset = STEP_PX / 2.0;
+    while offset < CELL_PX {
+        let yp = top - offset;
+        gizmos.line_2d(Vec2::new(left, yp), Vec2::new(right, yp), fill);
+        offset += STEP_PX;
     }
 }

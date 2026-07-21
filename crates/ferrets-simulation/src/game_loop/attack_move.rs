@@ -1,0 +1,157 @@
+//! Attack-move order implementation.
+//! Called by [`super::orders`] as part of the shared order lifecycle.
+
+use bevy_ecs::{entity::Entity, world::World};
+use ferrets_pathfinder::nav_size::NavSize;
+
+use super::orders::Processing;
+use super::{acquire, chase, chase::Destination};
+use crate::{
+    components::{
+        attack::AttackStaticData,
+        attack_move::AttackMoveComponent,
+        entity_info::EntityInfoComponent,
+        location::LocationComponent,
+        movement::MoveStaticData,
+        order_queue::{CancelPolicy, OrderState},
+    },
+    map::Map,
+    order::{Leash, Order},
+    session::GameSession,
+    simulation_id::SimulationId,
+};
+
+/// Called once when an AttackMove order becomes the front `New` entry.
+///
+/// Inserts the driver component and returns `InProcessing`, or `Finished`
+/// immediately if the entity cannot move.
+pub fn prepare(entity: Entity, _order: &Order, world: &mut World) -> OrderState {
+    if !world.entity(entity).contains::<MoveStaticData>() {
+        return OrderState::Finished;
+    }
+    world
+        .entity_mut(entity)
+        .insert(AttackMoveComponent::default());
+    OrderState::InProcessing
+}
+
+/// Called when an AttackMove order resumes from `Suspended`. The walk marker
+/// resets so the next leg re-paths from wherever the fight ended.
+pub fn prepare_suspended(entity: Entity, _order: &Order, world: &mut World) -> OrderState {
+    if let Some(mut driver) = world.entity_mut(entity).get_mut::<AttackMoveComponent>() {
+        driver.last_chase = None;
+    }
+    OrderState::InProcessing
+}
+
+/// Called for every AttackMove entry that has a cancel policy.
+///
+/// An attack-move stops immediately under both policies.
+pub fn cancel_processing(
+    entity: Entity,
+    _order: &Order,
+    _policy: CancelPolicy,
+    _entry_state: OrderState,
+    world: &mut World,
+) -> OrderState {
+    world.entity_mut(entity).remove::<AttackMoveComponent>();
+    OrderState::Finished
+}
+
+/// Advance an AttackMove order by one tick.
+///
+/// Scans for a hostile first — process runs exactly when the order is between
+/// legs (freshly started or just resumed after a fight or walk), which is when
+/// immediate re-acquisition matters. On a hit the order suspends into a leashed
+/// attack; otherwise it advances toward the destination like a move, arriving
+/// or giving up through the shared chase logic.
+pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
+    let target = order
+        .attack_move_target()
+        .expect("AttackMove order must have a target");
+
+    let Some(mut driver) = world.entity_mut(entity).take::<AttackMoveComponent>() else {
+        return Processing::state(OrderState::Finished);
+    };
+
+    if let Some(attack) = engagement(world, entity) {
+        world.entity_mut(entity).insert(driver);
+        return Processing::suspend(attack);
+    }
+
+    let position = world
+        .entity(entity)
+        .get::<LocationComponent>()
+        .unwrap()
+        .position;
+    let projection = world.resource::<Map>().projection();
+    match chase::advance(
+        &mut driver.last_chase,
+        projection,
+        position,
+        target,
+        NavSize::ONE,
+        0,
+    ) {
+        Destination::Arrived | Destination::OutOfReach => Processing::state(OrderState::Finished),
+        Destination::Walk(move_order) => {
+            world.entity_mut(entity).insert(driver);
+            Processing::suspend(move_order)
+        }
+    }
+}
+
+/// Called each tick while this order's `Move` sub-order runs (see
+/// [`super::orders::watch_tick`]): the throttled en-route scan. On a hit the
+/// walk is interrupted and replaced by a leashed attack.
+pub fn watch(entity: Entity, _order: &Order, front: &Order, world: &mut World) -> Option<Order> {
+    if !matches!(front, Order::Move { .. }) {
+        return None;
+    }
+    let id = world
+        .entity(entity)
+        .get::<EntityInfoComponent>()
+        .unwrap()
+        .id();
+    let tick = world.resource::<GameSession>().tick();
+    if !acquire::due(id, tick) {
+        return None;
+    }
+    engagement(world, entity)
+}
+
+/// A leashed attack on the best target in acquisition range, if the entity is
+/// armed and one exists. The leash anchors where the entity stands now.
+pub(super) fn engagement(world: &World, entity: Entity) -> Option<Order> {
+    let acquire_range = world
+        .entity(entity)
+        .get::<AttackStaticData>()?
+        .acquire_range();
+    let target = acquire::find_target(world, entity, acquire_range)?;
+    Some(leashed_attack(world, entity, target, acquire_range))
+}
+
+/// Like [`engagement`], but on a specific candidate — `None` when the
+/// candidate does not qualify for the entity's acquisition scan.
+pub(super) fn engagement_on(world: &World, entity: Entity, target: SimulationId) -> Option<Order> {
+    let acquire_range = world
+        .entity(entity)
+        .get::<AttackStaticData>()?
+        .acquire_range();
+    if !acquire::qualifies(world, entity, target, acquire_range) {
+        return None;
+    }
+    Some(leashed_attack(world, entity, target, acquire_range))
+}
+
+fn leashed_attack(world: &World, entity: Entity, target: SimulationId, radius: u32) -> Order {
+    let anchor = world
+        .entity(entity)
+        .get::<LocationComponent>()
+        .unwrap()
+        .position;
+    Order::Attack {
+        target,
+        leash: Some(Leash { anchor, radius }),
+    }
+}

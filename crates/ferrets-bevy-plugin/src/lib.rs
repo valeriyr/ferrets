@@ -26,9 +26,14 @@
 //! [ApplyDeferred]
 //! process_dying      — exclusive system; advance Die orders, despawn entities that
 //!                      finished dying
+//! flee               — exclusive system; fleeing-stance entities run from fresh hits
+//! auto_engage        — exclusive system; stance-driven target acquisition for idle
+//!                      entities
 //! tick_orders        — exclusive system; full order lifecycle for alive entities:
 //!                        prepare phase: flush cancelled entries, New → InProcessing,
 //!                          Suspended → resumed, insert driver components
+//!                        watch phase: suspended watchers may interrupt their running
+//!                          sub-order (attack-move/guard scanning mid-walk)
 //!                        process phase: advance InProcessing front order, remove driver
 //!                          components on finish, push chase sub-orders on suspend
 //! process_pending_reveals — exclusive system; retry reappearing entities that finished
@@ -188,6 +193,10 @@ impl Plugin for SimulationPlugin {
                 (
                     ApplyDeferred,
                     systems::process_dying,
+                    // Stance-driven initiative first, so a fresh engagement or
+                    // flee response executes on the same tick it was decided.
+                    systems::flee,
+                    systems::auto_engage,
                     systems::tick_orders,
                     systems::process_pending_reveals,
                     systems::check_game_result,

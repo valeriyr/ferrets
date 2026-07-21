@@ -38,6 +38,8 @@ pub struct EntityView {
     /// In-flight production, front first. Empty when nothing is queued.
     pub train_queue: Vec<String>,
     pub under_construction: bool,
+    /// The stance name, when the entity has one.
+    pub stance: Option<String>,
     /// Remaining amount in a resource source. `None` when not a source.
     pub resource_amount: Option<u32>,
 }

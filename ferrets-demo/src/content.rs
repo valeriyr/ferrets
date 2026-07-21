@@ -31,7 +31,7 @@ pub const CONTENT: &str = r#"
         movement = { speed = "0.25" },
         health = 80,
         dying = { time = 2 },
-        attack = { damage = 12, range = 5, aiming = 4, reloading = 6 },
+        attack = { damage = 12, range = 5, acquire_range = 8, aiming = 4, reloading = 6 },
         train_time = 100,
     })
     define_entity("sea_fortress", {
@@ -106,7 +106,7 @@ pub const CONTENT: &str = r#"
         movement = { speed = "0.3" },
         health = 40,
         dying = { time = 2 },
-        attack = { damage = 6, range = 4, aiming = 3, reloading = 4 },
+        attack = { damage = 6, range = 4, acquire_range = 7, aiming = 3, reloading = 4 },
         cost = { gold = 80 },
         train_time = 60,
     })
@@ -121,7 +121,7 @@ pub const CONTENT: &str = r#"
         movement = { speed = "0.3" },
         health = 60,
         dying = { time = 2 },
-        attack = { damage = 10, range = 1, aiming = 3, reloading = 3 },
+        attack = { damage = 10, range = 1, acquire_range = 5, aiming = 3, reloading = 3 },
         cost = { gold = 90 },
         train_time = 70,
     })

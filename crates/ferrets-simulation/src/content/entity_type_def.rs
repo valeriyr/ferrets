@@ -155,10 +155,25 @@ impl EntityTypeDef {
     /// Enables attacking for this entity type. One hit removes `damage` health
     /// points from a target within `range` grid cells; a swing lands after
     /// `aiming` ticks and the next one starts after `reloading` more.
+    /// `acquire_range` is the distance at which instances notice and engage
+    /// enemies on their own initiative.
     ///
     /// Panics if `aiming` or `reloading` is `0`.
-    pub fn with_attack(mut self, damage: u32, range: u32, aiming: u32, reloading: u32) -> Self {
-        self.attack = Some(AttackStaticData::new(damage, range, aiming, reloading));
+    pub fn with_attack(
+        mut self,
+        damage: u32,
+        range: u32,
+        acquire_range: u32,
+        aiming: u32,
+        reloading: u32,
+    ) -> Self {
+        self.attack = Some(AttackStaticData::new(
+            damage,
+            range,
+            acquire_range,
+            aiming,
+            reloading,
+        ));
         self
     }
 

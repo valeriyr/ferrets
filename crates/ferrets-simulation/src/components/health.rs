@@ -2,6 +2,8 @@
 
 use bevy_ecs::prelude::*;
 
+use crate::simulation_id::SimulationId;
+
 /// Content-defined health properties for an entity type.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HealthStaticData {
@@ -9,11 +11,22 @@ pub struct HealthStaticData {
     max_health: u32,
 }
 
+/// The most recent damage source: who hit the entity and when.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LastHit {
+    /// The entity that dealt the damage.
+    pub attacker: SimulationId,
+    /// The tick the hit landed on.
+    pub tick: u32,
+}
+
 /// Current health of an entity.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HealthComponent {
     /// Remaining health points. `0` means the entity is dead.
     current: u32,
+    /// The most recent damage source, if the entity has ever been hit.
+    last_hit: Option<LastHit>,
 }
 
 impl HealthStaticData {
@@ -39,7 +52,20 @@ impl HealthComponent {
     pub fn full(static_data: &HealthStaticData) -> Self {
         Self {
             current: static_data.max_health(),
+            last_hit: None,
         }
+    }
+
+    /// Returns the most recent damage source, if the entity has ever been hit.
+    #[inline]
+    pub fn last_hit(&self) -> Option<LastHit> {
+        self.last_hit
+    }
+
+    /// Records the source of a hit that just landed.
+    #[inline]
+    pub fn record_hit(&mut self, attacker: SimulationId, tick: u32) {
+        self.last_hit = Some(LastHit { attacker, tick });
     }
 
     /// Returns the remaining health points.

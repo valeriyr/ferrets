@@ -11,7 +11,7 @@ use std::f32::consts::FRAC_PI_2;
 
 use bevy::prelude::*;
 
-use crate::{debug::DebugState, map, scenario::CurrentScenario, states::InGameUi};
+use crate::{map, scenario::CurrentScenario, states::InGameUi};
 use ferrets_math::{fixed_uvec2::FixedUVec2, fixed_vec2::FixedVec2};
 use ferrets_pathfinder::{nav_pos::NavPos, nav_size::NavSize};
 use ferrets_simulation::{
@@ -23,8 +23,6 @@ use ferrets_simulation::{
         rally::{RallyPointComponent, RallyTarget},
         resource::ResourceSourceStaticData,
     },
-    content::registry::ContentRegistry,
-    map::Map,
     selection::Selection,
     session::GameSession,
 };
@@ -46,7 +44,7 @@ pub struct Renderable;
 pub struct Directional;
 
 /// World-space center of a footprint, in pixels (Bevy y points up, sim y down).
-fn world_center(position: FixedUVec2, size: NavSize) -> Vec3 {
+pub(crate) fn world_center(position: FixedUVec2, size: NavSize) -> Vec3 {
     let cx = position.x.to_num::<f32>() + size.width as f32 / 2.0;
     let cy = position.y.to_num::<f32>() + size.height as f32 / 2.0;
     Vec3::new(cx * CELL_PX, -cy * CELL_PX, 1.0)
@@ -410,57 +408,5 @@ pub fn spawn_terrain_tiles(
             Transform::from_translation(center),
             InGameUi,
         ));
-    }
-}
-
-/// Draws a faint grid over the playable area, tinting occupied ground cells
-/// (run in `Update`), when enabled.
-pub fn draw_grid(
-    mut gizmos: Gizmos,
-    map: Res<Map>,
-    registry: Res<ContentRegistry>,
-    debug: Res<DebugState>,
-) {
-    if !debug.grid {
-        return;
-    }
-    let (w, h) = (map.width() as f32, map.height() as f32);
-    let line = Color::srgba(0.0, 0.0, 0.0, 0.15);
-
-    // Fill occupied cells so the nav grid's occupancy is visible at a glance.
-    let nav_grid = map.nav_grid();
-    if let Some(ground) = registry.layer(map::GROUND) {
-        for y in 0..map.height() {
-            for x in 0..map.width() {
-                if nav_grid.is_occupied(ground, NavPos::new(x, y)) {
-                    fill_cell(&mut gizmos, x, y);
-                }
-            }
-        }
-    }
-
-    for x in 0..=map.width() {
-        let xp = x as f32 * CELL_PX;
-        gizmos.line_2d(Vec2::new(xp, 0.0), Vec2::new(xp, -h * CELL_PX), line);
-    }
-    for y in 0..=map.height() {
-        let yp = -(y as f32) * CELL_PX;
-        gizmos.line_2d(Vec2::new(0.0, yp), Vec2::new(w * CELL_PX, yp), line);
-    }
-}
-
-/// Tints a single cell red by stacking translucent lines (gizmos have no fill).
-fn fill_cell(gizmos: &mut Gizmos, x: u32, y: u32) {
-    const STEP_PX: f32 = 4.0;
-    let fill = Color::srgba(1.0, 0.2, 0.2, 0.35);
-    let left = x as f32 * CELL_PX;
-    let right = left + CELL_PX;
-    let top = -(y as f32) * CELL_PX;
-
-    let mut offset = STEP_PX / 2.0;
-    while offset < CELL_PX {
-        let yp = top - offset;
-        gizmos.line_2d(Vec2::new(left, yp), Vec2::new(right, yp), fill);
-        offset += STEP_PX;
     }
 }

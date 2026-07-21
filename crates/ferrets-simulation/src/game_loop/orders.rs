@@ -1,23 +1,28 @@
 //! Order lifecycle orchestration.
 //!
-//! Each tick the queue goes through two phases inside a single exclusive Bevy system:
+//! Each tick the queue goes through three phases inside a single exclusive Bevy system:
 //!
 //! - [`prepare_tick`] — flush cancelled entries, then transition the front order to
 //!   `InProcessing` (preparing `New` entries and resuming `Suspended` ones).
+//! - [`watch_tick`] — let a suspended order interrupt the sub-order running in
+//!   front of it, replacing the front.
 //! - [`process_tick`] — advance the front `InProcessing` order by one tick and handle
 //!   `Finished` and `Suspended` transitions.
 //!
 //! Each order type module (`movement`, `attack`, …) implements `prepare`,
-//! `prepare_suspended`, `cancel_processing`, and `process`. Each module owns its driver
-//! component lifecycle — inserting and removing the component as part of those calls.
-//! This module dispatches to the right implementation and enforces state-machine
-//! invariants with assertions.
+//! `prepare_suspended`, `cancel_processing`, and `process`, plus an optional `watch`.
+//! Each module owns its driver component lifecycle — inserting and removing the
+//! component as part of those calls. This module dispatches to the right
+//! implementation and enforces state-machine invariants with assertions.
 
 use bevy_ecs::{entity::Entity, world::World};
 
-use super::{attack, build, die, follow, harvest, movement, train};
+use super::{attack, attack_move, build, die, follow, guard, harvest, movement, patrol, train};
 use crate::{
-    components::order_queue::{CancelPolicy, OrderQueueComponent, OrderState},
+    components::{
+        location::LocationComponent,
+        order_queue::{CancelPolicy, OrderQueueComponent, OrderState},
+    },
     order::Order,
 };
 
@@ -52,6 +57,9 @@ fn dispatch_prepare(entity: Entity, order: &Order, world: &mut World) -> OrderSt
     match order {
         Order::Move { .. } => movement::prepare(entity, order, world),
         Order::Attack { .. } => attack::prepare(entity, order, world),
+        Order::AttackMove { .. } => attack_move::prepare(entity, order, world),
+        Order::Patrol { .. } => patrol::prepare(entity, order, world),
+        Order::Guard { .. } => guard::prepare(entity, order, world),
         Order::Follow { .. } => follow::prepare(entity, order, world),
         Order::Train => train::prepare(entity, order, world),
         Order::Build { .. } => build::prepare(entity, order, world),
@@ -63,6 +71,9 @@ fn dispatch_prepare(entity: Entity, order: &Order, world: &mut World) -> OrderSt
 fn dispatch_prepare_suspended(entity: Entity, order: &Order, world: &mut World) -> OrderState {
     match order {
         Order::Attack { .. } => attack::prepare_suspended(entity, order, world),
+        Order::AttackMove { .. } => attack_move::prepare_suspended(entity, order, world),
+        Order::Patrol { .. } => patrol::prepare_suspended(entity, order, world),
+        Order::Guard { .. } => guard::prepare_suspended(entity, order, world),
         Order::Follow { .. } => follow::prepare_suspended(entity, order, world),
         Order::Build { .. } => build::prepare_suspended(entity, order, world),
         Order::Harvest { .. } => harvest::prepare_suspended(entity, order, world),
@@ -86,6 +97,13 @@ fn dispatch_cancel(
         Order::Attack { .. } => {
             attack::cancel_processing(entity, order, policy, entry_state, world)
         }
+        Order::AttackMove { .. } => {
+            attack_move::cancel_processing(entity, order, policy, entry_state, world)
+        }
+        Order::Patrol { .. } => {
+            patrol::cancel_processing(entity, order, policy, entry_state, world)
+        }
+        Order::Guard { .. } => guard::cancel_processing(entity, order, policy, entry_state, world),
         Order::Follow { .. } => {
             follow::cancel_processing(entity, order, policy, entry_state, world)
         }
@@ -102,11 +120,29 @@ fn dispatch_process(entity: Entity, order: &Order, world: &mut World) -> Process
     match order {
         Order::Move { .. } => Processing::state(movement::process(entity, order, world)),
         Order::Attack { .. } => attack::process(entity, order, world),
+        Order::AttackMove { .. } => attack_move::process(entity, order, world),
+        Order::Patrol { .. } => patrol::process(entity, order, world),
+        Order::Guard { .. } => guard::process(entity, order, world),
         Order::Follow { .. } => follow::process(entity, order, world),
         Order::Train => Processing::state(train::process(entity, order, world)),
         Order::Build { .. } => build::process(entity, order, world),
         Order::Harvest { .. } => harvest::process(entity, order, world),
         Order::Die => Processing::state(die::process(entity, order, world)),
+    }
+}
+
+/// A suspended order watching the sub-order running in front of it. `Some`
+/// interrupts: the sub-order is force-cancelled and replaced (see [`watch_tick`]).
+fn dispatch_watch(
+    entity: Entity,
+    order: &Order,
+    front: &Order,
+    world: &mut World,
+) -> Option<Order> {
+    match order {
+        Order::AttackMove { .. } => attack_move::watch(entity, order, front, world),
+        Order::Guard { .. } => guard::watch(entity, order, front, world),
+        _ => None,
     }
 }
 
@@ -156,43 +192,58 @@ pub fn prepare_tick(entity: Entity, queue: &mut OrderQueueComponent, world: &mut
         }
     }
 
-    // Prepare the front entry until it is InProcessing or the queue is empty.
-    while let Some(front) = queue.front() {
-        let state = front.state;
-        let order = front.order.clone();
+    prepare_front(entity, queue, world);
+}
 
-        debug_assert!(
-            !matches!(state, OrderState::Finished),
-            "Finished entries must never stay in the queue"
-        );
-
-        let new_state = match state {
-            OrderState::InProcessing => break,
-            OrderState::New => dispatch_prepare(entity, &order, world),
-            OrderState::Suspended => dispatch_prepare_suspended(entity, &order, world),
-            OrderState::Finished => unreachable!(),
-        };
-
-        debug_assert!(
-            matches!(new_state, OrderState::InProcessing | OrderState::Finished),
-            "prepare must return InProcessing or Finished, got {:?}",
-            new_state
-        );
-
-        if new_state == OrderState::Finished {
-            queue.0.pop_front();
-        } else {
-            queue.front_mut().unwrap().state = OrderState::InProcessing;
-            break;
-        }
+/// Give the entry directly behind the front — when it is `Suspended`, i.e. the
+/// front is a sub-order it spawned — a chance to interrupt that sub-order.
+///
+/// On an interrupt, the front is force-cancelled, the replacement pushed in
+/// its place, and the prepare loop re-run so the front is `InProcessing` again
+/// for [`process_tick`]. The watcher itself stays suspended.
+///
+/// Watchers are only consulted while the entity rests on a cell: interrupting
+/// a `Move` mid-crossing would leave a fractional position with no crossing
+/// state to finish it.
+pub fn watch_tick(entity: Entity, queue: &mut OrderQueueComponent, world: &mut World) {
+    let Some(watcher) = queue.0.get(1) else {
+        return;
+    };
+    if watcher.state != OrderState::Suspended {
+        return;
+    }
+    let position = world
+        .entity(entity)
+        .get::<LocationComponent>()
+        .unwrap()
+        .position;
+    if movement::is_mid_crossing(position) {
+        return;
     }
 
-    debug_assert!(
-        queue
-            .front()
-            .is_none_or(|e| e.state == OrderState::InProcessing),
-        "after prepare, front must be InProcessing or queue must be empty"
+    let watcher_order = watcher.order.clone();
+    let front_order = queue.front().unwrap().order.clone();
+    let Some(replacement) = dispatch_watch(entity, &watcher_order, &front_order, world) else {
+        return;
+    };
+
+    let front_state = queue.front().unwrap().state;
+    let cancelled = dispatch_cancel(
+        entity,
+        &front_order,
+        CancelPolicy::Force,
+        front_state,
+        world,
     );
+    debug_assert_eq!(
+        cancelled,
+        OrderState::Finished,
+        "a force-cancelled sub-order must stop immediately"
+    );
+    queue.0.pop_front();
+    queue.push_front(replacement);
+
+    prepare_front(entity, queue, world);
 }
 
 /// Advance the front `InProcessing` order by one tick.
@@ -247,5 +298,45 @@ pub fn process_tick(entity: Entity, queue: &mut OrderQueueComponent, world: &mut
             OrderState::New | OrderState::InProcessing | OrderState::Suspended
         )),
         "after process, front must be New, InProcessing, Suspended, or queue must be empty"
+    );
+}
+
+/// Prepare the front entry until it is `InProcessing` or the queue is empty.
+fn prepare_front(entity: Entity, queue: &mut OrderQueueComponent, world: &mut World) {
+    while let Some(front) = queue.front() {
+        let state = front.state;
+        let order = front.order.clone();
+
+        debug_assert!(
+            !matches!(state, OrderState::Finished),
+            "Finished entries must never stay in the queue"
+        );
+
+        let new_state = match state {
+            OrderState::InProcessing => break,
+            OrderState::New => dispatch_prepare(entity, &order, world),
+            OrderState::Suspended => dispatch_prepare_suspended(entity, &order, world),
+            OrderState::Finished => unreachable!(),
+        };
+
+        debug_assert!(
+            matches!(new_state, OrderState::InProcessing | OrderState::Finished),
+            "prepare must return InProcessing or Finished, got {:?}",
+            new_state
+        );
+
+        if new_state == OrderState::Finished {
+            queue.0.pop_front();
+        } else {
+            queue.front_mut().unwrap().state = OrderState::InProcessing;
+            break;
+        }
+    }
+
+    debug_assert!(
+        queue
+            .front()
+            .is_none_or(|e| e.state == OrderState::InProcessing),
+        "after prepare, front must be InProcessing or queue must be empty"
     );
 }

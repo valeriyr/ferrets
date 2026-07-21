@@ -7,6 +7,7 @@ use ferrets_math::{fixed_urect::FixedURect, fixed_uvec2::FixedUVec2};
 use serde::{Deserialize, Serialize};
 
 use crate::components::rally::RallyTarget;
+use crate::components::stance::Stance;
 use crate::simulation_id::SimulationId;
 
 /// A player command.
@@ -22,6 +23,21 @@ pub enum PlayerCommand {
     /// Issues an attack order to the current selection, targeting the entity `target`.
     /// `flush` cancels existing orders before issuing this one; `false` appends.
     Attack { target: SimulationId, flush: bool },
+    /// Issues an attack-move order to the current selection, targeting `target`:
+    /// move there, engaging hostiles noticed on the way.
+    /// `flush` cancels existing orders before issuing this one; `false` appends.
+    AttackMove { target: FixedUVec2, flush: bool },
+    /// Issues a patrol order to the current selection: walk back and forth
+    /// between each unit's current position and `target`, engaging hostiles
+    /// noticed on the way, until cancelled.
+    /// `flush` cancels existing orders before issuing this one; `false` appends.
+    Patrol { target: FixedUVec2, flush: bool },
+    /// Issues a guard order to the current selection: stay near the entity
+    /// `target` and engage hostiles that threaten it or come close.
+    /// `flush` cancels existing orders before issuing this one; `false` appends.
+    Guard { target: SimulationId, flush: bool },
+    /// Sets the stance of the current selection.
+    SetStance { stance: Stance },
     /// Sends the current selection to the entity `target`, resolving the intent per
     /// unit: harvest from a source, deliver to a storage, attack an enemy, etc.
     /// `flush` cancels existing orders before issuing this one; `false` appends.

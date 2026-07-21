@@ -59,6 +59,7 @@ fn entity_table(lua: &Lua, entity: &EntityView) -> mlua::Result<Table> {
     }
     table.set("train_queue", strings_table(lua, &entity.train_queue)?)?;
     table.set("under_construction", entity.under_construction)?;
+    table.set("stance", entity.stance.as_deref())?;
     table.set("resource_amount", entity.resource_amount)?;
     Ok(table)
 }

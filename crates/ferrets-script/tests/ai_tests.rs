@@ -14,6 +14,7 @@ use ferrets_script::engine::lua::LuaEngine;
 use ferrets_script::error::ScriptError;
 use ferrets_simulation::command::PlayerCommand;
 use ferrets_simulation::components::rally::RallyTarget;
+use ferrets_simulation::components::stance::Stance;
 use ferrets_simulation::simulation_id::SimulationId;
 
 //
@@ -37,6 +38,10 @@ fn think_returns_commands_as_player_commands() {
                     { kind = "rally", entity = 14, x = 15, y = 16 },
                     { kind = "rally", entity = 17, target = 18 },
                     { kind = "rally", entity = 19 },
+                    { kind = "attack_move", x = 20, y = 21 },
+                    { kind = "patrol", x = 22, y = 23, flush = false },
+                    { kind = "guard", target = 24 },
+                    { kind = "stance", stance = "stand_ground" },
                     { kind = "stop" },
                 }
             end,
@@ -94,6 +99,21 @@ fn think_returns_commands_as_player_commands() {
             PlayerCommand::SetRallyPoint {
                 entity: SimulationId(19),
                 target: None,
+            },
+            PlayerCommand::AttackMove {
+                target: cell(20, 21),
+                flush: true,
+            },
+            PlayerCommand::Patrol {
+                target: cell(22, 23),
+                flush: false,
+            },
+            PlayerCommand::Guard {
+                target: SimulationId(24),
+                flush: true,
+            },
+            PlayerCommand::SetStance {
+                stance: Stance::StandGround,
             },
             PlayerCommand::Stop,
         ]
@@ -318,6 +338,16 @@ fn reports_fractional_number_as_command_error() {
 }
 
 #[test]
+fn reports_unknown_stance_as_command_error() {
+    let error = think_error(r#"return { { kind = "stance", stance = "berserk" } }"#);
+
+    assert!(
+        matches!(&error, ScriptError::CommandError(m) if m == "element 1: field 'stance': unknown stance 'berserk'"),
+        "got {error:?}"
+    );
+}
+
+#[test]
 fn reports_rally_with_target_and_cell_as_command_error() {
     let error =
         think_error(r#"return { { kind = "rally", entity = 1, target = 2, x = 3, y = 4 } }"#);
@@ -461,6 +491,8 @@ fn scripts_read_view_and_content_tables() {
                 if hall.health ~= 800 then error("health") end
                 if hall.train_queue[1] ~= "peasant" then error("train_queue") end
                 if hall.under_construction then error("under_construction") end
+                if hall.stance ~= nil then error("hall stance") end
+                if view.my_entities[2].stance ~= "flee" then error("worker stance") end
                 local mine = view.neutral_entities[1]
                 if mine.resource_amount ~= 900 then error("resource_amount") end
                 local worker = content.entities.peasant
@@ -579,6 +611,7 @@ fn populated_view(tick: u32) -> GameView {
                 carrying: None,
                 train_queue: vec!["peasant".to_string()],
                 under_construction: false,
+                stance: None,
                 resource_amount: None,
             },
             EntityView {
@@ -592,6 +625,7 @@ fn populated_view(tick: u32) -> GameView {
                 carrying: Some(("gold".to_string(), 3)),
                 train_queue: Vec::new(),
                 under_construction: false,
+                stance: Some("flee".to_string()),
                 resource_amount: None,
             },
         ],
@@ -608,6 +642,7 @@ fn populated_view(tick: u32) -> GameView {
             carrying: None,
             train_queue: Vec::new(),
             under_construction: false,
+            stance: None,
             resource_amount: Some(900),
         }],
     }

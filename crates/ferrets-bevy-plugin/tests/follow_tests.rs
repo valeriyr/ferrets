@@ -2,7 +2,7 @@
 
 mod utils;
 
-use ferrets_pathfinder::nav_pos::NavPos;
+use ferrets_pathfinder::{astar, nav_pos::NavPos};
 use ferrets_simulation::{command::PlayerCommand, spawn};
 
 #[test]
@@ -28,7 +28,7 @@ fn follow_tracks_moving_target() {
     {
         let world = app.world_mut();
         assert!(
-            utils::chebyshev(
+            astar::chebyshev(
                 utils::cell_of(world, follower),
                 utils::cell_of(world, leader)
             ) <= 1
@@ -50,7 +50,7 @@ fn follow_tracks_moving_target() {
         let world = app.world_mut();
         assert!(
             utils::cell_of(world, leader) == NavPos::new(14, 9)
-                && utils::chebyshev(
+                && astar::chebyshev(
                     utils::cell_of(world, follower),
                     utils::cell_of(world, leader)
                 ) <= 1

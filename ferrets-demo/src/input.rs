@@ -16,6 +16,7 @@ use ferrets_simulation::{
         location::{LocationComponent, LocationStaticData},
         owner::OwnerComponent,
         rally::{RallyPointComponent, RallyTarget},
+        stance::{Stance, StanceComponent},
         train::TrainStaticData,
     },
     content::registry::ContentRegistry,
@@ -58,6 +59,19 @@ pub enum InputMode {
     Normal,
     /// Left-click places the named building (started from the build menu).
     PlacingBuild(String),
+    /// Left-click issues the armed combat order (started from a hotkey).
+    Targeting(TargetedOrder),
+}
+
+/// A combat order armed by hotkey, waiting for its target click.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TargetedOrder {
+    /// `F` — attack-move to the clicked position.
+    AttackMove,
+    /// `R` — patrol between here and the clicked position.
+    Patrol,
+    /// `G` — guard the clicked entity.
+    Guard,
 }
 
 /// World-space anchor of an in-progress left-drag.
@@ -158,6 +172,9 @@ pub fn selection_input(
     >,
 ) {
     if !matches!(*mode, InputMode::Normal) {
+        // A drag interrupted by entering a mode must not fire when the click
+        // that ends the mode is released back in Normal.
+        drag.0 = None;
         return;
     }
     let (Ok(window), Ok((camera, camera_transform))) = (windows.single(), cameras.single()) else {
@@ -277,6 +294,123 @@ fn primary(selection: &Selection, session: &GameSession) -> Option<SimulationId>
     selection.get(session.local_player()).first().copied()
 }
 
+/// `F`/`R`/`G` arm a combat order for the current selection; the next
+/// left-click supplies its target.
+pub fn order_mode_input(
+    keys: Res<ButtonInput<KeyCode>>,
+    session: Res<GameSession>,
+    selection: Res<Selection>,
+    mut mode: ResMut<InputMode>,
+) {
+    // Arm from Normal, or re-arm a different order; never steal an
+    // in-progress building placement.
+    if matches!(*mode, InputMode::PlacingBuild(_)) {
+        return;
+    }
+    if selection.get(session.local_player()).is_empty() {
+        return;
+    }
+    let armed = if keys.just_pressed(KeyCode::KeyF) {
+        TargetedOrder::AttackMove
+    } else if keys.just_pressed(KeyCode::KeyR) {
+        TargetedOrder::Patrol
+    } else if keys.just_pressed(KeyCode::KeyG) {
+        TargetedOrder::Guard
+    } else {
+        return;
+    };
+    *mode = InputMode::Targeting(armed);
+}
+
+/// While a combat order is armed, left-click issues it (Esc/RMB cancel).
+pub fn targeting_input(
+    mouse: Res<ButtonInput<MouseButton>>,
+    keys: Res<ButtonInput<KeyCode>>,
+    mut mode: ResMut<InputMode>,
+    mut pending: ResMut<PendingInput>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    cameras: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
+    entities: Query<
+        (
+            &EntityInfoComponent,
+            &LocationComponent,
+            &LocationStaticData,
+        ),
+        Without<HiddenComponent>,
+    >,
+) {
+    let InputMode::Targeting(armed) = *mode else {
+        return;
+    };
+
+    if keys.just_pressed(KeyCode::Escape) || mouse.just_pressed(MouseButton::Right) {
+        *mode = InputMode::Normal;
+        return;
+    }
+    if !mouse.just_pressed(MouseButton::Left) {
+        return;
+    }
+    let (Ok(window), Ok((camera, camera_transform))) = (windows.single(), cameras.single()) else {
+        return;
+    };
+    let Some(cursor) = cursor_world(window, camera, camera_transform) else {
+        return;
+    };
+
+    let flush = !(keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight));
+    match armed {
+        TargetedOrder::AttackMove => {
+            pending.push(PlayerCommand::AttackMove {
+                target: world_to_pos(cursor),
+                flush,
+            });
+        }
+        TargetedOrder::Patrol => {
+            pending.push(PlayerCommand::Patrol {
+                target: world_to_pos(cursor),
+                flush,
+            });
+        }
+        TargetedOrder::Guard => {
+            // Guard needs an entity under the cursor; a miss keeps the mode
+            // armed so the player can click again.
+            let Some(target) = world_to_cell(cursor).and_then(|cell| entity_at(cell, &entities))
+            else {
+                return;
+            };
+            pending.push(PlayerCommand::Guard { target, flush });
+        }
+    }
+    *mode = InputMode::Normal;
+}
+
+/// `X` cycles the selection's stance, starting from the primary entity's.
+pub fn stance_input(
+    keys: Res<ButtonInput<KeyCode>>,
+    session: Res<GameSession>,
+    selection: Res<Selection>,
+    mut pending: ResMut<PendingInput>,
+    stances: Query<(&EntityInfoComponent, &StanceComponent)>,
+) {
+    if !keys.just_pressed(KeyCode::KeyX) {
+        return;
+    }
+    let Some(id) = primary(&selection, &session) else {
+        return;
+    };
+    let Some((_, StanceComponent(current))) = stances.iter().find(|(info, _)| info.id() == id)
+    else {
+        return;
+    };
+    let next = match current {
+        Stance::Flee => Stance::HoldFire,
+        Stance::HoldFire => Stance::StandGround,
+        Stance::StandGround => Stance::Defend,
+        Stance::Defend => Stance::Flee,
+    };
+    pending.push(PlayerCommand::SetStance { stance: next });
+}
+
 /// Number keys 1–4 queue a unit on the selected producer building.
 pub fn train_input(
     keys: Res<ButtonInput<KeyCode>>,
@@ -336,7 +470,7 @@ pub fn build_input(
                 .map_or(0, |i| (i + 1) % builds.len());
             builds[idx].clone()
         }
-        InputMode::Normal => builds[0].clone(),
+        InputMode::Normal | InputMode::Targeting(_) => builds[0].clone(),
     };
     *mode = InputMode::PlacingBuild(next);
 }

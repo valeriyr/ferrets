@@ -17,6 +17,7 @@ use crate::{
         pending_reveal::PendingRevealComponent,
         rally::RallyPointComponent,
         resource::{ResourceCarrierComponent, ResourceSourceComponent},
+        stance::{Stance, StanceComponent},
         tags::TagsComponent,
         train::TrainQueueComponent,
     },
@@ -106,6 +107,14 @@ pub fn spawn_entity(
     }
     if let Some(attack_data) = attack_data {
         entity_mut.insert(attack_data);
+    }
+    // Stance: armed entities default to defending themselves; unarmed but
+    // movable, damageable ones to fleeing; the rest have no initiative to
+    // configure.
+    if attack_data.is_some() {
+        entity_mut.insert(StanceComponent(Stance::Defend));
+    } else if move_data.is_some() && health_data.is_some() {
+        entity_mut.insert(StanceComponent(Stance::Flee));
     }
     if let Some(train_data) = trainer {
         entity_mut.insert((

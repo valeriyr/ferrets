@@ -23,7 +23,7 @@ fn fully_loaded_definition_is_valid() {
         .with_movement(FixedU64::from_num(0.5))
         .with_health(50)
         .with_dying(3, None)
-        .with_attack(10, 1, 2, 2)
+        .with_attack(10, 1, 1, 2, 2)
         .with_cost([("gold", 30), ("wood", 10)])
         .with_train_time(4)
         .with_build_time(6)
@@ -89,13 +89,13 @@ fn empty_corpse_type_panics() {
 #[test]
 #[should_panic(expected = "aiming must be greater than 0")]
 fn zero_aiming_panics() {
-    footman().with_attack(10, 1, 0, 2);
+    footman().with_attack(10, 1, 1, 0, 2);
 }
 
 #[test]
 #[should_panic(expected = "reloading must be greater than 0")]
 fn zero_reloading_panics() {
-    footman().with_attack(10, 1, 2, 0);
+    footman().with_attack(10, 1, 1, 2, 0);
 }
 
 //

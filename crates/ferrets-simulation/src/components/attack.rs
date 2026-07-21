@@ -10,6 +10,10 @@ pub struct AttackStaticData {
     damage: u32,
     /// Maximum distance to the target in grid cells. `1` means adjacent cells only.
     range: u32,
+    /// Distance in grid cells at which enemies are noticed and engaged on the
+    /// entity's own initiative. Usually at least `range`; a smaller value
+    /// auto-engages more conservatively than the weapon reaches.
+    acquire_range: u32,
     /// Ticks from the start of a swing until the hit lands.
     aiming: u32,
     /// Ticks after a hit before the next swing can start.
@@ -32,15 +36,23 @@ impl AttackStaticData {
     ///
     /// Panics if `aiming` or `reloading` is `0`.
     #[inline]
-    pub fn new(damage: u32, range: u32, aiming: u32, reloading: u32) -> Self {
+    pub fn new(damage: u32, range: u32, acquire_range: u32, aiming: u32, reloading: u32) -> Self {
         assert!(aiming > 0, "aiming must be greater than 0");
         assert!(reloading > 0, "reloading must be greater than 0");
         Self {
             damage,
             range,
+            acquire_range,
             aiming,
             reloading,
         }
+    }
+
+    /// Returns the distance at which enemies are noticed and engaged on the
+    /// entity's own initiative.
+    #[inline]
+    pub fn acquire_range(&self) -> u32 {
+        self.acquire_range
     }
 
     /// Returns the health points removed from the target by one hit.

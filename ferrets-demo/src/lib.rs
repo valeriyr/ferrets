@@ -120,18 +120,27 @@ pub fn run() {
         // Command-producing input only when a live player is at the controls; during
         // replay playback the recorded frames are the sole input, so stray clicks
         // must not enter the queue.
+        //
+        // Chained: the mode-consuming systems (targeting, placement) run last,
+        // so when they handle a click and reset the mode to Normal, the
+        // mode-gated systems have already seen the armed mode this frame — an
+        // unordered mode flip would let the same click also select or order.
         .add_systems(
             Update,
             (
                 input::pause_input,
                 input::selection_input,
                 input::order_input,
+                input::stance_input,
                 input::train_input,
                 input::build_input,
+                input::order_mode_input,
+                input::targeting_input,
                 input::placement_input,
                 // F2 sandbox spawn issues a Spawn command, so it counts as input too.
                 debug::spawn_debug,
             )
+                .chain()
                 .run_if(in_state(GameState::InGame).and(not(resource_exists::<ReplayPlayback>))),
         )
         // Viewing, HUD, debug, and rendering run for both live games and playback.
@@ -148,7 +157,8 @@ pub fn run() {
                 hud::leave_button,
                 debug::toggle_debug,
                 debug::debug_readout,
-                render::draw_grid,
+                debug::draw_grid,
+                debug::draw_orders,
                 (
                     render::attach_sprites,
                     render::interpolate_sprites,

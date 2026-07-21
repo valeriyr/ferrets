@@ -26,6 +26,7 @@ use ferrets_simulation::{
         order_queue::OrderQueueComponent,
         owner::OwnerComponent,
         resource::{ResourceCarrierComponent, ResourceSourceComponent},
+        stance::StanceComponent,
         train::TrainQueueComponent,
     },
     entity_index::EntityIndex,
@@ -290,6 +291,9 @@ fn entity_view(entity: &EntityRef, id: SimulationId, hidden: bool) -> EntityView
             .get::<TrainQueueComponent>()
             .map_or_else(Vec::new, |queue| queue.0.iter().cloned().collect()),
         under_construction: entity.contains::<UnderConstructionComponent>(),
+        stance: entity
+            .get::<StanceComponent>()
+            .map(|stance| stance.0.name().to_string()),
         resource_amount: entity
             .get::<ResourceSourceComponent>()
             .map(|source| source.amount),

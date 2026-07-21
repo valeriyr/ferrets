@@ -4,14 +4,38 @@ use ferrets_math::fixed_uvec2::FixedUVec2;
 
 use crate::simulation_id::SimulationId;
 
+/// Bounds an automatic engagement: the fight ends when the target strays
+/// farther than `radius` grid cells from `anchor`.
+#[derive(Debug, Clone, Copy)]
+pub struct Leash {
+    /// The position the engagement started from.
+    pub anchor: FixedUVec2,
+    /// How far from `anchor` the target may stray before the fight is broken off.
+    pub radius: u32,
+}
+
 /// An order an entity is executing or waiting to execute.
 #[derive(Debug, Clone)]
 pub enum Order {
     /// Move to within `range` grid cells of a world-space position in simulation
     /// coordinates. `range` of `0` requires reaching the exact cell.
     Move { target: FixedUVec2, range: u32 },
-    /// Attack the entity with the given id until it dies or becomes unreachable.
-    Attack { target: SimulationId },
+    /// Attack the entity with the given id until it dies or becomes
+    /// unreachable. A leash additionally breaks the attack off when the target
+    /// strays too far — automatic engagements set one, explicit ones do not.
+    Attack {
+        target: SimulationId,
+        leash: Option<Leash>,
+    },
+    /// Move to a world-space position, engaging hostiles noticed on the way
+    /// and resuming toward the position after each fight.
+    AttackMove { target: FixedUVec2 },
+    /// Walk back and forth between the position the order started at and
+    /// `target`, engaging hostiles noticed on the way, until cancelled.
+    Patrol { target: FixedUVec2 },
+    /// Stay near the entity with the given id and engage hostiles that
+    /// threaten it or come close, until it is gone.
+    Guard { target: SimulationId },
     /// Stay within one cell of the entity with the given id, chasing it as it
     /// moves, until it is gone.
     Follow { target: SimulationId },
@@ -42,7 +66,43 @@ impl Order {
     /// If this order is an attack order, returns the target id. Otherwise, returns `None`.
     pub fn attack_target(&self) -> Option<SimulationId> {
         match self {
-            Order::Attack { target } => Some(*target),
+            Order::Attack { target, .. } => Some(*target),
+            _ => None,
+        }
+    }
+
+    /// If this order is an attack order with a leash, returns the leash.
+    /// Otherwise, returns `None`.
+    pub fn attack_leash(&self) -> Option<Leash> {
+        match self {
+            Order::Attack { leash, .. } => *leash,
+            _ => None,
+        }
+    }
+
+    /// If this order is an attack-move order, returns the target position.
+    /// Otherwise, returns `None`.
+    pub fn attack_move_target(&self) -> Option<FixedUVec2> {
+        match self {
+            Order::AttackMove { target } => Some(*target),
+            _ => None,
+        }
+    }
+
+    /// If this order is a patrol order, returns the target position. Otherwise,
+    /// returns `None`.
+    pub fn patrol_target(&self) -> Option<FixedUVec2> {
+        match self {
+            Order::Patrol { target } => Some(*target),
+            _ => None,
+        }
+    }
+
+    /// If this order is a guard order, returns the guarded entity's id.
+    /// Otherwise, returns `None`.
+    pub fn guard_target(&self) -> Option<SimulationId> {
+        match self {
+            Order::Guard { target } => Some(*target),
             _ => None,
         }
     }

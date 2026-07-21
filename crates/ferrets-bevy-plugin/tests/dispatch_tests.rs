@@ -3,6 +3,7 @@
 
 mod utils;
 
+use ferrets_pathfinder::astar;
 use ferrets_simulation::{
     command::PlayerCommand, components::resource::ResourceSourceComponent,
     resources::PlayerResources, spawn,
@@ -56,7 +57,7 @@ fn send_to_entity_falls_through_to_follow_for_uncarryable_kinds() {
     utils::run_ticks(&mut app, 11);
     {
         let world = app.world_mut();
-        assert!(utils::chebyshev(utils::cell_of(world, worker), utils::cell_of(world, tree)) <= 1);
+        assert!(astar::chebyshev(utils::cell_of(world, worker), utils::cell_of(world, tree)) <= 1);
     }
 
     // Nothing was harvested: the stockpile and the source are untouched.

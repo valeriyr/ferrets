@@ -11,6 +11,7 @@ use ferrets_network::message::{Message, decode, encode};
 use ferrets_network::session_mode::SessionMode;
 use ferrets_simulation::command::PlayerCommand;
 use ferrets_simulation::components::rally::RallyTarget;
+use ferrets_simulation::components::stance::Stance;
 use ferrets_simulation::input::PlayerFrame;
 use ferrets_simulation::session::drop_policy::DropPolicy;
 use ferrets_simulation::session::finish_policy::FinishPolicy;
@@ -154,6 +155,21 @@ fn every_command_frames() -> Message {
             PlayerCommand::SetRallyPoint {
                 entity: SimulationId(4),
                 target: None,
+            },
+            PlayerCommand::AttackMove {
+                target: pos(11, 3),
+                flush: true,
+            },
+            PlayerCommand::Patrol {
+                target: pos(7, 14),
+                flush: false,
+            },
+            PlayerCommand::Guard {
+                target: SimulationId(5),
+                flush: true,
+            },
+            PlayerCommand::SetStance {
+                stance: Stance::HoldFire,
             },
             PlayerCommand::BuildEntity {
                 builder: SimulationId(4),

@@ -4,18 +4,22 @@
 //! optional behaviors (movement, combat, …) are expressed by component presence.
 
 pub mod attack;
+pub mod attack_move;
 pub mod build;
 pub mod dying;
 pub mod entity_info;
 pub mod follow;
+pub mod guard;
 pub mod health;
 pub mod hidden;
 pub mod location;
 pub mod movement;
 pub mod order_queue;
 pub mod owner;
+pub mod patrol;
 pub mod pending_reveal;
 pub mod rally;
 pub mod resource;
+pub mod stance;
 pub mod tags;
 pub mod train;

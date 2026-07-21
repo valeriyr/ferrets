@@ -30,11 +30,32 @@ fn loads_races_resources_and_entities() {
         .with_movement(FixedU64::from_str("0.3").unwrap())
         .with_health(40)
         .with_dying(2, None)
-        .with_attack(6, 4, 3, 4)
+        .with_attack(6, 4, 4, 3, 4)
         .with_cost([("gold", 80)])
         .with_train_time(60);
 
     assert_eq!(registry.entity("archer"), Some(&expected));
+}
+
+#[test]
+fn declared_acquire_range_overrides_weapon_range_default() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+
+        define_entity("scout", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            health = 20,
+            attack = { damage = 2, range = 3, acquire_range = 7, aiming = 2, reloading = 2 },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("load content");
+
+    let expected = EntityTypeDef::new("scout")
+        .with_location(LayerId::new(1), NavSize::ONE, Solidity::Solid)
+        .with_health(20)
+        .with_attack(2, 3, 7, 2, 2);
+
+    assert_eq!(registry.entity("scout"), Some(&expected));
 }
 
 #[test]

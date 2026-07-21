@@ -10,6 +10,7 @@ use ferrets_math::fixed_uvec2::FixedUVec2;
 use ferrets_pathfinder::nav_pos::NavPos;
 use ferrets_simulation::command::PlayerCommand;
 use ferrets_simulation::components::rally::RallyTarget;
+use ferrets_simulation::components::stance::Stance;
 use ferrets_simulation::simulation_id::SimulationId;
 use mlua::{Table, Value};
 
@@ -73,6 +74,21 @@ fn command(table: &Table, index: usize) -> crate::Result<PlayerCommand> {
             target: SimulationId(integer(table, index, "target")?),
             flush: flush(table, index)?,
         }),
+        "attack_move" => Ok(PlayerCommand::AttackMove {
+            target: cell(integer(table, index, "x")?, integer(table, index, "y")?),
+            flush: flush(table, index)?,
+        }),
+        "patrol" => Ok(PlayerCommand::Patrol {
+            target: cell(integer(table, index, "x")?, integer(table, index, "y")?),
+            flush: flush(table, index)?,
+        }),
+        "guard" => Ok(PlayerCommand::Guard {
+            target: SimulationId(integer(table, index, "target")?),
+            flush: flush(table, index)?,
+        }),
+        "stance" => Ok(PlayerCommand::SetStance {
+            stance: stance(table, index)?,
+        }),
         "send" => Ok(PlayerCommand::SendToEntity {
             target: SimulationId(integer(table, index, "target")?),
             flush: flush(table, index)?,
@@ -99,6 +115,22 @@ fn command(table: &Table, index: usize) -> crate::Result<PlayerCommand> {
 /// World position of the cell's origin corner.
 fn cell(x: u32, y: u32) -> FixedUVec2 {
     FixedUVec2::from(NavPos::new(x, y))
+}
+
+/// The `stance` field of a stance command, by name.
+fn stance(table: &Table, index: usize) -> crate::Result<Stance> {
+    let name: String = field(table, index, "stance")?;
+    match name.as_str() {
+        "flee" => Ok(Stance::Flee),
+        "hold_fire" => Ok(Stance::HoldFire),
+        "stand_ground" => Ok(Stance::StandGround),
+        "defend" => Ok(Stance::Defend),
+        other => Err(field_error(
+            index,
+            "stance",
+            &format!("unknown stance '{other}'"),
+        )),
+    }
 }
 
 /// The rally target of a `rally` command: `target` names an entity, `x`/`y` a

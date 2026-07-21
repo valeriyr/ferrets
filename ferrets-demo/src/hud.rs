@@ -9,6 +9,7 @@ use ferrets_simulation::{
         health::{HealthComponent, HealthStaticData},
         owner::OwnerComponent,
         resource::{ResourceCarrierComponent, ResourceSourceComponent, ResourceSourceStaticData},
+        stance::StanceComponent,
         train::TrainStaticData,
     },
     resources::PlayerResources,
@@ -244,8 +245,9 @@ pub fn update_help(
     )>,
     mut text: Query<&mut Text, With<HelpText>>,
 ) {
-    let mut message =
-        String::from("LMB select | drag box-select | RMB move/harvest/attack | F1 grid | F2 spawn");
+    let mut message = String::from(
+        "LMB select | RMB move/harvest/attack | F attack-move | R patrol | G guard | X stance | F1 debug | F2 spawn",
+    );
 
     let local = session.local_player();
     if let Some(&id) = selection.get(local).first()
@@ -287,6 +289,7 @@ pub fn update_selection(
         Option<&ResourceCarrierComponent>,
         Option<&ResourceSourceComponent>,
         Option<&ResourceSourceStaticData>,
+        Option<&StanceComponent>,
     )>,
     mut text: Query<&mut Text, With<SelectionText>>,
 ) {
@@ -297,7 +300,7 @@ pub fn update_selection(
             .iter()
             .find(|(info, ..)| info.id() == *id)
             .map(
-                |(info, health, health_data, carrier, source, source_data)| {
+                |(info, health, health_data, carrier, source, source_data, stance)| {
                     let mut parts = vec![pretty_name(info.type_name())];
                     if let (Some(health), Some(health_data)) = (health, health_data) {
                         parts.push(format!(
@@ -313,6 +316,9 @@ pub fn update_selection(
                     }
                     if let (Some(source), Some(source_data)) = (source, source_data) {
                         parts.push(format!("{} {} left", source.amount, source_data.kind()));
+                    }
+                    if let Some(StanceComponent(stance)) = stance {
+                        parts.push(format!("stance: {}", stance.name().replace('_', " ")));
                     }
                     parts.join("   ")
                 },

@@ -2,18 +2,22 @@
 //! Called by [`super::orders`] as part of the shared order lifecycle.
 
 use bevy_ecs::{entity::Entity, world::World};
+use ferrets_pathfinder::{astar, nav_pos::NavPos};
 
 use super::chase::{self, Destination};
 use super::orders::Processing;
 use crate::{
     components::{
         attack::{AttackComponent, AttackStaticData},
+        entity_info::EntityInfoComponent,
         health::HealthComponent,
-        location::LocationComponent,
+        location::{LocationComponent, LocationStaticData},
         order_queue::{CancelPolicy, OrderState},
     },
     entity_index::EntityIndex,
+    map::Map,
     order::Order,
+    session::GameSession,
     spawn,
 };
 
@@ -66,7 +70,8 @@ pub fn cancel_processing(
 /// Advance an Attack order by one tick.
 ///
 /// Each tick:
-/// 1. If the target is gone or dying, the order finishes.
+/// 1. If the target is gone or dying, the order finishes. A leashed attack also
+///    finishes when the target has strayed beyond the leash.
 /// 2. If the target is out of range, the swing resets and a chase move toward the
 ///    target's current position is requested as a sub-order (the entry suspends).
 ///    The order finishes instead when the previous chase ended without the entity
@@ -105,6 +110,25 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
         .position;
     let attack_data = *world.entity(entity).get::<AttackStaticData>().unwrap();
 
+    if let Some(leash) = order.attack_leash() {
+        let target_size = world
+            .entity(target)
+            .get::<LocationStaticData>()
+            .unwrap()
+            .size();
+        // Footprint-based like every range check, so leashes measure the same
+        // distances acquisition did.
+        if !astar::in_range_of_rect(
+            world.resource::<Map>().projection(),
+            NavPos::from(leash.anchor),
+            NavPos::from(target_position),
+            target_size,
+            leash.radius,
+        ) {
+            return Processing::state(OrderState::Finished);
+        }
+    }
+
     match chase::advance_to_entity(
         &mut attack_component.last_chase,
         world,
@@ -127,9 +151,16 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
     attack_component.phase += 1;
 
     if attack_component.phase == attack_data.aiming() {
+        let attacker_id = world
+            .entity(entity)
+            .get::<EntityInfoComponent>()
+            .unwrap()
+            .id();
+        let tick = world.resource::<GameSession>().tick();
         let mut target_died = false;
         if let Some(mut health) = world.entity_mut(target).get_mut::<HealthComponent>() {
             health.apply_damage(attack_data.damage());
+            health.record_hit(attacker_id, tick);
             target_died = health.is_dead();
         }
         if target_died {

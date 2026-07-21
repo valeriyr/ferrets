@@ -168,13 +168,15 @@ pub const AI_SCRIPT: &str = r#"
                 end
             end
 
-            -- Attack with every idle soldier once the wave is big enough.
+            -- Attack-move every idle soldier onto the nearest enemy once the
+            -- wave is big enough — the push engages whatever it meets.
             if #soldiers >= ARMY_ATTACK_AT and #view.enemy_entities > 0 then
                 for _, s in ipairs(soldiers) do
                     if s.idle then
                         local target = nearest(s, view.enemy_entities)
                         commands[#commands + 1] = { kind = "select", id = s.id }
-                        commands[#commands + 1] = { kind = "attack", target = target.id }
+                        commands[#commands + 1] =
+                            { kind = "attack_move", x = target.x, y = target.y }
                     end
                 end
             end

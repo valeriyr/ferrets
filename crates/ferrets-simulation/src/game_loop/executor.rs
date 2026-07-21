@@ -10,7 +10,7 @@ use crate::{
     command::PlayerCommand,
     components::{
         attack::AttackStaticData,
-        build::BuilderStaticData,
+        build::{BuilderStaticData, UnderConstructionComponent},
         health::HealthComponent,
         location::LocationComponent,
         order_queue::{CancelPolicy, OrderQueueComponent},
@@ -20,6 +20,7 @@ use crate::{
             ResourceCarrierComponent, ResourceCarrierStaticData, ResourceSourceComponent,
             ResourceSourceStaticData, ResourceStorageStaticData,
         },
+        stance::StanceComponent,
         train::{TrainQueueComponent, TrainStaticData},
     },
     content::registry::ContentRegistry,
@@ -115,9 +116,61 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
                 push_order(
                     world,
                     entity,
-                    Order::Attack { target: *target },
+                    Order::Attack {
+                        target: *target,
+                        leash: None,
+                    },
                     CancelPolicy::from_bool(*flush),
                 );
+            }
+        }
+        PlayerCommand::AttackMove { target, flush } => {
+            for entity in commanded_selection(world, player) {
+                push_order(
+                    world,
+                    entity,
+                    Order::AttackMove { target: *target },
+                    CancelPolicy::from_bool(*flush),
+                );
+            }
+        }
+        PlayerCommand::Patrol { target, flush } => {
+            for entity in commanded_selection(world, player) {
+                push_order(
+                    world,
+                    entity,
+                    Order::Patrol { target: *target },
+                    CancelPolicy::from_bool(*flush),
+                );
+            }
+        }
+        PlayerCommand::Guard { target, flush } => {
+            let Some(ward) = world.resource::<EntityIndex>().interactable(world, *target) else {
+                return;
+            };
+            // Guarding is for own, allied, and neutral wards — a hostile ward
+            // would immediately become the guard's own scan target.
+            if let Some(owner) = world.entity(ward).get::<OwnerComponent>()
+                && !world
+                    .resource::<GameSession>()
+                    .are_allied(player, owner.player())
+            {
+                return;
+            }
+            for entity in commanded_selection_excluding(world, player, *target) {
+                push_order(
+                    world,
+                    entity,
+                    Order::Guard { target: *target },
+                    CancelPolicy::from_bool(*flush),
+                );
+            }
+        }
+        PlayerCommand::SetStance { stance } => {
+            for entity in commanded_selection(world, player) {
+                if let Some(mut current) = world.entity_mut(entity).get_mut::<StanceComponent>() {
+                    current.0 = *stance;
+                }
             }
         }
         PlayerCommand::SendToEntity { target, flush } => {
@@ -260,7 +313,10 @@ pub(super) fn resolve_send_to_entity(
         && entity_ref.contains::<AttackStaticData>()
         && target_ref.contains::<HealthComponent>()
     {
-        return Some(Order::Attack { target: target_id });
+        return Some(Order::Attack {
+            target: target_id,
+            leash: None,
+        });
     }
 
     Some(Order::Follow { target: target_id })
@@ -272,6 +328,13 @@ fn train_entity(world: &mut World, player: PlayerId, trainer: SimulationId, type
     let Some(entity) = find_owned_interactable(world, player, trainer) else {
         return;
     };
+    // A building still being constructed cannot produce yet.
+    if world
+        .entity(entity)
+        .contains::<UnderConstructionComponent>()
+    {
+        return;
+    }
     if !world
         .entity(entity)
         .get::<TrainStaticData>()

@@ -6,9 +6,11 @@ use ferrets_simulation::{
 };
 
 /// Advances every alive entity's order queue by one tick: first prepares each
-/// front order, then processes it.
+/// front order, then lets suspended watchers interrupt their sub-orders, then
+/// processes the front.
 pub fn tick_orders(world: &mut World) {
     prepare(world);
+    watch(world);
     process(world);
 }
 
@@ -22,6 +24,21 @@ fn prepare(world: &mut World) {
             continue;
         };
         game_loop::orders::prepare_tick(entity, &mut queue, world);
+        world.entity_mut(entity).insert(queue);
+    }
+}
+
+/// Give every alive entity's suspended watcher (if any) a chance to interrupt
+/// the running sub-order.
+fn watch(world: &mut World) {
+    for entity in alive_entities(world) {
+        if world.entity(entity).contains::<DyingComponent>() {
+            continue;
+        }
+        let Some(mut queue) = world.entity_mut(entity).take::<OrderQueueComponent>() else {
+            continue;
+        };
+        game_loop::orders::watch_tick(entity, &mut queue, world);
         world.entity_mut(entity).insert(queue);
     }
 }

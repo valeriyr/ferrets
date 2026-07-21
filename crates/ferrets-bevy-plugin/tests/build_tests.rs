@@ -3,7 +3,7 @@
 mod utils;
 
 use bevy::prelude::*;
-use ferrets_pathfinder::nav_pos::NavPos;
+use ferrets_pathfinder::{astar, nav_pos::NavPos};
 use ferrets_simulation::{
     command::PlayerCommand,
     components::{
@@ -62,7 +62,7 @@ fn build_constructs_building() {
 
     let worker_cell = utils::cell_of(world, worker);
     let nearest = NavPos::new(worker_cell.x.clamp(10, 11), worker_cell.y.clamp(10, 11));
-    assert!(utils::chebyshev(worker_cell, nearest) <= 1);
+    assert!(astar::chebyshev(worker_cell, nearest) <= 1);
     utils::run_ticks(&mut app, 1);
     assert!(utils::order_queue_is_empty(app.world_mut(), worker));
 

@@ -114,13 +114,15 @@ fn three_peers_stay_in_lockstep_over_full_mesh() {
         .collect();
 
     // Every peer issues its own spawn, so all three players contribute frames
-    // that must cross the mesh and execute identically everywhere.
+    // that must cross the mesh and execute identically everywhere. The spawns
+    // sit outside one another's acquisition range so the hostile soldiers
+    // stand instead of thinning the count this test asserts.
     for (i, app) in apps.iter_mut().enumerate() {
         utils::push_command(
             app,
             PlayerCommand::Spawn {
                 type_name: "soldier".into(),
-                position: utils::pos(10 + i as u32, 10),
+                position: utils::pos(10 + 4 * i as u32, 10),
             },
         );
     }
@@ -1366,7 +1368,7 @@ fn harness_soldier() -> EntityTypeDef {
         .with_movement(FixedU64::from_num(0.5))
         .with_health(30)
         .with_dying(2, None)
-        .with_attack(10, 1, 2, 2)
+        .with_attack(10, 1, 1, 2, 2)
 }
 
 /// A standing building — the presence the `LastStanding` rule counts. Immobile,

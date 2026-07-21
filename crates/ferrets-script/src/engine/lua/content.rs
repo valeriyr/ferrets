@@ -116,9 +116,13 @@ fn build_entity(name: &str, table: &Table) -> crate::Result<EntityTypeDef> {
         def = def.with_dying(time, corpse.as_deref());
     }
     if let Some(attack) = optional::<Table>(table, "attack")? {
+        let range = required::<u32>(&attack, "range")?;
+        // Content may omit the acquisition range; the weapon range is the default.
+        let acquire_range = optional::<u32>(&attack, "acquire_range")?.unwrap_or(range);
         def = def.with_attack(
             required::<u32>(&attack, "damage")?,
-            required::<u32>(&attack, "range")?,
+            range,
+            acquire_range,
             required::<u32>(&attack, "aiming")?,
             required::<u32>(&attack, "reloading")?,
         );

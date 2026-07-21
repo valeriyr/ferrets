@@ -5,6 +5,7 @@ use bevy::prelude::*;
 use ferrets_bevy_plugin::{PendingInput, SimulationPlugin};
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_pathfinder::{
+    astar,
     astar::Projection,
     nav_grid::{LayerId, NavGrid},
     nav_pos::NavPos,
@@ -138,11 +139,6 @@ pub fn cell_of(world: &mut World, entity: Entity) -> NavPos {
     NavPos::from(world.get::<LocationComponent>(entity).unwrap().position)
 }
 
-/// Chebyshev distance — maximum of horizontal and vertical distances.
-pub fn chebyshev(a: NavPos, b: NavPos) -> u32 {
-    a.x.abs_diff(b.x).max(a.y.abs_diff(b.y))
-}
-
 /// The entities of the given content type owned by `player`.
 pub fn owned_of_type(world: &mut World, type_name: &str, player: PlayerId) -> Vec<Entity> {
     world
@@ -176,7 +172,7 @@ pub fn assert_adjacent_to_footprint(world: &mut World, unit: Entity, building: E
         unit_cell.y.clamp(origin.y, origin.y + size.height - 1),
     );
     assert!(
-        chebyshev(unit_cell, nearest) <= 1,
+        astar::chebyshev(unit_cell, nearest) <= 1,
         "expected {unit_cell:?} adjacent to the footprint at {origin:?}"
     );
 }
@@ -209,7 +205,7 @@ pub fn combat_app() -> App {
                 .with_movement(FixedU64::from_num(0.5))
                 .with_health(50)
                 .with_dying(3, None)
-                .with_attack(10, 1, 2, 2),
+                .with_attack(10, 1, 1, 2, 2),
         );
         // Registered before `dummy`, which leaves it as a corpse.
         registry.register(
@@ -256,7 +252,7 @@ pub fn register_orders_content(app: &mut App) {
                 .with_movement(FixedU64::from_num(0.5))
                 .with_health(30)
                 .with_dying(2, None)
-                .with_attack(10, 1, 2, 2)
+                .with_attack(10, 1, 1, 2, 2)
                 .with_cost([("gold", 30)])
                 .with_train_time(4),
         );
@@ -324,6 +320,25 @@ pub fn register_orders_content(app: &mut App) {
                 .with_location(GROUND, NavSize::ONE, Solidity::Passable)
                 .with_movement(FixedU64::from_num(0.5))
                 .with_health(20),
+        );
+        // A soldier variant that notices enemies well beyond its weapon range,
+        // for the stance and auto-engagement suites.
+        registry.register(
+            EntityTypeDef::new("sentry")
+                .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+                .with_movement(FixedU64::from_num(0.5))
+                .with_health(30)
+                .with_dying(2, None)
+                .with_attack(10, 1, 5, 2, 2),
+        );
+        // A ranged sentry, for suites that need hits without an adjacent chaser.
+        registry.register(
+            EntityTypeDef::new("archer")
+                .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+                .with_movement(FixedU64::from_num(0.5))
+                .with_health(30)
+                .with_dying(2, None)
+                .with_attack(10, 3, 5, 2, 2),
         );
     }
     app.world_mut().resource::<ContentRegistry>().validate();

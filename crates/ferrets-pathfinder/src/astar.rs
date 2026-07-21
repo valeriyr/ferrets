@@ -168,7 +168,7 @@ fn heuristic(projection: Projection, from: NavPos, to: NavPos, stop_distance: u3
 }
 
 /// Chebyshev distance — maximum of horizontal and vertical distances between two positions.
-fn chebyshev(a: NavPos, b: NavPos) -> u32 {
+pub fn chebyshev(a: NavPos, b: NavPos) -> u32 {
     a.x.abs_diff(b.x).max(a.y.abs_diff(b.y))
 }
 

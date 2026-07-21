@@ -270,7 +270,7 @@ fn register_rejects_corpse_with_live_gameplay_data() {
         EntityTypeDef::new("bones")
             .with_location(GROUND, NavSize::ONE, Solidity::Solid)
             .with_health(10)
-            .with_attack(1, 1, 1, 1)
+            .with_attack(1, 1, 1, 1, 1)
             .with_dying(2, None),
     );
     registry.register(

@@ -78,6 +78,7 @@ fn entity(type_name: &str, under_construction: bool) -> EntityView {
         carrying: None,
         train_queue: Vec::new(),
         under_construction,
+        stance: None,
         resource_amount: None,
     }
 }
