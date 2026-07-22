@@ -18,7 +18,7 @@ fn send_to_entity_attacks_hostiles() {
     let (enemy, enemy_id) =
         spawn::spawn_entity(world, "soldier", utils::pos(7, 5), Some(1)).unwrap();
 
-    utils::push_command(&mut app, PlayerCommand::SelectById { id: attacker_id });
+    utils::select(&mut app, attacker_id);
     utils::push_command(
         &mut app,
         PlayerCommand::SendToEntity {
@@ -45,7 +45,7 @@ fn send_to_entity_falls_through_to_follow_for_uncarryable_kinds() {
         .amount = 10;
 
     // The worker carries only gold, so a wood source resolves to a follow.
-    utils::push_command(&mut app, PlayerCommand::SelectById { id: worker_id });
+    utils::select(&mut app, worker_id);
     utils::push_command(
         &mut app,
         PlayerCommand::SendToEntity {

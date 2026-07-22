@@ -12,6 +12,18 @@ const PAN_SPEED: f32 = 700.0;
 const MIN_ZOOM: f32 = 0.7;
 const MAX_ZOOM: f32 = 2.0;
 
+/// Clamps a camera translation so the view stays within the map bounds (Bevy y
+/// points up, the map down). Shared by pan/zoom and any programmatic recenter.
+pub fn clamp_to_map(translation: Vec3, map: &Map) -> Vec3 {
+    let max_x = map.width() as f32 * CELL_PX;
+    let min_y = -(map.height() as f32 * CELL_PX);
+    Vec3::new(
+        translation.x.clamp(0.0, max_x),
+        translation.y.clamp(min_y, 0.0),
+        translation.z,
+    )
+}
+
 /// Spawns the 2D camera. It is framed on the local player's base once the game
 /// starts (see [`frame_local_player`]); the local player isn't known yet here.
 pub fn spawn_camera(mut commands: Commands) {
@@ -65,11 +77,7 @@ pub fn pan_zoom(
         transform.translation += (dir.normalize() * PAN_SPEED * time.delta_secs()).extend(0.0);
     }
 
-    // Keep the camera centered within the map (Bevy y points up, the map down).
-    let max_x = map.width() as f32 * CELL_PX;
-    let min_y = -(map.height() as f32 * CELL_PX);
-    transform.translation.x = transform.translation.x.clamp(0.0, max_x);
-    transform.translation.y = transform.translation.y.clamp(min_y, 0.0);
+    transform.translation = clamp_to_map(transform.translation, &map);
 
     if scroll.delta.y != 0.0
         && let Projection::Orthographic(ortho) = &mut *projection

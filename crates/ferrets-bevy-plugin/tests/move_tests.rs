@@ -29,7 +29,7 @@ fn passable_entities_never_claim_cells() {
 
     // The ghost walks away — it collides with the world for pathing, but its
     // crossings leave no occupancy trail.
-    utils::push_command(&mut app, PlayerCommand::SelectById { id: ghost_id });
+    utils::select(&mut app, ghost_id);
     utils::push_command(
         &mut app,
         PlayerCommand::Move {

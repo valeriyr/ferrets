@@ -48,6 +48,9 @@ pub fn run() {
         .init_resource::<time::TickTimer>()
         .init_resource::<input::DragStart>()
         .init_resource::<input::InputMode>()
+        .init_resource::<input::Primary>()
+        .init_resource::<input::LastClick>()
+        .init_resource::<input::LastRecall>()
         .init_resource::<debug::DebugState>()
         // Camera and content exist for every screen; the game scene is set up on
         // entering InGame once the lobby has configured the session.
@@ -128,11 +131,18 @@ pub fn run() {
         .add_systems(
             Update,
             (
+                input::track_primary,
                 input::pause_input,
                 input::selection_input,
                 input::order_input,
                 input::stance_input,
-                input::train_input,
+                input::control_group_input,
+                // HUD button clicks emit commands / set placement mode, so they
+                // belong to the live-input phase and are silenced during replay
+                // (unlike the display-only HUD systems in the viewing group).
+                hud::command_card_input,
+                hud::build_card_input,
+                hud::group_roster_input,
                 input::build_input,
                 input::order_mode_input,
                 input::targeting_input,
@@ -150,6 +160,8 @@ pub fn run() {
                 camera::pan_zoom,
                 hud::update_resources,
                 hud::update_help,
+                hud::update_command_card,
+                hud::update_group_roster,
                 hud::update_selection,
                 hud::update_objectives,
                 hud::update_game_over,

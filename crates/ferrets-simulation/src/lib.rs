@@ -4,6 +4,7 @@ pub mod checksum;
 pub mod command;
 pub mod components;
 pub mod content;
+pub mod control_groups;
 pub mod entity_index;
 pub mod game_loop;
 pub mod input;

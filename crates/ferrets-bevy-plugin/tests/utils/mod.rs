@@ -12,7 +12,7 @@ use ferrets_pathfinder::{
     nav_size::NavSize,
 };
 use ferrets_simulation::{
-    command::PlayerCommand,
+    command::{PlayerCommand, SelectMode},
     components::{
         entity_info::EntityInfoComponent,
         location::{LocationComponent, LocationStaticData, Solidity},
@@ -24,6 +24,7 @@ use ferrets_simulation::{
     input::{InputFrames, PlayerFrame},
     map::Map,
     resources::PlayerResources,
+    selection::Selection,
     session::{
         GameSession,
         ai_hosting::AiHosting,
@@ -33,6 +34,7 @@ use ferrets_simulation::{
         player_slot::{PlayerId, PlayerSlot},
         player_type::PlayerType,
     },
+    simulation_id::SimulationId,
 };
 
 /// The single navigation layer the harness content declares.
@@ -79,6 +81,61 @@ pub fn pos(x: u32, y: u32) -> FixedUVec2 {
 
 pub fn push_command(app: &mut App, command: PlayerCommand) {
     app.world_mut().resource_mut::<PendingInput>().push(command);
+}
+
+/// Selects `id` for the local player, replacing the current selection — the
+/// setup most order suites need before issuing a command.
+pub fn select(app: &mut App, id: SimulationId) {
+    push_command(
+        app,
+        PlayerCommand::SelectById {
+            id,
+            mode: SelectMode::Replace,
+        },
+    );
+}
+
+/// Ticks needed for a queued command to reach the simulation (see `SYNC_LATENCY`).
+pub const APPLY: u32 = 3;
+
+/// The local player's (player 0) current selection.
+pub fn selection(app: &App) -> Vec<SimulationId> {
+    app.world().resource::<Selection>().get(0).to_vec()
+}
+
+/// Two-player app for the selection and control-group suites: an armed unit, a
+/// one-hit-kill `critter` (for group pruning), and a tagged `keep` building.
+pub fn selection_app() -> App {
+    let mut app = make_app(vec![
+        PlayerSlot::occupied(0, PlayerType::Human, None, None),
+        PlayerSlot::occupied(1, PlayerType::Human, None, None),
+    ]);
+    {
+        let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
+        registry.register(
+            EntityTypeDef::new("soldier")
+                .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+                .with_movement(FixedU64::from_num(0.5))
+                .with_health(30)
+                .with_dying(1, None)
+                .with_attack(10, 1, 3, 1, 1),
+        );
+        registry.register(
+            EntityTypeDef::new("critter")
+                .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+                .with_health(1)
+                .with_dying(1, None),
+        );
+        registry.register(
+            EntityTypeDef::new("keep")
+                .with_location(GROUND, NavSize::new(2, 2), Solidity::Solid)
+                .with_health(100)
+                .with_tags(["building"]),
+        );
+    }
+    app.world_mut().resource::<ContentRegistry>().validate();
+    app.world_mut().resource_mut::<GameSession>().start();
+    app
 }
 
 /// Runs exactly `ticks` fixed updates.

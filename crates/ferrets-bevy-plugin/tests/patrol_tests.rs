@@ -18,7 +18,7 @@ fn patrol_ping_pongs_between_endpoints() {
     let (sentry, sentry_id) =
         spawn::spawn_entity(world, "sentry", utils::pos(5, 10), Some(0)).unwrap();
 
-    utils::push_command(&mut app, PlayerCommand::SelectById { id: sentry_id });
+    utils::select(&mut app, sentry_id);
     utils::push_command(
         &mut app,
         PlayerCommand::Patrol {
@@ -54,7 +54,7 @@ fn patrol_engages_en_route_and_resumes_route() {
         spawn::spawn_entity(world, "sentry", utils::pos(5, 10), Some(0)).unwrap();
     let (barracks, _) = spawn::spawn_entity(world, "barracks", utils::pos(8, 12), Some(1)).unwrap();
 
-    utils::push_command(&mut app, PlayerCommand::SelectById { id: sentry_id });
+    utils::select(&mut app, sentry_id);
     utils::push_command(
         &mut app,
         PlayerCommand::Patrol {

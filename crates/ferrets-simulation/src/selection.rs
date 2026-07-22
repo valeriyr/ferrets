@@ -24,6 +24,35 @@ impl Selection {
         self.0[player as usize] = ids;
     }
 
+    /// Adds `ids` to the current selection for `player`, keeping existing order
+    /// and skipping any already present.
+    pub fn add(&mut self, player: PlayerId, ids: &[SimulationId]) {
+        let selection = &mut self.0[player as usize];
+        for &id in ids {
+            if !selection.contains(&id) {
+                selection.push(id);
+            }
+        }
+    }
+
+    /// Flips each of `ids` in the current selection for `player`: a present id is
+    /// removed, an absent id is appended.
+    pub fn toggle(&mut self, player: PlayerId, ids: &[SimulationId]) {
+        let selection = &mut self.0[player as usize];
+        for &id in ids {
+            if let Some(pos) = selection.iter().position(|&s| s == id) {
+                selection.remove(pos);
+            } else {
+                selection.push(id);
+            }
+        }
+    }
+
+    /// Removes each of `ids` from the current selection for `player`.
+    pub fn subtract(&mut self, player: PlayerId, ids: &[SimulationId]) {
+        self.0[player as usize].retain(|s| !ids.contains(s));
+    }
+
     /// Removes `id` from every player's selection.
     ///
     /// Selections are independent per-player views and not exclusive: several

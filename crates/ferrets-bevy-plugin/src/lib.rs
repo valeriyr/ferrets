@@ -79,6 +79,7 @@ use std::sync::Mutex;
 use bevy::prelude::*;
 use ferrets_simulation::{
     content::registry::ContentRegistry,
+    control_groups::ControlGroups,
     entity_index::EntityIndex,
     input::{InputFrames, PlayerFrame, SYNC_LATENCY},
     map::Map,
@@ -131,6 +132,7 @@ pub fn install_game_resources(world: &mut World) {
     let player_count = session.slots().len();
     let frames = warmup_input_frames(session.slots());
     world.insert_resource(Selection::new(player_count));
+    world.insert_resource(ControlGroups::new(player_count));
     world.insert_resource(PlayerResources::new(player_count));
     world.insert_resource(frames);
 }
@@ -161,6 +163,7 @@ impl Plugin for SimulationPlugin {
         app.insert_resource(session)
             .insert_resource(map)
             .insert_resource(Selection::new(player_count))
+            .insert_resource(ControlGroups::new(player_count))
             .insert_resource(PlayerResources::new(player_count))
             .insert_resource(frames)
             .init_resource::<ContentRegistry>()

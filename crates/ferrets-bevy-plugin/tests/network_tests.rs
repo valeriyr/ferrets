@@ -1019,7 +1019,7 @@ fn lone_winner_victory_past_drop_replays_to_same_result() {
 
     // Player 0 sends its soldier onto player 1's base while the phantom stays
     // silent: the short grace lands the drop first, the kill ends the game.
-    utils::push_command(&mut host, PlayerCommand::SelectById { id: attacker });
+    utils::select(&mut host, attacker);
     utils::push_command(
         &mut host,
         PlayerCommand::SendToEntity {
@@ -1109,7 +1109,7 @@ fn non_drop_victory_replays_to_same_result() {
     ferrets_bevy_plugin::install_replay_recorder(record_app.world_mut(), recorder);
 
     let (attacker, enemy) = spawn_combatants(&mut record_app);
-    utils::push_command(&mut record_app, PlayerCommand::SelectById { id: attacker });
+    utils::select(&mut record_app, attacker);
     utils::push_command(
         &mut record_app,
         PlayerCommand::SendToEntity {
@@ -1181,7 +1181,7 @@ fn eliminated_player_node_freezing_does_not_stall_survivors() {
     }
     let (attacker, target) = ids[0];
 
-    utils::push_command(&mut apps[0], PlayerCommand::SelectById { id: attacker });
+    utils::select(&mut apps[0], attacker);
     utils::push_command(
         &mut apps[0],
         PlayerCommand::SendToEntity {
@@ -1235,7 +1235,7 @@ fn game_with_mid_game_elimination_records_and_replays_identically() {
     ferrets_bevy_plugin::install_replay_recorder(record_app.world_mut(), recorder);
 
     let (attacker, target) = spawn_ffa_combatants(&mut record_app);
-    utils::push_command(&mut record_app, PlayerCommand::SelectById { id: attacker });
+    utils::select(&mut record_app, attacker);
     utils::push_command(
         &mut record_app,
         PlayerCommand::SendToEntity {

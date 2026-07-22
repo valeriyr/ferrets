@@ -25,7 +25,7 @@ fn attack_kills_adjacent_target() {
         spawn::spawn_entity(world, "soldier", utils::pos(5, 5), Some(0)).unwrap();
     let (target, target_id) = spawn::spawn_entity(world, "dummy", utils::pos(6, 5), None).unwrap();
 
-    utils::push_command(&mut app, PlayerCommand::SelectById { id: attacker_id });
+    utils::select(&mut app, attacker_id);
     utils::push_command(
         &mut app,
         PlayerCommand::Attack {
@@ -75,7 +75,7 @@ fn attack_chases_target_out_of_range() {
         spawn::spawn_entity(world, "soldier", utils::pos(5, 5), Some(0)).unwrap();
     let (target, target_id) = spawn::spawn_entity(world, "dummy", utils::pos(10, 5), None).unwrap();
 
-    utils::push_command(&mut app, PlayerCommand::SelectById { id: attacker_id });
+    utils::select(&mut app, attacker_id);
     utils::push_command(
         &mut app,
         PlayerCommand::Attack {
@@ -103,7 +103,7 @@ fn stop_cancels_attack() {
         spawn::spawn_entity(world, "soldier", utils::pos(5, 5), Some(0)).unwrap();
     let (target, target_id) = spawn::spawn_entity(world, "dummy", utils::pos(6, 5), None).unwrap();
 
-    utils::push_command(&mut app, PlayerCommand::SelectById { id: attacker_id });
+    utils::select(&mut app, attacker_id);
     utils::push_command(
         &mut app,
         PlayerCommand::Attack {
@@ -160,7 +160,7 @@ fn send_to_entity_does_not_attack_ally() {
     let (_, actor_id) = spawn::spawn_entity(world, "soldier", utils::pos(5, 5), Some(0)).unwrap();
     let (ally, ally_id) = spawn::spawn_entity(world, "soldier", utils::pos(6, 5), Some(1)).unwrap();
 
-    utils::push_command(&mut app, PlayerCommand::SelectById { id: actor_id });
+    utils::select(&mut app, actor_id);
     utils::push_command(
         &mut app,
         PlayerCommand::SendToEntity {
@@ -186,7 +186,7 @@ fn attack_order_with_missing_target_finishes() {
     let (attacker, attacker_id) =
         spawn::spawn_entity(world, "soldier", utils::pos(5, 5), Some(0)).unwrap();
 
-    utils::push_command(&mut app, PlayerCommand::SelectById { id: attacker_id });
+    utils::select(&mut app, attacker_id);
     utils::push_command(
         &mut app,
         PlayerCommand::Attack {

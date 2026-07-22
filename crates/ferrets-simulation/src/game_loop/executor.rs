@@ -5,12 +5,14 @@
 //! the single exception — any visible entity can be selected.
 
 use bevy_ecs::{entity::Entity, world::World};
+use ferrets_math::fixed_urect::FixedURect;
 
 use crate::{
-    command::PlayerCommand,
+    command::{PlayerCommand, SelectMode},
     components::{
         attack::AttackStaticData,
         build::{BuilderStaticData, UnderConstructionComponent},
+        entity_info::EntityInfoComponent,
         health::HealthComponent,
         location::LocationComponent,
         order_queue::{CancelPolicy, OrderQueueComponent},
@@ -21,9 +23,11 @@ use crate::{
             ResourceSourceStaticData, ResourceStorageStaticData,
         },
         stance::StanceComponent,
+        tags::{self, TagsComponent},
         train::{TrainQueueComponent, TrainStaticData},
     },
     content::registry::ContentRegistry,
+    control_groups::{CONTROL_GROUP_COUNT, ControlGroups},
     entity_index::EntityIndex,
     input::InputFrames,
     order::Order,
@@ -65,34 +69,67 @@ pub fn tick(world: &mut World, current_tick: u32) -> bool {
 
 fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
     match command {
-        PlayerCommand::SelectById { id } => {
+        PlayerCommand::SelectById { id, mode } => {
             if world
                 .resource::<EntityIndex>()
                 .interactable(world, *id)
                 .is_some()
             {
-                world.resource_mut::<Selection>().set(player, vec![*id]);
+                apply_selection(world, player, vec![*id], *mode);
             }
         }
-        PlayerCommand::SelectByRect { rect } => {
-            let selected: Vec<SimulationId> = world
-                .resource::<EntityIndex>()
-                .alive_entries()
+        PlayerCommand::SelectByRect { rect, mode } => {
+            let selected = resolve_box_selection(world, player, rect);
+            apply_selection(world, player, selected, *mode);
+        }
+        PlayerCommand::SelectByType { class, rect, mode } => {
+            let selected = resolve_type_selection(world, player, class, rect);
+            apply_selection(world, player, selected, *mode);
+        }
+        PlayerCommand::AssignGroup { group } => {
+            let group = *group as usize;
+            if group < CONTROL_GROUP_COUNT {
+                let ids = world.resource::<Selection>().get(player).to_vec();
+                world
+                    .resource_mut::<ControlGroups>()
+                    .assign(player, group, ids);
+            }
+        }
+        PlayerCommand::AppendGroup { group } => {
+            let group = *group as usize;
+            if group < CONTROL_GROUP_COUNT {
+                let ids = world.resource::<Selection>().get(player).to_vec();
+                world
+                    .resource_mut::<ControlGroups>()
+                    .append(player, group, &ids);
+            }
+        }
+        PlayerCommand::RecallGroup { group, mode } => {
+            let group = *group as usize;
+            if group >= CONTROL_GROUP_COUNT {
+                return;
+            }
+            // A group prunes destroyed ids on despawn, but a dying entity may
+            // still be listed — recall only what is currently interactable, as
+            // the other selection commands do.
+            let candidates: Vec<SimulationId> = world
+                .resource::<ControlGroups>()
+                .get(player, group)
+                .to_vec()
                 .into_iter()
-                .filter(|&(id, entity)| {
+                .filter(|&id| {
                     world
                         .resource::<EntityIndex>()
                         .interactable(world, id)
                         .is_some()
-                        && world
-                            .entity(entity)
-                            .get::<LocationComponent>()
-                            .is_some_and(|loc| rect.contains(loc.position))
                 })
-                .map(|(id, _)| id)
                 .collect();
-
-            world.resource_mut::<Selection>().set(player, selected);
+            // Recalling an empty (or fully-wiped) group is a no-op: it must not
+            // clear the current selection.
+            if candidates.is_empty() {
+                return;
+            }
+            apply_selection(world, player, candidates, *mode);
         }
         PlayerCommand::Move { target, flush } => {
             for entity in commanded_selection(world, player) {
@@ -376,6 +413,103 @@ fn train_entity(world: &mut World, player: PlayerId, trainer: SimulationId, type
     let already_training = queue.0.iter().any(|e| matches!(e.order, Order::Train));
     if !already_training {
         queue.push(Order::Train, None);
+    }
+}
+
+/// Resolves a box selection: interactable entities inside `rect` that are not
+/// buildings, narrowed to the issuing player's own units when the box caught any.
+///
+/// Buildings are excluded from a rect selection (they can still be selected
+/// individually). When the box holds no own units it falls back to a single
+/// other-owner entity so an enemy or neutral can still be boxed to inspect it.
+fn resolve_box_selection(world: &World, player: PlayerId, rect: &FixedURect) -> Vec<SimulationId> {
+    let index = world.resource::<EntityIndex>();
+    let in_rect: Vec<(SimulationId, Entity)> = index
+        .alive_entries()
+        .into_iter()
+        .filter(|&(id, entity)| {
+            index.interactable(world, id).is_some()
+                && world
+                    .entity(entity)
+                    .get::<LocationComponent>()
+                    .is_some_and(|loc| rect.contains(loc.position))
+                && !world
+                    .entity(entity)
+                    .get::<TagsComponent>()
+                    .is_some_and(|component| component.contains(tags::BUILDING))
+        })
+        .collect();
+
+    let own: Vec<SimulationId> = in_rect
+        .iter()
+        .filter(|&&(_, entity)| {
+            world
+                .entity(entity)
+                .get::<OwnerComponent>()
+                .is_some_and(|owner| owner.player() == player)
+        })
+        .map(|&(id, _)| id)
+        .collect();
+
+    if own.is_empty() {
+        in_rect
+            .into_iter()
+            .next()
+            .map(|(id, _)| id)
+            .into_iter()
+            .collect()
+    } else {
+        own
+    }
+}
+
+/// Resolves a select-by-class: interactable entities inside `rect` whose
+/// registered selection class equals `class`, restricted to the issuing player's
+/// own entities (grouping by class covers your own units, not the enemy's).
+fn resolve_type_selection(
+    world: &World,
+    player: PlayerId,
+    class: &str,
+    rect: &FixedURect,
+) -> Vec<SimulationId> {
+    let index = world.resource::<EntityIndex>();
+    let registry = world.resource::<ContentRegistry>();
+    index
+        .alive_entries()
+        .into_iter()
+        .filter(|&(id, entity)| {
+            index.interactable(world, id).is_some()
+                && world
+                    .entity(entity)
+                    .get::<OwnerComponent>()
+                    .is_some_and(|owner| owner.player() == player)
+                && world
+                    .entity(entity)
+                    .get::<LocationComponent>()
+                    .is_some_and(|loc| rect.contains(loc.position))
+                && world
+                    .entity(entity)
+                    .get::<EntityInfoComponent>()
+                    .and_then(|info| registry.entity(info.type_name()))
+                    .is_some_and(|def| def.selection_class() == class)
+        })
+        .map(|(id, _)| id)
+        .collect()
+}
+
+/// Combines `candidates` into `player`'s selection according to `mode`.
+fn apply_selection(
+    world: &mut World,
+    player: PlayerId,
+    candidates: Vec<SimulationId>,
+    mode: SelectMode,
+) {
+    let mut selection = world.resource_mut::<Selection>();
+    match mode {
+        SelectMode::Replace => selection.set(player, candidates),
+        SelectMode::Add => selection.add(player, &candidates),
+        SelectMode::Toggle => selection.toggle(player, &candidates),
+        SelectMode::Remove => selection.subtract(player, &candidates),
     }
 }
 

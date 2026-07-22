@@ -15,7 +15,7 @@ fn follow_tracks_moving_target() {
         spawn::spawn_entity(world, "soldier", utils::pos(8, 5), Some(0)).unwrap();
 
     // A friendly target without collect/store intent resolves to a follow.
-    utils::push_command(&mut app, PlayerCommand::SelectById { id: follower_id });
+    utils::select(&mut app, follower_id);
     utils::push_command(
         &mut app,
         PlayerCommand::SendToEntity {
@@ -36,7 +36,7 @@ fn follow_tracks_moving_target() {
     }
 
     // The leader walks away; the follower keeps up.
-    utils::push_command(&mut app, PlayerCommand::SelectById { id: leader_id });
+    utils::select(&mut app, leader_id);
     utils::push_command(
         &mut app,
         PlayerCommand::Move {

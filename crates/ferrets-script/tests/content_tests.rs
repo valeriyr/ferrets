@@ -59,6 +59,45 @@ fn declared_acquire_range_overrides_weapon_range_default() {
 }
 
 #[test]
+fn parses_selection_priority_and_class() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+
+        define_entity("caster", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            health = 20,
+            selection_priority = 42,
+            selection_class = "spellcaster",
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("load content");
+
+    let expected = EntityTypeDef::new("caster")
+        .with_location(LayerId::new(1), NavSize::ONE, Solidity::Solid)
+        .with_health(20)
+        .with_selection_priority(42)
+        .with_selection_class("spellcaster");
+
+    assert_eq!(registry.entity("caster"), Some(&expected));
+}
+
+#[test]
+fn selection_class_defaults_to_type_name() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+
+        define_entity("marine", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("load content");
+
+    let marine = registry.entity("marine").expect("marine");
+    assert_eq!(marine.selection_class(), "marine");
+    assert_eq!(marine.selection_priority, 0);
+}
+
+#[test]
 fn wires_production_catalogues_across_entities() {
     // A worker that builds a hall, and a hall that trains the worker — the cyclic
     // catalogue that only validates once both are registered.

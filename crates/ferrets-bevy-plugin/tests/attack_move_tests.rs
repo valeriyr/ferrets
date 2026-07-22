@@ -21,7 +21,7 @@ fn attack_move_destroys_enemy_near_path_and_reaches_destination() {
     let (barracks, _) =
         spawn::spawn_entity(world, "barracks", utils::pos(10, 12), Some(1)).unwrap();
 
-    utils::push_command(&mut app, PlayerCommand::SelectById { id: sentry_id });
+    utils::select(&mut app, sentry_id);
     utils::push_command(
         &mut app,
         PlayerCommand::AttackMove {
@@ -46,7 +46,7 @@ fn attack_move_reengages_until_path_is_clear() {
     let (first, _) = spawn::spawn_entity(world, "barracks", utils::pos(7, 12), Some(1)).unwrap();
     let (second, _) = spawn::spawn_entity(world, "barracks", utils::pos(15, 8), Some(1)).unwrap();
 
-    utils::push_command(&mut app, PlayerCommand::SelectById { id: sentry_id });
+    utils::select(&mut app, sentry_id);
     utils::push_command(
         &mut app,
         PlayerCommand::AttackMove {
@@ -70,7 +70,7 @@ fn hold_fire_unit_still_engages_under_explicit_attack_move() {
     let (barracks, _) =
         spawn::spawn_entity(world, "barracks", utils::pos(10, 12), Some(1)).unwrap();
 
-    utils::push_command(&mut app, PlayerCommand::SelectById { id: sentry_id });
+    utils::select(&mut app, sentry_id);
     utils::push_command(
         &mut app,
         PlayerCommand::SetStance {
@@ -100,7 +100,7 @@ fn attack_move_without_enemies_reaches_destination() {
     let (sentry, sentry_id) =
         spawn::spawn_entity(world, "sentry", utils::pos(2, 10), Some(0)).unwrap();
 
-    utils::push_command(&mut app, PlayerCommand::SelectById { id: sentry_id });
+    utils::select(&mut app, sentry_id);
     utils::push_command(
         &mut app,
         PlayerCommand::AttackMove {
@@ -123,7 +123,7 @@ fn unarmed_unit_attack_moves_like_plain_move() {
         spawn::spawn_entity(world, "worker", utils::pos(2, 10), Some(0)).unwrap();
     let (ghost, _) = spawn::spawn_entity(world, "ghost", utils::pos(10, 12), Some(1)).unwrap();
 
-    utils::push_command(&mut app, PlayerCommand::SelectById { id: worker_id });
+    utils::select(&mut app, worker_id);
     utils::push_command(
         &mut app,
         PlayerCommand::AttackMove {

@@ -1,8 +1,9 @@
 //! Minimal HUD: a resource bar and a context line for the current selection.
 
 use bevy::prelude::*;
-use ferrets_bevy_plugin::{ReplayPlayback, ScenarioObjectives};
+use ferrets_bevy_plugin::{PendingInput, ReplayPlayback, ScenarioObjectives};
 use ferrets_simulation::{
+    command::{PlayerCommand, SelectMode},
     components::{
         build::BuilderStaticData,
         entity_info::EntityInfoComponent,
@@ -12,15 +13,21 @@ use ferrets_simulation::{
         stance::StanceComponent,
         train::TrainStaticData,
     },
+    control_groups::{CONTROL_GROUP_COUNT, ControlGroups},
     resources::PlayerResources,
     selection::Selection,
     session::{GameResult, GameSession},
 };
 
+use crate::input::{InputMode, Primary};
 use crate::states::{GameState, InGameUi};
 
 const BUTTON_NORMAL: Color = Color::srgb(0.20, 0.20, 0.24);
 const BUTTON_HOVERED: Color = Color::srgb(0.30, 0.30, 0.38);
+// Build buttons get a cooler tint so they stay distinct from train buttons on an
+// entity that can do both.
+const BUILD_NORMAL: Color = Color::srgb(0.16, 0.22, 0.30);
+const BUILD_HOVERED: Color = Color::srgb(0.24, 0.32, 0.44);
 
 #[derive(Component)]
 pub struct ResourceText;
@@ -45,6 +52,33 @@ pub struct ReplayNote;
 /// The button that returns to the main menu.
 #[derive(Component)]
 pub struct LeaveButton;
+
+/// The command-card container; train buttons for the primary producer are its children.
+#[derive(Component)]
+pub struct CommandCard;
+
+/// A command-card button that queues `type_name` on the primary producer.
+#[derive(Component)]
+pub struct TrainButton {
+    type_name: String,
+}
+
+/// A command-card button that starts placing a `type_name` building with the
+/// primary builder.
+#[derive(Component)]
+pub struct BuildButton {
+    type_name: String,
+}
+
+/// The control-group roster container; a chip per non-empty group is a child.
+#[derive(Component)]
+pub struct GroupRoster;
+
+/// A roster chip that recalls control `group` when clicked.
+#[derive(Component)]
+pub struct GroupButton {
+    group: u8,
+}
 
 /// Spawns the HUD text nodes.
 pub fn setup_hud(mut commands: Commands) {
@@ -152,6 +186,32 @@ pub fn setup_hud(mut commands: Commands) {
             ..default()
         },
     ));
+    // Control-group roster: a chip per non-empty group, stacked just above the
+    // command card so all unit-control UI sits together in the bottom-left, clear
+    // of the resource bar, debug readout, and objectives.
+    commands.spawn((
+        InGameUi,
+        GroupRoster,
+        Node {
+            position_type: PositionType::Absolute,
+            bottom: Val::Px(66.0),
+            left: Val::Px(10.0),
+            column_gap: Val::Px(6.0),
+            ..default()
+        },
+    ));
+    // Command card: train/build buttons for the selected producer (bottom left).
+    commands.spawn((
+        InGameUi,
+        CommandCard,
+        Node {
+            position_type: PositionType::Absolute,
+            bottom: Val::Px(34.0),
+            left: Val::Px(10.0),
+            column_gap: Val::Px(6.0),
+            ..default()
+        },
+    ));
     // Returns to the main menu.
     commands.spawn((
         InGameUi,
@@ -246,7 +306,7 @@ pub fn update_help(
     mut text: Query<&mut Text, With<HelpText>>,
 ) {
     let mut message = String::from(
-        "LMB select | RMB move/harvest/attack | F attack-move | R patrol | G guard | X stance | F1 debug | F2 spawn",
+        "LMB select (Shift add, dbl-click all of type) | RMB move/harvest/attack | F/R/G orders | X stance | 1-0 groups (Ctrl set) | F1 debug | F2 spawn",
     );
 
     let local = session.local_player();
@@ -255,20 +315,14 @@ pub fn update_help(
             info.id() == id && owner.is_some_and(|owner| owner.player() == local)
         })
     {
-        if let Some(trainer) = trainer {
-            let opts: Vec<String> = trainer
-                .trains()
-                .enumerate()
-                .map(|(i, name)| format!("{}) {name}", i + 1))
-                .collect();
-            message = format!(
-                "Train:  {}   |   RMB set rally (on self clears)",
-                opts.join("   ")
+        if trainer.is_some() {
+            message = String::from(
+                "Train: click a command-card button   |   RMB set rally (on self clears)",
             );
         }
-        if let Some(builder) = builder {
-            let opts: Vec<&str> = builder.builds().collect();
-            message = format!("Build [B to cycle, click to place]:  {}", opts.join(", "));
+        if builder.is_some() {
+            message =
+                String::from("Build: click a command-card button   |   click the map to place");
         }
     }
 
@@ -377,6 +431,172 @@ pub fn update_game_over(session: Res<GameSession>, mut text: Query<&mut Text, Wi
 
     if let Ok(mut text) = text.single_mut() {
         **text = message.to_string();
+    }
+}
+
+/// The shared visual bundle for a command-card button labelled `label`, tinted
+/// with its resting `base` colour.
+fn card_button(label: &str, base: Color) -> impl Bundle {
+    (
+        Button,
+        Node {
+            padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
+            ..default()
+        },
+        BackgroundColor(base),
+        children![(
+            Text::new(label.to_string()),
+            TextFont {
+                font_size: 15.0,
+                ..default()
+            },
+            TextColor(Color::srgb(0.9, 0.9, 0.95)),
+        )],
+    )
+}
+
+/// Rebuilds the command card whenever the primary selection changes: a train
+/// button per unit the selected producer can build, a build button per building
+/// the selected worker can construct, or nothing when the primary does neither.
+pub fn update_command_card(
+    primary: Res<Primary>,
+    producers: Query<(&EntityInfoComponent, &TrainStaticData)>,
+    builders: Query<(&EntityInfoComponent, &BuilderStaticData)>,
+    card: Query<Entity, With<CommandCard>>,
+    buttons: Query<Entity, Or<(With<TrainButton>, With<BuildButton>)>>,
+    mut commands: Commands,
+) {
+    if !primary.is_changed() {
+        return;
+    }
+    let Ok(card) = card.single() else {
+        return;
+    };
+    for button in &buttons {
+        commands.entity(button).despawn();
+    }
+    let Some(id) = primary.0 else {
+        return;
+    };
+    let trains = producers
+        .iter()
+        .find(|(info, _)| info.id() == id)
+        .map(|(_, trainer)| trainer.trains().map(String::from).collect::<Vec<_>>())
+        .unwrap_or_default();
+    let builds = builders
+        .iter()
+        .find(|(info, _)| info.id() == id)
+        .map(|(_, builder)| builder.builds().map(String::from).collect::<Vec<_>>())
+        .unwrap_or_default();
+
+    commands.entity(card).with_children(|parent| {
+        for name in trains {
+            parent.spawn((
+                TrainButton {
+                    type_name: name.clone(),
+                },
+                card_button(&pretty_name(&name), BUTTON_NORMAL),
+            ));
+        }
+        for name in builds {
+            parent.spawn((
+                BuildButton {
+                    type_name: name.clone(),
+                },
+                card_button(&pretty_name(&name), BUILD_NORMAL),
+            ));
+        }
+    });
+}
+
+/// Trains the button's unit on the primary producer when a train button is clicked.
+pub fn command_card_input(
+    mut buttons: Query<(&Interaction, &TrainButton, &mut BackgroundColor), Changed<Interaction>>,
+    primary: Res<Primary>,
+    mut pending: ResMut<PendingInput>,
+) {
+    for (interaction, button, mut color) in &mut buttons {
+        match interaction {
+            Interaction::Pressed => {
+                if let Some(trainer) = primary.0 {
+                    pending.push(PlayerCommand::TrainEntity {
+                        trainer,
+                        type_name: button.type_name.clone(),
+                    });
+                }
+            }
+            Interaction::Hovered => *color = BackgroundColor(BUTTON_HOVERED),
+            Interaction::None => *color = BackgroundColor(BUTTON_NORMAL),
+        }
+    }
+}
+
+/// Starts placing the button's building when a build button is clicked; the
+/// existing placement flow then handles the ghost and the confirming click.
+pub fn build_card_input(
+    mut buttons: Query<(&Interaction, &BuildButton, &mut BackgroundColor), Changed<Interaction>>,
+    mut mode: ResMut<InputMode>,
+) {
+    for (interaction, button, mut color) in &mut buttons {
+        match interaction {
+            Interaction::Pressed => {
+                *mode = InputMode::PlacingBuild(button.type_name.clone());
+            }
+            Interaction::Hovered => *color = BackgroundColor(BUILD_HOVERED),
+            Interaction::None => *color = BackgroundColor(BUILD_NORMAL),
+        }
+    }
+}
+
+/// Rebuilds the control-group roster when the groups change: a chip per non-empty
+/// group of the local player, labelled with its recall key and member count.
+pub fn update_group_roster(
+    session: Res<GameSession>,
+    groups: Res<ControlGroups>,
+    roster: Query<Entity, With<GroupRoster>>,
+    chips: Query<Entity, With<GroupButton>>,
+    mut commands: Commands,
+) {
+    if !groups.is_changed() {
+        return;
+    }
+    let Ok(roster) = roster.single() else {
+        return;
+    };
+    for chip in &chips {
+        commands.entity(chip).despawn();
+    }
+    let local = session.local_player();
+    commands.entity(roster).with_children(|parent| {
+        for group in 0..CONTROL_GROUP_COUNT {
+            let count = groups.get(local, group).len();
+            if count == 0 {
+                continue;
+            }
+            // The recall key is a client concern: group index 0..9 maps to keys 1..9,0.
+            let key = (group + 1) % CONTROL_GROUP_COUNT;
+            parent.spawn((
+                GroupButton { group: group as u8 },
+                card_button(&format!("{key}: {count}"), BUTTON_NORMAL),
+            ));
+        }
+    });
+}
+
+/// Recalls a group when its roster chip is clicked.
+pub fn group_roster_input(
+    mut chips: Query<(&Interaction, &GroupButton, &mut BackgroundColor), Changed<Interaction>>,
+    mut pending: ResMut<PendingInput>,
+) {
+    for (interaction, chip, mut color) in &mut chips {
+        match interaction {
+            Interaction::Pressed => pending.push(PlayerCommand::RecallGroup {
+                group: chip.group,
+                mode: SelectMode::Replace,
+            }),
+            Interaction::Hovered => *color = BackgroundColor(BUTTON_HOVERED),
+            Interaction::None => *color = BackgroundColor(BUTTON_NORMAL),
+        }
     }
 }
 

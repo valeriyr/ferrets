@@ -19,7 +19,7 @@ fn guard_follows_moving_ward() {
     let (worker, worker_id) =
         spawn::spawn_entity(world, "worker", utils::pos(6, 10), Some(0)).unwrap();
 
-    utils::push_command(&mut app, PlayerCommand::SelectById { id: sentry_id });
+    utils::select(&mut app, sentry_id);
     utils::push_command(
         &mut app,
         PlayerCommand::Guard {
@@ -27,7 +27,7 @@ fn guard_follows_moving_ward() {
             flush: true,
         },
     );
-    utils::push_command(&mut app, PlayerCommand::SelectById { id: worker_id });
+    utils::select(&mut app, worker_id);
     utils::push_command(
         &mut app,
         PlayerCommand::Move {
@@ -56,7 +56,7 @@ fn guard_of_building_holds_station() {
     let (barracks, barracks_id) =
         spawn::spawn_entity(world, "barracks", utils::pos(10, 10), Some(0)).unwrap();
 
-    utils::push_command(&mut app, PlayerCommand::SelectById { id: sentry_id });
+    utils::select(&mut app, sentry_id);
     utils::push_command(
         &mut app,
         PlayerCommand::Guard {
@@ -87,7 +87,7 @@ fn guard_finishes_when_ward_dies() {
     let (worker, worker_id) =
         spawn::spawn_entity(world, "worker", utils::pos(6, 10), Some(0)).unwrap();
 
-    utils::push_command(&mut app, PlayerCommand::SelectById { id: sentry_id });
+    utils::select(&mut app, sentry_id);
     utils::push_command(
         &mut app,
         PlayerCommand::Guard {
@@ -120,7 +120,7 @@ fn guard_engages_attacker_threatening_ward() {
     // answer for it.
     let (enemy, _) = spawn::spawn_entity(world, "sentry", utils::pos(15, 10), Some(1)).unwrap();
 
-    utils::push_command(&mut app, PlayerCommand::SelectById { id: guard_id });
+    utils::select(&mut app, guard_id);
     utils::push_command(
         &mut app,
         PlayerCommand::Guard {
@@ -147,7 +147,7 @@ fn guard_on_hostile_ward_is_refused() {
     // toward it) could ever move the sentry — isolating the refusal.
     let (_, enemy_id) = spawn::spawn_entity(world, "worker", utils::pos(25, 10), Some(1)).unwrap();
 
-    utils::push_command(&mut app, PlayerCommand::SelectById { id: sentry_id });
+    utils::select(&mut app, sentry_id);
     utils::push_command(
         &mut app,
         PlayerCommand::Guard {

@@ -156,6 +156,12 @@ fn build_entity(name: &str, table: &Table) -> crate::Result<EntityTypeDef> {
     if let Some(tags) = optional::<Vec<String>>(table, "tags")? {
         def = def.with_tags(tags);
     }
+    if let Some(priority) = optional::<i32>(table, "selection_priority")? {
+        def = def.with_selection_priority(priority);
+    }
+    if let Some(class) = optional::<String>(table, "selection_class")? {
+        def = def.with_selection_class(class);
+    }
 
     Ok(def)
 }

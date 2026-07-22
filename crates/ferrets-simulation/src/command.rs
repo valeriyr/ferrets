@@ -10,13 +10,41 @@ use crate::components::rally::RallyTarget;
 use crate::components::stance::Stance;
 use crate::simulation_id::SimulationId;
 
+/// How a selection command combines with the player's existing selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SelectMode {
+    /// Clears the selection, then selects the resolved entities.
+    Replace,
+    /// Adds the resolved entities to the selection, skipping any already present.
+    Add,
+    /// Flips each resolved entity's membership: selected becomes unselected and vice versa.
+    Toggle,
+    /// Removes the resolved entities from the selection.
+    Remove,
+}
+
 /// A player command.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PlayerCommand {
-    /// Replaces the player's selection with the given entity.
-    SelectById { id: SimulationId },
-    /// Replaces the player's selection with all entities inside `rect`.
-    SelectByRect { rect: FixedURect },
+    /// Selects the given entity, combining with the current selection per `mode`.
+    SelectById { id: SimulationId, mode: SelectMode },
+    /// Selects all entities inside `rect` sharing the selection class `class`
+    /// (see [`EntityTypeDef::selection_class`](crate::content::entity_type_def::EntityTypeDef::selection_class)),
+    /// combining with the current selection per `mode`.
+    SelectByType {
+        class: String,
+        rect: FixedURect,
+        mode: SelectMode,
+    },
+    /// Selects all entities inside `rect`, combining with the current selection per `mode`.
+    SelectByRect { rect: FixedURect, mode: SelectMode },
+    /// Saves the player's current selection as control `group`,
+    /// replacing whatever it held.
+    AssignGroup { group: u8 },
+    /// Adds the player's current selection to control `group`.
+    AppendGroup { group: u8 },
+    /// Selects control `group`, combining with the current selection per `mode`.
+    RecallGroup { group: u8, mode: SelectMode },
     /// Issues a move order to the current selection, targeting `target`.
     /// `flush` cancels existing orders before issuing this one; `false` appends.
     Move { target: FixedUVec2, flush: bool },

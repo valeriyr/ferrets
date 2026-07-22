@@ -32,7 +32,7 @@ fn collect_harvests_until_source_depletes() {
     spawn::spawn_entity(world, "depot", utils::pos(2, 4), Some(0)).unwrap();
 
     // A source target resolves to a harvest order.
-    utils::push_command(&mut app, PlayerCommand::SelectById { id: worker_id });
+    utils::select(&mut app, worker_id);
     utils::push_command(
         &mut app,
         PlayerCommand::SendToEntity {
@@ -70,7 +70,7 @@ fn visible_harvest_marks_carrier() {
         .amount = 4;
     spawn::spawn_entity(world, "depot", utils::pos(2, 4), Some(0)).unwrap();
 
-    utils::push_command(&mut app, PlayerCommand::SelectById { id: lumberjack_id });
+    utils::select(&mut app, lumberjack_id);
     utils::push_command(
         &mut app,
         PlayerCommand::SendToEntity {
@@ -115,7 +115,7 @@ fn persistent_source_stays_on_map_when_depleted() {
         .amount = 4;
     spawn::spawn_entity(world, "depot", utils::pos(2, 4), Some(0)).unwrap();
 
-    utils::push_command(&mut app, PlayerCommand::SelectById { id: worker_id });
+    utils::select(&mut app, worker_id);
     utils::push_command(
         &mut app,
         PlayerCommand::SendToEntity {
@@ -151,7 +151,7 @@ fn boxed_in_cancel_defers_reveal_until_cell_frees() {
         .amount = 12;
 
     // Gold trips are hidden: send the worker to disappear into the mine to work.
-    utils::push_command(&mut app, PlayerCommand::SelectById { id: worker_id });
+    utils::select(&mut app, worker_id);
     utils::push_command(
         &mut app,
         PlayerCommand::SendToEntity {

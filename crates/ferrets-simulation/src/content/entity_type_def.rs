@@ -67,6 +67,11 @@ pub struct EntityTypeDef {
     /// Content-declared classification tags (e.g. `building`). Each must be a
     /// registered tag.
     pub tags: BTreeSet<String>,
+    /// Relative weight for picking the lead unit of a mixed selection: higher wins.
+    pub selection_priority: i32,
+    /// Groups instances for select-all-of-type. `None` falls back to the type
+    /// name, so each type is its own class unless content shares one explicitly.
+    pub selection_class: Option<String>,
 }
 
 impl EntityTypeDef {
@@ -94,7 +99,15 @@ impl EntityTypeDef {
             resource_carrier: None,
             resource_storage: None,
             tags: BTreeSet::new(),
+            selection_priority: 0,
+            selection_class: None,
         }
+    }
+
+    /// The class instances group under for select-all-of-type, defaulting to the
+    /// type name when no explicit class was declared.
+    pub fn selection_class(&self) -> &str {
+        self.selection_class.as_deref().unwrap_or(&self.name)
     }
 
     /// Assigns this type to a race, by registered race name. Race-neutral types
@@ -261,6 +274,22 @@ impl EntityTypeDef {
             assert!(!tag.is_empty(), "tag names must not be empty");
             self.tags.insert(tag);
         }
+        self
+    }
+
+    /// Sets the primary-selection ordering weight (see [`selection_priority`](Self::selection_priority)).
+    pub fn with_selection_priority(mut self, priority: i32) -> Self {
+        self.selection_priority = priority;
+        self
+    }
+
+    /// Sets the select-all-of-type class (see [`selection_class`](Self::selection_class)).
+    ///
+    /// Panics if `class` is empty.
+    pub fn with_selection_class(mut self, class: impl Into<String>) -> Self {
+        let class = class.into();
+        assert!(!class.is_empty(), "selection class must not be empty");
+        self.selection_class = Some(class);
         self
     }
 

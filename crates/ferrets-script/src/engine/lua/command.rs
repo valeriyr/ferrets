@@ -8,7 +8,7 @@ use ferrets_math::FixedU64;
 use ferrets_math::fixed_urect::FixedURect;
 use ferrets_math::fixed_uvec2::FixedUVec2;
 use ferrets_pathfinder::nav_pos::NavPos;
-use ferrets_simulation::command::PlayerCommand;
+use ferrets_simulation::command::{PlayerCommand, SelectMode};
 use ferrets_simulation::components::rally::RallyTarget;
 use ferrets_simulation::components::stance::Stance;
 use ferrets_simulation::simulation_id::SimulationId;
@@ -45,6 +45,7 @@ fn command(table: &Table, index: usize) -> crate::Result<PlayerCommand> {
     match kind.as_str() {
         "select" => Ok(PlayerCommand::SelectById {
             id: SimulationId(integer(table, index, "id")?),
+            mode: SelectMode::Replace,
         }),
         "select_area" => {
             let x1 = integer(table, index, "x1")?;
@@ -64,6 +65,7 @@ fn command(table: &Table, index: usize) -> crate::Result<PlayerCommand> {
             );
             Ok(PlayerCommand::SelectByRect {
                 rect: FixedURect::from_corners(cell(x1, y1), far),
+                mode: SelectMode::Replace,
             })
         }
         "move" => Ok(PlayerCommand::Move {

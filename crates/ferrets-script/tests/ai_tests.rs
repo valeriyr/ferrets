@@ -12,7 +12,7 @@ use ferrets_script::ai::view::game::{EntityView, GameView};
 use ferrets_script::engine::ScriptEngine;
 use ferrets_script::engine::lua::LuaEngine;
 use ferrets_script::error::ScriptError;
-use ferrets_simulation::command::PlayerCommand;
+use ferrets_simulation::command::{PlayerCommand, SelectMode};
 use ferrets_simulation::components::rally::RallyTarget;
 use ferrets_simulation::components::stance::Stance;
 use ferrets_simulation::simulation_id::SimulationId;
@@ -55,7 +55,8 @@ fn think_returns_commands_as_player_commands() {
         commands,
         vec![
             PlayerCommand::SelectById {
-                id: SimulationId(7)
+                id: SimulationId(7),
+                mode: SelectMode::Replace,
             },
             PlayerCommand::SelectByRect {
                 rect: FixedURect::from_corners(
@@ -65,6 +66,7 @@ fn think_returns_commands_as_player_commands() {
                         FixedU64::from_num(5) - FixedU64::DELTA,
                     ),
                 ),
+                mode: SelectMode::Replace,
             },
             PlayerCommand::Move {
                 target: cell(5, 6),

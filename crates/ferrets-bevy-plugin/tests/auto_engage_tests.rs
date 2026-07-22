@@ -49,7 +49,7 @@ fn set_stance_applies_to_owned_selection_only() {
     let (foreign, foreign_id) =
         spawn::spawn_entity(world, "sentry", utils::pos(20, 20), Some(1)).unwrap();
 
-    utils::push_command(&mut app, PlayerCommand::SelectById { id: own_id });
+    utils::select(&mut app, own_id);
     utils::push_command(
         &mut app,
         PlayerCommand::SetStance {
@@ -57,7 +57,7 @@ fn set_stance_applies_to_owned_selection_only() {
         },
     );
     utils::run_ticks(&mut app, 2);
-    utils::push_command(&mut app, PlayerCommand::SelectById { id: foreign_id });
+    utils::select(&mut app, foreign_id);
     utils::push_command(
         &mut app,
         PlayerCommand::SetStance {
@@ -107,7 +107,7 @@ fn stand_ground_unit_fires_in_weapon_range_and_never_moves() {
         spawn::spawn_entity(world, "sentry", utils::pos(10, 10), Some(0)).unwrap();
     let (ghost, _) = spawn::spawn_entity(world, "ghost", utils::pos(14, 10), Some(1)).unwrap();
 
-    utils::push_command(&mut app, PlayerCommand::SelectById { id: sentry_id });
+    utils::select(&mut app, sentry_id);
     utils::push_command(
         &mut app,
         PlayerCommand::SetStance {
@@ -146,7 +146,7 @@ fn hold_fire_unit_never_engages() {
         spawn::spawn_entity(world, "sentry", utils::pos(10, 10), Some(0)).unwrap();
     let (ghost, _) = spawn::spawn_entity(world, "ghost", utils::pos(11, 10), Some(1)).unwrap();
 
-    utils::push_command(&mut app, PlayerCommand::SelectById { id: sentry_id });
+    utils::select(&mut app, sentry_id);
     utils::push_command(
         &mut app,
         PlayerCommand::SetStance {
@@ -170,7 +170,7 @@ fn ordered_unit_is_not_hijacked_by_idle_engagement() {
     let (ghost, _) = spawn::spawn_entity(world, "ghost", utils::pos(10, 12), Some(1)).unwrap();
 
     // A plain move straight past an enemy: the order is executed as given.
-    utils::push_command(&mut app, PlayerCommand::SelectById { id: sentry_id });
+    utils::select(&mut app, sentry_id);
     utils::push_command(
         &mut app,
         PlayerCommand::Move {

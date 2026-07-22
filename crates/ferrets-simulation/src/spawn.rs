@@ -22,6 +22,7 @@ use crate::{
         train::TrainQueueComponent,
     },
     content::registry::ContentRegistry,
+    control_groups::ControlGroups,
     entity_index::EntityIndex,
     game_loop::movement::is_mid_crossing,
     map::Map,
@@ -359,6 +360,7 @@ pub fn destroy_entity(world: &mut World, entity: Entity) {
     }
 
     world.resource_mut::<Selection>().remove(id);
+    world.resource_mut::<ControlGroups>().remove(id);
 
     let dying_time = world
         .entity(entity)

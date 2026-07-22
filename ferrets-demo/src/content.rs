@@ -109,6 +109,8 @@ pub const CONTENT: &str = r#"
         attack = { damage = 6, range = 4, acquire_range = 7, aiming = 3, reloading = 4 },
         cost = { gold = 80 },
         train_time = 60,
+        -- Combat units lead a mixed selection over workers.
+        selection_priority = 10,
     })
 
     -- Orc: worker, base, barracks, and a melee unit.
@@ -124,6 +126,7 @@ pub const CONTENT: &str = r#"
         attack = { damage = 10, range = 1, acquire_range = 5, aiming = 3, reloading = 3 },
         cost = { gold = 90 },
         train_time = 70,
+        selection_priority = 10,
     })
 "#;
 

@@ -28,7 +28,7 @@ fn damaged_worker_abandons_harvest_and_runs() {
     // The enemy sentry auto-engages the harvesting worker.
     let (_, _) = spawn::spawn_entity(world, "sentry", utils::pos(13, 10), Some(1)).unwrap();
 
-    utils::push_command(&mut app, PlayerCommand::SelectById { id: worker_id });
+    utils::select(&mut app, worker_id);
     utils::push_command(
         &mut app,
         PlayerCommand::SendToEntity {
@@ -56,7 +56,7 @@ fn fleeing_soldier_runs_instead_of_fighting_back() {
         spawn::spawn_entity(world, "sentry", utils::pos(10, 10), Some(0)).unwrap();
     let (enemy, _) = spawn::spawn_entity(world, "sentry", utils::pos(13, 10), Some(1)).unwrap();
 
-    utils::push_command(&mut app, PlayerCommand::SelectById { id: runner_id });
+    utils::select(&mut app, runner_id);
     utils::push_command(
         &mut app,
         PlayerCommand::SetStance {

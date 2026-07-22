@@ -9,7 +9,7 @@ use ferrets_network::message::control::{
 use ferrets_network::message::gameplay::GameplayMessage;
 use ferrets_network::message::{Message, decode, encode};
 use ferrets_network::session_mode::SessionMode;
-use ferrets_simulation::command::PlayerCommand;
+use ferrets_simulation::command::{PlayerCommand, SelectMode};
 use ferrets_simulation::components::rally::RallyTarget;
 use ferrets_simulation::components::stance::Stance;
 use ferrets_simulation::input::PlayerFrame;
@@ -124,9 +124,22 @@ fn every_command_frames() -> Message {
         commands: vec![
             PlayerCommand::SelectById {
                 id: SimulationId(7),
+                mode: SelectMode::Replace,
             },
             PlayerCommand::SelectByRect {
                 rect: FixedURect::from_corners(pos(1, 2), pos(5, 6)),
+                mode: SelectMode::Add,
+            },
+            PlayerCommand::SelectByType {
+                class: "archer".into(),
+                rect: FixedURect::from_corners(pos(0, 0), pos(9, 9)),
+                mode: SelectMode::Toggle,
+            },
+            PlayerCommand::AssignGroup { group: 3 },
+            PlayerCommand::AppendGroup { group: 3 },
+            PlayerCommand::RecallGroup {
+                group: 3,
+                mode: SelectMode::Remove,
             },
             PlayerCommand::Move {
                 target: pos(10, 12),
