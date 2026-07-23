@@ -7,7 +7,10 @@
 //! smooth and stays locked to the simulation cadence (it can never outrun it).
 //! Unit shapes rotate to point in their facing direction.
 
-use std::f32::consts::FRAC_PI_2;
+use std::{
+    collections::{HashMap, HashSet},
+    f32::consts::FRAC_PI_2,
+};
 
 use bevy::prelude::*;
 
@@ -22,9 +25,12 @@ use ferrets_simulation::{
         owner::OwnerComponent,
         rally::{RallyPointComponent, RallyTarget},
         resource::ResourceSourceStaticData,
+        tags::{self, TagsComponent},
     },
     selection::Selection,
     session::GameSession,
+    simulation_id::SimulationId,
+    visibility::{CellVisibility, VisibilityGrid},
 };
 
 /// Screen pixels per grid cell.
@@ -42,6 +48,49 @@ pub struct Renderable;
 /// (mobile units; buildings and resources stay axis-aligned).
 #[derive(Component)]
 pub struct Directional;
+
+/// A per-cell fog overlay sprite, darkened by the local team's visibility.
+#[derive(Component)]
+pub struct FogTile {
+    x: u32,
+    y: u32,
+}
+
+/// The outline a ghost redraws, matching the shape its building renders as (see
+/// [`shape_for`]).
+enum GhostShape {
+    /// A rectangle spanning the footprint — square buildings.
+    Rect { extent: Vec2 },
+    /// A regular polygon of `sides` — the hexagon barracks and octagon fortress.
+    Polygon { sides: u32, circumradius: f32 },
+}
+
+/// The last-seen appearance of a scouted enemy building, kept so it can be drawn
+/// as a dimmed ghost while its cell is remembered but out of sight. Render-only
+/// and local to this client; persists (stale) even after the real building dies
+/// in the fog, until the cell is seen again.
+struct GhostSprite {
+    origin: (u32, u32),
+    center: Vec2,
+    shape: GhostShape,
+}
+
+/// Last-seen enemy buildings, keyed by [`SimulationId`] (see [`GhostSprite`]).
+#[derive(Resource, Default)]
+pub struct Ghosts(HashMap<SimulationId, GhostSprite>);
+
+/// When set, the local view reveals the whole map — the fog overlay clears and
+/// fogged entities draw — for inspecting the game. A presentation-only toggle;
+/// the simulation and AI still respect fog, so it cannot cause a desync.
+#[derive(Resource, Default)]
+pub struct FogReveal(pub bool);
+
+/// Toggles the map-reveal view (see [`FogReveal`]) on the `V` key.
+pub fn toggle_fog_reveal(keys: Res<ButtonInput<KeyCode>>, mut reveal: ResMut<FogReveal>) {
+    if keys.just_pressed(KeyCode::KeyV) {
+        reveal.0 = !reveal.0;
+    }
+}
 
 /// World-space center of a footprint, in pixels (Bevy y points up, sim y down).
 pub(crate) fn world_center(position: FixedUVec2, size: NavSize) -> Vec3 {
@@ -235,6 +284,9 @@ pub fn record_prev(mut query: Query<(&LocationComponent, &LocationStaticData, &m
 /// fixed-step overstep, and hides off-map entities (run in `Update`).
 pub fn interpolate_sprites(
     fixed: Res<Time<Fixed>>,
+    session: Res<GameSession>,
+    fog: Res<VisibilityGrid>,
+    reveal: Res<FogReveal>,
     mut query: Query<(
         &LocationComponent,
         &LocationStaticData,
@@ -242,12 +294,22 @@ pub fn interpolate_sprites(
         &mut Transform,
         &mut Visibility,
         Option<&HiddenComponent>,
+        Option<&OwnerComponent>,
         Option<&Directional>,
     )>,
 ) {
     let alpha = fixed.overstep_fraction().clamp(0.0, 1.0);
-    for (location, location_data, prev, mut transform, mut visibility, hidden, directional) in
-        &mut query
+    let local = session.local_player();
+    for (
+        location,
+        location_data,
+        prev,
+        mut transform,
+        mut visibility,
+        hidden,
+        owner,
+        directional,
+    ) in &mut query
     {
         let curr = world_center(location.position, location_data.size());
         // Snap rather than slide across teleports/reveals.
@@ -261,7 +323,24 @@ pub fn interpolate_sprites(
         {
             transform.rotation = rotation;
         }
-        *visibility = if hidden.is_some() {
+        // Own and allied entities always draw; an enemy or neutral one is hidden
+        // while its cell is not in the local team's vision (fog of war). Building
+        // ghosts (draw_ghosts) stand in for last-seen enemy structures.
+        let fogged = !reveal.0
+            && match owner {
+                Some(owner)
+                    if owner.player() == local || session.are_allied(local, owner.player()) =>
+                {
+                    false
+                }
+                _ => !fog.is_visible_to(
+                    &session,
+                    local,
+                    location.position.x.to_num::<u32>(),
+                    location.position.y.to_num::<u32>(),
+                ),
+            };
+        *visibility = if hidden.is_some() || fogged {
             Visibility::Hidden
         } else {
             Visibility::Visible
@@ -275,7 +354,12 @@ pub fn draw_selection(
     session: Res<GameSession>,
     selection: Res<Selection>,
     query: Query<
-        (&EntityInfoComponent, &LocationStaticData, &Transform),
+        (
+            &EntityInfoComponent,
+            &LocationStaticData,
+            &Transform,
+            &Visibility,
+        ),
         (With<Renderable>, Without<HiddenComponent>),
     >,
 ) {
@@ -283,7 +367,10 @@ pub fn draw_selection(
     if selected.is_empty() {
         return;
     }
-    for (info, location_data, transform) in &query {
+    for (info, location_data, transform, visibility) in &query {
+        if matches!(visibility, Visibility::Hidden) {
+            continue;
+        }
         if selected.contains(&info.id()) {
             let size = location_data.size();
             // Larger than the sprite so the ring isn't hidden behind it.
@@ -356,11 +443,20 @@ pub fn draw_rally(
 pub fn draw_facing(
     mut gizmos: Gizmos,
     query: Query<
-        (&LocationComponent, &LocationStaticData, &Transform),
+        (
+            &LocationComponent,
+            &LocationStaticData,
+            &Transform,
+            &Visibility,
+        ),
         (With<Directional>, Without<HiddenComponent>),
     >,
 ) {
-    for (location, location_data, transform) in &query {
+    for (location, location_data, transform, visibility) in &query {
+        // Don't trace a unit hidden by fog (interpolate_sprites set its visibility).
+        if matches!(visibility, Visibility::Hidden) {
+            continue;
+        }
         let Some(dir) = facing_dir(location.facing) else {
             continue;
         };
@@ -408,5 +504,139 @@ pub fn spawn_terrain_tiles(
             Transform::from_translation(center),
             InGameUi,
         ));
+    }
+
+    // Fog overlay: one darkening tile per cell above the terrain but below
+    // entities (z 0.5), updated each frame from the local team's visibility.
+    for y in 0..map.height() {
+        for x in 0..map.width() {
+            let center = Vec3::new((x as f32 + 0.5) * CELL_PX, -(y as f32 + 0.5) * CELL_PX, 0.5);
+            commands.spawn((
+                FogTile { x, y },
+                Sprite::from_color(Color::srgba(0.0, 0.0, 0.0, 1.0), Vec2::splat(CELL_PX)),
+                Transform::from_translation(center),
+                InGameUi,
+            ));
+        }
+    }
+}
+
+/// Darkens each fog tile by the local team's knowledge of its cell: black when
+/// unexplored, dimmed when explored-but-unseen, clear when visible.
+pub fn update_fog_overlay(
+    session: Res<GameSession>,
+    fog: Res<VisibilityGrid>,
+    reveal: Res<FogReveal>,
+    mut tiles: Query<(&FogTile, &mut Sprite)>,
+) {
+    let local = session.local_player();
+    for (tile, mut sprite) in &mut tiles {
+        let alpha = if reveal.0 {
+            0.0
+        } else {
+            match fog.visibility_to(&session, local, tile.x, tile.y) {
+                CellVisibility::Unexplored => 1.0,
+                CellVisibility::Explored => 0.55,
+                CellVisibility::Visible => 0.0,
+            }
+        };
+        sprite.color = Color::srgba(0.0, 0.0, 0.0, alpha);
+    }
+}
+
+/// Snapshots scouted enemy buildings while visible and draws their last-seen
+/// ghost while their cell is remembered but out of sight; purges a ghost once
+/// its cell is seen again and the real building is gone.
+pub fn draw_ghosts(
+    mut gizmos: Gizmos,
+    session: Res<GameSession>,
+    fog: Res<VisibilityGrid>,
+    reveal: Res<FogReveal>,
+    mut ghosts: ResMut<Ghosts>,
+    buildings: Query<
+        (
+            &EntityInfoComponent,
+            &LocationComponent,
+            &LocationStaticData,
+            &TagsComponent,
+            Option<&OwnerComponent>,
+        ),
+        Without<HiddenComponent>,
+    >,
+) {
+    let local = session.local_player();
+    let mut alive = HashSet::new();
+    for (info, location, location_data, tags, owner) in &buildings {
+        let own_team =
+            owner.is_some_and(|o| o.player() == local || session.are_allied(local, o.player()));
+        if own_team || !tags.contains(tags::BUILDING) {
+            continue;
+        }
+        alive.insert(info.id());
+        let (x, y) = (
+            location.position.x.to_num::<u32>(),
+            location.position.y.to_num::<u32>(),
+        );
+        if fog.is_visible_to(&session, local, x, y) {
+            let size = location_data.size();
+            ghosts.0.insert(
+                info.id(),
+                GhostSprite {
+                    origin: (x, y),
+                    center: world_center(location.position, size).truncate(),
+                    shape: ghost_shape(info.type_name(), size),
+                },
+            );
+        }
+    }
+
+    ghosts.0.retain(|id, ghost| {
+        match fog.visibility_to(&session, local, ghost.origin.0, ghost.origin.1) {
+            // Seen again: keep only if the building is still there (else it was
+            // destroyed while we were away, so drop the stale ghost).
+            CellVisibility::Visible => alive.contains(id),
+            // Remembered but unseen: draw the ghost in its last-known place
+            // (unless the whole map is revealed, when the real entities show).
+            CellVisibility::Explored => {
+                if !reveal.0 {
+                    let iso = Isometry2d::from_translation(ghost.center);
+                    let color = Color::srgba(0.55, 0.55, 0.62, 0.6);
+                    match &ghost.shape {
+                        GhostShape::Rect { extent } => gizmos.rect_2d(iso, *extent, color),
+                        GhostShape::Polygon {
+                            sides,
+                            circumradius,
+                        } => {
+                            gizmos.primitive_2d(
+                                &RegularPolygon::new(*circumradius, *sides),
+                                iso,
+                                color,
+                            );
+                        }
+                    }
+                }
+                true
+            }
+            CellVisibility::Unexplored => false,
+        }
+    });
+}
+
+/// The ghost outline for a building of `type_name` occupying `size` cells —
+/// matched to what [`attach_sprites`] draws for the live building.
+fn ghost_shape(type_name: &str, size: NavSize) -> GhostShape {
+    let circumradius = size.width.min(size.height) as f32 * CELL_PX * 0.45;
+    match shape_for(type_name) {
+        Shape::Hexagon => GhostShape::Polygon {
+            sides: 6,
+            circumradius,
+        },
+        Shape::Fortress => GhostShape::Polygon {
+            sides: 8,
+            circumradius,
+        },
+        _ => GhostShape::Rect {
+            extent: Vec2::new(size.width as f32, size.height as f32) * CELL_PX * 0.85,
+        },
     }
 }

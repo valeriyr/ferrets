@@ -1,8 +1,10 @@
 use bevy::prelude::*;
+use ferrets_script::ai::AiVision;
 use ferrets_script::scenario::Outcome;
 use ferrets_simulation::game_loop;
 use ferrets_simulation::session::{GameResult, GameSession, Winner, finish_policy::FinishPolicy};
 
+use crate::ai;
 use crate::scenario::{ScenarioObjectives, ScenarioRuntimes};
 
 /// Applies the session's finish policy at the end of the tick, ending the game
@@ -54,7 +56,9 @@ fn check_scenario(world: &mut World) {
         .map(|slot| slot.race().unwrap_or_default().to_string());
     match judged_race {
         Some(race) => {
-            let view = crate::ai::game_view(world, player, &race);
+            // The scenario judge evaluates win conditions over the whole game,
+            // not as a competitor, so it sees everything.
+            let view = ai::game_view(world, player, &race, AiVision::Omniscient);
             match runtimes.runtime.evaluate(&view) {
                 Ok(status) => {
                     world.insert_resource(ScenarioObjectives(status.objectives));

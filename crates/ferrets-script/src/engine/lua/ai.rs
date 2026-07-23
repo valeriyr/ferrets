@@ -6,9 +6,9 @@ use std::rc::Rc;
 use ferrets_simulation::command::PlayerCommand;
 use mlua::{Function, Lua, Table, Value};
 
-use crate::ai::AiRuntime;
 use crate::ai::view::content::ContentView;
 use crate::ai::view::game::GameView;
+use crate::ai::{AiRuntime, AiVision};
 use crate::engine::lua::{self, command, view};
 use crate::error::ScriptError;
 
@@ -20,6 +20,7 @@ pub(super) struct LuaAiRuntime {
     lua: Lua,
     name: String,
     period: u32,
+    vision: AiVision,
     think: Function,
     state: Table,
 }
@@ -54,6 +55,7 @@ impl LuaAiRuntime {
             lua,
             name: definition.name,
             period: definition.period,
+            vision: definition.vision,
             think: definition.think,
             state,
         })
@@ -67,6 +69,10 @@ impl AiRuntime for LuaAiRuntime {
 
     fn period(&self) -> u32 {
         self.period
+    }
+
+    fn vision(&self) -> AiVision {
+        self.vision
     }
 
     fn think(&mut self, view: &GameView) -> crate::Result<Vec<PlayerCommand>> {
@@ -83,6 +89,7 @@ impl AiRuntime for LuaAiRuntime {
 struct AiDefinition {
     name: String,
     period: u32,
+    vision: AiVision,
     think: Function,
 }
 
@@ -108,10 +115,26 @@ fn register_define_ai(lua: &Lua, sink: &Rc<RefCell<Option<AiDefinition>>>) -> ml
             }
         };
         let period = lua::parse_period(&options, ai_error)?;
+        // Fog behaviour is the AI's own choice.
+        let vision = match options.get::<Option<String>>("vision")?.as_deref() {
+            Some("filtered") => AiVision::Filtered,
+            Some("omniscient") => AiVision::Omniscient,
+            None => {
+                return Err(ai_error(
+                    "define_ai must declare 'vision' ('filtered' or 'omniscient')",
+                ));
+            }
+            Some(other) => {
+                return Err(ai_error(&format!(
+                    "'vision' must be 'filtered' or 'omniscient', got '{other}'"
+                )));
+            }
+        };
 
         *slot = Some(AiDefinition {
             name,
             period,
+            vision,
             think,
         });
         Ok(())

@@ -26,6 +26,8 @@
 //! [ApplyDeferred]
 //! process_dying      — exclusive system; advance Die orders, despawn entities that
 //!                      finished dying
+//! recompute_visibility — exclusive system; refresh each player's fog of war from
+//!                      owned entities' sight, before acquisition/AI read it
 //! flee               — exclusive system; fleeing-stance entities run from fresh hits
 //! auto_engage        — exclusive system; stance-driven target acquisition for idle
 //!                      entities
@@ -87,6 +89,7 @@ use ferrets_simulation::{
     selection::Selection,
     session::{GameSession, player_slot::PlayerSlot},
     simulation_id::SimulationIdGenerator,
+    visibility::VisibilityGrid,
 };
 
 /// System set containing all simulation systems.
@@ -160,10 +163,12 @@ impl Plugin for SimulationPlugin {
 
         let player_count = session.slots().len();
         let frames = warmup_input_frames(session.slots());
+        let visibility = VisibilityGrid::new(player_count, map.width(), map.height());
         app.insert_resource(session)
             .insert_resource(map)
             .insert_resource(Selection::new(player_count))
             .insert_resource(ControlGroups::new(player_count))
+            .insert_resource(visibility)
             .insert_resource(PlayerResources::new(player_count))
             .insert_resource(frames)
             .init_resource::<ContentRegistry>()
@@ -196,6 +201,10 @@ impl Plugin for SimulationPlugin {
                 (
                     ApplyDeferred,
                     systems::process_dying,
+                    // Refresh fog of war before anything acts on it, so this
+                    // tick's acquisition and AI see current-tick visibility (dead
+                    // entities already removed, no longer granting sight).
+                    systems::recompute_visibility,
                     // Stance-driven initiative first, so a fresh engagement or
                     // flee response executes on the same tick it was decided.
                     systems::flee,

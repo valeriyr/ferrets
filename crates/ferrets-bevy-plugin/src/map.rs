@@ -8,6 +8,7 @@ use ferrets_simulation::map::Map;
 use ferrets_simulation::map_data::MapData;
 use ferrets_simulation::session::GameSession;
 use ferrets_simulation::spawn;
+use ferrets_simulation::visibility::VisibilityGrid;
 
 /// Builds the described map in the world: installs the live grid and spawns
 /// the declared placements.
@@ -19,7 +20,10 @@ use ferrets_simulation::spawn;
 /// and slots, so the skips are identical everywhere.
 pub fn instantiate_map(world: &mut World, data: &MapData) {
     let map = Map::from_data(data, world.resource::<ContentRegistry>());
+    let (width, height) = (map.width(), map.height());
     world.insert_resource(map);
+    let player_count = world.resource::<GameSession>().slots().len();
+    world.insert_resource(VisibilityGrid::new(player_count, width, height));
 
     for placement in data.placements() {
         if let Some(owner) = placement.owner {

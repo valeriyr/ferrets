@@ -18,6 +18,7 @@ pub mod session;
 pub mod simulation_id;
 pub mod skirmish;
 pub mod spawn;
+pub mod visibility;
 
 /// The full build version, `major.minor.patch`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

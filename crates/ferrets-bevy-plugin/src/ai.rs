@@ -14,8 +14,8 @@ use std::collections::BTreeMap;
 use bevy::ecs::world::EntityRef;
 use bevy::prelude::*;
 use ferrets_pathfinder::nav_pos::NavPos;
-use ferrets_script::ai::AiRuntime;
 use ferrets_script::ai::view::game::{EntityView, GameView};
+use ferrets_script::ai::{AiRuntime, AiVision};
 use ferrets_simulation::{
     components::{
         build::UnderConstructionComponent,
@@ -35,6 +35,7 @@ use ferrets_simulation::{
     resources::PlayerResources,
     session::{GameSession, player_slot::PlayerId, player_type::PlayerType},
     simulation_id::SimulationId,
+    visibility::VisibilityGrid,
 };
 
 use crate::network::NetworkSession;
@@ -187,7 +188,7 @@ pub fn supply_ai_input(world: &mut World) {
         }
         let commands = match runtimes.0.get_mut(&player) {
             Some(runtime) if is_think_tick(tick, player, runtime.period()) => {
-                let view = game_view(world, player, &race);
+                let view = game_view(world, player, &race, runtime.vision());
                 match runtime.think(&view) {
                     Ok(commands) => commands,
                     Err(error) => {
@@ -216,7 +217,7 @@ fn is_think_tick(tick: u32, player: PlayerId, period: u32) -> bool {
 /// Snapshots everything `player`'s brain observes this tick. Entity lists are
 /// in ascending simulation-id order; only integers, strings, and booleans are
 /// captured, so the snapshot is identical on every node with identical state.
-pub fn game_view(world: &World, player: PlayerId, race: &str) -> GameView {
+pub fn game_view(world: &World, player: PlayerId, race: &str, vision: AiVision) -> GameView {
     let map = world.resource::<Map>();
     let resources = world
         .resource::<PlayerResources>()
@@ -226,6 +227,7 @@ pub fn game_view(world: &World, player: PlayerId, race: &str) -> GameView {
         .collect();
 
     let session = world.resource::<GameSession>();
+    let visibility = world.resource::<VisibilityGrid>();
     let mut my_entities = Vec::new();
     let mut ally_entities = Vec::new();
     let mut enemy_entities = Vec::new();
@@ -244,10 +246,25 @@ pub fn game_view(world: &World, player: PlayerId, race: &str) -> GameView {
         }
         let view = entity_view(&entity_ref, id, hidden);
         match owner {
+            // Own and allied entities are always seen; enemy and neutral ones
+            // only when the brain's team can see their cell (unless the AI is
+            // omniscient, in which case fog does not filter its view).
             Some(owner) if owner == player => my_entities.push(view),
             Some(owner) if session.are_allied(player, owner) => ally_entities.push(view),
-            Some(_) => enemy_entities.push(view),
-            None => neutral_entities.push(view),
+            Some(_) => {
+                if matches!(vision, AiVision::Omniscient)
+                    || team_visible(&entity_ref, visibility, session, player)
+                {
+                    enemy_entities.push(view);
+                }
+            }
+            None => {
+                if matches!(vision, AiVision::Omniscient)
+                    || team_visible(&entity_ref, visibility, session, player)
+                {
+                    neutral_entities.push(view);
+                }
+            }
         }
     }
 
@@ -298,4 +315,21 @@ fn entity_view(entity: &EntityRef, id: SimulationId, hidden: bool) -> EntityView
             .get::<ResourceSourceComponent>()
             .map(|source| source.amount),
     }
+}
+
+/// Whether `player`'s team currently sees `entity`'s cell.
+fn team_visible(
+    entity: &EntityRef,
+    visibility: &VisibilityGrid,
+    session: &GameSession,
+    player: PlayerId,
+) -> bool {
+    entity.get::<LocationComponent>().is_some_and(|location| {
+        visibility.is_visible_to(
+            session,
+            player,
+            location.position.x.to_num::<u32>(),
+            location.position.y.to_num::<u32>(),
+        )
+    })
 }

@@ -72,6 +72,9 @@ pub struct EntityTypeDef {
     /// Groups instances for select-all-of-type. `None` falls back to the type
     /// name, so each type is its own class unless content shares one explicitly.
     pub selection_class: Option<String>,
+    /// How far, in cells, an owned instance reveals the map for its player.
+    /// Unset (`0`) reveals only the cell it occupies.
+    pub sight_range: u32,
 }
 
 impl EntityTypeDef {
@@ -101,6 +104,7 @@ impl EntityTypeDef {
             tags: BTreeSet::new(),
             selection_priority: 0,
             selection_class: None,
+            sight_range: 0,
         }
     }
 
@@ -290,6 +294,12 @@ impl EntityTypeDef {
         let class = class.into();
         assert!(!class.is_empty(), "selection class must not be empty");
         self.selection_class = Some(class);
+        self
+    }
+
+    /// Sets how far instances reveal the map (see [`sight_range`](Self::sight_range)).
+    pub fn with_sight_range(mut self, sight_range: u32) -> Self {
+        self.sight_range = sight_range;
         self
     }
 

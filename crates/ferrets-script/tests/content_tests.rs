@@ -68,6 +68,7 @@ fn parses_selection_priority_and_class() {
             health = 20,
             selection_priority = 42,
             selection_class = "spellcaster",
+            sight_range = 12,
         })
     "#;
     let registry = content::load(&engine(), source).expect("load content");
@@ -76,7 +77,8 @@ fn parses_selection_priority_and_class() {
         .with_location(LayerId::new(1), NavSize::ONE, Solidity::Solid)
         .with_health(20)
         .with_selection_priority(42)
-        .with_selection_class("spellcaster");
+        .with_selection_class("spellcaster")
+        .with_sight_range(12);
 
     assert_eq!(registry.entity("caster"), Some(&expected));
 }
@@ -95,6 +97,7 @@ fn selection_class_defaults_to_type_name() {
     let marine = registry.entity("marine").expect("marine");
     assert_eq!(marine.selection_class(), "marine");
     assert_eq!(marine.selection_priority, 0);
+    assert_eq!(marine.sight_range, 0);
 }
 
 #[test]

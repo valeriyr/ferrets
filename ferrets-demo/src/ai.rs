@@ -66,6 +66,7 @@ pub const AI_SCRIPT: &str = r#"
 
     define_ai("default", {
         period = 20,
+        vision = "filtered",
         think = function(state, view)
             local names = RACES[view.race]
             if names == nil then return end
@@ -168,15 +169,29 @@ pub const AI_SCRIPT: &str = r#"
                 end
             end
 
-            -- Attack-move every idle soldier onto the nearest enemy once the
-            -- wave is big enough — the push engages whatever it meets.
-            if #soldiers >= ARMY_ATTACK_AT and #view.enemy_entities > 0 then
+            -- Once the wave is big enough, push it out: onto the nearest enemy
+            -- in sight, or — with fog hiding every enemy — toward the far side
+            -- of the map to scout one out. The attack-move engages whatever it
+            -- meets and reveals the ground it crosses.
+            if #soldiers >= ARMY_ATTACK_AT then
+                local scout_x, scout_y
+                if hall ~= nil then
+                    scout_x = view.map.width - 1 - hall.x
+                    scout_y = view.map.height - 1 - hall.y
+                end
                 for _, s in ipairs(soldiers) do
                     if s.idle then
                         local target = nearest(s, view.enemy_entities)
-                        commands[#commands + 1] = { kind = "select", id = s.id }
-                        commands[#commands + 1] =
-                            { kind = "attack_move", x = target.x, y = target.y }
+                        local tx, ty
+                        if target ~= nil then
+                            tx, ty = target.x, target.y
+                        else
+                            tx, ty = scout_x, scout_y
+                        end
+                        if tx ~= nil then
+                            commands[#commands + 1] = { kind = "select", id = s.id }
+                            commands[#commands + 1] = { kind = "attack_move", x = tx, y = ty }
+                        end
                     end
                 end
             end
@@ -197,6 +212,7 @@ pub const BOSS_AI_SCRIPT: &str = r#"
 
     define_ai("default", {
         period = 20,
+        vision = "filtered",
         think = function(state, view)
             local commands = {}
 

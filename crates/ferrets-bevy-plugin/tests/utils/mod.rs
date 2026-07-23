@@ -118,7 +118,8 @@ pub fn selection_app() -> App {
                 .with_movement(FixedU64::from_num(0.5))
                 .with_health(30)
                 .with_dying(1, None)
-                .with_attack(10, 1, 3, 1, 1),
+                .with_attack(10, 1, 3, 1, 1)
+                .with_sight_range(5),
         );
         registry.register(
             EntityTypeDef::new("critter")
@@ -386,7 +387,10 @@ pub fn register_orders_content(app: &mut App) {
                 .with_movement(FixedU64::from_num(0.5))
                 .with_health(30)
                 .with_dying(2, None)
-                .with_attack(10, 1, 5, 2, 2),
+                .with_attack(10, 1, 5, 2, 2)
+                // Sees farther than it auto-engages, so its circular vision
+                // covers everything within acquisition range.
+                .with_sight_range(8),
         );
         // A ranged sentry, for suites that need hits without an adjacent chaser.
         registry.register(
@@ -395,7 +399,8 @@ pub fn register_orders_content(app: &mut App) {
                 .with_movement(FixedU64::from_num(0.5))
                 .with_health(30)
                 .with_dying(2, None)
-                .with_attack(10, 3, 5, 2, 2),
+                .with_attack(10, 3, 5, 2, 2)
+                .with_sight_range(8),
         );
     }
     app.world_mut().resource::<ContentRegistry>().validate();

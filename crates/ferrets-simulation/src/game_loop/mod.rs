@@ -19,3 +19,4 @@ pub mod patrol;
 pub mod pending_reveal;
 pub mod tick_counter;
 pub mod train;
+pub mod visibility;

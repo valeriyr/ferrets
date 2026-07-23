@@ -7,6 +7,7 @@
 //! ```lua
 //! define_ai("default", {
 //!     period = 20,                        -- ticks between think calls
+//!     vision = "filtered",                -- "filtered" (fog applies) or "omniscient"
 //!     think = function(state, view)
 //!         return { { kind = "stop" } }    -- an array of command tables
 //!     end,
@@ -49,6 +50,16 @@ use ferrets_simulation::command::PlayerCommand;
 
 use crate::ai::view::game::GameView;
 
+/// How much of the map an AI brain observes. Each AI implementation declares its
+/// own fog behaviour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AiVision {
+    /// Sees only what its team's vision reveals — fog of war applies.
+    Filtered,
+    /// Sees the whole map, ignoring fog.
+    Omniscient,
+}
+
 /// A live brain for one AI player, kept alive for a whole session.
 ///
 /// A runtime is single-threaded (`!Send`); callers own keeping it on one
@@ -59,6 +70,9 @@ pub trait AiRuntime {
 
     /// Ticks between think calls, as declared by the script.
     fn period(&self) -> u32;
+
+    /// How much of the map this brain observes (see [`AiVision`]).
+    fn vision(&self) -> AiVision;
 
     /// Runs one think step against `view`, returning the commands the script
     /// produced.

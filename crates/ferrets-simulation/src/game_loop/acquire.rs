@@ -14,6 +14,7 @@ use crate::{
     map::Map,
     session::GameSession,
     simulation_id::SimulationId,
+    visibility::VisibilityGrid,
 };
 
 /// Ticks between acquisition scans for one entity. Scans are staggered by
@@ -87,6 +88,20 @@ pub(super) fn qualifies(
         target_ref.get::<OwnerComponent>(),
     ) {
         return false;
+    }
+
+    // Fog of war: a unit only auto-engages what its team can see. An ownerless
+    // attacker has no team vision, so it is not fog-limited.
+    if let Some(seeker_owner) = world.entity(seeker).get::<OwnerComponent>() {
+        let position = target_ref.get::<LocationComponent>().unwrap().position;
+        if !world.resource::<VisibilityGrid>().is_visible_to(
+            world.resource::<GameSession>(),
+            seeker_owner.player(),
+            position.x.to_num::<u32>(),
+            position.y.to_num::<u32>(),
+        ) {
+            return false;
+        }
     }
 
     let size = target_ref.get::<LocationStaticData>().unwrap().size();

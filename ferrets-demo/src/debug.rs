@@ -19,11 +19,12 @@ use ferrets_simulation::{
     order::Order,
     selection::Selection,
     session::GameSession,
+    visibility::VisibilityGrid,
 };
 
 use crate::input::InputMode;
 use crate::map;
-use crate::render::{CELL_PX, world_center};
+use crate::render::{CELL_PX, FogReveal, world_center};
 use crate::states::InGameUi;
 
 /// Toggleable debug options.
@@ -168,6 +169,9 @@ pub fn draw_grid(
     map: Res<Map>,
     registry: Res<ContentRegistry>,
     debug: Res<DebugState>,
+    session: Res<GameSession>,
+    fog: Res<VisibilityGrid>,
+    reveal: Res<FogReveal>,
 ) {
     if !debug.grid {
         return;
@@ -175,12 +179,17 @@ pub fn draw_grid(
     let (w, h) = (map.width() as f32, map.height() as f32);
     let line = Color::srgba(0.0, 0.0, 0.0, 0.15);
 
-    // Fill occupied cells so the nav grid's occupancy is visible at a glance.
+    // Fill occupied cells so the nav grid's occupancy is visible at a glance —
+    // but only where the local team can see, so fogged entities' footprints
+    // don't leak their positions through the overlay.
+    let local = session.local_player();
     let nav_grid = map.nav_grid();
     if let Some(ground) = registry.layer(map::GROUND) {
         for y in 0..map.height() {
             for x in 0..map.width() {
-                if nav_grid.is_occupied(ground, NavPos::new(x, y)) {
+                if nav_grid.is_occupied(ground, NavPos::new(x, y))
+                    && (reveal.0 || fog.is_visible_to(&session, local, x, y))
+                {
                     fill_cell(&mut gizmos, x, y);
                 }
             }
@@ -209,6 +218,7 @@ pub fn draw_orders(
             &LocationStaticData,
             &OrderQueueComponent,
             Option<&PatrolComponent>,
+            &Visibility,
         ),
         Without<HiddenComponent>,
     >,
@@ -241,7 +251,11 @@ pub fn draw_orders(
             .map(|(_, location, data)| world_center(location.position, data.size()).truncate())
     };
 
-    for (location, location_data, queue, patrol) in &units {
+    for (location, location_data, queue, patrol, visibility) in &units {
+        // Don't reveal a fogged unit's orders (its sprite is hidden by fog).
+        if matches!(visibility, Visibility::Hidden) {
+            continue;
+        }
         let start = world_center(location.position, location_data.size()).truncate();
         for entry in &queue.0 {
             let (end, color) = match &entry.order {

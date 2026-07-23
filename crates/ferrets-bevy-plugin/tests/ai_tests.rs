@@ -15,6 +15,7 @@ use ferrets_replay::{
     recorder::Recorder,
     replay::Replay,
 };
+use ferrets_script::ai::AiVision;
 use ferrets_script::ai::view::content::ContentView;
 use ferrets_script::engine::ScriptEngine;
 use ferrets_script::engine::lua::LuaEngine;
@@ -187,7 +188,7 @@ fn game_view_classifies_and_snapshots_entities() {
     world.entity_mut(hidden_enemy).insert(HiddenComponent);
     world.resource_mut::<PlayerResources>().add(1, "gold", 120);
 
-    let view = game_view(world, 1, "human");
+    let view = game_view(world, 1, "human", AiVision::Omniscient);
 
     assert_eq!(view.player, 1);
     assert_eq!(view.race, "human");
@@ -233,6 +234,7 @@ fn identical_ai_sessions_stay_checksum_identical() {
 const STOPPER: &str = r#"
     define_ai("stopper", {
         period = 4,
+        vision = "filtered",
         think = function(state, view)
             return { { kind = "stop" } }
         end,
@@ -243,6 +245,7 @@ const STOPPER: &str = r#"
 const COUNTER: &str = r#"
     define_ai("counter", {
         period = 1,
+        vision = "filtered",
         think = function(state, view)
             state.count = (state.count or 0) + 1
             return { { kind = "move", x = state.count, y = 0 } }
@@ -254,6 +257,7 @@ const COUNTER: &str = r#"
 const PATROL: &str = r#"
     define_ai("patrol", {
         period = 5,
+        vision = "filtered",
         think = function(state, view)
             local unit = view.my_entities[1]
             if unit == nil then return end

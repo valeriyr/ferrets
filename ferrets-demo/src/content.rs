@@ -33,6 +33,9 @@ pub const CONTENT: &str = r#"
         dying = { time = 2 },
         attack = { damage = 12, range = 5, acquire_range = 8, aiming = 4, reloading = 6 },
         train_time = 100,
+        -- Sees past its acquire range so its circular vision covers the square it
+        -- can auto-engage.
+        sight_range = 12,
     })
     define_entity("sea_fortress", {
         location = { occupation = WATER, size = { 3, 3 }, solidity = "solid" },
@@ -40,6 +43,7 @@ pub const CONTENT: &str = r#"
         dying = { time = 2 },
         trainer = { "ship" },
         tags = { "building" },
+        sight_range = 8,
     })
 
     -- Neutral resource sources.
@@ -61,6 +65,7 @@ pub const CONTENT: &str = r#"
             dying = { time = 2 },
             cost = { gold = 50 },
             train_time = 40,
+            sight_range = 4,
             builder = builds,
             resource_carrier = {
                 gold = { capacity = 5, time = 20, visibility = "hidden" },
@@ -80,6 +85,7 @@ pub const CONTENT: &str = r#"
             trainer = { trains },
             resource_storage = { "gold", "wood" },
             tags = { "building" },
+            sight_range = 7,
         })
     end
 
@@ -93,6 +99,7 @@ pub const CONTENT: &str = r#"
             build_time = 120,
             trainer = { trains },
             tags = { "building" },
+            sight_range = 6,
         })
     end
 
@@ -111,6 +118,9 @@ pub const CONTENT: &str = r#"
         train_time = 60,
         -- Combat units lead a mixed selection over workers.
         selection_priority = 10,
+        -- Sees comfortably past its acquire range, so its circular vision covers
+        -- what it can auto-engage.
+        sight_range = 10,
     })
 
     -- Orc: worker, base, barracks, and a melee unit.
@@ -127,6 +137,7 @@ pub const CONTENT: &str = r#"
         cost = { gold = 90 },
         train_time = 70,
         selection_priority = 10,
+        sight_range = 8,
     })
 "#;
 

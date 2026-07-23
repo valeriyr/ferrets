@@ -306,7 +306,7 @@ pub fn update_help(
     mut text: Query<&mut Text, With<HelpText>>,
 ) {
     let mut message = String::from(
-        "LMB select (Shift add, dbl-click all of type) | RMB move/harvest/attack | F/R/G orders | X stance | 1-0 groups (Ctrl set) | F1 debug | F2 spawn",
+        "LMB select (Shift add, dbl-click all of type) | RMB move/harvest/attack | F/R/G orders | X stance | 1-0 groups (Ctrl set) | V reveal | F1 debug | F2 spawn",
     );
 
     let local = session.local_player();

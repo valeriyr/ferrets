@@ -6,9 +6,9 @@ use ferrets_math::FixedU64;
 use ferrets_math::fixed_urect::FixedURect;
 use ferrets_math::fixed_uvec2::FixedUVec2;
 use ferrets_pathfinder::nav_pos::NavPos;
-use ferrets_script::ai::AiRuntime;
 use ferrets_script::ai::view::content::{ContentView, EntityContentView};
 use ferrets_script::ai::view::game::{EntityView, GameView};
+use ferrets_script::ai::{AiRuntime, AiVision};
 use ferrets_script::engine::ScriptEngine;
 use ferrets_script::engine::lua::LuaEngine;
 use ferrets_script::error::ScriptError;
@@ -23,31 +23,28 @@ use ferrets_simulation::simulation_id::SimulationId;
 
 #[test]
 fn think_returns_commands_as_player_commands() {
-    let source = r#"
-        define_ai("all_kinds", {
-            period = 20,
-            think = function(state, view)
-                return {
-                    { kind = "select", id = 7 },
-                    { kind = "select_area", x1 = 1, y1 = 2, x2 = 3, y2 = 4 },
-                    { kind = "move", x = 5, y = 6 },
-                    { kind = "attack", target = 8, flush = false },
-                    { kind = "send", target = 9 },
-                    { kind = "train", trainer = 10, type_name = "peasant" },
-                    { kind = "build", builder = 11, type_name = "barracks", x = 12, y = 13 },
-                    { kind = "rally", entity = 14, x = 15, y = 16 },
-                    { kind = "rally", entity = 17, target = 18 },
-                    { kind = "rally", entity = 19 },
-                    { kind = "attack_move", x = 20, y = 21 },
-                    { kind = "patrol", x = 22, y = 23, flush = false },
-                    { kind = "guard", target = 24 },
-                    { kind = "stance", stance = "stand_ground" },
-                    { kind = "stop" },
-                }
-            end,
-        })
-    "#;
-    let mut runtime = load_ai(source, &empty_content()).expect("load ai");
+    let source = ai_script(
+        r#"function(state, view)
+            return {
+                { kind = "select", id = 7 },
+                { kind = "select_area", x1 = 1, y1 = 2, x2 = 3, y2 = 4 },
+                { kind = "move", x = 5, y = 6 },
+                { kind = "attack", target = 8, flush = false },
+                { kind = "send", target = 9 },
+                { kind = "train", trainer = 10, type_name = "peasant" },
+                { kind = "build", builder = 11, type_name = "barracks", x = 12, y = 13 },
+                { kind = "rally", entity = 14, x = 15, y = 16 },
+                { kind = "rally", entity = 17, target = 18 },
+                { kind = "rally", entity = 19 },
+                { kind = "attack_move", x = 20, y = 21 },
+                { kind = "patrol", x = 22, y = 23, flush = false },
+                { kind = "guard", target = 24 },
+                { kind = "stance", stance = "stand_ground" },
+                { kind = "stop" },
+            }
+        end"#,
+    );
+    let mut runtime = load_ai(&source, &empty_content()).expect("load ai");
 
     let commands = runtime.think(&empty_view()).expect("think");
 
@@ -124,15 +121,11 @@ fn think_returns_commands_as_player_commands() {
 
 #[test]
 fn returning_nil_or_empty_table_yields_no_commands() {
-    let nothing = r#"
-        define_ai("mute", { period = 1, think = function(state, view) end })
-    "#;
-    let empty = r#"
-        define_ai("empty", { period = 1, think = function(state, view) return {} end })
-    "#;
+    let nothing = ai_script("function(state, view) end");
+    let empty = ai_script("function(state, view) return {} end");
 
-    let mut from_nil = load_ai(nothing, &empty_content()).expect("load ai");
-    let mut from_empty = load_ai(empty, &empty_content()).expect("load ai");
+    let mut from_nil = load_ai(&nothing, &empty_content()).expect("load ai");
+    let mut from_empty = load_ai(&empty, &empty_content()).expect("load ai");
 
     assert!(from_nil.think(&empty_view()).expect("think").is_empty());
     assert!(from_empty.think(&empty_view()).expect("think").is_empty());
@@ -141,15 +134,12 @@ fn returning_nil_or_empty_table_yields_no_commands() {
 #[test]
 fn accepts_integral_floats_in_command_fields() {
     // Integer division in a script yields floats; whole values must pass.
-    let source = r#"
-        define_ai("divider", {
-            period = 1,
-            think = function(state, view)
-                return { { kind = "move", x = 10 / 2, y = 0 } }
-            end,
-        })
-    "#;
-    let mut runtime = load_ai(source, &empty_content()).expect("load ai");
+    let source = ai_script(
+        r#"function(state, view)
+            return { { kind = "move", x = 10 / 2, y = 0 } }
+        end"#,
+    );
+    let mut runtime = load_ai(&source, &empty_content()).expect("load ai");
 
     let commands = runtime.think(&empty_view()).expect("think");
 
@@ -236,8 +226,8 @@ fn reports_missing_define_ai_as_ai_error() {
 #[test]
 fn reports_second_define_ai_as_ai_error() {
     let source = r#"
-        define_ai("first", { period = 1, think = function() end })
-        define_ai("second", { period = 1, think = function() end })
+        define_ai("first", { period = 1, vision = "filtered", think = function() end })
+        define_ai("second", { period = 1, vision = "filtered", think = function() end })
     "#;
 
     let Err(error) = load_ai(source, &empty_content()) else {
@@ -253,12 +243,63 @@ fn reports_second_define_ai_as_ai_error() {
 #[test]
 fn accepts_integral_float_period() {
     let source = r#"
-        define_ai("divided", { period = 60 / 3, think = function() end })
+        define_ai("divided", { period = 60 / 3, vision = "filtered", think = function() end })
     "#;
 
     let runtime = load_ai(source, &empty_content()).expect("load ai");
 
     assert_eq!(runtime.period(), 20);
+}
+
+#[test]
+fn requires_explicit_vision_and_reads_declaration() {
+    // No principled default exists, so omitting `vision` is an error rather than
+    // a silent guess; a declaration is read back verbatim.
+    let missing = r#"
+        define_ai("fair", { period = 1, think = function() end })
+    "#;
+    let filtered = r#"
+        define_ai("scout", { period = 1, vision = "filtered", think = function() end })
+    "#;
+    let omniscient = r#"
+        define_ai("cheater", { period = 1, vision = "omniscient", think = function() end })
+    "#;
+
+    let Err(error) = load_ai(missing, &empty_content()) else {
+        panic!("must reject a definition with no vision");
+    };
+    assert!(
+        matches!(&error, ScriptError::AiError(m) if m.contains("must declare 'vision'")),
+        "got {error:?}"
+    );
+    assert_eq!(
+        load_ai(filtered, &empty_content())
+            .expect("load ai")
+            .vision(),
+        AiVision::Filtered
+    );
+    assert_eq!(
+        load_ai(omniscient, &empty_content())
+            .expect("load ai")
+            .vision(),
+        AiVision::Omniscient
+    );
+}
+
+#[test]
+fn reports_invalid_vision_as_ai_error() {
+    let source = r#"
+        define_ai("confused", { period = 1, vision = "wallhack", think = function() end })
+    "#;
+
+    let Err(error) = load_ai(source, &empty_content()) else {
+        panic!("must reject");
+    };
+
+    assert!(
+        matches!(&error, ScriptError::AiError(m) if m.contains("'vision' must be 'filtered' or 'omniscient'")),
+        "got {error:?}"
+    );
 }
 
 #[test]
@@ -296,7 +337,7 @@ fn reports_non_function_think_as_ai_error() {
 #[test]
 fn exposes_name_and_period() {
     let source = r#"
-        define_ai("named", { period = 20, think = function() end })
+        define_ai("named", { period = 20, vision = "filtered", think = function() end })
     "#;
 
     let runtime = load_ai(source, &empty_content()).expect("load ai");
@@ -373,15 +414,12 @@ fn reports_rally_with_half_cell_as_command_error() {
 #[test]
 fn malformed_element_fails_whole_batch() {
     // A valid command before the bad one must not survive the batch.
-    let source = r#"
-        define_ai("mixed", {
-            period = 1,
-            think = function(state, view)
-                return { { kind = "stop" }, { kind = "nope" } }
-            end,
-        })
-    "#;
-    let mut runtime = load_ai(source, &empty_content()).expect("load ai");
+    let source = ai_script(
+        r#"function(state, view)
+            return { { kind = "stop" }, { kind = "nope" } }
+        end"#,
+    );
+    let mut runtime = load_ai(&source, &empty_content()).expect("load ai");
 
     let error = runtime.think(&empty_view()).expect_err("must reject");
 
@@ -407,16 +445,13 @@ fn returning_non_table_is_command_error() {
 
 #[test]
 fn think_error_surfaces_and_runtime_stays_usable() {
-    let source = r#"
-        define_ai("fragile", {
-            period = 1,
-            think = function(state, view)
-                if view.tick == 1 then error("boom") end
-                return {}
-            end,
-        })
-    "#;
-    let mut runtime = load_ai(source, &empty_content()).expect("load ai");
+    let source = ai_script(
+        r#"function(state, view)
+            if view.tick == 1 then error("boom") end
+            return {}
+        end"#,
+    );
+    let mut runtime = load_ai(&source, &empty_content()).expect("load ai");
 
     let error = runtime.think(&view_at_tick(1)).expect_err("must fail");
     let recovered = runtime.think(&view_at_tick(2));
@@ -430,18 +465,15 @@ fn think_error_surfaces_and_runtime_stays_usable() {
 
 #[test]
 fn ambient_state_stdlib_is_unavailable() {
-    let source = r#"
-        define_ai("sandboxed", {
-            period = 1,
-            think = function(state, view)
-                if os ~= nil or io ~= nil then error("stdlib leaked") end
-                if pcall(math.random) then error("math.random available") end
-                if pcall(math.randomseed, 7) then error("math.randomseed available") end
-                return {}
-            end,
-        })
-    "#;
-    let mut runtime = load_ai(source, &empty_content()).expect("load ai");
+    let source = ai_script(
+        r#"function(state, view)
+            if os ~= nil or io ~= nil then error("stdlib leaked") end
+            if pcall(math.random) then error("math.random available") end
+            if pcall(math.randomseed, 7) then error("math.randomseed available") end
+            return {}
+        end"#,
+    );
+    let mut runtime = load_ai(&source, &empty_content()).expect("load ai");
 
     assert!(runtime.think(&empty_view()).is_ok());
 }
@@ -452,24 +484,21 @@ fn ambient_state_stdlib_is_unavailable() {
 
 #[test]
 fn identical_views_produce_identical_command_sequences() {
-    let source = r#"
-        define_ai("mirror", {
-            period = 1,
-            think = function(state, view)
-                state.round = (state.round or 0) + 1
-                local commands = {}
-                for _, e in ipairs(view.my_entities) do
-                    if e.idle then
-                        commands[#commands + 1] = { kind = "select", id = e.id }
-                        commands[#commands + 1] = { kind = "move", x = e.x + state.round, y = e.y }
-                    end
+    let source = ai_script(
+        r#"function(state, view)
+            state.round = (state.round or 0) + 1
+            local commands = {}
+            for _, e in ipairs(view.my_entities) do
+                if e.idle then
+                    commands[#commands + 1] = { kind = "select", id = e.id }
+                    commands[#commands + 1] = { kind = "move", x = e.x + state.round, y = e.y }
                 end
-                return commands
-            end,
-        })
-    "#;
-    let mut first = load_ai(source, &empty_content()).expect("load ai");
-    let mut second = load_ai(source, &empty_content()).expect("load ai");
+            end
+            return commands
+        end"#,
+    );
+    let mut first = load_ai(&source, &empty_content()).expect("load ai");
+    let mut second = load_ai(&source, &empty_content()).expect("load ai");
 
     for tick in 0..3 {
         let view = populated_view(tick);
@@ -482,32 +511,29 @@ fn identical_views_produce_identical_command_sequences() {
 
 #[test]
 fn scripts_read_view_and_content_tables() {
-    let source = r#"
-        define_ai("reader", {
-            period = 1,
-            think = function(state, view)
-                if view.race ~= "human" then error("race") end
-                if view.map.width ~= 64 then error("map width") end
-                local hall = view.my_entities[1]
-                if hall.type_name ~= "town_hall" then error("type_name") end
-                if hall.health ~= 800 then error("health") end
-                if hall.train_queue[1] ~= "peasant" then error("train_queue") end
-                if hall.under_construction then error("under_construction") end
-                if hall.stance ~= nil then error("hall stance") end
-                if view.my_entities[2].stance ~= "flee" then error("worker stance") end
-                local mine = view.neutral_entities[1]
-                if mine.resource_amount ~= 900 then error("resource_amount") end
-                local worker = content.entities.peasant
-                if worker.cost[1].kind ~= "gold" then error("cost kind") end
-                if worker.train_time ~= 40 then error("train_time") end
-                if not worker.can_move then error("can_move") end
-                if content.resources[1] ~= "gold" then error("resources") end
-                local gold = view.resources.gold
-                return { { kind = "move", x = gold + worker.cost[1].amount, y = hall.x } }
-            end,
-        })
-    "#;
-    let mut runtime = load_ai(source, &demo_like_content()).expect("load ai");
+    let source = ai_script(
+        r#"function(state, view)
+            if view.race ~= "human" then error("race") end
+            if view.map.width ~= 64 then error("map width") end
+            local hall = view.my_entities[1]
+            if hall.type_name ~= "town_hall" then error("type_name") end
+            if hall.health ~= 800 then error("health") end
+            if hall.train_queue[1] ~= "peasant" then error("train_queue") end
+            if hall.under_construction then error("under_construction") end
+            if hall.stance ~= nil then error("hall stance") end
+            if view.my_entities[2].stance ~= "flee" then error("worker stance") end
+            local mine = view.neutral_entities[1]
+            if mine.resource_amount ~= 900 then error("resource_amount") end
+            local worker = content.entities.peasant
+            if worker.cost[1].kind ~= "gold" then error("cost kind") end
+            if worker.train_time ~= 40 then error("train_time") end
+            if not worker.can_move then error("can_move") end
+            if content.resources[1] ~= "gold" then error("resources") end
+            local gold = view.resources.gold
+            return { { kind = "move", x = gold + worker.cost[1].amount, y = hall.x } }
+        end"#,
+    );
+    let mut runtime = load_ai(&source, &demo_like_content()).expect("load ai");
 
     let commands = runtime.think(&populated_view(0)).expect("think");
 
@@ -530,10 +556,19 @@ fn load_ai(source: &str, content: &ContentView) -> ferrets_script::Result<Box<dy
     LuaEngine.load_ai(source, content)
 }
 
+/// A loadable one-brain script wrapping `think` (a Lua `function(state, view) …
+/// end` literal) with a fixed name, period, and filtered vision, so a test
+/// states only the behaviour it exercises. Tests that pin a specific period,
+/// name, or vision spell out their own `define_ai`.
+fn ai_script(think: &str) -> String {
+    format!(r#"define_ai("test", {{ period = 1, vision = "filtered", think = {think} }})"#)
+}
+
 /// A brain that moves by its own think count, exercising persistent state.
 const COUNTER: &str = r#"
     define_ai("counter", {
         period = 1,
+        vision = "filtered",
         think = function(state, view)
             state.count = (state.count or 0) + 1
             return { { kind = "move", x = state.count, y = 0 } }
@@ -656,6 +691,7 @@ fn think_error(body: &str) -> ScriptError {
         r#"
         define_ai("failing", {{
             period = 1,
+            vision = "filtered",
             think = function(state, view)
                 {body}
             end,

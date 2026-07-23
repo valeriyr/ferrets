@@ -51,6 +51,8 @@ pub fn run() {
         .init_resource::<input::Primary>()
         .init_resource::<input::LastClick>()
         .init_resource::<input::LastRecall>()
+        .init_resource::<render::Ghosts>()
+        .init_resource::<render::FogReveal>()
         .init_resource::<debug::DebugState>()
         // Camera and content exist for every screen; the game scene is set up on
         // entering InGame once the lobby has configured the session.
@@ -158,6 +160,7 @@ pub fn run() {
             Update,
             (
                 camera::pan_zoom,
+                render::toggle_fog_reveal,
                 hud::update_resources,
                 hud::update_help,
                 hud::update_command_card,
@@ -170,10 +173,14 @@ pub fn run() {
                 debug::toggle_debug,
                 debug::debug_readout,
                 debug::draw_grid,
-                debug::draw_orders,
+                // Reads the fog Visibility that interpolate_sprites writes, so it
+                // must run after it — otherwise a fogged unit's orders can flash.
+                debug::draw_orders.after(render::interpolate_sprites),
                 (
                     render::attach_sprites,
                     render::interpolate_sprites,
+                    render::update_fog_overlay,
+                    render::draw_ghosts,
                     render::draw_selection,
                     render::draw_facing,
                     render::draw_rally,

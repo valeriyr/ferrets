@@ -162,6 +162,9 @@ fn build_entity(name: &str, table: &Table) -> crate::Result<EntityTypeDef> {
     if let Some(class) = optional::<String>(table, "selection_class")? {
         def = def.with_selection_class(class);
     }
+    if let Some(sight_range) = optional::<u32>(table, "sight_range")? {
+        def = def.with_sight_range(sight_range);
+    }
 
     Ok(def)
 }
