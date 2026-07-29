@@ -6,17 +6,16 @@ use ferrets_math::{FixedI64, FixedU64};
 use ferrets_pathfinder::{nav_pos::NavPos, nav_size::NavSize};
 use ferrets_simulation::{
     command::PlayerCommand,
-    components::{
-        attack::AttackComponent,
+    components::{attack::AttackComponent, dying::DyingComponent, health::HealthComponent},
+    content::{
         buffs::{BuffDef, StackRule},
-        dying::DyingComponent,
-        health::HealthComponent,
         stats::{Modifier, ModifierOp, StatId},
+        {entity_type_def::EntityTypeDef, location::Solidity, registry::ContentRegistry},
     },
-    content::{entity_type_def::EntityTypeDef, location::Solidity, registry::ContentRegistry},
     entity_index::EntityIndex,
     game_loop,
     map::Map,
+    order::AttackTarget,
     session::{GameSession, player_slot::PlayerSlot, player_type::PlayerType},
     simulation_id::SimulationId,
     spawn,
@@ -34,7 +33,7 @@ fn attack_kills_adjacent_target() {
     utils::push_command(
         &mut app,
         PlayerCommand::Attack {
-            target: target_id,
+            target: AttackTarget::Entity(target_id),
             flush: true,
         },
     );
@@ -84,7 +83,7 @@ fn attack_chases_target_out_of_range() {
     utils::push_command(
         &mut app,
         PlayerCommand::Attack {
-            target: target_id,
+            target: AttackTarget::Entity(target_id),
             flush: true,
         },
     );
@@ -112,7 +111,7 @@ fn stop_cancels_attack() {
     utils::push_command(
         &mut app,
         PlayerCommand::Attack {
-            target: target_id,
+            target: AttackTarget::Entity(target_id),
             flush: true,
         },
     );
@@ -196,7 +195,7 @@ fn attack_order_with_missing_target_finishes() {
     utils::push_command(
         &mut app,
         PlayerCommand::Attack {
-            target: SimulationId(999),
+            target: AttackTarget::Entity(SimulationId(999)),
             flush: true,
         },
     );
@@ -241,7 +240,7 @@ fn shortened_attack_cycle_still_lands_hits() {
     utils::push_command(
         &mut app,
         PlayerCommand::Attack {
-            target: target_id,
+            target: AttackTarget::Entity(target_id),
             flush: true,
         },
     );
@@ -286,7 +285,7 @@ fn attack_gives_up_on_walled_in_target() {
     utils::push_command(
         &mut app,
         PlayerCommand::Attack {
-            target: target_id,
+            target: AttackTarget::Entity(target_id),
             flush: true,
         },
     );

@@ -6,8 +6,10 @@ use ferrets_pathfinder::{
 };
 
 use crate::components::location::LocationComponent;
-use crate::content::location::{LocationDef, Solidity};
-use crate::content::registry::ContentRegistry;
+use crate::content::{
+    location::{LocationDef, Solidity},
+    registry::ContentRegistry,
+};
 use crate::map_data::{MapData, MapSlot};
 use crate::session::player_slot::PlayerId;
 

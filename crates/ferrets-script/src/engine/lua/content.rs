@@ -5,13 +5,16 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use ferrets_math::{FixedI64, FixedU64};
-use ferrets_pathfinder::nav_size::NavSize;
-use ferrets_simulation::components::buffs::{BuffDef, StackRule};
-use ferrets_simulation::components::skills::{SkillDef, SkillEffect, SkillTarget};
-use ferrets_simulation::components::stats::{Modifier, ModifierOp, StatId};
-use ferrets_simulation::content::entity_type_def::EntityTypeDef;
-use ferrets_simulation::content::registry::ContentRegistry;
-use ferrets_simulation::content::resource::HarvestData;
+use ferrets_pathfinder::{layer_mask::LayerMask, nav_size::NavSize};
+use ferrets_simulation::content::{
+    buffs::{BuffDef, StackRule},
+    entity_type_def::EntityTypeDef,
+    projectile::ProjectileDef,
+    registry::ContentRegistry,
+    resource::HarvestData,
+    skills::{SkillDef, SkillEffect, SkillTarget},
+    stats::{Modifier, ModifierOp, StatId},
+};
 use mlua::{Lua, Table, Value};
 
 use crate::content;
@@ -91,6 +94,18 @@ pub(super) fn register(lua: &Lua, registry: &Rc<RefCell<ContentRegistry>>) -> ml
         lua.create_function(move |_, (name, table): (String, Table)| {
             let buff = parse_buff(&table, &buffs.borrow()).map_err(mlua::Error::external)?;
             buffs.borrow_mut().register_buff(name, buff);
+            Ok(())
+        })?,
+    )?;
+
+    let projectiles = Rc::clone(registry);
+    globals.set(
+        "define_projectile",
+        lua.create_function(move |_, (name, table): (String, Table)| {
+            let projectile = parse_projectile(&table).map_err(mlua::Error::external)?;
+            projectiles
+                .borrow_mut()
+                .register_projectile(name, projectile);
             Ok(())
         })?,
     )?;
@@ -195,6 +210,20 @@ fn build_entity(
     if let Some(bonuses) = optional::<Table>(table, "bonus_damage_vs")? {
         def = def.with_bonus_damage_vs(pairs::<u32>(&bonuses, "bonus_damage_vs")?);
     }
+    if let Some(projectile) = optional::<String>(table, "projectile")? {
+        let id = registry.projectile(&projectile).ok_or_else(|| {
+            ScriptError::ContentError(format!("projectile '{projectile}' is not defined"))
+        })?;
+        def = def.with_projectile(id);
+    }
+    if let Some(splash) = optional::<Table>(table, "splash")? {
+        let shape = required::<String>(&splash, "shape")?;
+        let shape = content::splash_shape(&shape)?;
+        let bands = splash_bands(&splash)?;
+        let layers = required::<u32>(&splash, "layers")?;
+        let friendly_fire = required_flag(&splash, "friendly_fire")?;
+        def = def.with_splash(shape, bands, LayerMask::from(layers), friendly_fire);
+    }
     if let Some(skills) = optional::<Vec<String>>(table, "skills")? {
         let ids = skills
             .iter()
@@ -208,6 +237,34 @@ fn build_entity(
     }
 
     Ok(def)
+}
+
+/// Reads one projectile: `{ speed, aim }` — a decimal string in cells per tick, and
+/// whether the hit resolves against the target entity or the cell it was sent to.
+fn parse_projectile(table: &Table) -> crate::Result<ProjectileDef> {
+    let speed = required::<String>(table, "speed")?;
+    let aim = required::<String>(table, "aim")?;
+    Ok(ProjectileDef::new(
+        content::fixed(&speed)?,
+        content::attack_aim(&aim)?,
+    ))
+}
+
+/// Reads a splash `bands` list: an array of `{ radius, fraction }` pairs, innermost
+/// first, where the fraction is a decimal string.
+fn splash_bands(splash: &Table) -> crate::Result<Vec<(u32, FixedU64)>> {
+    let bands: Vec<Table> = required(splash, "bands")?;
+    let mut out = Vec::with_capacity(bands.len());
+    for band in bands {
+        let radius = band
+            .get::<u32>(1)
+            .map_err(|error| field_error("splash band radius", error))?;
+        let fraction = band
+            .get::<String>(2)
+            .map_err(|error| field_error("splash band fraction", error))?;
+        out.push((radius, content::fixed(&fraction)?));
+    }
+    Ok(out)
 }
 
 /// Reads the flat `stats = { name = value }` table: each key is a registered stat
@@ -300,6 +357,16 @@ fn optional<T: mlua::FromLua>(table: &Table, field: &str) -> crate::Result<Optio
         .get(field)
         .map_err(|error| field_error(field, error))?;
     Ok(value)
+}
+
+/// A required boolean field.
+///
+/// Read through `Option` rather than as a plain `bool`, because Lua's `nil`
+/// converts to `false` — a direct read cannot tell an absent flag from one that
+/// was deliberately set to `false`.
+fn required_flag(table: &Table, field: &str) -> crate::Result<bool> {
+    optional::<bool>(table, field)?
+        .ok_or_else(|| ScriptError::ContentError(format!("field '{field}' is required")))
 }
 
 /// A required positional (array) element.

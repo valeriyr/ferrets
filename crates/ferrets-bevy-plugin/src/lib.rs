@@ -42,6 +42,8 @@
 //!                          components on finish, push chase sub-orders on suspend
 //! process_pending_reveals — exclusive system; retry reappearing entities that finished
 //!                      an order while boxed-in and still await a free cell
+//! process_impacts    — exclusive system; land shots whose flight time has elapsed,
+//!                      where the same-tick delivery path lands its damage
 //! process_buffs      — exclusive system; age timed buffs (expiries land next tick)
 //! process_cooldowns  — exclusive system; age skill cooldowns by one tick
 //! process_energy_regen — exclusive system; refill energy pools toward max_energy
@@ -86,6 +88,7 @@ use ferrets_simulation::{
     content::registry::ContentRegistry,
     control_groups::ControlGroups,
     entity_index::EntityIndex,
+    impacts::PendingImpacts,
     input::{InputFrames, PlayerFrame, SYNC_LATENCY},
     map::Map,
     resources::PlayerResources,
@@ -176,6 +179,7 @@ impl Plugin for SimulationPlugin {
             .insert_resource(frames)
             .init_resource::<ContentRegistry>()
             .init_resource::<EntityIndex>()
+            .init_resource::<PendingImpacts>()
             .init_resource::<SimulationIdGenerator>()
             .init_resource::<PendingInput>()
             .add_systems(
@@ -217,6 +221,10 @@ impl Plugin for SimulationPlugin {
                     systems::flee,
                     systems::auto_engage,
                     systems::tick_orders,
+                    // Shots released earlier land here — the same point in the tick
+                    // where a hit delivered without a projectile is applied, so both
+                    // delivery paths reach their victims on the same schedule.
+                    systems::process_impacts,
                     systems::process_pending_reveals,
                     // Age timed buffs; expiries land in the next tick's
                     // recompute_stats snapshot.

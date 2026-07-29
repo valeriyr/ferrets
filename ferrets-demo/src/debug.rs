@@ -13,7 +13,7 @@ use ferrets_simulation::{
     },
     content::registry::ContentRegistry,
     map::Map,
-    order::Order,
+    order::{AttackTarget, Order},
     selection::Selection,
     session::GameSession,
     visibility::VisibilityGrid,
@@ -250,7 +250,10 @@ pub fn draw_orders(
             let (end, color) = match &entry.order {
                 Order::Move { target, .. } => (Some(cell_center(*target)), MOVE),
                 Order::AttackMove { target } => (Some(cell_center(*target)), COMBAT),
-                Order::Attack { target, .. } => (entity_center(*target), COMBAT),
+                Order::Attack { target, .. } => match target {
+                    AttackTarget::Entity(id) => (entity_center(*id), COMBAT),
+                    AttackTarget::Position(cell) => (Some(cell_center(*cell)), COMBAT),
+                },
                 Order::Guard { target } => (entity_center(*target), GUARD),
                 Order::Follow { target } => (entity_center(*target), GUARD),
                 Order::Harvest { target } => (entity_center(*target), HARVEST),

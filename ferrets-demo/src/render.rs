@@ -25,14 +25,20 @@ use ferrets_simulation::{
         owner::OwnerComponent,
         rally::{RallyPointComponent, RallyTarget},
         skills::SkillsComponent,
-        tags::{self, TagsComponent},
+        tags::TagsComponent,
     },
+    content::tags,
     content::{registry::ContentRegistry, resource::ResourceSourceDef},
+    impacts::PendingImpacts,
     selection::Selection,
     session::GameSession,
     simulation_id::SimulationId,
     visibility::{CellVisibility, VisibilityGrid},
 };
+
+/// The one colour every projectile in flight is drawn in, so shape alone tells the
+/// kinds apart.
+const SHOT_COLOR: Color = Color::srgb(1.0, 0.82, 0.4);
 
 /// Screen pixels per grid cell.
 pub const CELL_PX: f32 = 32.0;
@@ -128,8 +134,12 @@ fn color_for(
 
 /// The placeholder shape used for an entity type.
 enum Shape {
-    /// Combat units — a triangle that points where it faces.
+    /// Melee units — a triangle that points where it faces.
     Triangle,
+    /// Ranged units — a diamond.
+    Diamond,
+    /// Siege units (those whose hits burst) — a pentagon.
+    Pentagon,
     /// Workers — a circle.
     Circle,
     /// Ships — a hull with a triangular bow pointing where it faces.
@@ -145,8 +155,10 @@ enum Shape {
 /// Picks a shape from the entity type name. Add new types here.
 fn shape_for(type_name: &str) -> Shape {
     match type_name {
-        "archer" | "grunt" => Shape::Triangle,
         "peasant" | "peon" => Shape::Circle,
+        "grunt" => Shape::Diamond,
+        "archer" => Shape::Triangle,
+        "mortar" => Shape::Pentagon,
         "ship" => Shape::Ship,
         "barracks" | "orc_barracks" => Shape::Hexagon,
         "sea_fortress" => Shape::Fortress,
@@ -156,9 +168,8 @@ fn shape_for(type_name: &str) -> Shape {
 
 /// Attaches a placeholder shape to any simulation entity that lacks one.
 ///
-/// The shape is chosen from the entity type name (see [`shape_for`]). Units (the
-/// non-square shapes) also get a [`Directional`] marker so they rotate to face
-/// their look direction.
+/// The shape comes from [`shape_for`]. Units (the non-square shapes) also get a
+/// [`Directional`] marker so they rotate to face their look direction.
 pub fn attach_sprites(
     mut commands: Commands,
     session: Res<GameSession>,
@@ -187,6 +198,20 @@ pub fn attach_sprites(
             Shape::Triangle => {
                 entity.insert((
                     Mesh2d(meshes.add(RegularPolygon::new(radius, 3))),
+                    MeshMaterial2d(materials.add(color)),
+                    Directional,
+                ));
+            }
+            Shape::Diamond => {
+                entity.insert((
+                    Mesh2d(meshes.add(RegularPolygon::new(radius, 4))),
+                    MeshMaterial2d(materials.add(color)),
+                    Directional,
+                ));
+            }
+            Shape::Pentagon => {
+                entity.insert((
+                    Mesh2d(meshes.add(RegularPolygon::new(radius, 5))),
                     MeshMaterial2d(materials.add(color)),
                     Directional,
                 ));
@@ -448,6 +473,112 @@ pub fn draw_skill_pulses(
             radius,
             Color::srgba(1.0, 0.85, 0.35, 1.0 - progress),
         );
+    }
+}
+
+/// Draws each shot in flight as a dot sliding from its origin toward its impact
+/// (run in `Update`).
+///
+/// The simulation stores no position for a shot — only the ticks it was released on
+/// and lands on — so the dot is interpolated here. A shot over cells the local
+/// player cannot see is not drawn, so a shell fired out of unexplored terrain
+/// reveals nothing.
+pub fn draw_shots(
+    mut gizmos: Gizmos,
+    session: Res<GameSession>,
+    fixed: Res<Time<Fixed>>,
+    impacts: Res<PendingImpacts>,
+    registry: Res<ContentRegistry>,
+    grid: Res<VisibilityGrid>,
+    reveal: Res<FogReveal>,
+    targets: Query<(&EntityInfoComponent, &Transform), With<Renderable>>,
+) {
+    let tick = session.tick();
+    let overstep = fixed.overstep_fraction();
+    for shot in impacts.in_flight() {
+        let flight = shot.lands_on_tick.saturating_sub(shot.emitted_on_tick);
+        if flight == 0 {
+            continue;
+        }
+        let elapsed = tick.saturating_sub(shot.emitted_on_tick) as f32 + overstep;
+        let progress = (elapsed / flight as f32).clamp(0.0, 1.0);
+
+        let from = world_center(shot.origin, NavSize::ONE);
+        // Every shot is aimed at an entity, and the damage follows that entity
+        // wherever it moves, so the shot is drawn heading there. The committed point
+        // is the fallback for a target that is gone or out of sight — and, once a
+        // weapon can be aimed at bare ground, for a shot that never had one.
+        let to = targets
+            .iter()
+            .find(|(info, _)| Some(info.id()) == shot.target)
+            .map(|(_, transform)| transform.translation)
+            .unwrap_or_else(|| world_center(shot.impact, NavSize::ONE));
+        let at = from.lerp(to, progress);
+
+        let cell = NavPos::new(
+            (at.x / CELL_PX).max(0.0) as u32,
+            (-at.y / CELL_PX).max(0.0) as u32,
+        );
+        if !reveal.0
+            && grid.visibility_to(&session, session.local_player(), cell.x, cell.y)
+                != CellVisibility::Visible
+        {
+            continue;
+        }
+        // Shapes tell the kinds apart; the colour is shared so every shot in the air
+        // reads as the same class of thing at a glance.
+        let at = at.truncate();
+        match shot_shape(registry.projectile_name(shot.projectile)) {
+            ShotShape::Arrow => {
+                let along = (to - from).truncate().normalize_or_zero() * CELL_PX * 0.22;
+                gizmos.line_2d(at - along, at + along, SHOT_COLOR);
+            }
+            ShotShape::Ball { radius } => {
+                gizmos.circle_2d(at, radius, SHOT_COLOR);
+            }
+            ShotShape::Shell { circumradius } => {
+                gizmos.primitive_2d(
+                    &RegularPolygon::new(circumradius, 3),
+                    Isometry2d::from_translation(at),
+                    SHOT_COLOR,
+                );
+            }
+        }
+    }
+}
+
+/// How one projectile kind is drawn.
+enum ShotShape {
+    /// A short line lying along the flight direction.
+    Arrow,
+    /// A circle.
+    Ball {
+        /// Radius in pixels.
+        radius: f32,
+    },
+    /// A triangle, for a shot that bursts on arrival.
+    Shell {
+        /// Distance from the centre to a corner, in pixels.
+        circumradius: f32,
+    },
+}
+
+/// The shape a projectile kind is drawn as, by its registered name.
+///
+/// An unregistered or unnamed kind falls back to a plain ball rather than
+/// vanishing, so a content addition is visible before it is styled.
+fn shot_shape(name: Option<&str>) -> ShotShape {
+    match name {
+        Some("arrow") => ShotShape::Arrow,
+        Some("cannonball") => ShotShape::Ball {
+            radius: CELL_PX * 0.16,
+        },
+        Some("shell") => ShotShape::Shell {
+            circumradius: CELL_PX * 0.18,
+        },
+        _ => ShotShape::Ball {
+            radius: CELL_PX * 0.1,
+        },
     }
 }
 

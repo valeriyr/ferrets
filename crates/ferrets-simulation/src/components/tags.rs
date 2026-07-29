@@ -4,9 +4,6 @@ use std::collections::BTreeSet;
 
 use bevy_ecs::prelude::*;
 
-/// The tag marking an entity as a building.
-pub const BUILDING: &str = "building";
-
 /// The classification tags an entity carries. Tag names are free-form.
 #[derive(Component, Debug, Clone, Default, PartialEq, Eq)]
 pub struct TagsComponent {

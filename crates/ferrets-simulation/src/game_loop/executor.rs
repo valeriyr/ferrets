@@ -20,18 +20,24 @@ use crate::{
         owner::{self, OwnerComponent},
         rally::{RallyPointComponent, RallyTarget},
         resource::{ResourceCarrierComponent, ResourceSourceComponent},
-        skills::{SkillEffect, SkillId, SkillTarget, SkillsComponent},
+        skills::SkillsComponent,
         stance::StanceComponent,
-        stats::{StatId, StatsComponent},
-        tags::{self, TagsComponent},
+        stats::StatsComponent,
+        tags::TagsComponent,
         train::TrainQueueComponent,
     },
-    content::registry::ContentRegistry,
+    content::{
+        projectile::Aim,
+        registry::ContentRegistry,
+        skills::{SkillEffect, SkillId, SkillTarget},
+        stats::StatId,
+        tags,
+    },
     control_groups::{CONTROL_GROUP_COUNT, ControlGroups},
     entity_def,
     entity_index::EntityIndex,
     input::InputFrames,
-    order::Order,
+    order::{AttackTarget, Order},
     resources::PlayerResources,
     selection::Selection,
     session::{GameSession, player_slot::PlayerId},
@@ -150,7 +156,18 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
             // own or allied unit. Only the smart send-to-entity order below refuses
             // to attack a non-hostile target; whether friendly-fire damage lands is
             // a game-rules concern, not the command executor's.
-            for entity in commanded_selection_excluding(world, player, *target) {
+            //
+            // A named target is never ordered to attack itself; a cell excludes nobody.
+            let commanded = match target.entity() {
+                Some(id) => commanded_selection_excluding(world, player, id),
+                None => commanded_selection(world, player),
+            };
+            let aimed_at_ground = target.entity().is_none();
+            for entity in commanded {
+                // Only a weapon that sends its shots to a cell can be aimed at one.
+                if aimed_at_ground && !aims_at_cells(world, entity) {
+                    continue;
+                }
                 push_order(
                     world,
                     entity,
@@ -360,7 +377,7 @@ pub(super) fn resolve_send_to_entity(
         && target_ref.contains::<HealthComponent>()
     {
         return Some(Order::Attack {
-            target: target_id,
+            target: AttackTarget::Entity(target_id),
             leash: None,
         });
     }
@@ -547,6 +564,20 @@ fn commanded_selection_excluding(
         .filter(|&id| id != excluded)
         .filter_map(|id| find_owned_interactable(world, player, id))
         .collect()
+}
+
+/// Whether the entity's weapon sends its shots to a cell rather than following a
+/// target — the only kind that can be aimed at bare ground.
+fn aims_at_cells(world: &World, entity: Entity) -> bool {
+    entity_def::of(world, entity)
+        .projectile
+        .is_some_and(|projectile| {
+            world
+                .resource::<ContentRegistry>()
+                .projectile_def(projectile)
+                .aim()
+                == Aim::Position
+        })
 }
 
 /// Resolves `id` if it is interactable and owned by `player`.

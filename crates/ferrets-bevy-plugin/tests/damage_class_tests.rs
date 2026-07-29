@@ -4,15 +4,12 @@
 use bevy::prelude::*;
 use ferrets_math::FixedU64;
 use ferrets_pathfinder::nav_size::NavSize;
-use ferrets_simulation::command::{PlayerCommand, SelectMode};
-use ferrets_simulation::components::health::HealthComponent;
-use ferrets_simulation::content::entity_type_def::EntityTypeDef;
-use ferrets_simulation::content::location::Solidity;
-use ferrets_simulation::content::registry::ContentRegistry;
+use ferrets_simulation::content::{
+    entity_type_def::EntityTypeDef, location::Solidity, registry::ContentRegistry,
+};
 use ferrets_simulation::session::GameSession;
 use ferrets_simulation::session::player_slot::PlayerSlot;
 use ferrets_simulation::session::player_type::PlayerType;
-use ferrets_simulation::simulation_id::SimulationId;
 use ferrets_simulation::spawn;
 
 mod utils;
@@ -29,13 +26,13 @@ fn bonus_damage_vs_and_armor_shape_damage_per_hit() {
     let (tank, tank_id) =
         spawn::spawn_entity(app.world_mut(), "tank", utils::pos(6, 5), Some(1)).unwrap();
 
-    attack(&mut app, grunt, tank_id);
+    utils::attack(&mut app, grunt, tank_id);
     utils::run_ticks(&mut app, 15);
 
     // 10 base + 10 (vs armored) − 3 armor = 17 per hit, and three hits land in
     // 15 ticks on a 4-tick attack period.
     assert_eq!(
-        200 - health(&app, tank),
+        200 - utils::health(&app, tank),
         51,
         "expected three hits of 17 damage each"
     );
@@ -55,15 +52,18 @@ fn armor_mitigates_and_never_makes_target_immune() {
     let (fortress, fortress_id) =
         spawn::spawn_entity(app.world_mut(), "fortress", utils::pos(6, 15), Some(1)).unwrap();
 
-    attack(&mut app, grunt_a, scout_id);
-    attack(&mut app, grunt_b, fortress_id);
+    utils::attack(&mut app, grunt_a, scout_id);
+    utils::attack(&mut app, grunt_b, fortress_id);
     utils::run_ticks(&mut app, 15);
 
     // Both grunts land three hits. The scout is untagged and takes the full
     // 10/hit; the fortress's armor (100) exceeds the grunt's damage, so the floor
     // leaves exactly 1/hit — mitigated tenfold, yet never immune.
     assert_eq!(
-        (200 - health(&app, scout), 200 - health(&app, fortress)),
+        (
+            200 - utils::health(&app, scout),
+            200 - utils::health(&app, fortress)
+        ),
         (30, 3),
         "expected the scout at 10/hit and the fortress at the 1/hit floor"
     );
@@ -113,29 +113,4 @@ fn app() -> App {
     app.world_mut().resource::<ContentRegistry>().validate();
     app.world_mut().resource_mut::<GameSession>().start();
     app
-}
-
-fn health(app: &App, entity: Entity) -> u32 {
-    app.world()
-        .get::<HealthComponent>(entity)
-        .unwrap()
-        .current()
-        .to_num::<u32>()
-}
-
-fn attack(app: &mut App, attacker: SimulationId, target: SimulationId) {
-    utils::push_command(
-        app,
-        PlayerCommand::SelectById {
-            id: attacker,
-            mode: SelectMode::Replace,
-        },
-    );
-    utils::push_command(
-        app,
-        PlayerCommand::Attack {
-            target,
-            flush: true,
-        },
-    );
 }

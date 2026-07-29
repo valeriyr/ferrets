@@ -12,11 +12,12 @@ use crate::{
         entity_info::EntityInfoComponent,
         location::LocationComponent,
         order_queue::{CancelPolicy, OrderState},
-        stats::{StatId, StatsComponent},
+        stats::StatsComponent,
     },
+    content::stats::StatId,
     entity_def,
     map::Map,
-    order::{Leash, Order},
+    order::{AttackTarget, Leash, Order},
     session::GameSession,
     simulation_id::SimulationId,
 };
@@ -151,7 +152,7 @@ fn leashed_attack(world: &World, entity: Entity, target: SimulationId, radius: u
         .unwrap()
         .position;
     Order::Attack {
-        target,
+        target: AttackTarget::Entity(target),
         leash: Some(Leash { anchor, radius }),
     }
 }

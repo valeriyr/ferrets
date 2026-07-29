@@ -5,11 +5,10 @@ use bevy_ecs::{prelude::*, world::World};
 
 use crate::{
     components::{
-        hidden::HiddenComponent,
-        location::LocationComponent,
-        owner::OwnerComponent,
-        stats::{StatId, StatsComponent},
+        hidden::HiddenComponent, location::LocationComponent, owner::OwnerComponent,
+        stats::StatsComponent,
     },
+    content::stats::StatId,
     session::player_slot::PlayerId,
     visibility::VisibilityGrid,
 };

@@ -9,10 +9,13 @@ use ferrets_script::content;
 use ferrets_script::engine::ScriptEngine;
 use ferrets_script::engine::lua::LuaEngine;
 use ferrets_script::error::ScriptError;
-use ferrets_simulation::components::skills::{SkillDef, SkillEffect, SkillTarget};
-use ferrets_simulation::components::stats::StatId;
-use ferrets_simulation::content::entity_type_def::EntityTypeDef;
-use ferrets_simulation::content::location::Solidity;
+use ferrets_simulation::content::{
+    entity_type_def::EntityTypeDef,
+    location::Solidity,
+    skills::{SkillDef, SkillEffect, SkillTarget},
+    splash::SplashShape,
+    stats::StatId,
+};
 
 //
 // ─── Round-trip ─────────────────────────────────────────────────────────────
@@ -169,6 +172,120 @@ fn parses_skill_with_buff_effect() {
             target: SkillTarget::Caster,
             effect: SkillEffect::ApplyBuff(haste),
         }
+    );
+}
+
+#[test]
+fn parses_projectile_and_splash() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_projectile("shell", { speed = "0.4", aim = "position" })
+
+        define_entity("mortar", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = {
+                max_health = 30,
+                damage = 12, attack_range = 6, attack_period = 10, damage_point = 4,
+            },
+            projectile = "shell",
+            splash = {
+                shape = "circular",
+                bands = { {1, "0.5"}, {2, "0.25"} },
+                layers = GROUND,
+                friendly_fire = true,
+            },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("load content");
+
+    let expected = EntityTypeDef::new("mortar")
+        .with_location(LayerId::new(1), NavSize::ONE, Solidity::Solid)
+        .with_health(30)
+        .with_attack(12, 6, 6, 10, 4)
+        .with_projectile(registry.projectile("shell").expect("shell is registered"))
+        .with_splash(
+            SplashShape::Circular,
+            vec![
+                (1, FixedU64::from_str("0.5").unwrap()),
+                (2, FixedU64::from_str("0.25").unwrap()),
+            ],
+            LayerId::new(1),
+            true,
+        );
+
+    assert_eq!(registry.entity("mortar"), Some(&expected));
+}
+
+#[test]
+fn splash_rejects_missing_fields() {
+    // Splash has no engine defaults, so omitting any field is a content error rather
+    // than a silent fallback.
+    for (missing, block) in [
+        (
+            "shape",
+            r#"splash = { bands = { {1, "0.5"} }, layers = GROUND, friendly_fire = false },"#,
+        ),
+        (
+            "bands",
+            r#"splash = { shape = "circular", layers = GROUND, friendly_fire = false },"#,
+        ),
+        (
+            "layers",
+            r#"splash = { shape = "circular", bands = { {1, "0.5"} }, friendly_fire = false },"#,
+        ),
+        (
+            "friendly_fire",
+            r#"splash = { shape = "circular", bands = { {1, "0.5"} }, layers = GROUND },"#,
+        ),
+    ] {
+        let Err(error) = content::load(&engine(), &attacker_with(block)) else {
+            panic!("'{missing}' must be required");
+        };
+        assert!(
+            error.to_string().contains(missing),
+            "the error must name the missing '{missing}' field, got: {error}"
+        );
+    }
+}
+
+#[test]
+fn unknown_projectile_is_rejected() {
+    let Err(error) = content::load(&engine(), &attacker_with(r#"projectile = "boulder","#)) else {
+        panic!("an unregistered projectile must be rejected");
+    };
+    assert_eq!(
+        error.to_string(),
+        "content error: projectile 'boulder' is not defined"
+    );
+}
+
+#[test]
+fn define_projectile_rejects_missing_fields() {
+    // Neither field has a default: a speed is the flight time and an aim decides
+    // whether the hit follows its target or lands on a cell.
+    for (missing, block) in [("speed", r#"aim = "entity""#), ("aim", r#"speed = "0.4""#)] {
+        let source = format!(r#"define_projectile("arrow", {{ {block} }})"#);
+        let Err(error) = content::load(&engine(), &source) else {
+            panic!("'{missing}' must be required");
+        };
+        assert!(
+            error.to_string().contains(missing),
+            "the error must name the missing '{missing}' field, got: {error}"
+        );
+    }
+}
+
+#[test]
+fn unknown_projectile_aim_is_rejected() {
+    let source = r#"
+        define_projectile("arrow", { speed = "0.4", aim = "sideways" })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("an unknown aim must be rejected");
+    };
+    assert_eq!(
+        error.to_string(),
+        "content error: unknown attack aim 'sideways'"
     );
 }
 
@@ -565,4 +682,19 @@ const BASE: &str = r#"
 /// The engine the suite runs against — the only line naming a binding.
 fn engine() -> impl ScriptEngine {
     LuaEngine
+}
+
+/// An attacker table with `block` spliced in, for the delivery-field error cases.
+fn attacker_with(block: &str) -> String {
+    format!(
+        r#"
+        local GROUND = define_layer("ground")
+
+        define_entity("mortar", {{
+            location = {{ occupation = GROUND, size = 1, solidity = "solid" }},
+            stats = {{ damage = 12, attack_range = 6, attack_period = 10, damage_point = 4 }},
+            {block}
+        }})
+        "#
+    )
 }

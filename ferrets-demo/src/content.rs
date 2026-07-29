@@ -24,6 +24,14 @@ pub const CONTENT: &str = r#"
     define_resource("gold")
     define_resource("wood")
 
+    -- Projectile kinds. Each is registered by name so the renderer can draw an
+    -- arrow differently from a cannonball, and so several weapons can share one.
+    -- An arrow and a cannonball follow what they were fired at; a mortar shell is
+    -- sent to a cell, so a target that keeps moving escapes the burst.
+    define_projectile("arrow", { speed = "1.0", aim = "entity" })
+    define_projectile("cannonball", { speed = "0.5", aim = "entity" })
+    define_projectile("shell", { speed = "0.2", aim = "position" })
+
     -- The archer's self-buff: a burst of speed and damage that reverts on expiry.
     -- Five seconds at 20 Hz, long enough to watch it work and then wear off.
     define_buff("frenzy", {
@@ -62,6 +70,8 @@ pub const CONTENT: &str = r#"
             sight_range = 12,
         },
         dying = { time = 2 },
+        -- Shore bombardment: a slow ball, so shots at a moving target are wasted.
+        projectile = "cannonball",
         train_time = 100,
     })
     define_entity("sea_fortress", {
@@ -120,7 +130,7 @@ pub const CONTENT: &str = r#"
             dying = { time = 2 },
             cost = { gold = 200, wood = 100 },
             build_time = 120,
-            trainer = { trains },
+            trainer = trains,
             tags = { "building" },
         })
     end
@@ -128,7 +138,7 @@ pub const CONTENT: &str = r#"
     -- Human: worker, base, barracks, and a ranged unit.
     worker("peasant", "human", { "town_hall", "barracks" })
     main_hall("town_hall", "human", "peasant")
-    barracks("barracks", "human", "archer")
+    barracks("barracks", "human", { "archer", "mortar" })
     define_entity("archer", {
         race = "human",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
@@ -146,6 +156,8 @@ pub const CONTENT: &str = r#"
         dying = { time = 2 },
         -- Anti-armor arrows: extra damage against the (armored) grunt.
         bonus_damage_vs = { grunt = 4 },
+        -- A fast arrow: visibly in flight at range 4, but rarely wasted.
+        projectile = "arrow",
         -- An energy pool (above) feeds two activated skills: a self-buff burst of
         -- speed and damage that reverts on expiry, and a small self-heal.
         skills = { "battle_focus", "second_wind" },
@@ -155,10 +167,35 @@ pub const CONTENT: &str = r#"
         selection = { priority = 10 },
     })
 
+    -- Human siege: a mortar whose shell travels and bursts, so its damage lands
+    -- where the shot was aimed rather than on whatever it was tracking.
+    define_entity("mortar", {
+        race = "human",
+        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        stats = {
+            speed = "0.2", max_health = 35,
+            damage = 14, attack_range = 7, acquire_range = 9, attack_period = 20, damage_point = 8,
+            sight_range = 11,
+        },
+        dying = { time = 2 },
+        -- The shell crosses one cell every five ticks, so a target that keeps moving
+        -- takes the direct hit while the burst lands behind it.
+        projectile = "shell",
+        splash = {
+            shape = "circular",
+            bands = { {1, "0.5"}, {2, "0.25"} },
+            layers = GROUND,
+            friendly_fire = false,
+        },
+        cost = { gold = 120, wood = 40 },
+        train_time = 90,
+        selection = { priority = 10 },
+    })
+
     -- Orc: worker, base, barracks, and a melee unit.
     worker("peon", "orc", { "great_hall", "orc_barracks" })
     main_hall("great_hall", "orc", "peon")
-    barracks("orc_barracks", "orc", "grunt")
+    barracks("orc_barracks", "orc", { "grunt" })
     define_entity("grunt", {
         race = "orc",
         location = { occupation = GROUND, size = 1, solidity = "solid" },

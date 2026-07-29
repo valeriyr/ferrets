@@ -11,6 +11,7 @@ use ferrets_pathfinder::nav_pos::NavPos;
 use ferrets_simulation::command::{PlayerCommand, SelectMode};
 use ferrets_simulation::components::rally::RallyTarget;
 use ferrets_simulation::components::stance::Stance;
+use ferrets_simulation::order::AttackTarget;
 use ferrets_simulation::simulation_id::SimulationId;
 use mlua::{Table, Value};
 
@@ -73,7 +74,7 @@ fn command(table: &Table, index: usize) -> crate::Result<PlayerCommand> {
             flush: flush(table, index)?,
         }),
         "attack" => Ok(PlayerCommand::Attack {
-            target: SimulationId(integer(table, index, "target")?),
+            target: attack_target(table, index)?,
             flush: flush(table, index)?,
         }),
         "attack_move" => Ok(PlayerCommand::AttackMove {
@@ -150,6 +151,23 @@ fn rally_target(table: &Table, index: usize) -> crate::Result<Option<RallyTarget
         (None, Some(x), Some(y)) => Ok(Some(RallyTarget::Position(cell(x, y)))),
         (None, None, None) => Ok(None),
         (None, _, _) => Err(element_error(index, "rally cell needs both x and y")),
+    }
+}
+
+/// The aim of an attack: either a `target` id or an `x`/`y` cell, never both.
+fn attack_target(table: &Table, index: usize) -> crate::Result<AttackTarget> {
+    let target = optional_integer(table, index, "target")?;
+    let x = optional_integer(table, index, "x")?;
+    let y = optional_integer(table, index, "y")?;
+    match (target, x, y) {
+        (Some(_), Some(_), _) | (Some(_), _, Some(_)) => Err(element_error(
+            index,
+            "attack takes either a target or a cell, not both",
+        )),
+        (Some(id), None, None) => Ok(AttackTarget::Entity(SimulationId(id))),
+        (None, Some(x), Some(y)) => Ok(AttackTarget::Position(cell(x, y))),
+        (None, None, None) => Err(element_error(index, "attack needs a target or a cell")),
+        (None, _, _) => Err(element_error(index, "attack cell needs both x and y")),
     }
 }
 

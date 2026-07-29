@@ -2,27 +2,23 @@
 //! Called by [`super::orders`] as part of the shared order lifecycle.
 
 use bevy_ecs::{entity::Entity, world::World};
-use ferrets_math::FixedU64;
-use ferrets_pathfinder::{astar, nav_pos::NavPos};
+use ferrets_pathfinder::{astar, nav_pos::NavPos, nav_size::NavSize};
 
 use super::chase::{self, Destination};
+use super::impacts;
 use super::orders::Processing;
 use crate::{
     components::{
         attack::AttackComponent,
-        entity_info::EntityInfoComponent,
-        health::HealthComponent,
         location::LocationComponent,
         order_queue::{CancelPolicy, OrderState},
-        stats::{StatId, StatsComponent},
-        tags::TagsComponent,
+        stats::StatsComponent,
     },
+    content::stats::StatId,
     entity_def,
     entity_index::EntityIndex,
     map::Map,
-    order::Order,
-    session::GameSession,
-    spawn,
+    order::{AttackTarget, Order},
 };
 
 /// Called once when an Attack order becomes the front `New` entry.
@@ -37,10 +33,12 @@ pub fn prepare(entity: Entity, order: &Order, world: &mut World) -> OrderState {
     if !entity_def::of(world, entity).can_attack() {
         return OrderState::Finished;
     }
-    if world
-        .resource::<EntityIndex>()
-        .interactable(world, target)
-        .is_none()
+    // A cell is always there to be shelled; only a named entity can already be gone.
+    if let Some(id) = target.entity()
+        && world
+            .resource::<EntityIndex>()
+            .interactable(world, id)
+            .is_none()
     {
         return OrderState::Finished;
     }
@@ -87,7 +85,7 @@ pub fn cancel_processing(
 /// A target killed by the landed hit starts dying immediately; the order itself
 /// finishes on the next tick when the target is no longer alive.
 pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
-    let target_id = order
+    let target_aim = order
         .attack_target()
         .expect("Attack order must have a target");
 
@@ -95,20 +93,25 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
         return Processing::state(OrderState::Finished);
     };
 
-    let Some(target) = world
-        .resource::<EntityIndex>()
-        .interactable(world, target_id)
-    else {
-        return Processing::state(OrderState::Finished);
+    // A named entity must still be reachable and is chased wherever it goes; a cell
+    // is simply where it was aimed, and needs no such check.
+    let (target, target_position) = match target_aim {
+        AttackTarget::Entity(id) => {
+            let Some(target) = world.resource::<EntityIndex>().interactable(world, id) else {
+                return Processing::state(OrderState::Finished);
+            };
+            let at = world
+                .entity(target)
+                .get::<LocationComponent>()
+                .unwrap()
+                .position;
+            (Some(target), at)
+        }
+        AttackTarget::Position(cell) => (None, cell),
     };
 
     let position = world
         .entity(entity)
-        .get::<LocationComponent>()
-        .unwrap()
-        .position;
-    let target_position = world
-        .entity(target)
         .get::<LocationComponent>()
         .unwrap()
         .position;
@@ -128,7 +131,9 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
         .min(attack_period);
 
     if let Some(leash) = order.attack_leash() {
-        let target_size = entity_def::of(world, target).location.unwrap().size();
+        let target_size = target
+            .map(|target| entity_def::of(world, target).location.unwrap().size())
+            .unwrap_or(NavSize::ONE);
         // Footprint-based like every range check, so leashes measure the same
         // distances acquisition did.
         if !astar::in_range_of_rect(
@@ -142,13 +147,25 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
         }
     }
 
-    match chase::advance_to_entity(
-        &mut attack_component.last_chase,
-        world,
-        position,
-        target,
-        range,
-    ) {
+    // A named entity is closed on by its footprint; a bare cell has none.
+    let destination = match target {
+        Some(target) => chase::advance_to_entity(
+            &mut attack_component.last_chase,
+            world,
+            position,
+            target,
+            range,
+        ),
+        None => chase::advance(
+            &mut attack_component.last_chase,
+            world.resource::<Map>().projection(),
+            position,
+            target_position,
+            NavSize::ONE,
+            range,
+        ),
+    };
+    match destination {
         Destination::OutOfReach => return Processing::state(OrderState::Finished),
         Destination::Walk(move_order) => {
             // The swing resets while out of range.
@@ -164,22 +181,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
     attack_component.phase += 1;
 
     if attack_component.phase == damage_point {
-        let attacker_id = world
-            .entity(entity)
-            .get::<EntityInfoComponent>()
-            .unwrap()
-            .id();
-        let tick = world.resource::<GameSession>().tick();
-        let final_damage = modify_damage(world, entity, target, damage);
-        let mut target_died = false;
-        if let Some(mut health) = world.entity_mut(target).get_mut::<HealthComponent>() {
-            health.apply_damage(final_damage);
-            health.record_hit(attacker_id, tick);
-            target_died = health.is_dead();
-        }
-        if target_died {
-            spawn::destroy_entity(world, target);
-        }
+        impacts::deliver(world, entity, target, target_position, damage);
     }
 
     if attack_component.phase == attack_period {
@@ -188,22 +190,4 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
 
     world.entity_mut(entity).insert(attack_component);
     Processing::state(OrderState::InProcessing)
-}
-
-/// The damage one hit deals to `target`: the attacker's effective damage plus any
-/// bonus-vs-tag/type, less the target's flat armor, floored at `1` so no unit is
-/// invulnerable. This is the armor & damage-class calculation.
-fn modify_damage(world: &World, attacker: Entity, target: Entity, base: FixedU64) -> FixedU64 {
-    let target_ref = world.entity(target);
-    let target_type = target_ref
-        .get::<EntityInfoComponent>()
-        .map_or("", |info| info.type_name());
-    let bonus = entity_def::of(world, attacker)
-        .bonus_against(target_type, target_ref.get::<TagsComponent>());
-    let armor = target_ref
-        .get::<StatsComponent>()
-        .and_then(|stats| stats.effective(StatId::ARMOR))
-        .unwrap_or(FixedU64::ZERO);
-    let dealt = base + FixedU64::from_num(bonus);
-    dealt.saturating_sub(armor).max(FixedU64::ONE)
 }

@@ -5,13 +5,11 @@
 
 use ferrets_math::FixedU64;
 use ferrets_pathfinder::{layer_mask::LayerMask, nav_grid::LayerId, nav_size::NavSize};
-use ferrets_simulation::{
-    components::{
-        skills::{SkillDef, SkillEffect, SkillTarget},
-        stats::StatId,
-        tags,
-    },
-    content::{
+use ferrets_simulation::content::{
+    skills::{SkillDef, SkillEffect, SkillTarget},
+    stats::StatId,
+    tags,
+    {
         entity_type_def::EntityTypeDef,
         location::Solidity,
         registry::ContentRegistry,

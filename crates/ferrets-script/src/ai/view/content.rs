@@ -1,9 +1,9 @@
 //! The static content catalogue a script can consult, snapshotted once per
 //! session.
 
-use ferrets_simulation::components::stats::StatId;
-use ferrets_simulation::content::entity_type_def::EntityTypeDef;
-use ferrets_simulation::content::registry::ContentRegistry;
+use ferrets_simulation::content::{
+    entity_type_def::EntityTypeDef, registry::ContentRegistry, stats::StatId,
+};
 
 /// The static content catalogue a script can consult.
 pub struct ContentView {

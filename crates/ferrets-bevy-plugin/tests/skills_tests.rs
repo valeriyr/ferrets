@@ -5,13 +5,13 @@ use ferrets_math::{FixedI64, FixedU64};
 use ferrets_pathfinder::nav_size::NavSize;
 use ferrets_simulation::{
     command::PlayerCommand,
-    components::{
+    components::energy::EnergyComponent,
+    content::{
         buffs::{BuffDef, StackRule},
-        energy::EnergyComponent,
         skills::{SkillDef, SkillEffect, SkillTarget},
         stats::{Modifier, ModifierOp, StatId},
+        {entity_type_def::EntityTypeDef, location::Solidity, registry::ContentRegistry},
     },
-    content::{entity_type_def::EntityTypeDef, location::Solidity, registry::ContentRegistry},
     session::{GameSession, player_slot::PlayerSlot, player_type::PlayerType},
     spawn,
 };

@@ -5,12 +5,13 @@ use bevy_ecs::{entity::Entity, world::World};
 use ferrets_math::FixedU64;
 
 use crate::components::{
-    buffs::{BuffId, BuffsComponent},
-    energy::EnergyComponent,
-    skills::SkillsComponent,
-    stats::{Modifier, StatId, StatsComponent},
+    buffs::BuffsComponent, energy::EnergyComponent, skills::SkillsComponent, stats::StatsComponent,
 };
-use crate::content::registry::ContentRegistry;
+use crate::content::{
+    buffs::BuffId,
+    registry::ContentRegistry,
+    stats::{Modifier, StatId},
+};
 
 /// Applies the buff `id` to `entity`, inserting a [`BuffsComponent`] if it has
 /// none. No-op for an entity with no stat store to modify.

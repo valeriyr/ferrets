@@ -1,9 +1,13 @@
 //! Loading game content from a script into a [`ContentRegistry`].
 
 use ferrets_math::FixedU64;
-use ferrets_simulation::content::location::Solidity;
-use ferrets_simulation::content::registry::ContentRegistry;
-use ferrets_simulation::content::resource::{DepletionPolicy, HarvestVisibility};
+use ferrets_simulation::content::{
+    location::Solidity,
+    projectile::Aim,
+    registry::ContentRegistry,
+    resource::{DepletionPolicy, HarvestVisibility},
+    splash::SplashShape,
+};
 
 use crate::engine::ScriptEngine;
 use crate::error::ScriptError;
@@ -35,6 +39,28 @@ pub(crate) fn solidity(value: &str) -> crate::Result<Solidity> {
         "passable" => Ok(Solidity::Passable),
         other => Err(ScriptError::ContentError(format!(
             "unknown solidity '{other}'"
+        ))),
+    }
+}
+
+/// Maps an attack-aim name to its enum.
+pub(crate) fn attack_aim(value: &str) -> crate::Result<Aim> {
+    match value {
+        "entity" => Ok(Aim::Entity),
+        "position" => Ok(Aim::Position),
+        other => Err(ScriptError::ContentError(format!(
+            "unknown attack aim '{other}'"
+        ))),
+    }
+}
+
+/// Maps a splash-shape name to its enum.
+pub(crate) fn splash_shape(value: &str) -> crate::Result<SplashShape> {
+    match value {
+        "circular" => Ok(SplashShape::Circular),
+        "line" => Ok(SplashShape::Line),
+        other => Err(ScriptError::ContentError(format!(
+            "unknown splash shape '{other}'"
         ))),
     }
 }

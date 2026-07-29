@@ -15,6 +15,7 @@ use ferrets_script::error::ScriptError;
 use ferrets_simulation::command::{PlayerCommand, SelectMode};
 use ferrets_simulation::components::rally::RallyTarget;
 use ferrets_simulation::components::stance::Stance;
+use ferrets_simulation::order::AttackTarget;
 use ferrets_simulation::simulation_id::SimulationId;
 
 //
@@ -70,7 +71,7 @@ fn think_returns_commands_as_player_commands() {
                 flush: true,
             },
             PlayerCommand::Attack {
-                target: SimulationId(8),
+                target: AttackTarget::Entity(SimulationId(8)),
                 flush: false,
             },
             PlayerCommand::SendToEntity {

@@ -7,10 +7,13 @@ use ferrets_math::FixedU64;
 use ferrets_pathfinder::{layer_id::LayerId, layer_mask::LayerMask};
 
 use super::entity_type_def::{EntityTypeDef, EntityTypeId};
-use crate::components::buffs::{BuffDef, BuffId};
-use crate::components::skills::{SkillDef, SkillId};
-use crate::components::stats::{BUILTIN_STATS, StatId};
-use crate::components::tags;
+use crate::content::{
+    buffs::{BuffDef, BuffId},
+    projectile::{ProjectileDef, ProjectileId},
+    skills::{SkillDef, SkillId},
+    stats::{BUILTIN_STATS, StatId},
+    tags,
+};
 
 /// Stores every [`EntityTypeDef`], indexed by [`EntityTypeId`] and looked up by
 /// type name, as well as all the other registered content.
@@ -33,6 +36,8 @@ pub struct ContentRegistry {
     buff_defs: Vec<BuffDef>,
     skills: BTreeMap<String, SkillId>,
     skill_defs: Vec<SkillDef>,
+    projectiles: BTreeMap<String, ProjectileId>,
+    projectile_defs: Vec<ProjectileDef>,
 }
 
 impl Default for ContentRegistry {
@@ -54,6 +59,8 @@ impl Default for ContentRegistry {
             buff_defs: Vec::new(),
             skills: BTreeMap::new(),
             skill_defs: Vec::new(),
+            projectiles: BTreeMap::new(),
+            projectile_defs: Vec::new(),
         }
     }
 }
@@ -75,7 +82,8 @@ impl ContentRegistry {
     /// Panics if a type with the same name is already registered, or if the
     /// definition has no location, belongs to an unregistered race, references an
     /// unregistered resource kind or tag, carries a skill with an energy cost but no
-    /// energy pool, or leaves a corpse type that is unregistered, has no dying phase,
+    /// energy pool, delivers a hit without a damage stat, splashes onto unregistered
+    /// layers, or leaves a corpse type that is unregistered, has no dying phase,
     /// or defines live-gameplay data.
     pub fn register(&mut self, def: EntityTypeDef) {
         assert!(
@@ -92,6 +100,7 @@ impl ContentRegistry {
         self.validate_corpse(&def);
         self.validate_stats(&def);
         self.validate_skills(&def);
+        self.validate_delivery(&def);
 
         let id = EntityTypeId::from_index(self.defs.len());
         self.defs_by_name.insert(def.name.clone(), id);
@@ -302,6 +311,49 @@ impl ContentRegistry {
         &self.buff_defs[id.index()]
     }
 
+    /// Registers a projectile definition by name and returns its assigned
+    /// [`ProjectileId`]. Ids are assigned in registration order, so identical content
+    /// registered in the same order resolves to identical ids everywhere.
+    /// Re-registering a name keeps the first definition and returns its existing id.
+    ///
+    /// Panics if `name` is empty.
+    pub fn register_projectile(
+        &mut self,
+        name: impl Into<String>,
+        projectile: ProjectileDef,
+    ) -> ProjectileId {
+        let name = name.into();
+        assert!(!name.is_empty(), "projectile name must not be empty");
+
+        if let Some(&id) = self.projectiles.get(&name) {
+            return id;
+        }
+
+        let id = ProjectileId::from_index(self.projectile_defs.len());
+        self.projectiles.insert(name, id);
+        self.projectile_defs.push(projectile);
+        id
+    }
+
+    /// Returns the [`ProjectileId`] for the given name, or `None` if not registered.
+    pub fn projectile(&self, name: &str) -> Option<ProjectileId> {
+        self.projectiles.get(name).copied()
+    }
+
+    /// Returns the name the given projectile is registered under, or `None` if the
+    /// handle did not come from this registry.
+    pub fn projectile_name(&self, id: ProjectileId) -> Option<&str> {
+        self.projectiles
+            .iter()
+            .find(|&(_, &projectile)| projectile == id)
+            .map(|(name, _)| name.as_str())
+    }
+
+    /// Returns the projectile definition for the given handle.
+    pub fn projectile_def(&self, id: ProjectileId) -> &ProjectileDef {
+        &self.projectile_defs[id.index()]
+    }
+
     /// Registers a skill definition by name and returns its assigned [`SkillId`].
     /// Ids are assigned in registration order, so identical content registered in
     /// the same order resolves to identical ids everywhere. Re-registering a name
@@ -397,6 +449,25 @@ impl ContentRegistry {
             "entity type '{}' has no location",
             def.name
         );
+    }
+
+    /// Checks that a type's delivery configuration is usable: only an attacker can
+    /// deliver a hit at all, and a blast must reach registered layers.
+    fn validate_delivery(&self, def: &EntityTypeDef) {
+        assert!(
+            def.can_attack() || (def.projectile.is_none() && def.splash.is_none()),
+            "entity type '{}' configures a projectile or splash but carries no damage stat",
+            def.name
+        );
+
+        if let Some(splash) = &def.splash {
+            let unregistered = splash.layers() & !self.registered_layers();
+            assert!(
+                unregistered == LayerMask::EMPTY,
+                "entity type '{}' splashes onto unregistered layers {unregistered}",
+                def.name
+            );
+        }
     }
 
     /// Checks that every skill the type carries can be paid for: a skill with an

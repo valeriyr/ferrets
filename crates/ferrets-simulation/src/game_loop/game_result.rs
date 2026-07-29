@@ -6,7 +6,8 @@ use std::collections::BTreeSet;
 use bevy_ecs::world::World;
 
 use crate::{
-    components::{owner::OwnerComponent, tags},
+    components::{owner::OwnerComponent, tags::TagsComponent},
+    content::tags,
     entity_index::EntityIndex,
     session::{
         GameResult, GameSession, Winner,
@@ -62,7 +63,7 @@ pub fn check(world: &mut World) {
     for entity in entities {
         let entity_ref = world.entity(entity);
         let is_building = entity_ref
-            .get::<tags::TagsComponent>()
+            .get::<TagsComponent>()
             .is_some_and(|carried| carried.contains(tags::BUILDING));
         if is_building && let Some(owner) = entity_ref.get::<OwnerComponent>() {
             with_building.insert(owner.player());

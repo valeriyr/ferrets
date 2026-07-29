@@ -1,63 +1,11 @@
-//! Buffs and debuffs: timed bundles of [`Modifier`]s applied to an entity.
-//!
-//! A buff is the temporary/conditional counterpart to a base stat: it carries a
-//! set of modifiers, an optional tick duration (`None` = permanent), and a
-//! stacking rule that decides what happens when a buff of the same kind is
-//! applied again. A debuff is simply a buff whose modifiers are negative.
+//! Active buffs and debuffs on an entity.
 //!
 //! Active buffs are the source the stat pipeline folds into each entity's
 //! effective stats (see [`StatsComponent::recompute`](super::stats::StatsComponent::recompute)).
 
 use bevy_ecs::prelude::*;
 
-use super::stats::Modifier;
-
-/// A handle to a registered buff kind, assigned in registration order.
-///
-/// Content declares buff kinds by name and the registry mints their ids, so
-/// identical content registered in the same order resolves to identical ids on
-/// every peer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct BuffId(u16);
-
-impl BuffId {
-    /// Creates a buff id for the given registration index.
-    pub(crate) fn from_index(index: usize) -> Self {
-        Self(u16::try_from(index).expect("more buffs registered than BuffId can hold"))
-    }
-
-    /// The registration index this id refers to.
-    #[inline]
-    pub fn index(self) -> usize {
-        self.0 as usize
-    }
-}
-
-/// What happens when a buff is applied to an entity that already carries one of
-/// the same [`BuffId`]. There is no engine default — content declares
-/// the rule per buff.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StackRule {
-    /// Keep the single instance and reset its remaining duration.
-    Refresh,
-    /// Add a stack (its modifiers apply once more), up to `cap`, and refresh the
-    /// duration.
-    StackToCap(u32),
-    /// Keep the existing instance unchanged; drop the new application.
-    Ignore,
-}
-
-/// The definition of a buff (or debuff): a bundle of modifiers, a lifetime, and a
-/// stacking rule. Registered content, referenced by [`BuffId`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BuffDef {
-    /// The modifiers this buff contributes (negative magnitudes make a debuff).
-    pub modifiers: Vec<Modifier>,
-    /// Lifetime in ticks; `None` is permanent (removed only explicitly).
-    pub duration: Option<u32>,
-    /// How a repeat application of this kind combines.
-    pub stack_rule: StackRule,
-}
+use crate::content::buffs::{BuffId, StackRule};
 
 /// One active buff instance on an entity: its registered id (the stacking and
 /// removal identity), its remaining ticks, and how many stacks are active.

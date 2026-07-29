@@ -11,11 +11,11 @@ use ferrets_simulation::{
         health::HealthComponent,
         owner::OwnerComponent,
         resource::{ResourceCarrierComponent, ResourceSourceComponent},
-        skills::SkillId,
         stance::StanceComponent,
-        stats::StatId,
     },
     content::registry::ContentRegistry,
+    content::skills::SkillId,
+    content::stats::StatId,
     control_groups::{CONTROL_GROUP_COUNT, ControlGroups},
     resources::PlayerResources,
     selection::Selection,
@@ -317,7 +317,7 @@ pub fn update_help(
     mut text: Query<&mut Text, With<HelpText>>,
 ) {
     let mut message = String::from(
-        "LMB select (Shift add, dbl-click all of type) | RMB move/harvest/attack | F/R/G orders | X stance | 1-0 groups (Ctrl set) | V reveal | F1 debug | F2 spawn",
+        "LMB select (Shift add, dbl-click all of type) | RMB move/harvest/attack | F/R/G/Q orders | X stance | 1-0 groups (Ctrl set) | V reveal | F1 debug | F2 spawn",
     );
 
     let local = session.local_player();

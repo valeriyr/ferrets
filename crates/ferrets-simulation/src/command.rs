@@ -7,8 +7,9 @@ use ferrets_math::{fixed_urect::FixedURect, fixed_uvec2::FixedUVec2};
 use serde::{Deserialize, Serialize};
 
 use crate::components::rally::RallyTarget;
-use crate::components::skills::SkillId;
 use crate::components::stance::Stance;
+use crate::content::skills::SkillId;
+use crate::order::AttackTarget;
 use crate::simulation_id::SimulationId;
 
 /// How a selection command combines with the player's existing selection.
@@ -51,7 +52,7 @@ pub enum PlayerCommand {
     Move { target: FixedUVec2, flush: bool },
     /// Issues an attack order to the current selection, targeting the entity `target`.
     /// `flush` cancels existing orders before issuing this one; `false` appends.
-    Attack { target: SimulationId, flush: bool },
+    Attack { target: AttackTarget, flush: bool },
     /// Issues an attack-move order to the current selection, targeting `target`:
     /// move there, engaging hostiles noticed on the way.
     /// `flush` cancels existing orders before issuing this one; `false` appends.

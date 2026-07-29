@@ -184,6 +184,7 @@ pub fn run() {
                     render::draw_ghosts,
                     render::draw_selection,
                     render::draw_skill_pulses,
+                    render::draw_shots,
                     render::draw_facing,
                     render::draw_rally,
                 )

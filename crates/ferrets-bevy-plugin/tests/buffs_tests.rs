@@ -1,10 +1,14 @@
 //! Buff pipeline: a buff modifies effective stats for its duration, then reverts.
 
 use ferrets_math::FixedI64;
-use ferrets_simulation::components::buffs::{BuffDef, StackRule};
-use ferrets_simulation::components::stats::{Modifier, ModifierOp, StatId};
-use ferrets_simulation::content::registry::ContentRegistry;
-use ferrets_simulation::{game_loop, spawn};
+use ferrets_simulation::{
+    content::{
+        buffs::{BuffDef, StackRule},
+        registry::ContentRegistry,
+        stats::{Modifier, ModifierOp, StatId},
+    },
+    game_loop, spawn,
+};
 
 mod utils;
 

@@ -9,11 +9,12 @@ use crate::{
         location::LocationComponent,
         order_queue::OrderQueueComponent,
         stance::{Stance, StanceComponent},
-        stats::{StatId, StatsComponent},
+        stats::StatsComponent,
     },
+    content::stats::StatId,
     entity_def,
     entity_index::EntityIndex,
-    order::{Leash, Order},
+    order::{AttackTarget, Leash, Order},
     session::GameSession,
 };
 
@@ -73,7 +74,7 @@ pub fn tick(world: &mut World) {
                 {
                     queue.push(
                         Order::Attack {
-                            target,
+                            target: AttackTarget::Entity(target),
                             leash: Some(Leash {
                                 anchor,
                                 radius: range,

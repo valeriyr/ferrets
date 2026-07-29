@@ -1,8 +1,33 @@
 //! Internal resolved orders — what entity systems actually execute each tick.
 
 use ferrets_math::fixed_uvec2::FixedUVec2;
+use serde::{Deserialize, Serialize};
 
 use crate::simulation_id::SimulationId;
+
+/// What an attack is aimed at.
+///
+/// A weapon whose projectile follows its target is aimed at an entity; one that sends
+/// its shot to a cell is aimed at a position, and hits whatever is standing there when
+/// it arrives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AttackTarget {
+    /// The entity with the given id.
+    Entity(SimulationId),
+    /// A cell, in simulation coordinates.
+    Position(FixedUVec2),
+}
+
+impl AttackTarget {
+    /// The aimed entity, or `None` for a position.
+    #[inline]
+    pub fn entity(self) -> Option<SimulationId> {
+        match self {
+            AttackTarget::Entity(id) => Some(id),
+            AttackTarget::Position(_) => None,
+        }
+    }
+}
 
 /// Bounds an automatic engagement: the fight ends when the target strays beyond a
 /// fixed distance of where the engagement began.
@@ -21,11 +46,13 @@ pub enum Order {
     /// Move to within `range` grid cells of a world-space position in simulation
     /// coordinates. `range` of `0` requires reaching the exact cell.
     Move { target: FixedUVec2, range: u32 },
-    /// Attack the entity with the given id until it dies or becomes
-    /// unreachable. A leash additionally breaks the attack off when the target
-    /// strays too far — automatic engagements set one, explicit ones do not.
+    /// Attack what `target` names — an entity, or a cell for a weapon that sends its
+    /// shots to one. An entity target ends the order once it is gone or unreachable; a
+    /// cell is never gone, so a ground attack keeps firing until it is cancelled. A
+    /// leash additionally breaks the attack off when the target strays too far —
+    /// automatic engagements set one, explicit ones do not.
     Attack {
-        target: SimulationId,
+        target: AttackTarget,
         leash: Option<Leash>,
     },
     /// Move to a world-space position, engaging hostiles noticed on the way
@@ -64,8 +91,9 @@ impl Order {
         }
     }
 
-    /// If this order is an attack order, returns the target id. Otherwise, returns `None`.
-    pub fn attack_target(&self) -> Option<SimulationId> {
+    /// If this order is an attack order, returns what it is aimed at. Otherwise,
+    /// returns `None`.
+    pub fn attack_target(&self) -> Option<AttackTarget> {
         match self {
             Order::Attack { target, .. } => Some(*target),
             _ => None,

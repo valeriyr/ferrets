@@ -6,15 +6,19 @@ use ferrets_math::FixedU64;
 use ferrets_pathfinder::{layer_mask::LayerMask, nav_size::NavSize};
 
 use crate::{
-    components::{skills::SkillId, stats::StatId, tags::TagsComponent},
+    components::tags::TagsComponent,
     content::{
         build::BuilderDef,
         dying::DyingDef,
         location::{LocationDef, Solidity},
+        projectile::ProjectileId,
         resource::{
             DepletionPolicy, HarvestData, ResourceCarrierDef, ResourceSourceDef, ResourceStorageDef,
         },
         selection::SelectionDef,
+        skills::SkillId,
+        splash::{SplashDef, SplashShape},
+        stats::StatId,
         train::TrainerDef,
     },
     resources::{self, Cost},
@@ -55,7 +59,7 @@ pub struct EntityTypeDef {
     pub tags: BTreeSet<String>,
 
     /// Base value of every stat this type carries, seeded into each instance's
-    /// [`StatsComponent`](crate::components::stats::StatsComponent) at spawn. The
+    /// [`StatsComponent`](crate::content::stats::StatsComponent) at spawn. The
     /// built-in stats drive engine behaviour and gate capabilities (an attacker
     /// carries [`StatId::DAMAGE`], a mover [`StatId::SPEED`], …); content may add
     /// custom stats, which are seeded and buffed but otherwise ignored by the engine.
@@ -71,6 +75,11 @@ pub struct EntityTypeDef {
     /// whose type name equals the key — the "damage class" side of combat. Added
     /// before the target's armor is subtracted.
     pub bonus_damage_vs: BTreeMap<String, u32>,
+    /// How a hit is delivered. `None` lands the damage in the same tick the attack
+    /// cycle reaches its damage point.
+    pub projectile: Option<ProjectileId>,
+    /// How a hit spreads. `None` damages only the entity that was hit.
+    pub splash: Option<SplashDef>,
     /// Activated skills instances of this type can use, by registered id.
     pub skills: Vec<SkillId>,
     /// How instances behave under selection. Every type is selectable, so this is
@@ -113,6 +122,8 @@ impl EntityTypeDef {
             location: None,
             dying: None,
             bonus_damage_vs: BTreeMap::new(),
+            projectile: None,
+            splash: None,
             skills: Vec::new(),
             selection: SelectionDef::default(),
             cost: Cost::new(),
@@ -309,6 +320,33 @@ impl EntityTypeDef {
             assert!(!key.is_empty(), "bonus_damage_vs keys must not be empty");
             self.bonus_damage_vs.insert(key, amount);
         }
+        self
+    }
+
+    /// Delivers this type's hits as the registered projectile kind, instead of
+    /// landing them at the damage point.
+    ///
+    /// The projectile must be registered before this type — see
+    /// [`ContentRegistry::register`](crate::content::registry::ContentRegistry::register).
+    pub fn with_projectile(mut self, projectile: ProjectileId) -> Self {
+        self.projectile = Some(projectile);
+        self
+    }
+
+    /// Spreads this type's hits over an area: `bands` are `(radius, fraction)`
+    /// pairs in increasing radius order, `layers` the navigation layers the blast
+    /// reaches, and `friendly_fire` whether it also catches own and allied entities.
+    ///
+    /// Panics if `bands` is empty, its radii are not strictly increasing, or
+    /// `layers` is empty.
+    pub fn with_splash(
+        mut self,
+        shape: SplashShape,
+        bands: Vec<(u32, FixedU64)>,
+        layers: impl Into<LayerMask>,
+        friendly_fire: bool,
+    ) -> Self {
+        self.splash = Some(SplashDef::new(shape, bands, layers, friendly_fire));
         self
     }
 

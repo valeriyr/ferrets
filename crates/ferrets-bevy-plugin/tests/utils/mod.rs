@@ -14,21 +14,20 @@ use ferrets_pathfinder::{
 use ferrets_simulation::{
     command::{PlayerCommand, SelectMode},
     components::{
-        entity_info::EntityInfoComponent,
-        location::LocationComponent,
-        order_queue::OrderQueueComponent,
-        owner::OwnerComponent,
-        stats::{StatId, StatsComponent},
+        entity_info::EntityInfoComponent, health::HealthComponent, location::LocationComponent,
+        order_queue::OrderQueueComponent, owner::OwnerComponent, stats::StatsComponent,
     },
     content::{
         entity_type_def::EntityTypeDef,
         location::Solidity,
         registry::ContentRegistry,
         resource::{DepletionPolicy, HarvestData, HarvestVisibility},
+        stats::StatId,
     },
     entity_def,
     input::{InputFrames, PlayerFrame},
     map::Map,
+    order::AttackTarget,
     resources::PlayerResources,
     selection::Selection,
     session::{
@@ -253,6 +252,26 @@ pub fn count_of_type(world: &mut World, type_name: &str) -> usize {
 /// Player 0's stockpile of gold.
 pub fn gold(world: &World) -> u32 {
     world.resource::<PlayerResources>().amount(0, "gold")
+}
+
+/// The entity's displayed health points, `0` once it is dead or gone.
+pub fn health(app: &App, entity: Entity) -> u32 {
+    app.world()
+        .get::<HealthComponent>(entity)
+        .map_or(0, HealthComponent::displayed)
+}
+
+/// Selects `attacker` for the local player and orders it to attack `target`,
+/// flushing whatever it was doing.
+pub fn attack(app: &mut App, attacker: SimulationId, target: SimulationId) {
+    select(app, attacker);
+    push_command(
+        app,
+        PlayerCommand::Attack {
+            target: AttackTarget::Entity(target),
+            flush: true,
+        },
+    );
 }
 
 /// The entity's damage stat after the tick's modifier fold — what the buff and

@@ -20,6 +20,7 @@ use ferrets_simulation::{
     content::registry::ContentRegistry,
     control_groups::ControlGroups,
     map::Map,
+    order::AttackTarget,
     selection::Selection,
     session::GameSession,
     simulation_id::SimulationId,
@@ -80,6 +81,9 @@ pub enum TargetedOrder {
     Patrol,
     /// `G` — guard the clicked entity.
     Guard,
+    /// `Q` — shell the clicked cell. Only weapons that send their shots to a cell
+    /// take the order; the rest ignore it.
+    AttackGround,
 }
 
 /// World-space anchor of an in-progress left-drag.
@@ -417,6 +421,8 @@ pub fn order_mode_input(
         TargetedOrder::Patrol
     } else if keys.just_pressed(KeyCode::KeyG) {
         TargetedOrder::Guard
+    } else if keys.just_pressed(KeyCode::KeyQ) {
+        TargetedOrder::AttackGround
     } else {
         return;
     };
@@ -481,6 +487,12 @@ pub fn targeting_input(
                 return;
             };
             pending.push(PlayerCommand::Guard { target, flush });
+        }
+        TargetedOrder::AttackGround => {
+            pending.push(PlayerCommand::Attack {
+                target: AttackTarget::Position(world_to_pos(cursor)),
+                flush,
+            });
         }
     }
     *mode = InputMode::Normal;

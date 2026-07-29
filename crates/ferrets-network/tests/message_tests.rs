@@ -13,6 +13,7 @@ use ferrets_simulation::command::{PlayerCommand, SelectMode};
 use ferrets_simulation::components::rally::RallyTarget;
 use ferrets_simulation::components::stance::Stance;
 use ferrets_simulation::input::PlayerFrame;
+use ferrets_simulation::order::AttackTarget;
 use ferrets_simulation::session::drop_policy::DropPolicy;
 use ferrets_simulation::session::finish_policy::FinishPolicy;
 use ferrets_simulation::simulation_id::SimulationId;
@@ -146,8 +147,12 @@ fn every_command_frames() -> Message {
                 flush: true,
             },
             PlayerCommand::Attack {
-                target: SimulationId(9),
+                target: AttackTarget::Entity(SimulationId(9)),
                 flush: false,
+            },
+            PlayerCommand::Attack {
+                target: AttackTarget::Position(pos(7, 3)),
+                flush: true,
             },
             PlayerCommand::SendToEntity {
                 target: SimulationId(3),

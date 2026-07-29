@@ -1,8 +1,11 @@
 //! Tests for the stat store's modifier fold.
 
 use ferrets_math::{FixedI64, FixedU64};
-use ferrets_simulation::components::stats::{Modifier, ModifierOp, StatId, StatsComponent};
-use ferrets_simulation::content::registry::ContentRegistry;
+use ferrets_simulation::components::stats::StatsComponent;
+use ferrets_simulation::content::{
+    registry::ContentRegistry,
+    stats::{Modifier, ModifierOp, StatId},
+};
 
 //
 // ─── Combine ──────────────────────────────────────────────────────────────────
