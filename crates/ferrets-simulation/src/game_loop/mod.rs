@@ -17,6 +17,7 @@ pub mod movement;
 pub mod orders;
 pub mod patrol;
 pub mod pending_reveal;
+pub mod stats;
 pub mod tick_counter;
 pub mod train;
 pub mod visibility;

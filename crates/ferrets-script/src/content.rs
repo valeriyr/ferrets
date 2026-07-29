@@ -1,9 +1,9 @@
 //! Loading game content from a script into a [`ContentRegistry`].
 
 use ferrets_math::FixedU64;
-use ferrets_simulation::components::location::Solidity;
-use ferrets_simulation::components::resource::{DepletionPolicy, HarvestVisibility};
+use ferrets_simulation::content::location::Solidity;
 use ferrets_simulation::content::registry::ContentRegistry;
+use ferrets_simulation::content::resource::{DepletionPolicy, HarvestVisibility};
 
 use crate::engine::ScriptEngine;
 use crate::error::ScriptError;

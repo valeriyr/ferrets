@@ -5,11 +5,12 @@ use bevy_ecs::{entity::Entity, world::World};
 
 use crate::{
     components::{
-        dying::{DiedComponent, DyingComponent, DyingStaticData},
+        dying::{DiedComponent, DyingComponent},
         hidden::HiddenComponent,
-        location::{LocationComponent, LocationStaticData},
+        location::LocationComponent,
         order_queue::{CancelPolicy, OrderState},
     },
+    entity_def,
     map::Map,
     order::Order,
     spawn,
@@ -76,10 +77,10 @@ fn free_footprint(entity: Entity, world: &mut World) {
     }
 
     let location = *world.entity(entity).get::<LocationComponent>().unwrap();
-    let location_data = *world.entity(entity).get::<LocationStaticData>().unwrap();
+    let location_def = entity_def::of(world, entity).location.unwrap();
     world
         .resource_mut::<Map>()
-        .displace_entity(&location, &location_data);
+        .displace_entity(&location, &location_def);
 }
 
 /// Leaves the entity's configured corpse at its position, if any.
@@ -91,9 +92,9 @@ fn free_footprint(entity: Entity, world: &mut World) {
 /// When the footprint is blocked — someone took the cell during the death — no
 /// remains are left.
 fn leave_corpse(entity: Entity, world: &mut World) {
-    let Some(corpse_type) = world
-        .entity(entity)
-        .get::<DyingStaticData>()
+    let Some(corpse_type) = entity_def::of(world, entity)
+        .dying
+        .as_ref()
         .and_then(|dying| dying.corpse_type().map(String::from))
     else {
         return;

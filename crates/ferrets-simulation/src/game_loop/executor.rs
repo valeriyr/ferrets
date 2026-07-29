@@ -5,29 +5,30 @@
 //! the single exception — any visible entity can be selected.
 
 use bevy_ecs::{entity::Entity, world::World};
-use ferrets_math::fixed_urect::FixedURect;
+use ferrets_math::{FixedU64, fixed_urect::FixedURect};
 
 use crate::{
     command::{PlayerCommand, SelectMode},
     components::{
-        attack::AttackStaticData,
-        build::{BuilderStaticData, UnderConstructionComponent},
+        buffs::BuffsComponent,
+        build::UnderConstructionComponent,
+        energy::EnergyComponent,
         entity_info::EntityInfoComponent,
         health::HealthComponent,
         location::LocationComponent,
         order_queue::{CancelPolicy, OrderQueueComponent},
         owner::{self, OwnerComponent},
         rally::{RallyPointComponent, RallyTarget},
-        resource::{
-            ResourceCarrierComponent, ResourceCarrierStaticData, ResourceSourceComponent,
-            ResourceSourceStaticData, ResourceStorageStaticData,
-        },
+        resource::{ResourceCarrierComponent, ResourceSourceComponent},
+        skills::{SkillEffect, SkillId, SkillTarget, SkillsComponent},
         stance::StanceComponent,
+        stats::{StatId, StatsComponent},
         tags::{self, TagsComponent},
-        train::{TrainQueueComponent, TrainStaticData},
+        train::TrainQueueComponent,
     },
     content::registry::ContentRegistry,
     control_groups::{CONTROL_GROUP_COUNT, ControlGroups},
+    entity_def,
     entity_index::EntityIndex,
     input::InputFrames,
     order::Order,
@@ -255,9 +256,9 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
             let Some(entity) = find_owned_interactable(world, player, *builder) else {
                 return;
             };
-            if !world
-                .entity(entity)
-                .get::<BuilderStaticData>()
+            if !entity_def::of(world, entity)
+                .builder
+                .as_ref()
                 .is_some_and(|b| b.can_build(type_name))
             {
                 return;
@@ -286,6 +287,13 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
                 }
             }
         }
+        PlayerCommand::UseSkill {
+            caster,
+            skill,
+            target,
+        } => {
+            use_skill(world, player, *caster, *skill, *target);
+        }
         PlayerCommand::Spawn {
             type_name,
             position,
@@ -309,9 +317,10 @@ pub(super) fn resolve_send_to_entity(
     let entity_ref = world.entity(entity);
     let target_ref = world.entity(target);
 
-    let carries_source_kind = entity_ref
-        .get::<ResourceCarrierStaticData>()
-        .zip(target_ref.get::<ResourceSourceStaticData>())
+    let carries_source_kind = entity_def::of(world, entity)
+        .resource_carrier
+        .as_ref()
+        .zip(entity_def::of(world, target).resource_source.as_ref())
         .is_some_and(|(carrier, source)| carrier.can_carry(source.kind()));
     if carries_source_kind && target_ref.contains::<ResourceSourceComponent>() {
         return Some(Order::Harvest { target: target_id });
@@ -335,7 +344,7 @@ pub(super) fn resolve_send_to_entity(
         && entity_ref
             .get::<ResourceCarrierComponent>()
             .and_then(|carrier| carrier.kind.as_deref())
-            .zip(target_ref.get::<ResourceStorageStaticData>())
+            .zip(entity_def::of(world, target).resource_storage.as_ref())
             .is_some_and(|(kind, storage)| storage.accepts(kind));
     if accepts_delivery {
         return Some(Order::Harvest { target: target_id });
@@ -347,7 +356,7 @@ pub(super) fn resolve_send_to_entity(
         target_ref.get::<OwnerComponent>(),
     );
     if hostile
-        && entity_ref.contains::<AttackStaticData>()
+        && entity_def::of(world, entity).can_attack()
         && target_ref.contains::<HealthComponent>()
     {
         return Some(Order::Attack {
@@ -372,9 +381,9 @@ fn train_entity(world: &mut World, player: PlayerId, trainer: SimulationId, type
     {
         return;
     }
-    if !world
-        .entity(entity)
-        .get::<TrainStaticData>()
+    if !entity_def::of(world, entity)
+        .trainer
+        .as_ref()
         .is_some_and(|t| t.can_train(type_name))
     {
         return;
@@ -553,5 +562,118 @@ fn find_owned_interactable(world: &World, player: PlayerId, id: SimulationId) ->
 fn push_order(world: &mut World, entity: Entity, order: Order, flush: Option<CancelPolicy>) {
     if let Some(mut queue) = world.entity_mut(entity).get_mut::<OrderQueueComponent>() {
         queue.push(order, flush);
+    }
+}
+
+/// Uses `caster`'s skill by index, on `target`, when it is ready (off cooldown),
+/// affordable (enough energy), and the target is valid for the skill.
+fn use_skill(
+    world: &mut World,
+    player: PlayerId,
+    caster_id: SimulationId,
+    skill: SkillId,
+    target_id: Option<SimulationId>,
+) {
+    let Some(caster) = find_owned_interactable(world, player, caster_id) else {
+        return;
+    };
+    // The caster must have the skill, and it must be off cooldown.
+    if !world
+        .entity(caster)
+        .get::<SkillsComponent>()
+        .is_some_and(|skills| skills.ready(skill))
+    {
+        return;
+    }
+    let def = world.resource::<ContentRegistry>().skill_def(skill).clone();
+
+    // Resolve and validate the target.
+    let target = match def.target {
+        SkillTarget::Caster => caster,
+        SkillTarget::Ally | SkillTarget::Enemy => {
+            let Some(target_id) = target_id else {
+                return;
+            };
+            let Some(target) = world
+                .resource::<EntityIndex>()
+                .interactable(world, target_id)
+            else {
+                return;
+            };
+            let session = world.resource::<GameSession>();
+            let caster_ref = world.entity(caster);
+            let target_ref = world.entity(target);
+            let caster_owner = caster_ref.get::<OwnerComponent>();
+            let target_owner = target_ref.get::<OwnerComponent>();
+            let valid = match def.target {
+                SkillTarget::Ally => matches!(
+                    (caster_owner, target_owner),
+                    (Some(caster), Some(target)) if session.are_allied(caster.player(), target.player())
+                ),
+                SkillTarget::Enemy => owner::are_hostile(session, caster_owner, target_owner),
+                SkillTarget::Caster => unreachable!("handled above"),
+            };
+            if !valid {
+                return;
+            }
+            target
+        }
+    };
+
+    // Pay the energy cost; a skill that costs energy needs an energy pool.
+    if def.energy_cost > FixedU64::ZERO {
+        let mut caster_mut = world.entity_mut(caster);
+        let Some(mut energy) = caster_mut.get_mut::<EnergyComponent>() else {
+            return;
+        };
+        if !energy.spend(def.energy_cost) {
+            return;
+        }
+    }
+
+    apply_skill_effect(world, caster, target, &def.effect);
+
+    if let Some(mut skills) = world.entity_mut(caster).get_mut::<SkillsComponent>() {
+        skills.start_cooldown(skill, def.cooldown);
+    }
+}
+
+/// Applies a resolved skill effect to `target`.
+fn apply_skill_effect(world: &mut World, caster: Entity, target: Entity, effect: &SkillEffect) {
+    match effect {
+        SkillEffect::ApplyBuff(id) => super::stats::apply_buff(world, target, *id),
+        SkillEffect::RemoveBuff(id) => {
+            if let Some(mut buffs) = world.entity_mut(target).get_mut::<BuffsComponent>() {
+                buffs.remove(*id);
+            }
+        }
+        SkillEffect::Damage(amount) => {
+            let caster_id = world
+                .entity(caster)
+                .get::<EntityInfoComponent>()
+                .expect("caster has an id")
+                .id();
+            let tick = world.resource::<GameSession>().tick();
+            let mut died = false;
+            if let Some(mut health) = world.entity_mut(target).get_mut::<HealthComponent>() {
+                // Skill damage bypasses armor, like an ability rather than a weapon.
+                health.apply_damage(*amount);
+                health.record_hit(caster_id, tick);
+                died = health.is_dead();
+            }
+            if died {
+                spawn::destroy_entity(world, target);
+            }
+        }
+        SkillEffect::Heal(amount) => {
+            let max = world
+                .entity(target)
+                .get::<StatsComponent>()
+                .and_then(|stats| stats.effective(StatId::MAX_HEALTH))
+                .unwrap_or(FixedU64::ZERO);
+            if let Some(mut health) = world.entity_mut(target).get_mut::<HealthComponent>() {
+                health.heal(*amount, max);
+            }
+        }
     }
 }

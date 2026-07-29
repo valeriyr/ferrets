@@ -28,6 +28,10 @@ pub struct EntityView {
     pub y: u32,
     /// `None` when the type has no health.
     pub health: Option<u32>,
+    /// Effective attack damage, `None` when the entity cannot attack.
+    pub damage: Option<u32>,
+    /// Effective flat armor.
+    pub armor: Option<u32>,
     /// `true` when the order queue is empty.
     pub idle: bool,
     /// `true` when the entity is temporarily off the map (e.g. harvesting

@@ -3,36 +3,57 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use bevy_ecs::prelude::*;
+use ferrets_math::FixedU64;
 use ferrets_pathfinder::{layer_id::LayerId, layer_mask::LayerMask};
 
-use super::entity_type_def::EntityTypeDef;
+use super::entity_type_def::{EntityTypeDef, EntityTypeId};
+use crate::components::buffs::{BuffDef, BuffId};
+use crate::components::skills::{SkillDef, SkillId};
+use crate::components::stats::{BUILTIN_STATS, StatId};
 use crate::components::tags;
 
-/// Stores every [`EntityTypeDef`], keyed by type name,
-/// as well as all the other registered content.
+/// Stores every [`EntityTypeDef`], indexed by [`EntityTypeId`] and looked up by
+/// type name, as well as all the other registered content.
 ///
 /// Everything is held in ordered containers, so iteration over the registry is
 /// deterministic.
 #[derive(Resource)]
 pub struct ContentRegistry {
-    entities: BTreeMap<String, EntityTypeDef>,
+    /// All type definitions, indexed by [`EntityTypeId`] (registration order).
+    defs: Vec<EntityTypeDef>,
+    /// Type name → handle, for name lookups and name-sorted iteration.
+    defs_by_name: BTreeMap<String, EntityTypeId>,
     resources: BTreeSet<String>,
     races: BTreeSet<String>,
     tags: BTreeSet<String>,
     layers: BTreeMap<String, LayerId>,
     terrains: BTreeMap<String, LayerMask>,
+    stats: BTreeMap<String, StatId>,
+    buffs: BTreeMap<String, BuffId>,
+    buff_defs: Vec<BuffDef>,
+    skills: BTreeMap<String, SkillId>,
+    skill_defs: Vec<SkillDef>,
 }
 
 impl Default for ContentRegistry {
     /// A fresh registry already carries the engine's reserved tags.
     fn default() -> Self {
         Self {
-            entities: BTreeMap::new(),
+            defs: Vec::new(),
+            defs_by_name: BTreeMap::new(),
             resources: BTreeSet::new(),
             races: BTreeSet::new(),
             tags: BTreeSet::from([tags::BUILDING.to_string()]),
             layers: BTreeMap::new(),
             terrains: BTreeMap::new(),
+            stats: BUILTIN_STATS
+                .iter()
+                .map(|builtin| (builtin.name.to_string(), builtin.id))
+                .collect(),
+            buffs: BTreeMap::new(),
+            buff_defs: Vec::new(),
+            skills: BTreeMap::new(),
+            skill_defs: Vec::new(),
         }
     }
 }
@@ -53,11 +74,12 @@ impl ContentRegistry {
     ///
     /// Panics if a type with the same name is already registered, or if the
     /// definition has no location, belongs to an unregistered race, references an
-    /// unregistered resource kind or tag, or leaves a corpse type that is
-    /// unregistered, has no dying phase, or defines live-gameplay data.
+    /// unregistered resource kind or tag, carries a skill with an energy cost but no
+    /// energy pool, or leaves a corpse type that is unregistered, has no dying phase,
+    /// or defines live-gameplay data.
     pub fn register(&mut self, def: EntityTypeDef) {
         assert!(
-            !self.entities.contains_key(&def.name),
+            !self.defs_by_name.contains_key(&def.name),
             "entity type '{}' is already registered",
             def.name
         );
@@ -68,8 +90,12 @@ impl ContentRegistry {
         self.validate_tags(&def);
         self.validate_layers(&def);
         self.validate_corpse(&def);
+        self.validate_stats(&def);
+        self.validate_skills(&def);
 
-        self.entities.insert(def.name.clone(), def);
+        let id = EntityTypeId::from_index(self.defs.len());
+        self.defs_by_name.insert(def.name.clone(), id);
+        self.defs.push(def);
     }
 
     /// Validates the production catalogues of all registered types. Call once
@@ -82,7 +108,7 @@ impl ContentRegistry {
     /// Panics if any type trains a type that is not a registered trainable type,
     /// or builds a type that is not a registered constructible type.
     pub fn validate(&self) {
-        for def in self.entities.values() {
+        for def in &self.defs {
             self.validate_trains(def);
             self.validate_builds(def);
         }
@@ -90,12 +116,24 @@ impl ContentRegistry {
 
     /// Returns the definition for the given type name, or `None` if not registered.
     pub fn entity(&self, name: &str) -> Option<&EntityTypeDef> {
-        self.entities.get(name)
+        self.defs_by_name
+            .get(name)
+            .map(|&id| &self.defs[id.index()])
+    }
+
+    /// Returns the definition for the given handle.
+    pub fn def(&self, id: EntityTypeId) -> &EntityTypeDef {
+        &self.defs[id.index()]
+    }
+
+    /// Returns the handle for the given type name, or `None` if not registered.
+    pub fn type_id(&self, name: &str) -> Option<EntityTypeId> {
+        self.defs_by_name.get(name).copied()
     }
 
     /// Returns every registered entity type definition, in ascending name order.
     pub fn entities(&self) -> impl Iterator<Item = &EntityTypeDef> {
-        self.entities.values()
+        self.defs_by_name.values().map(|&id| &self.defs[id.index()])
     }
 
     /// Returns the registered resource kinds, in ascending order.
@@ -189,6 +227,125 @@ impl ContentRegistry {
         self.layers.iter().map(|(name, &id)| (name.as_str(), id))
     }
 
+    /// Registers a stat (health, damage, …) and returns its assigned [`StatId`].
+    ///
+    /// Ids are assigned in registration order. The built-in stats are
+    /// pre-registered first, so their ids are the [`StatId`] constants, and
+    /// content-declared stats follow. Re-registering a name returns its
+    /// existing id.
+    ///
+    /// Panics if `name` is empty.
+    pub fn register_stat(&mut self, name: impl Into<String>) -> StatId {
+        let name = name.into();
+        assert!(!name.is_empty(), "stat name must not be empty");
+
+        if let Some(&id) = self.stats.get(&name) {
+            return id;
+        }
+
+        let id = StatId::from_index(self.stats.len());
+        self.stats.insert(name, id);
+        id
+    }
+
+    /// Returns `true` if `name` is a registered stat.
+    pub fn has_stat(&self, name: &str) -> bool {
+        self.stats.contains_key(name)
+    }
+
+    /// Returns the [`StatId`] for the given stat name, or `None` if not registered.
+    pub fn stat(&self, name: &str) -> Option<StatId> {
+        self.stats.get(name).copied()
+    }
+
+    /// Registers a buff definition by name and returns its assigned [`BuffId`].
+    /// Ids are assigned in registration order, so identical content registered in
+    /// the same order resolves to identical ids everywhere. Re-registering a name
+    /// keeps the first definition and returns its existing id.
+    ///
+    /// Panics if `name` is empty.
+    pub fn register_buff(&mut self, name: impl Into<String>, buff: BuffDef) -> BuffId {
+        let name = name.into();
+        assert!(!name.is_empty(), "buff name must not be empty");
+
+        if let Some(&id) = self.buffs.get(&name) {
+            return id;
+        }
+
+        let id = BuffId::from_index(self.buff_defs.len());
+        self.buffs.insert(name, id);
+        self.buff_defs.push(buff);
+        id
+    }
+
+    /// Returns `true` if `name` is a registered buff.
+    pub fn has_buff(&self, name: &str) -> bool {
+        self.buffs.contains_key(name)
+    }
+
+    /// Returns the [`BuffId`] for the given buff name, or `None` if not registered.
+    pub fn buff(&self, name: &str) -> Option<BuffId> {
+        self.buffs.get(name).copied()
+    }
+
+    /// Returns the name the given buff is registered under, or `None` if the
+    /// handle did not come from this registry.
+    pub fn buff_name(&self, id: BuffId) -> Option<&str> {
+        self.buffs
+            .iter()
+            .find(|&(_, &buff)| buff == id)
+            .map(|(name, _)| name.as_str())
+    }
+
+    /// Returns the buff definition for the given handle.
+    pub fn buff_def(&self, id: BuffId) -> &BuffDef {
+        &self.buff_defs[id.index()]
+    }
+
+    /// Registers a skill definition by name and returns its assigned [`SkillId`].
+    /// Ids are assigned in registration order, so identical content registered in
+    /// the same order resolves to identical ids everywhere. Re-registering a name
+    /// keeps the first definition and returns its existing id.
+    ///
+    /// Panics if `name` is empty.
+    pub fn register_skill(&mut self, name: impl Into<String>, skill: SkillDef) -> SkillId {
+        let name = name.into();
+        assert!(!name.is_empty(), "skill name must not be empty");
+
+        if let Some(&id) = self.skills.get(&name) {
+            return id;
+        }
+
+        let id = SkillId::from_index(self.skill_defs.len());
+        self.skills.insert(name, id);
+        self.skill_defs.push(skill);
+        id
+    }
+
+    /// Returns `true` if `name` is a registered skill.
+    pub fn has_skill(&self, name: &str) -> bool {
+        self.skills.contains_key(name)
+    }
+
+    /// Returns the [`SkillId`] for the given skill name, or `None` if not registered.
+    pub fn skill(&self, name: &str) -> Option<SkillId> {
+        self.skills.get(name).copied()
+    }
+
+    /// Returns the name the given skill is registered under, or `None` if the
+    /// handle did not come from this registry.
+    pub fn skill_name(&self, id: SkillId) -> Option<&str> {
+        self.skills
+            .iter()
+            .find(|&(_, &skill)| skill == id)
+            .map(|(name, _)| name.as_str())
+    }
+
+    /// Returns the skill definition for the given handle.
+    pub fn skill_def(&self, id: SkillId) -> &SkillDef {
+        &self.skill_defs[id.index()]
+    }
+
     /// Registers a terrain type (grass, water, …): a name and the mask of
     /// navigation layers passable on cells of that terrain. An empty mask means
     /// the terrain is impassable on every layer.
@@ -240,6 +397,88 @@ impl ContentRegistry {
             "entity type '{}' has no location",
             def.name
         );
+    }
+
+    /// Checks that every skill the type carries can be paid for: a skill with an
+    /// energy cost needs the pool to spend from, so the type must declare
+    /// [`StatId::MAX_ENERGY`].
+    fn validate_skills(&self, def: &EntityTypeDef) {
+        for &skill in &def.skills {
+            if self.skill_def(skill).energy_cost > FixedU64::ZERO {
+                assert!(
+                    def.has_energy(),
+                    "entity type '{}' has skill '{}' with an energy cost but no max_energy stat",
+                    def.name,
+                    self.skill_name(skill).unwrap_or("<unregistered>"),
+                );
+            }
+        }
+    }
+
+    /// Checks the engine's built-in stats: a declared pool or speed is positive (a
+    /// zero would be meaningless); a stat the engine reads as a whole number is at
+    /// least its floor; an attacker — one carrying the [`StatId::DAMAGE`] stat —
+    /// also carries the rest of its weapon; and the hit lands within the attack
+    /// cycle (`damage_point <= attack_period`).
+    /// Content's own custom stats are engine-transparent and not checked here.
+    fn validate_stats(&self, def: &EntityTypeDef) {
+        // Declaring any of these at zero says nothing an omitted stat would not.
+        for stat in [StatId::MAX_HEALTH, StatId::SPEED, StatId::MAX_ENERGY] {
+            if let Some(value) = def.base_stat(stat) {
+                assert!(
+                    value > FixedU64::ZERO,
+                    "entity type '{}' has a non-positive {} stat",
+                    def.name,
+                    BUILTIN_STATS[stat.index()].name,
+                );
+            }
+        }
+
+        // A floored stat is one the engine reads as a whole number, so an authored
+        // value below the floor truncates to something its consumer can never
+        // satisfy — and an entity that is never buffed never reaches the fold that
+        // would raise it. Driven off the floor table so the two cannot disagree.
+        for builtin in &BUILTIN_STATS {
+            if builtin.floor == FixedU64::ZERO {
+                continue;
+            }
+            if let Some(value) = def.base_stat(builtin.id) {
+                assert!(
+                    value >= builtin.floor,
+                    "entity type '{}' has {} below its minimum of {}",
+                    def.name,
+                    builtin.name,
+                    builtin.floor,
+                );
+            }
+        }
+
+        if def.can_attack() {
+            for stat in [
+                StatId::ATTACK_RANGE,
+                StatId::ACQUIRE_RANGE,
+                StatId::ATTACK_PERIOD,
+                StatId::DAMAGE_POINT,
+            ] {
+                assert!(
+                    def.base_stat(stat).is_some(),
+                    "entity type '{}' carries the damage stat but is missing {}",
+                    def.name,
+                    BUILTIN_STATS[stat.index()].name,
+                );
+            }
+        }
+
+        if let (Some(period), Some(damage_point)) = (
+            def.base_stat(StatId::ATTACK_PERIOD),
+            def.base_stat(StatId::DAMAGE_POINT),
+        ) {
+            assert!(
+                damage_point <= period,
+                "entity type '{}' has a damage_point beyond its attack_period",
+                def.name
+            );
+        }
     }
 
     /// Checks that the definition's race, if any, is registered.
@@ -313,8 +552,7 @@ impl ContentRegistry {
 
         for type_name in trainer.trains() {
             let trainable = self
-                .entities
-                .get(type_name)
+                .entity(type_name)
                 .is_some_and(|trained| trained.train_time.is_some());
             assert!(
                 trainable,
@@ -336,12 +574,12 @@ impl ContentRegistry {
         };
 
         assert!(
-            self.entities.contains_key(corpse_type),
+            self.entity(corpse_type).is_some(),
             "entity type '{}' leaves an unregistered corpse type '{corpse_type}'",
             def.name
         );
         assert!(
-            self.entities[corpse_type].dying.is_some(),
+            self.entity(corpse_type).unwrap().dying.is_some(),
             "entity type '{}' leaves a corpse type '{corpse_type}' that has no dying phase",
             def.name
         );
@@ -357,7 +595,7 @@ impl ContentRegistry {
     /// only the allowed data, so fields added to [`EntityTypeDef`] later are
     /// corpse-incompatible by default.
     fn validate_corpse_compatible(&self, user: &EntityTypeDef, corpse_type: &str) {
-        let corpse = &self.entities[corpse_type];
+        let corpse = self.entity(corpse_type).expect("corpse type is registered");
 
         let mut allowed = EntityTypeDef::new(corpse.name.clone());
         allowed.race = corpse.race.clone();
@@ -378,8 +616,7 @@ impl ContentRegistry {
 
         for type_name in builder.builds() {
             let constructible = self
-                .entities
-                .get(type_name)
+                .entity(type_name)
                 .is_some_and(|built| built.build_time.is_some());
             assert!(
                 constructible,

@@ -8,11 +8,8 @@ use ferrets_pathfinder::{nav_pos::NavPos, nav_size::NavSize};
 use ferrets_simulation::{
     command::PlayerCommand,
     components::{
-        entity_info::EntityInfoComponent,
-        hidden::HiddenComponent,
-        location::{LocationComponent, LocationStaticData},
-        order_queue::OrderQueueComponent,
-        patrol::PatrolComponent,
+        entity_info::EntityInfoComponent, hidden::HiddenComponent, location::LocationComponent,
+        order_queue::OrderQueueComponent, patrol::PatrolComponent,
     },
     content::registry::ContentRegistry,
     map::Map,
@@ -113,16 +110,10 @@ pub fn debug_readout(
     session: Res<GameSession>,
     selection: Res<Selection>,
     mode: Res<InputMode>,
+    registry: Res<ContentRegistry>,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
-    entities: Query<
-        (
-            &EntityInfoComponent,
-            &LocationComponent,
-            &LocationStaticData,
-        ),
-        Without<HiddenComponent>,
-    >,
+    entities: Query<(&EntityInfoComponent, &LocationComponent), Without<HiddenComponent>>,
     mut text: Query<&mut Text, With<DebugText>>,
 ) {
     let cell = cursor_cell(&windows, &cameras);
@@ -131,14 +122,14 @@ pub fn debug_readout(
     // What the hit-test finds under the cursor (the same test selection uses).
     let hover = cell
         .and_then(|(cx, cy)| {
-            entities.iter().find(|(_, location, location_data)| {
+            entities.iter().find(|(info, location)| {
                 let ox = location.position.x.to_num::<u32>();
                 let oy = location.position.y.to_num::<u32>();
-                let size = location_data.size();
+                let size = registry.def(info.type_id()).location.unwrap().size();
                 cx >= ox && cx < ox + size.width && cy >= oy && cy < oy + size.height
             })
         })
-        .map(|(info, _, _)| info.type_name().to_string());
+        .map(|(info, _)| info.type_name().to_string());
     let hover_str = hover.as_deref().unwrap_or("-");
 
     let selected = selection.get(session.local_player()).len();
@@ -212,24 +203,18 @@ pub fn draw_grid(
 pub fn draw_orders(
     mut gizmos: Gizmos,
     debug: Res<DebugState>,
+    registry: Res<ContentRegistry>,
     units: Query<
         (
+            &EntityInfoComponent,
             &LocationComponent,
-            &LocationStaticData,
             &OrderQueueComponent,
             Option<&PatrolComponent>,
             &Visibility,
         ),
         Without<HiddenComponent>,
     >,
-    targets: Query<
-        (
-            &EntityInfoComponent,
-            &LocationComponent,
-            &LocationStaticData,
-        ),
-        Without<HiddenComponent>,
-    >,
+    targets: Query<(&EntityInfoComponent, &LocationComponent), Without<HiddenComponent>>,
 ) {
     const MOVE: Color = Color::srgb(0.3, 0.85, 0.4);
     const COMBAT: Color = Color::srgb(1.0, 0.35, 0.25);
@@ -248,15 +233,19 @@ pub fn draw_orders(
         targets
             .iter()
             .find(|(info, ..)| info.id() == id)
-            .map(|(_, location, data)| world_center(location.position, data.size()).truncate())
+            .map(|(info, location)| {
+                let size = registry.def(info.type_id()).location.unwrap().size();
+                world_center(location.position, size).truncate()
+            })
     };
 
-    for (location, location_data, queue, patrol, visibility) in &units {
+    for (info, location, queue, patrol, visibility) in &units {
         // Don't reveal a fogged unit's orders (its sprite is hidden by fog).
         if matches!(visibility, Visibility::Hidden) {
             continue;
         }
-        let start = world_center(location.position, location_data.size()).truncate();
+        let size = registry.def(info.type_id()).location.unwrap().size();
+        let start = world_center(location.position, size).truncate();
         for entry in &queue.0 {
             let (end, color) = match &entry.order {
                 Order::Move { target, .. } => (Some(cell_center(*target)), MOVE),

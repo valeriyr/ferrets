@@ -6,23 +6,27 @@ use ferrets_pathfinder::{nav_pos::NavPos, nav_size::NavSize};
 
 use crate::{
     components::{
-        dying::{CorpseComponent, DiedComponent, DyingComponent, DyingStaticData},
+        dying::{CorpseComponent, DiedComponent, DyingComponent},
+        energy::EnergyComponent,
         entity_info::EntityInfoComponent,
         health::HealthComponent,
         hidden::HiddenComponent,
-        location::{LocationComponent, LocationStaticData},
+        location::LocationComponent,
         movement::MoveComponent,
         order_queue::{CancelPolicy, OrderQueueComponent},
         owner::OwnerComponent,
         pending_reveal::PendingRevealComponent,
         rally::RallyPointComponent,
         resource::{ResourceCarrierComponent, ResourceSourceComponent},
+        skills::SkillsComponent,
         stance::{Stance, StanceComponent},
+        stats::{StatId, StatsComponent},
         tags::TagsComponent,
         train::TrainQueueComponent,
     },
-    content::registry::ContentRegistry,
+    content::{location::LocationDef, registry::ContentRegistry},
     control_groups::ControlGroups,
+    entity_def,
     entity_index::EntityIndex,
     game_loop::movement::is_mid_crossing,
     map::Map,
@@ -48,32 +52,33 @@ pub fn spawn_entity(
     owner: Option<PlayerId>,
 ) -> Option<(Entity, SimulationId)> {
     let (
-        location_data,
-        move_data,
-        health_data,
-        dying_data,
-        attack_data,
-        trainer,
-        builder,
-        resource_source,
-        resource_carrier,
-        resource_storage,
+        type_id,
+        location_def,
+        base_stats,
+        is_attacker,
+        is_mover,
+        is_damageable,
+        has_trainer,
+        has_resource_source,
+        has_resource_carrier,
         tags,
+        skills,
     ) = {
         let registry = world.resource::<ContentRegistry>();
+        let type_id = registry.type_id(type_name)?;
         let type_def = registry.entity(type_name)?;
         (
+            type_id,
             type_def.location?,
-            type_def.movement,
-            type_def.health,
-            type_def.dying.clone(),
-            type_def.attack,
-            type_def.trainer.clone(),
-            type_def.builder.clone(),
-            type_def.resource_source.clone(),
-            type_def.resource_carrier.clone(),
-            type_def.resource_storage.clone(),
+            type_def.base_stats.clone(),
+            type_def.can_attack(),
+            type_def.can_move(),
+            type_def.is_damageable(),
+            type_def.trainer.is_some(),
+            type_def.resource_source.is_some(),
+            type_def.resource_carrier.is_some(),
             type_def.tags.clone(),
+            type_def.skills.clone(),
         )
     };
 
@@ -81,7 +86,7 @@ pub fn spawn_entity(
 
     {
         let map = world.resource::<Map>();
-        if !map.can_place_entity(&location, &location_data) {
+        if !map.can_place_entity(&location, &location_def) {
             return None;
         }
     }
@@ -89,61 +94,64 @@ pub fn spawn_entity(
     let id = world.resource_mut::<SimulationIdGenerator>().generate();
 
     let mut entity_mut = world.spawn((
-        EntityInfoComponent::new(id, type_name),
+        EntityInfoComponent::new(id, type_id, type_name),
         location,
-        location_data,
         OrderQueueComponent::default(),
     ));
     if let Some(player) = owner {
         entity_mut.insert(OwnerComponent::new(player));
     }
-    if let Some(move_data) = move_data {
-        entity_mut.insert(move_data);
+    // Seed the per-entity stat store from the type's base stats — built-in and
+    // custom alike. Buffs later fold these into `effective` (see
+    // game_loop::stats::recompute_stats).
+    let mut stats = StatsComponent::default();
+    for (&stat, &value) in &base_stats {
+        stats.set_base(stat, value);
     }
-    if let Some(health_data) = health_data {
-        entity_mut.insert((health_data, HealthComponent::full(&health_data)));
+    entity_mut.insert(stats);
+
+    // Current-value pools, seeded to full from their max stats.
+    if let Some(&max_health) = base_stats.get(&StatId::MAX_HEALTH) {
+        entity_mut.insert(HealthComponent::full(max_health));
     }
-    if let Some(dying_data) = dying_data {
-        entity_mut.insert(dying_data);
+    if let Some(&max_energy) = base_stats.get(&StatId::MAX_ENERGY) {
+        entity_mut.insert(EnergyComponent::full(max_energy));
     }
-    if let Some(attack_data) = attack_data {
-        entity_mut.insert(attack_data);
-    }
-    // Stance: armed entities default to defending themselves; unarmed but
-    // movable, damageable ones to fleeing; the rest have no initiative to
-    // configure.
-    if attack_data.is_some() {
+
+    // Stance: armed entities default to defending themselves; unarmed but movable,
+    // damageable ones to fleeing; the rest have no initiative to configure.
+    if is_attacker {
         entity_mut.insert(StanceComponent(Stance::Defend));
-    } else if move_data.is_some() && health_data.is_some() {
+    } else if is_mover && is_damageable {
         entity_mut.insert(StanceComponent(Stance::Flee));
     }
-    if let Some(train_data) = trainer {
+
+    // Production and resource roles get their runtime-state components; the
+    // type-constant config stays on the definition, read via its handle.
+    if has_trainer {
         entity_mut.insert((
-            train_data,
             TrainQueueComponent::default(),
             RallyPointComponent::default(),
         ));
     }
-    if let Some(builder_data) = builder {
-        entity_mut.insert(builder_data);
+    if has_resource_source {
+        entity_mut.insert(ResourceSourceComponent::default());
     }
-    if let Some(source_data) = resource_source {
-        entity_mut.insert((source_data, ResourceSourceComponent::default()));
-    }
-    if let Some(carrier_data) = resource_carrier {
-        entity_mut.insert((carrier_data, ResourceCarrierComponent::default()));
-    }
-    if let Some(storage_data) = resource_storage {
-        entity_mut.insert(storage_data);
+    if has_resource_carrier {
+        entity_mut.insert(ResourceCarrierComponent::default());
     }
     if !tags.is_empty() {
         entity_mut.insert(TagsComponent::new(tags));
     }
+    if !skills.is_empty() {
+        entity_mut.insert(SkillsComponent::new(skills));
+    }
+
     let entity = entity_mut.id();
 
     world
         .resource_mut::<Map>()
-        .place_entity(&location, &location_data);
+        .place_entity(&location, &location_def);
     world.resource_mut::<EntityIndex>().insert_alive(id, entity);
 
     Some((entity, id))
@@ -172,42 +180,39 @@ pub fn spawn_corpse_entity(
     type_name: &str,
     position: FixedUVec2,
 ) -> Option<(Entity, SimulationId)> {
-    let (location_data, dying_data) = {
+    let (type_id, location_def, dying_def) = {
         let registry = world.resource::<ContentRegistry>();
+        let type_id = registry.type_id(type_name)?;
         let type_def = registry.entity(type_name)?;
-        (type_def.location?, type_def.dying.clone())
+        (type_id, type_def.location?, type_def.dying.clone())
     };
 
     let location = LocationComponent::new(position, DEFAULT_FACING);
     if !world
         .resource::<Map>()
-        .can_place_entity(&location, &location_data)
+        .can_place_entity(&location, &location_def)
     {
         return None;
     }
     world
         .resource_mut::<Map>()
-        .place_entity(&location, &location_data);
+        .place_entity(&location, &location_def);
 
     let id = world.resource_mut::<SimulationIdGenerator>().generate();
-    let dying_time = dying_data.as_ref().map(|d| d.dying_time()).unwrap_or(0);
+    let dying_time = dying_def.as_ref().map(|d| d.dying_time()).unwrap_or(0);
 
     let mut queue = OrderQueueComponent::default();
     queue.push(Order::Die, None);
 
-    let mut entity_mut = world.spawn((
-        EntityInfoComponent::new(id, type_name),
+    let entity_mut = world.spawn((
+        EntityInfoComponent::new(id, type_id, type_name),
         location,
-        location_data,
         queue,
         CorpseComponent,
         DyingComponent {
             ticks_remaining: dying_time,
         },
     ));
-    if let Some(dying_data) = dying_data {
-        entity_mut.insert(dying_data);
-    }
     let entity = entity_mut.id();
 
     world.resource_mut::<EntityIndex>().insert_dying(id, entity);
@@ -224,13 +229,12 @@ pub(crate) fn hide_entity(world: &mut World, entity: Entity) {
         .entity(entity)
         .get::<LocationComponent>()
         .expect("only entities with LocationComponent can be hidden");
-    let location_data = *world
-        .entity(entity)
-        .get::<LocationStaticData>()
-        .expect("only entities with LocationStaticData can be hidden");
+    let location_def = entity_def::of(world, entity)
+        .location
+        .expect("only entities with LocationDef can be hidden");
     world
         .resource_mut::<Map>()
-        .displace_entity(&location, &location_data);
+        .displace_entity(&location, &location_def);
     // Hiding is the inverse of a pending reveal: drop any stale retry so a new
     // hide is not undone by `process_pending_reveals` on a later tick.
     world
@@ -255,19 +259,18 @@ pub(crate) fn reveal_entity_near(
         return true;
     }
 
-    let location_data = *world
-        .entity(entity)
-        .get::<LocationStaticData>()
-        .expect("only entities with LocationStaticData can be revealed");
+    let location_def = entity_def::of(world, entity)
+        .location
+        .expect("only entities with LocationDef can be revealed");
     let Some(cell) =
         world
             .resource::<Map>()
-            .find_placement_near(around, around_size, &location_data)
+            .find_placement_near(around, around_size, &location_def)
     else {
         return false;
     };
 
-    place_hidden_at(world, entity, cell, &location_data);
+    place_hidden_at(world, entity, cell, &location_def);
     true
 }
 
@@ -296,12 +299,7 @@ pub(crate) fn reveal_entity_near_or_retry(
 }
 
 /// Puts a hidden entity back on the map at `cell`.
-fn place_hidden_at(
-    world: &mut World,
-    entity: Entity,
-    cell: NavPos,
-    location_data: &LocationStaticData,
-) {
+fn place_hidden_at(world: &mut World, entity: Entity, cell: NavPos, location_def: &LocationDef) {
     let mut entity_mut = world.entity_mut(entity);
 
     entity_mut.remove::<HiddenComponent>();
@@ -314,7 +312,7 @@ fn place_hidden_at(
     let location = *location;
     world
         .resource_mut::<Map>()
-        .place_entity(&location, location_data);
+        .place_entity(&location, location_def);
 }
 
 /// Starts the dying phase for an alive entity.
@@ -362,9 +360,9 @@ pub fn destroy_entity(world: &mut World, entity: Entity) {
     world.resource_mut::<Selection>().remove(id);
     world.resource_mut::<ControlGroups>().remove(id);
 
-    let dying_time = world
-        .entity(entity)
-        .get::<DyingStaticData>()
+    let dying_time = entity_def::of(world, entity)
+        .dying
+        .as_ref()
         .map(|d| d.dying_time())
         .unwrap_or(0);
 

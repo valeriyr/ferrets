@@ -7,6 +7,7 @@ use ferrets_math::{fixed_urect::FixedURect, fixed_uvec2::FixedUVec2};
 use serde::{Deserialize, Serialize};
 
 use crate::components::rally::RallyTarget;
+use crate::components::skills::SkillId;
 use crate::components::stance::Stance;
 use crate::simulation_id::SimulationId;
 
@@ -100,5 +101,12 @@ pub enum PlayerCommand {
     Spawn {
         type_name: String,
         position: FixedUVec2,
+    },
+    /// Uses the `skill` of the `caster` entity, on `target` when the skill needs
+    /// one (`None` for a self-targeted skill).
+    UseSkill {
+        caster: SimulationId,
+        skill: SkillId,
+        target: Option<SimulationId>,
     },
 }

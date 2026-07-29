@@ -15,12 +15,18 @@ use ferrets_simulation::{
     command::{PlayerCommand, SelectMode},
     components::{
         entity_info::EntityInfoComponent,
-        location::{LocationComponent, LocationStaticData, Solidity},
+        location::LocationComponent,
         order_queue::OrderQueueComponent,
         owner::OwnerComponent,
+        stats::{StatId, StatsComponent},
+    },
+    content::{
+        entity_type_def::EntityTypeDef,
+        location::Solidity,
+        registry::ContentRegistry,
         resource::{DepletionPolicy, HarvestData, HarvestVisibility},
     },
-    content::{entity_type_def::EntityTypeDef, registry::ContentRegistry},
+    entity_def,
     input::{InputFrames, PlayerFrame},
     map::Map,
     resources::PlayerResources,
@@ -118,7 +124,7 @@ pub fn selection_app() -> App {
                 .with_movement(FixedU64::from_num(0.5))
                 .with_health(30)
                 .with_dying(1, None)
-                .with_attack(10, 1, 3, 1, 1)
+                .with_attack(10, 1, 3, 2, 1)
                 .with_sight_range(5),
         );
         registry.register(
@@ -223,7 +229,7 @@ pub fn single_owned_of_type(world: &mut World, type_name: &str, player: PlayerId
 /// Asserts `unit` stands within one cell of `building`'s footprint.
 pub fn assert_adjacent_to_footprint(world: &mut World, unit: Entity, building: Entity) {
     let origin = cell_of(world, building);
-    let size = world.get::<LocationStaticData>(building).unwrap().size();
+    let size = entity_def::of(world, building).location.unwrap().size();
     let unit_cell = cell_of(world, unit);
     let nearest = NavPos::new(
         unit_cell.x.clamp(origin.x, origin.x + size.width - 1),
@@ -249,6 +255,16 @@ pub fn gold(world: &World) -> u32 {
     world.resource::<PlayerResources>().amount(0, "gold")
 }
 
+/// The entity's damage stat after the tick's modifier fold — what the buff and
+/// skill suites compare before and after applying an effect.
+pub fn effective_damage(app: &App, entity: Entity) -> FixedU64 {
+    app.world()
+        .get::<StatsComponent>(entity)
+        .unwrap()
+        .effective(StatId::DAMAGE)
+        .unwrap()
+}
+
 /// App with the combat content roster — an attacking soldier (50 hp, 3-tick
 /// dying phase) and an immobile dummy that leaves decaying bones — one human
 /// player, session started.
@@ -263,7 +279,7 @@ pub fn combat_app() -> App {
                 .with_movement(FixedU64::from_num(0.5))
                 .with_health(50)
                 .with_dying(3, None)
-                .with_attack(10, 1, 1, 2, 2),
+                .with_attack(10, 1, 1, 4, 2),
         );
         // Registered before `dummy`, which leaves it as a corpse.
         registry.register(
@@ -310,7 +326,7 @@ pub fn register_orders_content(app: &mut App) {
                 .with_movement(FixedU64::from_num(0.5))
                 .with_health(30)
                 .with_dying(2, None)
-                .with_attack(10, 1, 1, 2, 2)
+                .with_attack(10, 1, 1, 4, 2)
                 .with_cost([("gold", 30)])
                 .with_train_time(4),
         );
@@ -387,7 +403,7 @@ pub fn register_orders_content(app: &mut App) {
                 .with_movement(FixedU64::from_num(0.5))
                 .with_health(30)
                 .with_dying(2, None)
-                .with_attack(10, 1, 5, 2, 2)
+                .with_attack(10, 1, 5, 4, 2)
                 // Sees farther than it auto-engages, so its circular vision
                 // covers everything within acquisition range.
                 .with_sight_range(8),
@@ -399,7 +415,7 @@ pub fn register_orders_content(app: &mut App) {
                 .with_movement(FixedU64::from_num(0.5))
                 .with_health(30)
                 .with_dying(2, None)
-                .with_attack(10, 3, 5, 2, 2)
+                .with_attack(10, 3, 5, 4, 2)
                 .with_sight_range(8),
         );
     }

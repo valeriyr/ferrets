@@ -1,15 +1,9 @@
-//! Health state and content-defined health properties for simulation entities.
+//! Health state for simulation entities.
 
 use bevy_ecs::prelude::*;
+use ferrets_math::FixedU64;
 
 use crate::simulation_id::SimulationId;
-
-/// Content-defined health properties for an entity type.
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct HealthStaticData {
-    /// Maximum health points.
-    max_health: u32,
-}
 
 /// The most recent damage source: who hit the entity and when.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,34 +18,17 @@ pub struct LastHit {
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HealthComponent {
     /// Remaining health points. `0` means the entity is dead.
-    current: u32,
+    current: FixedU64,
     /// The most recent damage source, if the entity has ever been hit.
     last_hit: Option<LastHit>,
 }
 
-impl HealthStaticData {
-    /// Creates a new `HealthStaticData` with the given data.
-    ///
-    /// Panics if `max_health` is `0`.
-    #[inline]
-    pub fn new(max_health: u32) -> Self {
-        assert!(max_health > 0, "max_health must be greater than 0");
-        Self { max_health }
-    }
-
-    /// Returns the maximum health points.
-    #[inline]
-    pub fn max_health(&self) -> u32 {
-        self.max_health
-    }
-}
-
 impl HealthComponent {
-    /// Creates a `HealthComponent` at full health.
+    /// Creates a `HealthComponent` at full health, given the maximum health.
     #[inline]
-    pub fn full(static_data: &HealthStaticData) -> Self {
+    pub fn full(max: FixedU64) -> Self {
         Self {
-            current: static_data.max_health(),
+            current: max,
             last_hit: None,
         }
     }
@@ -70,19 +47,36 @@ impl HealthComponent {
 
     /// Returns the remaining health points.
     #[inline]
-    pub fn current(&self) -> u32 {
+    pub fn current(&self) -> FixedU64 {
         self.current
+    }
+
+    /// Health points for display and integer-only consumers: `0` exactly when
+    /// dead, otherwise at least `1` — a barely-alive entity never reads as `0`.
+    #[inline]
+    pub fn displayed(&self) -> u32 {
+        if self.current == FixedU64::ZERO {
+            0
+        } else {
+            self.current.to_num::<u32>().max(1)
+        }
     }
 
     /// Returns `true` when health has reached `0`.
     #[inline]
     pub fn is_dead(&self) -> bool {
-        self.current == 0
+        self.current == FixedU64::ZERO
     }
 
     /// Reduces health by `amount`, saturating at `0`.
     #[inline]
-    pub fn apply_damage(&mut self, amount: u32) {
+    pub fn apply_damage(&mut self, amount: FixedU64) {
         self.current = self.current.saturating_sub(amount);
+    }
+
+    /// Restores `amount` health, capped at `max`.
+    #[inline]
+    pub fn heal(&mut self, amount: FixedU64, max: FixedU64) {
+        self.current = (self.current + amount).min(max);
     }
 }

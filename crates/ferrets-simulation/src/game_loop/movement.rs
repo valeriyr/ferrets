@@ -10,10 +10,13 @@ const BLOCKED_WAIT_TICKS: u32 = 5;
 
 use crate::{
     components::{
-        location::{LocationComponent, LocationStaticData, Solidity},
-        movement::{MoveComponent, MoveStaticData},
+        location::LocationComponent,
+        movement::MoveComponent,
         order_queue::{CancelPolicy, OrderState},
+        stats::{StatId, StatsComponent},
     },
+    content::location::Solidity,
+    entity_def,
     map::Map,
     order::Order,
 };
@@ -24,7 +27,7 @@ use crate::{
 /// or `Finished` immediately if the entity cannot move. Whether the target is already
 /// reached is not checked here — that is deferred to [`process`].
 pub fn prepare(entity: Entity, _order: &Order, world: &mut World) -> OrderState {
-    if !world.entity(entity).contains::<MoveStaticData>() {
+    if !entity_def::of(world, entity).can_move() {
         return OrderState::Finished;
     }
     insert_driver(entity, world);
@@ -88,11 +91,11 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> OrderState {
         .position;
     let speed = world
         .entity(entity)
-        .get::<MoveStaticData>()
-        .unwrap()
-        .speed();
-    let location_data = *world.entity(entity).get::<LocationStaticData>().unwrap();
-    let occupation = location_data.occupation();
+        .get::<StatsComponent>()
+        .and_then(|stats| stats.effective(StatId::SPEED))
+        .expect("movable entities have a speed stat");
+    let location_def = entity_def::of(world, entity).location.unwrap();
+    let occupation = location_def.occupation();
 
     let Some(mut move_component) = world.entity_mut(entity).take::<MoveComponent>() else {
         return OrderState::Finished;
@@ -174,7 +177,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> OrderState {
     // Claim the next cell and release the current one before any position
     // change. Passable entities never claim cells.
     let current_cell = NavPos::from(position);
-    if location_data.solidity() == Solidity::Solid {
+    if location_def.solidity() == Solidity::Solid {
         let mut map = world.resource_mut::<Map>();
         map.nav_grid_mut()
             .set_occupied_by(occupation, current_cell, false);

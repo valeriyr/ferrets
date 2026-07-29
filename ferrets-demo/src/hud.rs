@@ -5,14 +5,17 @@ use ferrets_bevy_plugin::{PendingInput, ReplayPlayback, ScenarioObjectives};
 use ferrets_simulation::{
     command::{PlayerCommand, SelectMode},
     components::{
-        build::BuilderStaticData,
+        buffs::BuffsComponent,
+        energy::EnergyComponent,
         entity_info::EntityInfoComponent,
-        health::{HealthComponent, HealthStaticData},
+        health::HealthComponent,
         owner::OwnerComponent,
-        resource::{ResourceCarrierComponent, ResourceSourceComponent, ResourceSourceStaticData},
+        resource::{ResourceCarrierComponent, ResourceSourceComponent},
+        skills::SkillId,
         stance::StanceComponent,
-        train::TrainStaticData,
+        stats::StatId,
     },
+    content::registry::ContentRegistry,
     control_groups::{CONTROL_GROUP_COUNT, ControlGroups},
     resources::PlayerResources,
     selection::Selection,
@@ -28,6 +31,9 @@ const BUTTON_HOVERED: Color = Color::srgb(0.30, 0.30, 0.38);
 // entity that can do both.
 const BUILD_NORMAL: Color = Color::srgb(0.16, 0.22, 0.30);
 const BUILD_HOVERED: Color = Color::srgb(0.24, 0.32, 0.44);
+// Skill buttons get a warm violet tint so abilities read apart from train/build.
+const SKILL_NORMAL: Color = Color::srgb(0.26, 0.18, 0.30);
+const SKILL_HOVERED: Color = Color::srgb(0.38, 0.26, 0.44);
 
 #[derive(Component)]
 pub struct ResourceText;
@@ -57,26 +63,35 @@ pub struct LeaveButton;
 #[derive(Component)]
 pub struct CommandCard;
 
-/// A command-card button that queues `type_name` on the primary producer.
+/// A command-card button that queues an entity type on the primary producer.
 #[derive(Component)]
 pub struct TrainButton {
+    /// The entity type this button queues.
     type_name: String,
 }
 
-/// A command-card button that starts placing a `type_name` building with the
-/// primary builder.
+/// A command-card button that starts placing a building with the primary builder.
 #[derive(Component)]
 pub struct BuildButton {
+    /// The building type this button starts placing.
     type_name: String,
+}
+
+/// A command-card button that casts a skill on the selection.
+#[derive(Component)]
+pub struct SkillButton {
+    /// The skill this button casts.
+    skill: SkillId,
 }
 
 /// The control-group roster container; a chip per non-empty group is a child.
 #[derive(Component)]
 pub struct GroupRoster;
 
-/// A roster chip that recalls control `group` when clicked.
+/// A roster chip that recalls a control group when clicked.
 #[derive(Component)]
 pub struct GroupButton {
+    /// The control group this chip recalls.
     group: u8,
 }
 
@@ -297,12 +312,8 @@ pub fn update_resources(
 pub fn update_help(
     session: Res<GameSession>,
     selection: Res<Selection>,
-    producers: Query<(
-        &EntityInfoComponent,
-        Option<&OwnerComponent>,
-        Option<&TrainStaticData>,
-        Option<&BuilderStaticData>,
-    )>,
+    registry: Res<ContentRegistry>,
+    producers: Query<(&EntityInfoComponent, Option<&OwnerComponent>)>,
     mut text: Query<&mut Text, With<HelpText>>,
 ) {
     let mut message = String::from(
@@ -311,18 +322,22 @@ pub fn update_help(
 
     let local = session.local_player();
     if let Some(&id) = selection.get(local).first()
-        && let Some((_, _, trainer, builder)) = producers.iter().find(|(info, owner, ..)| {
+        && let Some((info, _)) = producers.iter().find(|(info, owner)| {
             info.id() == id && owner.is_some_and(|owner| owner.player() == local)
         })
     {
-        if trainer.is_some() {
+        let def = registry.def(info.type_id());
+        if def.trainer.is_some() {
             message = String::from(
                 "Train: click a command-card button   |   RMB set rally (on self clears)",
             );
         }
-        if builder.is_some() {
+        if def.builder.is_some() {
             message =
                 String::from("Build: click a command-card button   |   click the map to place");
+        }
+        if !def.skills.is_empty() {
+            message = String::from("Skill: click a command-card button");
         }
     }
 
@@ -336,14 +351,15 @@ pub fn update_help(
 pub fn update_selection(
     session: Res<GameSession>,
     selection: Res<Selection>,
+    registry: Res<ContentRegistry>,
     entities: Query<(
         &EntityInfoComponent,
         Option<&HealthComponent>,
-        Option<&HealthStaticData>,
         Option<&ResourceCarrierComponent>,
         Option<&ResourceSourceComponent>,
-        Option<&ResourceSourceStaticData>,
         Option<&StanceComponent>,
+        Option<&EnergyComponent>,
+        Option<&BuffsComponent>,
     )>,
     mut text: Query<&mut Text, With<SelectionText>>,
 ) {
@@ -353,30 +369,50 @@ pub fn update_selection(
         [id] => entities
             .iter()
             .find(|(info, ..)| info.id() == *id)
-            .map(
-                |(info, health, health_data, carrier, source, source_data, stance)| {
-                    let mut parts = vec![pretty_name(info.type_name())];
-                    if let (Some(health), Some(health_data)) = (health, health_data) {
-                        parts.push(format!(
-                            "HP {}/{}",
-                            health.current(),
-                            health_data.max_health()
-                        ));
-                    }
-                    if let Some(carrier) = carrier
-                        && let Some(kind) = &carrier.kind
-                    {
-                        parts.push(format!("carrying {} {kind}", carrier.amount));
-                    }
-                    if let (Some(source), Some(source_data)) = (source, source_data) {
-                        parts.push(format!("{} {} left", source.amount, source_data.kind()));
-                    }
-                    if let Some(StanceComponent(stance)) = stance {
-                        parts.push(format!("stance: {}", stance.name().replace('_', " ")));
-                    }
-                    parts.join("   ")
-                },
-            )
+            .map(|(info, health, carrier, source, stance, energy, buffs)| {
+                let def = registry.def(info.type_id());
+                let mut parts = vec![pretty_name(info.type_name())];
+                if let (Some(health), Some(max_health)) =
+                    (health, def.base_stat(StatId::MAX_HEALTH))
+                {
+                    parts.push(format!(
+                        "HP {}/{}",
+                        health.displayed(),
+                        max_health.to_num::<u32>()
+                    ));
+                }
+                if let Some(carrier) = carrier
+                    && let Some(kind) = &carrier.kind
+                {
+                    parts.push(format!("carrying {} {kind}", carrier.amount));
+                }
+                if let (Some(source), Some(source_def)) = (source, def.resource_source.as_ref()) {
+                    parts.push(format!("{} {} left", source.amount, source_def.kind()));
+                }
+                if let Some(StanceComponent(stance)) = stance {
+                    parts.push(format!("stance: {}", stance.name().replace('_', " ")));
+                }
+                if let Some(energy) = energy {
+                    parts.push(format!("energy {}", energy.current_as_u32()));
+                }
+                if let Some(buffs) = buffs
+                    && !buffs.is_empty()
+                {
+                    let names: Vec<String> = buffs
+                        .active()
+                        .map(|(id, stacks)| {
+                            let name = pretty_name(registry.buff_name(id).unwrap_or("buff"));
+                            if stacks > 1 {
+                                format!("{name} x{stacks}")
+                            } else {
+                                name
+                            }
+                        })
+                        .collect();
+                    parts.push(names.join(", "));
+                }
+                parts.join("   ")
+            })
             .unwrap_or_default(),
         many => format!("{} units selected", many.len()),
     };
@@ -460,10 +496,10 @@ fn card_button(label: &str, base: Color) -> impl Bundle {
 /// the selected worker can construct, or nothing when the primary does neither.
 pub fn update_command_card(
     primary: Res<Primary>,
-    producers: Query<(&EntityInfoComponent, &TrainStaticData)>,
-    builders: Query<(&EntityInfoComponent, &BuilderStaticData)>,
+    registry: Res<ContentRegistry>,
+    entities: Query<&EntityInfoComponent>,
     card: Query<Entity, With<CommandCard>>,
-    buttons: Query<Entity, Or<(With<TrainButton>, With<BuildButton>)>>,
+    buttons: Query<Entity, Or<(With<TrainButton>, With<BuildButton>, With<SkillButton>)>>,
     mut commands: Commands,
 ) {
     if !primary.is_changed() {
@@ -478,15 +514,25 @@ pub fn update_command_card(
     let Some(id) = primary.0 else {
         return;
     };
-    let trains = producers
+    let def = entities
         .iter()
-        .find(|(info, _)| info.id() == id)
-        .map(|(_, trainer)| trainer.trains().map(String::from).collect::<Vec<_>>())
+        .find(|info| info.id() == id)
+        .map(|info| registry.def(info.type_id()));
+    let trains = def
+        .and_then(|def| def.trainer.as_ref())
+        .map(|trainer| trainer.trains().map(String::from).collect::<Vec<_>>())
         .unwrap_or_default();
-    let builds = builders
-        .iter()
-        .find(|(info, _)| info.id() == id)
-        .map(|(_, builder)| builder.builds().map(String::from).collect::<Vec<_>>())
+    let builds = def
+        .and_then(|def| def.builder.as_ref())
+        .map(|builder| builder.builds().map(String::from).collect::<Vec<_>>())
+        .unwrap_or_default();
+    let skills: Vec<(SkillId, String)> = def
+        .map(|def| {
+            def.skills
+                .iter()
+                .map(|&id| (id, pretty_name(registry.skill_name(id).unwrap_or("skill"))))
+                .collect()
+        })
         .unwrap_or_default();
 
     commands.entity(card).with_children(|parent| {
@@ -505,6 +551,9 @@ pub fn update_command_card(
                 },
                 card_button(&pretty_name(&name), BUILD_NORMAL),
             ));
+        }
+        for (id, label) in skills {
+            parent.spawn((SkillButton { skill: id }, card_button(&label, SKILL_NORMAL)));
         }
     });
 }
@@ -544,6 +593,30 @@ pub fn build_card_input(
             }
             Interaction::Hovered => *color = BackgroundColor(BUILD_HOVERED),
             Interaction::None => *color = BackgroundColor(BUILD_NORMAL),
+        }
+    }
+}
+
+/// Casts the button's skill on every selected unit when clicked.
+pub fn skill_card_input(
+    mut buttons: Query<(&Interaction, &SkillButton, &mut BackgroundColor), Changed<Interaction>>,
+    session: Res<GameSession>,
+    selection: Res<Selection>,
+    mut pending: ResMut<PendingInput>,
+) {
+    for (interaction, button, mut color) in &mut buttons {
+        match interaction {
+            Interaction::Pressed => {
+                for &caster in selection.get(session.local_player()) {
+                    pending.push(PlayerCommand::UseSkill {
+                        caster,
+                        skill: button.skill,
+                        target: None,
+                    });
+                }
+            }
+            Interaction::Hovered => *color = BackgroundColor(SKILL_HOVERED),
+            Interaction::None => *color = BackgroundColor(SKILL_NORMAL),
         }
     }
 }

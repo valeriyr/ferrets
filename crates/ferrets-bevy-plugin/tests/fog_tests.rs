@@ -11,8 +11,7 @@ use ferrets_pathfinder::nav_size::NavSize;
 use ferrets_script::ai::AiVision;
 use ferrets_simulation::{
     command::PlayerCommand,
-    components::location::Solidity,
-    content::{entity_type_def::EntityTypeDef, registry::ContentRegistry},
+    content::{entity_type_def::EntityTypeDef, location::Solidity, registry::ContentRegistry},
     session::{
         GameSession, player_slot::PlayerId, player_slot::PlayerSlot, player_type::PlayerType,
     },
@@ -165,7 +164,7 @@ fn fog_app(slots: Vec<PlayerSlot>) -> App {
                 .with_movement(FixedU64::from_num(0.5))
                 .with_health(30)
                 .with_dying(1, None)
-                .with_attack(10, 8, 8, 1, 1)
+                .with_attack(10, 8, 8, 2, 1)
                 .with_sight_range(3),
         );
         registry.register(

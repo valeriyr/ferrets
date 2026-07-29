@@ -49,6 +49,8 @@ fn entity_table(lua: &Lua, entity: &EntityView) -> mlua::Result<Table> {
     table.set("x", entity.x)?;
     table.set("y", entity.y)?;
     table.set("health", entity.health)?;
+    table.set("damage", entity.damage)?;
+    table.set("armor", entity.armor)?;
     table.set("idle", entity.idle)?;
     table.set("hidden", entity.hidden)?;
     if let Some((kind, amount)) = &entity.carrying {
@@ -99,12 +101,12 @@ fn entity_content_table(lua: &Lua, entity: &EntityContentView) -> mlua::Result<T
     size.set("h", entity.size.1)?;
     table.set("size", size)?;
 
-    table.set("health", entity.health)?;
-    if let Some((damage, range)) = entity.attack {
-        let attack = lua.create_table()?;
-        attack.set("damage", damage)?;
-        attack.set("range", range)?;
-        table.set("attack", attack)?;
+    table.set("max_health", entity.max_health)?;
+    if let Some(attack) = &entity.attack {
+        let attack_table = lua.create_table()?;
+        attack_table.set("damage", attack.damage)?;
+        attack_table.set("attack_range", attack.attack_range)?;
+        table.set("attack", attack_table)?;
     }
     table.set(
         "harvests",

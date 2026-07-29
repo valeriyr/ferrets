@@ -24,26 +24,52 @@ pub const CONTENT: &str = r#"
     define_resource("gold")
     define_resource("wood")
 
+    -- The archer's self-buff: a burst of speed and damage that reverts on expiry.
+    -- Five seconds at 20 Hz, long enough to watch it work and then wear off.
+    define_buff("frenzy", {
+        duration = 100,
+        stack = "refresh",
+        modifiers = {
+            { stat = "speed", op = "percent", value = "1.0" },
+            { stat = "damage", op = "percent", value = "0.5" },
+        },
+    })
+
+    -- The archer's activated abilities, cast from the command card. Both are
+    -- self-targeted, so the archer carries two skill buttons.
+    define_skill("battle_focus", {
+        cooldown = 80,
+        energy_cost = "30",
+        target = "self",
+        effect = { apply_buff = "frenzy" },
+    })
+    define_skill("second_wind", {
+        cooldown = 120,
+        energy_cost = "20",
+        target = "self",
+        effect = { heal = "15" },
+    })
+
     -- The lake boss: a raceless water fortress spawning free ships. Ships are
     -- ranged so they shell shore targets; the fortress is the boss's building.
     define_entity("ship", {
         location = { occupation = WATER, size = 1, solidity = "solid" },
-        movement = { speed = "0.25" },
-        health = 80,
+        stats = {
+            speed = "0.25", max_health = 80,
+            damage = 12, attack_range = 5, acquire_range = 8, attack_period = 10, damage_point = 4,
+            -- Sees past its acquire range so its circular vision covers the square it
+            -- can auto-engage.
+            sight_range = 12,
+        },
         dying = { time = 2 },
-        attack = { damage = 12, range = 5, acquire_range = 8, aiming = 4, reloading = 6 },
         train_time = 100,
-        -- Sees past its acquire range so its circular vision covers the square it
-        -- can auto-engage.
-        sight_range = 12,
     })
     define_entity("sea_fortress", {
         location = { occupation = WATER, size = { 3, 3 }, solidity = "solid" },
-        health = 1500,
+        stats = { max_health = 1500, sight_range = 8 },
         dying = { time = 2 },
         trainer = { "ship" },
         tags = { "building" },
-        sight_range = 8,
     })
 
     -- Neutral resource sources.
@@ -60,12 +86,10 @@ pub const CONTENT: &str = r#"
         define_entity(name, {
             race = race,
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            movement = { speed = "0.3" },
-            health = 30,
+            stats = { speed = "0.3", max_health = 30, sight_range = 4 },
             dying = { time = 2 },
             cost = { gold = 50 },
             train_time = 40,
-            sight_range = 4,
             builder = builds,
             resource_carrier = {
                 gold = { capacity = 5, time = 20, visibility = "hidden" },
@@ -78,14 +102,13 @@ pub const CONTENT: &str = r#"
         define_entity(name, {
             race = race,
             location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
-            health = 800,
+            stats = { max_health = 800, sight_range = 7 },
             dying = { time = 2 },
             cost = { gold = 400 },
             build_time = 200,
             trainer = { trains },
             resource_storage = { "gold", "wood" },
             tags = { "building" },
-            sight_range = 7,
         })
     end
 
@@ -93,13 +116,12 @@ pub const CONTENT: &str = r#"
         define_entity(name, {
             race = race,
             location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
-            health = 500,
+            stats = { max_health = 500, sight_range = 6 },
             dying = { time = 2 },
             cost = { gold = 200, wood = 100 },
             build_time = 120,
             trainer = { trains },
             tags = { "building" },
-            sight_range = 6,
         })
     end
 
@@ -110,17 +132,27 @@ pub const CONTENT: &str = r#"
     define_entity("archer", {
         race = "human",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
-        movement = { speed = "0.3" },
-        health = 40,
+        stats = {
+            speed = "0.3", max_health = 40,
+            damage = 6, attack_range = 4, acquire_range = 7, attack_period = 7, damage_point = 3,
+            -- 0.1/tick is 2 energy a second, so a 30-cost cast is earned over ~15s
+            -- rather than handed back instantly: energy gates the skills, not the
+            -- cooldowns.
+            max_energy = 60, energy_regen = "0.1",
+            -- Sees comfortably past its acquire range, so its circular vision covers
+            -- what it can auto-engage.
+            sight_range = 10,
+        },
         dying = { time = 2 },
-        attack = { damage = 6, range = 4, acquire_range = 7, aiming = 3, reloading = 4 },
+        -- Anti-armor arrows: extra damage against the (armored) grunt.
+        bonus_damage_vs = { grunt = 4 },
+        -- An energy pool (above) feeds two activated skills: a self-buff burst of
+        -- speed and damage that reverts on expiry, and a small self-heal.
+        skills = { "battle_focus", "second_wind" },
         cost = { gold = 80 },
         train_time = 60,
         -- Combat units lead a mixed selection over workers.
-        selection_priority = 10,
-        -- Sees comfortably past its acquire range, so its circular vision covers
-        -- what it can auto-engage.
-        sight_range = 10,
+        selection = { priority = 10 },
     })
 
     -- Orc: worker, base, barracks, and a melee unit.
@@ -130,14 +162,17 @@ pub const CONTENT: &str = r#"
     define_entity("grunt", {
         race = "orc",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
-        movement = { speed = "0.3" },
-        health = 60,
+        stats = {
+            speed = "0.3", max_health = 60,
+            damage = 10, attack_range = 1, acquire_range = 5, attack_period = 6, damage_point = 3,
+            -- Heavy melee: flat armor blunts each incoming hit.
+            armor = 3,
+            sight_range = 8,
+        },
         dying = { time = 2 },
-        attack = { damage = 10, range = 1, acquire_range = 5, aiming = 3, reloading = 3 },
         cost = { gold = 90 },
         train_time = 70,
-        selection_priority = 10,
-        sight_range = 8,
+        selection = { priority = 10 },
     })
 "#;
 

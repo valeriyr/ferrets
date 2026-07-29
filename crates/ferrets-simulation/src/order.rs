@@ -4,13 +4,14 @@ use ferrets_math::fixed_uvec2::FixedUVec2;
 
 use crate::simulation_id::SimulationId;
 
-/// Bounds an automatic engagement: the fight ends when the target strays
-/// farther than `radius` grid cells from `anchor`.
+/// Bounds an automatic engagement: the fight ends when the target strays beyond a
+/// fixed distance of where the engagement began.
 #[derive(Debug, Clone, Copy)]
 pub struct Leash {
     /// The position the engagement started from.
     pub anchor: FixedUVec2,
-    /// How far from `anchor` the target may stray before the fight is broken off.
+    /// How far from the anchor the target may stray, in grid cells, before the
+    /// fight is broken off.
     pub radius: u32,
 }
 

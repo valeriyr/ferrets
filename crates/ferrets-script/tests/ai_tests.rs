@@ -6,7 +6,7 @@ use ferrets_math::FixedU64;
 use ferrets_math::fixed_urect::FixedURect;
 use ferrets_math::fixed_uvec2::FixedUVec2;
 use ferrets_pathfinder::nav_pos::NavPos;
-use ferrets_script::ai::view::content::{ContentView, EntityContentView};
+use ferrets_script::ai::view::content::{AttackView, ContentView, EntityContentView};
 use ferrets_script::ai::view::game::{EntityView, GameView};
 use ferrets_script::ai::{AiRuntime, AiVision};
 use ferrets_script::engine::ScriptEngine;
@@ -528,6 +528,10 @@ fn scripts_read_view_and_content_tables() {
             if worker.cost[1].kind ~= "gold" then error("cost kind") end
             if worker.train_time ~= 40 then error("train_time") end
             if not worker.can_move then error("can_move") end
+            if worker.max_health ~= 30 then error("max_health") end
+            local soldier = content.entities.soldier
+            if soldier.attack.damage ~= 10 then error("attack damage") end
+            if soldier.attack.attack_range ~= 1 then error("attack range") end
             if content.resources[1] ~= "gold" then error("resources") end
             local gold = view.resources.gold
             return { { kind = "move", x = gold + worker.cost[1].amount, y = hall.x } }
@@ -591,20 +595,39 @@ fn empty_content() -> ContentView {
 fn demo_like_content() -> ContentView {
     ContentView {
         resources: vec!["gold".to_string(), "wood".to_string()],
-        entities: vec![EntityContentView {
-            name: "peasant".to_string(),
-            cost: vec![("gold".to_string(), 50)],
-            train_time: Some(40),
-            build_time: None,
-            trains: None,
-            builds: Some(vec!["town_hall".to_string()]),
-            size: (1, 1),
-            health: Some(30),
-            attack: None,
-            harvests: Some(vec!["gold".to_string()]),
-            stores: None,
-            can_move: true,
-        }],
+        entities: vec![
+            EntityContentView {
+                name: "peasant".to_string(),
+                cost: vec![("gold".to_string(), 50)],
+                train_time: Some(40),
+                build_time: None,
+                trains: None,
+                builds: Some(vec!["town_hall".to_string()]),
+                size: (1, 1),
+                max_health: Some(30),
+                attack: None,
+                harvests: Some(vec!["gold".to_string()]),
+                stores: None,
+                can_move: true,
+            },
+            EntityContentView {
+                name: "soldier".to_string(),
+                cost: vec![("gold".to_string(), 100)],
+                train_time: Some(20),
+                build_time: None,
+                trains: None,
+                builds: None,
+                size: (1, 1),
+                max_health: Some(50),
+                attack: Some(AttackView {
+                    damage: 10,
+                    attack_range: 1,
+                }),
+                harvests: None,
+                stores: None,
+                can_move: true,
+            },
+        ],
     }
 }
 
@@ -643,6 +666,8 @@ fn populated_view(tick: u32) -> GameView {
                 x: 8,
                 y: 9,
                 health: Some(800),
+                damage: None,
+                armor: None,
                 idle: false,
                 hidden: false,
                 carrying: None,
@@ -657,6 +682,8 @@ fn populated_view(tick: u32) -> GameView {
                 x: 10,
                 y: 9,
                 health: Some(30),
+                damage: None,
+                armor: None,
                 idle: true,
                 hidden: false,
                 carrying: Some(("gold".to_string(), 3)),
@@ -674,6 +701,8 @@ fn populated_view(tick: u32) -> GameView {
             x: 4,
             y: 4,
             health: None,
+            damage: None,
+            armor: None,
             idle: true,
             hidden: false,
             carrying: None,

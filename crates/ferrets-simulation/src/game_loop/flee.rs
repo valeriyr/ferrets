@@ -8,10 +8,10 @@ use crate::{
     components::{
         health::HealthComponent,
         location::LocationComponent,
-        movement::MoveStaticData,
         order_queue::{CancelPolicy, OrderQueueComponent},
         stance::{Stance, StanceComponent},
     },
+    entity_def,
     entity_index::EntityIndex,
     map::Map,
     order::Order,
@@ -39,7 +39,7 @@ pub fn tick(world: &mut World) {
         ) {
             continue;
         }
-        if !entity_ref.contains::<MoveStaticData>() {
+        if !entity_def::of(world, entity).can_move() {
             continue;
         }
         let Some(hit) = entity_ref

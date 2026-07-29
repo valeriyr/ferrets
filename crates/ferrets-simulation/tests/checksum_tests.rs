@@ -5,10 +5,7 @@ use bevy_ecs::world::World;
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2, fixed_vec2::FixedVec2};
 use ferrets_simulation::{
     checksum::state_checksum,
-    components::{
-        health::{HealthComponent, HealthStaticData},
-        location::LocationComponent,
-    },
+    components::{health::HealthComponent, location::LocationComponent},
     entity_index::EntityIndex,
     resources::PlayerResources,
     simulation_id::SimulationId,
@@ -70,7 +67,7 @@ fn world(gold: u32, hp: u32, x: u32) -> World {
     let entity = world
         .spawn((
             LocationComponent::new(uvec2(x, 5), FixedVec2::ZERO),
-            HealthComponent::full(&HealthStaticData::new(hp)),
+            HealthComponent::full(FixedU64::from_num(hp)),
         ))
         .id();
     let mut index = EntityIndex::default();

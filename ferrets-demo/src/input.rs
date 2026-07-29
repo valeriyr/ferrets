@@ -11,9 +11,8 @@ use ferrets_simulation::{
     command::{PlayerCommand, SelectMode},
     components::entity_info::EntityInfoComponent,
     components::{
-        build::BuilderStaticData,
         hidden::HiddenComponent,
-        location::{LocationComponent, LocationStaticData},
+        location::LocationComponent,
         owner::OwnerComponent,
         rally::{RallyPointComponent, RallyTarget},
         stance::{Stance, StanceComponent},
@@ -160,20 +159,14 @@ fn visible_cell_rect(
 /// footprint (a unit standing on/near a building wins over the building).
 fn entity_at(
     cell: (u32, u32),
-    entities: &Query<
-        (
-            &EntityInfoComponent,
-            &LocationComponent,
-            &LocationStaticData,
-        ),
-        Without<HiddenComponent>,
-    >,
+    registry: &ContentRegistry,
+    entities: &Query<(&EntityInfoComponent, &LocationComponent), Without<HiddenComponent>>,
 ) -> Option<SimulationId> {
     let mut best: Option<(u32, SimulationId)> = None;
-    for (info, location, location_data) in entities {
+    for (info, location) in entities {
         let ox = location.position.x.to_num::<u32>();
         let oy = location.position.y.to_num::<u32>();
-        let size = location_data.size();
+        let size = registry.def(info.type_id()).location.unwrap().size();
         let inside =
             cell.0 >= ox && cell.0 < ox + size.width && cell.1 >= oy && cell.1 < oy + size.height;
         if inside {
@@ -201,14 +194,7 @@ pub fn selection_input(
     interactions: Query<&Interaction>,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
-    entities: Query<
-        (
-            &EntityInfoComponent,
-            &LocationComponent,
-            &LocationStaticData,
-        ),
-        Without<HiddenComponent>,
-    >,
+    entities: Query<(&EntityInfoComponent, &LocationComponent), Without<HiddenComponent>>,
 ) {
     if !matches!(*mode, InputMode::Normal) {
         // A drag interrupted by entering a mode must not fire when the click
@@ -254,7 +240,7 @@ pub fn selection_input(
         let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
         if start.distance(cursor) <= CLICK_SLOP
             && let Some(cell) = world_to_cell(cursor)
-            && let Some(id) = entity_at(cell, &entities)
+            && let Some(id) = entity_at(cell, &registry, &entities)
         {
             let now = time.elapsed_secs();
             let double = last_click
@@ -316,18 +302,12 @@ pub fn order_input(
     keys: Res<ButtonInput<KeyCode>>,
     session: Res<GameSession>,
     selection: Res<Selection>,
+    registry: Res<ContentRegistry>,
     mut pending: ResMut<PendingInput>,
     interactions: Query<&Interaction>,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
-    entities: Query<
-        (
-            &EntityInfoComponent,
-            &LocationComponent,
-            &LocationStaticData,
-        ),
-        Without<HiddenComponent>,
-    >,
+    entities: Query<(&EntityInfoComponent, &LocationComponent), Without<HiddenComponent>>,
     rally_holders: Query<(&EntityInfoComponent, &OwnerComponent), With<RallyPointComponent>>,
 ) {
     if !mouse.just_pressed(MouseButton::Right) || !matches!(*mode, InputMode::Normal) {
@@ -346,7 +326,7 @@ pub fn order_input(
 
     let flush = !(keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight));
 
-    let target = world_to_cell(cursor).and_then(|cell| entity_at(cell, &entities));
+    let target = world_to_cell(cursor).and_then(|cell| entity_at(cell, &registry, &entities));
 
     // Only an all-producer selection captures the click; a mixed selection
     // keeps ordering its units around normally.
@@ -386,7 +366,7 @@ pub fn order_input(
 #[derive(Resource, Default, PartialEq, Eq)]
 pub struct Primary(pub Option<SimulationId>);
 
-/// Recomputes [`Primary`] as the selection's highest-`selection_priority` entity,
+/// Recomputes [`Primary`] as the selection's highest-selection-priority entity,
 /// ties broken by lowest [`SimulationId`], so a mixed selection leads with its
 /// most significant unit (a caster over line infantry).
 pub fn track_primary(
@@ -404,7 +384,7 @@ pub fn track_primary(
             entities.iter().find(|info| info.id() == id).map(|info| {
                 let priority = registry
                     .entity(info.type_name())
-                    .map_or(0, |def| def.selection_priority);
+                    .map_or(0, |def| def.selection.priority());
                 (priority, id)
             })
         })
@@ -447,19 +427,13 @@ pub fn order_mode_input(
 pub fn targeting_input(
     mouse: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
+    registry: Res<ContentRegistry>,
     mut mode: ResMut<InputMode>,
     mut pending: ResMut<PendingInput>,
     interactions: Query<&Interaction>,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
-    entities: Query<
-        (
-            &EntityInfoComponent,
-            &LocationComponent,
-            &LocationStaticData,
-        ),
-        Without<HiddenComponent>,
-    >,
+    entities: Query<(&EntityInfoComponent, &LocationComponent), Without<HiddenComponent>>,
 ) {
     let InputMode::Targeting(armed) = *mode else {
         return;
@@ -501,7 +475,8 @@ pub fn targeting_input(
         TargetedOrder::Guard => {
             // Guard needs an entity under the cursor; a miss keeps the mode
             // armed so the player can click again.
-            let Some(target) = world_to_cell(cursor).and_then(|cell| entity_at(cell, &entities))
+            let Some(target) =
+                world_to_cell(cursor).and_then(|cell| entity_at(cell, &registry, &entities))
             else {
                 return;
             };
@@ -635,39 +610,6 @@ fn center_on_group(
     }
 }
 
-/// `B` enters/cycles build-placement mode for the selected builder's catalogue.
-pub fn build_input(
-    keys: Res<ButtonInput<KeyCode>>,
-    primary: Res<Primary>,
-    mut mode: ResMut<InputMode>,
-    builders: Query<(&EntityInfoComponent, &BuilderStaticData)>,
-) {
-    if !keys.just_pressed(KeyCode::KeyB) {
-        return;
-    }
-    let Some(id) = primary.0 else {
-        return;
-    };
-    let Some((_, builder)) = builders.iter().find(|(info, _)| info.id() == id) else {
-        return;
-    };
-    let builds: Vec<String> = builder.builds().map(String::from).collect();
-    if builds.is_empty() {
-        return;
-    }
-    let next = match &*mode {
-        InputMode::PlacingBuild(current) => {
-            let idx = builds
-                .iter()
-                .position(|b| b == current)
-                .map_or(0, |i| (i + 1) % builds.len());
-            builds[idx].clone()
-        }
-        InputMode::Normal | InputMode::Targeting(_) => builds[0].clone(),
-    };
-    *mode = InputMode::PlacingBuild(next);
-}
-
 /// While placing, draw a footprint ghost and place on left-click (Esc/RMB cancel).
 pub fn placement_input(
     mouse: Res<ButtonInput<MouseButton>>,
@@ -706,14 +648,14 @@ pub fn placement_input(
     let Some((cx, cy)) = world_to_cell(cursor) else {
         return;
     };
-    let Some(location_data) = registry.entity(&type_name).and_then(|def| def.location) else {
+    let Some(location_def) = registry.entity(&type_name).and_then(|def| def.location) else {
         *mode = InputMode::Normal;
         return;
     };
-    let size = location_data.size();
+    let size = location_def.size();
 
     let passable = map.nav_grid().is_footprint_passable_by(
-        location_data.occupation(),
+        location_def.occupation(),
         NavPos::new(cx, cy),
         size,
     );

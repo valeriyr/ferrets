@@ -109,7 +109,7 @@ pub fn state_checksum(world: &World) -> u64 {
             hasher.write_fixed_vec2(location.facing);
         }
         if let Some(health) = entity.get::<HealthComponent>() {
-            hasher.write_u32(health.current());
+            hasher.write_fixed_u64(health.current());
         }
     }
 

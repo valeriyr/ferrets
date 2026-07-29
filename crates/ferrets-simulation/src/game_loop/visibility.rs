@@ -5,10 +5,11 @@ use bevy_ecs::{prelude::*, world::World};
 
 use crate::{
     components::{
-        entity_info::EntityInfoComponent, hidden::HiddenComponent, location::LocationComponent,
+        hidden::HiddenComponent,
+        location::LocationComponent,
         owner::OwnerComponent,
+        stats::{StatId, StatsComponent},
     },
-    content::registry::ContentRegistry,
     session::player_slot::PlayerId,
     visibility::VisibilityGrid,
 };
@@ -20,32 +21,20 @@ use crate::{
 /// The result is a pure function of entity positions, the (static) sight stat,
 /// and team membership, so it is identical on every node.
 pub fn recompute_visibility(world: &mut World) {
-    // Owned, on-map sight sources: (player, cell x, cell y, type name).
-    let sources: Vec<(PlayerId, u32, u32, String)> = world
-        .query_filtered::<(&EntityInfoComponent, &LocationComponent, &OwnerComponent), Without<HiddenComponent>>()
+    // Owned, on-map sight sources: (player, cell x, cell y, sight radius). Sight
+    // is read from the effective stat store; an unset sight sees only its own cell.
+    let sources: Vec<(PlayerId, u32, u32, u32)> = world
+        .query_filtered::<(&LocationComponent, &OwnerComponent, &StatsComponent), Without<HiddenComponent>>()
         .iter(world)
-        .map(|(info, location, owner)| {
+        .map(|(location, owner, stats)| {
             (
                 owner.player(),
                 location.position.x.to_num::<u32>(),
                 location.position.y.to_num::<u32>(),
-                info.type_name().to_string(),
+                stats.effective_as_u32(StatId::SIGHT_RANGE).unwrap_or(0),
             )
         })
         .collect();
-
-    // Resolve each source's sight range from content; an unregistered type or an
-    // unset stat sees only its own cell.
-    let sources: Vec<(PlayerId, u32, u32, u32)> = {
-        let registry = world.resource::<ContentRegistry>();
-        sources
-            .into_iter()
-            .map(|(player, x, y, type_name)| {
-                let sight = registry.entity(&type_name).map_or(0, |def| def.sight_range);
-                (player, x, y, sight)
-            })
-            .collect()
-    };
 
     let mut grid = world.resource_mut::<VisibilityGrid>();
     grid.age();

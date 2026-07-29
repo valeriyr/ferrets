@@ -9,11 +9,10 @@ use ferrets_pathfinder::{nav_pos::NavPos, nav_size::NavSize};
 use ferrets_simulation::{
     command::PlayerCommand,
     components::{
-        location::Solidity,
         rally::{RallyPointComponent, RallyTarget},
         resource::ResourceSourceComponent,
     },
-    content::{entity_type_def::EntityTypeDef, registry::ContentRegistry},
+    content::{entity_type_def::EntityTypeDef, location::Solidity, registry::ContentRegistry},
     resources::PlayerResources,
     session::{GameSession, player_slot::PlayerSlot, player_type::PlayerType},
     spawn,

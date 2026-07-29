@@ -2,15 +2,20 @@
 
 mod utils;
 
-use ferrets_math::FixedU64;
+use ferrets_math::{FixedI64, FixedU64};
 use ferrets_pathfinder::{nav_pos::NavPos, nav_size::NavSize};
 use ferrets_simulation::{
     command::PlayerCommand,
     components::{
-        attack::AttackComponent, dying::DyingComponent, health::HealthComponent, location::Solidity,
+        attack::AttackComponent,
+        buffs::{BuffDef, StackRule},
+        dying::DyingComponent,
+        health::HealthComponent,
+        stats::{Modifier, ModifierOp, StatId},
     },
-    content::{entity_type_def::EntityTypeDef, registry::ContentRegistry},
+    content::{entity_type_def::EntityTypeDef, location::Solidity, registry::ContentRegistry},
     entity_index::EntityIndex,
+    game_loop,
     map::Map,
     session::{GameSession, player_slot::PlayerSlot, player_type::PlayerType},
     simulation_id::SimulationId,
@@ -34,7 +39,7 @@ fn attack_kills_adjacent_target() {
         },
     );
 
-    // The first hit lands after the aiming phase.
+    // The first hit lands at the damage point.
     utils::run_ticks(&mut app, 4);
     assert!(
         app.world_mut()
@@ -150,7 +155,7 @@ fn send_to_entity_does_not_attack_ally() {
                 .with_movement(FixedU64::from_num(0.5))
                 .with_health(30)
                 .with_dying(2, None)
-                .with_attack(10, 1, 1, 2, 2),
+                .with_attack(10, 1, 1, 4, 2),
         );
         registry.validate();
     }
@@ -174,8 +179,9 @@ fn send_to_entity_does_not_attack_ally() {
     assert_eq!(
         app.world_mut()
             .get::<HealthComponent>(ally)
-            .map(|h| h.current()),
-        Some(30),
+            .unwrap()
+            .current(),
+        30,
     );
 }
 
@@ -200,4 +206,103 @@ fn attack_order_with_missing_target_finishes() {
     utils::run_ticks(&mut app, 3);
     assert!(utils::order_queue_is_empty(app.world_mut(), attacker));
     assert!(app.world_mut().get::<AttackComponent>(attacker).is_none());
+}
+
+#[test]
+fn shortened_attack_cycle_still_lands_hits() {
+    // The soldier's authored cycle is 4 ticks with the hit landing on tick 2. A
+    // debuff shortens the cycle to 1, leaving the authored hit beyond its end —
+    // the phase counter then runs 1..=1 and would never reach 2, so without the
+    // clamp this attacker would never deal damage at all.
+    let mut app = utils::combat_app();
+    let (attacker, attacker_id) =
+        spawn::spawn_entity(app.world_mut(), "soldier", utils::pos(5, 5), Some(0)).unwrap();
+    let (target, target_id) =
+        spawn::spawn_entity(app.world_mut(), "dummy", utils::pos(6, 5), None).unwrap();
+
+    let hasty = app
+        .world_mut()
+        .resource_mut::<ContentRegistry>()
+        .register_buff(
+            "hasty",
+            BuffDef {
+                modifiers: vec![Modifier {
+                    stat: StatId::ATTACK_PERIOD,
+                    op: ModifierOp::FlatAdd,
+                    magnitude: FixedI64::from_num(-3),
+                }],
+                duration: None,
+                stack_rule: StackRule::Refresh,
+            },
+        );
+    game_loop::stats::apply_buff(app.world_mut(), attacker, hasty);
+
+    utils::select(&mut app, attacker_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Attack {
+            target: target_id,
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, 4);
+
+    // With the cycle clamped to 1 a hit lands every tick, so two land in the two
+    // ticks after the command arrives — exactly lethal for the 20-hp dummy. Under
+    // the authored 4-tick cycle only one hit could have landed by now.
+    let health = app.world().get::<HealthComponent>(target).unwrap();
+    assert!(
+        health.is_dead(),
+        "expected the shortened cycle to land two hits, target at {} hp",
+        health.displayed()
+    );
+}
+
+#[test]
+fn attack_gives_up_on_walled_in_target() {
+    // The target sits inside a ring of solid dummies, so no path reaches a cell
+    // within the soldier's range of 1. The chase must notice it made no progress
+    // and finish the order rather than walk forever.
+    let mut app = utils::combat_app();
+    let (_, attacker_id) =
+        spawn::spawn_entity(app.world_mut(), "soldier", utils::pos(5, 5), Some(0)).unwrap();
+    let (target, target_id) =
+        spawn::spawn_entity(app.world_mut(), "dummy", utils::pos(15, 15), None).unwrap();
+    for (x, y) in [
+        (14, 14),
+        (15, 14),
+        (16, 14),
+        (14, 15),
+        (16, 15),
+        (14, 16),
+        (15, 16),
+        (16, 16),
+    ] {
+        spawn::spawn_entity(app.world_mut(), "dummy", utils::pos(x, y), None)
+            .expect("wall segment must be placeable");
+    }
+
+    utils::select(&mut app, attacker_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Attack {
+            target: target_id,
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, 120);
+
+    let attacker = utils::single_owned_of_type(app.world_mut(), "soldier", 0);
+    assert!(
+        utils::order_queue_is_empty(app.world_mut(), attacker),
+        "the chase must give up on an unreachable target"
+    );
+    assert_eq!(
+        app.world()
+            .get::<HealthComponent>(target)
+            .unwrap()
+            .current(),
+        FixedU64::from_num(20),
+        "the walled-in target must take no damage"
+    );
 }

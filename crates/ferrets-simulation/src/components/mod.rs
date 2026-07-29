@@ -5,8 +5,10 @@
 
 pub mod attack;
 pub mod attack_move;
+pub mod buffs;
 pub mod build;
 pub mod dying;
+pub mod energy;
 pub mod entity_info;
 pub mod follow;
 pub mod guard;
@@ -20,6 +22,8 @@ pub mod patrol;
 pub mod pending_reveal;
 pub mod rally;
 pub mod resource;
+pub mod skills;
 pub mod stance;
+pub mod stats;
 pub mod tags;
 pub mod train;

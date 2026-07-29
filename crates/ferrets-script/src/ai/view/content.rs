@@ -1,6 +1,7 @@
 //! The static content catalogue a script can consult, snapshotted once per
 //! session.
 
+use ferrets_simulation::components::stats::StatId;
 use ferrets_simulation::content::entity_type_def::EntityTypeDef;
 use ferrets_simulation::content::registry::ContentRegistry;
 
@@ -37,15 +38,22 @@ pub struct EntityContentView {
     pub builds: Option<Vec<String>>,
     /// Footprint width and height in cells.
     pub size: (u32, u32),
-    /// Maximum health. `None` when the type has no health.
-    pub health: Option<u32>,
-    /// Damage and range. `None` when the type cannot attack.
-    pub attack: Option<(u32, u32)>,
+    /// Maximum health (the `max_health` stat). `None` when the type has none.
+    pub max_health: Option<u32>,
+    /// The weapon. `None` when the type cannot attack.
+    pub attack: Option<AttackView>,
     /// Harvestable resource kinds. `None` when the type cannot harvest.
     pub harvests: Option<Vec<String>>,
     /// Resource kinds accepted for delivery. `None` when not a storage.
     pub stores: Option<Vec<String>>,
     pub can_move: bool,
+}
+
+/// A type's weapon — the combat stats a script reads together (a type carries
+/// them all, or has no weapon at all).
+pub struct AttackView {
+    pub damage: u32,
+    pub attack_range: u32,
 }
 
 impl EntityContentView {
@@ -72,8 +80,14 @@ impl EntityContentView {
                 .location
                 .as_ref()
                 .map_or((1, 1), |l| (l.size().width, l.size().height)),
-            health: def.health.as_ref().map(|h| h.max_health()),
-            attack: def.attack.as_ref().map(|a| (a.damage(), a.range())),
+            max_health: def.base_stat(StatId::MAX_HEALTH).map(|v| v.to_num::<u32>()),
+            attack: def
+                .base_stat(StatId::DAMAGE)
+                .zip(def.base_stat(StatId::ATTACK_RANGE))
+                .map(|(damage, range)| AttackView {
+                    damage: damage.to_num::<u32>(),
+                    attack_range: range.to_num::<u32>(),
+                }),
             harvests: def
                 .resource_carrier
                 .as_ref()
@@ -82,7 +96,7 @@ impl EntityContentView {
                 .resource_storage
                 .as_ref()
                 .map(|s| s.kinds().map(str::to_string).collect()),
-            can_move: def.movement.is_some(),
+            can_move: def.can_move(),
         }
     }
 }

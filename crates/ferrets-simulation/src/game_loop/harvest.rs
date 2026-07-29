@@ -9,15 +9,16 @@ use super::orders::Processing;
 use crate::{
     components::{
         build::UnderConstructionComponent,
-        location::{LocationComponent, LocationStaticData},
+        location::LocationComponent,
         order_queue::{CancelPolicy, OrderState},
         owner::OwnerComponent,
         resource::{
-            DepletionPolicy, HarvestComponent, HarvestVisibility, HarvestingComponent,
-            ResourceCarrierComponent, ResourceCarrierStaticData, ResourceSourceComponent,
-            ResourceSourceStaticData, ResourceStorageStaticData, UnderHarvestComponent,
+            HarvestComponent, HarvestingComponent, ResourceCarrierComponent,
+            ResourceSourceComponent, UnderHarvestComponent,
         },
     },
+    content::resource::{DepletionPolicy, HarvestVisibility, ResourceCarrierDef},
+    entity_def,
     entity_index::EntityIndex,
     map::Map,
     order::Order,
@@ -49,16 +50,18 @@ pub fn prepare(entity: Entity, order: &Order, world: &mut World) -> OrderState {
     else {
         return OrderState::Finished;
     };
-    let Some(carrier_data) = world.entity(entity).get::<ResourceCarrierStaticData>() else {
+    let Some(carrier_def) = entity_def::of(world, entity).resource_carrier.as_ref() else {
         return OrderState::Finished;
     };
 
     let target_ref = world.entity(target);
+    let target_def = entity_def::of(world, target);
     let is_source = target_ref.contains::<ResourceSourceComponent>()
-        && target_ref
-            .get::<ResourceSourceStaticData>()
-            .is_some_and(|source| carrier_data.can_carry(source.kind()));
-    let is_storage = target_ref.contains::<ResourceStorageStaticData>();
+        && target_def
+            .resource_source
+            .as_ref()
+            .is_some_and(|source| carrier_def.can_carry(source.kind()));
+    let is_storage = target_def.resource_storage.is_some();
     if !is_source && !is_storage {
         return OrderState::Finished;
     }
@@ -115,9 +118,9 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
         return Processing::state(OrderState::Finished);
     };
 
-    let carrier_data = world
-        .entity(entity)
-        .get::<ResourceCarrierStaticData>()
+    let carrier_def = entity_def::of(world, entity)
+        .resource_carrier
+        .as_ref()
         .unwrap()
         .clone();
 
@@ -155,14 +158,14 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
         order,
         &harvest_component,
         carried_kind.as_deref(),
-        &carrier_data,
+        &carrier_def,
         world,
     );
 
     let carrying = carried_amount > 0;
     let carried_capacity = carried_kind
         .as_deref()
-        .and_then(|kind| carrier_data.harvest_data(kind))
+        .and_then(|kind| carrier_def.harvest_data(kind))
         .map_or(0, |data| data.capacity());
 
     let target_id = order
@@ -173,7 +176,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
         && world
             .resource::<EntityIndex>()
             .interactable(world, target_id)
-            .is_some_and(|t| world.entity(t).contains::<ResourceStorageStaticData>());
+            .is_some_and(|t| entity_def::of(world, t).resource_storage.is_some());
     let deliver = carrying
         && (carried_amount >= carried_capacity || ordered_storage_pending || source.is_none());
 
@@ -257,13 +260,13 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
     chase::face_entity(world, entity, source_entity);
 
     let (source_kind, depletion) = {
-        let source_data = world
-            .entity(source_entity)
-            .get::<ResourceSourceStaticData>()
+        let source_def = entity_def::of(world, source_entity)
+            .resource_source
+            .as_ref()
             .unwrap();
-        (source_data.kind().to_string(), source_data.depletion())
+        (source_def.kind().to_string(), source_def.depletion())
     };
-    let harvest_data = *carrier_data
+    let harvest_data = *carrier_def
         .harvest_data(&source_kind)
         .expect("resolve_source returns carryable kinds");
 
@@ -375,11 +378,7 @@ fn own_footprint(entity: Entity, world: &World) -> (NavPos, NavSize) {
         .get::<LocationComponent>()
         .unwrap()
         .position;
-    let size = world
-        .entity(entity)
-        .get::<LocationStaticData>()
-        .unwrap()
-        .size();
+    let size = entity_def::of(world, entity).location.unwrap().size();
     (NavPos::from(position), size)
 }
 
@@ -394,7 +393,7 @@ fn resolve_source(
     order: &Order,
     hc: &HarvestComponent,
     carried_kind: Option<&str>,
-    carrier_data: &ResourceCarrierStaticData,
+    carrier_def: &ResourceCarrierDef,
     world: &World,
 ) -> Option<SimulationId> {
     let matches = |id: SimulationId| -> bool {
@@ -402,14 +401,14 @@ fn resolve_source(
             return false;
         };
         let source_ref = world.entity(source);
-        let Some(static_data) = source_ref.get::<ResourceSourceStaticData>() else {
+        let Some(source_def) = entity_def::of(world, source).resource_source.as_ref() else {
             return false;
         };
         source_ref
             .get::<ResourceSourceComponent>()
             .is_some_and(|s| s.amount > 0)
-            && carrier_data.can_carry(static_data.kind())
-            && carried_kind.is_none_or(|kind| static_data.kind() == kind)
+            && carrier_def.can_carry(source_def.kind())
+            && carried_kind.is_none_or(|kind| source_def.kind() == kind)
     };
 
     let target_id = order
@@ -448,8 +447,9 @@ fn resolve_storage(
 ) -> Option<Entity> {
     let qualifies = |storage: Entity| -> bool {
         let storage_ref = world.entity(storage);
-        storage_ref
-            .get::<ResourceStorageStaticData>()
+        entity_def::of(world, storage)
+            .resource_storage
+            .as_ref()
             .is_some_and(|s| s.accepts(kind))
             && storage_ref
                 .get::<OwnerComponent>()
@@ -503,11 +503,7 @@ fn nearest(
                 .unwrap()
                 .position,
         );
-        let size = world
-            .entity(entity)
-            .get::<LocationStaticData>()
-            .unwrap()
-            .size();
+        let size = entity_def::of(world, entity).location.unwrap().size();
         if let Some(max) = max_distance
             && !astar::in_range_of_rect(projection, from, origin, size, max)
         {

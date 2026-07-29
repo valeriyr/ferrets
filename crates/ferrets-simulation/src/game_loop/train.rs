@@ -7,13 +7,14 @@ use ferrets_pathfinder::nav_pos::NavPos;
 
 use crate::{
     components::{
-        location::{LocationComponent, LocationStaticData},
+        location::LocationComponent,
         order_queue::{CancelPolicy, OrderQueueComponent, OrderState},
         owner::OwnerComponent,
         rally::{RallyPointComponent, RallyTarget},
-        train::{TrainComponent, TrainQueueComponent, TrainStaticData},
+        train::{TrainComponent, TrainQueueComponent},
     },
     content::registry::ContentRegistry,
+    entity_def,
     game_loop::executor,
     map::Map,
     order::Order,
@@ -26,10 +27,10 @@ use crate::{
 /// Inserts the driver component and returns `InProcessing`, or `Finished`
 /// immediately if the entity cannot train or has nothing queued.
 pub fn prepare(entity: Entity, _order: &Order, world: &mut World) -> OrderState {
-    let entity_ref = world.entity(entity);
-    if !entity_ref.contains::<TrainStaticData>() {
+    if entity_def::of(world, entity).trainer.is_none() {
         return OrderState::Finished;
     }
+    let entity_ref = world.entity(entity);
     if entity_ref
         .get::<TrainQueueComponent>()
         .is_none_or(|queue| queue.0.is_empty())
@@ -103,12 +104,12 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> OrderState 
         return OrderState::Finished;
     };
 
-    let allowed = world
-        .entity(entity)
-        .get::<TrainStaticData>()
+    let allowed = entity_def::of(world, entity)
+        .trainer
+        .as_ref()
         .is_some_and(|t| t.can_train(&type_name));
 
-    let (train_time, unit_location_data) = {
+    let (train_time, unit_location_def) = {
         let registry = world.resource::<ContentRegistry>();
         let type_def = if allowed {
             registry.entity(&type_name)
@@ -147,16 +148,12 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> OrderState 
                 .unwrap()
                 .position,
         );
-        let size = world
-            .entity(entity)
-            .get::<LocationStaticData>()
-            .unwrap()
-            .size();
+        let size = entity_def::of(world, entity).location.unwrap().size();
 
         let placement =
             world
                 .resource::<Map>()
-                .find_placement_near(origin, size, &unit_location_data);
+                .find_placement_near(origin, size, &unit_location_def);
 
         // No free cell around the trainer — hold the finished unit and retry.
         if let Some(cell) = placement {

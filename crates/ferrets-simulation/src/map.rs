@@ -5,7 +5,8 @@ use ferrets_pathfinder::{
     astar::Projection, nav_grid::NavGrid, nav_pos::NavPos, nav_size::NavSize, search,
 };
 
-use crate::components::location::{LocationComponent, LocationStaticData, Solidity};
+use crate::components::location::LocationComponent;
+use crate::content::location::{LocationDef, Solidity};
 use crate::content::registry::ContentRegistry;
 use crate::map_data::{MapData, MapSlot};
 use crate::session::player_slot::PlayerId;
@@ -140,19 +141,15 @@ impl Map {
     }
 
     /// Returns `true` if every cell in the entity's footprint is passable.
-    pub fn can_place_entity(
-        &self,
-        loc: &LocationComponent,
-        static_data: &LocationStaticData,
-    ) -> bool {
+    pub fn can_place_entity(&self, loc: &LocationComponent, location_def: &LocationDef) -> bool {
         self.nav_grid.is_footprint_passable_by(
-            static_data.occupation(),
+            location_def.occupation(),
             NavPos::from(loc.position),
-            static_data.size(),
+            location_def.size(),
         )
     }
 
-    /// Finds a free position for an entity with `spawn_data` properties, scanning
+    /// Finds a free position for an entity with `location_def` properties, scanning
     /// outward from the rectangle of cells at `origin` with the given `size`.
     ///
     /// Cells are scanned ring by ring in row-major order, so the result is
@@ -161,29 +158,29 @@ impl Map {
         &self,
         origin: NavPos,
         size: NavSize,
-        spawn_data: &LocationStaticData,
+        location_def: &LocationDef,
     ) -> Option<NavPos> {
         /// How far out from the rectangle to search before giving up.
         const MAX_RADIUS: u32 = 8;
 
         search::find_placement_near(
             &self.nav_grid,
-            spawn_data.occupation(),
+            location_def.occupation(),
             origin,
             size,
-            spawn_data.size(),
+            location_def.size(),
             MAX_RADIUS,
         )
     }
 
     /// Marks every cell in the entity's footprint as occupied.
-    pub fn place_entity(&mut self, loc: &LocationComponent, static_data: &LocationStaticData) {
-        self.set_footprint(loc, static_data, true);
+    pub fn place_entity(&mut self, loc: &LocationComponent, location_def: &LocationDef) {
+        self.set_footprint(loc, location_def, true);
     }
 
     /// Clears every cell in the entity's footprint.
-    pub fn displace_entity(&mut self, loc: &LocationComponent, static_data: &LocationStaticData) {
-        self.set_footprint(loc, static_data, false);
+    pub fn displace_entity(&mut self, loc: &LocationComponent, location_def: &LocationDef) {
+        self.set_footprint(loc, location_def, false);
     }
 
     /// Marks or clears every cell in the entity's footprint as occupied based on the `occupied` parameter.
@@ -192,19 +189,19 @@ impl Map {
     fn set_footprint(
         &mut self,
         loc: &LocationComponent,
-        static_data: &LocationStaticData,
+        location_def: &LocationDef,
         occupied: bool,
     ) {
-        if static_data.solidity() == Solidity::Passable {
+        if location_def.solidity() == Solidity::Passable {
             return;
         }
 
         let origin = NavPos::from(loc.position);
-        let NavSize { width, height } = static_data.size();
+        let NavSize { width, height } = location_def.size();
         for dy in 0..height {
             for dx in 0..width {
                 self.nav_grid_mut().set_occupied_by(
-                    static_data.occupation(),
+                    location_def.occupation(),
                     NavPos::new(origin.x + dx, origin.y + dy),
                     occupied,
                 );

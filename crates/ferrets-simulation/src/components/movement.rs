@@ -1,16 +1,8 @@
-//! In-flight movement state and content-defined movement properties for simulation entities.
+//! In-flight movement state for simulation entities.
 
 use bevy_ecs::prelude::*;
 
-use ferrets_math::FixedU64;
 use ferrets_pathfinder::nav_pos::NavPos;
-
-/// Content-defined movement properties for an entity type.
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct MoveStaticData {
-    /// Movement speed in grid units per tick (fixed-point, supports fractional values).
-    speed: FixedU64,
-}
 
 /// Per-entity in-flight movement state.
 #[derive(Component, Debug)]
@@ -35,21 +27,6 @@ impl MoveComponent {
             self.path.clear();
             self.path.push(current);
         }
-    }
-}
-
-impl MoveStaticData {
-    /// Creates a new `MoveStaticData` with the given data.
-    ///
-    /// Panics if `speed` is zero.
-    pub fn new(speed: FixedU64) -> Self {
-        assert!(speed > FixedU64::ZERO, "speed must be greater than 0");
-        Self { speed }
-    }
-
-    /// Returns the entity's movement speed in grid units per tick.
-    pub fn speed(&self) -> FixedU64 {
-        self.speed
     }
 }
 

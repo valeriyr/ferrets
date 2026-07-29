@@ -1,30 +1,47 @@
 //! Definition of a single entity type — the content-level blueprint for spawning.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use ferrets_math::FixedU64;
 use ferrets_pathfinder::{layer_mask::LayerMask, nav_size::NavSize};
 
 use crate::{
-    components::{
-        attack::AttackStaticData,
-        build::BuilderStaticData,
-        dying::DyingStaticData,
-        health::HealthStaticData,
-        location::{LocationStaticData, Solidity},
-        movement::MoveStaticData,
+    components::{skills::SkillId, stats::StatId, tags::TagsComponent},
+    content::{
+        build::BuilderDef,
+        dying::DyingDef,
+        location::{LocationDef, Solidity},
         resource::{
-            DepletionPolicy, HarvestData, ResourceCarrierStaticData, ResourceSourceStaticData,
-            ResourceStorageStaticData,
+            DepletionPolicy, HarvestData, ResourceCarrierDef, ResourceSourceDef, ResourceStorageDef,
         },
-        train::TrainStaticData,
+        selection::SelectionDef,
+        train::TrainerDef,
     },
     resources::{self, Cost},
 };
 
+/// Stable handle for a registered entity type, assigned in registration order by
+/// [`ContentRegistry`](crate::content::registry::ContentRegistry). Cheap to store
+/// on an entity and to resolve back to its [`EntityTypeDef`] in O(1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct EntityTypeId(u32);
+
+impl EntityTypeId {
+    /// Wraps a registration index. Registry-internal: handles are minted only by
+    /// [`ContentRegistry`](crate::content::registry::ContentRegistry).
+    pub(crate) fn from_index(index: usize) -> Self {
+        Self(u32::try_from(index).expect("entity type count fits in u32"))
+    }
+
+    /// The registration index this handle refers to.
+    pub(crate) fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
 /// Content-level blueprint for an entity type (unit, building, resource, …).
 ///
-/// Holds the static data components that are identical for every instance of this type.
+/// Holds the properties that are identical for every instance of this type.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EntityTypeDef {
     /// Unique type name used to look up this definition in
@@ -33,19 +50,33 @@ pub struct EntityTypeDef {
     /// The race this type belongs to, by registered race name. `None` means the
     /// type is race-neutral (e.g. resource sources, critters).
     pub race: Option<String>,
+    /// Content-declared classification tags (e.g. `building`). Each must be a
+    /// registered tag.
+    pub tags: BTreeSet<String>,
+
+    /// Base value of every stat this type carries, seeded into each instance's
+    /// [`StatsComponent`](crate::components::stats::StatsComponent) at spawn. The
+    /// built-in stats drive engine behaviour and gate capabilities (an attacker
+    /// carries [`StatId::DAMAGE`], a mover [`StatId::SPEED`], …); content may add
+    /// custom stats, which are seeded and buffed but otherwise ignored by the engine.
+    pub base_stats: BTreeMap<StatId, FixedU64>,
     /// Navigation and footprint properties shared by all instances of this type.
     /// Mandatory for every spawnable type; enforced by
     /// [`ContentRegistry::validate`](crate::content::registry::ContentRegistry::validate).
-    pub location: Option<LocationStaticData>,
-    /// Movement properties. `None` means the entity cannot move.
-    pub movement: Option<MoveStaticData>,
-    /// Health properties. `None` means the entity cannot take damage.
-    pub health: Option<HealthStaticData>,
+    pub location: Option<LocationDef>,
     /// Dying-phase properties. `None` means a destroyed instance is removed
     /// from the world immediately, with no dying phase.
-    pub dying: Option<DyingStaticData>,
-    /// Combat properties. `None` means the entity cannot attack.
-    pub attack: Option<AttackStaticData>,
+    pub dying: Option<DyingDef>,
+    /// Extra damage each hit deals to a target that carries the keyed tag or
+    /// whose type name equals the key — the "damage class" side of combat. Added
+    /// before the target's armor is subtracted.
+    pub bonus_damage_vs: BTreeMap<String, u32>,
+    /// Activated skills instances of this type can use, by registered id.
+    pub skills: Vec<SkillId>,
+    /// How instances behave under selection. Every type is selectable, so this is
+    /// always present.
+    pub selection: SelectionDef,
+
     /// Price to train or construct one instance. Empty means free.
     pub cost: Cost,
     /// Ticks to train one instance. `None` means the type cannot be trained.
@@ -53,28 +84,17 @@ pub struct EntityTypeDef {
     /// Ticks to construct one instance. `None` means the type cannot be built.
     pub build_time: Option<u32>,
     /// The entity types instances can train. `None` means instances cannot train.
-    pub trainer: Option<TrainStaticData>,
+    pub trainer: Option<TrainerDef>,
     /// The entity types instances can construct. `None` means instances cannot build.
-    pub builder: Option<BuilderStaticData>,
+    pub builder: Option<BuilderDef>,
     /// Resource-source properties. `None` means the entity is not a resource source.
     /// The remaining resource amount is per-instance state, set after spawning.
-    pub resource_source: Option<ResourceSourceStaticData>,
+    pub resource_source: Option<ResourceSourceDef>,
     /// The resource kinds instances can harvest, and how. `None` means the
     /// entity cannot harvest resources.
-    pub resource_carrier: Option<ResourceCarrierStaticData>,
+    pub resource_carrier: Option<ResourceCarrierDef>,
     /// Resource kinds accepted for delivery. `None` means the entity is not a storage.
-    pub resource_storage: Option<ResourceStorageStaticData>,
-    /// Content-declared classification tags (e.g. `building`). Each must be a
-    /// registered tag.
-    pub tags: BTreeSet<String>,
-    /// Relative weight for picking the lead unit of a mixed selection: higher wins.
-    pub selection_priority: i32,
-    /// Groups instances for select-all-of-type. `None` falls back to the type
-    /// name, so each type is its own class unless content shares one explicitly.
-    pub selection_class: Option<String>,
-    /// How far, in cells, an owned instance reveals the map for its player.
-    /// Unset (`0`) reveals only the cell it occupies.
-    pub sight_range: u32,
+    pub resource_storage: Option<ResourceStorageDef>,
 }
 
 impl EntityTypeDef {
@@ -88,11 +108,13 @@ impl EntityTypeDef {
         Self {
             name,
             race: None,
+            tags: BTreeSet::new(),
+            base_stats: BTreeMap::new(),
             location: None,
-            movement: None,
-            health: None,
             dying: None,
-            attack: None,
+            bonus_damage_vs: BTreeMap::new(),
+            skills: Vec::new(),
+            selection: SelectionDef::default(),
             cost: Cost::new(),
             train_time: None,
             build_time: None,
@@ -101,17 +123,52 @@ impl EntityTypeDef {
             resource_source: None,
             resource_carrier: None,
             resource_storage: None,
-            tags: BTreeSet::new(),
-            selection_priority: 0,
-            selection_class: None,
-            sight_range: 0,
         }
     }
 
     /// The class instances group under for select-all-of-type, defaulting to the
     /// type name when no explicit class was declared.
     pub fn selection_class(&self) -> &str {
-        self.selection_class.as_deref().unwrap_or(&self.name)
+        self.selection.class().unwrap_or(&self.name)
+    }
+
+    /// The authored base value of `stat`, if this type carries it.
+    pub fn base_stat(&self, stat: StatId) -> Option<FixedU64> {
+        self.base_stats.get(&stat).copied()
+    }
+
+    /// The total bonus damage one hit deals to a target with the given type name
+    /// and tags, summed over every matching
+    /// [`bonus_damage_vs`](Self::bonus_damage_vs) key.
+    pub fn bonus_against(&self, target_type: &str, target_tags: Option<&TagsComponent>) -> u32 {
+        self.bonus_damage_vs
+            .iter()
+            .filter(|(key, _)| {
+                let key = key.as_str();
+                key == target_type || target_tags.is_some_and(|tags| tags.contains(key))
+            })
+            .map(|(_, &amount)| amount)
+            .sum()
+    }
+
+    /// Whether instances can attack: they carry the [`StatId::DAMAGE`] stat.
+    pub fn can_attack(&self) -> bool {
+        self.base_stats.contains_key(&StatId::DAMAGE)
+    }
+
+    /// Whether instances can move: they carry the [`StatId::SPEED`] stat.
+    pub fn can_move(&self) -> bool {
+        self.base_stats.contains_key(&StatId::SPEED)
+    }
+
+    /// Whether instances can take damage: they carry the [`StatId::MAX_HEALTH`] stat.
+    pub fn is_damageable(&self) -> bool {
+        self.base_stats.contains_key(&StatId::MAX_HEALTH)
+    }
+
+    /// Whether instances have an energy pool: they carry the [`StatId::MAX_ENERGY`] stat.
+    pub fn has_energy(&self) -> bool {
+        self.base_stats.contains_key(&StatId::MAX_ENERGY)
     }
 
     /// Assigns this type to a race, by registered race name. Race-neutral types
@@ -121,6 +178,92 @@ impl EntityTypeDef {
     /// [`ContentRegistry::register`](crate::content::registry::ContentRegistry::register).
     pub fn with_race(mut self, race: impl Into<String>) -> Self {
         self.race = Some(race.into());
+        self
+    }
+
+    /// Adds classification tags to this type (see [`tags`](Self::tags)).
+    ///
+    /// Panics if any tag name is empty.
+    pub fn with_tags(mut self, tags: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        for tag in tags {
+            let tag = tag.into();
+            assert!(!tag.is_empty(), "tag names must not be empty");
+            self.tags.insert(tag);
+        }
+        self
+    }
+
+    /// Sets one base stat directly — for a custom (engine-unsupported) stat or a
+    /// built-in one. Every base stat is seeded and buffed; the engine reads only
+    /// the built-ins.
+    pub fn with_stat(mut self, stat: StatId, value: FixedU64) -> Self {
+        self.base_stats.insert(stat, value);
+        self
+    }
+
+    /// Enables movement for this entity type at the given speed (grid units per tick).
+    ///
+    /// Panics if `speed` is `0`.
+    pub fn with_movement(mut self, speed: FixedU64) -> Self {
+        self.base_stats.insert(StatId::SPEED, speed);
+        self
+    }
+
+    /// Enables health for this entity type with the given maximum health points.
+    ///
+    /// Panics if `max_health` is `0`.
+    pub fn with_health(mut self, max_health: u32) -> Self {
+        self.base_stats
+            .insert(StatId::MAX_HEALTH, FixedU64::from_num(max_health));
+        self
+    }
+
+    /// Enables attacking for this entity type. One hit removes `damage` health
+    /// points from a target within `range` grid cells; the full attack cycle is
+    /// `attack_period` ticks and the hit lands `damage_point` ticks into it.
+    /// `acquire_range` is the distance at which instances notice and engage
+    /// enemies on their own initiative.
+    pub fn with_attack(
+        mut self,
+        damage: u32,
+        range: u32,
+        acquire_range: u32,
+        attack_period: u32,
+        damage_point: u32,
+    ) -> Self {
+        self.base_stats
+            .insert(StatId::DAMAGE, FixedU64::from_num(damage));
+        self.base_stats
+            .insert(StatId::ATTACK_RANGE, FixedU64::from_num(range));
+        self.base_stats
+            .insert(StatId::ACQUIRE_RANGE, FixedU64::from_num(acquire_range));
+        self.base_stats
+            .insert(StatId::ATTACK_PERIOD, FixedU64::from_num(attack_period));
+        self.base_stats
+            .insert(StatId::DAMAGE_POINT, FixedU64::from_num(damage_point));
+        self
+    }
+
+    /// Sets the flat armor subtracted from each incoming hit (see [`armor`](Self::armor)).
+    pub fn with_armor(mut self, armor: u32) -> Self {
+        self.base_stats
+            .insert(StatId::ARMOR, FixedU64::from_num(armor));
+        self
+    }
+
+    /// Sets how far instances reveal the map (see [`sight_range`](Self::sight_range)).
+    pub fn with_sight_range(mut self, sight_range: u32) -> Self {
+        self.base_stats
+            .insert(StatId::SIGHT_RANGE, FixedU64::from_num(sight_range));
+        self
+    }
+
+    /// Gives instances an energy pool of `max` that regenerates `regen` per tick,
+    /// for spending on skills.
+    pub fn with_energy(mut self, max: u32, regen: FixedU64) -> Self {
+        self.base_stats
+            .insert(StatId::MAX_ENERGY, FixedU64::from_num(max));
+        self.base_stats.insert(StatId::ENERGY_REGEN, regen);
         self
     }
 
@@ -138,23 +281,7 @@ impl EntityTypeDef {
         size: NavSize,
         solidity: Solidity,
     ) -> Self {
-        self.location = Some(LocationStaticData::new(occupation, size, solidity));
-        self
-    }
-
-    /// Enables movement for this entity type at the given speed (grid units per tick).
-    ///
-    /// Panics if `speed` is `0`.
-    pub fn with_movement(mut self, speed: FixedU64) -> Self {
-        self.movement = Some(MoveStaticData::new(speed));
-        self
-    }
-
-    /// Enables health for this entity type with the given maximum health points.
-    ///
-    /// Panics if `max_health` is `0`.
-    pub fn with_health(mut self, max_health: u32) -> Self {
-        self.health = Some(HealthStaticData::new(max_health));
+        self.location = Some(LocationDef::new(occupation, size, solidity));
         self
     }
 
@@ -165,32 +292,38 @@ impl EntityTypeDef {
     ///
     /// Panics if `dying_time` is `0` or `corpse_type` is empty.
     pub fn with_dying(mut self, dying_time: u32, corpse_type: Option<&str>) -> Self {
-        self.dying = Some(DyingStaticData::new(dying_time, corpse_type));
+        self.dying = Some(DyingDef::new(dying_time, corpse_type));
         self
     }
 
-    /// Enables attacking for this entity type. One hit removes `damage` health
-    /// points from a target within `range` grid cells; a swing lands after
-    /// `aiming` ticks and the next one starts after `reloading` more.
-    /// `acquire_range` is the distance at which instances notice and engage
-    /// enemies on their own initiative.
+    /// Adds per-target damage bonuses, keyed by the target's tag or type name
+    /// (see [`bonus_damage_vs`](Self::bonus_damage_vs)).
     ///
-    /// Panics if `aiming` or `reloading` is `0`.
-    pub fn with_attack(
+    /// Panics if any key is empty.
+    pub fn with_bonus_damage_vs(
         mut self,
-        damage: u32,
-        range: u32,
-        acquire_range: u32,
-        aiming: u32,
-        reloading: u32,
+        bonuses: impl IntoIterator<Item = (impl Into<String>, u32)>,
     ) -> Self {
-        self.attack = Some(AttackStaticData::new(
-            damage,
-            range,
-            acquire_range,
-            aiming,
-            reloading,
-        ));
+        for (key, amount) in bonuses {
+            let key = key.into();
+            assert!(!key.is_empty(), "bonus_damage_vs keys must not be empty");
+            self.bonus_damage_vs.insert(key, amount);
+        }
+        self
+    }
+
+    /// Adds activated skills instances of this type can use (see [`skills`](Self::skills)).
+    pub fn with_skills(mut self, skills: impl IntoIterator<Item = SkillId>) -> Self {
+        self.skills.extend(skills);
+        self
+    }
+
+    /// Sets the primary-selection ordering weight and the select-all-of-type
+    /// class, which falls back to the type name when `class` is `None`.
+    ///
+    /// Panics if `class` is empty.
+    pub fn with_selection(mut self, priority: u32, class: Option<&str>) -> Self {
+        self.selection = SelectionDef::new(priority, class);
         self
     }
 
@@ -232,7 +365,7 @@ impl EntityTypeDef {
     ///
     /// Panics if `trains` is empty or any entry is empty.
     pub fn with_trainer(mut self, trains: impl IntoIterator<Item = impl Into<String>>) -> Self {
-        self.trainer = Some(TrainStaticData::new(trains));
+        self.trainer = Some(TrainerDef::new(trains));
         self
     }
 
@@ -240,7 +373,7 @@ impl EntityTypeDef {
     ///
     /// Panics if `builds` is empty or any entry is empty.
     pub fn with_builder(mut self, builds: impl IntoIterator<Item = impl Into<String>>) -> Self {
-        self.builder = Some(BuilderStaticData::new(builds));
+        self.builder = Some(BuilderDef::new(builds));
         self
     }
 
@@ -253,7 +386,7 @@ impl EntityTypeDef {
         kind: impl Into<String>,
         depletion: DepletionPolicy,
     ) -> Self {
-        self.resource_source = Some(ResourceSourceStaticData::new(kind, depletion));
+        self.resource_source = Some(ResourceSourceDef::new(kind, depletion));
         self
     }
 
@@ -265,41 +398,7 @@ impl EntityTypeDef {
         mut self,
         carries: impl IntoIterator<Item = (impl Into<String>, HarvestData)>,
     ) -> Self {
-        self.resource_carrier = Some(ResourceCarrierStaticData::new(carries));
-        self
-    }
-
-    /// Adds classification tags to this type (see [`tags`](Self::tags)).
-    ///
-    /// Panics if any tag name is empty.
-    pub fn with_tags(mut self, tags: impl IntoIterator<Item = impl Into<String>>) -> Self {
-        for tag in tags {
-            let tag = tag.into();
-            assert!(!tag.is_empty(), "tag names must not be empty");
-            self.tags.insert(tag);
-        }
-        self
-    }
-
-    /// Sets the primary-selection ordering weight (see [`selection_priority`](Self::selection_priority)).
-    pub fn with_selection_priority(mut self, priority: i32) -> Self {
-        self.selection_priority = priority;
-        self
-    }
-
-    /// Sets the select-all-of-type class (see [`selection_class`](Self::selection_class)).
-    ///
-    /// Panics if `class` is empty.
-    pub fn with_selection_class(mut self, class: impl Into<String>) -> Self {
-        let class = class.into();
-        assert!(!class.is_empty(), "selection class must not be empty");
-        self.selection_class = Some(class);
-        self
-    }
-
-    /// Sets how far instances reveal the map (see [`sight_range`](Self::sight_range)).
-    pub fn with_sight_range(mut self, sight_range: u32) -> Self {
-        self.sight_range = sight_range;
+        self.resource_carrier = Some(ResourceCarrierDef::new(carries));
         self
     }
 
@@ -311,7 +410,7 @@ impl EntityTypeDef {
         mut self,
         accepts: impl IntoIterator<Item = impl Into<String>>,
     ) -> Self {
-        self.resource_storage = Some(ResourceStorageStaticData::new(accepts));
+        self.resource_storage = Some(ResourceStorageDef::new(accepts));
         self
     }
 }

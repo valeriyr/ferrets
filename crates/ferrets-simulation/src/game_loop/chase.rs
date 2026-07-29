@@ -8,11 +8,7 @@ use bevy_ecs::{entity::Entity, world::World};
 use ferrets_math::{FixedI64, fixed_uvec2::FixedUVec2, fixed_vec2::FixedVec2};
 use ferrets_pathfinder::{astar, astar::Projection, nav_pos::NavPos, nav_size::NavSize};
 
-use crate::{
-    components::location::{LocationComponent, LocationStaticData},
-    map::Map,
-    order::Order,
-};
+use crate::{components::location::LocationComponent, entity_def, map::Map, order::Order};
 
 /// Where a chaser stands relative to its destination this tick.
 pub enum Destination {
@@ -108,11 +104,7 @@ pub fn advance_to_entity(
         .get::<LocationComponent>()
         .unwrap()
         .position;
-    let destination_size = world
-        .entity(destination)
-        .get::<LocationStaticData>()
-        .unwrap()
-        .size();
+    let destination_size = entity_def::of(world, destination).location.unwrap().size();
     let projection = world.resource::<Map>().projection();
 
     advance(

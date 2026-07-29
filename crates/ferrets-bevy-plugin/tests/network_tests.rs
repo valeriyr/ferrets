@@ -23,8 +23,7 @@ use ferrets_replay::replay::Replay;
 use ferrets_simulation::{
     checksum::state_checksum,
     command::PlayerCommand,
-    components::location::Solidity,
-    content::{entity_type_def::EntityTypeDef, registry::ContentRegistry},
+    content::{entity_type_def::EntityTypeDef, location::Solidity, registry::ContentRegistry},
     input::{InputFrames, PlayerFrame},
     map::Map,
     session::{
@@ -1368,7 +1367,7 @@ fn harness_soldier() -> EntityTypeDef {
         .with_movement(FixedU64::from_num(0.5))
         .with_health(30)
         .with_dying(2, None)
-        .with_attack(10, 1, 1, 2, 2)
+        .with_attack(10, 1, 1, 4, 2)
 }
 
 /// A standing building — the presence the `LastStanding` rule counts. Immobile,

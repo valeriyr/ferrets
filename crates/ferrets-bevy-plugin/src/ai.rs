@@ -27,6 +27,7 @@ use ferrets_simulation::{
         owner::OwnerComponent,
         resource::{ResourceCarrierComponent, ResourceSourceComponent},
         stance::StanceComponent,
+        stats::{StatId, StatsComponent},
         train::TrainQueueComponent,
     },
     entity_index::EntityIndex,
@@ -296,7 +297,13 @@ fn entity_view(entity: &EntityRef, id: SimulationId, hidden: bool) -> EntityView
             .map_or_else(String::new, |info| info.type_name().to_string()),
         x: cell.x,
         y: cell.y,
-        health: entity.get::<HealthComponent>().map(|h| h.current()),
+        health: entity.get::<HealthComponent>().map(|h| h.displayed()),
+        damage: entity
+            .get::<StatsComponent>()
+            .and_then(|stats| stats.effective_as_u32(StatId::DAMAGE)),
+        armor: entity
+            .get::<StatsComponent>()
+            .and_then(|stats| stats.effective_as_u32(StatId::ARMOR)),
         idle: entity
             .get::<OrderQueueComponent>()
             .is_none_or(|queue| queue.front().is_none()),

@@ -28,6 +28,8 @@
 //!                      finished dying
 //! recompute_visibility — exclusive system; refresh each player's fog of war from
 //!                      owned entities' sight, before acquisition/AI read it
+//! recompute_stats    — exclusive system; fold active buffs into effective stats,
+//!                      the once-per-tick snapshot consumers read
 //! flee               — exclusive system; fleeing-stance entities run from fresh hits
 //! auto_engage        — exclusive system; stance-driven target acquisition for idle
 //!                      entities
@@ -40,8 +42,9 @@
 //!                          components on finish, push chase sub-orders on suspend
 //! process_pending_reveals — exclusive system; retry reappearing entities that finished
 //!                      an order while boxed-in and still await a free cell
-//! process_stats      — HP/mana regen, buff ticks                     [not yet implemented]
-//! process_skills     — skill cooldown counters                        [not yet implemented]
+//! process_buffs      — exclusive system; age timed buffs (expiries land next tick)
+//! process_cooldowns  — exclusive system; age skill cooldowns by one tick
+//! process_energy_regen — exclusive system; refill energy pools toward max_energy
 //! process_entity_ai  — per-entity AI think (throttled, every N ticks) [not yet implemented]
 //! check_game_result  — apply the finish policy; may end the session (last player
 //!                      standing, or a scripted scenario's verdict)
@@ -205,12 +208,22 @@ impl Plugin for SimulationPlugin {
                     // tick's acquisition and AI see current-tick visibility (dead
                     // entities already removed, no longer granting sight).
                     systems::recompute_visibility,
+                    // Fold active buffs into effective stats before consumers
+                    // read them, so a buff applied by a command this tick is in
+                    // this tick's snapshot.
+                    systems::recompute_stats,
                     // Stance-driven initiative first, so a fresh engagement or
                     // flee response executes on the same tick it was decided.
                     systems::flee,
                     systems::auto_engage,
                     systems::tick_orders,
                     systems::process_pending_reveals,
+                    // Age timed buffs; expiries land in the next tick's
+                    // recompute_stats snapshot.
+                    systems::process_buffs,
+                    // Skill cooldowns tick down and energy pools refill.
+                    systems::process_cooldowns,
+                    systems::process_energy_regen,
                     systems::check_game_result,
                     systems::tick_counter,
                 )

@@ -21,12 +21,13 @@ use ferrets_simulation::{
     components::{
         entity_info::EntityInfoComponent,
         hidden::HiddenComponent,
-        location::{LocationComponent, LocationStaticData},
+        location::LocationComponent,
         owner::OwnerComponent,
         rally::{RallyPointComponent, RallyTarget},
-        resource::ResourceSourceStaticData,
+        skills::SkillsComponent,
         tags::{self, TagsComponent},
     },
+    content::{registry::ContentRegistry, resource::ResourceSourceDef},
     selection::Selection,
     session::GameSession,
     simulation_id::SimulationId,
@@ -101,7 +102,7 @@ pub(crate) fn world_center(position: FixedUVec2, size: NavSize) -> Vec3 {
 
 fn color_for(
     owner: Option<&OwnerComponent>,
-    source: Option<&ResourceSourceStaticData>,
+    source: Option<&ResourceSourceDef>,
     session: &GameSession,
 ) -> Color {
     // Resource sources are colored by what they yield, regardless of ownership.
@@ -161,6 +162,7 @@ fn shape_for(type_name: &str) -> Shape {
 pub fn attach_sprites(
     mut commands: Commands,
     session: Res<GameSession>,
+    registry: Res<ContentRegistry>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     query: Query<
@@ -168,17 +170,16 @@ pub fn attach_sprites(
             Entity,
             &EntityInfoComponent,
             &LocationComponent,
-            &LocationStaticData,
             Option<&OwnerComponent>,
-            Option<&ResourceSourceStaticData>,
         ),
         Without<Renderable>,
     >,
 ) {
-    for (entity, info, location, location_data, owner, source) in &query {
-        let size = location_data.size();
+    for (entity, info, location, owner) in &query {
+        let def = registry.def(info.type_id());
+        let size = def.location.unwrap().size();
         let center = world_center(location.position, size);
-        let color = color_for(owner, source, &session);
+        let color = color_for(owner, def.resource_source.as_ref(), &session);
         let radius = size.width.min(size.height) as f32 * CELL_PX * 0.45;
 
         let mut entity = commands.entity(entity);
@@ -274,9 +275,13 @@ fn facing_rotation(facing: FixedVec2) -> Option<Quat> {
 
 /// Snapshots each sprite's current sim position as the interpolation start, run
 /// before the simulation advances (`FixedPreUpdate`).
-pub fn record_prev(mut query: Query<(&LocationComponent, &LocationStaticData, &mut PrevPos)>) {
-    for (location, location_data, mut prev) in &mut query {
-        prev.0 = world_center(location.position, location_data.size());
+pub fn record_prev(
+    registry: Res<ContentRegistry>,
+    mut query: Query<(&EntityInfoComponent, &LocationComponent, &mut PrevPos)>,
+) {
+    for (info, location, mut prev) in &mut query {
+        let size = registry.def(info.type_id()).location.unwrap().size();
+        prev.0 = world_center(location.position, size);
     }
 }
 
@@ -285,11 +290,12 @@ pub fn record_prev(mut query: Query<(&LocationComponent, &LocationStaticData, &m
 pub fn interpolate_sprites(
     fixed: Res<Time<Fixed>>,
     session: Res<GameSession>,
+    registry: Res<ContentRegistry>,
     fog: Res<VisibilityGrid>,
     reveal: Res<FogReveal>,
     mut query: Query<(
+        &EntityInfoComponent,
         &LocationComponent,
-        &LocationStaticData,
         &PrevPos,
         &mut Transform,
         &mut Visibility,
@@ -300,18 +306,11 @@ pub fn interpolate_sprites(
 ) {
     let alpha = fixed.overstep_fraction().clamp(0.0, 1.0);
     let local = session.local_player();
-    for (
-        location,
-        location_data,
-        prev,
-        mut transform,
-        mut visibility,
-        hidden,
-        owner,
-        directional,
-    ) in &mut query
+    for (info, location, prev, mut transform, mut visibility, hidden, owner, directional) in
+        &mut query
     {
-        let curr = world_center(location.position, location_data.size());
+        let size = registry.def(info.type_id()).location.unwrap().size();
+        let curr = world_center(location.position, size);
         // Snap rather than slide across teleports/reveals.
         transform.translation = if prev.0.distance(curr) > 1.5 * CELL_PX {
             curr
@@ -353,13 +352,9 @@ pub fn draw_selection(
     mut gizmos: Gizmos,
     session: Res<GameSession>,
     selection: Res<Selection>,
+    registry: Res<ContentRegistry>,
     query: Query<
-        (
-            &EntityInfoComponent,
-            &LocationStaticData,
-            &Transform,
-            &Visibility,
-        ),
+        (&EntityInfoComponent, &Transform, &Visibility),
         (With<Renderable>, Without<HiddenComponent>),
     >,
 ) {
@@ -367,12 +362,12 @@ pub fn draw_selection(
     if selected.is_empty() {
         return;
     }
-    for (info, location_data, transform, visibility) in &query {
+    for (info, transform, visibility) in &query {
         if matches!(visibility, Visibility::Hidden) {
             continue;
         }
         if selected.contains(&info.id()) {
-            let size = location_data.size();
+            let size = registry.def(info.type_id()).location.unwrap().size();
             // Larger than the sprite so the ring isn't hidden behind it.
             let radius = size.width.max(size.height) as f32 * CELL_PX * 0.7;
             gizmos.circle_2d(
@@ -384,32 +379,97 @@ pub fn draw_selection(
     }
 }
 
+/// How long a cast pulse stays on screen, in seconds.
+const PULSE_SECS: f32 = 0.45;
+
+/// Ring pulses marking skills that have just been cast.
+#[derive(Resource, Default)]
+pub struct SkillPulses {
+    /// Which of each caster's skills were off cooldown last frame, in declaration
+    /// order. A skill leaving that set started its cooldown, which only a
+    /// successful cast does — so rejected casts never draw a pulse.
+    was_ready: HashMap<SimulationId, Vec<bool>>,
+    /// Live pulses: the caster and the seconds of life left.
+    active: Vec<(SimulationId, f32)>,
+}
+
+/// Draws an expanding ring on a unit for a moment after one of its skills is cast
+/// (run in `Update`).
+///
+/// The cast is spotted from the caster's own cooldowns rather than from the issued
+/// command, so a cast the simulation refused — too little energy, or still on
+/// cooldown — draws nothing. The ring marks the caster, which is also the target
+/// for every self-targeted skill; a skill aimed at another entity would still
+/// mark the caster.
+pub fn draw_skill_pulses(
+    mut gizmos: Gizmos,
+    time: Res<Time>,
+    mut pulses: ResMut<SkillPulses>,
+    casters: Query<(&EntityInfoComponent, &SkillsComponent)>,
+    rendered: Query<
+        (&EntityInfoComponent, &Transform, &Visibility),
+        (With<Renderable>, Without<HiddenComponent>),
+    >,
+) {
+    let mut seen = HashSet::new();
+    for (info, skills) in &casters {
+        let ready: Vec<bool> = skills.skills().map(|id| skills.ready(id)).collect();
+        seen.insert(info.id());
+        if let Some(previous) = pulses.was_ready.get(&info.id())
+            && previous.len() == ready.len()
+            && previous
+                .iter()
+                .zip(&ready)
+                .any(|(before, now)| *before && !*now)
+        {
+            pulses.active.push((info.id(), PULSE_SECS));
+        }
+        pulses.was_ready.insert(info.id(), ready);
+    }
+    pulses.was_ready.retain(|id, _| seen.contains(id));
+
+    let delta = time.delta_secs();
+    for (_, remaining) in &mut pulses.active {
+        *remaining -= delta;
+    }
+    pulses.active.retain(|(_, remaining)| *remaining > 0.0);
+
+    for &(caster, remaining) in &pulses.active {
+        let Some((_, transform, _)) = rendered.iter().find(|(info, _, visibility)| {
+            info.id() == caster && !matches!(visibility, Visibility::Hidden)
+        }) else {
+            continue;
+        };
+        // Expand and fade over the pulse's life.
+        let progress = 1.0 - remaining / PULSE_SECS;
+        let radius = CELL_PX * (0.35 + 0.55 * progress);
+        gizmos.circle_2d(
+            transform.translation.truncate(),
+            radius,
+            Color::srgba(1.0, 0.85, 0.35, 1.0 - progress),
+        );
+    }
+}
+
 /// Draws the rally point of each selected own producer: a line from the
 /// building to the target and a circle marking it (run in `Update`).
 pub fn draw_rally(
     mut gizmos: Gizmos,
     session: Res<GameSession>,
     selection: Res<Selection>,
+    registry: Res<ContentRegistry>,
     holders: Query<(
         &EntityInfoComponent,
         &LocationComponent,
-        &LocationStaticData,
         &OwnerComponent,
         &RallyPointComponent,
     )>,
-    targets: Query<
-        (
-            &EntityInfoComponent,
-            &LocationComponent,
-            &LocationStaticData,
-        ),
-        Without<HiddenComponent>,
-    >,
+    targets: Query<(&EntityInfoComponent, &LocationComponent), Without<HiddenComponent>>,
 ) {
     const COLOR: Color = Color::srgb(1.0, 0.65, 0.2);
 
     let local = session.local_player();
-    for (info, location, location_data, owner, rally) in &holders {
+    for (info, location, owner, rally) in &holders {
         if owner.player() != local || !selection.get(local).contains(&info.id()) {
             continue;
         }
@@ -424,16 +484,18 @@ pub fn draw_rally(
             }
             RallyTarget::Entity(id) => {
                 // A vanished target leaves nothing to point at.
-                let Some((_, target_location, target_data)) = targets
+                let Some((target_info, target_location)) = targets
                     .iter()
                     .find(|(target_info, ..)| target_info.id() == id)
                 else {
                     continue;
                 };
-                world_center(target_location.position, target_data.size())
+                let target_size = registry.def(target_info.type_id()).location.unwrap().size();
+                world_center(target_location.position, target_size)
             }
         };
-        let start = world_center(location.position, location_data.size());
+        let start_size = registry.def(info.type_id()).location.unwrap().size();
+        let start = world_center(location.position, start_size);
         gizmos.line_2d(start.truncate(), end.truncate(), COLOR);
         gizmos.circle_2d(end.truncate(), CELL_PX * 0.3, COLOR);
     }
@@ -442,17 +504,18 @@ pub fn draw_rally(
 /// Draws a short line from each unit's center in its facing direction (Update).
 pub fn draw_facing(
     mut gizmos: Gizmos,
+    registry: Res<ContentRegistry>,
     query: Query<
         (
+            &EntityInfoComponent,
             &LocationComponent,
-            &LocationStaticData,
             &Transform,
             &Visibility,
         ),
         (With<Directional>, Without<HiddenComponent>),
     >,
 ) {
-    for (location, location_data, transform, visibility) in &query {
+    for (info, location, transform, visibility) in &query {
         // Don't trace a unit hidden by fog (interpolate_sprites set its visibility).
         if matches!(visibility, Visibility::Hidden) {
             continue;
@@ -460,7 +523,7 @@ pub fn draw_facing(
         let Some(dir) = facing_dir(location.facing) else {
             continue;
         };
-        let size = location_data.size();
+        let size = registry.def(info.type_id()).location.unwrap().size();
         let length = size.width.min(size.height) as f32 * CELL_PX * 0.6;
         let center = transform.translation.truncate();
         gizmos.line_2d(center, center + dir * length, Color::srgb(1.0, 1.0, 0.4));
@@ -550,6 +613,7 @@ pub fn update_fog_overlay(
 pub fn draw_ghosts(
     mut gizmos: Gizmos,
     session: Res<GameSession>,
+    registry: Res<ContentRegistry>,
     fog: Res<VisibilityGrid>,
     reveal: Res<FogReveal>,
     mut ghosts: ResMut<Ghosts>,
@@ -557,7 +621,6 @@ pub fn draw_ghosts(
         (
             &EntityInfoComponent,
             &LocationComponent,
-            &LocationStaticData,
             &TagsComponent,
             Option<&OwnerComponent>,
         ),
@@ -566,7 +629,7 @@ pub fn draw_ghosts(
 ) {
     let local = session.local_player();
     let mut alive = HashSet::new();
-    for (info, location, location_data, tags, owner) in &buildings {
+    for (info, location, tags, owner) in &buildings {
         let own_team =
             owner.is_some_and(|o| o.player() == local || session.are_allied(local, o.player()));
         if own_team || !tags.contains(tags::BUILDING) {
@@ -578,7 +641,7 @@ pub fn draw_ghosts(
             location.position.y.to_num::<u32>(),
         );
         if fog.is_visible_to(&session, local, x, y) {
-            let size = location_data.size();
+            let size = registry.def(info.type_id()).location.unwrap().size();
             ghosts.0.insert(
                 info.id(),
                 GhostSprite {

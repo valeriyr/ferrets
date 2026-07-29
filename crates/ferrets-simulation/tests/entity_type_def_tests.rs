@@ -3,13 +3,11 @@
 
 use ferrets_math::FixedU64;
 use ferrets_pathfinder::{layer_mask::LayerMask, nav_grid::LayerId, nav_size::NavSize};
-use ferrets_simulation::{
-    components::{
-        dying::DyingStaticData,
-        location::Solidity,
-        resource::{DepletionPolicy, HarvestData, HarvestVisibility},
-    },
-    content::entity_type_def::EntityTypeDef,
+use ferrets_simulation::content::{
+    dying::DyingDef,
+    entity_type_def::EntityTypeDef,
+    location::Solidity,
+    resource::{DepletionPolicy, HarvestData, HarvestVisibility},
 };
 
 //
@@ -23,7 +21,7 @@ fn fully_loaded_definition_is_valid() {
         .with_movement(FixedU64::from_num(0.5))
         .with_health(50)
         .with_dying(3, None)
-        .with_attack(10, 1, 1, 2, 2)
+        .with_attack(10, 1, 1, 4, 2)
         .with_cost([("gold", 30), ("wood", 10)])
         .with_train_time(4)
         .with_build_time(6)
@@ -59,43 +57,22 @@ fn zero_footprint_panics() {
 }
 
 //
-// ─── Movement, health, attack ─────────────────────────────────────────────────
+// ─── Dying phase ──────────────────────────────────────────────────────────────
 //
-
-#[test]
-#[should_panic(expected = "speed must be greater than 0")]
-fn zero_speed_panics() {
-    footman().with_movement(FixedU64::ZERO);
-}
-
-#[test]
-#[should_panic(expected = "max_health must be greater than 0")]
-fn zero_max_health_panics() {
-    footman().with_health(0);
-}
+// Stat invariants (positive health/speed/attack_period/damage_point, weapon completeness)
+// are validated at registration, not construction — see the registry tests.
+//
 
 #[test]
 #[should_panic(expected = "dying_time must be greater than 0")]
 fn zero_dying_time_panics() {
-    DyingStaticData::new(0, None);
+    DyingDef::new(0, None);
 }
 
 #[test]
 #[should_panic(expected = "corpse_type must not be empty")]
 fn empty_corpse_type_panics() {
-    DyingStaticData::new(3, Some(""));
-}
-
-#[test]
-#[should_panic(expected = "aiming must be greater than 0")]
-fn zero_aiming_panics() {
-    footman().with_attack(10, 1, 1, 0, 2);
-}
-
-#[test]
-#[should_panic(expected = "reloading must be greater than 0")]
-fn zero_reloading_panics() {
-    footman().with_attack(10, 1, 1, 2, 0);
+    DyingDef::new(3, Some(""));
 }
 
 //

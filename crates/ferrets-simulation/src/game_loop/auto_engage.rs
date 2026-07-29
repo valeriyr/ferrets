@@ -5,12 +5,13 @@ use bevy_ecs::world::World;
 use super::{acquire, attack_move};
 use crate::{
     components::{
-        attack::AttackStaticData,
         hidden::HiddenComponent,
         location::LocationComponent,
         order_queue::OrderQueueComponent,
         stance::{Stance, StanceComponent},
+        stats::{StatId, StatsComponent},
     },
+    entity_def,
     entity_index::EntityIndex,
     order::{Leash, Order},
     session::GameSession,
@@ -54,11 +55,14 @@ pub fn tick(world: &mut World) {
         {
             continue;
         }
-        let Some(attack_data) = entity_ref.get::<AttackStaticData>() else {
+        if !entity_def::of(world, entity).can_attack() {
             continue;
-        };
+        }
 
-        let range = attack_data.range();
+        let range = entity_ref
+            .get::<StatsComponent>()
+            .and_then(|stats| stats.effective_as_u32(StatId::ATTACK_RANGE))
+            .expect("attackers have a range stat");
         let anchor = entity_ref.get::<LocationComponent>().unwrap().position;
 
         match stance {

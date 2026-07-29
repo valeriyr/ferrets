@@ -9,9 +9,9 @@ use crate::{
     components::{
         follow::FollowComponent,
         location::LocationComponent,
-        movement::MoveStaticData,
         order_queue::{CancelPolicy, OrderState},
     },
+    entity_def,
     entity_index::EntityIndex,
     order::Order,
 };
@@ -24,7 +24,7 @@ const FOLLOW_DISTANCE: u32 = 1;
 /// Inserts the driver component and returns `InProcessing`, or `Finished`
 /// immediately if the entity cannot move or the target is gone.
 pub fn prepare(entity: Entity, order: &Order, world: &mut World) -> OrderState {
-    if !world.entity(entity).contains::<MoveStaticData>() {
+    if !entity_def::of(world, entity).can_move() {
         return OrderState::Finished;
     }
     let target = order

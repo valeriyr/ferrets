@@ -7,9 +7,10 @@ use ferrets_pathfinder::{astar, nav_pos::NavPos};
 use crate::{
     components::{
         health::HealthComponent,
-        location::{LocationComponent, LocationStaticData},
+        location::LocationComponent,
         owner::{self, OwnerComponent},
     },
+    entity_def,
     entity_index::EntityIndex,
     map::Map,
     session::GameSession,
@@ -104,7 +105,7 @@ pub(super) fn qualifies(
         }
     }
 
-    let size = target_ref.get::<LocationStaticData>().unwrap().size();
+    let size = entity_def::of(world, target).location.unwrap().size();
     astar::in_range_of_rect(
         world.resource::<Map>().projection(),
         NavPos::from(position_of(world, seeker)),
@@ -142,6 +143,6 @@ fn footprint_distance(world: &World, from: NavPos, id: SimulationId) -> u32 {
         world.resource::<Map>().projection(),
         from,
         NavPos::from(entity_ref.get::<LocationComponent>().unwrap().position),
-        entity_ref.get::<LocationStaticData>().unwrap().size(),
+        entity_def::of(world, entity).location.unwrap().size(),
     )
 }

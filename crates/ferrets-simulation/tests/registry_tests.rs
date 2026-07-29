@@ -3,14 +3,20 @@
 //! inconsistency, so a referenced type must be registered before the type that
 //! references it.
 
+use ferrets_math::FixedU64;
 use ferrets_pathfinder::{layer_mask::LayerMask, nav_grid::LayerId, nav_size::NavSize};
 use ferrets_simulation::{
     components::{
-        location::Solidity,
-        resource::{DepletionPolicy, HarvestData, HarvestVisibility},
+        skills::{SkillDef, SkillEffect, SkillTarget},
+        stats::StatId,
         tags,
     },
-    content::{entity_type_def::EntityTypeDef, registry::ContentRegistry},
+    content::{
+        entity_type_def::EntityTypeDef,
+        location::Solidity,
+        registry::ContentRegistry,
+        resource::{DepletionPolicy, HarvestData, HarvestVisibility},
+    },
 };
 
 //
@@ -270,7 +276,7 @@ fn register_rejects_corpse_with_live_gameplay_data() {
         EntityTypeDef::new("bones")
             .with_location(GROUND, NavSize::ONE, Solidity::Solid)
             .with_health(10)
-            .with_attack(1, 1, 1, 1, 1)
+            .with_attack(1, 1, 1, 2, 1)
             .with_dying(2, None),
     );
     registry.register(
@@ -469,6 +475,142 @@ fn register_terrain_rejects_duplicate_name() {
 #[should_panic(expected = "terrain name must not be empty")]
 fn empty_terrain_name_panics() {
     ContentRegistry::default().register_terrain("", LayerMask::EMPTY);
+}
+
+//
+// ─── Stats ──────────────────────────────────────────────────────────────────────
+//
+
+#[test]
+#[should_panic(expected = "has a non-positive max_health stat")]
+fn register_rejects_non_positive_max_health() {
+    let mut registry = ground_registry();
+    registry.register(
+        EntityTypeDef::new("worker")
+            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_health(0),
+    );
+}
+
+#[test]
+#[should_panic(expected = "has a non-positive speed stat")]
+fn register_rejects_non_positive_speed() {
+    let mut registry = ground_registry();
+    registry.register(
+        EntityTypeDef::new("worker")
+            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_movement(FixedU64::ZERO),
+    );
+}
+
+#[test]
+#[should_panic(expected = "has attack_range below its minimum of 1")]
+fn register_rejects_zero_attack_range() {
+    let mut registry = ground_registry();
+    registry.register(
+        EntityTypeDef::new("worker")
+            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_attack(10, 0, 1, 2, 1),
+    );
+}
+
+#[test]
+#[should_panic(expected = "has attack_period below its minimum of 1")]
+fn register_rejects_zero_attack_period() {
+    let mut registry = ground_registry();
+    registry.register(
+        EntityTypeDef::new("worker")
+            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_attack(10, 1, 1, 0, 0),
+    );
+}
+
+#[test]
+#[should_panic(expected = "has damage_point below its minimum of 1")]
+fn register_rejects_zero_damage_point() {
+    let mut registry = ground_registry();
+    registry.register(
+        EntityTypeDef::new("worker")
+            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_attack(10, 1, 1, 2, 0),
+    );
+}
+
+#[test]
+#[should_panic(expected = "with an energy cost but no max_energy stat")]
+fn register_rejects_costed_skill_without_energy_pool() {
+    let mut registry = ground_registry();
+    let jolt = registry.register_skill(
+        "jolt",
+        SkillDef {
+            cooldown: 10,
+            energy_cost: FixedU64::from_num(25),
+            target: SkillTarget::Caster,
+            effect: SkillEffect::Damage(FixedU64::from_num(5)),
+        },
+    );
+    registry.register(
+        EntityTypeDef::new("caster")
+            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_health(20)
+            .with_skills([jolt]),
+    );
+}
+
+#[test]
+fn register_accepts_free_skill_without_energy_pool() {
+    let mut registry = ground_registry();
+    let shout = registry.register_skill(
+        "shout",
+        SkillDef {
+            cooldown: 10,
+            energy_cost: FixedU64::ZERO,
+            target: SkillTarget::Caster,
+            effect: SkillEffect::Damage(FixedU64::from_num(5)),
+        },
+    );
+    registry.register(
+        EntityTypeDef::new("caster")
+            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_health(20)
+            .with_skills([shout]),
+    );
+    assert!(registry.entity("caster").is_some());
+}
+
+#[test]
+#[should_panic(expected = "has attack_period below its minimum of 1")]
+fn register_rejects_fractional_attack_period() {
+    // Positive but below one whole tick: the engine reads the cycle as an integer,
+    // so this would truncate to a phase the counter never reaches.
+    let mut registry = ground_registry();
+    registry.register(
+        EntityTypeDef::new("worker")
+            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_stat(StatId::ATTACK_PERIOD, FixedU64::from_num(0.5)),
+    );
+}
+
+#[test]
+#[should_panic(expected = "has a damage_point beyond its attack_period")]
+fn register_rejects_damage_point_beyond_attack_period() {
+    let mut registry = ground_registry();
+    registry.register(
+        EntityTypeDef::new("worker")
+            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_attack(10, 1, 1, 2, 5),
+    );
+}
+
+#[test]
+#[should_panic(expected = "carries the damage stat but is missing attack_range")]
+fn register_rejects_attacker_without_weapon_stats() {
+    let mut registry = ground_registry();
+    registry.register(
+        EntityTypeDef::new("worker")
+            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_stat(StatId::DAMAGE, FixedU64::from_num(5)),
+    );
 }
 
 //

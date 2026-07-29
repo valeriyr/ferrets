@@ -7,10 +7,10 @@ use super::orders::Processing;
 use crate::{
     components::{
         location::LocationComponent,
-        movement::MoveStaticData,
         order_queue::{CancelPolicy, OrderState},
         patrol::PatrolComponent,
     },
+    entity_def,
     order::Order,
 };
 
@@ -19,7 +19,7 @@ use crate::{
 /// Records the current position as the return endpoint and returns
 /// `InProcessing`, or `Finished` immediately if the entity cannot move.
 pub fn prepare(entity: Entity, _order: &Order, world: &mut World) -> OrderState {
-    if !world.entity(entity).contains::<MoveStaticData>() {
+    if !entity_def::of(world, entity).can_move() {
         return OrderState::Finished;
     }
     let home = world

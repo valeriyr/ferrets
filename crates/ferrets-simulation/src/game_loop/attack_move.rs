@@ -8,13 +8,13 @@ use super::orders::Processing;
 use super::{acquire, chase, chase::Destination};
 use crate::{
     components::{
-        attack::AttackStaticData,
         attack_move::AttackMoveComponent,
         entity_info::EntityInfoComponent,
         location::LocationComponent,
-        movement::MoveStaticData,
         order_queue::{CancelPolicy, OrderState},
+        stats::{StatId, StatsComponent},
     },
+    entity_def,
     map::Map,
     order::{Leash, Order},
     session::GameSession,
@@ -26,7 +26,7 @@ use crate::{
 /// Inserts the driver component and returns `InProcessing`, or `Finished`
 /// immediately if the entity cannot move.
 pub fn prepare(entity: Entity, _order: &Order, world: &mut World) -> OrderState {
-    if !world.entity(entity).contains::<MoveStaticData>() {
+    if !entity_def::of(world, entity).can_move() {
         return OrderState::Finished;
     }
     world
@@ -125,8 +125,8 @@ pub fn watch(entity: Entity, _order: &Order, front: &Order, world: &mut World) -
 pub(super) fn engagement(world: &World, entity: Entity) -> Option<Order> {
     let acquire_range = world
         .entity(entity)
-        .get::<AttackStaticData>()?
-        .acquire_range();
+        .get::<StatsComponent>()
+        .and_then(|stats| stats.effective_as_u32(StatId::ACQUIRE_RANGE))?;
     let target = acquire::find_target(world, entity, acquire_range)?;
     Some(leashed_attack(world, entity, target, acquire_range))
 }
@@ -136,8 +136,8 @@ pub(super) fn engagement(world: &World, entity: Entity) -> Option<Order> {
 pub(super) fn engagement_on(world: &World, entity: Entity, target: SimulationId) -> Option<Order> {
     let acquire_range = world
         .entity(entity)
-        .get::<AttackStaticData>()?
-        .acquire_range();
+        .get::<StatsComponent>()
+        .and_then(|stats| stats.effective_as_u32(StatId::ACQUIRE_RANGE))?;
     if !acquire::qualifies(world, entity, target, acquire_range) {
         return None;
     }

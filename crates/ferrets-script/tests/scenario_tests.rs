@@ -316,6 +316,8 @@ fn entity(id: u32, type_name: &str, under_construction: bool) -> EntityView {
         x: 0,
         y: 0,
         health: Some(1),
+        damage: None,
+        armor: None,
         idle: true,
         hidden: false,
         carrying: None,

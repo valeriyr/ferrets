@@ -9,8 +9,10 @@ use ferrets_script::content;
 use ferrets_script::engine::ScriptEngine;
 use ferrets_script::engine::lua::LuaEngine;
 use ferrets_script::error::ScriptError;
-use ferrets_simulation::components::location::Solidity;
+use ferrets_simulation::components::skills::{SkillDef, SkillEffect, SkillTarget};
+use ferrets_simulation::components::stats::StatId;
 use ferrets_simulation::content::entity_type_def::EntityTypeDef;
+use ferrets_simulation::content::location::Solidity;
 
 //
 // ─── Round-trip ─────────────────────────────────────────────────────────────
@@ -30,7 +32,7 @@ fn loads_races_resources_and_entities() {
         .with_movement(FixedU64::from_str("0.3").unwrap())
         .with_health(40)
         .with_dying(2, None)
-        .with_attack(6, 4, 4, 3, 4)
+        .with_attack(6, 4, 4, 7, 3)
         .with_cost([("gold", 80)])
         .with_train_time(60);
 
@@ -44,8 +46,10 @@ fn declared_acquire_range_overrides_weapon_range_default() {
 
         define_entity("scout", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            health = 20,
-            attack = { damage = 2, range = 3, acquire_range = 7, aiming = 2, reloading = 2 },
+            stats = {
+                max_health = 20,
+                damage = 2, attack_range = 3, acquire_range = 7, attack_period = 4, damage_point = 2,
+            },
         })
     "#;
     let registry = content::load(&engine(), source).expect("load content");
@@ -53,9 +57,119 @@ fn declared_acquire_range_overrides_weapon_range_default() {
     let expected = EntityTypeDef::new("scout")
         .with_location(LayerId::new(1), NavSize::ONE, Solidity::Solid)
         .with_health(20)
-        .with_attack(2, 3, 7, 2, 2);
+        .with_attack(2, 3, 7, 4, 2);
 
     assert_eq!(registry.entity("scout"), Some(&expected));
+}
+
+#[test]
+fn custom_stat_is_declared_and_seeded() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_stat("morale")
+        define_entity("hero", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = { max_health = 10, morale = 7 },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("load content");
+
+    let morale = registry.stat("morale").expect("morale is registered");
+    assert_eq!(
+        registry.entity("hero").unwrap().base_stat(morale),
+        Some(FixedU64::from_num(7)),
+    );
+}
+
+#[test]
+fn unknown_stat_name_errors() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_entity("gadget", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = { bogus = 1 },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject an unknown stat");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("stat 'bogus' is not defined")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn parses_armor_bonus_damage_vs_and_energy() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+
+        define_entity("knight", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = {
+                max_health = 100,
+                damage = 12, attack_range = 1, attack_period = 4, damage_point = 2,
+                armor = 4, max_energy = 50, energy_regen = "0.5",
+            },
+            bonus_damage_vs = { armored = 8, dragon = 15 },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("load content");
+
+    let expected = EntityTypeDef::new("knight")
+        .with_location(LayerId::new(1), NavSize::ONE, Solidity::Solid)
+        .with_health(100)
+        .with_attack(12, 1, 1, 4, 2)
+        .with_armor(4)
+        .with_bonus_damage_vs([("armored", 8u32), ("dragon", 15u32)])
+        .with_energy(50, FixedU64::from_str("0.5").unwrap());
+
+    assert_eq!(registry.entity("knight"), Some(&expected));
+}
+
+#[test]
+fn parses_skill_with_buff_effect() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+
+        define_buff("haste", {
+            duration = 20,
+            stack = "refresh",
+            modifiers = {
+                { stat = "damage", op = "percent", value = "1.0" },
+            },
+        })
+
+        define_skill("battle_focus", {
+            cooldown = 5,
+            energy_cost = "30",
+            target = "self",
+            effect = { apply_buff = "haste" },
+        })
+
+        define_entity("mage", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = { max_health = 40, max_energy = 100, energy_regen = "1" },
+            skills = { "battle_focus" },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("load content");
+    let mage = registry.entity("mage").expect("mage defined");
+    let haste = registry.buff("haste").expect("haste buff defined");
+    let battle_focus = registry.skill("battle_focus").expect("skill defined");
+
+    // The entity references the skill by id, and the registered definition carries
+    // the parsed cooldown, cost, and effect.
+    assert_eq!(mage.skills, vec![battle_focus]);
+    assert_eq!(
+        registry.skill_def(battle_focus),
+        &SkillDef {
+            cooldown: 5,
+            energy_cost: FixedU64::from_num(30),
+            target: SkillTarget::Caster,
+            effect: SkillEffect::ApplyBuff(haste),
+        }
+    );
 }
 
 #[test]
@@ -65,10 +179,8 @@ fn parses_selection_priority_and_class() {
 
         define_entity("caster", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            health = 20,
-            selection_priority = 42,
-            selection_class = "spellcaster",
-            sight_range = 12,
+            stats = { max_health = 20, sight_range = 12 },
+            selection = { priority = 42, class = "spellcaster" },
         })
     "#;
     let registry = content::load(&engine(), source).expect("load content");
@@ -76,8 +188,7 @@ fn parses_selection_priority_and_class() {
     let expected = EntityTypeDef::new("caster")
         .with_location(LayerId::new(1), NavSize::ONE, Solidity::Solid)
         .with_health(20)
-        .with_selection_priority(42)
-        .with_selection_class("spellcaster")
+        .with_selection(42, Some("spellcaster"))
         .with_sight_range(12);
 
     assert_eq!(registry.entity("caster"), Some(&expected));
@@ -96,8 +207,8 @@ fn selection_class_defaults_to_type_name() {
 
     let marine = registry.entity("marine").expect("marine");
     assert_eq!(marine.selection_class(), "marine");
-    assert_eq!(marine.selection_priority, 0);
-    assert_eq!(marine.sight_range, 0);
+    assert_eq!(marine.selection.priority(), 0);
+    assert_eq!(marine.base_stat(StatId::SIGHT_RANGE), None);
 }
 
 #[test]
@@ -309,7 +420,7 @@ fn reports_malformed_number_as_number_error() {
     let source = r#"
         define_entity("archer", {
             location = { occupation = 1, size = 1, solidity = "solid" },
-            movement = { speed = "fast" },
+            stats = { speed = "fast" },
         })
     "#;
 
@@ -406,10 +517,11 @@ const ARCHER: &str = r#"
     define_entity("archer", {
         race = "human",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
-        movement = { speed = "0.3" },
-        health = 40,
+        stats = {
+            speed = "0.3", max_health = 40,
+            damage = 6, attack_range = 4, attack_period = 7, damage_point = 3,
+        },
         dying = { time = 2 },
-        attack = { damage = 6, range = 4, aiming = 3, reloading = 4 },
         cost = { gold = 80 },
         train_time = 60,
     })
@@ -427,8 +539,7 @@ const BASE: &str = r#"
     define_entity("peasant", {
         race = "human",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
-        movement = { speed = "0.3" },
-        health = 30,
+        stats = { speed = "0.3", max_health = 30 },
         dying = { time = 2 },
         cost = { gold = 50 },
         train_time = 40,
@@ -442,7 +553,7 @@ const BASE: &str = r#"
     define_entity("town_hall", {
         race = "human",
         location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
-        health = 800,
+        stats = { max_health = 800 },
         dying = { time = 2 },
         cost = { gold = 400 },
         build_time = 200,

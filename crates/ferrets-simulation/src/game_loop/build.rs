@@ -8,12 +8,13 @@ use super::chase::{self, Destination};
 use super::orders::Processing;
 use crate::{
     components::{
-        build::{BuildComponent, BuilderStaticData, UnderConstructionComponent},
+        build::{BuildComponent, UnderConstructionComponent},
         location::LocationComponent,
         order_queue::{CancelPolicy, OrderState},
         owner::OwnerComponent,
     },
     content::registry::ContentRegistry,
+    entity_def,
     entity_index::EntityIndex,
     map::Map,
     order::Order,
@@ -31,10 +32,10 @@ const BUILD_DISTANCE: u32 = 1;
 pub fn prepare(entity: Entity, order: &Order, world: &mut World) -> OrderState {
     let (type_name, _) = order.build_params().expect("Build order must have params");
 
-    if !world
-        .entity(entity)
-        .get::<BuilderStaticData>()
-        .is_some_and(|builder_data| builder_data.can_build(type_name))
+    if !entity_def::of(world, entity)
+        .builder
+        .as_ref()
+        .is_some_and(|builder_def| builder_def.can_build(type_name))
     {
         return OrderState::Finished;
     }
@@ -123,7 +124,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
         return Processing::state(OrderState::Finished);
     };
 
-    let (build_time, building_location_data, cost) = {
+    let (build_time, building_location_def, cost) = {
         let registry = world.resource::<ContentRegistry>();
         let type_def = registry.entity(type_name).expect("type checked in prepare");
         (
@@ -150,7 +151,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
             projection,
             builder_position,
             position,
-            building_location_data.size(),
+            building_location_def.size(),
             BUILD_DISTANCE,
         ) {
             Destination::OutOfReach => return Processing::state(OrderState::Finished),
@@ -187,7 +188,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
                 world,
                 entity,
                 site_origin,
-                building_location_data.size(),
+                building_location_def.size(),
             );
             return Processing::state(OrderState::Finished);
         };
@@ -214,7 +215,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
             world,
             entity,
             site_origin,
-            building_location_data.size(),
+            building_location_def.size(),
         );
         return Processing::state(OrderState::Finished);
     };
@@ -225,7 +226,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
 
     if build_component.progress >= build_time {
         // No free cell to reappear on — stay inside and retry every tick.
-        if !spawn::reveal_entity_near(world, entity, site_origin, building_location_data.size()) {
+        if !spawn::reveal_entity_near(world, entity, site_origin, building_location_def.size()) {
             world.entity_mut(entity).insert(build_component);
             return Processing::state(OrderState::InProcessing);
         }

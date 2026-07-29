@@ -8,8 +8,7 @@ mod utils;
 use bevy::prelude::{App, Entity};
 use ferrets_pathfinder::nav_size::NavSize;
 use ferrets_simulation::{
-    components::location::Solidity,
-    content::{entity_type_def::EntityTypeDef, registry::ContentRegistry},
+    content::{entity_type_def::EntityTypeDef, location::Solidity, registry::ContentRegistry},
     session::{
         GameResult, GameSession, Winner,
         finish_policy::FinishPolicy,

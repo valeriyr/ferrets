@@ -53,6 +53,7 @@ pub fn run() {
         .init_resource::<input::LastRecall>()
         .init_resource::<render::Ghosts>()
         .init_resource::<render::FogReveal>()
+        .init_resource::<render::SkillPulses>()
         .init_resource::<debug::DebugState>()
         // Camera and content exist for every screen; the game scene is set up on
         // entering InGame once the lobby has configured the session.
@@ -144,8 +145,8 @@ pub fn run() {
                 // (unlike the display-only HUD systems in the viewing group).
                 hud::command_card_input,
                 hud::build_card_input,
+                hud::skill_card_input,
                 hud::group_roster_input,
-                input::build_input,
                 input::order_mode_input,
                 input::targeting_input,
                 input::placement_input,
@@ -182,6 +183,7 @@ pub fn run() {
                     render::update_fog_overlay,
                     render::draw_ghosts,
                     render::draw_selection,
+                    render::draw_skill_pulses,
                     render::draw_facing,
                     render::draw_rally,
                 )
