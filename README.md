@@ -2,7 +2,7 @@
 
 <img src="docs/title.svg" alt="ferrets" width="180" />
 
-**Ferrets out every last desync.**
+**A deterministic RTS engine that ferrets out every last desync.**
 
 [![CI](https://github.com/valeriyr/ferrets/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/valeriyr/ferrets/actions/workflows/ci.yml)
 [![Rust 1.94+](https://img.shields.io/badge/rust-1.94%2B-orange?logo=rust)](https://www.rust-lang.org)
