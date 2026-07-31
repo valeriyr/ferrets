@@ -12,6 +12,7 @@ use ferrets_simulation::{
         owner::OwnerComponent,
         resource::{ResourceCarrierComponent, ResourceSourceComponent},
         stance::StanceComponent,
+        stats::StatsComponent,
     },
     content::registry::ContentRegistry,
     content::skills::SkillId,
@@ -355,6 +356,7 @@ pub fn update_selection(
     entities: Query<(
         &EntityInfoComponent,
         Option<&HealthComponent>,
+        Option<&StatsComponent>,
         Option<&ResourceCarrierComponent>,
         Option<&ResourceSourceComponent>,
         Option<&StanceComponent>,
@@ -369,50 +371,56 @@ pub fn update_selection(
         [id] => entities
             .iter()
             .find(|(info, ..)| info.id() == *id)
-            .map(|(info, health, carrier, source, stance, energy, buffs)| {
-                let def = registry.def(info.type_id());
-                let mut parts = vec![pretty_name(info.type_name())];
-                if let (Some(health), Some(max_health)) =
-                    (health, def.base_stat(StatId::MAX_HEALTH))
-                {
-                    parts.push(format!(
-                        "HP {}/{}",
-                        health.displayed(),
-                        max_health.to_num::<u32>()
-                    ));
-                }
-                if let Some(carrier) = carrier
-                    && let Some(kind) = &carrier.kind
-                {
-                    parts.push(format!("carrying {} {kind}", carrier.amount));
-                }
-                if let (Some(source), Some(source_def)) = (source, def.resource_source.as_ref()) {
-                    parts.push(format!("{} {} left", source.amount, source_def.kind()));
-                }
-                if let Some(StanceComponent(stance)) = stance {
-                    parts.push(format!("stance: {}", stance.name().replace('_', " ")));
-                }
-                if let Some(energy) = energy {
-                    parts.push(format!("energy {}", energy.current_as_u32()));
-                }
-                if let Some(buffs) = buffs
-                    && !buffs.is_empty()
-                {
-                    let names: Vec<String> = buffs
-                        .active()
-                        .map(|(id, stacks)| {
-                            let name = pretty_name(registry.buff_name(id).unwrap_or("buff"));
-                            if stacks > 1 {
-                                format!("{name} x{stacks}")
-                            } else {
-                                name
-                            }
-                        })
-                        .collect();
-                    parts.push(names.join(", "));
-                }
-                parts.join("   ")
-            })
+            .map(
+                |(info, health, stats, carrier, source, stance, energy, buffs)| {
+                    let def = registry.def(info.type_id());
+                    let mut parts = vec![pretty_name(info.type_name())];
+                    // The effective ceiling, so a modifier that moves max health shows in
+                    // the denominator instead of leaving the reading out of step with it.
+                    let max_health = stats
+                        .and_then(|stats| stats.effective(StatId::MAX_HEALTH))
+                        .or_else(|| def.base_stat(StatId::MAX_HEALTH));
+                    if let (Some(health), Some(max_health)) = (health, max_health) {
+                        parts.push(format!(
+                            "HP {}/{}",
+                            health.displayed(),
+                            max_health.to_num::<u32>()
+                        ));
+                    }
+                    if let Some(carrier) = carrier
+                        && let Some(kind) = &carrier.kind
+                    {
+                        parts.push(format!("carrying {} {kind}", carrier.amount));
+                    }
+                    if let (Some(source), Some(source_def)) = (source, def.resource_source.as_ref())
+                    {
+                        parts.push(format!("{} {} left", source.amount, source_def.kind()));
+                    }
+                    if let Some(StanceComponent(stance)) = stance {
+                        parts.push(format!("stance: {}", stance.name().replace('_', " ")));
+                    }
+                    if let Some(energy) = energy {
+                        parts.push(format!("energy {}", energy.current_as_u32()));
+                    }
+                    if let Some(buffs) = buffs
+                        && !buffs.is_empty()
+                    {
+                        let names: Vec<String> = buffs
+                            .active()
+                            .map(|(id, stacks)| {
+                                let name = pretty_name(registry.buff_name(id).unwrap_or("buff"));
+                                if stacks > 1 {
+                                    format!("{name} x{stacks}")
+                                } else {
+                                    name
+                                }
+                            })
+                            .collect();
+                        parts.push(names.join(", "));
+                    }
+                    parts.join("   ")
+                },
+            )
             .unwrap_or_default(),
         many => format!("{} units selected", many.len()),
     };

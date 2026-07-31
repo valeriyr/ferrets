@@ -14,15 +14,22 @@ use ferrets_pathfinder::{
 use ferrets_simulation::{
     command::{PlayerCommand, SelectMode},
     components::{
-        entity_info::EntityInfoComponent, health::HealthComponent, location::LocationComponent,
-        order_queue::OrderQueueComponent, owner::OwnerComponent, stats::StatsComponent,
+        entity_info::EntityInfoComponent,
+        health::HealthComponent,
+        hidden::HiddenComponent,
+        location::LocationComponent,
+        order_queue::{CancelPolicy, OrderQueueComponent},
+        owner::OwnerComponent,
+        pending_reveal::PendingRevealComponent,
+        stats::StatsComponent,
     },
     content::{
         entity_type_def::EntityTypeDef,
         location::Solidity,
         registry::ContentRegistry,
-        resource::{DepletionPolicy, HarvestData, HarvestVisibility},
+        resource::{DepletionPolicy, HarvestData},
         stats::StatId,
+        work::WorkPresence,
     },
     entity_def,
     input::{InputFrames, PlayerFrame},
@@ -40,6 +47,7 @@ use ferrets_simulation::{
         player_type::PlayerType,
     },
     simulation_id::SimulationId,
+    spawn,
 };
 
 /// The single navigation layer the harness content declares.
@@ -82,6 +90,19 @@ pub fn make_app(slots: Vec<PlayerSlot>) -> App {
 
 pub fn pos(x: u32, y: u32) -> FixedUVec2 {
     FixedUVec2::new(FixedU64::from_num(x), FixedU64::from_num(y))
+}
+
+/// Spawns one entity of `type_name` at `(x, y)` owned by `player`, panicking when
+/// the spawn is refused.
+pub fn spawn_owned(
+    app: &mut App,
+    type_name: &str,
+    x: u32,
+    y: u32,
+    player: PlayerId,
+) -> (Entity, SimulationId) {
+    spawn::spawn_entity(app.world_mut(), type_name, pos(x, y), Some(player))
+        .unwrap_or_else(|| panic!("{type_name} spawns"))
 }
 
 pub fn push_command(app: &mut App, command: PlayerCommand) {
@@ -186,6 +207,18 @@ pub fn order_queue_is_empty(world: &mut World, entity: Entity) -> bool {
         .is_some_and(|q| q.front().is_none())
 }
 
+/// Force-cancels everything `entity` is doing, standing in for a stop command.
+///
+/// Not routed through `PlayerCommand::Stop`, because that reaches the selection and a
+/// worker off the map cannot be selected — a hidden builder or a carrier down a mine is
+/// exactly what these suites need to stop.
+pub fn stop_orders(world: &mut World, entity: Entity) {
+    world
+        .get_mut::<OrderQueueComponent>(entity)
+        .expect("simulation entities carry an order queue")
+        .cancel_all(CancelPolicy::Force);
+}
+
 /// Asserts `entity` has been despawned: looking it up fails specifically because
 /// its id is now invalid (its slot was freed and the generation bumped), naming
 /// exactly that entity — not merely with some error.
@@ -200,6 +233,42 @@ pub fn assert_despawned(world: &mut World, entity: Entity) {
 /// The cell the entity currently stands on.
 pub fn cell_of(world: &mut World, entity: Entity) -> NavPos {
     NavPos::from(world.get::<LocationComponent>(entity).unwrap().position)
+}
+
+/// Marks or clears every cell of the map's ground layer, used to box a worker in.
+pub fn set_all_cells_occupied(world: &mut World, occupied: bool) {
+    let mut map = world.resource_mut::<Map>();
+    let grid = map.nav_grid_mut();
+    let (width, height) = (grid.width(), grid.height());
+    for y in 0..height {
+        for x in 0..width {
+            grid.set_occupied(GROUND, NavPos::new(x, y), occupied);
+        }
+    }
+}
+
+/// Asserts `worker` is boxed in — hidden with its reveal queued — then frees `cell`
+/// and checks the scheduled retry brings it back onto exactly that cell, dropping
+/// both markers.
+pub fn assert_reveal_deferred_then_lands_on(app: &mut App, worker: Entity, cell: NavPos) {
+    assert!(
+        app.world().get::<HiddenComponent>(worker).is_some(),
+        "a boxed-in worker stays off the map"
+    );
+    assert!(
+        app.world().get::<PendingRevealComponent>(worker).is_some(),
+        "with its reveal queued rather than forced"
+    );
+
+    app.world_mut()
+        .resource_mut::<Map>()
+        .nav_grid_mut()
+        .set_occupied(GROUND, cell, false);
+    run_ticks(app, 1);
+
+    assert!(app.world().get::<HiddenComponent>(worker).is_none());
+    assert!(app.world().get::<PendingRevealComponent>(worker).is_none());
+    assert_eq!(cell_of(app.world_mut(), worker), cell);
 }
 
 /// The entities of the given content type owned by `player`.
@@ -254,11 +323,34 @@ pub fn gold(world: &World) -> u32 {
     world.resource::<PlayerResources>().amount(0, "gold")
 }
 
+/// Grants `amount` gold to player 0's stockpile.
+pub fn grant_gold(app: &mut App, amount: u32) {
+    app.world_mut()
+        .resource_mut::<PlayerResources>()
+        .add(0, "gold", amount);
+}
+
 /// The entity's displayed health points, `0` once it is dead or gone.
 pub fn health(app: &App, entity: Entity) -> u32 {
     app.world()
         .get::<HealthComponent>(entity)
         .map_or(0, HealthComponent::displayed)
+}
+
+/// The entity's exact remaining health, unrounded.
+pub fn current_health(app: &App, entity: Entity) -> FixedU64 {
+    app.world()
+        .get::<HealthComponent>(entity)
+        .unwrap()
+        .current()
+}
+
+/// Removes `amount` health points directly, standing in for damage taken.
+pub fn wound(app: &mut App, entity: Entity, amount: f64) {
+    app.world_mut()
+        .get_mut::<HealthComponent>(entity)
+        .unwrap()
+        .apply_damage(FixedU64::from_num(amount));
 }
 
 /// Selects `attacker` for the local player and orders it to attack `target`,
@@ -367,11 +459,31 @@ pub fn register_orders_content(app: &mut App) {
                 .with_dying(2, None)
                 .with_cost([("gold", 10)])
                 .with_train_time(2)
-                .with_builder(["depot"])
-                .with_resource_carrier([(
-                    "gold",
-                    HarvestData::new(5, 2, HarvestVisibility::Hidden),
-                )]),
+                .with_stat(StatId::BUILD_RANGE, FixedU64::ONE)
+                .with_stat(StatId::HARVEST_RANGE, FixedU64::ONE)
+                .with_builder(["depot"], WorkPresence::Hidden)
+                .with_resource_carrier([("gold", HarvestData::new(5, 2, WorkPresence::Hidden))]),
+        );
+        // Same catalogue as `worker`, but it works from outside the site — the pair
+        // is what makes `WorkPresence` observable.
+        registry.register(
+            EntityTypeDef::new("mason")
+                .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+                .with_movement(FixedU64::from_num(0.5))
+                .with_health(20)
+                .with_dying(2, None)
+                .with_stat(StatId::BUILD_RANGE, FixedU64::ONE)
+                .with_builder(["depot"], WorkPresence::Present),
+        );
+        // Same catalogue again, and any number of them can crowd one site.
+        registry.register(
+            EntityTypeDef::new("carpenter")
+                .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+                .with_movement(FixedU64::from_num(0.5))
+                .with_health(20)
+                .with_dying(2, None)
+                .with_stat(StatId::BUILD_RANGE, FixedU64::ONE)
+                .with_builder(["depot"], WorkPresence::PresentStacking),
         );
         registry.register(
             EntityTypeDef::new("lumberjack")
@@ -379,9 +491,32 @@ pub fn register_orders_content(app: &mut App) {
                 .with_movement(FixedU64::from_num(0.5))
                 .with_health(20)
                 .with_dying(2, None)
+                .with_stat(StatId::HARVEST_RANGE, FixedU64::ONE)
+                .with_resource_carrier([("wood", HarvestData::new(5, 2, WorkPresence::Present))]),
+        );
+        // Works a seam from three cells back, which says nothing about how close it
+        // has to get to put the load down.
+        registry.register(
+            EntityTypeDef::new("prospector")
+                .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+                .with_movement(FixedU64::from_num(0.5))
+                .with_health(20)
+                .with_dying(2, None)
+                .with_stat(StatId::HARVEST_RANGE, FixedU64::from_num(3))
+                .with_resource_carrier([("gold", HarvestData::new(5, 2, WorkPresence::Present))]),
+        );
+        // Same trade as `lumberjack`, but a stand takes as many axes as turn up — and
+        // a trip long enough to watch a crew form and break up while it lasts.
+        registry.register(
+            EntityTypeDef::new("logger")
+                .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+                .with_movement(FixedU64::from_num(0.5))
+                .with_health(20)
+                .with_dying(2, None)
+                .with_stat(StatId::HARVEST_RANGE, FixedU64::ONE)
                 .with_resource_carrier([(
                     "wood",
-                    HarvestData::new(5, 2, HarvestVisibility::Visible),
+                    HarvestData::new(5, 8, WorkPresence::PresentStacking),
                 )]),
         );
         registry.register(

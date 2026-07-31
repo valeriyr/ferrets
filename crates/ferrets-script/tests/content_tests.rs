@@ -12,10 +12,13 @@ use ferrets_script::error::ScriptError;
 use ferrets_simulation::content::{
     entity_type_def::EntityTypeDef,
     location::Solidity,
+    repair::{RepairCost, RepairRate},
     skills::{SkillDef, SkillEffect, SkillTarget},
     splash::SplashShape,
     stats::StatId,
+    work::WorkPresence,
 };
+use ferrets_simulation::resources;
 
 //
 // ─── Round-trip ─────────────────────────────────────────────────────────────
@@ -128,6 +131,136 @@ fn parses_armor_bonus_damage_vs_and_energy() {
         .with_energy(50, FixedU64::from_str("0.5").unwrap());
 
     assert_eq!(registry.entity("knight"), Some(&expected));
+}
+
+#[test]
+fn parses_repairer_and_repair_ratio() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_resource("gold")
+        define_tag("building")
+
+        define_entity("depot", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = { max_health = 100 },
+            cost = { gold = 200 },
+            build_time = 20,
+            repair_ratio = "0.5",
+            tags = { "building" },
+        })
+
+        define_entity("worker", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = {
+                max_health = 20, repair_speed = "1.0", repair_cost_factor = "0.25",
+                repair_range = 1,
+            },
+            repairer = {
+                repairs = { "building" },
+                rate = { mode = "production" },
+                presence = "present_stacking",
+                cost = { mode = "pro_rata" },
+                patience = 200,
+            },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("load content");
+
+    let depot = registry.entity("depot").expect("depot defined");
+    assert_eq!(depot.repair_ratio, Some(FixedU64::from_str("0.5").unwrap()));
+
+    let worker = registry.entity("worker").expect("worker defined");
+    let repairer = worker.repairer.as_ref().expect("worker can repair");
+    assert_eq!(repairer.repairs().collect::<Vec<_>>(), ["building"]);
+    assert_eq!(repairer.presence(), WorkPresence::PresentStacking);
+    assert_eq!(repairer.cost(), &RepairCost::ProRata);
+    assert_eq!(repairer.patience(), Some(200));
+    assert!(
+        !repairer.self_repair(),
+        "self-repair is off unless declared"
+    );
+}
+
+#[test]
+fn parses_flat_per_tick_repair_cost() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_resource("gold")
+        define_tag("building")
+
+        define_entity("hauler", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = { max_health = 20, repair_speed = "1.0", repair_range = 1 },
+            repairer = {
+                repairs = { "building" },
+                rate = { mode = "production" },
+                presence = "present",
+                self_repair = true,
+                cost = { mode = "per_tick", resources = { gold = 2 } },
+            },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("load content");
+    let repairer = registry
+        .entity("hauler")
+        .expect("hauler defined")
+        .repairer
+        .as_ref()
+        .expect("hauler can repair");
+
+    assert_eq!(
+        repairer.cost(),
+        &RepairCost::PerTick(resources::cost([("gold", 2u32)]))
+    );
+    assert!(repairer.self_repair());
+    assert_eq!(
+        repairer.patience(),
+        None,
+        "an omitted patience waits indefinitely"
+    );
+}
+
+#[test]
+fn parses_medic_paying_energy_at_flat_rate() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_tag("biological")
+
+        define_entity("medic", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = {
+                max_health = 45, max_energy = 200, energy_regen = "0.2",
+                repair_speed = "1.0", repair_range = 2,
+            },
+            repairer = {
+                repairs = { "biological" },
+                rate = { mode = "per_tick", health = "1.0" },
+                presence = "present",
+                cost = { mode = "energy", per_health = "0.5" },
+            },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("load content");
+    let medic = registry.entity("medic").expect("medic defined");
+    let repairer = medic.repairer.as_ref().expect("medic can repair");
+
+    assert_eq!(
+        repairer.rate(),
+        RepairRate::PerTick(FixedU64::from_str("1.0").unwrap())
+    );
+    assert_eq!(
+        repairer.cost(),
+        &RepairCost::Energy(FixedU64::from_str("0.5").unwrap())
+    );
+    assert_eq!(
+        medic.base_stat(StatId::REPAIR_RANGE),
+        Some(FixedU64::from_num(2))
+    );
+    assert_eq!(
+        repairer.presence(),
+        WorkPresence::Present,
+        "one medic to a patient"
+    );
 }
 
 #[test]
@@ -533,6 +666,107 @@ fn reports_unknown_enum_as_content_error() {
 }
 
 #[test]
+fn repairer_without_rate_errors() {
+    // No default: mending a structure against its build time and patching up a
+    // casualty at a flat rate are both ordinary, so content states which it is.
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_tag("building")
+
+        define_entity("worker", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = { max_health = 20, repair_speed = "1.0", repair_range = 1 },
+            repairer = { repairs = { "building" }, presence = "present" },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("a repairer must state its rate");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("field 'rate'")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn repairer_without_cost_errors() {
+    // Free work is a balance stance, not an absence — `{ mode = "free" }` says so,
+    // and requiring it keeps a misspelled field from quietly meaning free.
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_tag("building")
+
+        define_entity("worker", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = { max_health = 20, repair_speed = "1.0", repair_range = 1 },
+            repairer = {
+                repairs = { "building" },
+                rate = { mode = "production" },
+                presence = "present",
+            },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("a repairer must state what its work costs");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("field 'cost'")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn unknown_repair_rate_mode_errors() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_tag("biological")
+
+        define_entity("medic", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = { max_health = 20, repair_speed = "1.0", repair_range = 1 },
+            repairer = {
+                repairs = { "biological" },
+                rate = { mode = "instant" },
+                presence = "present",
+            },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject an unknown repair rate mode");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("unknown repair rate mode 'instant'")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn unknown_work_presence_errors() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_tag("building")
+
+        define_entity("worker", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = { max_health = 20, repair_speed = "1.0" },
+            repairer = {
+                repairs = { "building" },
+                rate = { mode = "production" },
+                presence = "lurking",
+                cost = { mode = "free" },
+            },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject an unknown work presence");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("unknown work presence 'lurking'")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
 fn reports_malformed_number_as_number_error() {
     let source = r#"
         define_entity("archer", {
@@ -656,14 +890,14 @@ const BASE: &str = r#"
     define_entity("peasant", {
         race = "human",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
-        stats = { speed = "0.3", max_health = 30 },
+        stats = { speed = "0.3", max_health = 30, build_range = 1, harvest_range = 1 },
         dying = { time = 2 },
         cost = { gold = 50 },
         train_time = 40,
-        builder = { "town_hall" },
+        builder = { builds = { "town_hall" }, presence = "hidden" },
         resource_carrier = {
-            gold = { capacity = 5, time = 20, visibility = "hidden" },
-            wood = { capacity = 5, time = 20, visibility = "visible" },
+            gold = { capacity = 5, time = 20, presence = "hidden" },
+            wood = { capacity = 5, time = 20, presence = "present" },
         },
     })
 

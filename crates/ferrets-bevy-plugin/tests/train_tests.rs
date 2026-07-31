@@ -71,7 +71,7 @@ fn building_under_construction_refuses_training() {
         spawn::spawn_entity(world, "barracks", utils::pos(10, 10), Some(0)).unwrap();
     world
         .entity_mut(barracks)
-        .insert(UnderConstructionComponent);
+        .insert(UnderConstructionComponent::default());
     world.resource_mut::<PlayerResources>().add(0, "gold", 30);
 
     utils::push_command(

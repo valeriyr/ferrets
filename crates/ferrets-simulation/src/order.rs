@@ -1,6 +1,7 @@
 //! Internal resolved orders — what entity systems actually execute each tick.
 
 use ferrets_math::fixed_uvec2::FixedUVec2;
+use ferrets_pathfinder::nav_size::NavSize;
 use serde::{Deserialize, Serialize};
 
 use crate::simulation_id::SimulationId;
@@ -43,9 +44,16 @@ pub struct Leash {
 /// An order an entity is executing or waiting to execute.
 #[derive(Debug, Clone)]
 pub enum Order {
-    /// Move to within `range` grid cells of a world-space position in simulation
-    /// coordinates. `range` of `0` requires reaching the exact cell.
-    Move { target: FixedUVec2, range: u32 },
+    /// Move to within `range` grid cells of the footprint at `target` with the given
+    /// `size`, in simulation coordinates. `range` of `0` requires reaching the
+    /// footprint itself. A bare cell is a footprint of [`NavSize::ONE`]; naming the
+    /// whole of a larger destination is what lets a unit stop at the near side of a
+    /// building rather than walking round to the corner its position names.
+    Move {
+        target: FixedUVec2,
+        size: NavSize,
+        range: u32,
+    },
     /// Attack what `target` names — an entity, or a cell for a weapon that sends its
     /// shots to one. An entity target ends the order once it is gone or unreachable; a
     /// cell is never gone, so a ground attack keeps firing until it is cancelled. A
@@ -78,15 +86,24 @@ pub enum Order {
     /// Harvest resources in a loop: gather from a source, deliver to a storage,
     /// repeat. `target` is the source or storage the order was issued on.
     Harvest { target: SimulationId },
+    /// Mend the entity with the given id: walk to it, then restore its health a
+    /// tick at a time until the pool is full, it is gone, or the work can no longer
+    /// be paid for.
+    Repair { target: SimulationId },
     /// Wait out the dying phase, then leave the world.
     Die,
 }
 
 impl Order {
-    /// If this order is a move order, returns the target position and range. Otherwise, returns `None`.
-    pub fn move_params(&self) -> Option<(FixedUVec2, u32)> {
+    /// If this order is a move order, returns the destination footprint and range.
+    /// Otherwise, returns `None`.
+    pub fn move_params(&self) -> Option<(FixedUVec2, NavSize, u32)> {
         match self {
-            Order::Move { target, range } => Some((*target, *range)),
+            Order::Move {
+                target,
+                size,
+                range,
+            } => Some((*target, *size, *range)),
             _ => None,
         }
     }
@@ -159,6 +176,14 @@ impl Order {
     pub fn harvest_target(&self) -> Option<SimulationId> {
         match self {
             Order::Harvest { target } => Some(*target),
+            _ => None,
+        }
+    }
+
+    /// If this order is a repair order, returns the target id. Otherwise, returns `None`.
+    pub fn repair_target(&self) -> Option<SimulationId> {
+        match self {
+            Order::Repair { target } => Some(*target),
             _ => None,
         }
     }

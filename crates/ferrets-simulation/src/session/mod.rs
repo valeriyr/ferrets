@@ -224,7 +224,10 @@ impl GameSession {
     ///
     /// Use this to gate systems that must still run while blocked (e.g. network input collection).
     pub fn is_active(&self) -> bool {
-        matches!(self.state, SessionState::Running | SessionState::Blocked)
+        match self.state {
+            SessionState::Running | SessionState::Blocked => true,
+            SessionState::Pending | SessionState::Finished => false,
+        }
     }
 
     /// Pauses or resumes the session. While paused the tick loop is frozen; peer

@@ -9,7 +9,6 @@ use super::{acquire, chase, chase::Destination};
 use crate::{
     components::{
         attack_move::AttackMoveComponent,
-        entity_info::EntityInfoComponent,
         location::LocationComponent,
         order_queue::{CancelPolicy, OrderState},
         stats::StatsComponent,
@@ -109,11 +108,7 @@ pub fn watch(entity: Entity, _order: &Order, front: &Order, world: &mut World) -
     if !matches!(front, Order::Move { .. }) {
         return None;
     }
-    let id = world
-        .entity(entity)
-        .get::<EntityInfoComponent>()
-        .unwrap()
-        .id();
+    let id = entity_def::simulation_id(world, entity);
     let tick = world.resource::<GameSession>().tick();
     if !acquire::due(id, tick) {
         return None;

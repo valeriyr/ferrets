@@ -6,7 +6,6 @@ use bevy_ecs::{entity::Entity, world::World};
 use super::{acquire, attack_move, chase, chase::Destination, orders::Processing};
 use crate::{
     components::{
-        entity_info::EntityInfoComponent,
         guard::GuardComponent,
         location::LocationComponent,
         order_queue::{CancelPolicy, OrderState},
@@ -88,11 +87,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
         return Processing::state(OrderState::Finished);
     };
 
-    let id = world
-        .entity(entity)
-        .get::<EntityInfoComponent>()
-        .unwrap()
-        .id();
+    let id = entity_def::simulation_id(world, entity);
     let tick = world.resource::<GameSession>().tick();
     if acquire::due(id, tick)
         && let Some(attack) = engagement(world, entity, ward)
@@ -132,11 +127,7 @@ pub fn watch(entity: Entity, order: &Order, front: &Order, world: &mut World) ->
     if !matches!(front, Order::Move { .. }) {
         return None;
     }
-    let id = world
-        .entity(entity)
-        .get::<EntityInfoComponent>()
-        .unwrap()
-        .id();
+    let id = entity_def::simulation_id(world, entity);
     let tick = world.resource::<GameSession>().tick();
     if !acquire::due(id, tick) {
         return None;

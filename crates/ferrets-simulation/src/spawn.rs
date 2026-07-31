@@ -227,19 +227,30 @@ pub fn spawn_corpse_entity(
 ///
 /// A hidden entity cannot be selected or targeted and holds no cells. Bring it
 /// back with [`reveal_entity_near`] or [`reveal_entity_near_or_retry`].
+///
+/// Safe to call on an entity that is already hidden — one stuck waiting on a free
+/// cell can be hidden again by whatever it does next.
 pub(crate) fn hide_entity(world: &mut World, entity: Entity) {
-    let location = *world
-        .entity(entity)
-        .get::<LocationComponent>()
-        .expect("only entities with LocationComponent can be hidden");
-    let location_def = entity_def::of(world, entity)
-        .location
-        .expect("only entities with LocationDef can be hidden");
-    world
-        .resource_mut::<Map>()
-        .displace_entity(&location, &location_def);
-    // Hiding is the inverse of a pending reveal: drop any stale retry so a new
-    // hide is not undone by `process_pending_reveals` on a later tick.
+    // An entity that is already off the map holds no cells to free. Freeing them
+    // again would clear whatever moved onto them while it was away — and the marker
+    // below carries nothing, so setting it twice costs nothing either.
+    if !world.entity(entity).contains::<HiddenComponent>() {
+        let location = *world
+            .entity(entity)
+            .get::<LocationComponent>()
+            .expect("only entities with LocationComponent can be hidden");
+        let location_def = entity_def::of(world, entity)
+            .location
+            .expect("only entities with LocationDef can be hidden");
+        world
+            .resource_mut::<Map>()
+            .displace_entity(&location, &location_def);
+    }
+    // Hiding is the inverse of a pending reveal: drop any stale retry so a new hide
+    // is not undone by `process_pending_reveals` on a later tick. This is the part
+    // that still matters for an entity that was already hidden — it is off the map
+    // for a new reason now, and comes back where that reason says rather than where
+    // the abandoned one would have put it.
     world
         .entity_mut(entity)
         .remove::<PendingRevealComponent>()
@@ -334,11 +345,7 @@ pub fn destroy_entity(world: &mut World, entity: Entity) {
         }
     }
 
-    let id = world
-        .entity(entity)
-        .get::<EntityInfoComponent>()
-        .expect("simulation entity must have EntityInfoComponent")
-        .id();
+    let id = entity_def::simulation_id(world, entity);
     let location = *world
         .entity(entity)
         .get::<LocationComponent>()
@@ -389,11 +396,7 @@ pub fn remove_dead_entity(world: &mut World, entity: Entity) {
         "remove_dead_entity requires a finished dying phase"
     );
 
-    let id = world
-        .entity(entity)
-        .get::<EntityInfoComponent>()
-        .expect("simulation entity must have EntityInfoComponent")
-        .id();
+    let id = entity_def::simulation_id(world, entity);
 
     world.resource_mut::<EntityIndex>().remove_dying(id);
     world.despawn(entity);

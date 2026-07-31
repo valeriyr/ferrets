@@ -15,7 +15,7 @@ use crate::{
         order_queue::{CancelPolicy, OrderState},
         stats::StatsComponent,
     },
-    content::{location::Solidity, stats::StatId},
+    content::stats::StatId,
     entity_def,
     map::Map,
     order::Order,
@@ -82,7 +82,7 @@ pub fn cancel_processing(
 /// `MoveComponent` is taken from the entity at the start and reinserted on
 /// `InProcessing`; on `Finished` it is simply dropped (removed by not reinserting).
 pub fn process(entity: Entity, order: &Order, world: &mut World) -> OrderState {
-    let (target, range) = order.move_params().expect("Move order must have params");
+    let (target, size, range) = order.move_params().expect("Move order must have params");
 
     let position = world
         .entity(entity)
@@ -123,10 +123,11 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> OrderState {
 
     // At rest on a cell — check if the goal is already reached.
     let projection = world.resource::<Map>().projection();
-    if astar::in_range(
+    if astar::in_range_of_rect(
         projection,
         NavPos::from(position),
         NavPos::from(target),
+        size,
         range,
     ) {
         return OrderState::Finished;
@@ -142,6 +143,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> OrderState {
                 occupation,
                 position,
                 target,
+                size,
                 range,
             )
         };
@@ -177,7 +179,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> OrderState {
     // Claim the next cell and release the current one before any position
     // change. Passable entities never claim cells.
     let current_cell = NavPos::from(position);
-    if location_def.solidity() == Solidity::Solid {
+    if location_def.solidity().claims_cells() {
         let mut map = world.resource_mut::<Map>();
         map.nav_grid_mut()
             .set_occupied_by(occupation, current_cell, false);

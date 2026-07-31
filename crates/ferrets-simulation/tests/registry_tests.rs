@@ -13,7 +13,9 @@ use ferrets_simulation::content::{
         entity_type_def::EntityTypeDef,
         location::Solidity,
         registry::ContentRegistry,
-        resource::{DepletionPolicy, HarvestData, HarvestVisibility},
+        repair::{RepairCost, RepairRate},
+        resource::{DepletionPolicy, HarvestData},
+        work::WorkPresence,
     },
 };
 
@@ -54,8 +56,9 @@ fn register_accepts_registered_kinds() {
     gold_registry_with(
         worker()
             .with_cost([("gold", 10)])
+            .with_stat(StatId::HARVEST_RANGE, FixedU64::ONE)
             .with_resource_source("gold", DepletionPolicy::Destroy)
-            .with_resource_carrier([("gold", HarvestData::new(5, 2, HarvestVisibility::Hidden))])
+            .with_resource_carrier([("gold", HarvestData::new(5, 2, WorkPresence::Hidden))])
             .with_resource_storage(["gold"]),
     );
 }
@@ -76,8 +79,7 @@ fn register_rejects_unknown_source_kind() {
 #[should_panic(expected = "unregistered resource kind 'wood' in its resource carrier")]
 fn register_rejects_unknown_carrier_kind() {
     gold_registry_with(
-        worker()
-            .with_resource_carrier([("wood", HarvestData::new(5, 2, HarvestVisibility::Visible))]),
+        worker().with_resource_carrier([("wood", HarvestData::new(5, 2, WorkPresence::Present))]),
     );
 }
 
@@ -122,7 +124,8 @@ fn validate_accepts_registered_production_catalogues() {
     registry.register(
         EntityTypeDef::new("worker")
             .with_location(GROUND, NavSize::ONE, Solidity::Solid)
-            .with_builder(["depot"]),
+            .with_stat(StatId::BUILD_RANGE, FixedU64::ONE)
+            .with_builder(["depot"], WorkPresence::Hidden),
     );
 
     registry.validate();
@@ -144,7 +147,8 @@ fn validate_accepts_production_cycle() {
         EntityTypeDef::new("worker")
             .with_location(GROUND, NavSize::ONE, Solidity::Solid)
             .with_train_time(4)
-            .with_builder(["town_hall"]),
+            .with_stat(StatId::BUILD_RANGE, FixedU64::ONE)
+            .with_builder(["town_hall"], WorkPresence::Hidden),
     );
 
     registry.validate();
@@ -190,7 +194,8 @@ fn validate_rejects_unknown_built_type() {
     registry.register(
         EntityTypeDef::new("worker")
             .with_location(GROUND, NavSize::ONE, Solidity::Solid)
-            .with_builder(["nexus"]),
+            .with_stat(StatId::BUILD_RANGE, FixedU64::ONE)
+            .with_builder(["nexus"], WorkPresence::Hidden),
     );
     registry.validate();
 }
@@ -207,7 +212,8 @@ fn validate_rejects_unconstructible_built_type() {
     registry.register(
         EntityTypeDef::new("worker")
             .with_location(GROUND, NavSize::ONE, Solidity::Solid)
-            .with_builder(["statue"]),
+            .with_stat(StatId::BUILD_RANGE, FixedU64::ONE)
+            .with_builder(["statue"], WorkPresence::Hidden),
     );
     registry.validate();
 }
@@ -601,6 +607,84 @@ fn register_rejects_damage_point_beyond_attack_period() {
 }
 
 #[test]
+#[should_panic(expected = "declares health_regen without max_health")]
+fn register_rejects_health_regen_without_pool() {
+    let mut registry = ground_registry();
+    registry.register(
+        EntityTypeDef::new("wall")
+            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_stat(StatId::HEALTH_REGEN, FixedU64::from_num(0.5)),
+    );
+}
+
+#[test]
+#[should_panic(expected = "declares energy_regen without max_energy")]
+fn register_rejects_energy_regen_without_pool() {
+    let mut registry = ground_registry();
+    registry.register(
+        EntityTypeDef::new("wall")
+            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_health(20)
+            .with_stat(StatId::ENERGY_REGEN, FixedU64::from_num(0.5)),
+    );
+}
+
+#[test]
+#[should_panic(expected = "declares repair_speed but cannot repair")]
+fn register_rejects_repair_speed_without_capability() {
+    let mut registry = ground_registry();
+    registry.register(
+        EntityTypeDef::new("worker")
+            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_health(20)
+            .with_stat(StatId::REPAIR_SPEED, FixedU64::ONE),
+    );
+}
+
+#[test]
+#[should_panic(expected = "can build but is missing build_range")]
+fn register_rejects_builder_without_reach() {
+    let mut registry = ground_registry();
+    registry.register(
+        EntityTypeDef::new("worker")
+            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_builder(["depot"], WorkPresence::Hidden),
+    );
+}
+
+#[test]
+#[should_panic(expected = "declares build_range but cannot build")]
+fn register_rejects_build_range_without_capability() {
+    let mut registry = ground_registry();
+    registry.register(
+        EntityTypeDef::new("soldier")
+            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_stat(StatId::BUILD_RANGE, FixedU64::ONE),
+    );
+}
+
+#[test]
+#[should_panic(expected = "can carry resources but is missing harvest_range")]
+fn register_rejects_carrier_without_reach() {
+    gold_registry_with(
+        EntityTypeDef::new("worker")
+            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_resource_carrier([("gold", HarvestData::new(5, 2, WorkPresence::Present))]),
+    );
+}
+
+#[test]
+#[should_panic(expected = "declares harvest_range but cannot carry resources")]
+fn register_rejects_harvest_range_without_capability() {
+    let mut registry = ground_registry();
+    registry.register(
+        EntityTypeDef::new("soldier")
+            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_stat(StatId::HARVEST_RANGE, FixedU64::ONE),
+    );
+}
+
+#[test]
 #[should_panic(expected = "carries the damage stat but is missing attack_range")]
 fn register_rejects_attacker_without_weapon_stats() {
     let mut registry = ground_registry();
@@ -608,6 +692,140 @@ fn register_rejects_attacker_without_weapon_stats() {
         EntityTypeDef::new("worker")
             .with_location(GROUND, NavSize::ONE, Solidity::Solid)
             .with_stat(StatId::DAMAGE, FixedU64::from_num(5)),
+    );
+}
+
+//
+// ─── Repair capability ────────────────────────────────────────────────────────
+//
+
+#[test]
+#[should_panic(expected = "can repair but is missing repair_speed")]
+fn register_rejects_repairer_without_rate() {
+    let mut registry = ground_registry();
+    registry.register(
+        EntityTypeDef::new("worker")
+            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_health(20)
+            .with_repairer(
+                ["building"],
+                RepairRate::Production,
+                WorkPresence::Present,
+                false,
+                RepairCost::Free,
+                None,
+            ),
+    );
+}
+
+#[test]
+#[should_panic(expected = "can repair but is missing repair_range")]
+fn register_rejects_repairer_without_reach() {
+    let mut registry = ground_registry();
+    registry.register(
+        EntityTypeDef::new("worker")
+            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_health(20)
+            .with_stat(StatId::REPAIR_SPEED, FixedU64::ONE)
+            .with_repairer(
+                ["building"],
+                RepairRate::Production,
+                WorkPresence::Present,
+                false,
+                RepairCost::Free,
+                None,
+            ),
+    );
+}
+
+#[test]
+#[should_panic(expected = "repairs unregistered tag 'mechanical'")]
+fn register_rejects_repairer_mending_unknown_tag() {
+    // "building" is pre-registered, so an unknown tag has to be one content would
+    // have had to declare itself.
+    let mut registry = ground_registry();
+    registry.register(
+        EntityTypeDef::new("worker")
+            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_health(20)
+            .with_stat(StatId::REPAIR_SPEED, FixedU64::ONE)
+            .with_stat(StatId::REPAIR_RANGE, FixedU64::ONE)
+            .with_repairer(
+                ["mechanical"],
+                RepairRate::Production,
+                WorkPresence::Present,
+                false,
+                RepairCost::Free,
+                None,
+            ),
+    );
+}
+
+#[test]
+#[should_panic(expected = "charges pro-rata repair but is missing repair_cost_factor")]
+fn register_rejects_pro_rata_repair_without_factor() {
+    let mut registry = ground_registry();
+    registry.register(
+        EntityTypeDef::new("worker")
+            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_health(20)
+            .with_stat(StatId::REPAIR_SPEED, FixedU64::ONE)
+            .with_stat(StatId::REPAIR_RANGE, FixedU64::ONE)
+            .with_repairer(
+                ["building"],
+                RepairRate::Production,
+                WorkPresence::Present,
+                false,
+                RepairCost::ProRata,
+                None,
+            ),
+    );
+}
+
+#[test]
+#[should_panic(expected = "pays for repair with energy but has no max_energy stat")]
+fn register_rejects_energy_paid_repair_without_pool() {
+    let mut registry = ground_registry();
+    registry.register_tag("biological");
+    registry.register(
+        EntityTypeDef::new("medic")
+            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_health(20)
+            .with_stat(StatId::REPAIR_SPEED, FixedU64::ONE)
+            .with_stat(StatId::REPAIR_RANGE, FixedU64::from_num(2))
+            .with_repairer(
+                ["biological"],
+                RepairRate::PerTick(FixedU64::ONE),
+                WorkPresence::Present,
+                false,
+                RepairCost::Energy(FixedU64::from_num(0.5)),
+                None,
+            ),
+    );
+}
+
+#[test]
+#[should_panic(expected = "a flat repair rate must be positive")]
+fn repairer_rejects_non_positive_flat_rate() {
+    EntityTypeDef::new("medic").with_repairer(
+        ["biological"],
+        RepairRate::PerTick(FixedU64::ZERO),
+        WorkPresence::Present,
+        false,
+        RepairCost::Free,
+        None,
+    );
+}
+
+#[test]
+#[should_panic(expected = "has a repair_ratio but no build_time or train_time")]
+fn register_rejects_repair_ratio_without_production_time() {
+    let mut registry = ground_registry();
+    registry.register(
+        EntityTypeDef::new("monolith")
+            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_health(100)
+            .with_repair_ratio(FixedU64::ONE),
     );
 }
 

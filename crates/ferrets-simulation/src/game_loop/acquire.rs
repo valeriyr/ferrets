@@ -1,7 +1,6 @@
 //! Deterministic hostile-target acquisition shared by auto-engaging behaviors.
 
 use bevy_ecs::{entity::Entity, world::World};
-use ferrets_math::fixed_uvec2::FixedUVec2;
 use ferrets_pathfinder::{astar, nav_pos::NavPos};
 
 use crate::{
@@ -45,7 +44,7 @@ pub fn find_target(world: &World, seeker: Entity, range: u32) -> Option<Simulati
         return Some(attacker);
     }
 
-    let from = NavPos::from(position_of(world, seeker));
+    let from = NavPos::from(entity_def::position(world, seeker));
     let mut best: Option<(u32, SimulationId)> = None;
     for (id, _) in world.resource::<EntityIndex>().alive_entries() {
         if !qualifies(world, seeker, id, range) {
@@ -105,22 +104,14 @@ pub(super) fn qualifies(
         }
     }
 
-    let size = entity_def::of(world, target).location.unwrap().size();
+    let (target_position, target_size) = entity_def::footprint(world, target);
     astar::in_range_of_rect(
         world.resource::<Map>().projection(),
-        NavPos::from(position_of(world, seeker)),
-        NavPos::from(target_ref.get::<LocationComponent>().unwrap().position),
-        size,
+        NavPos::from(entity_def::position(world, seeker)),
+        NavPos::from(target_position),
+        target_size,
         range,
     )
-}
-
-fn position_of(world: &World, entity: Entity) -> FixedUVec2 {
-    world
-        .entity(entity)
-        .get::<LocationComponent>()
-        .unwrap()
-        .position
 }
 
 /// The entity's most recent attacker, while the hit is still fresh (see
@@ -138,11 +129,11 @@ pub(super) fn fresh_attacker(world: &World, entity: Entity) -> Option<Simulation
 /// Distance from `from` to the footprint of the alive entity with the given id.
 fn footprint_distance(world: &World, from: NavPos, id: SimulationId) -> u32 {
     let entity = world.resource::<EntityIndex>().alive(id).unwrap();
-    let entity_ref = world.entity(entity);
+    let (position, size) = entity_def::footprint(world, entity);
     astar::rect_distance(
         world.resource::<Map>().projection(),
         from,
-        NavPos::from(entity_ref.get::<LocationComponent>().unwrap().position),
-        entity_def::of(world, entity).location.unwrap().size(),
+        NavPos::from(position),
+        size,
     )
 }

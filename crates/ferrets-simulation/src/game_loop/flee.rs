@@ -3,13 +3,14 @@
 use bevy_ecs::world::World;
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_pathfinder::nav_pos::NavPos;
+use ferrets_pathfinder::nav_size::NavSize;
 
 use crate::{
     components::{
         health::HealthComponent,
         location::LocationComponent,
         order_queue::{CancelPolicy, OrderQueueComponent},
-        stance::{Stance, StanceComponent},
+        stance::StanceComponent,
     },
     entity_def,
     entity_index::EntityIndex,
@@ -33,10 +34,10 @@ pub fn tick(world: &mut World) {
 
     for (_, entity) in world.resource::<EntityIndex>().alive_entries() {
         let entity_ref = world.entity(entity);
-        if !matches!(
-            entity_ref.get::<StanceComponent>(),
-            Some(StanceComponent(Stance::Flee))
-        ) {
+        if !entity_ref
+            .get::<StanceComponent>()
+            .is_some_and(|stance| stance.0.flees())
+        {
             continue;
         }
         if !entity_def::of(world, entity).can_move() {
@@ -67,7 +68,14 @@ pub fn tick(world: &mut World) {
         let target = flee_target(world, position, attacker_position);
 
         if let Some(mut queue) = world.entity_mut(entity).get_mut::<OrderQueueComponent>() {
-            queue.push(Order::Move { target, range: 0 }, Some(CancelPolicy::Soft));
+            queue.push(
+                Order::Move {
+                    target,
+                    size: NavSize::ONE,
+                    range: 0,
+                },
+                Some(CancelPolicy::Soft),
+            );
         }
     }
 }

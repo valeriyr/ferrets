@@ -345,15 +345,21 @@ pub fn net_control(
                         continue;
                     }
                     let news = pending.propose(effective, proposer, paused);
-                    if news && authority == Authority::Peers {
-                        forward(
-                            &mut net,
-                            InGameMessage::PauseAt {
-                                proposer,
-                                tick: effective,
-                                paused,
-                            },
-                        );
+                    if news {
+                        match authority {
+                            // A mesh has no relay of its own, so each node passes
+                            // on what it just learned; under host authority the
+                            // host's own broadcast already reached everybody.
+                            Authority::Peers => forward(
+                                &mut net,
+                                InGameMessage::PauseAt {
+                                    proposer,
+                                    tick: effective,
+                                    paused,
+                                },
+                            ),
+                            Authority::Host { .. } => {}
+                        }
                     }
                 }
                 InGameMessage::DropAt { player, tick: at } => {
@@ -408,15 +414,17 @@ pub fn net_control(
                     let news = votes.0.get(&voter) != Some(&(tick, missing.clone()));
                     if news {
                         votes.0.insert(voter, (tick, missing.clone()));
-                        if authority == Authority::Peers {
-                            forward(
+                        match authority {
+                            // Same relay split as a pause proposal.
+                            Authority::Peers => forward(
                                 &mut net,
                                 InGameMessage::StallVote {
                                     voter,
                                     tick,
                                     missing,
                                 },
-                            );
+                            ),
+                            Authority::Host { .. } => {}
                         }
                     }
                 }

@@ -6,10 +6,7 @@ use ferrets_pathfinder::{
 };
 
 use crate::components::location::LocationComponent;
-use crate::content::{
-    location::{LocationDef, Solidity},
-    registry::ContentRegistry,
-};
+use crate::content::{location::LocationDef, registry::ContentRegistry};
 use crate::map_data::{MapData, MapSlot};
 use crate::session::player_slot::PlayerId;
 
@@ -194,7 +191,7 @@ impl Map {
         location_def: &LocationDef,
         occupied: bool,
     ) {
-        if location_def.solidity() == Solidity::Passable {
+        if !location_def.solidity().claims_cells() {
             return;
         }
 

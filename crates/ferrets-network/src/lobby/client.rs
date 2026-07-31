@@ -144,11 +144,21 @@ impl LobbyClient {
                     {
                         return PollOutcome::Rejected(reason);
                     }
-                    _ => {}
+                    // Another peer's rejection, plus the requests only ever sent
+                    // client → host.
+                    LobbyMessage::Rejected { .. }
+                    | LobbyMessage::Join { .. }
+                    | LobbyMessage::RequestRace { .. }
+                    | LobbyMessage::RequestTeam { .. } => {}
                 },
+                // In-game control reaches a client only once it has started.
+                ControlEvent::Message {
+                    message: ControlMessage::InGame(_),
+                    ..
+                } => {}
                 // A client only ever connects to the host, so any disconnect is it.
                 ControlEvent::Disconnected(_) => return PollOutcome::HostLost,
-                _ => {}
+                ControlEvent::Connected(_) => {}
             }
         }
         PollOutcome::Waiting { changed }

@@ -1,16 +1,25 @@
 //! Content-defined construction-catalogue property struct.
 
-/// Content-defined construction catalogue: which entity types this entity can build.
+use crate::content::work::WorkPresence;
+
+/// Content-defined construction catalogue: which entity types this entity can
+/// build, and how it attends the site while building them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BuilderDef {
+    /// The entity types this entity can construct.
     builds: Vec<String>,
+    /// Where the builder stands while the site goes up.
+    presence: WorkPresence,
 }
 
 impl BuilderDef {
     /// Creates a new `BuilderDef` with the given data.
     ///
     /// Panics if `builds` is empty or contains an empty type name.
-    pub fn new(builds: impl IntoIterator<Item = impl Into<String>>) -> Self {
+    pub fn new(
+        builds: impl IntoIterator<Item = impl Into<String>>,
+        presence: WorkPresence,
+    ) -> Self {
         let builds: Vec<String> = builds.into_iter().map(Into::into).collect();
 
         assert!(!builds.is_empty(), "builds must not be empty");
@@ -19,7 +28,7 @@ impl BuilderDef {
             "constructed type names must not be empty"
         );
 
-        Self { builds }
+        Self { builds, presence }
     }
 
     /// Returns `true` if buildings of `type_name` can be constructed by this entity.
@@ -30,5 +39,11 @@ impl BuilderDef {
     /// Returns the entity types that can be constructed.
     pub fn builds(&self) -> impl Iterator<Item = &str> {
         self.builds.iter().map(String::as_str)
+    }
+
+    /// Where the builder stands while the site goes up.
+    #[inline]
+    pub fn presence(&self) -> WorkPresence {
+        self.presence
     }
 }

@@ -6,7 +6,9 @@
 
 use bevy_ecs::{entity::Entity, world::World};
 use ferrets_math::{FixedU64, fixed_urect::FixedURect};
+use ferrets_pathfinder::nav_size::NavSize;
 
+use super::repair;
 use crate::{
     command::{PlayerCommand, SelectMode},
     components::{
@@ -145,6 +147,7 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
                     entity,
                     Order::Move {
                         target: *target,
+                        size: NavSize::ONE,
                         range: 0,
                     },
                     CancelPolicy::from_bool(*flush),
@@ -297,6 +300,18 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
                 CancelPolicy::from_bool(*flush),
             );
         }
+        PlayerCommand::Repair { target, flush } => {
+            // Entities that cannot mend this target drop the order in `prepare`, so
+            // a mixed selection simply sends the ones that can.
+            for entity in commanded_selection(world, player) {
+                push_order(
+                    world,
+                    entity,
+                    Order::Repair { target: *target },
+                    CancelPolicy::from_bool(*flush),
+                );
+            }
+        }
         PlayerCommand::Stop => {
             for entity in commanded_selection(world, player) {
                 if let Some(mut queue) = world.entity_mut(entity).get_mut::<OrderQueueComponent>() {
@@ -343,6 +358,15 @@ pub(super) fn resolve_send_to_entity(
         return Some(Order::Harvest { target: target_id });
     }
 
+    // A site still going up is a call for help: a unit that builds its type joins the
+    // crew raising it. Read before the delivery below, because a half-built storage
+    // is not a drop-off yet however much its type says it accepts the load.
+    if target_ref.contains::<UnderConstructionComponent>()
+        && let Some(order) = assist_construction(world, entity, target)
+    {
+        return Some(order);
+    }
+
     let carried = entity_ref
         .get::<ResourceCarrierComponent>()
         .map_or(0, |carrier| carrier.amount);
@@ -367,6 +391,12 @@ pub(super) fn resolve_send_to_entity(
         return Some(Order::Harvest { target: target_id });
     }
 
+    // A damaged friendly the unit can mend, after the harvest readings so a loaded
+    // carrier still delivers to a storage that happens to be hurt.
+    if repair::would_repair(world, entity, target) {
+        return Some(Order::Repair { target: target_id });
+    }
+
     let hostile = owner::are_hostile(
         world.resource::<GameSession>(),
         entity_ref.get::<OwnerComponent>(),
@@ -383,6 +413,49 @@ pub(super) fn resolve_send_to_entity(
     }
 
     Some(Order::Follow { target: target_id })
+}
+
+/// The Build order that puts `entity` to work on the unfinished site `target`, or
+/// `None` if it is not a site this one can join.
+///
+/// The order names the site's own type and cell, which is what
+/// [`game_loop::build`](super::build) matches an existing site on — so the builder
+/// takes up the work already under way rather than trying to place a second one.
+/// Only the owner's own sites qualify, because that is the whole of what can be
+/// joined.
+fn assist_construction(world: &World, entity: Entity, target: Entity) -> Option<Order> {
+    let target_ref = world.entity(target);
+
+    let same_owner = matches!(
+        (
+            world.entity(entity).get::<OwnerComponent>(),
+            target_ref.get::<OwnerComponent>(),
+        ),
+        (Some(builder), Some(site)) if builder.player() == site.player()
+    );
+    if !same_owner {
+        return None;
+    }
+
+    let type_name = target_ref
+        .get::<EntityInfoComponent>()
+        .expect("simulation entity must have EntityInfoComponent")
+        .type_name();
+    if !entity_def::of(world, entity)
+        .builder
+        .as_ref()
+        .is_some_and(|builder| builder.can_build(type_name))
+    {
+        return None;
+    }
+
+    Some(Order::Build {
+        type_name: type_name.to_string(),
+        position: target_ref
+            .get::<LocationComponent>()
+            .expect("a placed site has a location")
+            .position,
+    })
 }
 
 /// Validates and executes a train command: pays the cost up front and enqueues
@@ -679,11 +752,7 @@ fn apply_skill_effect(world: &mut World, caster: Entity, target: Entity, effect:
             }
         }
         SkillEffect::Damage(amount) => {
-            let caster_id = world
-                .entity(caster)
-                .get::<EntityInfoComponent>()
-                .expect("caster has an id")
-                .id();
+            let caster_id = entity_def::simulation_id(world, caster);
             let tick = world.resource::<GameSession>().tick();
             let mut died = false;
             if let Some(mut health) = world.entity_mut(target).get_mut::<HealthComponent>() {

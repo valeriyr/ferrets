@@ -158,6 +158,248 @@ fn orthogonal_stop_within_euclidean_range() {
 }
 
 //
+// ─── Footprint goals ──────────────────────────────────────────────────────────
+//
+// A goal names the first cell of a footprint, not its middle. A search that
+// measured to that cell alone would send a unit round to the corner it names —
+// so the goal test and the estimate both measure to the nearest cell of the
+// whole rectangle.
+//
+// The building these walk up to is `GOAL_ORIGIN`/`GOAL_SIZE`: 2 x 2 at (4,4).
+//
+
+#[test]
+fn isometric_reaches_footprint_from_every_side() {
+    // . . . . N . . . . .   y=0   N = from the north (4,0)
+    // . . . . . . . . . .   y=1
+    // . . . . . . . . . .   y=2
+    // . . . . . . . . . .   y=3
+    // W . . . B B . . . E   y=4   W = west (0,4), B = the building, E = east (9,4)
+    // . . . . B B . . . .   y=5
+    // . . . . . . . . . .   y=6
+    // . . . . . . . . . .   y=7
+    // . . . . . . . . D .   y=8   D = off the south-east corner (8,8)
+    // . . . . S . . . . .   y=9   S = from the south (4,9)
+    //
+    // Each approach is already pointed at the nearest cell of the footprint, so the
+    // walk is a straight run that stops the moment that cell is one step away. All
+    // moves cost the same under Chebyshev, so the diagonal approach closes two cells
+    // at once and arrives in two steps rather than three.
+    let mut grid = utils::grid(10, 10);
+    occupy_goal(&mut grid);
+
+    for (start, expected) in [
+        ((9, 4), vec![(8, 4), (7, 4), (6, 4)]),
+        ((0, 4), vec![(1, 4), (2, 4), (3, 4)]),
+        ((4, 0), vec![(4, 1), (4, 2), (4, 3)]),
+        ((4, 9), vec![(4, 8), (4, 7), (4, 6)]),
+        ((8, 8), vec![(7, 7), (6, 6)]),
+    ] {
+        let path = find_iso_rect(&grid, utils::world(start.0, start.1), 1).unwrap();
+
+        assert_eq!(
+            path,
+            expected
+                .iter()
+                .map(|&(x, y)| utils::world(x, y))
+                .collect::<Vec<_>>(),
+            "walking in from {start:?}"
+        );
+    }
+}
+
+#[test]
+fn isometric_footprint_goal_costs_less_than_its_corner() {
+    // . . . . . . . . . .   y=3
+    // . . . . B B . * . S   y=4   B = the building, S = start (9,4)
+    // . . . . B B . . . .   y=5   * = one cell east of its near face
+    //
+    // The near face is three steps away. Aiming at (4,4) alone is satisfied only west
+    // or north of it — every such cell lies past the building — so that walk is
+    // longer and ends on the far side of what the unit came to stand next to.
+    let mut grid = utils::grid(10, 10);
+    occupy_goal(&mut grid);
+
+    let to_footprint = find_iso_rect(&grid, utils::world(9, 4), 1).unwrap();
+    let to_corner = find_iso(&grid, utils::world(9, 4), utils::world(4, 4), 1).unwrap();
+
+    assert_eq!(
+        to_footprint,
+        vec![utils::world(8, 4), utils::world(7, 4), utils::world(6, 4)]
+    );
+    assert_eq!(
+        to_corner,
+        vec![
+            utils::world(8, 4),
+            utils::world(7, 4),
+            utils::world(6, 3),
+            utils::world(5, 3),
+        ],
+        "the extra step is the drift north to get beside the corner"
+    );
+}
+
+#[test]
+fn isometric_stops_beside_facing_side_of_wide_footprint() {
+    // . . . . . . . . . .   y=3
+    // . . . B B B B . . .   y=4   B = a 4 x 1 wall at (3,4)
+    // . . . . . * . . . .   y=5   * = where the walk ends, due north of the start
+    // . . . . . S . . . .   y=9   S = start (5,9), below the middle of it
+    //
+    // One axis clamps and the other does not: the nearest cell is (5,4), straight
+    // ahead. Measured to the origin at (3,4) the walk would drift west instead of
+    // stopping where it stands.
+    let mut grid = utils::grid(10, 10);
+    for x in 3..=6 {
+        grid.set_occupied(utils::GROUND, utils::nav(x, 4), true);
+    }
+
+    let path = find_iso_footprint(
+        &grid,
+        utils::world(5, 9),
+        utils::world(3, 4),
+        NavSize::new(4, 1),
+        1,
+    )
+    .unwrap();
+
+    assert_eq!(
+        path,
+        vec![
+            utils::world(5, 8),
+            utils::world(5, 7),
+            utils::world(5, 6),
+            utils::world(5, 5),
+        ]
+    );
+}
+
+#[test]
+fn orthogonal_reaches_footprint_from_side() {
+    // . . . . B B . * . S   y=4   B = the building, S = start (9,4)
+    //
+    // A straight run is all cardinal steps, which cost the same under either
+    // projection, and the near face is one cardinal cell from (6,4) either way — so
+    // the two projections only part company on the diagonals.
+    let mut grid = utils::grid(10, 10);
+    occupy_goal(&mut grid);
+
+    let path = find_ortho_rect(&grid, utils::world(9, 4), 1).unwrap();
+
+    assert_eq!(
+        path,
+        vec![utils::world(8, 4), utils::world(7, 4), utils::world(6, 4)]
+    );
+}
+
+#[test]
+fn isometric_empty_path_when_already_beside_footprint() {
+    // . . . . B B S . . .   y=4   S = start (6,4), one cell from the east face
+    //
+    // Chebyshev to (4,4) is 2, so measuring to the position alone would set the
+    // unit walking at a building it is already standing next to.
+    let mut grid = utils::grid(10, 10);
+    occupy_goal(&mut grid);
+
+    let path = find_iso_rect(&grid, utils::world(6, 4), 1).unwrap();
+
+    assert!(path.is_empty(), "expected to be in range already: {path:?}");
+}
+
+#[test]
+fn isometric_no_stop_distance_stands_in_footprint() {
+    // . . . . G G . S . .   y=4   G = an open footprint, S = start (7,4)
+    // . . . . G G . . . .   y=5
+    //
+    // Reaching any cell of it is arriving, so the walk ends on its near column rather
+    // than crossing to the (4,4) that names it.
+    let grid = utils::grid(10, 10);
+
+    let path = find_iso_rect(&grid, utils::world(7, 4), 0).unwrap();
+
+    assert_eq!(path, vec![utils::world(6, 4), utils::world(5, 4)]);
+}
+
+#[test]
+fn fully_blocked_footprint_cannot_be_stood_in() {
+    // Standing in it is the only thing a stop distance of zero accepts, and every
+    // cell of it is taken — under either projection.
+    let mut grid = utils::grid(10, 10);
+    occupy_goal(&mut grid);
+
+    assert!(find_iso_rect(&grid, utils::world(9, 4), 0).is_none());
+    assert!(find_ortho_rect(&grid, utils::world(9, 4), 0).is_none());
+}
+
+#[test]
+fn partly_blocked_footprint_still_admits_walking_in() {
+    // Only the (4,4) cell naming the footprint is taken. Standing in it means
+    // standing on any of its cells, so the walk ends on a free one rather than
+    // giving up over the one it could never take.
+    let mut grid = utils::grid(10, 10);
+    grid.set_occupied(utils::GROUND, utils::nav(4, 4), true);
+
+    let path = find_iso_rect(&grid, utils::world(7, 4), 0).unwrap();
+
+    assert_eq!(path, vec![utils::world(6, 4), utils::world(5, 4)]);
+}
+
+#[test]
+fn empty_path_when_standing_in_footprint_off_its_origin() {
+    // (5,5) is not the (4,4) that names the footprint, but it is part of it — and
+    // standing anywhere in it already satisfies a stop distance of zero.
+    let grid = utils::grid(10, 10);
+
+    let path = find_iso_rect(&grid, utils::world(5, 5), 0).unwrap();
+
+    assert!(path.is_empty(), "expected to stand in it already: {path:?}");
+}
+
+#[test]
+fn isometric_routes_round_wall_to_footprint() {
+    // . . X . . . . . . .   y=0   X = wall, spanning x=2 from y=0 down to y=7
+    // . . X . . . . . . .   y=1
+    // . . X . . . . . . .   y=2
+    // . . X . . . . . . .   y=3
+    // S . X . B B . . . .   y=4   S = start (0,4), B = the building
+    // . . X . B B . . . .   y=5
+    // . . X . . . . . . .   y=6
+    // . . X . . . . . . .   y=7
+    // . . . . . . . . . .   y=8   the one way past
+    // . . . . . . . . . .   y=9
+    //
+    // The wall stands between the unit and the near face, open only at the bottom, so
+    // the walk has to give up ground before it gains any. An estimate that claimed
+    // the footprint was closer than the route allows could shut that detour out;
+    // measuring to the nearest cell of it never over-claims, so the way round stays
+    // open.
+    //
+    // Rounding the wall's end costs two cardinal steps rather than one diagonal,
+    // twice: cutting the corner at (2,8) would pass the blocked (2,7).
+    let mut grid = utils::grid(10, 10);
+    occupy_goal(&mut grid);
+    for y in 0..=7 {
+        grid.set_occupied(utils::GROUND, utils::nav(2, y), true);
+    }
+
+    let path = find_iso_rect(&grid, utils::world(0, 4), 1).unwrap();
+
+    assert_eq!(
+        path,
+        vec![
+            utils::world(1, 5),
+            utils::world(1, 6),
+            utils::world(1, 7),
+            utils::world(1, 8),
+            utils::world(2, 8),
+            utils::world(3, 8),
+            utils::world(3, 7),
+            utils::world(3, 6),
+        ]
+    );
+}
+
+//
 // ─── Projection comparison ────────────────────────────────────────────────────
 //
 
@@ -228,6 +470,25 @@ fn projections_stop_at_different_positions() {
     assert_eq!(ortho_path, vec![utils::world(1, 3), utils::world(2, 2)]);
 }
 
+#[test]
+fn projections_measure_footprint_range_their_own_way() {
+    // . . . . B B . . . .   y=4   B = the building
+    // . . . . B B . . . .   y=5
+    // . . . . . . S . . .   y=6   S = start (6,6), diagonally off its corner
+    //
+    // The nearest cell of the footprint is (5,5), one step away diagonally:
+    // Chebyshev counts that as 1, squared Euclidean as 2. So the same stop distance
+    // arrives under one projection and still has a step to take under the other.
+    let mut grid = utils::grid(10, 10);
+    occupy_goal(&mut grid);
+
+    let iso_path = find_iso_rect(&grid, utils::world(6, 6), 1).unwrap();
+    let ortho_path = find_ortho_rect(&grid, utils::world(6, 6), 1).unwrap();
+
+    assert!(iso_path.is_empty());
+    assert_eq!(ortho_path, vec![utils::world(6, 5)]);
+}
+
 //
 // ─── Layer mask ───────────────────────────────────────────────────────────────
 //
@@ -246,6 +507,7 @@ fn layer_mask_filters_obstacles() {
         utils::AIR,
         utils::world(0, 0),
         utils::world(4, 0),
+        NavSize::ONE,
         0,
     )
     .unwrap();
@@ -657,6 +919,59 @@ fn in_range_of_rect_ortho(from: (u32, u32), distance: u32) -> bool {
     )
 }
 
+/// The 2×2 building the footprint-goal tests walk up to, at (4,4)–(5,5).
+const GOAL_ORIGIN: (u32, u32) = (4, 4);
+const GOAL_SIZE: NavSize = NavSize::new(2, 2);
+
+/// Occupies every cell of the footprint the goal tests walk up to.
+fn occupy_goal(grid: &mut NavGrid) {
+    for y in GOAL_ORIGIN.1..GOAL_ORIGIN.1 + GOAL_SIZE.height {
+        for x in GOAL_ORIGIN.0..GOAL_ORIGIN.0 + GOAL_SIZE.width {
+            grid.set_occupied(utils::GROUND, utils::nav(x, y), true);
+        }
+    }
+}
+
+fn find_iso_rect(grid: &NavGrid, start: FixedUVec2, distance: u32) -> Option<Vec<FixedUVec2>> {
+    find_iso_footprint(
+        grid,
+        start,
+        utils::world(GOAL_ORIGIN.0, GOAL_ORIGIN.1),
+        GOAL_SIZE,
+        distance,
+    )
+}
+
+fn find_iso_footprint(
+    grid: &NavGrid,
+    start: FixedUVec2,
+    goal: FixedUVec2,
+    goal_size: NavSize,
+    distance: u32,
+) -> Option<Vec<FixedUVec2>> {
+    astar::find_path(
+        grid,
+        Projection::Isometric,
+        utils::GROUND,
+        start,
+        goal,
+        goal_size,
+        distance,
+    )
+}
+
+fn find_ortho_rect(grid: &NavGrid, start: FixedUVec2, distance: u32) -> Option<Vec<FixedUVec2>> {
+    astar::find_path(
+        grid,
+        Projection::Orthogonal,
+        utils::GROUND,
+        start,
+        utils::world(GOAL_ORIGIN.0, GOAL_ORIGIN.1),
+        GOAL_SIZE,
+        distance,
+    )
+}
+
 fn find_iso(
     grid: &NavGrid,
     start: FixedUVec2,
@@ -669,6 +984,7 @@ fn find_iso(
         utils::GROUND,
         start,
         goal,
+        NavSize::ONE,
         distance,
     )
 }
@@ -685,6 +1001,7 @@ fn find_ortho(
         utils::GROUND,
         start,
         goal,
+        NavSize::ONE,
         distance,
     )
 }

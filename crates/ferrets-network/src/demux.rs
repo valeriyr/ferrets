@@ -64,7 +64,7 @@ impl Shared {
                     Err(_) => {}
                 },
                 // A connect/disconnect concerns both channels.
-                _ => {
+                TransportEvent::PeerConnected(_) | TransportEvent::PeerDisconnected(_) => {
                     self.control.push_back(event.clone());
                     self.gameplay.push_back(event);
                 }

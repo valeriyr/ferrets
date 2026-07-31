@@ -2,6 +2,8 @@
 
 use std::collections::BTreeMap;
 
+use crate::content::work::WorkPresence;
+
 /// What happens to a source when harvesting empties it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DepletionPolicy {
@@ -43,16 +45,6 @@ impl ResourceSourceDef {
     }
 }
 
-/// Where the carrier is during a harvest trip.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HarvestVisibility {
-    /// The carrier enters the source and leaves the map for the trip
-    /// (a worker inside a gold mine).
-    Hidden,
-    /// The carrier works in place next to the source (chopping a tree).
-    Visible,
-}
-
 /// How a carrier harvests one resource kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HarvestData {
@@ -60,21 +52,21 @@ pub struct HarvestData {
     capacity: u32,
     /// Ticks one harvest trip takes.
     harvest_time: u32,
-    /// Where the carrier is during a trip.
-    visibility: HarvestVisibility,
+    /// How the carrier attends the source during a trip.
+    presence: WorkPresence,
 }
 
 impl HarvestData {
     /// Creates a new `HarvestData` with the given data.
     ///
     /// Panics if `capacity` or `harvest_time` is `0`.
-    pub fn new(capacity: u32, harvest_time: u32, visibility: HarvestVisibility) -> Self {
+    pub fn new(capacity: u32, harvest_time: u32, presence: WorkPresence) -> Self {
         assert!(capacity > 0, "capacity must be greater than 0");
         assert!(harvest_time > 0, "harvest_time must be greater than 0");
         Self {
             capacity,
             harvest_time,
-            visibility,
+            presence,
         }
     }
 
@@ -88,9 +80,9 @@ impl HarvestData {
         self.harvest_time
     }
 
-    /// Returns where the carrier is during a trip.
-    pub fn visibility(&self) -> HarvestVisibility {
-        self.visibility
+    /// Returns how the carrier attends the source during a trip.
+    pub fn presence(&self) -> WorkPresence {
+        self.presence
     }
 }
 

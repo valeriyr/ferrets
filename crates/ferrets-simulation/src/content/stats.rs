@@ -41,6 +41,20 @@ impl StatId {
     pub const MAX_ENERGY: StatId = StatId(9);
     /// Energy regenerated per tick, toward [`MAX_ENERGY`](Self::MAX_ENERGY).
     pub const ENERGY_REGEN: StatId = StatId(10);
+    /// Health regenerated per tick, toward [`MAX_HEALTH`](Self::MAX_HEALTH).
+    pub const HEALTH_REGEN: StatId = StatId(11);
+    /// How fast one worker mends, as a multiple of the target's production rate:
+    /// `1` restores the target in the time it takes to produce one.
+    pub const REPAIR_SPEED: StatId = StatId(12);
+    /// Share of a target's own cost charged for mending it in full — `0.25` bills a
+    /// quarter of the price to restore an empty pool.
+    pub const REPAIR_COST_FACTOR: StatId = StatId(13);
+    /// How close a mender must be to its work, in cells.
+    pub const REPAIR_RANGE: StatId = StatId(14);
+    /// How close a builder must be to a site it is raising, in cells.
+    pub const BUILD_RANGE: StatId = StatId(15);
+    /// How close a carrier must be to a source it works, in cells.
+    pub const HARVEST_RANGE: StatId = StatId(16);
 
     /// Creates a stat id for the given registration index.
     pub(crate) fn from_index(index: usize) -> Self {
@@ -68,14 +82,15 @@ pub(crate) struct BuiltinStat {
 /// The built-in stats, registered first and in this order, so their assigned ids
 /// equal the [`StatId`] constants above.
 ///
-/// A non-zero floor marks a stat the engine reads as a whole number — a counter it
-/// compares a phase against, or a distance in cells — where zero is a value the
-/// consumer can never satisfy rather than simply meaning "none". Modifiers are
-/// signed, so without the floor a debuff could reach values registration would have
-/// rejected. Fractional stats take no floor: authored values below 1 would be
-/// raised by one rather than guarded.
-pub(crate) const BUILTIN_STATS: [BuiltinStat; 11] = [
-    builtin(StatId::MAX_HEALTH, "max_health", FixedU64::ZERO),
+/// A non-zero floor marks a stat where zero is a value the consumer can never
+/// satisfy rather than simply meaning "none" — a counter, a distance in cells, or a
+/// pool ceiling. Modifiers are signed, so without the floor a debuff could reach
+/// values registration would have rejected. Fractional stats take no floor:
+/// authored values below 1 would be raised by one rather than guarded.
+pub(crate) const BUILTIN_STATS: [BuiltinStat; 17] = [
+    // Current health settles under this ceiling, so a zero would turn any debuff
+    // that reached it into an instant kill.
+    builtin(StatId::MAX_HEALTH, "max_health", FixedU64::ONE),
     builtin(StatId::DAMAGE, "damage", FixedU64::ZERO),
     builtin(StatId::ARMOR, "armor", FixedU64::ZERO),
     // No floor: speed is fractional grid units per tick, and authored values sit
@@ -91,6 +106,19 @@ pub(crate) const BUILTIN_STATS: [BuiltinStat; 11] = [
     builtin(StatId::DAMAGE_POINT, "damage_point", FixedU64::ONE),
     builtin(StatId::MAX_ENERGY, "max_energy", FixedU64::ZERO),
     builtin(StatId::ENERGY_REGEN, "energy_regen", FixedU64::ZERO),
+    builtin(StatId::HEALTH_REGEN, "health_regen", FixedU64::ZERO),
+    // Both are fractional rates, so a whole-number floor would raise the values
+    // content authors rather than guard them.
+    builtin(StatId::REPAIR_SPEED, "repair_speed", FixedU64::ZERO),
+    builtin(
+        StatId::REPAIR_COST_FACTOR,
+        "repair_cost_factor",
+        FixedU64::ZERO,
+    ),
+    // Zero range can only be satisfied by standing inside the target's footprint.
+    builtin(StatId::REPAIR_RANGE, "repair_range", FixedU64::ONE),
+    builtin(StatId::BUILD_RANGE, "build_range", FixedU64::ONE),
+    builtin(StatId::HARVEST_RANGE, "harvest_range", FixedU64::ONE),
 ];
 
 /// Shorthand for one [`BUILTIN_STATS`] entry.

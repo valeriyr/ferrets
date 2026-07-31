@@ -27,6 +27,19 @@ impl Stance {
             Stance::Defend => "defend",
         }
     }
+
+    /// Whether the stance picks targets on its own initiative.
+    pub fn auto_engages(self) -> bool {
+        match self {
+            Stance::StandGround | Stance::Defend => true,
+            Stance::Flee | Stance::HoldFire => false,
+        }
+    }
+
+    /// Whether the stance runs from whatever damages it.
+    pub fn flees(self) -> bool {
+        matches!(self, Stance::Flee)
+    }
 }
 
 /// The entity's current stance.

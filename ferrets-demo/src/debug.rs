@@ -198,8 +198,8 @@ pub fn draw_grid(
 }
 
 /// Draws every unit's order queue while the debug overlay is on: a line per
-/// order from the unit to its target, colored by kind — moves green, combat
-/// red, guard/follow cyan, harvest gold, build blue (run in `Update`).
+/// order from the unit to its target, colored by the order's kind (run in
+/// `Update`).
 pub fn draw_orders(
     mut gizmos: Gizmos,
     debug: Res<DebugState>,
@@ -221,14 +221,19 @@ pub fn draw_orders(
     const GUARD: Color = Color::srgb(0.3, 0.9, 0.9);
     const HARVEST: Color = Color::srgb(0.85, 0.7, 0.2);
     const BUILD: Color = Color::srgb(0.35, 0.55, 1.0);
+    // Matches the always-on work-link hue, and stays apart from MOVE's green.
+    const REPAIR: Color = Color::srgb(0.9, 0.5, 0.9);
 
     if !debug.grid {
         return;
     }
 
-    let cell_center = |position: FixedUVec2| {
-        world_center(FixedUVec2::from(NavPos::from(position)), NavSize::ONE).truncate()
+    // A destination is named by the first cell of its footprint, so a line drawn to
+    // the position alone points at a corner of what the unit is walking to.
+    let footprint_center = |position: FixedUVec2, size: NavSize| {
+        world_center(FixedUVec2::from(NavPos::from(position)), size).truncate()
     };
+    let cell_center = |position: FixedUVec2| footprint_center(position, NavSize::ONE);
     let entity_center = |id| {
         targets
             .iter()
@@ -248,7 +253,7 @@ pub fn draw_orders(
         let start = world_center(location.position, size).truncate();
         for entry in &queue.0 {
             let (end, color) = match &entry.order {
-                Order::Move { target, .. } => (Some(cell_center(*target)), MOVE),
+                Order::Move { target, size, .. } => (Some(footprint_center(*target, *size)), MOVE),
                 Order::AttackMove { target } => (Some(cell_center(*target)), COMBAT),
                 Order::Attack { target, .. } => match target {
                     AttackTarget::Entity(id) => (entity_center(*id), COMBAT),
@@ -257,7 +262,17 @@ pub fn draw_orders(
                 Order::Guard { target } => (entity_center(*target), GUARD),
                 Order::Follow { target } => (entity_center(*target), GUARD),
                 Order::Harvest { target } => (entity_center(*target), HARVEST),
-                Order::Build { position, .. } => (Some(cell_center(*position)), BUILD),
+                Order::Build {
+                    type_name,
+                    position,
+                } => {
+                    let size = registry
+                        .entity(type_name)
+                        .and_then(|def| def.location)
+                        .map_or(NavSize::ONE, |location| location.size());
+                    (Some(footprint_center(*position, size)), BUILD)
+                }
+                Order::Repair { target } => (entity_center(*target), REPAIR),
                 Order::Patrol { target } => {
                     // Both patrol endpoints; before the order starts, the
                     // return point is where the unit stands.

@@ -1,11 +1,13 @@
 //! Per-tick stat pipeline: fold active buffs into effective stats, age timed
 //! buffs, and advance the per-tick counters and pools that read those stats.
 
-use bevy_ecs::{entity::Entity, world::World};
+use bevy_ecs::{entity::Entity, query::Without, world::World};
 use ferrets_math::FixedU64;
 
 use crate::components::{
-    buffs::BuffsComponent, energy::EnergyComponent, skills::SkillsComponent, stats::StatsComponent,
+    buffs::BuffsComponent, build::UnderConstructionComponent, dying::DyingComponent,
+    energy::EnergyComponent, health::HealthComponent, skills::SkillsComponent,
+    stats::StatsComponent,
 };
 use crate::content::{
     buffs::BuffId,
@@ -68,13 +70,44 @@ pub fn process_cooldowns(world: &mut World) {
 pub fn process_energy_regen(world: &mut World) {
     let mut query = world.query::<(&mut EnergyComponent, &StatsComponent)>();
     for (mut energy, stats) in query.iter_mut(world) {
+        // An energy pool is only ever seeded from `max_energy`, so anything with one
+        // carries the stat. The regeneration rate is genuinely optional: a pool that
+        // never refills on its own is ordinary content.
         let max = stats
             .effective(StatId::MAX_ENERGY)
-            .unwrap_or(FixedU64::ZERO);
+            .expect("an energy pool implies the stat it was seeded from");
         let regen = stats
             .effective(StatId::ENERGY_REGEN)
             .unwrap_or(FixedU64::ZERO);
         energy.regenerate(regen, max);
+    }
+}
+
+/// Refills each health pool by one tick's `health_regen`, up to `max_health`.
+///
+/// Runs unconditionally for the entities it covers, so a pool also settles back
+/// under a ceiling a debuff has lowered. Entities that are dying, or still under
+/// construction, are left alone: neither should mend on its own.
+pub fn process_health_regen(world: &mut World) {
+    let mut query = world.query_filtered::<
+        (&mut HealthComponent, &StatsComponent),
+        (Without<DyingComponent>, Without<UnderConstructionComponent>),
+    >();
+    for (mut health, stats) in query.iter_mut(world) {
+        // Nothing brings an entity back, whatever its regeneration says.
+        if health.is_dead() {
+            continue;
+        }
+        // A health pool is only ever seeded from `max_health`, so anything with one
+        // carries the stat — and standing a missing ceiling in as zero would settle
+        // the pool to zero and read as a kill.
+        let max = stats
+            .effective(StatId::MAX_HEALTH)
+            .expect("a health pool implies the stat it was seeded from");
+        let regen = stats
+            .effective(StatId::HEALTH_REGEN)
+            .unwrap_or(FixedU64::ZERO);
+        health.heal(regen, max);
     }
 }
 

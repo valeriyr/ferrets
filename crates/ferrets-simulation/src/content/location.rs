@@ -12,6 +12,17 @@ pub enum Solidity {
     Passable,
 }
 
+impl Solidity {
+    /// Whether a footprint of this solidity marks the cells it covers occupied.
+    #[inline]
+    pub fn claims_cells(self) -> bool {
+        match self {
+            Solidity::Solid => true,
+            Solidity::Passable => false,
+        }
+    }
+}
+
 /// Content-defined location properties for an entity type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LocationDef {

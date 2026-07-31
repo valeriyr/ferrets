@@ -33,11 +33,12 @@ const CARDINAL_COST: u32 = 10;
 /// Movement cost for a diagonal step — approximates √2 × [`CARDINAL_COST`].
 const DIAGONAL_COST: u32 = 14;
 
-/// Finds the shortest path for a unit with `layer_mask` from `start` toward `goal`.
+/// Finds the shortest path for a unit with `layer_mask` from `start` toward the
+/// footprint covering `goal_size` cells from `goal`.
 ///
-/// `stop_distance` controls how close the path must get to `goal` — `0` requires
-/// reaching the exact position. The distance metric depends on the projection:
-/// Chebyshev cells for `Isometric`, Euclidean cells for `Orthogonal`.
+/// `stop_distance` controls how close the path must get to the footprint — `0`
+/// requires standing on one of its cells. The distance metric depends on the
+/// projection: Chebyshev cells for `Isometric`, Euclidean cells for `Orthogonal`.
 ///
 /// Returns the sequence of positions to visit (excluding `start`), or `None` if no path exists.
 pub fn find_path(
@@ -46,6 +47,7 @@ pub fn find_path(
     layer_mask: impl Into<LayerMask>,
     start: FixedUVec2,
     goal: FixedUVec2,
+    goal_size: NavSize,
     stop_distance: u32,
 ) -> Option<Vec<FixedUVec2>> {
     let layer_mask = layer_mask.into();
@@ -53,12 +55,16 @@ pub fn find_path(
     let start = NavPos::from(start);
     let goal = NavPos::from(goal);
 
-    if stop_distance == 0 && start != goal && grid.is_occupied_by(layer_mask, goal) {
-        return None;
+    if in_range_of_rect(projection, start, goal, goal_size, stop_distance) {
+        return Some(vec![]);
     }
 
-    if in_range(projection, start, goal, stop_distance) {
-        return Some(vec![]);
+    // Stopping at no distance at all means standing somewhere on the destination
+    // footprint, which cannot happen with every cell of it occupied.
+    if stop_distance == 0
+        && rect_cells(goal, goal_size).all(|cell| grid.is_occupied_by(layer_mask, cell))
+    {
+        return None;
     }
 
     let result = pathfinding::prelude::astar(
@@ -82,8 +88,8 @@ pub fn find_path(
                 Some((neighbor, cost))
             })
         },
-        |&pos| heuristic(projection, pos, goal, stop_distance),
-        |pos| in_range(projection, *pos, goal, stop_distance),
+        |&pos| heuristic(projection, pos, goal, goal_size, stop_distance),
+        |pos| in_range_of_rect(projection, *pos, goal, goal_size, stop_distance),
     );
 
     result.map(|(path, _cost)| path.into_iter().skip(1).map(|p| p.into()).collect())
@@ -108,6 +114,13 @@ fn step_cost(projection: Projection, is_diagonal: bool) -> u32 {
             }
         }
     }
+}
+
+/// The cells the footprint at `origin` with the given `size` covers.
+fn rect_cells(origin: NavPos, size: NavSize) -> impl Iterator<Item = NavPos> {
+    (0..size.height).flat_map(move |dy| {
+        (0..size.width).map(move |dx| NavPos::new(origin.x + dx, origin.y + dy))
+    })
 }
 
 /// Returns `true` if `from` is within `stop_distance` of `to`.
@@ -159,11 +172,27 @@ pub fn rect_distance(projection: Projection, from: NavPos, origin: NavPos, size:
     }
 }
 
-/// A* cost estimate from `from` toward `to`, adjusted for `stop_distance`.
-fn heuristic(projection: Projection, from: NavPos, to: NavPos, stop_distance: u32) -> u32 {
+/// A* cost estimate from `from` toward the rectangle at `goal`/`goal_size`, adjusted
+/// for `stop_distance`.
+///
+/// Measured to the nearest cell of the rectangle, which is what the goal test
+/// accepts — estimating against a far corner instead would overshoot and could send
+/// the search the long way round.
+fn heuristic(
+    projection: Projection,
+    from: NavPos,
+    goal: NavPos,
+    goal_size: NavSize,
+    stop_distance: u32,
+) -> u32 {
+    let nearest = from.clamp_to_rect(goal, goal_size);
     match projection {
-        Projection::Isometric => chebyshev(from, to).saturating_sub(stop_distance) * CARDINAL_COST,
-        Projection::Orthogonal => octile(from, to).saturating_sub(stop_distance * DIAGONAL_COST),
+        Projection::Isometric => {
+            chebyshev(from, nearest).saturating_sub(stop_distance) * CARDINAL_COST
+        }
+        Projection::Orthogonal => {
+            octile(from, nearest).saturating_sub(stop_distance * DIAGONAL_COST)
+        }
     }
 }
 

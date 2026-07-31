@@ -17,7 +17,9 @@
 
 use bevy_ecs::{entity::Entity, world::World};
 
-use super::{attack, attack_move, build, die, follow, guard, harvest, movement, patrol, train};
+use super::{
+    attack, attack_move, build, die, follow, guard, harvest, movement, patrol, repair, train,
+};
 use crate::{
     components::{
         location::LocationComponent,
@@ -64,6 +66,7 @@ fn dispatch_prepare(entity: Entity, order: &Order, world: &mut World) -> OrderSt
         Order::Train => train::prepare(entity, order, world),
         Order::Build { .. } => build::prepare(entity, order, world),
         Order::Harvest { .. } => harvest::prepare(entity, order, world),
+        Order::Repair { .. } => repair::prepare(entity, order, world),
         Order::Die => die::prepare(entity, order, world),
     }
 }
@@ -77,6 +80,7 @@ fn dispatch_prepare_suspended(entity: Entity, order: &Order, world: &mut World) 
         Order::Follow { .. } => follow::prepare_suspended(entity, order, world),
         Order::Build { .. } => build::prepare_suspended(entity, order, world),
         Order::Harvest { .. } => harvest::prepare_suspended(entity, order, world),
+        Order::Repair { .. } => repair::prepare_suspended(entity, order, world),
         Order::Move { .. } => unreachable!("Move orders never suspend"),
         Order::Train => unreachable!("Train orders never suspend"),
         Order::Die => unreachable!("Die orders never suspend"),
@@ -112,6 +116,9 @@ fn dispatch_cancel(
         Order::Harvest { .. } => {
             harvest::cancel_processing(entity, order, policy, entry_state, world)
         }
+        Order::Repair { .. } => {
+            repair::cancel_processing(entity, order, policy, entry_state, world)
+        }
         Order::Die => die::cancel_processing(entity, order, policy, entry_state, world),
     }
 }
@@ -127,6 +134,7 @@ fn dispatch_process(entity: Entity, order: &Order, world: &mut World) -> Process
         Order::Train => Processing::state(train::process(entity, order, world)),
         Order::Build { .. } => build::process(entity, order, world),
         Order::Harvest { .. } => harvest::process(entity, order, world),
+        Order::Repair { .. } => repair::process(entity, order, world),
         Order::Die => Processing::state(die::process(entity, order, world)),
     }
 }
@@ -142,7 +150,15 @@ fn dispatch_watch(
     match order {
         Order::AttackMove { .. } => attack_move::watch(entity, order, front, world),
         Order::Guard { .. } => guard::watch(entity, order, front, world),
-        _ => None,
+        Order::Move { .. }
+        | Order::Attack { .. }
+        | Order::Patrol { .. }
+        | Order::Follow { .. }
+        | Order::Train
+        | Order::Build { .. }
+        | Order::Harvest { .. }
+        | Order::Repair { .. }
+        | Order::Die => None,
     }
 }
 
@@ -179,16 +195,15 @@ pub fn prepare_tick(entity: Entity, queue: &mut OrderQueueComponent, world: &mut
 
         let new_state = dispatch_cancel(entity, &order, policy, entry_state, world);
 
-        debug_assert!(
-            matches!(new_state, OrderState::InProcessing | OrderState::Finished),
-            "cancel_processing must return InProcessing or Finished, got {:?}",
-            new_state
-        );
-
-        if new_state == OrderState::Finished {
-            queue.0.remove(i);
-        } else {
-            i += 1;
+        match new_state {
+            OrderState::Finished => {
+                queue.0.remove(i);
+            }
+            OrderState::InProcessing => i += 1,
+            OrderState::New | OrderState::Suspended => unreachable!(
+                "cancel_processing must return InProcessing or Finished, got {:?}",
+                new_state
+            ),
         }
     }
 
@@ -270,22 +285,21 @@ pub fn process_tick(entity: Entity, queue: &mut OrderQueueComponent, world: &mut
     let result = dispatch_process(entity, &order, world);
 
     debug_assert!(
-        matches!(
-            result.state,
-            OrderState::InProcessing | OrderState::Finished | OrderState::Suspended
-        ),
-        "process must return InProcessing, Finished, or Suspended, got {:?}",
-        result.state
-    );
-    debug_assert!(
         result.sub_order.is_none() || result.state == OrderState::Suspended,
         "a sub-order is only valid together with Suspended"
     );
 
     queue.0.front_mut().unwrap().state = result.state;
 
-    if result.state == OrderState::Finished {
-        queue.0.pop_front();
+    match result.state {
+        OrderState::Finished => {
+            queue.0.pop_front();
+        }
+        OrderState::InProcessing | OrderState::Suspended => {}
+        OrderState::New => unreachable!(
+            "process must return InProcessing, Finished, or Suspended, got {:?}",
+            result.state
+        ),
     }
 
     if let Some(sub_order) = result.sub_order {
@@ -319,17 +333,18 @@ fn prepare_front(entity: Entity, queue: &mut OrderQueueComponent, world: &mut Wo
             OrderState::Finished => unreachable!(),
         };
 
-        debug_assert!(
-            matches!(new_state, OrderState::InProcessing | OrderState::Finished),
-            "prepare must return InProcessing or Finished, got {:?}",
-            new_state
-        );
-
-        if new_state == OrderState::Finished {
-            queue.0.pop_front();
-        } else {
-            queue.front_mut().unwrap().state = OrderState::InProcessing;
-            break;
+        match new_state {
+            OrderState::Finished => {
+                queue.0.pop_front();
+            }
+            OrderState::InProcessing => {
+                queue.front_mut().unwrap().state = OrderState::InProcessing;
+                break;
+            }
+            OrderState::New | OrderState::Suspended => unreachable!(
+                "prepare must return InProcessing or Finished, got {:?}",
+                new_state
+            ),
         }
     }
 

@@ -1,0 +1,47 @@
+//! What a worker's declared presence means for it while it works.
+//!
+//! Every order that puts a worker on a job for a stretch of ticks hides and
+//! reveals it the same way; this module keeps that pairing in one place so the
+//! verbs cannot drift apart.
+
+use bevy_ecs::{entity::Entity, world::World};
+use ferrets_pathfinder::{nav_pos::NavPos, nav_size::NavSize};
+
+use crate::{
+    components::stats::StatsComponent,
+    content::{stats::StatId, work::WorkPresence},
+    spawn,
+};
+
+/// Takes a worker off the map for a job its presence says it disappears into,
+/// which frees any of the job's cells it was standing on.
+///
+/// A no-op for one that works in the open, which stays exactly where it walked to
+/// and is never moved on its own account.
+pub(super) fn enter(world: &mut World, entity: Entity, presence: WorkPresence) {
+    if presence.is_hidden() {
+        spawn::hide_entity(world, entity);
+    }
+}
+
+/// Brings a worker that disappeared into its job back out beside the footprint at
+/// `around`, and leaves one that worked in the open exactly where it stands.
+///
+/// The reveal is queued rather than retried, because the callers all finish their
+/// order in the same tick and are in no position to retry it themselves.
+pub(super) fn leave(world: &mut World, entity: Entity, around: NavPos, around_size: NavSize) {
+    spawn::reveal_entity_near_or_retry(world, entity, around, around_size);
+}
+
+/// How close a worker has to be to its work, in cells.
+///
+/// Registration pairs every work capability with its reach stat, so a worker
+/// partway through the order always carries it.
+pub(super) fn reach(world: &World, entity: Entity, stat: StatId) -> u32 {
+    world
+        .entity(entity)
+        .get::<StatsComponent>()
+        .expect("workers have a stat store")
+        .effective_as_u32(stat)
+        .unwrap()
+}

@@ -2,11 +2,8 @@
 
 use ferrets_math::FixedU64;
 use ferrets_simulation::content::{
-    location::Solidity,
-    projectile::Aim,
-    registry::ContentRegistry,
-    resource::{DepletionPolicy, HarvestVisibility},
-    splash::SplashShape,
+    location::Solidity, projectile::Aim, registry::ContentRegistry, resource::DepletionPolicy,
+    splash::SplashShape, work::WorkPresence,
 };
 
 use crate::engine::ScriptEngine;
@@ -65,6 +62,18 @@ pub(crate) fn splash_shape(value: &str) -> crate::Result<SplashShape> {
     }
 }
 
+/// Maps a work-presence name to its enum.
+pub(crate) fn work_presence(value: &str) -> crate::Result<WorkPresence> {
+    match value {
+        "hidden" => Ok(WorkPresence::Hidden),
+        "present" => Ok(WorkPresence::Present),
+        "present_stacking" => Ok(WorkPresence::PresentStacking),
+        other => Err(ScriptError::ContentError(format!(
+            "unknown work presence '{other}'"
+        ))),
+    }
+}
+
 /// Maps a depletion-policy name to its enum.
 pub(crate) fn depletion(value: &str) -> crate::Result<DepletionPolicy> {
     match value {
@@ -72,17 +81,6 @@ pub(crate) fn depletion(value: &str) -> crate::Result<DepletionPolicy> {
         "destroy" => Ok(DepletionPolicy::Destroy),
         other => Err(ScriptError::ContentError(format!(
             "unknown depletion policy '{other}'"
-        ))),
-    }
-}
-
-/// Maps a harvest-visibility name to its enum.
-pub(crate) fn visibility(value: &str) -> crate::Result<HarvestVisibility> {
-    match value {
-        "hidden" => Ok(HarvestVisibility::Hidden),
-        "visible" => Ok(HarvestVisibility::Visible),
-        other => Err(ScriptError::ContentError(format!(
-            "unknown harvest visibility '{other}'"
         ))),
     }
 }

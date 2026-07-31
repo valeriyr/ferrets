@@ -24,6 +24,10 @@ pub const CONTENT: &str = r#"
     define_resource("gold")
     define_resource("wood")
 
+    -- Marks the living, which is what a medic will treat and a worker will not.
+    -- "building" is pre-registered by the engine.
+    define_tag("biological")
+
     -- Projectile kinds. Each is registered by name so the renderer can draw an
     -- arrow differently from a cannonball, and so several weapons can share one.
     -- An arrow and a cannonball follow what they were fired at; a mortar shell is
@@ -92,18 +96,43 @@ pub const CONTENT: &str = r#"
         resource_source = { kind = "wood", depletion = "destroy" },
     })
 
-    local function worker(name, race, builds)
+    -- The two races differ only in how their workers attend a job, not in what they
+    -- charge or how fast they work, so the presences can be compared side by side:
+    -- `presence` names the one to use for building, mending and chopping.
+    local function worker(name, race, builds, presence)
         define_entity(name, {
             race = race,
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            stats = { speed = "0.3", max_health = 30, sight_range = 4 },
+            stats = {
+                speed = "0.3", max_health = 30, sight_range = 4,
+                -- Mends at the rate it builds, and bills a quarter of the price for
+                -- a full restore, so repairing is cheaper than rebuilding. It works
+                -- from the next cell over.
+                repair_speed = "1.0", repair_cost_factor = "0.25", repair_range = 1,
+                -- Raises a site from the next cell over, and works a seam or a
+                -- stand of trees from the same distance.
+                build_range = 1, harvest_range = 1,
+            },
             dying = { time = 2 },
             cost = { gold = 50 },
             train_time = 40,
-            builder = builds,
+            builder = { builds = builds, presence = presence.build },
+            -- Workers mend structures at the pace the structure took to raise, and
+            -- each pays its own share of the bill.
+            repairer = {
+                repairs = { "building" },
+                rate = { mode = "production" },
+                presence = presence.repair,
+                cost = { mode = "pro_rata" },
+                -- Broke for ten seconds and the job is abandoned.
+                patience = 200,
+            },
+            tags = { "biological" },
+            -- A mine shaft holds one worker whoever sinks it; chopping happens in the
+            -- open, and how many axes one stand takes is the race's own business.
             resource_carrier = {
-                gold = { capacity = 5, time = 20, visibility = "hidden" },
-                wood = { capacity = 5, time = 20, visibility = "visible" },
+                gold = { capacity = 5, time = 20, presence = "hidden" },
+                wood = { capacity = 5, time = 20, presence = presence.wood },
             },
         })
     end
@@ -130,15 +159,23 @@ pub const CONTENT: &str = r#"
             dying = { time = 2 },
             cost = { gold = 200, wood = 100 },
             build_time = 120,
+            -- Mends in half the time it took to raise: a barracks is quicker to
+            -- patch up than to put up.
+            repair_ratio = "0.5",
             trainer = trains,
             tags = { "building" },
         })
     end
 
     -- Human: worker, base, barracks, and a ranged unit.
-    worker("peasant", "human", { "town_hall", "barracks" })
+    -- Peasants work in the open and swarm: any number of them can share a site, a
+    -- repair or a stand of trees, each adding its own tick of work, so a gang of
+    -- them raises a building in a fraction of the time one would take.
+    worker("peasant", "human", { "town_hall", "barracks" }, {
+        build = "present_stacking", repair = "present_stacking", wood = "present_stacking",
+    })
     main_hall("town_hall", "human", "peasant")
-    barracks("barracks", "human", { "archer", "mortar" })
+    barracks("barracks", "human", { "archer", "mortar", "medic" })
     define_entity("archer", {
         race = "human",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
@@ -154,6 +191,7 @@ pub const CONTENT: &str = r#"
             sight_range = 10,
         },
         dying = { time = 2 },
+        tags = { "biological" },
         -- Anti-armor arrows: extra damage against the (armored) grunt.
         bonus_damage_vs = { grunt = 4 },
         -- A fast arrow: visibly in flight at range 4, but rarely wasted.
@@ -167,6 +205,38 @@ pub const CONTENT: &str = r#"
         selection = { priority = 10 },
     })
 
+    -- Human support: a medic that restores the living at a flat rate, paying out of
+    -- its own energy rather than the treasury. Nothing it does touches a building,
+    -- and only one medic may work a patient at a time.
+    define_entity("medic", {
+        race = "human",
+        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        stats = {
+            speed = "0.3", max_health = 45, sight_range = 9,
+            -- Half a point of energy per point of health (see the repairer cost
+            -- below) means a full 200-point pool restores 400 health across a squad.
+            max_energy = 200, energy_regen = "0.2",
+            -- A flat point of health per tick, whatever the patient is — a unit's
+            -- price says nothing about how long it takes to patch up.
+            repair_speed = "1.0", repair_range = 2,
+        },
+        dying = { time = 2 },
+        tags = { "biological" },
+        repairer = {
+            repairs = { "biological" },
+            rate = { mode = "per_tick", health = "1.0" },
+            -- Stays on the map beside its patient, and works alone.
+            presence = "present",
+            cost = { mode = "energy", per_health = "0.5" },
+            -- Never gives up: out of energy it waits at the patient and resumes as
+            -- the pool refills.
+            patience = nil,
+        },
+        cost = { gold = 100 },
+        train_time = 70,
+        selection = { priority = 8 },
+    })
+
     -- Human siege: a mortar whose shell travels and bursts, so its damage lands
     -- where the shot was aimed rather than on whatever it was tracking.
     define_entity("mortar", {
@@ -178,6 +248,7 @@ pub const CONTENT: &str = r#"
             sight_range = 11,
         },
         dying = { time = 2 },
+        tags = { "biological" },
         -- The shell crosses one cell every five ticks, so a target that keeps moving
         -- takes the direct hit while the burst lands behind it.
         projectile = "shell",
@@ -185,7 +256,7 @@ pub const CONTENT: &str = r#"
             shape = "circular",
             bands = { {1, "0.5"}, {2, "0.25"} },
             layers = GROUND,
-            friendly_fire = false,
+            friendly_fire = true,
         },
         cost = { gold = 120, wood = 40 },
         train_time = 90,
@@ -193,7 +264,12 @@ pub const CONTENT: &str = r#"
     })
 
     -- Orc: worker, base, barracks, and a melee unit.
-    worker("peon", "orc", { "great_hall", "orc_barracks" })
+    -- Peons work one to a job and disappear into what they raise: a site swallows its
+    -- peon until the walls are up, where a repair or a stand only ties one up in the
+    -- open. Nothing they do goes faster for a second pair of hands.
+    worker("peon", "orc", { "great_hall", "orc_barracks" }, {
+        build = "hidden", repair = "present", wood = "present",
+    })
     main_hall("great_hall", "orc", "peon")
     barracks("orc_barracks", "orc", { "grunt" })
     define_entity("grunt", {
@@ -204,9 +280,13 @@ pub const CONTENT: &str = r#"
             damage = 10, attack_range = 1, acquire_range = 5, attack_period = 6, damage_point = 3,
             -- Heavy melee: flat armor blunts each incoming hit.
             armor = 3,
+            -- 0.05/tick is a point a second, so a mauled grunt walks off its wounds
+            -- over about a minute instead of needing to be replaced.
+            health_regen = "0.05",
             sight_range = 8,
         },
         dying = { time = 2 },
+        tags = { "biological" },
         cost = { gold = 90 },
         train_time = 70,
         selection = { priority = 10 },

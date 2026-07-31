@@ -92,6 +92,10 @@ pub enum PlayerCommand {
         position: FixedUVec2,
         flush: bool,
     },
+    /// Issues a repair order against `target` to every selected entity that can
+    /// mend it.
+    /// `flush` cancels existing orders before issuing this one; `false` appends.
+    Repair { target: SimulationId, flush: bool },
     /// Stops the current orders.
     Stop,
     /// Spawns a fully-formed entity of `type_name` for the issuing player at

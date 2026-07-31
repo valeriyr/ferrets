@@ -43,7 +43,7 @@ pub fn tick(world: &mut World) {
             Some(StanceComponent(stance)) => *stance,
             None => continue,
         };
-        if matches!(stance, Stance::Flee | Stance::HoldFire) {
+        if !stance.auto_engages() {
             continue;
         }
         if world.entity(entity).contains::<HiddenComponent>() {

@@ -11,6 +11,7 @@ use ferrets_simulation::content::{
     entity_type_def::EntityTypeDef,
     projectile::ProjectileDef,
     registry::ContentRegistry,
+    repair::{RepairCost, RepairRate},
     resource::HarvestData,
     skills::{SkillDef, SkillEffect, SkillTarget},
     stats::{Modifier, ModifierOp, StatId},
@@ -185,8 +186,28 @@ fn build_entity(
     if let Some(trainer) = optional::<Vec<String>>(table, "trainer")? {
         def = def.with_trainer(trainer);
     }
-    if let Some(builder) = optional::<Vec<String>>(table, "builder")? {
-        def = def.with_builder(builder);
+    if let Some(builder) = optional::<Table>(table, "builder")? {
+        let builds = required::<Vec<String>>(&builder, "builds")?;
+        let presence = required::<String>(&builder, "presence")?;
+        def = def.with_builder(builds, content::work_presence(&presence)?);
+    }
+    if let Some(repairer) = optional::<Table>(table, "repairer")? {
+        let repairs = required::<Vec<String>>(&repairer, "repairs")?;
+        let presence = required::<String>(&repairer, "presence")?;
+        // Off unless declared, and an omitted patience waits indefinitely.
+        let self_repair = optional::<bool>(&repairer, "self_repair")?.unwrap_or(false);
+        let patience = optional::<u32>(&repairer, "patience")?;
+        def = def.with_repairer(
+            repairs,
+            parse_repair_rate(&repairer)?,
+            content::work_presence(&presence)?,
+            self_repair,
+            parse_repair_cost(&repairer)?,
+            patience,
+        );
+    }
+    if let Some(ratio) = optional::<String>(table, "repair_ratio")? {
+        def = def.with_repair_ratio(content::fixed(&ratio)?);
     }
     if let Some(source) = optional::<Table>(table, "resource_source")? {
         let kind = required::<String>(&source, "kind")?;
@@ -237,6 +258,56 @@ fn build_entity(
     }
 
     Ok(def)
+}
+
+/// Reads a repairer's `rate` block: `{ mode = ... }`, where the mode is
+/// `"production"` or `"per_tick"` with a `health` amount.
+///
+/// Required, because the two pace the work so differently that inferring one would
+/// hide the choice: a structure mended against its build time and a casualty patched
+/// up at a flat rate are both ordinary content.
+fn parse_repair_rate(repairer: &Table) -> crate::Result<RepairRate> {
+    let rate = required::<Table>(repairer, "rate")?;
+    let mode = required::<String>(&rate, "mode")?;
+    match mode.as_str() {
+        "production" => Ok(RepairRate::Production),
+        "per_tick" => {
+            let health = required::<String>(&rate, "health")?;
+            Ok(RepairRate::PerTick(content::fixed(&health)?))
+        }
+        other => Err(ScriptError::ContentError(format!(
+            "unknown repair rate mode '{other}'"
+        ))),
+    }
+}
+
+/// Reads a repairer's `cost` block: `{ mode = ... }`, where the mode is `"free"`,
+/// `"pro_rata"`, `"per_tick"` with a `resources` table of amounts, or `"energy"`
+/// with a `per_health` rate.
+///
+/// Required, and `"free"` has to be said out loud: free work is a balance stance
+/// rather than an absence, and inferring it would turn a misspelled field name into
+/// unlimited free repair.
+fn parse_repair_cost(repairer: &Table) -> crate::Result<RepairCost> {
+    let cost = required::<Table>(repairer, "cost")?;
+    let mode = required::<String>(&cost, "mode")?;
+    match mode.as_str() {
+        "free" => Ok(RepairCost::Free),
+        "pro_rata" => Ok(RepairCost::ProRata),
+        "per_tick" => {
+            let resources = required::<Table>(&cost, "resources")?;
+            Ok(RepairCost::PerTick(
+                pairs::<u32>(&resources, "resources")?.into_iter().collect(),
+            ))
+        }
+        "energy" => {
+            let per_health = required::<String>(&cost, "per_health")?;
+            Ok(RepairCost::Energy(content::fixed(&per_health)?))
+        }
+        other => Err(ScriptError::ContentError(format!(
+            "unknown repair cost mode '{other}'"
+        ))),
+    }
 }
 
 /// Reads one projectile: `{ speed, aim }` — a decimal string in cells per tick, and
@@ -328,7 +399,7 @@ fn pairs<V: mlua::FromLua>(table: &Table, field: &str) -> crate::Result<Vec<(Str
     Ok(entries)
 }
 
-/// Reads a `resource_carrier` map: each kind maps to `{capacity, time, visibility}`.
+/// Reads a `resource_carrier` map: each kind maps to `{capacity, time, presence}`.
 fn harvest_kinds(carrier: &Table) -> crate::Result<Vec<(String, HarvestData)>> {
     let mut carries = Vec::new();
     for pair in carrier.clone().pairs::<String, Table>() {
@@ -336,7 +407,7 @@ fn harvest_kinds(carrier: &Table) -> crate::Result<Vec<(String, HarvestData)>> {
         let harvest = HarvestData::new(
             required::<u32>(&data, "capacity")?,
             required::<u32>(&data, "time")?,
-            content::visibility(&required::<String>(&data, "visibility")?)?,
+            content::work_presence(&required::<String>(&data, "presence")?)?,
         );
         carries.push((kind, harvest));
     }

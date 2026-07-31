@@ -40,13 +40,15 @@
 //!                          sub-order (attack-move/guard scanning mid-walk)
 //!                        process phase: advance InProcessing front order, remove driver
 //!                          components on finish, push chase sub-orders on suspend
-//! process_pending_reveals — exclusive system; retry reappearing entities that finished
-//!                      an order while boxed-in and still await a free cell
 //! process_impacts    — exclusive system; land shots whose flight time has elapsed,
 //!                      where the same-tick delivery path lands its damage
+//! process_pending_reveals — exclusive system; retry reappearing entities that finished
+//!                      an order while boxed-in and still await a free cell
 //! process_buffs      — exclusive system; age timed buffs (expiries land next tick)
 //! process_cooldowns  — exclusive system; age skill cooldowns by one tick
 //! process_energy_regen — exclusive system; refill energy pools toward max_energy
+//! process_health_regen — exclusive system; refill health pools toward max_health,
+//!                      skipping the dying and the still-under-construction
 //! process_entity_ai  — per-entity AI think (throttled, every N ticks) [not yet implemented]
 //! check_game_result  — apply the finish policy; may end the session (last player
 //!                      standing, or a scripted scenario's verdict)
@@ -229,9 +231,12 @@ impl Plugin for SimulationPlugin {
                     // Age timed buffs; expiries land in the next tick's
                     // recompute_stats snapshot.
                     systems::process_buffs,
-                    // Skill cooldowns tick down and energy pools refill.
+                    // Skill cooldowns tick down and the per-entity pools refill,
+                    // after every source of damage and spending this tick has been
+                    // applied.
                     systems::process_cooldowns,
                     systems::process_energy_regen,
+                    systems::process_health_regen,
                     systems::check_game_result,
                     systems::tick_counter,
                 )

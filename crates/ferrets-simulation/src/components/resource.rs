@@ -1,5 +1,7 @@
 //! Resource-gathering runtime state: source amounts, carrier loads, and harvest progress.
 
+use std::collections::BTreeSet;
+
 use bevy_ecs::prelude::*;
 use ferrets_math::fixed_uvec2::FixedUVec2;
 
@@ -14,14 +16,18 @@ pub struct ResourceSourceComponent {
     pub amount: u32,
 }
 
-/// Marks a source that a carrier is currently harvesting. Other carriers wait.
+/// The crew working a source, present exactly while somebody is on a trip there.
 #[derive(Component, Debug, Default)]
-pub struct UnderHarvestComponent;
+pub struct UnderHarvestComponent {
+    /// The carriers on a trip to the source right now.
+    pub carriers: BTreeSet<SimulationId>,
+}
 
-/// Marks a carrier that is working a source in place.
+/// Marks a carrier at work on a source.
 ///
-/// Present for the duration of a visible harvest trip; hidden trips mark the
-/// carrier with [`crate::components::hidden::HiddenComponent`] instead.
+/// Present for the duration of a harvest trip, whatever the carrier's declared
+/// presence: whether it can be seen while it works is
+/// [`crate::components::hidden::HiddenComponent`]'s answer, not this one's.
 #[derive(Component, Debug, Default)]
 pub struct HarvestingComponent;
 
@@ -41,7 +47,8 @@ pub struct HarvestComponent {
     pub progress: u32,
     /// The source currently being worked, if a trip is in progress.
     pub harvesting: Option<SimulationId>,
-    /// The last source worked; harvesting resumes here after a delivery.
+    /// The source this order settled on, kept across deliveries so the carrier
+    /// returns to it instead of searching again.
     pub source: Option<SimulationId>,
     /// Set once at least one trip has completed for this order; a storage-targeted
     /// order delivers the current load first, then keeps harvesting.

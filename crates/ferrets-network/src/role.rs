@@ -17,6 +17,9 @@ pub enum Role {
 impl Role {
     /// Whether a node in this role forwards other players' frames.
     pub fn relays(self) -> bool {
-        matches!(self, Self::Peer | Self::Host)
+        match self {
+            Self::Peer | Self::Host => true,
+            Self::Client => false,
+        }
     }
 }

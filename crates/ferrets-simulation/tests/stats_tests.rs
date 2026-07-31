@@ -65,10 +65,11 @@ fn negative_percent_is_debuff() {
 
 #[test]
 fn effective_clamps_at_zero() {
-    // (10 - 20) clamps up to 0 rather than going negative.
-    let mut store = store(StatId::MAX_HEALTH, 10.0);
-    store.recompute(&[flat(StatId::MAX_HEALTH, -20.0)]);
-    assert_eq!(store.effective(StatId::MAX_HEALTH), Some(FixedU64::ZERO));
+    // (10 - 20) clamps up to 0 rather than going negative. Read on an unfloored
+    // stat, so the clamp is what the result shows.
+    let mut store = store(StatId::DAMAGE, 10.0);
+    store.recompute(&[flat(StatId::DAMAGE, -20.0)]);
+    assert_eq!(store.effective(StatId::DAMAGE), Some(FixedU64::ZERO));
 }
 
 #[test]
@@ -96,6 +97,15 @@ fn floored_stat_holds_at_its_floor() {
 }
 
 #[test]
+fn pool_ceiling_holds_at_its_floor() {
+    // Current health settles under max_health, so a debuff deep enough to zero the
+    // ceiling would be an instant kill; the floor leaves a point to stand on.
+    let mut store = store(StatId::MAX_HEALTH, 40.0);
+    store.recompute(&[percent(StatId::MAX_HEALTH, -1.0)]);
+    assert_eq!(store.effective(StatId::MAX_HEALTH), Some(FixedU64::ONE));
+}
+
+#[test]
 fn fractional_stat_is_not_raised_to_whole_number() {
     // Speed is fractional grid units per tick and authored below 1, so it carries
     // no floor — folding must leave it exactly where the modifiers put it.
@@ -119,6 +129,70 @@ fn unfloored_stat_folds_to_zero() {
     let mut store = store(StatId::ARMOR, 5.0);
     store.recompute(&[flat(StatId::ARMOR, -10.0)]);
     assert_eq!(store.effective(StatId::ARMOR), Some(FixedU64::ZERO));
+}
+
+#[test]
+fn working_reaches_hold_at_their_floor() {
+    // Every distance a capability reaches for is a stat, and none of them mean
+    // anything at zero: a reach of nothing could only be satisfied by standing
+    // inside the target's own footprint, which no solid one allows. A debuff deep
+    // enough to zero one leaves the worker able to touch what is next to it.
+    for reach in [
+        StatId::BUILD_RANGE,
+        StatId::REPAIR_RANGE,
+        StatId::HARVEST_RANGE,
+    ] {
+        let mut store = store(reach, 3.0);
+        store.recompute(&[flat(reach, -10.0)]);
+        assert_eq!(
+            store.effective(reach),
+            Some(FixedU64::ONE),
+            "{reach:?} folded past its floor"
+        );
+    }
+}
+
+#[test]
+fn harvest_range_folds_like_any_other_reach() {
+    let mut store = store(StatId::HARVEST_RANGE, 2.0);
+
+    store.recompute(&[]);
+    assert_eq!(
+        store.effective(StatId::HARVEST_RANGE),
+        Some(FixedU64::from_num(2)),
+        "an unmodified reach is what content authored"
+    );
+
+    // Whole cells, so a fractional result is what the reader truncates, not what
+    // the store rounds — `effective_as_u32` is what range checks actually consume.
+    store.recompute(&[percent(StatId::HARVEST_RANGE, 0.75)]);
+    assert_eq!(
+        store.effective(StatId::HARVEST_RANGE),
+        Some(FixedU64::from_num(3.5))
+    );
+    assert_eq!(store.effective_as_u32(StatId::HARVEST_RANGE), Some(3));
+}
+
+#[test]
+fn built_in_stats_are_registered_under_their_content_names() {
+    // Content authors reach each stat by name, so the name has to resolve to the
+    // same handle the consuming order reads.
+    let registry = ContentRegistry::default();
+
+    for (name, stat) in [
+        ("harvest_range", StatId::HARVEST_RANGE),
+        ("build_range", StatId::BUILD_RANGE),
+        ("repair_range", StatId::REPAIR_RANGE),
+        ("repair_speed", StatId::REPAIR_SPEED),
+        ("repair_cost_factor", StatId::REPAIR_COST_FACTOR),
+        ("health_regen", StatId::HEALTH_REGEN),
+    ] {
+        assert_eq!(
+            registry.stat(name),
+            Some(stat),
+            "'{name}' did not resolve to {stat:?}"
+        );
+    }
 }
 
 #[test]

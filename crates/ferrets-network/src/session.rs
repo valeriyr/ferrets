@@ -141,7 +141,8 @@ impl NetSession {
                         received.lost.push(player);
                     }
                 }
-                _ => {}
+                // The roster is fixed once the game starts; a late connect joins nothing.
+                ControlEvent::Connected(_) => {}
             }
         }
         received
@@ -333,7 +334,8 @@ fn roster_for_session(
                 .find(|info| info.slot == slot.id())
                 .and_then(|info| match info.occupant {
                     Occupant::Human { peer } => Some(peer),
-                    _ => None,
+                    // Not a human slot, so no peer answers for it here.
+                    Occupant::Open | Occupant::Ai | Occupant::Closed => None,
                 })
                 .map(Some)
                 .ok_or_else(|| {

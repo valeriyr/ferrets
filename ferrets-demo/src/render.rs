@@ -15,21 +15,30 @@ use std::{
 use bevy::prelude::*;
 
 use crate::{map, scenario::CurrentScenario, states::InGameUi};
-use ferrets_math::{fixed_uvec2::FixedUVec2, fixed_vec2::FixedVec2};
+use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2, fixed_vec2::FixedVec2};
 use ferrets_pathfinder::{nav_pos::NavPos, nav_size::NavSize};
 use ferrets_simulation::{
     components::{
+        build::{BuildComponent, UnderConstructionComponent},
+        energy::EnergyComponent,
         entity_info::EntityInfoComponent,
+        health::HealthComponent,
         hidden::HiddenComponent,
         location::LocationComponent,
+        order_queue::OrderQueueComponent,
         owner::OwnerComponent,
         rally::{RallyPointComponent, RallyTarget},
+        repair::{RepairComponent, UnderRepairComponent},
+        resource::{HarvestComponent, UnderHarvestComponent},
         skills::SkillsComponent,
+        stats::StatsComponent,
         tags::TagsComponent,
+        train::{TrainComponent, TrainQueueComponent},
     },
     content::tags,
-    content::{registry::ContentRegistry, resource::ResourceSourceDef},
+    content::{registry::ContentRegistry, resource::ResourceSourceDef, stats::StatId},
     impacts::PendingImpacts,
+    order::Order,
     selection::Selection,
     session::GameSession,
     simulation_id::SimulationId,
@@ -148,6 +157,8 @@ enum Shape {
     Hexagon,
     /// The sea fortress — an octagon with an inner keep.
     Fortress,
+    /// Support units — a disc bearing a lighter cross.
+    Cross,
     /// Main buildings and resource sources — a square.
     Square,
 }
@@ -159,6 +170,7 @@ fn shape_for(type_name: &str) -> Shape {
         "grunt" => Shape::Diamond,
         "archer" => Shape::Triangle,
         "mortar" => Shape::Pentagon,
+        "medic" => Shape::Cross,
         "ship" => Shape::Ship,
         "barracks" | "orc_barracks" => Shape::Hexagon,
         "sea_fortress" => Shape::Fortress,
@@ -265,6 +277,27 @@ pub fn attach_sprites(
                     parent.spawn((
                         Mesh2d(keep),
                         MeshMaterial2d(keep_color),
+                        Transform::from_translation(Vec3::new(0.0, 0.0, 0.1)),
+                    ));
+                });
+            }
+            Shape::Cross => {
+                // A disc with a lighter cross laid over it, so a medic reads as
+                // support at a glance rather than as another combat silhouette.
+                let arm = Vec2::new(radius * 1.1, radius * 0.36);
+                let mark = color.lighter(0.35);
+                entity.insert((
+                    Mesh2d(meshes.add(Circle::new(radius))),
+                    MeshMaterial2d(materials.add(color)),
+                    Directional,
+                ));
+                entity.with_children(|parent| {
+                    parent.spawn((
+                        Sprite::from_color(mark, arm),
+                        Transform::from_translation(Vec3::new(0.0, 0.0, 0.1)),
+                    ));
+                    parent.spawn((
+                        Sprite::from_color(mark, Vec2::new(arm.y, arm.x)),
                         Transform::from_translation(Vec3::new(0.0, 0.0, 0.1)),
                     ));
                 });
@@ -503,7 +536,14 @@ pub fn draw_shots(
         let elapsed = tick.saturating_sub(shot.emitted_on_tick) as f32 + overstep;
         let progress = (elapsed / flight as f32).clamp(0.0, 1.0);
 
-        let from = world_center(shot.origin, NavSize::ONE);
+        // Drawn from the shooter itself, so a shot from a large one leaves its middle
+        // rather than the corner cell its position names. The recorded release point
+        // is the fallback for a shooter that has since died or gone dark.
+        let from = targets
+            .iter()
+            .find(|(info, _)| info.id() == shot.attacker)
+            .map(|(_, transform)| transform.translation)
+            .unwrap_or_else(|| world_center(shot.origin, NavSize::ONE));
         // Every shot is aimed at an entity, and the damage follows that entity
         // wherever it moves, so the shot is drawn heading there. The committed point
         // is the fallback for a target that is gone or out of sight — and, once a
@@ -832,5 +872,298 @@ fn ghost_shape(type_name: &str, size: NavSize) -> GhostShape {
         _ => GhostShape::Rect {
             extent: Vec2::new(size.width as f32, size.height as f32) * CELL_PX * 0.85,
         },
+    }
+}
+
+// Colors of the always-on work visualization, one hue per verb — shared by the
+// worker links, the job markers, and the construction progress bar so the same
+// work reads the same everywhere.
+const BUILD_WORK_COLOR: Color = Color::srgb(0.35, 0.55, 1.0);
+const HARVEST_WORK_COLOR: Color = Color::srgb(0.85, 0.7, 0.2);
+const REPAIR_WORK_COLOR: Color = Color::srgb(0.9, 0.5, 0.9);
+const TRAIN_WORK_COLOR: Color = Color::srgb(0.3, 0.9, 0.9);
+/// A repairer that cannot pay for this tick's work.
+const STALLED_WORK_COLOR: Color = Color::srgb(1.0, 0.3, 0.25);
+
+/// Draws a line from every visible worker to the job it is actively on — a site
+/// being raised, a source being worked, or a patient being mended — so who is
+/// doing what reads at a glance without the debug overlay (run in `Update`).
+///
+/// Walking toward a job draws nothing: the link appears when the work does. A
+/// repairer that cannot pay for its work shows its link in the stalled color.
+pub fn draw_work_links(
+    mut gizmos: Gizmos,
+    registry: Res<ContentRegistry>,
+    // Anchored on the interpolated transforms rather than the stepped sim
+    // positions, so the lines glide with the sprites they connect.
+    workers: Query<
+        (
+            &Transform,
+            &OrderQueueComponent,
+            &Visibility,
+            Option<&HarvestComponent>,
+            Option<&BuildComponent>,
+            Option<&RepairComponent>,
+        ),
+        Without<HiddenComponent>,
+    >,
+    targets: Query<(&EntityInfoComponent, &Transform), Without<HiddenComponent>>,
+) {
+    let entity_center = |id: SimulationId| {
+        targets
+            .iter()
+            .find(|(info, _)| info.id() == id)
+            .map(|(_, transform)| transform.translation.truncate())
+    };
+
+    for (transform, queue, visibility, harvest, build, repair) in &workers {
+        if matches!(visibility, Visibility::Hidden) {
+            continue;
+        }
+        let Some(entry) = queue.0.front() else {
+            continue;
+        };
+        let (end, color) = match &entry.order {
+            Order::Build {
+                type_name,
+                position,
+            } => {
+                if build.is_none_or(|build| build.building.is_none()) {
+                    continue;
+                }
+                let size = registry
+                    .entity(type_name)
+                    .and_then(|def| def.location)
+                    .map_or(NavSize::ONE, |location| location.size());
+                (
+                    Some(world_center(FixedUVec2::from(NavPos::from(*position)), size).truncate()),
+                    BUILD_WORK_COLOR,
+                )
+            }
+            Order::Harvest { .. } => {
+                let Some(source) = harvest.and_then(|harvest| harvest.harvesting) else {
+                    continue;
+                };
+                (entity_center(source), HARVEST_WORK_COLOR)
+            }
+            Order::Repair { target } => {
+                let Some(repair) = repair else {
+                    continue;
+                };
+                let color = if repair.stalled > 0 {
+                    STALLED_WORK_COLOR
+                } else {
+                    REPAIR_WORK_COLOR
+                };
+                (entity_center(*target), color)
+            }
+            Order::Move { .. }
+            | Order::Attack { .. }
+            | Order::AttackMove { .. }
+            | Order::Patrol { .. }
+            | Order::Follow { .. }
+            | Order::Guard { .. }
+            | Order::Train
+            | Order::Die => continue,
+        };
+        let Some(end) = end else {
+            continue;
+        };
+        let start = transform.translation.truncate();
+        gizmos.line_2d(start, end, color);
+        gizmos.circle_2d(end, CELL_PX * 0.18, color);
+    }
+}
+
+/// Marks the jobs themselves: a ring in the verb's color around a source being
+/// worked or an entity being mended, and a dot per crew member above it, so a
+/// stacked crew is countable at a glance (run in `Update`). An unfinished site
+/// shows its crew dots too; its own state is the translucent shape (see
+/// [`tint_under_construction`]) and the progress bar (see [`draw_status_bars`]).
+pub fn draw_work_markers(
+    mut gizmos: Gizmos,
+    registry: Res<ContentRegistry>,
+    // Anchored on the interpolated transforms, so a ring follows a walking
+    // patient instead of stepping cell to cell behind it.
+    jobs: Query<
+        (
+            &EntityInfoComponent,
+            &Transform,
+            &Visibility,
+            Option<&UnderHarvestComponent>,
+            Option<&UnderRepairComponent>,
+            Option<&UnderConstructionComponent>,
+        ),
+        Without<HiddenComponent>,
+    >,
+) {
+    for (info, transform, visibility, harvest, repair, construction) in &jobs {
+        if matches!(visibility, Visibility::Hidden) {
+            continue;
+        }
+        if harvest.is_none() && repair.is_none() && construction.is_none() {
+            continue;
+        }
+        let size = registry.def(info.type_id()).location.unwrap().size();
+        let center = transform.translation.truncate();
+        let radius = size.width.max(size.height) as f32 * CELL_PX * 0.55;
+
+        let mut crew = 0;
+        if let Some(harvest) = harvest {
+            gizmos.circle_2d(center, radius, HARVEST_WORK_COLOR);
+            crew += harvest.carriers.len();
+        }
+        if let Some(repair) = repair {
+            gizmos.circle_2d(center, radius + 2.0, REPAIR_WORK_COLOR);
+            crew += repair.repairers.len();
+        }
+        if let Some(construction) = construction {
+            crew += construction.builders.len();
+        }
+
+        let top = center.y + size.height as f32 * CELL_PX / 2.0 + 13.0;
+        let gap = 7.0;
+        let left = center.x - crew.saturating_sub(1) as f32 * gap / 2.0;
+        for i in 0..crew {
+            gizmos.circle_2d(
+                Vec2::new(left + i as f32 * gap, top),
+                2.5,
+                Color::srgb(0.95, 0.95, 0.98),
+            );
+        }
+    }
+}
+
+/// Draws slim bars over entities — energy, then health, then construction
+/// progress while a site goes up, then training progress with a dot per queued
+/// unit — for whichever of those the entity has (run in `Update`). Whatever fog
+/// or hiding keeps off screen stays bare.
+pub fn draw_status_bars(
+    mut gizmos: Gizmos,
+    registry: Res<ContentRegistry>,
+    // Anchored on the interpolated transforms, so the bars glide with the
+    // sprites they sit over.
+    query: Query<
+        (
+            &EntityInfoComponent,
+            &Transform,
+            &Visibility,
+            Option<&HealthComponent>,
+            Option<&StatsComponent>,
+            Option<&EnergyComponent>,
+            Option<&UnderConstructionComponent>,
+            Option<&TrainQueueComponent>,
+            Option<&TrainComponent>,
+        ),
+        Without<HiddenComponent>,
+    >,
+) {
+    for (info, transform, visibility, health, stats, energy, construction, queue, train) in &query {
+        if matches!(visibility, Visibility::Hidden) {
+            continue;
+        }
+        let def = registry.def(info.type_id());
+        let size = def.location.unwrap().size();
+        let center = transform.translation.truncate();
+        let half_width = size.width as f32 * CELL_PX * 0.4;
+        let mut y = center.y + size.height as f32 * CELL_PX / 2.0 + 4.0;
+
+        let bar = |gizmos: &mut Gizmos, fraction: f32, color: Color, y: f32| {
+            let left = Vec2::new(center.x - half_width, y);
+            let right = Vec2::new(center.x + half_width, y);
+            let fill = left.lerp(right, fraction.clamp(0.0, 1.0));
+            // Two rows of lines stand in for a filled rect (gizmos have no fill).
+            for row in [0.0, 1.0] {
+                let offset = Vec2::new(0.0, row);
+                gizmos.line_2d(
+                    left + offset,
+                    right + offset,
+                    Color::srgba(0.0, 0.0, 0.0, 0.7),
+                );
+                if fraction > 0.0 {
+                    gizmos.line_2d(left + offset, fill + offset, color);
+                }
+            }
+        };
+
+        if let (Some(energy), Some(stats)) = (energy, stats)
+            && let Some(max) = stats.effective(StatId::MAX_ENERGY)
+            && max > FixedU64::ZERO
+        {
+            let fraction = (energy.current().to_num::<f32>() / max.to_num::<f32>()).min(1.0);
+            bar(&mut gizmos, fraction, Color::srgb(0.45, 0.5, 1.0), y);
+            y += 4.0;
+        }
+
+        if let (Some(health), Some(stats)) = (health, stats)
+            && let Some(max) = stats.effective(StatId::MAX_HEALTH)
+            && max > FixedU64::ZERO
+        {
+            let fraction = (health.current().to_num::<f32>() / max.to_num::<f32>()).min(1.0);
+            let color = Color::srgb(1.0 - fraction * 0.75, 0.15 + fraction * 0.75, 0.2);
+            bar(&mut gizmos, fraction, color, y);
+            y += 4.0;
+        }
+
+        if let Some(construction) = construction {
+            let time = def.build_time.unwrap_or(1).max(1);
+            let fraction = construction.progress as f32 / time as f32;
+            bar(&mut gizmos, fraction, BUILD_WORK_COLOR, y);
+            y += 4.0;
+        }
+
+        if let Some(front) = queue.and_then(|queue| queue.0.front()) {
+            let time = registry
+                .entity(front)
+                .and_then(|def| def.train_time)
+                .unwrap_or(1)
+                .max(1);
+            let progress = train.map_or(0, |train| train.progress);
+            bar(
+                &mut gizmos,
+                progress as f32 / time as f32,
+                TRAIN_WORK_COLOR,
+                y,
+            );
+
+            // A dot per queued unit above the bar, so the queue depth reads at
+            // the trainer without selecting it.
+            let queued = queue.map_or(0, |queue| queue.0.len());
+            let gap = 7.0;
+            let left = center.x - queued.saturating_sub(1) as f32 * gap / 2.0;
+            for i in 0..queued {
+                gizmos.circle_2d(
+                    Vec2::new(left + i as f32 * gap, y + 5.0),
+                    2.5,
+                    TRAIN_WORK_COLOR,
+                );
+            }
+        }
+    }
+}
+
+/// Fades a site to translucent while it is under construction and back to solid
+/// when it finishes, so an unfinished building reads as one (run in `Update`).
+pub fn tint_under_construction(
+    mut materials: ResMut<Assets<ColorMaterial>>,
+    query: Query<
+        (
+            &MeshMaterial2d<ColorMaterial>,
+            Has<UnderConstructionComponent>,
+        ),
+        With<Renderable>,
+    >,
+) {
+    for (material, under_construction) in &query {
+        let alpha = if under_construction { 0.45 } else { 1.0 };
+        // Read first, write only on a change: `get_mut` alone would mark every
+        // material dirty every frame.
+        if materials
+            .get(&material.0)
+            .is_some_and(|m| m.color.alpha() != alpha)
+            && let Some(material) = materials.get_mut(&material.0)
+        {
+            material.color.set_alpha(alpha);
+        }
     }
 }

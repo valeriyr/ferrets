@@ -10,6 +10,7 @@ use super::entity_type_def::{EntityTypeDef, EntityTypeId};
 use crate::content::{
     buffs::{BuffDef, BuffId},
     projectile::{ProjectileDef, ProjectileId},
+    repair::RepairCost,
     skills::{SkillDef, SkillId},
     stats::{BUILTIN_STATS, StatId},
     tags,
@@ -101,6 +102,9 @@ impl ContentRegistry {
         self.validate_stats(&def);
         self.validate_skills(&def);
         self.validate_delivery(&def);
+        self.validate_repair(&def);
+        self.validate_build(&def);
+        self.validate_harvest(&def);
 
         let id = EntityTypeId::from_index(self.defs.len());
         self.defs_by_name.insert(def.name.clone(), id);
@@ -494,7 +498,12 @@ impl ContentRegistry {
     /// Content's own custom stats are engine-transparent and not checked here.
     fn validate_stats(&self, def: &EntityTypeDef) {
         // Declaring any of these at zero says nothing an omitted stat would not.
-        for stat in [StatId::MAX_HEALTH, StatId::SPEED, StatId::MAX_ENERGY] {
+        for stat in [
+            StatId::MAX_HEALTH,
+            StatId::SPEED,
+            StatId::MAX_ENERGY,
+            StatId::REPAIR_SPEED,
+        ] {
             if let Some(value) = def.base_stat(stat) {
                 assert!(
                     value > FixedU64::ZERO,
@@ -540,6 +549,23 @@ impl ContentRegistry {
             }
         }
 
+        // A regeneration rate is read through the pool it refills, so one declared
+        // without that pool is content that can never take effect.
+        for (regen, pool) in [
+            (StatId::HEALTH_REGEN, StatId::MAX_HEALTH),
+            (StatId::ENERGY_REGEN, StatId::MAX_ENERGY),
+        ] {
+            if def.base_stat(regen).is_some() {
+                assert!(
+                    def.base_stat(pool).is_some(),
+                    "entity type '{}' declares {} without {}",
+                    def.name,
+                    BUILTIN_STATS[regen.index()].name,
+                    BUILTIN_STATS[pool.index()].name,
+                );
+            }
+        }
+
         if let (Some(period), Some(damage_point)) = (
             def.base_stat(StatId::ATTACK_PERIOD),
             def.base_stat(StatId::DAMAGE_POINT),
@@ -549,6 +575,127 @@ impl ContentRegistry {
                 "entity type '{}' has a damage_point beyond its attack_period",
                 def.name
             );
+        }
+    }
+
+    /// Checks that a build capability carries the reach the order reads, and that the
+    /// stat is not declared by something that cannot build.
+    fn validate_build(&self, def: &EntityTypeDef) {
+        if def.base_stat(StatId::BUILD_RANGE).is_some() {
+            assert!(
+                def.builder.is_some(),
+                "entity type '{}' declares build_range but cannot build",
+                def.name
+            );
+        }
+        if def.builder.is_some() {
+            assert!(
+                def.base_stat(StatId::BUILD_RANGE).is_some(),
+                "entity type '{}' can build but is missing build_range",
+                def.name
+            );
+        }
+    }
+
+    /// Checks that a carrying capability carries the reach the order reads, and that
+    /// the stat is not declared by something that cannot carry.
+    fn validate_harvest(&self, def: &EntityTypeDef) {
+        if def.base_stat(StatId::HARVEST_RANGE).is_some() {
+            assert!(
+                def.resource_carrier.is_some(),
+                "entity type '{}' declares harvest_range but cannot carry resources",
+                def.name
+            );
+        }
+        if def.resource_carrier.is_some() {
+            assert!(
+                def.base_stat(StatId::HARVEST_RANGE).is_some(),
+                "entity type '{}' can carry resources but is missing harvest_range",
+                def.name
+            );
+        }
+    }
+
+    /// Checks that a repair capability is complete and that the terms it names —
+    /// mended tags, charged resources, and the target's own repair scale — resolve.
+    fn validate_repair(&self, def: &EntityTypeDef) {
+        // Both repair stats are read only through a repair capability, so either one
+        // alone is content that can never take effect.
+        for stat in [
+            StatId::REPAIR_SPEED,
+            StatId::REPAIR_COST_FACTOR,
+            StatId::REPAIR_RANGE,
+        ] {
+            if def.base_stat(stat).is_some() {
+                assert!(
+                    def.can_repair(),
+                    "entity type '{}' declares {} but cannot repair",
+                    def.name,
+                    BUILTIN_STATS[stat.index()].name,
+                );
+            }
+        }
+
+        if let Some(ratio) = def.repair_ratio {
+            assert!(
+                ratio > FixedU64::ZERO,
+                "entity type '{}' has a non-positive repair_ratio",
+                def.name
+            );
+            assert!(
+                def.production_time().is_some(),
+                "entity type '{}' has a repair_ratio but no build_time or train_time \
+                 to scale it against",
+                def.name
+            );
+        }
+
+        let Some(repairer) = def.repairer.as_ref() else {
+            return;
+        };
+
+        for stat in [StatId::REPAIR_SPEED, StatId::REPAIR_RANGE] {
+            assert!(
+                def.base_stat(stat).is_some(),
+                "entity type '{}' can repair but is missing {}",
+                def.name,
+                BUILTIN_STATS[stat.index()].name,
+            );
+        }
+        for tag in repairer.repairs() {
+            assert!(
+                self.has_tag(tag),
+                "entity type '{}' repairs unregistered tag '{tag}'",
+                def.name
+            );
+        }
+        match repairer.cost() {
+            RepairCost::Free => {}
+            // The factor is what turns a target's price into a repair bill, and it is
+            // a stat so that an upgrade can move it.
+            RepairCost::ProRata => assert!(
+                def.base_stat(StatId::REPAIR_COST_FACTOR).is_some(),
+                "entity type '{}' charges pro-rata repair but is missing \
+                 repair_cost_factor",
+                def.name
+            ),
+            RepairCost::PerTick(cost) => {
+                for kind in cost.keys() {
+                    assert!(
+                        self.has_resource(kind),
+                        "entity type '{}' charges unregistered resource kind '{kind}' \
+                         for repair",
+                        def.name
+                    );
+                }
+            }
+            // Spending from a pool the type does not have would make the work free.
+            RepairCost::Energy(_) => assert!(
+                def.has_energy(),
+                "entity type '{}' pays for repair with energy but has no max_energy \
+                 stat",
+                def.name
+            ),
         }
     }
 

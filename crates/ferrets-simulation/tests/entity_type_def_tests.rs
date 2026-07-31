@@ -7,7 +7,9 @@ use ferrets_simulation::content::{
     dying::DyingDef,
     entity_type_def::EntityTypeDef,
     location::Solidity,
-    resource::{DepletionPolicy, HarvestData, HarvestVisibility},
+    resource::{DepletionPolicy, HarvestData},
+    stats::StatId,
+    work::WorkPresence,
 };
 
 //
@@ -26,9 +28,10 @@ fn fully_loaded_definition_is_valid() {
         .with_train_time(4)
         .with_build_time(6)
         .with_trainer(["footman"])
-        .with_builder(["depot"])
+        .with_stat(StatId::BUILD_RANGE, FixedU64::ONE)
+        .with_builder(["depot"], WorkPresence::Hidden)
         .with_resource_source("gold", DepletionPolicy::Destroy)
-        .with_resource_carrier([("gold", HarvestData::new(5, 2, HarvestVisibility::Hidden))])
+        .with_resource_carrier([("gold", HarvestData::new(5, 2, WorkPresence::Hidden))])
         .with_resource_storage(["gold"]);
 
     assert_eq!(def.name, "factotum");
@@ -118,13 +121,13 @@ fn empty_trains_entry_panics() {
 #[test]
 #[should_panic(expected = "builds must not be empty")]
 fn empty_builds_list_panics() {
-    footman().with_builder(Vec::<String>::new());
+    footman().with_builder(Vec::<String>::new(), WorkPresence::Hidden);
 }
 
 #[test]
 #[should_panic(expected = "constructed type names must not be empty")]
 fn empty_builds_entry_panics() {
-    footman().with_builder([""]);
+    footman().with_builder([""], WorkPresence::Hidden);
 }
 
 //
@@ -140,13 +143,13 @@ fn empty_source_kind_panics() {
 #[test]
 #[should_panic(expected = "harvest_time must be greater than 0")]
 fn zero_harvest_time_panics() {
-    HarvestData::new(5, 0, HarvestVisibility::Visible);
+    HarvestData::new(5, 0, WorkPresence::Present);
 }
 
 #[test]
 #[should_panic(expected = "capacity must be greater than 0")]
 fn zero_carry_capacity_panics() {
-    HarvestData::new(0, 2, HarvestVisibility::Visible);
+    HarvestData::new(0, 2, WorkPresence::Present);
 }
 
 #[test]
@@ -158,7 +161,7 @@ fn empty_carries_list_panics() {
 #[test]
 #[should_panic(expected = "carried resource kinds must not be empty")]
 fn empty_carry_kind_panics() {
-    footman().with_resource_carrier([("", HarvestData::new(5, 2, HarvestVisibility::Visible))]);
+    footman().with_resource_carrier([("", HarvestData::new(5, 2, WorkPresence::Present))]);
 }
 
 #[test]

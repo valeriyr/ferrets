@@ -187,6 +187,10 @@ pub fn run() {
                     render::draw_shots,
                     render::draw_facing,
                     render::draw_rally,
+                    render::draw_work_links,
+                    render::draw_work_markers,
+                    render::draw_status_bars,
+                    render::tint_under_construction,
                 )
                     .chain(),
             )

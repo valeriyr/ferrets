@@ -93,21 +93,18 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
         return Processing::state(OrderState::Finished);
     };
 
-    // A named entity must still be reachable and is chased wherever it goes; a cell
-    // is simply where it was aimed, and needs no such check.
-    let (target, target_position) = match target_aim {
+    // A named entity must still be reachable and is chased, measured and faced by
+    // its whole footprint wherever it goes; a cell is simply where it was aimed, has
+    // no footprint of its own, and needs no such check.
+    let (target, target_position, target_size) = match target_aim {
         AttackTarget::Entity(id) => {
             let Some(target) = world.resource::<EntityIndex>().interactable(world, id) else {
                 return Processing::state(OrderState::Finished);
             };
-            let at = world
-                .entity(target)
-                .get::<LocationComponent>()
-                .unwrap()
-                .position;
-            (Some(target), at)
+            let (at, size) = entity_def::footprint(world, target);
+            (Some(target), at, size)
         }
-        AttackTarget::Position(cell) => (None, cell),
+        AttackTarget::Position(cell) => (None, cell, NavSize::ONE),
     };
 
     let position = world
@@ -131,9 +128,6 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
         .min(attack_period);
 
     if let Some(leash) = order.attack_leash() {
-        let target_size = target
-            .map(|target| entity_def::of(world, target).location.unwrap().size())
-            .unwrap_or(NavSize::ONE);
         // Footprint-based like every range check, so leashes measure the same
         // distances acquisition did.
         if !astar::in_range_of_rect(
@@ -147,7 +141,6 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
         }
     }
 
-    // A named entity is closed on by its footprint; a bare cell has none.
     let destination = match target {
         Some(target) => chase::advance_to_entity(
             &mut attack_component.last_chase,
@@ -161,7 +154,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
             world.resource::<Map>().projection(),
             position,
             target_position,
-            NavSize::ONE,
+            target_size,
             range,
         ),
     };
@@ -176,7 +169,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
         Destination::Arrived => {}
     }
 
-    chase::face(world, entity, target_position);
+    chase::face(world, entity, target_position, target_size);
 
     attack_component.phase += 1;
 

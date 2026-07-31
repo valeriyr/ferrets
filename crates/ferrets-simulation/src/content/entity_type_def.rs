@@ -12,6 +12,7 @@ use crate::{
         dying::DyingDef,
         location::{LocationDef, Solidity},
         projectile::ProjectileId,
+        repair::{RepairCost, RepairRate, RepairerDef},
         resource::{
             DepletionPolicy, HarvestData, ResourceCarrierDef, ResourceSourceDef, ResourceStorageDef,
         },
@@ -20,6 +21,7 @@ use crate::{
         splash::{SplashDef, SplashShape},
         stats::StatId,
         train::TrainerDef,
+        work::WorkPresence,
     },
     resources::{self, Cost},
 };
@@ -96,6 +98,12 @@ pub struct EntityTypeDef {
     pub trainer: Option<TrainerDef>,
     /// The entity types instances can construct. `None` means instances cannot build.
     pub builder: Option<BuilderDef>,
+    /// What instances can mend, and on what terms. `None` means instances cannot
+    /// repair.
+    pub repairer: Option<RepairerDef>,
+    /// Multiplier on this type's own production time, giving the time one worker at
+    /// `repair_speed` of `1` takes to restore a full pool. `None` reads as `1`.
+    pub repair_ratio: Option<FixedU64>,
     /// Resource-source properties. `None` means the entity is not a resource source.
     /// The remaining resource amount is per-instance state, set after spawning.
     pub resource_source: Option<ResourceSourceDef>,
@@ -131,6 +139,8 @@ impl EntityTypeDef {
             build_time: None,
             trainer: None,
             builder: None,
+            repairer: None,
+            repair_ratio: None,
             resource_source: None,
             resource_carrier: None,
             resource_storage: None,
@@ -180,6 +190,24 @@ impl EntityTypeDef {
     /// Whether instances have an energy pool: they carry the [`StatId::MAX_ENERGY`] stat.
     pub fn has_energy(&self) -> bool {
         self.base_stats.contains_key(&StatId::MAX_ENERGY)
+    }
+
+    /// Whether instances can mend other entities.
+    pub fn can_repair(&self) -> bool {
+        self.repairer.is_some()
+    }
+
+    /// Ticks to produce one instance, however it is produced. `None` means nothing
+    /// produces the type, which also leaves repair no rate to work from.
+    pub fn production_time(&self) -> Option<u32> {
+        self.build_time.or(self.train_time)
+    }
+
+    /// Whether instances can be mended at a rate paced against production. A type
+    /// nothing produces gives that pacing nothing to work from; a mender working at
+    /// a flat rate does not care.
+    pub fn is_production_repairable(&self) -> bool {
+        self.is_damageable() && self.production_time().is_some()
     }
 
     /// Assigns this type to a race, by registered race name. Race-neutral types
@@ -407,11 +435,49 @@ impl EntityTypeDef {
         self
     }
 
-    /// Allows instances of this type to construct buildings of the `builds` types.
+    /// Allows instances of this type to construct buildings of the `builds` types,
+    /// attending the site as `presence` describes.
     ///
     /// Panics if `builds` is empty or any entry is empty.
-    pub fn with_builder(mut self, builds: impl IntoIterator<Item = impl Into<String>>) -> Self {
-        self.builder = Some(BuilderDef::new(builds));
+    pub fn with_builder(
+        mut self,
+        builds: impl IntoIterator<Item = impl Into<String>>,
+        presence: WorkPresence,
+    ) -> Self {
+        self.builder = Some(BuilderDef::new(builds, presence));
+        self
+    }
+
+    /// Allows instances of this type to mend targets carrying the `repairs` tags,
+    /// on the given terms.
+    ///
+    /// Panics if `repairs` is empty or any entry is empty.
+    pub fn with_repairer(
+        mut self,
+        repairs: impl IntoIterator<Item = impl Into<String>>,
+        rate: RepairRate,
+        presence: WorkPresence,
+        self_repair: bool,
+        cost: RepairCost,
+        patience: Option<u32>,
+    ) -> Self {
+        self.repairer = Some(RepairerDef::new(
+            repairs,
+            rate,
+            presence,
+            self_repair,
+            cost,
+            patience,
+        ));
+        self
+    }
+
+    /// Sets how long mending this type takes, relative to producing one.
+    ///
+    /// Panics if `ratio` is not positive.
+    pub fn with_repair_ratio(mut self, ratio: FixedU64) -> Self {
+        assert!(ratio > FixedU64::ZERO, "repair_ratio must be positive");
+        self.repair_ratio = Some(ratio);
         self
     }
 

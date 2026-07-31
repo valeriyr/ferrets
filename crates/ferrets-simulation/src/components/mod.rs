@@ -21,6 +21,7 @@ pub mod owner;
 pub mod patrol;
 pub mod pending_reveal;
 pub mod rally;
+pub mod repair;
 pub mod resource;
 pub mod skills;
 pub mod stance;

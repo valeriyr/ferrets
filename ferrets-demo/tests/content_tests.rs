@@ -5,6 +5,7 @@ use ferrets_demo::content::CONTENT;
 use ferrets_demo::map;
 use ferrets_pathfinder::nav_pos::NavPos;
 use ferrets_script::{content, engine::lua::LuaEngine};
+use ferrets_simulation::content::work::WorkPresence;
 use ferrets_simulation::map::Map;
 
 #[test]
@@ -30,6 +31,51 @@ fn content_loads_and_validates() {
     assert!(registry.has_race("human") && registry.has_race("orc"));
     assert!(registry.has_layer(map::GROUND) && registry.has_layer(map::WATER));
     assert!(registry.has_terrain("grass") && registry.has_terrain("water"));
+}
+
+#[test]
+fn worker_presences_cover_every_variant_and_differ_by_race() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+
+    let presences = |name: &str| {
+        let def = registry.entity(name).expect("worker is registered");
+        let carrier = def
+            .resource_carrier
+            .as_ref()
+            .expect("workers carry resources");
+        vec![
+            def.builder.as_ref().expect("workers build").presence(),
+            def.repairer.as_ref().expect("workers mend").presence(),
+            carrier
+                .harvest_data("wood")
+                .expect("workers chop")
+                .presence(),
+            carrier
+                .harvest_data("gold")
+                .expect("workers mine")
+                .presence(),
+        ]
+    };
+
+    let peasant = presences("peasant");
+    let peon = presences("peon");
+
+    // Every variant has to be reachable in play, or one of them can only ever be
+    // exercised by the test suite.
+    for variant in [
+        WorkPresence::Hidden,
+        WorkPresence::Present,
+        WorkPresence::PresentStacking,
+    ] {
+        assert!(
+            peasant.contains(&variant) || peon.contains(&variant),
+            "no demo worker declares {variant:?}, so it cannot be tried in the game"
+        );
+    }
+    assert_ne!(
+        peasant, peon,
+        "the two races are meant to attend their work differently"
+    );
 }
 
 #[test]
