@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/title.svg" alt="ferrets" width="280" />
+<img src="docs/title.svg" alt="ferrets" width="180" />
 
 **Ferrets out every last desync.**
 
