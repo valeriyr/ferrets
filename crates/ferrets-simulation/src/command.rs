@@ -25,6 +25,17 @@ pub enum SelectMode {
     Remove,
 }
 
+/// Who performs a cast: the issuing player itself, or one of its entities.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SkillCasterRef {
+    /// The issuing player casts; its identity comes from the input frame that
+    /// carried the command, never from the payload.
+    Player,
+    /// The given entity casts. It must be owned by the issuing player and its
+    /// type must declare the skill.
+    Entity(SimulationId),
+}
+
 /// A player command.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PlayerCommand {
@@ -107,11 +118,11 @@ pub enum PlayerCommand {
         type_name: String,
         position: FixedUVec2,
     },
-    /// Uses the `skill` of the `caster` entity, on `target` when the skill needs
-    /// one (`None` for a self-targeted skill).
+    /// Casts `skill` with `caster`, on `target` when the skill needs one
+    /// (`None` for a self-targeted skill).
     UseSkill {
-        caster: SimulationId,
         skill: SkillId,
+        caster: SkillCasterRef,
         target: Option<SimulationId>,
     },
 }

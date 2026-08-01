@@ -3,27 +3,30 @@
 use bevy::prelude::*;
 use ferrets_bevy_plugin::{PendingInput, ReplayPlayback, ScenarioObjectives};
 use ferrets_simulation::{
-    command::{PlayerCommand, SelectMode},
+    command::{PlayerCommand, SelectMode, SkillCasterRef},
     components::{
-        buffs::BuffsComponent,
         energy::EnergyComponent,
+        entity_buffs::BuffsComponent,
         entity_info::EntityInfoComponent,
+        entity_skills::SkillsComponent,
+        entity_stats::StatsComponent,
         health::HealthComponent,
         owner::OwnerComponent,
         resource::{ResourceCarrierComponent, ResourceSourceComponent},
         stance::StanceComponent,
-        stats::StatsComponent,
     },
+    content::entity_stats::EntityStatId,
     content::registry::ContentRegistry,
-    content::skills::SkillId,
-    content::stats::StatId,
+    content::skills::{EntityCastTarget, SkillCaster, SkillId},
     control_groups::{CONTROL_GROUP_COUNT, ControlGroups},
+    player_skills::PlayerSkills,
     resources::PlayerResources,
     selection::Selection,
     session::{GameResult, GameSession},
+    supply,
 };
 
-use crate::input::{InputMode, Primary};
+use crate::input::{InputMode, Primary, TargetedOrder};
 use crate::states::{GameState, InGameUi};
 
 const BUTTON_NORMAL: Color = Color::srgb(0.20, 0.20, 0.24);
@@ -35,9 +38,16 @@ const BUILD_HOVERED: Color = Color::srgb(0.24, 0.32, 0.44);
 // Skill buttons get a warm violet tint so abilities read apart from train/build.
 const SKILL_NORMAL: Color = Color::srgb(0.26, 0.18, 0.30);
 const SKILL_HOVERED: Color = Color::srgb(0.38, 0.26, 0.44);
+// The supply readout turns red the moment there is no headroom left.
+const SUPPLY_NORMAL: Color = Color::srgb(0.85, 0.9, 0.85);
+const SUPPLY_BLOCKED: Color = Color::srgb(1.0, 0.35, 0.3);
 
 #[derive(Component)]
 pub struct ResourceText;
+
+/// The supply readout, red while training is supply-blocked.
+#[derive(Component)]
+pub struct SupplyText;
 
 #[derive(Component)]
 pub struct HelpText;
@@ -80,6 +90,13 @@ pub struct BuildButton {
 
 /// A command-card button that casts a skill on the selection.
 #[derive(Component)]
+pub struct PlayerSkillButton {
+    /// The player-cast skill this button casts.
+    skill: SkillId,
+}
+
+/// A command-card button that casts a skill on the selection.
+#[derive(Component)]
 pub struct SkillButton {
     /// The skill this button casts.
     skill: SkillId,
@@ -97,7 +114,29 @@ pub struct GroupButton {
 }
 
 /// Spawns the HUD text nodes.
-pub fn setup_hud(mut commands: Commands) {
+pub fn setup_hud(mut commands: Commands, registry: Res<ContentRegistry>) {
+    // The player-cast rallying call: one persistent button atop the bottom-left
+    // control cluster (help line, command card, group roster), clear of the
+    // leave button in the opposite corner.
+    if let Some(war_drums) = registry.skill("war_drums") {
+        commands
+            .spawn((
+                InGameUi,
+                Node {
+                    position_type: PositionType::Absolute,
+                    bottom: Val::Px(98.0),
+                    left: Val::Px(10.0),
+                    ..default()
+                },
+            ))
+            .with_children(|parent| {
+                parent.spawn((
+                    PlayerSkillButton { skill: war_drums },
+                    card_button("War Drums", SKILL_NORMAL),
+                ));
+            });
+    }
+
     commands.spawn((
         InGameUi,
         ResourceText,
@@ -110,6 +149,22 @@ pub fn setup_hud(mut commands: Commands) {
         Node {
             position_type: PositionType::Absolute,
             top: Val::Px(8.0),
+            left: Val::Px(10.0),
+            ..default()
+        },
+    ));
+    commands.spawn((
+        InGameUi,
+        SupplyText,
+        Text::new("Supply: 0/0"),
+        TextFont {
+            font_size: 18.0,
+            ..default()
+        },
+        TextColor(SUPPLY_NORMAL),
+        Node {
+            position_type: PositionType::Absolute,
+            top: Val::Px(34.0),
             left: Val::Px(10.0),
             ..default()
         },
@@ -146,7 +201,8 @@ pub fn setup_hud(mut commands: Commands) {
             ..default()
         },
     ));
-    // Scenario objectives, top-left below the resource bar. Empty (and invisible)
+    // Scenario objectives, top-left — dropped well below the resource bar and
+    // debug readout so the checklist reads as its own block. Empty (and invisible)
     // outside a scripted mission.
     commands.spawn((
         InGameUi,
@@ -159,7 +215,7 @@ pub fn setup_hud(mut commands: Commands) {
         TextColor(Color::srgb(0.9, 0.95, 0.85)),
         Node {
             position_type: PositionType::Absolute,
-            top: Val::Px(80.0),
+            top: Val::Px(130.0),
             left: Val::Px(10.0),
             ..default()
         },
@@ -307,6 +363,28 @@ pub fn update_resources(
     }
 }
 
+/// Updates the supply readout with the local player's used/provided totals,
+/// turning it red while there is no headroom left (run in `Update`).
+///
+/// Exclusive, because the derived totals read entities and resources across the
+/// whole world.
+pub fn update_supply(world: &mut World) {
+    let player = world.resource::<GameSession>().local_player();
+    let provided = supply::provided(world, player).to_num::<u32>();
+    let used = supply::used(world, player).to_num::<u32>();
+
+    let mut query = world.query_filtered::<(&mut Text, &mut TextColor), With<SupplyText>>();
+    let Ok((mut text, mut color)) = query.single_mut(world) else {
+        return;
+    };
+    **text = format!("Supply: {used}/{provided}");
+    *color = TextColor(if used >= provided {
+        SUPPLY_BLOCKED
+    } else {
+        SUPPLY_NORMAL
+    });
+}
+
 /// Updates the context line with the selection's train/build options. The
 /// options only appear for the local player's own producers — a selected
 /// enemy building shows what it is, not orders it would refuse.
@@ -318,7 +396,7 @@ pub fn update_help(
     mut text: Query<&mut Text, With<HelpText>>,
 ) {
     let mut message = String::from(
-        "LMB select (Shift add, dbl-click all of type) | RMB move/harvest/attack | F/R/G/Q orders | X stance | 1-0 groups (Ctrl set) | V reveal | F1 debug | F2 spawn",
+        "LMB select (Shift add, dbl-click all of type) | RMB move/harvest/attack | F/R/G/Q orders | X stance | B war drums | 1-0 groups (Ctrl set) | V reveal | F1 debug | F2 spawn",
     );
 
     let local = session.local_player();
@@ -378,8 +456,8 @@ pub fn update_selection(
                     // The effective ceiling, so a modifier that moves max health shows in
                     // the denominator instead of leaving the reading out of step with it.
                     let max_health = stats
-                        .and_then(|stats| stats.effective(StatId::MAX_HEALTH))
-                        .or_else(|| def.base_stat(StatId::MAX_HEALTH));
+                        .and_then(|stats| stats.effective(EntityStatId::MAX_HEALTH))
+                        .or_else(|| def.base_stat(EntityStatId::MAX_HEALTH));
                     if let (Some(health), Some(max_health)) = (health, max_health) {
                         parts.push(format!(
                             "HP {}/{}",
@@ -408,7 +486,8 @@ pub fn update_selection(
                         let names: Vec<String> = buffs
                             .active()
                             .map(|(id, stacks)| {
-                                let name = pretty_name(registry.buff_name(id).unwrap_or("buff"));
+                                let name =
+                                    pretty_name(registry.entity_buff_name(id).unwrap_or("buff"));
                                 if stacks > 1 {
                                     format!("{name} x{stacks}")
                                 } else {
@@ -605,27 +684,136 @@ pub fn build_card_input(
     }
 }
 
-/// Casts the button's skill on every selected unit when clicked.
+/// Handles a click on a skill button: a self-cast fires for every selected
+/// unit at once; a targeted skill arms the click that names the target.
 pub fn skill_card_input(
     mut buttons: Query<(&Interaction, &SkillButton, &mut BackgroundColor), Changed<Interaction>>,
+    registry: Res<ContentRegistry>,
     session: Res<GameSession>,
     selection: Res<Selection>,
+    mut mode: ResMut<InputMode>,
     mut pending: ResMut<PendingInput>,
 ) {
     for (interaction, button, mut color) in &mut buttons {
         match interaction {
             Interaction::Pressed => {
-                for &caster in selection.get(session.local_player()) {
-                    pending.push(PlayerCommand::UseSkill {
-                        caster,
-                        skill: button.skill,
-                        target: None,
-                    });
+                let Some(def) = registry.skill_def(button.skill) else {
+                    continue;
+                };
+                let target = match &def.caster {
+                    SkillCaster::Entity { target, .. } => *target,
+                    SkillCaster::Player { .. } => {
+                        unreachable!("entity types declare only entity-cast skills")
+                    }
+                };
+                match target {
+                    // Self-cast: fires immediately for every selected unit that
+                    // has the skill.
+                    EntityCastTarget::Caster => {
+                        for &caster in selection.get(session.local_player()) {
+                            pending.push(PlayerCommand::UseSkill {
+                                skill: button.skill,
+                                caster: SkillCasterRef::Entity(caster),
+                                target: None,
+                            });
+                        }
+                    }
+                    // Targeted cast: arm the click that names the target.
+                    EntityCastTarget::Ally | EntityCastTarget::Enemy => {
+                        *mode = InputMode::Targeting(TargetedOrder::Skill(button.skill));
+                    }
                 }
             }
             Interaction::Hovered => *color = BackgroundColor(SKILL_HOVERED),
             Interaction::None => *color = BackgroundColor(SKILL_NORMAL),
         }
+    }
+}
+
+/// Casts its button's player skill when clicked.
+pub fn player_skill_card_input(
+    mut buttons: Query<
+        (&Interaction, &PlayerSkillButton, &mut BackgroundColor),
+        Changed<Interaction>,
+    >,
+    mut pending: ResMut<PendingInput>,
+) {
+    for (interaction, button, mut color) in &mut buttons {
+        match interaction {
+            Interaction::Pressed => {
+                pending.push(PlayerCommand::UseSkill {
+                    skill: button.skill,
+                    caster: SkillCasterRef::Player,
+                    target: None,
+                });
+            }
+            Interaction::Hovered => *color = BackgroundColor(SKILL_HOVERED),
+            Interaction::None => *color = BackgroundColor(SKILL_NORMAL),
+        }
+    }
+}
+
+/// Shows the player skill's cooldown on its button.
+pub fn update_player_skill_cooldown(
+    session: Res<GameSession>,
+    registry: Res<ContentRegistry>,
+    skills: Res<PlayerSkills>,
+    buttons: Query<(&PlayerSkillButton, &Children)>,
+    mut texts: Query<&mut Text>,
+) {
+    for (button, children) in &buttons {
+        let name = pretty_name(registry.skill_name(button.skill).unwrap_or("skill"));
+        let remaining = skills.cooldown_remaining(session.local_player(), button.skill);
+        let label = cooldown_label(name, remaining);
+        for &child in children {
+            if let Ok(mut text) = texts.get_mut(child)
+                && text.0 != label
+            {
+                text.0 = label.clone();
+            }
+        }
+    }
+}
+
+/// Shows the primary selected entity's skill cooldowns on its command-card
+/// buttons, the same way the player skill button shows its own.
+pub fn update_skill_cooldowns(
+    registry: Res<ContentRegistry>,
+    primary: Res<Primary>,
+    entities: Query<(&EntityInfoComponent, &SkillsComponent)>,
+    buttons: Query<(&SkillButton, &Children)>,
+    mut texts: Query<&mut Text>,
+) {
+    let Some(id) = primary.0 else {
+        return;
+    };
+    let Some(skills) = entities
+        .iter()
+        .find(|(info, _)| info.id() == id)
+        .map(|(_, skills)| skills)
+    else {
+        return;
+    };
+    for (button, children) in &buttons {
+        let name = pretty_name(registry.skill_name(button.skill).unwrap_or("skill"));
+        let label = cooldown_label(name, skills.cooldown_remaining(button.skill));
+        for &child in children {
+            if let Ok(mut text) = texts.get_mut(child)
+                && text.0 != label
+            {
+                text.0 = label.clone();
+            }
+        }
+    }
+}
+
+/// A skill button's label: the bare name when ready, "name (Ns)" while the
+/// cast recharges. Ticks are 20 Hz, so seconds are the remaining ticks over
+/// twenty, rounded up.
+fn cooldown_label(name: String, remaining: u32) -> String {
+    match remaining {
+        0 => name,
+        ticks => format!("{name} ({}s)", ticks.div_ceil(20)),
     }
 }
 

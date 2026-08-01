@@ -20,8 +20,8 @@ use crate::{
         },
     },
     content::{
+        entity_stats::EntityStatId,
         resource::{DepletionPolicy, ResourceCarrierDef},
-        stats::StatId,
         work::WorkPresence,
     },
     entity_def,
@@ -269,7 +269,7 @@ fn advance(
         world,
         position,
         source_entity,
-        work::reach(world, entity, StatId::HARVEST_RANGE),
+        work::reach(world, entity, EntityStatId::HARVEST_RANGE),
     ) {
         Destination::OutOfReach => return Processing::state(OrderState::Finished),
         Destination::Walk(move_order) => return Processing::suspend(move_order),

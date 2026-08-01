@@ -5,13 +5,13 @@ use bevy_ecs::world::World;
 use super::{acquire, attack_move};
 use crate::{
     components::{
+        entity_stats::StatsComponent,
         hidden::HiddenComponent,
         location::LocationComponent,
         order_queue::OrderQueueComponent,
         stance::{Stance, StanceComponent},
-        stats::StatsComponent,
     },
-    content::stats::StatId,
+    content::entity_stats::EntityStatId,
     entity_def,
     entity_index::EntityIndex,
     order::{AttackTarget, Leash, Order},
@@ -62,7 +62,7 @@ pub fn tick(world: &mut World) {
 
         let range = entity_ref
             .get::<StatsComponent>()
-            .and_then(|stats| stats.effective_as_u32(StatId::ATTACK_RANGE))
+            .and_then(|stats| stats.effective_as_u32(EntityStatId::ATTACK_RANGE))
             .expect("attackers have a range stat");
         let anchor = entity_ref.get::<LocationComponent>().unwrap().position;
 

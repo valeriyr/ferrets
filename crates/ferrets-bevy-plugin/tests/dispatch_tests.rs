@@ -9,12 +9,12 @@ use ferrets_simulation::{
     command::PlayerCommand,
     components::resource::{ResourceCarrierComponent, ResourceSourceComponent},
     content::{
+        entity_stats::EntityStatId,
         entity_type_def::EntityTypeDef,
         location::Solidity,
         registry::ContentRegistry,
         repair::{RepairCost, RepairRate},
         resource::HarvestData,
-        stats::StatId,
         work::WorkPresence,
     },
     resources::PlayerResources,
@@ -177,10 +177,10 @@ fn repair_dispatch_app() -> App {
                 .with_location(utils::GROUND, NavSize::ONE, Solidity::Solid)
                 .with_movement(FixedU64::from_num(0.5))
                 .with_health(20)
-                .with_stat(StatId::HARVEST_RANGE, FixedU64::ONE)
+                .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
                 .with_resource_carrier([("gold", HarvestData::new(5, 2, WorkPresence::Present))])
-                .with_stat(StatId::REPAIR_SPEED, FixedU64::ONE)
-                .with_stat(StatId::REPAIR_RANGE, FixedU64::ONE)
+                .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
+                .with_stat(EntityStatId::REPAIR_RANGE, FixedU64::ONE)
                 .with_repairer(
                     ["building"],
                     RepairRate::PerTick(FixedU64::from_num(5)),

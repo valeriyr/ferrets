@@ -8,7 +8,7 @@ use ferrets_bevy_plugin::{NetworkActive, PauseIntent, PendingInput};
 use ferrets_math::{FixedU64, fixed_urect::FixedURect, fixed_uvec2::FixedUVec2};
 use ferrets_pathfinder::nav_pos::NavPos;
 use ferrets_simulation::{
-    command::{PlayerCommand, SelectMode},
+    command::{PlayerCommand, SelectMode, SkillCasterRef},
     components::entity_info::EntityInfoComponent,
     components::{
         hidden::HiddenComponent,
@@ -18,6 +18,7 @@ use ferrets_simulation::{
         stance::{Stance, StanceComponent},
     },
     content::registry::ContentRegistry,
+    content::skills::SkillId,
     control_groups::ControlGroups,
     map::Map,
     order::AttackTarget,
@@ -84,6 +85,9 @@ pub enum TargetedOrder {
     /// `Q` — shell the clicked cell. Only weapons that send their shots to a cell
     /// take the order; the rest ignore it.
     AttackGround,
+    /// Armed from the command card — cast the skill on the clicked entity.
+    /// Selected units that lack the skill, and invalid targets, ignore the cast.
+    Skill(SkillId),
 }
 
 /// World-space anchor of an in-progress left-drag.
@@ -434,6 +438,8 @@ pub fn targeting_input(
     mouse: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
     registry: Res<ContentRegistry>,
+    session: Res<GameSession>,
+    selection: Res<Selection>,
     mut mode: ResMut<InputMode>,
     mut pending: ResMut<PendingInput>,
     interactions: Query<&Interaction>,
@@ -493,6 +499,22 @@ pub fn targeting_input(
                 target: AttackTarget::Position(world_to_pos(cursor)),
                 flush,
             });
+        }
+        TargetedOrder::Skill(skill) => {
+            // The cast needs an entity under the cursor; a miss keeps the mode
+            // armed so the player can click again.
+            let Some(target) =
+                world_to_cell(cursor).and_then(|cell| entity_at(cell, &registry, &entities))
+            else {
+                return;
+            };
+            for &caster in selection.get(session.local_player()) {
+                pending.push(PlayerCommand::UseSkill {
+                    skill,
+                    caster: SkillCasterRef::Entity(caster),
+                    target: Some(target),
+                });
+            }
         }
     }
     *mode = InputMode::Normal;

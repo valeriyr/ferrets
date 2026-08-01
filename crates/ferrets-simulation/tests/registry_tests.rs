@@ -3,11 +3,18 @@
 //! inconsistency, so a referenced type must be registered before the type that
 //! references it.
 
-use ferrets_math::FixedU64;
+use ferrets_math::{FixedI64, FixedU64};
 use ferrets_pathfinder::{layer_mask::LayerMask, nav_grid::LayerId, nav_size::NavSize};
 use ferrets_simulation::content::{
-    skills::{SkillDef, SkillEffect, SkillTarget},
-    stats::StatId,
+    entity_buffs::EntityBuffDef,
+    entity_stats::EntityStatId,
+    player_buffs::{PlayerBuffDef, PlayerBuffId},
+    player_stats::PlayerStatId,
+    skills::{
+        EntityCastCost, EntityCastEffect, EntityCastTarget, PlayerCastEffect, SkillCaster, SkillDef,
+    },
+    stack_rule::StackRule,
+    stats::{EntityModifier, ModifierOp},
     tags,
     {
         entity_type_def::EntityTypeDef,
@@ -18,6 +25,7 @@ use ferrets_simulation::content::{
         work::WorkPresence,
     },
 };
+use ferrets_simulation::resources::{self, Cost};
 
 //
 // ─── Identity ─────────────────────────────────────────────────────────────────
@@ -56,7 +64,7 @@ fn register_accepts_registered_kinds() {
     gold_registry_with(
         worker()
             .with_cost([("gold", 10)])
-            .with_stat(StatId::HARVEST_RANGE, FixedU64::ONE)
+            .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
             .with_resource_source("gold", DepletionPolicy::Destroy)
             .with_resource_carrier([("gold", HarvestData::new(5, 2, WorkPresence::Hidden))])
             .with_resource_storage(["gold"]),
@@ -124,7 +132,7 @@ fn validate_accepts_registered_production_catalogues() {
     registry.register(
         EntityTypeDef::new("worker")
             .with_location(GROUND, NavSize::ONE, Solidity::Solid)
-            .with_stat(StatId::BUILD_RANGE, FixedU64::ONE)
+            .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
             .with_builder(["depot"], WorkPresence::Hidden),
     );
 
@@ -147,7 +155,7 @@ fn validate_accepts_production_cycle() {
         EntityTypeDef::new("worker")
             .with_location(GROUND, NavSize::ONE, Solidity::Solid)
             .with_train_time(4)
-            .with_stat(StatId::BUILD_RANGE, FixedU64::ONE)
+            .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
             .with_builder(["town_hall"], WorkPresence::Hidden),
     );
 
@@ -194,7 +202,7 @@ fn validate_rejects_unknown_built_type() {
     registry.register(
         EntityTypeDef::new("worker")
             .with_location(GROUND, NavSize::ONE, Solidity::Solid)
-            .with_stat(StatId::BUILD_RANGE, FixedU64::ONE)
+            .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
             .with_builder(["nexus"], WorkPresence::Hidden),
     );
     registry.validate();
@@ -212,7 +220,7 @@ fn validate_rejects_unconstructible_built_type() {
     registry.register(
         EntityTypeDef::new("worker")
             .with_location(GROUND, NavSize::ONE, Solidity::Solid)
-            .with_stat(StatId::BUILD_RANGE, FixedU64::ONE)
+            .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
             .with_builder(["statue"], WorkPresence::Hidden),
     );
     registry.validate();
@@ -508,6 +516,28 @@ fn register_rejects_non_positive_speed() {
 }
 
 #[test]
+#[should_panic(expected = "has a non-positive supply_provided stat")]
+fn register_rejects_non_positive_supply_provided() {
+    let mut registry = ground_registry();
+    registry.register(
+        EntityTypeDef::new("worker")
+            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_stat(EntityStatId::SUPPLY_PROVIDED, FixedU64::ZERO),
+    );
+}
+
+#[test]
+#[should_panic(expected = "has a non-positive supply_cost stat")]
+fn register_rejects_non_positive_supply_cost() {
+    let mut registry = ground_registry();
+    registry.register(
+        EntityTypeDef::new("worker")
+            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_stat(EntityStatId::SUPPLY_COST, FixedU64::ZERO),
+    );
+}
+
+#[test]
 #[should_panic(expected = "has attack_range below its minimum of 1")]
 fn register_rejects_zero_attack_range() {
     let mut registry = ground_registry();
@@ -548,9 +578,11 @@ fn register_rejects_costed_skill_without_energy_pool() {
         "jolt",
         SkillDef {
             cooldown: 10,
-            energy_cost: FixedU64::from_num(25),
-            target: SkillTarget::Caster,
-            effect: SkillEffect::Damage(FixedU64::from_num(5)),
+            caster: SkillCaster::Entity {
+                costs: vec![EntityCastCost::Energy(FixedU64::from_num(25))],
+                target: EntityCastTarget::Caster,
+                effect: EntityCastEffect::Damage(FixedU64::from_num(5)),
+            },
         },
     );
     registry.register(
@@ -568,9 +600,11 @@ fn register_accepts_free_skill_without_energy_pool() {
         "shout",
         SkillDef {
             cooldown: 10,
-            energy_cost: FixedU64::ZERO,
-            target: SkillTarget::Caster,
-            effect: SkillEffect::Damage(FixedU64::from_num(5)),
+            caster: SkillCaster::Entity {
+                costs: Vec::new(),
+                target: EntityCastTarget::Caster,
+                effect: EntityCastEffect::Damage(FixedU64::from_num(5)),
+            },
         },
     );
     registry.register(
@@ -583,6 +617,71 @@ fn register_accepts_free_skill_without_energy_pool() {
 }
 
 #[test]
+#[should_panic(expected = "skill 'jolt' costs unregistered resource kind 'wood'")]
+fn register_rejects_skill_costing_unregistered_resource() {
+    let mut registry = ground_registry();
+    registry.register_skill(
+        "jolt",
+        SkillDef {
+            cooldown: 10,
+            caster: SkillCaster::Entity {
+                costs: vec![EntityCastCost::Resources(resources::cost([("wood", 5)]))],
+                target: EntityCastTarget::Caster,
+                effect: EntityCastEffect::Damage(FixedU64::from_num(5)),
+            },
+        },
+    );
+}
+
+#[test]
+fn register_accepts_resource_costed_skill_without_pools() {
+    // The stockpile is the owner's, not the type's, so a resource cost asks
+    // nothing of the carrying type.
+    let mut registry = ground_registry();
+    registry.register_resource("gold");
+    let rally = registry.register_skill(
+        "rally",
+        SkillDef {
+            cooldown: 10,
+            caster: SkillCaster::Entity {
+                costs: vec![EntityCastCost::Resources(resources::cost([("gold", 25)]))],
+                target: EntityCastTarget::Caster,
+                effect: EntityCastEffect::Damage(FixedU64::from_num(5)),
+            },
+        },
+    );
+    registry.register(
+        EntityTypeDef::new("caster")
+            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_health(20)
+            .with_skills([rally]),
+    );
+    assert!(registry.entity("caster").is_some());
+}
+
+#[test]
+#[should_panic(expected = "with a health cost but no health pool")]
+fn register_rejects_health_costed_skill_without_health_pool() {
+    let mut registry = ground_registry();
+    let rite = registry.register_skill(
+        "rite",
+        SkillDef {
+            cooldown: 10,
+            caster: SkillCaster::Entity {
+                costs: vec![EntityCastCost::Health(FixedU64::from_num(5))],
+                target: EntityCastTarget::Caster,
+                effect: EntityCastEffect::Damage(FixedU64::from_num(5)),
+            },
+        },
+    );
+    registry.register(
+        EntityTypeDef::new("caster")
+            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_skills([rite]),
+    );
+}
+
+#[test]
 #[should_panic(expected = "has attack_period below its minimum of 1")]
 fn register_rejects_fractional_attack_period() {
     // Positive but below one whole tick: the engine reads the cycle as an integer,
@@ -591,7 +690,7 @@ fn register_rejects_fractional_attack_period() {
     registry.register(
         EntityTypeDef::new("worker")
             .with_location(GROUND, NavSize::ONE, Solidity::Solid)
-            .with_stat(StatId::ATTACK_PERIOD, FixedU64::from_num(0.5)),
+            .with_stat(EntityStatId::ATTACK_PERIOD, FixedU64::from_num(0.5)),
     );
 }
 
@@ -613,7 +712,7 @@ fn register_rejects_health_regen_without_pool() {
     registry.register(
         EntityTypeDef::new("wall")
             .with_location(GROUND, NavSize::ONE, Solidity::Solid)
-            .with_stat(StatId::HEALTH_REGEN, FixedU64::from_num(0.5)),
+            .with_stat(EntityStatId::HEALTH_REGEN, FixedU64::from_num(0.5)),
     );
 }
 
@@ -625,7 +724,7 @@ fn register_rejects_energy_regen_without_pool() {
         EntityTypeDef::new("wall")
             .with_location(GROUND, NavSize::ONE, Solidity::Solid)
             .with_health(20)
-            .with_stat(StatId::ENERGY_REGEN, FixedU64::from_num(0.5)),
+            .with_stat(EntityStatId::ENERGY_REGEN, FixedU64::from_num(0.5)),
     );
 }
 
@@ -637,7 +736,7 @@ fn register_rejects_repair_speed_without_capability() {
         EntityTypeDef::new("worker")
             .with_location(GROUND, NavSize::ONE, Solidity::Solid)
             .with_health(20)
-            .with_stat(StatId::REPAIR_SPEED, FixedU64::ONE),
+            .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE),
     );
 }
 
@@ -659,7 +758,7 @@ fn register_rejects_build_range_without_capability() {
     registry.register(
         EntityTypeDef::new("soldier")
             .with_location(GROUND, NavSize::ONE, Solidity::Solid)
-            .with_stat(StatId::BUILD_RANGE, FixedU64::ONE),
+            .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE),
     );
 }
 
@@ -680,7 +779,7 @@ fn register_rejects_harvest_range_without_capability() {
     registry.register(
         EntityTypeDef::new("soldier")
             .with_location(GROUND, NavSize::ONE, Solidity::Solid)
-            .with_stat(StatId::HARVEST_RANGE, FixedU64::ONE),
+            .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE),
     );
 }
 
@@ -691,7 +790,140 @@ fn register_rejects_attacker_without_weapon_stats() {
     registry.register(
         EntityTypeDef::new("worker")
             .with_location(GROUND, NavSize::ONE, Solidity::Solid)
-            .with_stat(StatId::DAMAGE, FixedU64::from_num(5)),
+            .with_stat(EntityStatId::DAMAGE, FixedU64::from_num(5)),
+    );
+}
+
+//
+// ─── Player stats ─────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn register_player_stat_resolves_built_in_name_to_its_constant() {
+    let mut registry = ContentRegistry::default();
+
+    assert_eq!(
+        registry.register_player_stat("max_supply"),
+        PlayerStatId::MAX_SUPPLY
+    );
+    assert!(registry.has_player_stat("max_supply"));
+    assert_eq!(
+        registry.player_stat("max_supply"),
+        Some(PlayerStatId::MAX_SUPPLY)
+    );
+}
+
+#[test]
+fn content_declared_player_stats_get_sequential_ids_after_built_ins() {
+    let mut registry = ContentRegistry::default();
+
+    let morale = registry.register_player_stat("morale");
+    let karma = registry.register_player_stat("karma");
+
+    assert_eq!(morale.index(), PlayerStatId::MAX_SUPPLY.index() + 1);
+    assert_eq!(karma.index(), PlayerStatId::MAX_SUPPLY.index() + 2);
+    assert_eq!(registry.register_player_stat("morale"), morale);
+    assert_eq!(registry.player_stat("karma"), Some(karma));
+}
+
+#[test]
+#[should_panic(expected = "player stat name must not be empty")]
+fn empty_player_stat_name_panics() {
+    ContentRegistry::default().register_player_stat("");
+}
+
+#[test]
+#[should_panic(expected = "'damage' is already registered as an entity stat")]
+fn register_player_stat_rejects_entity_stat_name() {
+    ContentRegistry::default().register_player_stat("damage");
+}
+
+#[test]
+#[should_panic(expected = "'max_supply' is already registered as a player stat")]
+fn register_stat_rejects_player_stat_name() {
+    ContentRegistry::default().register_entity_stat("max_supply");
+}
+
+//
+// ─── Skill casts ──────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn register_accepts_player_cast_skill() {
+    let mut registry = ground_registry();
+    let haste = haste_buff(&mut registry);
+    let war_cry = registry.register_skill("war_cry", player_cast(haste));
+    assert!(registry.has_skill("war_cry"));
+    assert_eq!(registry.skill("war_cry"), Some(war_cry));
+    assert_eq!(registry.skill_name(war_cry), Some("war_cry"));
+}
+
+#[test]
+#[should_panic(expected = "skill 'war_cry' references an unregistered player buff")]
+fn register_rejects_player_cast_skill_with_unregistered_buff() {
+    // A handle from another registry names a buff this one never minted.
+    let mut foreign = ContentRegistry::default();
+    let buff = haste_buff(&mut foreign);
+    ground_registry().register_skill("war_cry", player_cast(buff));
+}
+
+#[test]
+#[should_panic(expected = "skill 'focus' references an unregistered entity buff")]
+fn register_rejects_entity_cast_skill_with_unregistered_buff() {
+    let mut foreign = ContentRegistry::default();
+    let buff = foreign.register_entity_buff(
+        "haste",
+        EntityBuffDef {
+            modifiers: vec![EntityModifier {
+                stat: EntityStatId::SPEED,
+                op: ModifierOp::PercentAdd,
+                magnitude: FixedI64::ONE,
+            }],
+            duration: Some(10),
+            stack_rule: StackRule::Refresh,
+        },
+    );
+    ground_registry().register_skill(
+        "focus",
+        SkillDef {
+            cooldown: 10,
+            caster: SkillCaster::Entity {
+                costs: Vec::new(),
+                target: EntityCastTarget::Caster,
+                effect: EntityCastEffect::ApplyBuff(buff),
+            },
+        },
+    );
+}
+
+#[test]
+#[should_panic(expected = "skill 'war_cry' costs unregistered resource kind 'gold'")]
+fn register_rejects_player_cast_skill_costing_unregistered_resource() {
+    let mut registry = ground_registry();
+    let haste = haste_buff(&mut registry);
+    registry.register_skill(
+        "war_cry",
+        SkillDef {
+            cooldown: 10,
+            caster: SkillCaster::Player {
+                cost: resources::cost([("gold", 25)]),
+                effect: PlayerCastEffect::ApplyBuff(haste),
+            },
+        },
+    );
+}
+
+#[test]
+#[should_panic(expected = "entity type 'caster' declares player-cast skill 'war_cry'")]
+fn register_rejects_type_declaring_player_cast_skill() {
+    let mut registry = ground_registry();
+    let haste = haste_buff(&mut registry);
+    let war_cry = registry.register_skill("war_cry", player_cast(haste));
+    registry.register(
+        EntityTypeDef::new("caster")
+            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_health(20)
+            .with_skills([war_cry]),
     );
 }
 
@@ -726,7 +958,7 @@ fn register_rejects_repairer_without_reach() {
         EntityTypeDef::new("worker")
             .with_location(GROUND, NavSize::ONE, Solidity::Solid)
             .with_health(20)
-            .with_stat(StatId::REPAIR_SPEED, FixedU64::ONE)
+            .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
             .with_repairer(
                 ["building"],
                 RepairRate::Production,
@@ -748,8 +980,8 @@ fn register_rejects_repairer_mending_unknown_tag() {
         EntityTypeDef::new("worker")
             .with_location(GROUND, NavSize::ONE, Solidity::Solid)
             .with_health(20)
-            .with_stat(StatId::REPAIR_SPEED, FixedU64::ONE)
-            .with_stat(StatId::REPAIR_RANGE, FixedU64::ONE)
+            .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
+            .with_stat(EntityStatId::REPAIR_RANGE, FixedU64::ONE)
             .with_repairer(
                 ["mechanical"],
                 RepairRate::Production,
@@ -769,8 +1001,8 @@ fn register_rejects_pro_rata_repair_without_factor() {
         EntityTypeDef::new("worker")
             .with_location(GROUND, NavSize::ONE, Solidity::Solid)
             .with_health(20)
-            .with_stat(StatId::REPAIR_SPEED, FixedU64::ONE)
-            .with_stat(StatId::REPAIR_RANGE, FixedU64::ONE)
+            .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
+            .with_stat(EntityStatId::REPAIR_RANGE, FixedU64::ONE)
             .with_repairer(
                 ["building"],
                 RepairRate::Production,
@@ -791,8 +1023,8 @@ fn register_rejects_energy_paid_repair_without_pool() {
         EntityTypeDef::new("medic")
             .with_location(GROUND, NavSize::ONE, Solidity::Solid)
             .with_health(20)
-            .with_stat(StatId::REPAIR_SPEED, FixedU64::ONE)
-            .with_stat(StatId::REPAIR_RANGE, FixedU64::from_num(2))
+            .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
+            .with_stat(EntityStatId::REPAIR_RANGE, FixedU64::from_num(2))
             .with_repairer(
                 ["biological"],
                 RepairRate::PerTick(FixedU64::ONE),
@@ -851,4 +1083,32 @@ fn gold_registry_with(def: EntityTypeDef) {
 
 fn worker() -> EntityTypeDef {
     EntityTypeDef::new("worker").with_location(GROUND, NavSize::ONE, Solidity::Solid)
+}
+
+/// A player-cast buff skill.
+fn player_cast(buff: PlayerBuffId) -> SkillDef {
+    SkillDef {
+        cooldown: 10,
+        caster: SkillCaster::Player {
+            cost: Cost::new(),
+            effect: PlayerCastEffect::ApplyBuff(buff),
+        },
+    }
+}
+
+/// An army-wide speed buff registered into `registry`.
+fn haste_buff(registry: &mut ContentRegistry) -> PlayerBuffId {
+    registry.register_player_buff(
+        "haste",
+        PlayerBuffDef {
+            player_modifiers: Vec::new(),
+            entity_modifiers: vec![EntityModifier {
+                stat: EntityStatId::SPEED,
+                op: ModifierOp::PercentAdd,
+                magnitude: FixedI64::ONE,
+            }],
+            duration: Some(10),
+            stack_rule: StackRule::Refresh,
+        },
+    )
 }

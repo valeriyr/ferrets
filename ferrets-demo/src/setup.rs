@@ -7,8 +7,8 @@ use bevy::prelude::*;
 use ferrets_bevy_plugin::instantiate_map;
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_simulation::{
-    map::Map, resources::PlayerResources, session::GameSession, session::player_slot::PlayerId,
-    spawn,
+    content::player_stats::PlayerStatId, map::Map, player_stats::PlayerStats,
+    resources::PlayerResources, session::GameSession, session::player_slot::PlayerId, spawn,
 };
 
 use crate::map;
@@ -55,7 +55,26 @@ pub fn spawn_demo_scene(world: &mut World) {
         }
     }
 
+    seed_player_stats(world);
+
     world.resource_mut::<GameSession>().start();
+}
+
+/// Seeds the demo's baseline player stats for every occupied slot: a hard
+/// supply ceiling well above what a map's farms can provide, so the headroom
+/// players actually play against comes from their standing buildings.
+///
+/// Every game mode's spawner runs this before starting the session, so the
+/// ceiling holds however the session was configured.
+pub fn seed_player_stats(world: &mut World) {
+    let players: Vec<PlayerId> = {
+        let session = world.resource::<GameSession>();
+        session.occupied_slots().map(|slot| slot.id()).collect()
+    };
+    let mut stats = world.resource_mut::<PlayerStats>();
+    for player in players {
+        stats.set_base(player, PlayerStatId::MAX_SUPPLY, FixedU64::from_num(200));
+    }
 }
 
 fn spawn_base(world: &mut World, player: PlayerId, race: &str, (x, y): (u32, u32)) {

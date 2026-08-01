@@ -10,11 +10,11 @@ use super::orders::Processing;
 use crate::{
     components::{
         attack::AttackComponent,
+        entity_stats::StatsComponent,
         location::LocationComponent,
         order_queue::{CancelPolicy, OrderState},
-        stats::StatsComponent,
     },
-    content::stats::StatId,
+    content::entity_stats::EntityStatId,
     entity_def,
     entity_index::EntityIndex,
     map::Map,
@@ -116,14 +116,14 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
         .entity(entity)
         .get::<StatsComponent>()
         .expect("attackers have a stat store");
-    let range = stats.effective_as_u32(StatId::ATTACK_RANGE).unwrap();
-    let damage = stats.effective(StatId::DAMAGE).unwrap();
-    let attack_period = stats.effective_as_u32(StatId::ATTACK_PERIOD).unwrap();
+    let range = stats.effective_as_u32(EntityStatId::ATTACK_RANGE).unwrap();
+    let damage = stats.effective(EntityStatId::DAMAGE).unwrap();
+    let attack_period = stats.effective_as_u32(EntityStatId::ATTACK_PERIOD).unwrap();
     // Registration keeps the authored damage point inside the authored cycle, but
     // the two stats take modifiers independently, so a shortened cycle can leave
     // the hit beyond its end — where the phase counter would never reach it.
     let damage_point = stats
-        .effective_as_u32(StatId::DAMAGE_POINT)
+        .effective_as_u32(EntityStatId::DAMAGE_POINT)
         .unwrap()
         .min(attack_period);
 

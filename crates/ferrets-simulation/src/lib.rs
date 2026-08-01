@@ -1,5 +1,6 @@
 //! Deterministic RTS game simulation.
 
+pub mod buffs_store;
 pub mod checksum;
 pub mod command;
 pub mod components;
@@ -13,6 +14,9 @@ pub mod input;
 pub mod map;
 pub mod map_data;
 pub mod order;
+pub mod player_buffs;
+pub mod player_skills;
+pub mod player_stats;
 pub mod resources;
 pub mod scenario;
 pub mod selection;
@@ -20,6 +24,7 @@ pub mod session;
 pub mod simulation_id;
 pub mod skirmish;
 pub mod spawn;
+pub mod supply;
 pub mod visibility;
 
 /// The full build version, `major.minor.patch`.

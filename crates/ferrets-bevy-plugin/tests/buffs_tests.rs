@@ -1,12 +1,7 @@
 //! Buff pipeline: a buff modifies effective stats for its duration, then reverts.
 
-use ferrets_math::FixedI64;
 use ferrets_simulation::{
-    content::{
-        buffs::{BuffDef, StackRule},
-        registry::ContentRegistry,
-        stats::{Modifier, ModifierOp, StatId},
-    },
+    content::{entity_stats::EntityStatId, stats::ModifierOp},
     game_loop, spawn,
 };
 
@@ -23,24 +18,17 @@ fn buff_modifies_effective_stat_then_reverts_on_expiry() {
         spawn::spawn_entity(app.world_mut(), "soldier", utils::pos(5, 5), Some(0)).unwrap();
 
     let base = utils::effective_damage(&app, soldier);
-    let frenzy = app
-        .world_mut()
-        .resource_mut::<ContentRegistry>()
-        .register_buff(
-            "frenzy",
-            BuffDef {
-                modifiers: vec![Modifier {
-                    stat: StatId::DAMAGE,
-                    op: ModifierOp::PercentAdd,
-                    magnitude: FixedI64::from_num(1),
-                }],
-                duration: Some(3),
-                stack_rule: StackRule::Refresh,
-            },
-        );
+    let frenzy = utils::register_entity_buff(
+        &mut app,
+        "frenzy",
+        EntityStatId::DAMAGE,
+        ModifierOp::PercentAdd,
+        1.0,
+        Some(3),
+    );
 
     // +100% damage for three ticks.
-    game_loop::stats::apply_buff(app.world_mut(), soldier, frenzy);
+    game_loop::stats::apply_entity_buff(app.world_mut(), soldier, frenzy);
 
     utils::run_ticks(&mut app, 1);
     assert_eq!(

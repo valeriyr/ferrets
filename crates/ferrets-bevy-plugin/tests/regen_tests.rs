@@ -4,16 +4,13 @@
 mod utils;
 
 use bevy::prelude::*;
-use ferrets_math::{FixedI64, FixedU64};
+use ferrets_math::FixedU64;
 use ferrets_pathfinder::nav_size::NavSize;
 use ferrets_simulation::{
     components::build::UnderConstructionComponent,
     content::{
-        buffs::{BuffDef, StackRule},
-        entity_type_def::EntityTypeDef,
-        location::Solidity,
-        registry::ContentRegistry,
-        stats::{Modifier, ModifierOp, StatId},
+        entity_stats::EntityStatId, entity_type_def::EntityTypeDef, location::Solidity,
+        registry::ContentRegistry, stats::ModifierOp,
     },
     game_loop,
     session::{GameSession, player_slot::PlayerSlot, player_type::PlayerType},
@@ -69,22 +66,15 @@ fn health_settles_under_lowered_ceiling() {
     let mut app = app();
     let (troll, _) = utils::spawn_owned(&mut app, "troll", 5, 5, 0);
 
-    let frailty = app
-        .world_mut()
-        .resource_mut::<ContentRegistry>()
-        .register_buff(
-            "frailty",
-            BuffDef {
-                modifiers: vec![Modifier {
-                    stat: StatId::MAX_HEALTH,
-                    op: ModifierOp::FlatAdd,
-                    magnitude: FixedI64::from_num(-25),
-                }],
-                duration: None,
-                stack_rule: StackRule::Refresh,
-            },
-        );
-    game_loop::stats::apply_buff(app.world_mut(), troll, frailty);
+    let frailty = utils::register_entity_buff(
+        &mut app,
+        "frailty",
+        EntityStatId::MAX_HEALTH,
+        ModifierOp::FlatAdd,
+        -25.0,
+        None,
+    );
+    game_loop::stats::apply_entity_buff(app.world_mut(), troll, frailty);
     utils::run_ticks(&mut app, 1);
 
     assert_eq!(
@@ -100,22 +90,15 @@ fn lowered_ceiling_does_not_kill() {
     let (troll, _) = utils::spawn_owned(&mut app, "troll", 5, 5, 0);
 
     // Deep enough to zero the ceiling outright, which the max_health floor forbids.
-    let withering = app
-        .world_mut()
-        .resource_mut::<ContentRegistry>()
-        .register_buff(
-            "withering",
-            BuffDef {
-                modifiers: vec![Modifier {
-                    stat: StatId::MAX_HEALTH,
-                    op: ModifierOp::PercentAdd,
-                    magnitude: FixedI64::from_num(-1),
-                }],
-                duration: None,
-                stack_rule: StackRule::Refresh,
-            },
-        );
-    game_loop::stats::apply_buff(app.world_mut(), troll, withering);
+    let withering = utils::register_entity_buff(
+        &mut app,
+        "withering",
+        EntityStatId::MAX_HEALTH,
+        ModifierOp::PercentAdd,
+        -1.0,
+        None,
+    );
+    game_loop::stats::apply_entity_buff(app.world_mut(), troll, withering);
     utils::run_ticks(&mut app, 5);
 
     assert_eq!(
@@ -176,7 +159,7 @@ fn app() -> App {
                 .with_location(utils::GROUND, NavSize::ONE, Solidity::Solid)
                 .with_health(40)
                 .with_dying(3, None)
-                .with_stat(StatId::HEALTH_REGEN, FixedU64::from_num(0.5)),
+                .with_stat(EntityStatId::HEALTH_REGEN, FixedU64::from_num(0.5)),
         );
         registry.register(
             EntityTypeDef::new("dummy")

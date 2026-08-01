@@ -10,15 +10,15 @@ use ferrets_pathfinder::{astar, nav_pos::NavPos, nav_size::NavSize};
 use ferrets_simulation::{
     command::PlayerCommand,
     components::{
-        build::UnderConstructionComponent, energy::EnergyComponent, hidden::HiddenComponent,
-        location::LocationComponent, repair::UnderRepairComponent, stats::StatsComponent,
+        build::UnderConstructionComponent, energy::EnergyComponent, entity_stats::StatsComponent,
+        hidden::HiddenComponent, location::LocationComponent, repair::UnderRepairComponent,
     },
     content::{
+        entity_stats::EntityStatId,
         entity_type_def::EntityTypeDef,
         location::Solidity,
         registry::ContentRegistry,
         repair::{RepairCost, RepairRate},
-        stats::StatId,
         work::WorkPresence,
     },
     resources,
@@ -792,8 +792,8 @@ fn app() -> App {
                 .with_location(utils::GROUND, NavSize::ONE, Solidity::Solid)
                 .with_movement(FixedU64::from_num(0.5))
                 .with_health(30)
-                .with_stat(StatId::REPAIR_SPEED, FixedU64::ONE)
-                .with_stat(StatId::REPAIR_RANGE, FixedU64::ONE)
+                .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
+                .with_stat(EntityStatId::REPAIR_RANGE, FixedU64::ONE)
                 .with_repairer(
                     ["flesh"],
                     RepairRate::PerTick(FixedU64::from_num(5)),
@@ -837,8 +837,8 @@ fn app() -> App {
                 .with_movement(FixedU64::from_num(0.5))
                 .with_health(30)
                 .with_energy(50, FixedU64::ZERO)
-                .with_stat(StatId::REPAIR_SPEED, FixedU64::ONE)
-                .with_stat(StatId::REPAIR_RANGE, FixedU64::from_num(2))
+                .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
+                .with_stat(EntityStatId::REPAIR_RANGE, FixedU64::from_num(2))
                 .with_repairer(
                     ["building"],
                     RepairRate::PerTick(FixedU64::from_num(5)),
@@ -910,12 +910,14 @@ fn repairer(
         .with_location(utils::GROUND, NavSize::ONE, Solidity::Solid)
         .with_movement(FixedU64::from_num(0.5))
         .with_health(20)
-        .with_stat(StatId::REPAIR_SPEED, FixedU64::ONE)
-        .with_stat(StatId::REPAIR_RANGE, FixedU64::ONE);
+        .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
+        .with_stat(EntityStatId::REPAIR_RANGE, FixedU64::ONE);
     // The factor only means something to a pro-rata bill, and declaring it without
     // one is rejected at registration.
     let def = match cost {
-        RepairCost::ProRata => def.with_stat(StatId::REPAIR_COST_FACTOR, FixedU64::from_num(0.5)),
+        RepairCost::ProRata => {
+            def.with_stat(EntityStatId::REPAIR_COST_FACTOR, FixedU64::from_num(0.5))
+        }
         _ => def,
     };
     def.with_repairer(
@@ -961,7 +963,7 @@ fn grant_energy(app: &mut App, entity: Entity, amount: f64) {
         .world()
         .get::<StatsComponent>(entity)
         .unwrap()
-        .effective(StatId::MAX_ENERGY)
+        .effective(EntityStatId::MAX_ENERGY)
         .unwrap();
     app.world_mut()
         .get_mut::<EnergyComponent>(entity)

@@ -15,15 +15,15 @@ use crate::{
     components::{
         build::UnderConstructionComponent,
         energy::EnergyComponent,
+        entity_stats::StatsComponent,
         health::HealthComponent,
         order_queue::{CancelPolicy, OrderState},
         owner::OwnerComponent,
         repair::{RepairComponent, UnderRepairComponent},
-        stats::StatsComponent,
     },
     content::{
+        entity_stats::EntityStatId,
         repair::{RepairCost, RepairRate, RepairerDef},
-        stats::StatId,
     },
     entity_def,
     entity_index::EntityIndex,
@@ -132,7 +132,7 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
             entity_def::position(world, entity),
             target_position,
             target_size,
-            work::reach(world, entity, StatId::REPAIR_RANGE),
+            work::reach(world, entity, EntityStatId::REPAIR_RANGE),
         ) {
             Destination::OutOfReach => return finish(world, entity, target_id),
             Destination::Walk(move_order) => {
@@ -152,7 +152,7 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
         }
     }
 
-    let max_health = effective(world, target, StatId::MAX_HEALTH);
+    let max_health = effective(world, target, EntityStatId::MAX_HEALTH);
     let restored = restorable(world, entity, target, max_health);
     if restored == FixedU64::ZERO {
         return finish(world, entity, target_id);
@@ -204,7 +204,7 @@ fn accepts(world: &World, entity: Entity, target: Entity) -> bool {
         return false;
     }
     let target_def = entity_def::of(world, target);
-    if !target_def.is_damageable() || !repairer.mends(&target_def.tags) {
+    if !target_def.has_health() || !repairer.mends(&target_def.tags) {
         return false;
     }
     // Only a production-paced mender needs the target to be something production
@@ -254,7 +254,7 @@ fn shares_jobs(world: &World, entity: Entity) -> bool {
 fn restorable(world: &World, entity: Entity, target: Entity, max_health: FixedU64) -> FixedU64 {
     // The speed stat scales whichever pace content chose, so an upgrade reads the
     // same way for a builder mending a wall and a medic patching up infantry.
-    let speed = effective(world, entity, StatId::REPAIR_SPEED);
+    let speed = effective(world, entity, EntityStatId::REPAIR_SPEED);
     let amount = match repairer_of(world, entity).rate() {
         RepairRate::PerTick(health) => health.saturating_mul(speed),
         RepairRate::Production => {
@@ -278,7 +278,7 @@ fn restorable(world: &World, entity: Entity, target: Entity, max_health: FixedU6
 
 /// The health `target` is missing from its effective pool.
 fn remaining_damage(world: &World, target: Entity) -> FixedU64 {
-    let max_health = effective(world, target, StatId::MAX_HEALTH);
+    let max_health = effective(world, target, EntityStatId::MAX_HEALTH);
     let current = world
         .entity(target)
         .get::<HealthComponent>()
@@ -318,7 +318,7 @@ fn charge(
         // `max_health` cannot be zero — the stat floors at one — so the division
         // inside is safe.
         RepairCost::ProRata => {
-            let factor = effective(world, entity, StatId::REPAIR_COST_FACTOR);
+            let factor = effective(world, entity, EntityStatId::REPAIR_COST_FACTOR);
             let target_cost = entity_def::of(world, target).cost.clone();
             pro_rata(&target_cost, restored, max_health, factor, owed)
         }
@@ -408,7 +408,7 @@ fn repairer_of(world: &World, entity: Entity) -> &RepairerDef {
 ///
 /// Every stat read through this is one registration demands of the capability that
 /// reads it, and a repair order only starts on an entity that has that capability.
-fn effective(world: &World, entity: Entity, stat: StatId) -> FixedU64 {
+fn effective(world: &World, entity: Entity, stat: EntityStatId) -> FixedU64 {
     world
         .entity(entity)
         .get::<StatsComponent>()

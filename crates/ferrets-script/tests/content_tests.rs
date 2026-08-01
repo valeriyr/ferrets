@@ -3,19 +3,23 @@
 //! surface as errors rather than panics. The contract holds for any engine;
 //! [`engine`] picks the binding the suite runs against.
 
-use ferrets_math::FixedU64;
+use ferrets_math::{FixedI64, FixedU64};
 use ferrets_pathfinder::{nav_grid::LayerId, nav_size::NavSize};
 use ferrets_script::content;
 use ferrets_script::engine::ScriptEngine;
 use ferrets_script::engine::lua::LuaEngine;
 use ferrets_script::error::ScriptError;
 use ferrets_simulation::content::{
+    entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     location::Solidity,
+    player_stats::PlayerStatId,
     repair::{RepairCost, RepairRate},
-    skills::{SkillDef, SkillEffect, SkillTarget},
+    skills::{
+        EntityCastCost, EntityCastEffect, EntityCastTarget, PlayerCastEffect, SkillCaster, SkillDef,
+    },
     splash::SplashShape,
-    stats::StatId,
+    stats::{EntityModifier, ModifierOp, PlayerModifier},
     work::WorkPresence,
 };
 use ferrets_simulation::resources;
@@ -72,7 +76,7 @@ fn declared_acquire_range_overrides_weapon_range_default() {
 fn custom_stat_is_declared_and_seeded() {
     let source = r#"
         local GROUND = define_layer("ground")
-        define_stat("morale")
+        define_entity_stat("morale")
         define_entity("hero", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
             stats = { max_health = 10, morale = 7 },
@@ -80,11 +84,24 @@ fn custom_stat_is_declared_and_seeded() {
     "#;
     let registry = content::load(&engine(), source).expect("load content");
 
-    let morale = registry.stat("morale").expect("morale is registered");
+    let morale = registry
+        .entity_stat("morale")
+        .expect("morale is registered");
     assert_eq!(
         registry.entity("hero").unwrap().base_stat(morale),
         Some(FixedU64::from_num(7)),
     );
+}
+
+#[test]
+fn custom_player_stat_is_declared() {
+    let source = r#"
+        define_player_stat("morale")
+    "#;
+    let registry = content::load(&engine(), source).expect("load content");
+
+    assert!(registry.has_player_stat("morale"));
+    assert!(registry.player_stat("morale").is_some());
 }
 
 #[test]
@@ -253,7 +270,7 @@ fn parses_medic_paying_energy_at_flat_rate() {
         &RepairCost::Energy(FixedU64::from_str("0.5").unwrap())
     );
     assert_eq!(
-        medic.base_stat(StatId::REPAIR_RANGE),
+        medic.base_stat(EntityStatId::REPAIR_RANGE),
         Some(FixedU64::from_num(2))
     );
     assert_eq!(
@@ -268,18 +285,19 @@ fn parses_skill_with_buff_effect() {
     let source = r#"
         local GROUND = define_layer("ground")
 
-        define_buff("haste", {
+        define_entity_buff("haste", {
             duration = 20,
             stack = "refresh",
             modifiers = {
-                { stat = "damage", op = "percent", value = "1.0" },
+                { entity_stat = "damage", op = "percent", value = "1.0" },
             },
         })
 
         define_skill("battle_focus", {
+            caster = "entity",
             cooldown = 5,
-            energy_cost = "30",
-            target = "self",
+            cost = { energy = "30" },
+            target = "caster",
             effect = { apply_buff = "haste" },
         })
 
@@ -291,20 +309,226 @@ fn parses_skill_with_buff_effect() {
     "#;
     let registry = content::load(&engine(), source).expect("load content");
     let mage = registry.entity("mage").expect("mage defined");
-    let haste = registry.buff("haste").expect("haste buff defined");
+    let haste = registry.entity_buff("haste").expect("haste buff defined");
     let battle_focus = registry.skill("battle_focus").expect("skill defined");
 
     // The entity references the skill by id, and the registered definition carries
-    // the parsed cooldown, cost, and effect.
+    // the parsed caster, cooldown, cost, and effect.
     assert_eq!(mage.skills, vec![battle_focus]);
     assert_eq!(
         registry.skill_def(battle_focus),
-        &SkillDef {
+        Some(&SkillDef {
             cooldown: 5,
-            energy_cost: FixedU64::from_num(30),
-            target: SkillTarget::Caster,
-            effect: SkillEffect::ApplyBuff(haste),
-        }
+            caster: SkillCaster::Entity {
+                costs: vec![EntityCastCost::Energy(FixedU64::from_num(30))],
+                target: EntityCastTarget::Caster,
+                effect: EntityCastEffect::ApplyBuff(haste),
+            },
+        })
+    );
+}
+
+#[test]
+fn parses_player_cast_skill() {
+    let source = r#"
+        define_resource("gold")
+
+        define_player_buff("war_cry_haste", {
+            duration = 10,
+            stack = "refresh",
+            entity_modifiers = {
+                { entity_stat = "speed", op = "percent", value = "0.5" },
+            },
+        })
+
+        define_skill("war_cry", {
+            caster = "player",
+            cooldown = 30,
+            cost = { resources = { gold = 25 } },
+            effect = { apply_buff = "war_cry_haste" },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("load content");
+
+    let war_cry = registry.skill("war_cry").expect("skill defined");
+    let haste = registry.player_buff("war_cry_haste").expect("buff defined");
+    assert_eq!(
+        registry.skill_def(war_cry),
+        Some(&SkillDef {
+            cooldown: 30,
+            caster: SkillCaster::Player {
+                cost: resources::cost([("gold", 25)]),
+                effect: PlayerCastEffect::ApplyBuff(haste),
+            },
+        })
+    );
+}
+
+#[test]
+fn unknown_skill_caster_errors() {
+    let source = r#"
+        define_skill("war_cry", {
+            caster = "building",
+            cooldown = 30,
+            target = "caster_player",
+            effect = { damage = "5" },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject an unknown caster kind");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("unknown skill caster 'building' (expected entity or player)")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn unknown_skill_target_errors() {
+    let source = r#"
+        define_skill("war_cry", {
+            caster = "entity",
+            cooldown = 30,
+            target = "everyone",
+            effect = { damage = "5" },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject an unknown target");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("unknown skill target 'everyone'")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn player_cast_skill_with_target_errors() {
+    let source = r#"
+        define_skill("war_cry", {
+            caster = "player",
+            cooldown = 30,
+            target = "caster_player",
+            effect = { remove_buff = "haste" },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject a target on a player cast");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("a player-cast skill takes no target")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn parses_player_buff_with_both_modifier_lists() {
+    let source = r#"
+        define_player_buff("prosperity", {
+            duration = 10,
+            stack = "refresh",
+            player_modifiers = {
+                { player_stat = "max_supply", op = "flat", value = "5" },
+            },
+            entity_modifiers = {
+                { entity_stat = "speed", op = "percent", value = "0.5" },
+            },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("load content");
+
+    let prosperity = registry.player_buff("prosperity").expect("buff defined");
+    let def = registry.player_buff_def(prosperity);
+    assert_eq!(
+        def.player_modifiers,
+        vec![PlayerModifier {
+            stat: PlayerStatId::MAX_SUPPLY,
+            op: ModifierOp::FlatAdd,
+            magnitude: FixedI64::from_num(5),
+        }]
+    );
+    assert_eq!(
+        def.entity_modifiers,
+        vec![EntityModifier {
+            stat: EntityStatId::SPEED,
+            op: ModifierOp::PercentAdd,
+            magnitude: FixedI64::from_num(0.5),
+        }]
+    );
+}
+
+#[test]
+fn player_stat_in_entity_modifier_list_errors() {
+    let source = r#"
+        define_entity_buff("confused", {
+            duration = 10,
+            stack = "refresh",
+            modifiers = {
+                { player_stat = "max_supply", op = "flat", value = "1" },
+            },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject a player stat in an entity modifier list");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("expected entity_stat, found player_stat")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn entity_stat_in_player_modifier_list_errors() {
+    let source = r#"
+        define_player_buff("confused", {
+            duration = 10,
+            stack = "refresh",
+            player_modifiers = {
+                { entity_stat = "speed", op = "flat", value = "1" },
+            },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject an entity stat in a player modifier list");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("expected player_stat, found entity_stat")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn player_buff_without_modifier_lists_errors() {
+    let source = r#"
+        define_player_buff("aimless", {
+            duration = 10,
+            stack = "refresh",
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject a player buff granting nothing");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("player buff must declare player_modifiers or entity_modifiers")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn skill_with_unknown_buff_errors() {
+    let source = r#"
+        define_skill("war_cry", {
+            caster = "player",
+            cooldown = 30,
+            effect = { apply_buff = "war_cry_haste" },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject an unregistered buff");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("player buff 'war_cry_haste' is not defined")),
+        "unexpected error: {error:?}"
     );
 }
 
@@ -458,7 +682,7 @@ fn selection_class_defaults_to_type_name() {
     let marine = registry.entity("marine").expect("marine");
     assert_eq!(marine.selection_class(), "marine");
     assert_eq!(marine.selection.priority(), 0);
-    assert_eq!(marine.base_stat(StatId::SIGHT_RANGE), None);
+    assert_eq!(marine.base_stat(EntityStatId::SIGHT_RANGE), None);
 }
 
 #[test]

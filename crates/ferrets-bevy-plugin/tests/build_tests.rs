@@ -14,8 +14,8 @@ use ferrets_simulation::{
         location::LocationComponent,
     },
     content::{
-        entity_type_def::EntityTypeDef, location::Solidity, registry::ContentRegistry,
-        stats::StatId, work::WorkPresence,
+        entity_stats::EntityStatId, entity_type_def::EntityTypeDef, location::Solidity,
+        registry::ContentRegistry, work::WorkPresence,
     },
     session::{GameSession, player_slot::PlayerSlot, player_type::PlayerType},
     simulation_id::SimulationId,
@@ -620,7 +620,7 @@ fn surveyor_app() -> App {
                 .with_location(utils::GROUND, NavSize::ONE, Solidity::Solid)
                 .with_movement(FixedU64::from_num(0.5))
                 .with_health(20)
-                .with_stat(StatId::BUILD_RANGE, FixedU64::from_num(3))
+                .with_stat(EntityStatId::BUILD_RANGE, FixedU64::from_num(3))
                 .with_builder(["depot"], WorkPresence::Present),
         );
     }

@@ -336,6 +336,8 @@ fn view_with(my_entities: Vec<EntityView>) -> GameView {
         map_width: 32,
         map_height: 32,
         resources: Vec::new(),
+        supply_provided: 0,
+        supply_used: 0,
         my_entities,
         ally_entities: Vec::new(),
         enemy_entities: Vec::new(),

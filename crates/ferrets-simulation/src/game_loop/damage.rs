@@ -8,10 +8,10 @@ use bevy_ecs::{entity::Entity, world::World};
 use ferrets_math::FixedU64;
 
 use crate::components::{
-    entity_info::EntityInfoComponent, health::HealthComponent, stats::StatsComponent,
+    entity_info::EntityInfoComponent, entity_stats::StatsComponent, health::HealthComponent,
     tags::TagsComponent,
 };
-use crate::content::{entity_type_def::EntityTypeDef, stats::StatId};
+use crate::content::{entity_stats::EntityStatId, entity_type_def::EntityTypeDef};
 use crate::session::GameSession;
 use crate::simulation_id::SimulationId;
 use crate::spawn;
@@ -52,7 +52,7 @@ pub fn resolve_scaled(
     let bonus = attacker_def.bonus_against(target_type, target_ref.get::<TagsComponent>());
     let armor = target_ref
         .get::<StatsComponent>()
-        .and_then(|stats| stats.effective(StatId::ARMOR))
+        .and_then(|stats| stats.effective(EntityStatId::ARMOR))
         .unwrap_or(FixedU64::ZERO);
     let dealt = (base + FixedU64::from_num(bonus)).saturating_mul(fraction);
     dealt.saturating_sub(armor).max(FixedU64::ONE)

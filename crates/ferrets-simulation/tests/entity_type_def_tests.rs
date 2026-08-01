@@ -5,10 +5,10 @@ use ferrets_math::FixedU64;
 use ferrets_pathfinder::{layer_mask::LayerMask, nav_grid::LayerId, nav_size::NavSize};
 use ferrets_simulation::content::{
     dying::DyingDef,
+    entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     location::Solidity,
     resource::{DepletionPolicy, HarvestData},
-    stats::StatId,
     work::WorkPresence,
 };
 
@@ -28,7 +28,7 @@ fn fully_loaded_definition_is_valid() {
         .with_train_time(4)
         .with_build_time(6)
         .with_trainer(["footman"])
-        .with_stat(StatId::BUILD_RANGE, FixedU64::ONE)
+        .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
         .with_builder(["depot"], WorkPresence::Hidden)
         .with_resource_source("gold", DepletionPolicy::Destroy)
         .with_resource_carrier([("gold", HarvestData::new(5, 2, WorkPresence::Hidden))])

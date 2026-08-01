@@ -7,15 +7,21 @@ use std::rc::Rc;
 use ferrets_math::{FixedI64, FixedU64};
 use ferrets_pathfinder::{layer_mask::LayerMask, nav_size::NavSize};
 use ferrets_simulation::content::{
-    buffs::{BuffDef, StackRule},
+    entity_buffs::EntityBuffDef,
+    entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
+    player_buffs::PlayerBuffDef,
     projectile::ProjectileDef,
     registry::ContentRegistry,
     repair::{RepairCost, RepairRate},
     resource::HarvestData,
-    skills::{SkillDef, SkillEffect, SkillTarget},
-    stats::{Modifier, ModifierOp, StatId},
+    skills::{
+        EntityCastCost, EntityCastEffect, EntityCastTarget, PlayerCastEffect, SkillCaster, SkillDef,
+    },
+    stack_rule::StackRule,
+    stats::{EntityModifier, ModifierOp, PlayerModifier},
 };
+use ferrets_simulation::resources::Cost;
 use mlua::{Lua, Table, Value};
 
 use crate::content;
@@ -82,19 +88,40 @@ pub(super) fn register(lua: &Lua, registry: &Rc<RefCell<ContentRegistry>>) -> ml
 
     let stats = Rc::clone(registry);
     globals.set(
-        "define_stat",
+        "define_entity_stat",
         lua.create_function(move |_, name: String| {
-            stats.borrow_mut().register_stat(name);
+            stats.borrow_mut().register_entity_stat(name);
             Ok(())
         })?,
     )?;
 
-    let buffs = Rc::clone(registry);
+    let player_stats = Rc::clone(registry);
     globals.set(
-        "define_buff",
+        "define_player_stat",
+        lua.create_function(move |_, name: String| {
+            player_stats.borrow_mut().register_player_stat(name);
+            Ok(())
+        })?,
+    )?;
+
+    let entity_buffs = Rc::clone(registry);
+    globals.set(
+        "define_entity_buff",
         lua.create_function(move |_, (name, table): (String, Table)| {
-            let buff = parse_buff(&table, &buffs.borrow()).map_err(mlua::Error::external)?;
-            buffs.borrow_mut().register_buff(name, buff);
+            let buff =
+                parse_entity_buff(&table, &entity_buffs.borrow()).map_err(mlua::Error::external)?;
+            entity_buffs.borrow_mut().register_entity_buff(name, buff);
+            Ok(())
+        })?,
+    )?;
+
+    let player_buffs = Rc::clone(registry);
+    globals.set(
+        "define_player_buff",
+        lua.create_function(move |_, (name, table): (String, Table)| {
+            let buff =
+                parse_player_buff(&table, &player_buffs.borrow()).map_err(mlua::Error::external)?;
+            player_buffs.borrow_mut().register_player_buff(name, buff);
             Ok(())
         })?,
     )?;
@@ -163,10 +190,10 @@ fn build_entity(
         }
         // A weapon may omit its acquisition range; the attack range is the default.
         if def.can_attack()
-            && def.base_stat(StatId::ACQUIRE_RANGE).is_none()
-            && let Some(range) = def.base_stat(StatId::ATTACK_RANGE)
+            && def.base_stat(EntityStatId::ACQUIRE_RANGE).is_none()
+            && let Some(range) = def.base_stat(EntityStatId::ATTACK_RANGE)
         {
-            def = def.with_stat(StatId::ACQUIRE_RANGE, range);
+            def = def.with_stat(EntityStatId::ACQUIRE_RANGE, range);
         }
     }
     if let Some(dying) = optional::<Table>(table, "dying")? {
@@ -339,18 +366,18 @@ fn splash_bands(splash: &Table) -> crate::Result<Vec<(u32, FixedU64)>> {
 }
 
 /// Reads the flat `stats = { name = value }` table: each key is a registered stat
-/// name (built-in, or content-declared with `define_stat`), each value a
+/// name (built-in, or content-declared with `define_entity_stat`), each value a
 /// non-negative integer or a decimal string. An unknown name is rejected — a
 /// custom stat must be declared before it is set.
 fn parse_stats(
     stats: &Table,
     registry: &ContentRegistry,
-) -> crate::Result<Vec<(StatId, FixedU64)>> {
+) -> crate::Result<Vec<(EntityStatId, FixedU64)>> {
     let mut out = Vec::new();
     for pair in stats.pairs::<String, Value>() {
         let (name, value) = pair.map_err(|error| field_error("stats", error))?;
         let stat = registry
-            .stat(&name)
+            .entity_stat(&name)
             .ok_or_else(|| ScriptError::ContentError(format!("stat '{name}' is not defined")))?;
         out.push((stat, stat_value(&name, value)?));
     }
@@ -458,47 +485,107 @@ fn field_error(field: &str, error: mlua::Error) -> ScriptError {
     ScriptError::ContentError(format!("field '{field}': {error}"))
 }
 
-/// Reads one skill: `{ cooldown, energy_cost?, target, effect }`.
+/// Reads one skill: `{ caster, cooldown, ... }` — the `caster` arm decides the
+/// remaining fields. An entity cast reads `{ cost?, target, effect }`; a
+/// player cast reads `{ cost?, effect }` and takes no target (the cast lands
+/// on the casting player). A missing `cost` block is a free skill.
 fn parse_skill(table: &Table, registry: &ContentRegistry) -> crate::Result<SkillDef> {
-    let energy_cost = match optional::<String>(table, "energy_cost")? {
-        Some(cost) => content::fixed(&cost)?,
-        None => FixedU64::ZERO,
+    let cooldown = required::<u32>(table, "cooldown")?;
+    let caster = match required::<String>(table, "caster")?.as_str() {
+        "entity" => SkillCaster::Entity {
+            costs: match optional::<Table>(table, "cost")? {
+                Some(cost) => parse_entity_cast_cost(&cost)?,
+                None => Vec::new(),
+            },
+            target: parse_entity_cast_target(&required::<String>(table, "target")?)?,
+            effect: parse_entity_effect(&required::<Table>(table, "effect")?, registry)?,
+        },
+        "player" => {
+            if optional::<Value>(table, "target")?.is_some() {
+                return Err(ScriptError::ContentError(
+                    "a player-cast skill takes no target: the cast lands on the casting player"
+                        .to_string(),
+                ));
+            }
+            SkillCaster::Player {
+                cost: match optional::<Table>(table, "cost")? {
+                    Some(cost) => parse_player_cast_cost(&cost)?,
+                    None => Cost::new(),
+                },
+                effect: parse_player_effect(&required::<Table>(table, "effect")?, registry)?,
+            }
+        }
+        other => {
+            return Err(ScriptError::ContentError(format!(
+                "unknown skill caster '{other}' (expected entity or player)"
+            )));
+        }
     };
-    Ok(SkillDef {
-        cooldown: required::<u32>(table, "cooldown")?,
-        energy_cost,
-        target: parse_skill_target(&required::<String>(table, "target")?)?,
-        effect: parse_skill_effect(&required::<Table>(table, "effect")?, registry)?,
-    })
+    Ok(SkillDef { cooldown, caster })
 }
 
-fn parse_skill_target(target: &str) -> crate::Result<SkillTarget> {
+/// Reads an entity cast's `cost` block: any of `resources` (a table of
+/// amounts), `energy`, and `health` (decimal strings) — each present entry one
+/// price a cast pays.
+fn parse_entity_cast_cost(cost: &Table) -> crate::Result<Vec<EntityCastCost>> {
+    let mut costs = Vec::new();
+    if let Some(resources) = optional::<Table>(cost, "resources")? {
+        costs.push(EntityCastCost::Resources(
+            pairs::<u32>(&resources, "resources")?.into_iter().collect(),
+        ));
+    }
+    if let Some(energy) = optional::<String>(cost, "energy")? {
+        costs.push(EntityCastCost::Energy(content::fixed(&energy)?));
+    }
+    if let Some(health) = optional::<String>(cost, "health")? {
+        costs.push(EntityCastCost::Health(content::fixed(&health)?));
+    }
+    if costs.is_empty() {
+        return Err(ScriptError::ContentError(
+            "skill cost must name at least one of resources, energy, or health".to_string(),
+        ));
+    }
+    Ok(costs)
+}
+
+/// Reads a player cast's `cost` block: a `resources` table of amounts — the
+/// only pool a player has.
+fn parse_player_cast_cost(cost: &Table) -> crate::Result<Cost> {
+    let resources = required::<Table>(cost, "resources")?;
+    Ok(pairs::<u32>(&resources, "resources")?.into_iter().collect())
+}
+
+fn parse_entity_cast_target(target: &str) -> crate::Result<EntityCastTarget> {
     match target {
-        "self" => Ok(SkillTarget::Caster),
-        "ally" => Ok(SkillTarget::Ally),
-        "enemy" => Ok(SkillTarget::Enemy),
+        "caster" => Ok(EntityCastTarget::Caster),
+        "ally" => Ok(EntityCastTarget::Ally),
+        "enemy" => Ok(EntityCastTarget::Enemy),
         other => Err(ScriptError::ContentError(format!(
-            "unknown skill target '{other}' (expected self, ally, or enemy)"
+            "unknown skill target '{other}' (expected caster, ally, or enemy)"
         ))),
     }
 }
 
-/// Reads a skill effect: exactly one of `apply_buff`, `remove_buff`, `damage`, `heal`.
-fn parse_skill_effect(table: &Table, registry: &ContentRegistry) -> crate::Result<SkillEffect> {
+/// Reads an entity cast's effect: exactly one of `apply_buff`, `remove_buff`,
+/// `damage`, `heal`. Buff names resolve in the entity-buff registry.
+fn parse_entity_effect(
+    table: &Table,
+    registry: &ContentRegistry,
+) -> crate::Result<EntityCastEffect> {
     if let Some(name) = optional::<String>(table, "apply_buff")? {
-        let id = registry
-            .buff(&name)
-            .ok_or_else(|| ScriptError::ContentError(format!("buff '{name}' is not defined")))?;
-        Ok(SkillEffect::ApplyBuff(id))
+        let id = registry.entity_buff(&name).ok_or_else(|| {
+            ScriptError::ContentError(format!("entity buff '{name}' is not defined"))
+        })?;
+        Ok(EntityCastEffect::ApplyBuff(id))
     } else if let Some(name) = optional::<String>(table, "remove_buff")? {
-        let id = registry
-            .buff(&name)
-            .ok_or_else(|| ScriptError::ContentError(format!("buff '{name}' is not defined")))?;
-        Ok(SkillEffect::RemoveBuff(id))
+        let id = registry.entity_buff(&name).ok_or_else(|| {
+            ScriptError::ContentError(format!("entity buff '{name}' is not defined"))
+        })?;
+        Ok(EntityCastEffect::RemoveBuff(id))
     } else if let Some(amount) = optional::<String>(table, "damage")? {
-        Ok(SkillEffect::Damage(content::fixed(&amount)?))
+        Ok(EntityCastEffect::Damage(content::fixed(&amount)?))
     } else if let Some(amount) = optional::<String>(table, "heal")? {
-        Ok(SkillEffect::Heal(content::fixed(&amount)?))
+        Ok(EntityCastEffect::Heal(content::fixed(&amount)?))
     } else {
         Err(ScriptError::ContentError(
             "skill effect must be one of apply_buff, remove_buff, damage, or heal".to_string(),
@@ -506,12 +593,59 @@ fn parse_skill_effect(table: &Table, registry: &ContentRegistry) -> crate::Resul
     }
 }
 
-/// Reads a buff definition: `{ duration?, stack, modifiers }`.
-fn parse_buff(table: &Table, registry: &ContentRegistry) -> crate::Result<BuffDef> {
-    Ok(BuffDef {
+/// Reads a player cast's effect: exactly one of `apply_buff` and
+/// `remove_buff`. Buff names resolve in the player-buff registry.
+fn parse_player_effect(
+    table: &Table,
+    registry: &ContentRegistry,
+) -> crate::Result<PlayerCastEffect> {
+    if let Some(name) = optional::<String>(table, "apply_buff")? {
+        let id = registry.player_buff(&name).ok_or_else(|| {
+            ScriptError::ContentError(format!("player buff '{name}' is not defined"))
+        })?;
+        Ok(PlayerCastEffect::ApplyBuff(id))
+    } else if let Some(name) = optional::<String>(table, "remove_buff")? {
+        let id = registry.player_buff(&name).ok_or_else(|| {
+            ScriptError::ContentError(format!("player buff '{name}' is not defined"))
+        })?;
+        Ok(PlayerCastEffect::RemoveBuff(id))
+    } else {
+        Err(ScriptError::ContentError(
+            "player-cast skill effect must be one of apply_buff or remove_buff".to_string(),
+        ))
+    }
+}
+
+/// Reads an entity buff definition: `{ duration?, stack, modifiers }`.
+fn parse_entity_buff(table: &Table, registry: &ContentRegistry) -> crate::Result<EntityBuffDef> {
+    Ok(EntityBuffDef {
         duration: optional::<u32>(table, "duration")?,
         stack_rule: parse_stack_rule(&required::<String>(table, "stack")?)?,
-        modifiers: parse_modifiers(&required::<Vec<Table>>(table, "modifiers")?, registry)?,
+        modifiers: parse_entity_modifiers(&required::<Vec<Table>>(table, "modifiers")?, registry)?,
+    })
+}
+
+/// Reads a player buff definition: `{ duration?, stack, player_modifiers?,
+/// entity_modifiers? }` — at least one modifier list must be present.
+fn parse_player_buff(table: &Table, registry: &ContentRegistry) -> crate::Result<PlayerBuffDef> {
+    let player_modifiers = match optional::<Vec<Table>>(table, "player_modifiers")? {
+        Some(modifiers) => parse_player_modifiers(&modifiers, registry)?,
+        None => Vec::new(),
+    };
+    let entity_modifiers = match optional::<Vec<Table>>(table, "entity_modifiers")? {
+        Some(modifiers) => parse_entity_modifiers(&modifiers, registry)?,
+        None => Vec::new(),
+    };
+    if player_modifiers.is_empty() && entity_modifiers.is_empty() {
+        return Err(ScriptError::ContentError(
+            "player buff must declare player_modifiers or entity_modifiers".to_string(),
+        ));
+    }
+    Ok(PlayerBuffDef {
+        player_modifiers,
+        entity_modifiers,
+        duration: optional::<u32>(table, "duration")?,
+        stack_rule: parse_stack_rule(&required::<String>(table, "stack")?)?,
     })
 }
 
@@ -531,22 +665,74 @@ fn parse_stack_rule(rule: &str) -> crate::Result<StackRule> {
     }
 }
 
-fn parse_modifiers(
+fn parse_entity_modifiers(
     modifiers: &[Table],
     registry: &ContentRegistry,
-) -> crate::Result<Vec<Modifier>> {
+) -> crate::Result<Vec<EntityModifier>> {
     modifiers
         .iter()
-        .map(|modifier| parse_modifier(modifier, registry))
+        .map(|modifier| parse_entity_modifier(modifier, registry))
         .collect()
 }
 
-/// Reads one modifier: `{ stat, op, value }`, resolving the stat name to its id.
-fn parse_modifier(table: &Table, registry: &ContentRegistry) -> crate::Result<Modifier> {
-    let stat_name = required::<String>(table, "stat")?;
+fn parse_player_modifiers(
+    modifiers: &[Table],
+    registry: &ContentRegistry,
+) -> crate::Result<Vec<PlayerModifier>> {
+    modifiers
+        .iter()
+        .map(|modifier| parse_player_modifier(modifier, registry))
+        .collect()
+}
+
+/// Reads one entity modifier: `{ entity_stat, op, value }`.
+fn parse_entity_modifier(
+    table: &Table,
+    registry: &ContentRegistry,
+) -> crate::Result<EntityModifier> {
+    if optional::<Value>(table, "player_stat")?.is_some() {
+        return Err(ScriptError::ContentError(
+            "this modifier list holds entity modifiers; expected entity_stat, found player_stat"
+                .to_string(),
+        ));
+    }
+    let name = required::<String>(table, "entity_stat")?;
     let stat = registry
-        .stat(&stat_name)
-        .ok_or_else(|| ScriptError::ContentError(format!("stat '{stat_name}' is not defined")))?;
+        .entity_stat(&name)
+        .ok_or_else(|| ScriptError::ContentError(format!("entity stat '{name}' is not defined")))?;
+    let (op, magnitude) = parse_modifier_op_value(table)?;
+    Ok(EntityModifier {
+        stat,
+        op,
+        magnitude,
+    })
+}
+
+/// Reads one player modifier: `{ player_stat, op, value }`.
+fn parse_player_modifier(
+    table: &Table,
+    registry: &ContentRegistry,
+) -> crate::Result<PlayerModifier> {
+    if optional::<Value>(table, "entity_stat")?.is_some() {
+        return Err(ScriptError::ContentError(
+            "this modifier list holds player modifiers; expected player_stat, found entity_stat"
+                .to_string(),
+        ));
+    }
+    let name = required::<String>(table, "player_stat")?;
+    let stat = registry
+        .player_stat(&name)
+        .ok_or_else(|| ScriptError::ContentError(format!("player stat '{name}' is not defined")))?;
+    let (op, magnitude) = parse_modifier_op_value(table)?;
+    Ok(PlayerModifier {
+        stat,
+        op,
+        magnitude,
+    })
+}
+
+/// Reads a modifier's `op` and `value` fields, shared by both modifier kinds.
+fn parse_modifier_op_value(table: &Table) -> crate::Result<(ModifierOp, FixedI64)> {
     let op = match required::<String>(table, "op")?.as_str() {
         "flat" => ModifierOp::FlatAdd,
         "percent" => ModifierOp::PercentAdd,
@@ -558,9 +744,5 @@ fn parse_modifier(table: &Table, registry: &ContentRegistry) -> crate::Result<Mo
     };
     let value = FixedI64::from_str(&required::<String>(table, "value")?)
         .map_err(|error| ScriptError::ContentError(format!("invalid modifier value: {error}")))?;
-    Ok(Modifier {
-        stat,
-        op,
-        magnitude: value,
-    })
+    Ok((op, value))
 }

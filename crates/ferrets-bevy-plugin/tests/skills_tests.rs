@@ -1,17 +1,20 @@
-//! Skills: using a skill applies its effect and spends energy.
+//! Entity skills: using a skill applies its effect and pays its costs.
 
 use bevy::prelude::*;
-use ferrets_math::{FixedI64, FixedU64};
+use ferrets_math::FixedU64;
 use ferrets_pathfinder::nav_size::NavSize;
 use ferrets_simulation::{
-    command::PlayerCommand,
+    command::{PlayerCommand, SkillCasterRef},
     components::energy::EnergyComponent,
     content::{
-        buffs::{BuffDef, StackRule},
-        skills::{SkillDef, SkillEffect, SkillTarget},
-        stats::{Modifier, ModifierOp, StatId},
+        entity_stats::EntityStatId,
+        skills::{
+            EntityCastCost, EntityCastEffect, EntityCastTarget, SkillCaster, SkillDef, SkillId,
+        },
+        stats::ModifierOp,
         {entity_type_def::EntityTypeDef, location::Solidity, registry::ContentRegistry},
     },
+    resources,
     session::{GameSession, player_slot::PlayerSlot, player_type::PlayerType},
     spawn,
 };
@@ -38,8 +41,8 @@ fn using_skill_applies_effect_and_spends_energy() {
     utils::push_command(
         &mut app,
         PlayerCommand::UseSkill {
-            caster: mage_id,
             skill: battle_focus,
+            caster: SkillCasterRef::Entity(mage_id),
             target: None,
         },
     );
@@ -60,35 +63,180 @@ fn using_skill_applies_effect_and_spends_energy() {
 }
 
 //
+// ─── Resource and health costs ──────────────────────────────────────────────
+//
+
+#[test]
+fn skill_with_resource_cost_pays_stockpile() {
+    let mut app = app();
+    let (mage, mage_id) =
+        spawn::spawn_entity(app.world_mut(), "mage", utils::pos(5, 5), Some(0)).unwrap();
+    utils::grant_gold(&mut app, 30);
+
+    let rally = skill(&app, "rally");
+    let base = utils::effective_damage(&app, mage);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::UseSkill {
+            skill: rally,
+            caster: SkillCasterRef::Entity(mage_id),
+            target: None,
+        },
+    );
+    utils::run_ticks(&mut app, 5);
+
+    assert_eq!(
+        utils::effective_damage(&app, mage),
+        base + base,
+        "the cast applied its buff"
+    );
+    assert_eq!(
+        utils::gold(app.world()),
+        5,
+        "the cast spent exactly its 25-gold cost"
+    );
+}
+
+#[test]
+fn skill_with_unaffordable_resource_cost_is_refused() {
+    let mut app = app();
+    let (mage, mage_id) =
+        spawn::spawn_entity(app.world_mut(), "mage", utils::pos(5, 5), Some(0)).unwrap();
+    utils::grant_gold(&mut app, 10);
+
+    let rally = skill(&app, "rally");
+    let base = utils::effective_damage(&app, mage);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::UseSkill {
+            skill: rally,
+            caster: SkillCasterRef::Entity(mage_id),
+            target: None,
+        },
+    );
+    utils::run_ticks(&mut app, 5);
+
+    assert_eq!(
+        utils::effective_damage(&app, mage),
+        base,
+        "the refused cast applied nothing"
+    );
+    assert_eq!(
+        utils::gold(app.world()),
+        10,
+        "the refused cast paid nothing"
+    );
+}
+
+#[test]
+fn skill_with_health_cost_pays_health() {
+    let mut app = app();
+    let (mage, mage_id) =
+        spawn::spawn_entity(app.world_mut(), "mage", utils::pos(5, 5), Some(0)).unwrap();
+
+    let sacrifice = skill(&app, "sacrifice");
+    let base = utils::effective_damage(&app, mage);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::UseSkill {
+            skill: sacrifice,
+            caster: SkillCasterRef::Entity(mage_id),
+            target: None,
+        },
+    );
+    utils::run_ticks(&mut app, 5);
+
+    assert_eq!(
+        utils::effective_damage(&app, mage),
+        base + base,
+        "the cast applied its buff"
+    );
+    assert_eq!(
+        utils::health(&app, mage),
+        40,
+        "the cast paid exactly its 10-health cost"
+    );
+}
+
+#[test]
+fn skill_with_lethal_health_cost_is_refused() {
+    let mut app = app();
+    let (mage, mage_id) =
+        spawn::spawn_entity(app.world_mut(), "mage", utils::pos(5, 5), Some(0)).unwrap();
+
+    // The cost equals the mage's full health: surviving on zero is not
+    // surviving, so the cast is refused.
+    let last_rite = skill(&app, "last_rite");
+    let base = utils::effective_damage(&app, mage);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::UseSkill {
+            skill: last_rite,
+            caster: SkillCasterRef::Entity(mage_id),
+            target: None,
+        },
+    );
+    utils::run_ticks(&mut app, 5);
+
+    assert_eq!(
+        utils::effective_damage(&app, mage),
+        base,
+        "the refused cast applied nothing"
+    );
+    assert_eq!(
+        utils::health(&app, mage),
+        50,
+        "the refused cast paid nothing"
+    );
+}
+
+//
 // ─── Helpers ────────────────────────────────────────────────────────────────
 //
 
-/// One human player and a `mage` that can cast a self-targeted +100% damage buff
-/// costing 30 energy on a 5-tick cooldown.
+/// One human player and a `mage` whose self-targeted +100% damage buff can be
+/// cast four ways: `battle_focus` (30 energy), `rally` (25 gold), `sacrifice`
+/// (10 health), and `last_rite` (its whole 50 health).
 fn app() -> App {
     let mut app = utils::make_app(vec![PlayerSlot::occupied(0, PlayerType::Human, None, None)]);
+    app.world_mut()
+        .resource_mut::<ContentRegistry>()
+        .register_resource("gold");
+    let frenzy = utils::register_entity_buff(
+        &mut app,
+        "frenzy",
+        EntityStatId::DAMAGE,
+        ModifierOp::PercentAdd,
+        1.0,
+        Some(20),
+    );
     {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
-        let frenzy = registry.register_buff(
-            "frenzy",
-            BuffDef {
-                modifiers: vec![Modifier {
-                    stat: StatId::DAMAGE,
-                    op: ModifierOp::PercentAdd,
-                    magnitude: FixedI64::from_num(1),
-                }],
-                duration: Some(20),
-                stack_rule: StackRule::Refresh,
+        let costed = |costs| SkillDef {
+            cooldown: 5,
+            caster: SkillCaster::Entity {
+                costs,
+                target: EntityCastTarget::Caster,
+                effect: EntityCastEffect::ApplyBuff(frenzy),
             },
-        );
+        };
         let battle_focus = registry.register_skill(
             "battle_focus",
-            SkillDef {
-                cooldown: 5,
-                energy_cost: FixedU64::from_num(30),
-                target: SkillTarget::Caster,
-                effect: SkillEffect::ApplyBuff(frenzy),
-            },
+            costed(vec![EntityCastCost::Energy(FixedU64::from_num(30))]),
+        );
+        let rally = registry.register_skill(
+            "rally",
+            costed(vec![EntityCastCost::Resources(resources::cost([(
+                "gold", 25,
+            )]))]),
+        );
+        let sacrifice = registry.register_skill(
+            "sacrifice",
+            costed(vec![EntityCastCost::Health(FixedU64::from_num(10))]),
+        );
+        let last_rite = registry.register_skill(
+            "last_rite",
+            costed(vec![EntityCastCost::Health(FixedU64::from_num(50))]),
         );
         registry.register(
             EntityTypeDef::new("mage")
@@ -96,12 +244,20 @@ fn app() -> App {
                 .with_health(50)
                 .with_attack(10, 1, 1, 4, 2)
                 .with_energy(100, FixedU64::from_num(1))
-                .with_skills([battle_focus]),
+                .with_skills([battle_focus, rally, sacrifice, last_rite]),
         );
     }
     app.world_mut().resource::<ContentRegistry>().validate();
     app.world_mut().resource_mut::<GameSession>().start();
     app
+}
+
+/// The registered id of `name`.
+fn skill(app: &App, name: &str) -> SkillId {
+    app.world()
+        .resource::<ContentRegistry>()
+        .skill(name)
+        .expect("skill defined")
 }
 
 fn energy(app: &App, entity: Entity) -> FixedU64 {

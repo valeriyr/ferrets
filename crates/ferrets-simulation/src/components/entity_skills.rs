@@ -30,6 +30,15 @@ impl SkillsComponent {
             .any(|&(skill, remaining)| skill == id && remaining == 0)
     }
 
+    /// Remaining cooldown ticks for skill `id`; zero when ready or absent.
+    pub fn cooldown_remaining(&self, id: SkillId) -> u32 {
+        self.skills
+            .iter()
+            .find(|&&(skill, _)| skill == id)
+            .map(|&(_, remaining)| remaining)
+            .unwrap_or(0)
+    }
+
     /// Puts skill `id` on `cooldown` ticks; a no-op if the entity lacks it.
     pub fn start_cooldown(&mut self, id: SkillId, cooldown: u32) {
         if let Some((_, remaining)) = self.skills.iter_mut().find(|(skill, _)| *skill == id) {

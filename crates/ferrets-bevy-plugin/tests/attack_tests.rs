@@ -2,14 +2,14 @@
 
 mod utils;
 
-use ferrets_math::{FixedI64, FixedU64};
+use ferrets_math::FixedU64;
 use ferrets_pathfinder::{nav_pos::NavPos, nav_size::NavSize};
 use ferrets_simulation::{
     command::PlayerCommand,
     components::{attack::AttackComponent, dying::DyingComponent, health::HealthComponent},
     content::{
-        buffs::{BuffDef, StackRule},
-        stats::{Modifier, ModifierOp, StatId},
+        entity_stats::EntityStatId,
+        stats::ModifierOp,
         {entity_type_def::EntityTypeDef, location::Solidity, registry::ContentRegistry},
     },
     entity_index::EntityIndex,
@@ -219,22 +219,15 @@ fn shortened_attack_cycle_still_lands_hits() {
     let (target, target_id) =
         spawn::spawn_entity(app.world_mut(), "dummy", utils::pos(6, 5), None).unwrap();
 
-    let hasty = app
-        .world_mut()
-        .resource_mut::<ContentRegistry>()
-        .register_buff(
-            "hasty",
-            BuffDef {
-                modifiers: vec![Modifier {
-                    stat: StatId::ATTACK_PERIOD,
-                    op: ModifierOp::FlatAdd,
-                    magnitude: FixedI64::from_num(-3),
-                }],
-                duration: None,
-                stack_rule: StackRule::Refresh,
-            },
-        );
-    game_loop::stats::apply_buff(app.world_mut(), attacker, hasty);
+    let hasty = utils::register_entity_buff(
+        &mut app,
+        "hasty",
+        EntityStatId::ATTACK_PERIOD,
+        ModifierOp::FlatAdd,
+        -3.0,
+        None,
+    );
+    game_loop::stats::apply_entity_buff(app.world_mut(), attacker, hasty);
 
     utils::select(&mut app, attacker_id);
     utils::push_command(

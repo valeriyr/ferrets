@@ -23,6 +23,11 @@ pub(super) fn game_table(lua: &Lua, view: &GameView) -> mlua::Result<Table> {
     }
     table.set("resources", resources)?;
 
+    let supply = lua.create_table()?;
+    supply.set("provided", view.supply_provided)?;
+    supply.set("used", view.supply_used)?;
+    table.set("supply", supply)?;
+
     table.set("my_entities", entities_table(lua, &view.my_entities)?)?;
     table.set("ally_entities", entities_table(lua, &view.ally_entities)?)?;
     table.set("enemy_entities", entities_table(lua, &view.enemy_entities)?)?;

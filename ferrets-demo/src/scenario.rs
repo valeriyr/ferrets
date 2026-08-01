@@ -30,7 +30,7 @@ use ferrets_simulation::{
     },
 };
 
-use crate::states::GameState;
+use crate::{setup, states::GameState};
 
 /// The scenario script. The engine holds the objective list (id + label,
 /// fixing the display order); the script only reports which are met and the
@@ -186,6 +186,7 @@ pub fn start_scenario(world: &mut World) {
 pub fn spawn_scenario_scene(world: &mut World) {
     let scenario = world.resource::<CurrentScenario>().0.clone();
     instantiate_scenario(world, &scenario);
+    setup::seed_player_stats(world);
     world.resource_mut::<GameSession>().start();
 }
 

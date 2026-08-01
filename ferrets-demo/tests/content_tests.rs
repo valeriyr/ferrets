@@ -3,8 +3,11 @@
 
 use ferrets_demo::content::CONTENT;
 use ferrets_demo::map;
+use ferrets_math::FixedU64;
 use ferrets_pathfinder::nav_pos::NavPos;
 use ferrets_script::{content, engine::lua::LuaEngine};
+use ferrets_simulation::content::entity_stats::EntityStatId;
+use ferrets_simulation::content::skills::{EntityCastTarget, PlayerCastEffect, SkillCaster};
 use ferrets_simulation::content::work::WorkPresence;
 use ferrets_simulation::map::Map;
 
@@ -17,12 +20,17 @@ fn content_loads_and_validates() {
         "tree",
         "peasant",
         "town_hall",
+        "farm",
         "barracks",
         "archer",
+        "mortar",
+        "medic",
         "peon",
         "great_hall",
-        "orc_barracks",
+        "pig_farm",
+        "war_camp",
         "grunt",
+        "shaman",
         "ship",
         "sea_fortress",
     ] {
@@ -31,6 +39,29 @@ fn content_loads_and_validates() {
     assert!(registry.has_race("human") && registry.has_race("orc"));
     assert!(registry.has_layer(map::GROUND) && registry.has_layer(map::WATER));
     assert!(registry.has_terrain("grass") && registry.has_terrain("water"));
+}
+
+#[test]
+fn farms_provide_supply_and_units_carry_supply_cost() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+
+    for name in ["farm", "pig_farm"] {
+        let farm = registry.entity(name).expect("farm is registered");
+        assert!(
+            farm.base_stat(EntityStatId::SUPPLY_PROVIDED)
+                .is_some_and(|provided| provided > FixedU64::ZERO),
+            "'{name}' provides supply, or the race has nothing to raise its cap with"
+        );
+    }
+
+    for name in ["peasant", "archer", "peon", "grunt", "shaman", "ship"] {
+        let unit = registry.entity(name).expect("unit is registered");
+        assert!(
+            unit.base_stat(EntityStatId::SUPPLY_COST)
+                .is_some_and(|cost| cost > FixedU64::ZERO),
+            "'{name}' occupies supply, or farms would gate nothing it does"
+        );
+    }
 }
 
 #[test]
@@ -75,6 +106,71 @@ fn worker_presences_cover_every_variant_and_differ_by_race() {
     assert_ne!(
         peasant, peon,
         "the two races are meant to attend their work differently"
+    );
+}
+
+#[test]
+fn war_drums_rallies_owned_units_for_stockpile_price() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+
+    let war_drums = registry
+        .skill("war_drums")
+        .expect("war_drums is registered");
+    let def = registry
+        .skill_def(war_drums)
+        .expect("handle came from this registry");
+    let SkillCaster::Player { cost, effect } = &def.caster else {
+        panic!("war_drums is a player cast");
+    };
+    let PlayerCastEffect::ApplyBuff(buff) = effect else {
+        panic!("the rallying call applies a buff");
+    };
+    let buff = registry.player_buff_def(*buff);
+    assert!(
+        buff.entity_modifiers
+            .iter()
+            .any(|modifier| modifier.stat == EntityStatId::SPEED),
+        "the rallying call moves the army's speed, or casting it changes nothing visible"
+    );
+    assert!(
+        cost.contains_key("gold"),
+        "the cast is paid from the stockpile, or it costs the player nothing"
+    );
+}
+
+#[test]
+fn grunt_and_shaman_carry_their_abilities() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+
+    let blood_rite = registry
+        .skill("blood_rite")
+        .expect("blood_rite is registered");
+    let grunt = registry.entity("grunt").expect("grunt is registered");
+    assert!(
+        grunt.skills.contains(&blood_rite),
+        "the grunt carries blood_rite, or the health-cost arm has no demo button"
+    );
+
+    let second_wind = registry
+        .skill("second_wind")
+        .expect("second_wind is registered");
+    let shaman = registry.entity("shaman").expect("shaman is registered");
+    assert!(
+        shaman.skills.contains(&second_wind),
+        "the shaman carries second_wind, or the mend has no caster"
+    );
+    let def = registry
+        .skill_def(second_wind)
+        .expect("handle came from this registry");
+    assert!(
+        matches!(
+            def.caster,
+            SkillCaster::Entity {
+                target: EntityCastTarget::Ally,
+                ..
+            }
+        ),
+        "second_wind mends a clicked ally, or the shaman can only heal itself"
     );
 }
 

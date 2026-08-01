@@ -3,7 +3,7 @@
 use bevy::ecs::entity::EntityNotSpawnedError;
 use bevy::prelude::*;
 use ferrets_bevy_plugin::{PendingInput, SimulationPlugin};
-use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
+use ferrets_math::{FixedI64, FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_pathfinder::{
     astar,
     astar::Projection,
@@ -15,27 +15,33 @@ use ferrets_simulation::{
     command::{PlayerCommand, SelectMode},
     components::{
         entity_info::EntityInfoComponent,
+        entity_stats::StatsComponent,
         health::HealthComponent,
         hidden::HiddenComponent,
         location::LocationComponent,
         order_queue::{CancelPolicy, OrderQueueComponent},
         owner::OwnerComponent,
         pending_reveal::PendingRevealComponent,
-        stats::StatsComponent,
+        train::TrainQueueComponent,
     },
     content::{
+        entity_buffs::{EntityBuffDef, EntityBuffId},
+        entity_stats::EntityStatId,
         entity_type_def::EntityTypeDef,
         location::Solidity,
+        player_buffs::PlayerBuffDef,
         registry::ContentRegistry,
         resource::{DepletionPolicy, HarvestData},
-        stats::StatId,
+        skills::{PlayerCastEffect, SkillCaster, SkillDef},
+        stack_rule::StackRule,
+        stats::{EntityModifier, ModifierOp},
         work::WorkPresence,
     },
     entity_def,
     input::{InputFrames, PlayerFrame},
     map::Map,
     order::AttackTarget,
-    resources::PlayerResources,
+    resources::{self, PlayerResources},
     selection::Selection,
     session::{
         GameSession,
@@ -366,13 +372,40 @@ pub fn attack(app: &mut App, attacker: SimulationId, target: SimulationId) {
     );
 }
 
+/// Registers a single-modifier entity buff, refreshing on re-application:
+/// `stat` moved by `magnitude` per `op`, for `duration` ticks (`None` is
+/// permanent).
+pub fn register_entity_buff(
+    app: &mut App,
+    name: &str,
+    stat: EntityStatId,
+    op: ModifierOp,
+    magnitude: f64,
+    duration: Option<u32>,
+) -> EntityBuffId {
+    app.world_mut()
+        .resource_mut::<ContentRegistry>()
+        .register_entity_buff(
+            name,
+            EntityBuffDef {
+                modifiers: vec![EntityModifier {
+                    stat,
+                    op,
+                    magnitude: FixedI64::from_num(magnitude),
+                }],
+                duration,
+                stack_rule: StackRule::Refresh,
+            },
+        )
+}
+
 /// The entity's damage stat after the tick's modifier fold — what the buff and
 /// skill suites compare before and after applying an effect.
 pub fn effective_damage(app: &App, entity: Entity) -> FixedU64 {
     app.world()
         .get::<StatsComponent>(entity)
         .unwrap()
-        .effective(StatId::DAMAGE)
+        .effective(EntityStatId::DAMAGE)
         .unwrap()
 }
 
@@ -425,6 +458,128 @@ pub fn orders_app() -> App {
     app
 }
 
+/// App with the economy roster plus the supply roster — a `camp` that provides
+/// supply, a `settler` that costs it, a `lodge` that trains settlers and
+/// workers, and a `pioneer` that raises camps — one human player, session
+/// started.
+///
+/// No other type in the roster carries a supply stat, so headroom comes only
+/// from standing camps and the player's `max_supply` ceiling.
+pub fn supply_app() -> App {
+    let mut app = make_app(vec![PlayerSlot::occupied(0, PlayerType::Human, None, None)]);
+    register_orders_content(&mut app);
+    {
+        let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
+        // Registered before `pioneer`, which builds it.
+        registry.register(
+            EntityTypeDef::new("camp")
+                .with_location(GROUND, NavSize::new(2, 2), Solidity::Solid)
+                .with_health(100)
+                .with_dying(2, None)
+                .with_cost([("gold", 20)])
+                .with_build_time(10)
+                .with_stat(EntityStatId::SUPPLY_PROVIDED, FixedU64::from_num(8)),
+        );
+        // Registered before `lodge`, which trains it.
+        registry.register(
+            EntityTypeDef::new("settler")
+                .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+                .with_movement(FixedU64::from_num(0.5))
+                .with_health(20)
+                .with_dying(2, None)
+                .with_cost([("gold", 10)])
+                .with_train_time(10)
+                .with_stat(EntityStatId::SUPPLY_COST, FixedU64::ONE),
+        );
+        // Also trains the supply-free `worker`, so the gate's exemption for
+        // costless types can be watched from the same trainer.
+        registry.register(
+            EntityTypeDef::new("lodge")
+                .with_location(GROUND, NavSize::new(2, 2), Solidity::Solid)
+                .with_health(100)
+                .with_dying(2, None)
+                .with_trainer(["settler", "worker"]),
+        );
+        // Works from outside the site, so a camp going up stays observable.
+        registry.register(
+            EntityTypeDef::new("pioneer")
+                .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+                .with_movement(FixedU64::from_num(0.5))
+                .with_health(20)
+                .with_dying(2, None)
+                .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
+                .with_builder(["camp"], WorkPresence::Present),
+        );
+    }
+    app.world_mut().resource::<ContentRegistry>().validate();
+    app.world_mut().resource_mut::<GameSession>().start();
+    app
+}
+
+/// App with the player-effects roster — a `runner` whose speed owner-wide
+/// modifiers move, and a `drums` player skill (+100% speed for 10 ticks,
+/// 20-tick cooldown, 10 gold) — two human players, session started.
+pub fn player_effects_app() -> App {
+    let mut app = make_app(vec![
+        PlayerSlot::occupied(0, PlayerType::Human, None, None),
+        PlayerSlot::occupied(1, PlayerType::Human, None, None),
+    ]);
+    {
+        let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
+        registry.register_resource("gold");
+        registry.register(
+            EntityTypeDef::new("runner")
+                .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+                .with_movement(FixedU64::from_num(0.5))
+                .with_health(20)
+                .with_dying(2, None),
+        );
+        let drums_haste = registry.register_player_buff(
+            "drums_haste",
+            PlayerBuffDef {
+                player_modifiers: Vec::new(),
+                entity_modifiers: vec![EntityModifier {
+                    stat: EntityStatId::SPEED,
+                    op: ModifierOp::PercentAdd,
+                    magnitude: FixedI64::from_num(1),
+                }],
+                duration: Some(10),
+                stack_rule: StackRule::Refresh,
+            },
+        );
+        registry.register_skill(
+            "drums",
+            SkillDef {
+                cooldown: 20,
+                caster: SkillCaster::Player {
+                    cost: resources::cost([("gold", 10)]),
+                    effect: PlayerCastEffect::ApplyBuff(drums_haste),
+                },
+            },
+        );
+    }
+    app.world_mut().resource::<ContentRegistry>().validate();
+    app.world_mut().resource_mut::<GameSession>().start();
+    app
+}
+
+/// The entity's speed stat after the tick's modifier fold — what the
+/// player-effect suites compare before and after an owner-wide modifier.
+pub fn effective_speed(app: &App, entity: Entity) -> FixedU64 {
+    app.world()
+        .get::<StatsComponent>(entity)
+        .unwrap()
+        .effective(EntityStatId::SPEED)
+        .unwrap()
+}
+
+/// The number of units waiting in `entity`'s training queue.
+pub fn train_queue_len(world: &World, entity: Entity) -> usize {
+    world
+        .get::<TrainQueueComponent>(entity)
+        .map_or(0, |queue| queue.0.len())
+}
+
 /// Registers the economy content roster ([`orders_app`]'s) and validates it.
 pub fn register_orders_content(app: &mut App) {
     {
@@ -459,8 +614,8 @@ pub fn register_orders_content(app: &mut App) {
                 .with_dying(2, None)
                 .with_cost([("gold", 10)])
                 .with_train_time(2)
-                .with_stat(StatId::BUILD_RANGE, FixedU64::ONE)
-                .with_stat(StatId::HARVEST_RANGE, FixedU64::ONE)
+                .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
+                .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
                 .with_builder(["depot"], WorkPresence::Hidden)
                 .with_resource_carrier([("gold", HarvestData::new(5, 2, WorkPresence::Hidden))]),
         );
@@ -472,7 +627,7 @@ pub fn register_orders_content(app: &mut App) {
                 .with_movement(FixedU64::from_num(0.5))
                 .with_health(20)
                 .with_dying(2, None)
-                .with_stat(StatId::BUILD_RANGE, FixedU64::ONE)
+                .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
                 .with_builder(["depot"], WorkPresence::Present),
         );
         // Same catalogue again, and any number of them can crowd one site.
@@ -482,7 +637,7 @@ pub fn register_orders_content(app: &mut App) {
                 .with_movement(FixedU64::from_num(0.5))
                 .with_health(20)
                 .with_dying(2, None)
-                .with_stat(StatId::BUILD_RANGE, FixedU64::ONE)
+                .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
                 .with_builder(["depot"], WorkPresence::PresentStacking),
         );
         registry.register(
@@ -491,7 +646,7 @@ pub fn register_orders_content(app: &mut App) {
                 .with_movement(FixedU64::from_num(0.5))
                 .with_health(20)
                 .with_dying(2, None)
-                .with_stat(StatId::HARVEST_RANGE, FixedU64::ONE)
+                .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
                 .with_resource_carrier([("wood", HarvestData::new(5, 2, WorkPresence::Present))]),
         );
         // Works a seam from three cells back, which says nothing about how close it
@@ -502,7 +657,7 @@ pub fn register_orders_content(app: &mut App) {
                 .with_movement(FixedU64::from_num(0.5))
                 .with_health(20)
                 .with_dying(2, None)
-                .with_stat(StatId::HARVEST_RANGE, FixedU64::from_num(3))
+                .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::from_num(3))
                 .with_resource_carrier([("gold", HarvestData::new(5, 2, WorkPresence::Present))]),
         );
         // Same trade as `lumberjack`, but a stand takes as many axes as turn up — and
@@ -513,7 +668,7 @@ pub fn register_orders_content(app: &mut App) {
                 .with_movement(FixedU64::from_num(0.5))
                 .with_health(20)
                 .with_dying(2, None)
-                .with_stat(StatId::HARVEST_RANGE, FixedU64::ONE)
+                .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
                 .with_resource_carrier([(
                     "wood",
                     HarvestData::new(5, 8, WorkPresence::PresentStacking),

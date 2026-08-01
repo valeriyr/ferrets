@@ -10,12 +10,12 @@ const BLOCKED_WAIT_TICKS: u32 = 5;
 
 use crate::{
     components::{
+        entity_stats::StatsComponent,
         location::LocationComponent,
         movement::MoveComponent,
         order_queue::{CancelPolicy, OrderState},
-        stats::StatsComponent,
     },
-    content::stats::StatId,
+    content::entity_stats::EntityStatId,
     entity_def,
     map::Map,
     order::Order,
@@ -92,7 +92,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> OrderState {
     let speed = world
         .entity(entity)
         .get::<StatsComponent>()
-        .and_then(|stats| stats.effective(StatId::SPEED))
+        .and_then(|stats| stats.effective(EntityStatId::SPEED))
         .expect("movable entities have a speed stat");
     let location_def = entity_def::of(world, entity).location.unwrap();
     let occupation = location_def.occupation();

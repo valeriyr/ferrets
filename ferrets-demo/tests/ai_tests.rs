@@ -80,7 +80,7 @@ fn ai_builds_economy_and_army() {
     let world = app.world_mut();
     assert_eq!(world.resource::<GameSession>().tick(), 1000);
     assert!(count_owned(world, 1, "barracks") >= 1);
-    assert!(count_owned(world, 2, "orc_barracks") >= 1);
+    assert!(count_owned(world, 2, "war_camp") >= 1);
     assert_eq!(count_owned(world, 1, "peasant"), 5);
     assert_eq!(count_owned(world, 2, "peon"), 5);
     assert!(count_owned(world, 1, "archer") >= 1);

@@ -8,11 +8,13 @@ use ferrets_pathfinder::{layer_id::LayerId, layer_mask::LayerMask};
 
 use super::entity_type_def::{EntityTypeDef, EntityTypeId};
 use crate::content::{
-    buffs::{BuffDef, BuffId},
+    entity_buffs::{EntityBuffDef, EntityBuffId},
+    entity_stats::{ENTITY_BUILTIN_STATS, EntityStatId},
+    player_buffs::{PlayerBuffDef, PlayerBuffId},
+    player_stats::{PLAYER_BUILTIN_STATS, PlayerStatId},
     projectile::{ProjectileDef, ProjectileId},
     repair::RepairCost,
-    skills::{SkillDef, SkillId},
-    stats::{BUILTIN_STATS, StatId},
+    skills::{EntityCastCost, EntityCastEffect, PlayerCastEffect, SkillCaster, SkillDef, SkillId},
     tags,
 };
 
@@ -32,9 +34,12 @@ pub struct ContentRegistry {
     tags: BTreeSet<String>,
     layers: BTreeMap<String, LayerId>,
     terrains: BTreeMap<String, LayerMask>,
-    stats: BTreeMap<String, StatId>,
-    buffs: BTreeMap<String, BuffId>,
-    buff_defs: Vec<BuffDef>,
+    entity_stats: BTreeMap<String, EntityStatId>,
+    player_stats: BTreeMap<String, PlayerStatId>,
+    entity_buffs: BTreeMap<String, EntityBuffId>,
+    entity_buff_defs: Vec<EntityBuffDef>,
+    player_buffs: BTreeMap<String, PlayerBuffId>,
+    player_buff_defs: Vec<PlayerBuffDef>,
     skills: BTreeMap<String, SkillId>,
     skill_defs: Vec<SkillDef>,
     projectiles: BTreeMap<String, ProjectileId>,
@@ -52,12 +57,18 @@ impl Default for ContentRegistry {
             tags: BTreeSet::from([tags::BUILDING.to_string()]),
             layers: BTreeMap::new(),
             terrains: BTreeMap::new(),
-            stats: BUILTIN_STATS
+            entity_stats: ENTITY_BUILTIN_STATS
                 .iter()
                 .map(|builtin| (builtin.name.to_string(), builtin.id))
                 .collect(),
-            buffs: BTreeMap::new(),
-            buff_defs: Vec::new(),
+            player_stats: PLAYER_BUILTIN_STATS
+                .iter()
+                .map(|builtin| (builtin.name.to_string(), builtin.id))
+                .collect(),
+            entity_buffs: BTreeMap::new(),
+            entity_buff_defs: Vec::new(),
+            player_buffs: BTreeMap::new(),
+            player_buff_defs: Vec::new(),
             skills: BTreeMap::new(),
             skill_defs: Vec::new(),
             projectiles: BTreeMap::new(),
@@ -240,79 +251,170 @@ impl ContentRegistry {
         self.layers.iter().map(|(name, &id)| (name.as_str(), id))
     }
 
-    /// Registers a stat (health, damage, …) and returns its assigned [`StatId`].
+    /// Registers an entity stat (health, damage, …) and returns its assigned
+    /// [`EntityStatId`].
     ///
     /// Ids are assigned in registration order. The built-in stats are
-    /// pre-registered first, so their ids are the [`StatId`] constants, and
+    /// pre-registered first, so their ids are the [`EntityStatId`] constants, and
     /// content-declared stats follow. Re-registering a name returns its
     /// existing id.
     ///
-    /// Panics if `name` is empty.
-    pub fn register_stat(&mut self, name: impl Into<String>) -> StatId {
+    /// Panics if `name` is empty or already names a player stat — the two
+    /// vocabularies are separate, but one name meaning both would leave content
+    /// ambiguous to its readers.
+    pub fn register_entity_stat(&mut self, name: impl Into<String>) -> EntityStatId {
         let name = name.into();
         assert!(!name.is_empty(), "stat name must not be empty");
+        assert!(
+            !self.player_stats.contains_key(&name),
+            "'{name}' is already registered as a player stat"
+        );
 
-        if let Some(&id) = self.stats.get(&name) {
+        if let Some(&id) = self.entity_stats.get(&name) {
             return id;
         }
 
-        let id = StatId::from_index(self.stats.len());
-        self.stats.insert(name, id);
+        let id = EntityStatId::from_index(self.entity_stats.len());
+        self.entity_stats.insert(name, id);
         id
     }
 
-    /// Returns `true` if `name` is a registered stat.
-    pub fn has_stat(&self, name: &str) -> bool {
-        self.stats.contains_key(name)
+    /// Returns `true` if `name` is a registered entity stat.
+    pub fn has_entity_stat(&self, name: &str) -> bool {
+        self.entity_stats.contains_key(name)
     }
 
-    /// Returns the [`StatId`] for the given stat name, or `None` if not registered.
-    pub fn stat(&self, name: &str) -> Option<StatId> {
-        self.stats.get(name).copied()
+    /// Returns the [`EntityStatId`] for the given stat name, or `None` if not registered.
+    pub fn entity_stat(&self, name: &str) -> Option<EntityStatId> {
+        self.entity_stats.get(name).copied()
     }
 
-    /// Registers a buff definition by name and returns its assigned [`BuffId`].
-    /// Ids are assigned in registration order, so identical content registered in
-    /// the same order resolves to identical ids everywhere. Re-registering a name
-    /// keeps the first definition and returns its existing id.
+    /// Registers a player stat (max_supply, …) and returns its assigned
+    /// [`PlayerStatId`].
+    ///
+    /// Ids are assigned in registration order. The built-in player stats are
+    /// pre-registered first, so their ids are the [`PlayerStatId`] constants, and
+    /// content-declared player stats follow. Re-registering a name returns its
+    /// existing id.
+    ///
+    /// Panics if `name` is empty or already names an entity stat.
+    pub fn register_player_stat(&mut self, name: impl Into<String>) -> PlayerStatId {
+        let name = name.into();
+        assert!(!name.is_empty(), "player stat name must not be empty");
+        assert!(
+            !self.entity_stats.contains_key(&name),
+            "'{name}' is already registered as an entity stat"
+        );
+
+        if let Some(&id) = self.player_stats.get(&name) {
+            return id;
+        }
+
+        let id = PlayerStatId::from_index(self.player_stats.len());
+        self.player_stats.insert(name, id);
+        id
+    }
+
+    /// Returns `true` if `name` is a registered player stat.
+    pub fn has_player_stat(&self, name: &str) -> bool {
+        self.player_stats.contains_key(name)
+    }
+
+    /// Returns the [`PlayerStatId`] for the given player stat name, or `None` if
+    /// not registered.
+    pub fn player_stat(&self, name: &str) -> Option<PlayerStatId> {
+        self.player_stats.get(name).copied()
+    }
+
+    /// Registers an entity buff definition by name and returns its assigned
+    /// [`EntityBuffId`]. Ids are assigned in registration order, so identical
+    /// content registered in the same order resolves to identical ids
+    /// everywhere. Re-registering a name keeps the first definition and returns
+    /// its existing id.
     ///
     /// Panics if `name` is empty.
-    pub fn register_buff(&mut self, name: impl Into<String>, buff: BuffDef) -> BuffId {
+    pub fn register_entity_buff(
+        &mut self,
+        name: impl Into<String>,
+        buff: EntityBuffDef,
+    ) -> EntityBuffId {
         let name = name.into();
-        assert!(!name.is_empty(), "buff name must not be empty");
+        assert!(!name.is_empty(), "entity buff name must not be empty");
 
-        if let Some(&id) = self.buffs.get(&name) {
+        if let Some(&id) = self.entity_buffs.get(&name) {
             return id;
         }
 
-        let id = BuffId::from_index(self.buff_defs.len());
-        self.buffs.insert(name, id);
-        self.buff_defs.push(buff);
+        let id = EntityBuffId::from_index(self.entity_buff_defs.len());
+        self.entity_buffs.insert(name, id);
+        self.entity_buff_defs.push(buff);
         id
     }
 
-    /// Returns `true` if `name` is a registered buff.
-    pub fn has_buff(&self, name: &str) -> bool {
-        self.buffs.contains_key(name)
+    /// Returns `true` if `name` is a registered entity buff.
+    pub fn has_entity_buff(&self, name: &str) -> bool {
+        self.entity_buffs.contains_key(name)
     }
 
-    /// Returns the [`BuffId`] for the given buff name, or `None` if not registered.
-    pub fn buff(&self, name: &str) -> Option<BuffId> {
-        self.buffs.get(name).copied()
+    /// Returns the [`EntityBuffId`] for the given entity buff name, or `None`
+    /// if not registered.
+    pub fn entity_buff(&self, name: &str) -> Option<EntityBuffId> {
+        self.entity_buffs.get(name).copied()
     }
 
-    /// Returns the name the given buff is registered under, or `None` if the
-    /// handle did not come from this registry.
-    pub fn buff_name(&self, id: BuffId) -> Option<&str> {
-        self.buffs
+    /// Returns the entity buff definition for the given handle.
+    pub fn entity_buff_def(&self, id: EntityBuffId) -> &EntityBuffDef {
+        &self.entity_buff_defs[id.index()]
+    }
+
+    /// Returns the name the given entity buff is registered under, or `None`
+    /// if the handle did not come from this registry.
+    pub fn entity_buff_name(&self, id: EntityBuffId) -> Option<&str> {
+        self.entity_buffs
             .iter()
             .find(|&(_, &buff)| buff == id)
             .map(|(name, _)| name.as_str())
     }
 
-    /// Returns the buff definition for the given handle.
-    pub fn buff_def(&self, id: BuffId) -> &BuffDef {
-        &self.buff_defs[id.index()]
+    /// Registers a player buff definition by name and returns its assigned
+    /// [`PlayerBuffId`]. Ids are assigned in registration order, so identical
+    /// content registered in the same order resolves to identical ids
+    /// everywhere. Re-registering a name keeps the first definition and returns
+    /// its existing id.
+    ///
+    /// Panics if `name` is empty.
+    pub fn register_player_buff(
+        &mut self,
+        name: impl Into<String>,
+        buff: PlayerBuffDef,
+    ) -> PlayerBuffId {
+        let name = name.into();
+        assert!(!name.is_empty(), "player buff name must not be empty");
+
+        if let Some(&id) = self.player_buffs.get(&name) {
+            return id;
+        }
+
+        let id = PlayerBuffId::from_index(self.player_buff_defs.len());
+        self.player_buffs.insert(name, id);
+        self.player_buff_defs.push(buff);
+        id
+    }
+
+    /// Returns `true` if `name` is a registered player buff.
+    pub fn has_player_buff(&self, name: &str) -> bool {
+        self.player_buffs.contains_key(name)
+    }
+
+    /// Returns the [`PlayerBuffId`] for the given player buff name, or `None`
+    /// if not registered.
+    pub fn player_buff(&self, name: &str) -> Option<PlayerBuffId> {
+        self.player_buffs.get(name).copied()
+    }
+
+    /// Returns the player buff definition for the given handle.
+    pub fn player_buff_def(&self, id: PlayerBuffId) -> &PlayerBuffDef {
+        &self.player_buff_defs[id.index()]
     }
 
     /// Registers a projectile definition by name and returns its assigned
@@ -358,15 +460,63 @@ impl ContentRegistry {
         &self.projectile_defs[id.index()]
     }
 
-    /// Registers a skill definition by name and returns its assigned [`SkillId`].
-    /// Ids are assigned in registration order, so identical content registered in
-    /// the same order resolves to identical ids everywhere. Re-registering a name
-    /// keeps the first definition and returns its existing id.
+    /// Registers a skill definition by name and returns its assigned
+    /// [`SkillId`]. Ids are assigned in registration order, so identical
+    /// content registered in the same order resolves to identical ids
+    /// everywhere. Re-registering a name keeps the first definition and
+    /// returns its existing id.
     ///
-    /// Panics if `name` is empty.
+    /// Panics if `name` is empty, the skill costs an unregistered resource
+    /// kind, or its effect references a buff this registry never minted.
     pub fn register_skill(&mut self, name: impl Into<String>, skill: SkillDef) -> SkillId {
         let name = name.into();
         assert!(!name.is_empty(), "skill name must not be empty");
+
+        match &skill.caster {
+            SkillCaster::Entity { costs, effect, .. } => {
+                for cost in costs {
+                    match cost {
+                        EntityCastCost::Resources(resources) => {
+                            for kind in resources.keys() {
+                                assert!(
+                                    self.has_resource(kind),
+                                    "skill '{name}' costs unregistered resource kind '{kind}'"
+                                );
+                            }
+                        }
+                        // Whether the pool exists is the carrying type's
+                        // business, checked when a type declares the skill
+                        // (see [`Self::validate_skills`]).
+                        EntityCastCost::Energy(_) | EntityCastCost::Health(_) => {}
+                    }
+                }
+                match effect {
+                    EntityCastEffect::ApplyBuff(buff) | EntityCastEffect::RemoveBuff(buff) => {
+                        assert!(
+                            buff.index() < self.entity_buff_defs.len(),
+                            "skill '{name}' references an unregistered entity buff"
+                        )
+                    }
+                    EntityCastEffect::Damage(_) | EntityCastEffect::Heal(_) => {}
+                }
+            }
+            SkillCaster::Player { cost, effect } => {
+                for kind in cost.keys() {
+                    assert!(
+                        self.has_resource(kind),
+                        "skill '{name}' costs unregistered resource kind '{kind}'"
+                    );
+                }
+                match effect {
+                    PlayerCastEffect::ApplyBuff(buff) | PlayerCastEffect::RemoveBuff(buff) => {
+                        assert!(
+                            buff.index() < self.player_buff_defs.len(),
+                            "skill '{name}' references an unregistered player buff"
+                        )
+                    }
+                }
+            }
+        }
 
         if let Some(&id) = self.skills.get(&name) {
             return id;
@@ -383,7 +533,8 @@ impl ContentRegistry {
         self.skills.contains_key(name)
     }
 
-    /// Returns the [`SkillId`] for the given skill name, or `None` if not registered.
+    /// Returns the [`SkillId`] for the given skill name, or `None` if not
+    /// registered.
     pub fn skill(&self, name: &str) -> Option<SkillId> {
         self.skills.get(name).copied()
     }
@@ -397,9 +548,10 @@ impl ContentRegistry {
             .map(|(name, _)| name.as_str())
     }
 
-    /// Returns the skill definition for the given handle.
-    pub fn skill_def(&self, id: SkillId) -> &SkillDef {
-        &self.skill_defs[id.index()]
+    /// Returns the skill definition for the given handle, or `None` if the
+    /// handle did not come from this registry.
+    pub fn skill_def(&self, id: SkillId) -> Option<&SkillDef> {
+        self.skill_defs.get(id.index())
     }
 
     /// Registers a terrain type (grass, water, …): a name and the mask of
@@ -474,42 +626,67 @@ impl ContentRegistry {
         }
     }
 
-    /// Checks that every skill the type carries can be paid for: a skill with an
-    /// energy cost needs the pool to spend from, so the type must declare
-    /// [`StatId::MAX_ENERGY`].
+    /// Checks that every skill the type carries is entity-cast and can be paid
+    /// for: each pool cost draws from the caster, so the type must have the
+    /// pools its skills spend from.
     fn validate_skills(&self, def: &EntityTypeDef) {
         for &skill in &def.skills {
-            if self.skill_def(skill).energy_cost > FixedU64::ZERO {
-                assert!(
-                    def.has_energy(),
-                    "entity type '{}' has skill '{}' with an energy cost but no max_energy stat",
+            let skill_def = self
+                .skill_def(skill)
+                .expect("a declared skill id must come from this registry");
+            let costs = match &skill_def.caster {
+                SkillCaster::Entity { costs, .. } => costs,
+                SkillCaster::Player { .. } => panic!(
+                    "entity type '{}' declares player-cast skill '{}'",
                     def.name,
                     self.skill_name(skill).unwrap_or("<unregistered>"),
-                );
+                ),
+            };
+            for cost in costs {
+                match cost {
+                    // Kinds were checked when the skill was registered; the
+                    // stockpile is the owner's, not the type's, so there is
+                    // nothing type-level left to require.
+                    EntityCastCost::Resources(_) => {}
+                    EntityCastCost::Energy(_) => assert!(
+                        def.has_energy(),
+                        "entity type '{}' has skill '{}' with an energy cost but no max_energy stat",
+                        def.name,
+                        self.skill_name(skill).unwrap_or("<unregistered>"),
+                    ),
+                    EntityCastCost::Health(_) => assert!(
+                        def.has_health(),
+                        "entity type '{}' has skill '{}' with a health cost but no health pool",
+                        def.name,
+                        self.skill_name(skill).unwrap_or("<unregistered>"),
+                    ),
+                }
             }
         }
     }
 
     /// Checks the engine's built-in stats: a declared pool or speed is positive (a
     /// zero would be meaningless); a stat the engine reads as a whole number is at
-    /// least its floor; an attacker — one carrying the [`StatId::DAMAGE`] stat —
+    /// least its floor; an attacker — one carrying the [`EntityStatId::DAMAGE`] stat —
     /// also carries the rest of its weapon; and the hit lands within the attack
     /// cycle (`damage_point <= attack_period`).
     /// Content's own custom stats are engine-transparent and not checked here.
     fn validate_stats(&self, def: &EntityTypeDef) {
         // Declaring any of these at zero says nothing an omitted stat would not.
         for stat in [
-            StatId::MAX_HEALTH,
-            StatId::SPEED,
-            StatId::MAX_ENERGY,
-            StatId::REPAIR_SPEED,
+            EntityStatId::MAX_HEALTH,
+            EntityStatId::SPEED,
+            EntityStatId::MAX_ENERGY,
+            EntityStatId::REPAIR_SPEED,
+            EntityStatId::SUPPLY_PROVIDED,
+            EntityStatId::SUPPLY_COST,
         ] {
             if let Some(value) = def.base_stat(stat) {
                 assert!(
                     value > FixedU64::ZERO,
                     "entity type '{}' has a non-positive {} stat",
                     def.name,
-                    BUILTIN_STATS[stat.index()].name,
+                    ENTITY_BUILTIN_STATS[stat.index()].name,
                 );
             }
         }
@@ -518,7 +695,7 @@ impl ContentRegistry {
         // value below the floor truncates to something its consumer can never
         // satisfy — and an entity that is never buffed never reaches the fold that
         // would raise it. Driven off the floor table so the two cannot disagree.
-        for builtin in &BUILTIN_STATS {
+        for builtin in &ENTITY_BUILTIN_STATS {
             if builtin.floor == FixedU64::ZERO {
                 continue;
             }
@@ -535,16 +712,16 @@ impl ContentRegistry {
 
         if def.can_attack() {
             for stat in [
-                StatId::ATTACK_RANGE,
-                StatId::ACQUIRE_RANGE,
-                StatId::ATTACK_PERIOD,
-                StatId::DAMAGE_POINT,
+                EntityStatId::ATTACK_RANGE,
+                EntityStatId::ACQUIRE_RANGE,
+                EntityStatId::ATTACK_PERIOD,
+                EntityStatId::DAMAGE_POINT,
             ] {
                 assert!(
                     def.base_stat(stat).is_some(),
                     "entity type '{}' carries the damage stat but is missing {}",
                     def.name,
-                    BUILTIN_STATS[stat.index()].name,
+                    ENTITY_BUILTIN_STATS[stat.index()].name,
                 );
             }
         }
@@ -552,23 +729,23 @@ impl ContentRegistry {
         // A regeneration rate is read through the pool it refills, so one declared
         // without that pool is content that can never take effect.
         for (regen, pool) in [
-            (StatId::HEALTH_REGEN, StatId::MAX_HEALTH),
-            (StatId::ENERGY_REGEN, StatId::MAX_ENERGY),
+            (EntityStatId::HEALTH_REGEN, EntityStatId::MAX_HEALTH),
+            (EntityStatId::ENERGY_REGEN, EntityStatId::MAX_ENERGY),
         ] {
             if def.base_stat(regen).is_some() {
                 assert!(
                     def.base_stat(pool).is_some(),
                     "entity type '{}' declares {} without {}",
                     def.name,
-                    BUILTIN_STATS[regen.index()].name,
-                    BUILTIN_STATS[pool.index()].name,
+                    ENTITY_BUILTIN_STATS[regen.index()].name,
+                    ENTITY_BUILTIN_STATS[pool.index()].name,
                 );
             }
         }
 
         if let (Some(period), Some(damage_point)) = (
-            def.base_stat(StatId::ATTACK_PERIOD),
-            def.base_stat(StatId::DAMAGE_POINT),
+            def.base_stat(EntityStatId::ATTACK_PERIOD),
+            def.base_stat(EntityStatId::DAMAGE_POINT),
         ) {
             assert!(
                 damage_point <= period,
@@ -581,7 +758,7 @@ impl ContentRegistry {
     /// Checks that a build capability carries the reach the order reads, and that the
     /// stat is not declared by something that cannot build.
     fn validate_build(&self, def: &EntityTypeDef) {
-        if def.base_stat(StatId::BUILD_RANGE).is_some() {
+        if def.base_stat(EntityStatId::BUILD_RANGE).is_some() {
             assert!(
                 def.builder.is_some(),
                 "entity type '{}' declares build_range but cannot build",
@@ -590,7 +767,7 @@ impl ContentRegistry {
         }
         if def.builder.is_some() {
             assert!(
-                def.base_stat(StatId::BUILD_RANGE).is_some(),
+                def.base_stat(EntityStatId::BUILD_RANGE).is_some(),
                 "entity type '{}' can build but is missing build_range",
                 def.name
             );
@@ -600,7 +777,7 @@ impl ContentRegistry {
     /// Checks that a carrying capability carries the reach the order reads, and that
     /// the stat is not declared by something that cannot carry.
     fn validate_harvest(&self, def: &EntityTypeDef) {
-        if def.base_stat(StatId::HARVEST_RANGE).is_some() {
+        if def.base_stat(EntityStatId::HARVEST_RANGE).is_some() {
             assert!(
                 def.resource_carrier.is_some(),
                 "entity type '{}' declares harvest_range but cannot carry resources",
@@ -609,7 +786,7 @@ impl ContentRegistry {
         }
         if def.resource_carrier.is_some() {
             assert!(
-                def.base_stat(StatId::HARVEST_RANGE).is_some(),
+                def.base_stat(EntityStatId::HARVEST_RANGE).is_some(),
                 "entity type '{}' can carry resources but is missing harvest_range",
                 def.name
             );
@@ -622,16 +799,16 @@ impl ContentRegistry {
         // Both repair stats are read only through a repair capability, so either one
         // alone is content that can never take effect.
         for stat in [
-            StatId::REPAIR_SPEED,
-            StatId::REPAIR_COST_FACTOR,
-            StatId::REPAIR_RANGE,
+            EntityStatId::REPAIR_SPEED,
+            EntityStatId::REPAIR_COST_FACTOR,
+            EntityStatId::REPAIR_RANGE,
         ] {
             if def.base_stat(stat).is_some() {
                 assert!(
                     def.can_repair(),
                     "entity type '{}' declares {} but cannot repair",
                     def.name,
-                    BUILTIN_STATS[stat.index()].name,
+                    ENTITY_BUILTIN_STATS[stat.index()].name,
                 );
             }
         }
@@ -654,12 +831,12 @@ impl ContentRegistry {
             return;
         };
 
-        for stat in [StatId::REPAIR_SPEED, StatId::REPAIR_RANGE] {
+        for stat in [EntityStatId::REPAIR_SPEED, EntityStatId::REPAIR_RANGE] {
             assert!(
                 def.base_stat(stat).is_some(),
                 "entity type '{}' can repair but is missing {}",
                 def.name,
-                BUILTIN_STATS[stat.index()].name,
+                ENTITY_BUILTIN_STATS[stat.index()].name,
             );
         }
         for tag in repairer.repairs() {
@@ -674,7 +851,7 @@ impl ContentRegistry {
             // The factor is what turns a target's price into a repair bill, and it is
             // a stat so that an upgrade can move it.
             RepairCost::ProRata => assert!(
-                def.base_stat(StatId::REPAIR_COST_FACTOR).is_some(),
+                def.base_stat(EntityStatId::REPAIR_COST_FACTOR).is_some(),
                 "entity type '{}' charges pro-rata repair but is missing \
                  repair_cost_factor",
                 def.name

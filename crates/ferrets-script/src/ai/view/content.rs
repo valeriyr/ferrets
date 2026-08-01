@@ -2,7 +2,7 @@
 //! session.
 
 use ferrets_simulation::content::{
-    entity_type_def::EntityTypeDef, registry::ContentRegistry, stats::StatId,
+    entity_stats::EntityStatId, entity_type_def::EntityTypeDef, registry::ContentRegistry,
 };
 
 /// The static content catalogue a script can consult.
@@ -80,10 +80,12 @@ impl EntityContentView {
                 .location
                 .as_ref()
                 .map_or((1, 1), |l| (l.size().width, l.size().height)),
-            max_health: def.base_stat(StatId::MAX_HEALTH).map(|v| v.to_num::<u32>()),
+            max_health: def
+                .base_stat(EntityStatId::MAX_HEALTH)
+                .map(|v| v.to_num::<u32>()),
             attack: def
-                .base_stat(StatId::DAMAGE)
-                .zip(def.base_stat(StatId::ATTACK_RANGE))
+                .base_stat(EntityStatId::DAMAGE)
+                .zip(def.base_stat(EntityStatId::ATTACK_RANGE))
                 .map(|(damage, range)| AttackView {
                     damage: damage.to_num::<u32>(),
                     attack_range: range.to_num::<u32>(),

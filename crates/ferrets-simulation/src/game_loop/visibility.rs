@@ -5,10 +5,10 @@ use bevy_ecs::{prelude::*, world::World};
 
 use crate::{
     components::{
-        hidden::HiddenComponent, location::LocationComponent, owner::OwnerComponent,
-        stats::StatsComponent,
+        entity_stats::StatsComponent, hidden::HiddenComponent, location::LocationComponent,
+        owner::OwnerComponent,
     },
-    content::stats::StatId,
+    content::entity_stats::EntityStatId,
     session::player_slot::PlayerId,
     visibility::VisibilityGrid,
 };
@@ -22,6 +22,9 @@ use crate::{
 pub fn recompute_visibility(world: &mut World) {
     // Owned, on-map sight sources: (player, cell x, cell y, sight radius). Sight
     // is read from the effective stat store; an unset sight sees only its own cell.
+    // A raw query (not the alive index) on purpose: the dying still see until
+    // their remains leave the map, and the OR-fold below is commutative, so
+    // iteration order cannot reach the shared grid.
     let sources: Vec<(PlayerId, u32, u32, u32)> = world
         .query_filtered::<(&LocationComponent, &OwnerComponent, &StatsComponent), Without<HiddenComponent>>()
         .iter(world)
@@ -30,7 +33,7 @@ pub fn recompute_visibility(world: &mut World) {
                 owner.player(),
                 location.position.x.to_num::<u32>(),
                 location.position.y.to_num::<u32>(),
-                stats.effective_as_u32(StatId::SIGHT_RANGE).unwrap_or(0),
+                stats.effective_as_u32(EntityStatId::SIGHT_RANGE).unwrap_or(0),
             )
         })
         .collect();

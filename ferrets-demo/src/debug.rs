@@ -58,7 +58,8 @@ pub fn setup_debug(mut commands: Commands) {
         TextColor(Color::srgb(0.6, 0.9, 1.0)),
         Node {
             position_type: PositionType::Absolute,
-            top: Val::Px(40.0),
+            // Below the resource and supply lines (top 8 and 34).
+            top: Val::Px(60.0),
             left: Val::Px(10.0),
             ..default()
         },

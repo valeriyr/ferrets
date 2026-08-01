@@ -28,8 +28,11 @@
 //!                      finished dying
 //! recompute_visibility — exclusive system; refresh each player's fog of war from
 //!                      owned entities' sight, before acquisition/AI read it
-//! recompute_stats    — exclusive system; fold active buffs into effective stats,
-//!                      the once-per-tick snapshot consumers read
+//! recompute_entity_stats — exclusive system; fold each entity's buffs and its owner's
+//!                      player-level buffs and modifiers into effective stats, the
+//!                      once-per-tick snapshot consumers read
+//! recompute_player_stats — exclusive system; refold player stats from applied
+//!                      modifiers and what the player's active buffs grant
 //! flee               — exclusive system; fleeing-stance entities run from fresh hits
 //! auto_engage        — exclusive system; stance-driven target acquisition for idle
 //!                      entities
@@ -44,8 +47,11 @@
 //!                      where the same-tick delivery path lands its damage
 //! process_pending_reveals — exclusive system; retry reappearing entities that finished
 //!                      an order while boxed-in and still await a free cell
-//! process_buffs      — exclusive system; age timed buffs (expiries land next tick)
-//! process_cooldowns  — exclusive system; age skill cooldowns by one tick
+//! process_entity_buffs — exclusive system; age entities' timed buffs (expiries
+//!                      land next tick)
+//! process_player_buffs — exclusive system; age players' timed buffs likewise
+//! process_entity_skills — exclusive system; age entity-skill cooldowns by one tick
+//! process_player_skills — exclusive system; age player-skill cooldowns
 //! process_energy_regen — exclusive system; refill energy pools toward max_energy
 //! process_health_regen — exclusive system; refill health pools toward max_health,
 //!                      skipping the dying and the still-under-construction
@@ -93,6 +99,9 @@ use ferrets_simulation::{
     impacts::PendingImpacts,
     input::{InputFrames, PlayerFrame, SYNC_LATENCY},
     map::Map,
+    player_buffs::PlayerBuffs,
+    player_skills::PlayerSkills,
+    player_stats::PlayerStats,
     resources::PlayerResources,
     selection::Selection,
     session::{GameSession, player_slot::PlayerSlot},
@@ -145,6 +154,9 @@ pub fn install_game_resources(world: &mut World) {
     world.insert_resource(Selection::new(player_count));
     world.insert_resource(ControlGroups::new(player_count));
     world.insert_resource(PlayerResources::new(player_count));
+    world.insert_resource(PlayerStats::new(player_count));
+    world.insert_resource(PlayerSkills::new(player_count));
+    world.insert_resource(PlayerBuffs::new(player_count));
     world.insert_resource(frames);
 }
 
@@ -178,6 +190,9 @@ impl Plugin for SimulationPlugin {
             .insert_resource(ControlGroups::new(player_count))
             .insert_resource(visibility)
             .insert_resource(PlayerResources::new(player_count))
+            .insert_resource(PlayerStats::new(player_count))
+            .insert_resource(PlayerSkills::new(player_count))
+            .insert_resource(PlayerBuffs::new(player_count))
             .insert_resource(frames)
             .init_resource::<ContentRegistry>()
             .init_resource::<EntityIndex>()
@@ -217,7 +232,8 @@ impl Plugin for SimulationPlugin {
                     // Fold active buffs into effective stats before consumers
                     // read them, so a buff applied by a command this tick is in
                     // this tick's snapshot.
-                    systems::recompute_stats,
+                    systems::recompute_entity_stats,
+                    systems::recompute_player_stats,
                     // Stance-driven initiative first, so a fresh engagement or
                     // flee response executes on the same tick it was decided.
                     systems::flee,
@@ -229,12 +245,14 @@ impl Plugin for SimulationPlugin {
                     systems::process_impacts,
                     systems::process_pending_reveals,
                     // Age timed buffs; expiries land in the next tick's
-                    // recompute_stats snapshot.
-                    systems::process_buffs,
+                    // recompute snapshots.
+                    systems::process_entity_buffs,
+                    systems::process_player_buffs,
                     // Skill cooldowns tick down and the per-entity pools refill,
                     // after every source of damage and spending this tick has been
                     // applied.
-                    systems::process_cooldowns,
+                    systems::process_entity_skills,
+                    systems::process_player_skills,
                     systems::process_energy_regen,
                     systems::process_health_regen,
                     systems::check_game_result,

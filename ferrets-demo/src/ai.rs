@@ -20,8 +20,14 @@ use ferrets_simulation::session::player_slot::PlayerId;
 /// then trains soldiers and attacks with each full wave.
 pub const AI_SCRIPT: &str = r#"
     local RACES = {
-        human = { worker = "peasant", hall = "town_hall", barracks = "barracks", soldier = "archer" },
-        orc = { worker = "peon", hall = "great_hall", barracks = "orc_barracks", soldier = "grunt" },
+        human = {
+            worker = "peasant", hall = "town_hall", barracks = "barracks",
+            soldier = "archer", farm = "farm",
+        },
+        orc = {
+            worker = "peon", hall = "great_hall", barracks = "war_camp",
+            soldier = "grunt", farm = "pig_farm",
+        },
     }
 
     local MAX_WORKERS = 5
@@ -73,6 +79,7 @@ pub const AI_SCRIPT: &str = r#"
             local commands = {}
             local gold = view.resources.gold or 0
             local wood = view.resources.wood or 0
+            local supply_left = view.supply.provided - view.supply.used
 
             local halls, workers, soldiers, barracks = {}, {}, {}, {}
             for _, e in ipairs(view.my_entities) do
@@ -88,10 +95,12 @@ pub const AI_SCRIPT: &str = r#"
             if hall ~= nil and not hall.under_construction
                 and #workers + count_queued(halls, names.worker) < MAX_WORKERS
                 and #hall.train_queue < MAX_QUEUE
+                and supply_left >= 1
                 and gold >= cost_of(names.worker, "gold") then
                 commands[#commands + 1] =
                     { kind = "train", trainer = hall.id, type_name = names.worker }
                 gold = gold - cost_of(names.worker, "gold")
+                supply_left = supply_left - 1
             end
 
             -- Put up one barracks. An invalid placement is a silent no-op that
@@ -105,10 +114,20 @@ pub const AI_SCRIPT: &str = r#"
                     end
                 end
             end
+            -- One structure goes up at a time. A farm takes priority the moment
+            -- headroom runs dry — blocked training costs more than a late
+            -- barracks — and the barracks follows once supply breathes.
+            local wanted = nil
+            if supply_left < 2 then
+                wanted = names.farm
+            elseif #barracks == 0 then
+                wanted = names.barracks
+            end
+
             local builder_id = nil
-            if #barracks == 0 and not build_in_flight and hall ~= nil
-                and gold >= cost_of(names.barracks, "gold")
-                and wood >= cost_of(names.barracks, "wood") then
+            if wanted ~= nil and not build_in_flight and hall ~= nil
+                and gold >= cost_of(wanted, "gold")
+                and wood >= cost_of(wanted, "wood") then
                 local builder = nil
                 for _, w in ipairs(workers) do
                     if w.idle and not w.hidden then builder = w break end
@@ -124,7 +143,7 @@ pub const AI_SCRIPT: &str = r#"
                             and x + 3 <= view.map.width and y + 3 <= view.map.height then
                             commands[#commands + 1] = {
                                 kind = "build", builder = builder.id,
-                                type_name = names.barracks, x = x, y = y,
+                                type_name = wanted, x = x, y = y,
                             }
                             state.builder_id = builder.id
                             builder_id = builder.id
@@ -161,10 +180,12 @@ pub const AI_SCRIPT: &str = r#"
             -- Train the army once the barracks stands.
             for _, b in ipairs(barracks) do
                 if not b.under_construction and #b.train_queue < MAX_QUEUE
+                    and supply_left >= 1
                     and gold >= cost_of(names.soldier, "gold") then
                     commands[#commands + 1] =
                         { kind = "train", trainer = b.id, type_name = names.soldier }
                     gold = gold - cost_of(names.soldier, "gold")
+                    supply_left = supply_left - 1
                     break
                 end
             end

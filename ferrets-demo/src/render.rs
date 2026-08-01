@@ -22,6 +22,8 @@ use ferrets_simulation::{
         build::{BuildComponent, UnderConstructionComponent},
         energy::EnergyComponent,
         entity_info::EntityInfoComponent,
+        entity_skills::SkillsComponent,
+        entity_stats::StatsComponent,
         health::HealthComponent,
         hidden::HiddenComponent,
         location::LocationComponent,
@@ -30,13 +32,11 @@ use ferrets_simulation::{
         rally::{RallyPointComponent, RallyTarget},
         repair::{RepairComponent, UnderRepairComponent},
         resource::{HarvestComponent, UnderHarvestComponent},
-        skills::SkillsComponent,
-        stats::StatsComponent,
         tags::TagsComponent,
         train::{TrainComponent, TrainQueueComponent},
     },
     content::tags,
-    content::{registry::ContentRegistry, resource::ResourceSourceDef, stats::StatId},
+    content::{entity_stats::EntityStatId, registry::ContentRegistry, resource::ResourceSourceDef},
     impacts::PendingImpacts,
     order::Order,
     selection::Selection,
@@ -170,9 +170,9 @@ fn shape_for(type_name: &str) -> Shape {
         "grunt" => Shape::Diamond,
         "archer" => Shape::Triangle,
         "mortar" => Shape::Pentagon,
-        "medic" => Shape::Cross,
+        "medic" | "shaman" => Shape::Cross,
         "ship" => Shape::Ship,
-        "barracks" | "orc_barracks" => Shape::Hexagon,
+        "barracks" | "war_camp" => Shape::Hexagon,
         "sea_fortress" => Shape::Fortress,
         _ => Shape::Square,
     }
@@ -1087,7 +1087,7 @@ pub fn draw_status_bars(
         };
 
         if let (Some(energy), Some(stats)) = (energy, stats)
-            && let Some(max) = stats.effective(StatId::MAX_ENERGY)
+            && let Some(max) = stats.effective(EntityStatId::MAX_ENERGY)
             && max > FixedU64::ZERO
         {
             let fraction = (energy.current().to_num::<f32>() / max.to_num::<f32>()).min(1.0);
@@ -1096,7 +1096,7 @@ pub fn draw_status_bars(
         }
 
         if let (Some(health), Some(stats)) = (health, stats)
-            && let Some(max) = stats.effective(StatId::MAX_HEALTH)
+            && let Some(max) = stats.effective(EntityStatId::MAX_HEALTH)
             && max > FixedU64::ZERO
         {
             let fraction = (health.current().to_num::<f32>() / max.to_num::<f32>()).min(1.0);

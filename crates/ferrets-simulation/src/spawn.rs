@@ -9,6 +9,8 @@ use crate::{
         dying::{CorpseComponent, DiedComponent, DyingComponent},
         energy::EnergyComponent,
         entity_info::EntityInfoComponent,
+        entity_skills::SkillsComponent,
+        entity_stats::StatsComponent,
         health::HealthComponent,
         hidden::HiddenComponent,
         location::LocationComponent,
@@ -18,14 +20,12 @@ use crate::{
         pending_reveal::PendingRevealComponent,
         rally::RallyPointComponent,
         resource::{ResourceCarrierComponent, ResourceSourceComponent},
-        skills::SkillsComponent,
         stance::{Stance, StanceComponent},
-        stats::StatsComponent,
         tags::TagsComponent,
         train::TrainQueueComponent,
     },
     content::{
-        stats::StatId,
+        entity_stats::EntityStatId,
         {location::LocationDef, registry::ContentRegistry},
     },
     control_groups::ControlGroups,
@@ -58,9 +58,9 @@ pub fn spawn_entity(
         type_id,
         location_def,
         base_stats,
-        is_attacker,
-        is_mover,
-        is_damageable,
+        can_attack,
+        can_move,
+        has_health,
         has_trainer,
         has_resource_source,
         has_resource_carrier,
@@ -76,7 +76,7 @@ pub fn spawn_entity(
             type_def.base_stats.clone(),
             type_def.can_attack(),
             type_def.can_move(),
-            type_def.is_damageable(),
+            type_def.has_health(),
             type_def.trainer.is_some(),
             type_def.resource_source.is_some(),
             type_def.resource_carrier.is_some(),
@@ -106,7 +106,7 @@ pub fn spawn_entity(
     }
     // Seed the per-entity stat store from the type's base stats — built-in and
     // custom alike. Buffs later fold these into `effective` (see
-    // game_loop::stats::recompute_stats).
+    // game_loop::stats::recompute_entity_stats).
     let mut stats = StatsComponent::default();
     for (&stat, &value) in &base_stats {
         stats.set_base(stat, value);
@@ -114,18 +114,18 @@ pub fn spawn_entity(
     entity_mut.insert(stats);
 
     // Current-value pools, seeded to full from their max stats.
-    if let Some(&max_health) = base_stats.get(&StatId::MAX_HEALTH) {
+    if let Some(&max_health) = base_stats.get(&EntityStatId::MAX_HEALTH) {
         entity_mut.insert(HealthComponent::full(max_health));
     }
-    if let Some(&max_energy) = base_stats.get(&StatId::MAX_ENERGY) {
+    if let Some(&max_energy) = base_stats.get(&EntityStatId::MAX_ENERGY) {
         entity_mut.insert(EnergyComponent::full(max_energy));
     }
 
     // Stance: armed entities default to defending themselves; unarmed but movable,
     // damageable ones to fleeing; the rest have no initiative to configure.
-    if is_attacker {
+    if can_attack {
         entity_mut.insert(StanceComponent(Stance::Defend));
-    } else if is_mover && is_damageable {
+    } else if can_move && has_health {
         entity_mut.insert(StanceComponent(Stance::Flee));
     }
 

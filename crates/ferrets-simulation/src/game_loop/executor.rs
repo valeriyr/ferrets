@@ -9,30 +9,34 @@ use ferrets_math::{FixedU64, fixed_urect::FixedURect};
 use ferrets_pathfinder::nav_size::NavSize;
 
 use super::repair;
+use super::stats;
 use crate::{
-    command::{PlayerCommand, SelectMode},
+    command::{PlayerCommand, SelectMode, SkillCasterRef},
     components::{
-        buffs::BuffsComponent,
         build::UnderConstructionComponent,
         energy::EnergyComponent,
+        entity_buffs::BuffsComponent,
         entity_info::EntityInfoComponent,
+        entity_skills::SkillsComponent,
+        entity_stats::StatsComponent,
         health::HealthComponent,
         location::LocationComponent,
         order_queue::{CancelPolicy, OrderQueueComponent},
         owner::{self, OwnerComponent},
         rally::{RallyPointComponent, RallyTarget},
         resource::{ResourceCarrierComponent, ResourceSourceComponent},
-        skills::SkillsComponent,
         stance::StanceComponent,
-        stats::StatsComponent,
         tags::TagsComponent,
         train::TrainQueueComponent,
     },
     content::{
+        entity_stats::EntityStatId,
         projectile::Aim,
         registry::ContentRegistry,
-        skills::{SkillEffect, SkillId, SkillTarget},
-        stats::StatId,
+        skills::{
+            EntityCastCost, EntityCastEffect, EntityCastTarget, PlayerCastEffect, SkillCaster,
+            SkillId,
+        },
         tags,
     },
     control_groups::{CONTROL_GROUP_COUNT, ControlGroups},
@@ -40,11 +44,13 @@ use crate::{
     entity_index::EntityIndex,
     input::InputFrames,
     order::{AttackTarget, Order},
-    resources::PlayerResources,
+    player_buffs::PlayerBuffs,
+    player_skills::PlayerSkills,
+    resources::{Cost, PlayerResources},
     selection::Selection,
     session::{GameSession, player_slot::PlayerId},
     simulation_id::SimulationId,
-    spawn,
+    spawn, supply,
 };
 
 /// Processes the frame for `current_tick` once every player the tick requires
@@ -320,11 +326,11 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
             }
         }
         PlayerCommand::UseSkill {
-            caster,
             skill,
+            caster,
             target,
         } => {
-            use_skill(world, player, *caster, *skill, *target);
+            use_skill(world, player, *skill, *caster, *target);
         }
         PlayerCommand::Spawn {
             type_name,
@@ -479,14 +485,19 @@ fn train_entity(world: &mut World, player: PlayerId, trainer: SimulationId, type
         return;
     }
 
-    let Some(cost) = world
+    let Some((cost, supply_ok)) = world
         .resource::<ContentRegistry>()
         .entity(type_name)
         .filter(|def| def.train_time.is_some())
-        .map(|def| def.cost.clone())
+        .map(|def| (def.cost.clone(), supply::allows(world, player, def)))
     else {
         return;
     };
+    // Supply is reserved here, where the resource cost is paid: the queue entry
+    // holds it from this moment and hands it to the unit it becomes.
+    if !supply_ok {
+        return;
+    }
     if !world
         .resource::<PlayerResources>()
         .can_afford(player, &cost)
@@ -669,13 +680,100 @@ fn push_order(world: &mut World, entity: Entity, order: Order, flush: Option<Can
     }
 }
 
-/// Uses `caster`'s skill by index, on `target`, when it is ready (off cooldown),
-/// affordable (enough energy), and the target is valid for the skill.
+/// Validates and executes a cast: the skill must exist, match its caster
+/// kind, be off cooldown for that caster, be affordable (every cost payable),
+/// and the target must be valid for the skill.
 fn use_skill(
     world: &mut World,
     player: PlayerId,
-    caster_id: SimulationId,
     skill: SkillId,
+    caster: SkillCasterRef,
+    target_id: Option<SimulationId>,
+) {
+    // Resolved defensively: the id arrives over the wire, and an id this
+    // registry never minted is a peer to distrust, not a panic. The same goes
+    // for a caster ref that does not match the skill's cast arm.
+    let Some(def) = world
+        .resource::<ContentRegistry>()
+        .skill_def(skill)
+        .cloned()
+    else {
+        return;
+    };
+    match (caster, def.caster) {
+        (SkillCasterRef::Player, SkillCaster::Player { cost, effect }) => {
+            use_skill_as_player(world, player, skill, def.cooldown, &cost, effect);
+        }
+        (
+            SkillCasterRef::Entity(caster_id),
+            SkillCaster::Entity {
+                costs,
+                target,
+                effect,
+            },
+        ) => {
+            use_skill_as_entity(
+                world,
+                player,
+                skill,
+                def.cooldown,
+                &costs,
+                target,
+                effect,
+                caster_id,
+                target_id,
+            );
+        }
+        (SkillCasterRef::Player, SkillCaster::Entity { .. })
+        | (SkillCasterRef::Entity(_), SkillCaster::Player { .. }) => {}
+    }
+}
+
+/// The player-cast path: cooldown per player, resource cost, effect on the
+/// casting player.
+fn use_skill_as_player(
+    world: &mut World,
+    player: PlayerId,
+    skill: SkillId,
+    cooldown: u32,
+    cost: &Cost,
+    effect: PlayerCastEffect,
+) {
+    if !world.resource::<PlayerSkills>().ready(player, skill) {
+        return;
+    }
+    if !world.resource::<PlayerResources>().can_afford(player, cost) {
+        return;
+    }
+    world
+        .resource_mut::<PlayerResources>()
+        .subtract(player, cost);
+
+    match effect {
+        PlayerCastEffect::ApplyBuff(buff) => stats::apply_player_buff(world, player, buff),
+        PlayerCastEffect::RemoveBuff(buff) => {
+            world.resource_mut::<PlayerBuffs>().remove(player, buff);
+        }
+    }
+
+    world
+        .resource_mut::<PlayerSkills>()
+        .start_cooldown(player, skill, cooldown);
+}
+
+/// The entity-cast path: the caster must be an owned entity whose type
+/// declares the skill; cooldown per entity, pool costs draw from the caster,
+/// the effect lands on the resolved target entity.
+#[allow(clippy::too_many_arguments)]
+fn use_skill_as_entity(
+    world: &mut World,
+    player: PlayerId,
+    skill: SkillId,
+    cooldown: u32,
+    costs: &[EntityCastCost],
+    cast_target: EntityCastTarget,
+    effect: EntityCastEffect,
+    caster_id: SimulationId,
     target_id: Option<SimulationId>,
 ) {
     let Some(caster) = find_owned_interactable(world, player, caster_id) else {
@@ -689,12 +787,11 @@ fn use_skill(
     {
         return;
     }
-    let def = world.resource::<ContentRegistry>().skill_def(skill).clone();
 
     // Resolve and validate the target.
-    let target = match def.target {
-        SkillTarget::Caster => caster,
-        SkillTarget::Ally | SkillTarget::Enemy => {
+    let target = match cast_target {
+        EntityCastTarget::Caster => caster,
+        EntityCastTarget::Ally | EntityCastTarget::Enemy => {
             let Some(target_id) = target_id else {
                 return;
             };
@@ -709,13 +806,13 @@ fn use_skill(
             let target_ref = world.entity(target);
             let caster_owner = caster_ref.get::<OwnerComponent>();
             let target_owner = target_ref.get::<OwnerComponent>();
-            let valid = match def.target {
-                SkillTarget::Ally => matches!(
+            let valid = match cast_target {
+                EntityCastTarget::Ally => matches!(
                     (caster_owner, target_owner),
                     (Some(caster), Some(target)) if session.are_allied(caster.player(), target.player())
                 ),
-                SkillTarget::Enemy => owner::are_hostile(session, caster_owner, target_owner),
-                SkillTarget::Caster => unreachable!("handled above"),
+                EntityCastTarget::Enemy => owner::are_hostile(session, caster_owner, target_owner),
+                EntityCastTarget::Caster => unreachable!("handled above"),
             };
             if !valid {
                 return;
@@ -724,40 +821,87 @@ fn use_skill(
         }
     };
 
-    // Pay the energy cost; a skill that costs energy needs an energy pool.
-    if def.energy_cost > FixedU64::ZERO {
-        let mut caster_mut = world.entity_mut(caster);
-        let Some(mut energy) = caster_mut.get_mut::<EnergyComponent>() else {
-            return;
-        };
-        if !energy.spend(def.energy_cost) {
-            return;
+    // Fold the costs into one total per pool, so a check covers every arm that
+    // draws from that pool.
+    let mut resources = Cost::new();
+    let mut energy_cost = FixedU64::ZERO;
+    let mut health_cost = FixedU64::ZERO;
+    for cost in costs {
+        match cost {
+            EntityCastCost::Resources(cost) => {
+                for (kind, amount) in cost {
+                    *resources.entry(kind.clone()).or_default() += amount;
+                }
+            }
+            EntityCastCost::Energy(amount) => energy_cost += *amount,
+            EntityCastCost::Health(amount) => health_cost += *amount,
         }
     }
 
-    apply_skill_effect(world, caster, target, &def.effect);
+    // Every cost must be payable before any is paid, so a cast never
+    // half-charges.
+    if !world
+        .resource::<PlayerResources>()
+        .can_afford(player, &resources)
+    {
+        return;
+    }
+    let caster_ref = world.entity(caster);
+    if energy_cost > FixedU64::ZERO
+        && caster_ref
+            .get::<EnergyComponent>()
+            .is_none_or(|energy| energy.current() < energy_cost)
+    {
+        return;
+    }
+    // Strictly more health than the cost: a cast that could not be survived is
+    // refused.
+    if health_cost > FixedU64::ZERO
+        && caster_ref
+            .get::<HealthComponent>()
+            .is_none_or(|health| health.current() <= health_cost)
+    {
+        return;
+    }
+
+    world
+        .resource_mut::<PlayerResources>()
+        .subtract(player, &resources);
+    let mut caster_mut = world.entity_mut(caster);
+    if energy_cost > FixedU64::ZERO
+        && let Some(mut energy) = caster_mut.get_mut::<EnergyComponent>()
+    {
+        energy.spend(energy_cost);
+    }
+    if health_cost > FixedU64::ZERO
+        && let Some(mut health) = caster_mut.get_mut::<HealthComponent>()
+    {
+        health.apply_damage(health_cost);
+    }
+
+    apply_skill_effect(world, caster, target, effect);
 
     if let Some(mut skills) = world.entity_mut(caster).get_mut::<SkillsComponent>() {
-        skills.start_cooldown(skill, def.cooldown);
+        skills.start_cooldown(skill, cooldown);
     }
 }
 
 /// Applies a resolved skill effect to `target`.
-fn apply_skill_effect(world: &mut World, caster: Entity, target: Entity, effect: &SkillEffect) {
+fn apply_skill_effect(world: &mut World, caster: Entity, target: Entity, effect: EntityCastEffect) {
     match effect {
-        SkillEffect::ApplyBuff(id) => super::stats::apply_buff(world, target, *id),
-        SkillEffect::RemoveBuff(id) => {
+        EntityCastEffect::ApplyBuff(id) => super::stats::apply_entity_buff(world, target, id),
+        EntityCastEffect::RemoveBuff(id) => {
             if let Some(mut buffs) = world.entity_mut(target).get_mut::<BuffsComponent>() {
-                buffs.remove(*id);
+                buffs.remove(id);
             }
         }
-        SkillEffect::Damage(amount) => {
+        EntityCastEffect::Damage(amount) => {
             let caster_id = entity_def::simulation_id(world, caster);
             let tick = world.resource::<GameSession>().tick();
             let mut died = false;
             if let Some(mut health) = world.entity_mut(target).get_mut::<HealthComponent>() {
                 // Skill damage bypasses armor, like an ability rather than a weapon.
-                health.apply_damage(*amount);
+                health.apply_damage(amount);
                 health.record_hit(caster_id, tick);
                 died = health.is_dead();
             }
@@ -765,14 +909,14 @@ fn apply_skill_effect(world: &mut World, caster: Entity, target: Entity, effect:
                 spawn::destroy_entity(world, target);
             }
         }
-        SkillEffect::Heal(amount) => {
+        EntityCastEffect::Heal(amount) => {
             let max = world
                 .entity(target)
                 .get::<StatsComponent>()
-                .and_then(|stats| stats.effective(StatId::MAX_HEALTH))
+                .and_then(|stats| stats.effective(EntityStatId::MAX_HEALTH))
                 .unwrap_or(FixedU64::ZERO);
             if let Some(mut health) = world.entity_mut(target).get_mut::<HealthComponent>() {
-                health.heal(*amount, max);
+                health.heal(amount, max);
             }
         }
     }

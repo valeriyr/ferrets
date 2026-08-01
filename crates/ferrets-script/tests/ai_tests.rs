@@ -644,6 +644,8 @@ fn view_at_tick(tick: u32) -> GameView {
         map_width: 64,
         map_height: 64,
         resources: Vec::new(),
+        supply_provided: 0,
+        supply_used: 0,
         my_entities: Vec::new(),
         ally_entities: Vec::new(),
         enemy_entities: Vec::new(),
@@ -660,6 +662,8 @@ fn populated_view(tick: u32) -> GameView {
         map_width: 64,
         map_height: 64,
         resources: vec![("gold".to_string(), 120), ("wood".to_string(), 40)],
+        supply_provided: 0,
+        supply_used: 0,
         my_entities: vec![
             EntityView {
                 id: 1,

@@ -1,28 +1,34 @@
-//! Active buffs and debuffs on an entity.
+//! The buff store both buff sites share.
 //!
-//! Active buffs are the source the stat pipeline folds into each entity's
-//! effective stats (see [`StatsComponent::recompute`](super::stats::StatsComponent::recompute)).
+//! It tracks only identity, stacks, and remaining time, and is generic over
+//! the buff id kind so both sites share one stacking and expiry
+//! implementation.
 
-use bevy_ecs::prelude::*;
+use crate::content::stack_rule::StackRule;
 
-use crate::content::buffs::{BuffId, StackRule};
-
-/// One active buff instance on an entity: its registered id (the stacking and
-/// removal identity), its remaining ticks, and how many stacks are active.
+/// One active buff instance: its registered id (the stacking and removal
+/// identity), its remaining ticks, and how many stacks are active.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ActiveBuff {
+struct ActiveBuff<BuffId> {
     id: BuffId,
     remaining: Option<u32>,
     stacks: u32,
 }
 
-/// The active buffs on an entity.
-#[derive(Component, Debug, Clone, Default, PartialEq, Eq)]
-pub struct BuffsComponent {
-    active: Vec<ActiveBuff>,
+/// The active buffs of one carrier, keyed by the site's buff id kind — the
+/// store inside the per-entity component and each player's slot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BuffsStore<BuffId> {
+    active: Vec<ActiveBuff<BuffId>>,
 }
 
-impl BuffsComponent {
+impl<BuffId> Default for BuffsStore<BuffId> {
+    fn default() -> Self {
+        Self { active: Vec::new() }
+    }
+}
+
+impl<BuffId: Copy + PartialEq> BuffsStore<BuffId> {
     /// Applies the buff `id` with the given lifetime, resolving stacking against
     /// any active instance of the same id per `stack_rule`.
     pub fn apply(&mut self, id: BuffId, stack_rule: StackRule, duration: Option<u32>) {

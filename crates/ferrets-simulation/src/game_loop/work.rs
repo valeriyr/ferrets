@@ -8,8 +8,8 @@ use bevy_ecs::{entity::Entity, world::World};
 use ferrets_pathfinder::{nav_pos::NavPos, nav_size::NavSize};
 
 use crate::{
-    components::stats::StatsComponent,
-    content::{stats::StatId, work::WorkPresence},
+    components::entity_stats::StatsComponent,
+    content::{entity_stats::EntityStatId, work::WorkPresence},
     spawn,
 };
 
@@ -37,7 +37,7 @@ pub(super) fn leave(world: &mut World, entity: Entity, around: NavPos, around_si
 ///
 /// Registration pairs every work capability with its reach stat, so a worker
 /// partway through the order always carries it.
-pub(super) fn reach(world: &World, entity: Entity, stat: StatId) -> u32 {
+pub(super) fn reach(world: &World, entity: Entity, stat: EntityStatId) -> u32 {
     world
         .entity(entity)
         .get::<StatsComponent>()

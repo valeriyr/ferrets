@@ -12,6 +12,10 @@ pub struct GameView {
     pub map_height: u32,
     /// Stockpile per resource kind, in ascending kind order.
     pub resources: Vec<(String, u32)>,
+    /// Supply the player's standing entities provide, after any ceiling.
+    pub supply_provided: u32,
+    /// Supply the player occupies — standing entities plus queued training.
+    pub supply_used: u32,
     pub my_entities: Vec<EntityView>,
     /// Entities owned by allied players (teammates), excluding the viewer's own.
     pub ally_entities: Vec<EntityView>,

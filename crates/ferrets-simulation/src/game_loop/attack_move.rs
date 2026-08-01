@@ -9,11 +9,11 @@ use super::{acquire, chase, chase::Destination};
 use crate::{
     components::{
         attack_move::AttackMoveComponent,
+        entity_stats::StatsComponent,
         location::LocationComponent,
         order_queue::{CancelPolicy, OrderState},
-        stats::StatsComponent,
     },
-    content::stats::StatId,
+    content::entity_stats::EntityStatId,
     entity_def,
     map::Map,
     order::{AttackTarget, Leash, Order},
@@ -122,7 +122,7 @@ pub(super) fn engagement(world: &World, entity: Entity) -> Option<Order> {
     let acquire_range = world
         .entity(entity)
         .get::<StatsComponent>()
-        .and_then(|stats| stats.effective_as_u32(StatId::ACQUIRE_RANGE))?;
+        .and_then(|stats| stats.effective_as_u32(EntityStatId::ACQUIRE_RANGE))?;
     let target = acquire::find_target(world, entity, acquire_range)?;
     Some(leashed_attack(world, entity, target, acquire_range))
 }
@@ -133,7 +133,7 @@ pub(super) fn engagement_on(world: &World, entity: Entity, target: SimulationId)
     let acquire_range = world
         .entity(entity)
         .get::<StatsComponent>()
-        .and_then(|stats| stats.effective_as_u32(StatId::ACQUIRE_RANGE))?;
+        .and_then(|stats| stats.effective_as_u32(EntityStatId::ACQUIRE_RANGE))?;
     if !acquire::qualifies(world, entity, target, acquire_range) {
         return None;
     }

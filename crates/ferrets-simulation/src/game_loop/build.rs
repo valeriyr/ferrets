@@ -23,7 +23,7 @@ use crate::{
         order_queue::{CancelPolicy, OrderState},
         owner::OwnerComponent,
     },
-    content::{registry::ContentRegistry, stats::StatId, work::WorkPresence},
+    content::{entity_stats::EntityStatId, registry::ContentRegistry, work::WorkPresence},
     entity_def,
     entity_index::EntityIndex,
     map::Map,
@@ -31,7 +31,7 @@ use crate::{
     resources::PlayerResources,
     session::player_slot::PlayerId,
     simulation_id::SimulationId,
-    spawn,
+    spawn, supply,
 };
 
 /// Called once when a Build order becomes the front `New` entry.
@@ -145,7 +145,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
             entity_def::position(world, entity),
             position,
             size,
-            work::reach(world, entity, StatId::BUILD_RANGE),
+            work::reach(world, entity, EntityStatId::BUILD_RANGE),
         ) {
             Destination::OutOfReach => return Processing::state(OrderState::Finished),
             Destination::Walk(move_order) => {
@@ -177,12 +177,20 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
             return Processing::state(OrderState::InProcessing);
         }
 
-        if let Some(player) = owner
-            && !world
+        if let Some(player) = owner {
+            let def = world
+                .resource::<ContentRegistry>()
+                .entity(type_name)
+                .expect("type checked in prepare");
+            if !supply::allows(world, player, def) {
+                return Processing::state(OrderState::Finished);
+            }
+            if !world
                 .resource::<PlayerResources>()
                 .can_afford(player, &cost)
-        {
-            return Processing::state(OrderState::Finished);
+            {
+                return Processing::state(OrderState::Finished);
+            }
         }
 
         // A builder that disappears into its work leaves the map now, which frees any

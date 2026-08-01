@@ -38,28 +38,58 @@ pub const CONTENT: &str = r#"
 
     -- The archer's self-buff: a burst of speed and damage that reverts on expiry.
     -- Five seconds at 20 Hz, long enough to watch it work and then wear off.
-    define_buff("frenzy", {
+    define_entity_buff("frenzy", {
         duration = 100,
         stack = "refresh",
         modifiers = {
-            { stat = "speed", op = "percent", value = "1.0" },
-            { stat = "damage", op = "percent", value = "0.5" },
+            { entity_stat = "speed", op = "percent", value = "1.0" },
+            { entity_stat = "damage", op = "percent", value = "0.5" },
         },
     })
 
-    -- The archer's activated abilities, cast from the command card. Both are
-    -- self-targeted, so the archer carries two skill buttons.
+    -- Activated abilities, cast from the command card. Battle focus is the
+    -- archer's self-buff; blood rite is the grunt's — the same frenzy at a
+    -- different price, health and gold instead of energy, so the cost arms can
+    -- be compared side by side. Second wind is the shaman's targeted mend: it
+    -- takes an allied unit, so its button arms a target click.
     define_skill("battle_focus", {
+        caster = "entity",
         cooldown = 80,
-        energy_cost = "30",
-        target = "self",
+        cost = { energy = "30" },
+        target = "caster",
         effect = { apply_buff = "frenzy" },
     })
     define_skill("second_wind", {
+        caster = "entity",
         cooldown = 120,
-        energy_cost = "20",
-        target = "self",
+        cost = { energy = "20" },
+        target = "ally",
         effect = { heal = "15" },
+    })
+    define_skill("blood_rite", {
+        caster = "entity",
+        cooldown = 160,
+        cost = { health = "8", resources = { gold = 10 } },
+        target = "caster",
+        effect = { apply_buff = "frenzy" },
+    })
+
+    -- A player-level rallying call: every unit the caster owns moves half again
+    -- as fast for five seconds, paid from the stockpile and cooled down per
+    -- player. Cast from its own HUD button. The skill is just the trigger; the
+    -- effect is an ordinary buff, held by the player instead of any unit.
+    define_player_buff("war_drums", {
+        duration = 100,
+        stack = "refresh",
+        entity_modifiers = {
+            { entity_stat = "speed", op = "percent", value = "0.5" },
+        },
+    })
+    define_skill("war_drums", {
+        caster = "player",
+        cooldown = 300,
+        cost = { resources = { gold = 50 } },
+        effect = { apply_buff = "war_drums" },
     })
 
     -- The lake boss: a raceless water fortress spawning free ships. Ships are
@@ -72,6 +102,7 @@ pub const CONTENT: &str = r#"
             -- Sees past its acquire range so its circular vision covers the square it
             -- can auto-engage.
             sight_range = 12,
+            supply_cost = 1,
         },
         dying = { time = 2 },
         -- Shore bombardment: a slow ball, so shots at a moving target are wasted.
@@ -80,7 +111,7 @@ pub const CONTENT: &str = r#"
     })
     define_entity("sea_fortress", {
         location = { occupation = WATER, size = { 3, 3 }, solidity = "solid" },
-        stats = { max_health = 1500, sight_range = 8 },
+        stats = { max_health = 1500, sight_range = 8, supply_provided = 5 },
         dying = { time = 2 },
         trainer = { "ship" },
         tags = { "building" },
@@ -112,6 +143,7 @@ pub const CONTENT: &str = r#"
                 -- Raises a site from the next cell over, and works a seam or a
                 -- stand of trees from the same distance.
                 build_range = 1, harvest_range = 1,
+                supply_cost = 1,
             },
             dying = { time = 2 },
             cost = { gold = 50 },
@@ -141,12 +173,28 @@ pub const CONTENT: &str = r#"
         define_entity(name, {
             race = race,
             location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
-            stats = { max_health = 800, sight_range = 7 },
+            -- Enough starting headroom for the first few units; farms carry the
+            -- army beyond it.
+            stats = { max_health = 800, sight_range = 7, supply_provided = 10 },
             dying = { time = 2 },
             cost = { gold = 400 },
             build_time = 200,
             trainer = { trains },
             resource_storage = { "gold", "wood" },
+            tags = { "building" },
+        })
+    end
+
+    -- Farms feed the army: each adds headroom for a handful of units, and losing
+    -- one blocks new training until the headroom recovers.
+    local function farm(name, race)
+        define_entity(name, {
+            race = race,
+            location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
+            stats = { max_health = 200, sight_range = 3, supply_provided = 6 },
+            dying = { time = 2 },
+            cost = { gold = 40, wood = 20 },
+            build_time = 60,
             tags = { "building" },
         })
     end
@@ -171,10 +219,11 @@ pub const CONTENT: &str = r#"
     -- Peasants work in the open and swarm: any number of them can share a site, a
     -- repair or a stand of trees, each adding its own tick of work, so a gang of
     -- them raises a building in a fraction of the time one would take.
-    worker("peasant", "human", { "town_hall", "barracks" }, {
+    worker("peasant", "human", { "town_hall", "barracks", "farm" }, {
         build = "present_stacking", repair = "present_stacking", wood = "present_stacking",
     })
     main_hall("town_hall", "human", "peasant")
+    farm("farm", "human")
     barracks("barracks", "human", { "archer", "mortar", "medic" })
     define_entity("archer", {
         race = "human",
@@ -189,6 +238,7 @@ pub const CONTENT: &str = r#"
             -- Sees comfortably past its acquire range, so its circular vision covers
             -- what it can auto-engage.
             sight_range = 10,
+            supply_cost = 1,
         },
         dying = { time = 2 },
         tags = { "biological" },
@@ -196,9 +246,9 @@ pub const CONTENT: &str = r#"
         bonus_damage_vs = { grunt = 4 },
         -- A fast arrow: visibly in flight at range 4, but rarely wasted.
         projectile = "arrow",
-        -- An energy pool (above) feeds two activated skills: a self-buff burst of
-        -- speed and damage that reverts on expiry, and a small self-heal.
-        skills = { "battle_focus", "second_wind" },
+        -- An energy pool (above) feeds the self-buff burst of speed and damage
+        -- that reverts on expiry.
+        skills = { "battle_focus" },
         cost = { gold = 80 },
         train_time = 60,
         -- Combat units lead a mixed selection over workers.
@@ -219,6 +269,7 @@ pub const CONTENT: &str = r#"
             -- A flat point of health per tick, whatever the patient is — a unit's
             -- price says nothing about how long it takes to patch up.
             repair_speed = "1.0", repair_range = 2,
+            supply_cost = 1,
         },
         dying = { time = 2 },
         tags = { "biological" },
@@ -246,6 +297,7 @@ pub const CONTENT: &str = r#"
             speed = "0.2", max_health = 35,
             damage = 14, attack_range = 7, acquire_range = 9, attack_period = 20, damage_point = 8,
             sight_range = 11,
+            supply_cost = 1,
         },
         dying = { time = 2 },
         tags = { "biological" },
@@ -267,11 +319,12 @@ pub const CONTENT: &str = r#"
     -- Peons work one to a job and disappear into what they raise: a site swallows its
     -- peon until the walls are up, where a repair or a stand only ties one up in the
     -- open. Nothing they do goes faster for a second pair of hands.
-    worker("peon", "orc", { "great_hall", "orc_barracks" }, {
+    worker("peon", "orc", { "great_hall", "war_camp", "pig_farm" }, {
         build = "hidden", repair = "present", wood = "present",
     })
     main_hall("great_hall", "orc", "peon")
-    barracks("orc_barracks", "orc", { "grunt" })
+    farm("pig_farm", "orc")
+    barracks("war_camp", "orc", { "grunt", "shaman" })
     define_entity("grunt", {
         race = "orc",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
@@ -284,12 +337,36 @@ pub const CONTENT: &str = r#"
             -- over about a minute instead of needing to be replaced.
             health_regen = "0.05",
             sight_range = 8,
+            supply_cost = 1,
         },
         dying = { time = 2 },
         tags = { "biological" },
+        -- Blood rite: the grunt buys the archer's frenzy with its own blood and
+        -- a little gold — regeneration (above) walks the price off afterwards.
+        skills = { "blood_rite" },
         cost = { gold = 90 },
         train_time = 70,
         selection = { priority = 10 },
+    })
+
+    -- Orc support: a shaman that mends one allied unit at a time from its energy
+    -- pool. The heal takes a target, so casting is button-then-click.
+    define_entity("shaman", {
+        race = "orc",
+        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        stats = {
+            speed = "0.3", max_health = 35,
+            max_energy = 80, energy_regen = "0.2",
+            sight_range = 8,
+            supply_cost = 1,
+        },
+        dying = { time = 2 },
+        tags = { "biological" },
+        skills = { "second_wind" },
+        cost = { gold = 120 },
+        train_time = 80,
+        -- Support trails combat units in a mixed selection, like the medic.
+        selection = { priority = 5 },
     })
 "#;
 

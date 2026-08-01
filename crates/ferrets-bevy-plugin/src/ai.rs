@@ -20,6 +20,7 @@ use ferrets_simulation::{
     components::{
         build::UnderConstructionComponent,
         entity_info::EntityInfoComponent,
+        entity_stats::StatsComponent,
         health::HealthComponent,
         hidden::HiddenComponent,
         location::LocationComponent,
@@ -27,16 +28,16 @@ use ferrets_simulation::{
         owner::OwnerComponent,
         resource::{ResourceCarrierComponent, ResourceSourceComponent},
         stance::StanceComponent,
-        stats::StatsComponent,
         train::TrainQueueComponent,
     },
-    content::stats::StatId,
+    content::entity_stats::EntityStatId,
     entity_index::EntityIndex,
     input::{InputFrames, PlayerFrame, SYNC_LATENCY},
     map::Map,
     resources::PlayerResources,
     session::{GameSession, player_slot::PlayerId, player_type::PlayerType},
     simulation_id::SimulationId,
+    supply,
     visibility::VisibilityGrid,
 };
 
@@ -277,6 +278,8 @@ pub fn game_view(world: &World, player: PlayerId, race: &str, vision: AiVision) 
         map_width: map.width(),
         map_height: map.height(),
         resources,
+        supply_provided: supply::provided(world, player).to_num::<u32>(),
+        supply_used: supply::used(world, player).to_num::<u32>(),
         my_entities,
         ally_entities,
         enemy_entities,
@@ -301,10 +304,10 @@ fn entity_view(entity: &EntityRef, id: SimulationId, hidden: bool) -> EntityView
         health: entity.get::<HealthComponent>().map(|h| h.displayed()),
         damage: entity
             .get::<StatsComponent>()
-            .and_then(|stats| stats.effective_as_u32(StatId::DAMAGE)),
+            .and_then(|stats| stats.effective_as_u32(EntityStatId::DAMAGE)),
         armor: entity
             .get::<StatsComponent>()
-            .and_then(|stats| stats.effective_as_u32(StatId::ARMOR)),
+            .and_then(|stats| stats.effective_as_u32(EntityStatId::ARMOR)),
         idle: entity
             .get::<OrderQueueComponent>()
             .is_none_or(|queue| queue.front().is_none()),
