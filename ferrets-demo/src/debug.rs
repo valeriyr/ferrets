@@ -284,7 +284,7 @@ pub fn draw_orders(
                     gizmos.circle_2d(home, CELL_PX * 0.25, COMBAT);
                     continue;
                 }
-                Order::Train | Order::Die => continue,
+                Order::Train | Order::Research { .. } | Order::Die => continue,
             };
             // A vanished target leaves nothing to point at.
             let Some(end) = end else { continue };

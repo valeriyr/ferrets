@@ -19,6 +19,7 @@ use ferrets_script::ai::{AiRuntime, AiVision};
 use ferrets_simulation::{
     components::{
         build::UnderConstructionComponent,
+        energy::EnergyComponent,
         entity_info::EntityInfoComponent,
         entity_stats::StatsComponent,
         health::HealthComponent,
@@ -30,10 +31,12 @@ use ferrets_simulation::{
         stance::StanceComponent,
         train::TrainQueueComponent,
     },
-    content::entity_stats::EntityStatId,
+    content::{entity_stats::EntityStatId, registry::ContentRegistry},
     entity_index::EntityIndex,
     input::{InputFrames, PlayerFrame, SYNC_LATENCY},
     map::Map,
+    order::Order,
+    player_research::PlayerResearch,
     resources::PlayerResources,
     session::{GameSession, player_slot::PlayerId, player_type::PlayerType},
     simulation_id::SimulationId,
@@ -271,6 +274,8 @@ pub fn game_view(world: &World, player: PlayerId, race: &str, vision: AiVision) 
         }
     }
 
+    let (researched, researching) = research_views(world, player);
+
     GameView {
         tick: session.tick(),
         player: u32::from(player),
@@ -280,11 +285,49 @@ pub fn game_view(world: &World, player: PlayerId, race: &str, vision: AiVision) 
         resources,
         supply_provided: supply::provided(world, player).to_num::<u32>(),
         supply_used: supply::used(world, player).to_num::<u32>(),
+        researched,
+        researching,
         my_entities,
         ally_entities,
         enemy_entities,
         neutral_entities,
     }
+}
+
+/// Snapshots the player's research state: completed names, and the names its
+/// entities are working on or have queued, each in ascending name order.
+fn research_views(world: &World, player: PlayerId) -> (Vec<String>, Vec<String>) {
+    let registry = world.resource::<ContentRegistry>();
+
+    let mut researched: Vec<String> = world
+        .resource::<PlayerResearch>()
+        .completed(player)
+        .filter_map(|id| registry.research_name(id).map(str::to_string))
+        .collect();
+    researched.sort();
+
+    let mut researching: Vec<String> = Vec::new();
+    for (_, entity) in world.resource::<EntityIndex>().alive_entries() {
+        let entity_ref = world.entity(entity);
+        if entity_ref
+            .get::<OwnerComponent>()
+            .is_none_or(|owner| owner.player() != player)
+        {
+            continue;
+        }
+        let Some(queue) = entity_ref.get::<OrderQueueComponent>() else {
+            continue;
+        };
+        for entry in queue.0.iter() {
+            if let Order::Research { research } = &entry.order
+                && let Some(name) = registry.research_name(*research)
+            {
+                researching.push(name.to_string());
+            }
+        }
+    }
+    researching.sort();
+    (researched, researching)
 }
 
 /// Snapshots one entity to its integer view.
@@ -302,6 +345,9 @@ fn entity_view(entity: &EntityRef, id: SimulationId, hidden: bool) -> EntityView
         x: cell.x,
         y: cell.y,
         health: entity.get::<HealthComponent>().map(|h| h.displayed()),
+        energy: entity
+            .get::<EnergyComponent>()
+            .map(|energy| energy.current_as_u32()),
         damage: entity
             .get::<StatsComponent>()
             .and_then(|stats| stats.effective_as_u32(EntityStatId::DAMAGE)),

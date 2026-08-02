@@ -31,6 +31,7 @@ use ferrets_simulation::{
         location::Solidity,
         player_buffs::PlayerBuffDef,
         registry::ContentRegistry,
+        research::{ResearchDef, ResearchId},
         resource::{DepletionPolicy, HarvestData},
         skills::{PlayerCastEffect, SkillCaster, SkillDef},
         stack_rule::StackRule,
@@ -555,12 +556,92 @@ pub fn player_effects_app() -> App {
                     cost: resources::cost([("gold", 10)]),
                     effect: PlayerCastEffect::ApplyBuff(drums_haste),
                 },
+                requires: Vec::new(),
             },
         );
     }
     app.world_mut().resource::<ContentRegistry>().validate();
     app.world_mut().resource_mut::<GameSession>().start();
     app
+}
+
+/// App with the research roster — a `lab` (tagged "workshop") hosting the
+/// `smithing` upgrade (a permanent +5 damage army-wide buff) and the `tactics`
+/// unlock that requires it, plus a `guardhouse` training a free `pikeman`, a
+/// `halberdier` gated on the `smithing` research, and a `knight` gated on the
+/// "workshop" tag — one human player, session started.
+pub fn research_app() -> App {
+    let mut app = make_app(vec![PlayerSlot::occupied(0, PlayerType::Human, None, None)]);
+    {
+        let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
+        registry.register_resource("gold");
+        registry.register_tag("workshop");
+        let sharp_blades = registry.register_player_buff(
+            "sharp_blades",
+            PlayerBuffDef {
+                player_modifiers: Vec::new(),
+                entity_modifiers: vec![EntityModifier {
+                    stat: EntityStatId::DAMAGE,
+                    op: ModifierOp::FlatAdd,
+                    magnitude: FixedI64::from_num(5),
+                }],
+                duration: None,
+                stack_rule: StackRule::Ignore,
+            },
+        );
+        let smithing = registry.register_research(
+            "smithing",
+            ResearchDef::new(
+                resources::cost([("gold", 30)]),
+                10,
+                Some(sharp_blades),
+                Vec::<String>::new(),
+            ),
+        );
+        let tactics = registry.register_research(
+            "tactics",
+            ResearchDef::new(resources::cost([("gold", 20)]), 10, None, ["smithing"]),
+        );
+        let soldier = |name: &str| {
+            EntityTypeDef::new(name)
+                .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+                .with_movement(FixedU64::from_num(0.5))
+                .with_health(30)
+                .with_dying(2, None)
+                .with_attack(10, 1, 1, 4, 2)
+                .with_cost([("gold", 10)])
+                .with_train_time(5)
+        };
+        registry.register(soldier("pikeman"));
+        registry.register(soldier("halberdier").with_requires(["smithing"]));
+        registry.register(soldier("knight").with_requires(["workshop"]));
+        registry.register(
+            EntityTypeDef::new("lab")
+                .with_location(GROUND, NavSize::new(2, 2), Solidity::Solid)
+                .with_health(100)
+                .with_dying(2, None)
+                .with_researcher([smithing, tactics])
+                .with_tags(["workshop"]),
+        );
+        registry.register(
+            EntityTypeDef::new("guardhouse")
+                .with_location(GROUND, NavSize::new(2, 2), Solidity::Solid)
+                .with_health(100)
+                .with_dying(2, None)
+                .with_trainer(["pikeman", "halberdier", "knight"]),
+        );
+    }
+    app.world_mut().resource::<ContentRegistry>().validate();
+    app.world_mut().resource_mut::<GameSession>().start();
+    app
+}
+
+/// The handle the given research name resolves to in the app's registry.
+pub fn research_id(app: &App, name: &str) -> ResearchId {
+    app.world()
+        .resource::<ContentRegistry>()
+        .research(name)
+        .unwrap_or_else(|| panic!("research '{name}' is registered"))
 }
 
 /// The entity's speed stat after the tick's modifier fold — what the

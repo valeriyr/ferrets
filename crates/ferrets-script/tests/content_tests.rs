@@ -15,6 +15,7 @@ use ferrets_simulation::content::{
     location::Solidity,
     player_stats::PlayerStatId,
     repair::{RepairCost, RepairRate},
+    research::ResearchDef,
     skills::{
         EntityCastCost, EntityCastEffect, EntityCastTarget, PlayerCastEffect, SkillCaster, SkillDef,
     },
@@ -324,8 +325,66 @@ fn parses_skill_with_buff_effect() {
                 target: EntityCastTarget::Caster,
                 effect: EntityCastEffect::ApplyBuff(haste),
             },
+            requires: Vec::new(),
         })
     );
+}
+
+#[test]
+fn parses_skill_requirements() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+
+        define_entity_buff("haste", {
+            duration = 20,
+            stack = "refresh",
+            modifiers = {
+                { entity_stat = "damage", op = "percent", value = "1.0" },
+            },
+        })
+        define_research("arcana", { time = 100 })
+        define_skill("war_secret", {
+            caster = "entity",
+            cooldown = 5,
+            target = "caster",
+            effect = { apply_buff = "haste" },
+            requires = { "arcana" },
+        })
+        define_entity("mage", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = { max_health = 40 },
+            skills = { "war_secret" },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("load content");
+
+    let war_secret = registry.skill("war_secret").expect("skill defined");
+    assert_eq!(
+        registry.skill_def(war_secret).unwrap().requires,
+        vec!["arcana".to_string()]
+    );
+}
+
+#[test]
+#[should_panic(
+    expected = "skill 'war_secret' requires 'arcana', which is not a registered entity type, tag, or research"
+)]
+fn undeclared_skill_requirement_panics_on_load() {
+    let source = r#"
+        define_player_buff("haste", {
+            stack = "refresh",
+            entity_modifiers = {
+                { entity_stat = "speed", op = "percent", value = "0.5" },
+            },
+        })
+        define_skill("war_secret", {
+            caster = "player",
+            cooldown = 5,
+            effect = { remove_buff = "haste" },
+            requires = { "arcana" },
+        })
+    "#;
+    let _ = content::load(&engine(), source);
 }
 
 #[test]
@@ -360,6 +419,7 @@ fn parses_player_cast_skill() {
                 cost: resources::cost([("gold", 25)]),
                 effect: PlayerCastEffect::ApplyBuff(haste),
             },
+            requires: Vec::new(),
         })
     );
 }
@@ -709,6 +769,127 @@ fn wires_production_catalogues_across_entities() {
             .trains()
             .any(|t| t == "peasant")
     );
+}
+
+//
+// ─── Research ─────────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn parses_research_with_buff_and_requirements() {
+    let source = r#"
+        local ground = define_layer("ground")
+        define_resource("gold")
+        define_player_buff("sharp_blades", {
+            stack = "ignore",
+            entity_modifiers = {
+                { entity_stat = "damage", op = "flat", value = "5" },
+            },
+        })
+        define_research("smithing", {
+            cost = { gold = 30 },
+            time = 200,
+            buff = "sharp_blades",
+            requires = { "lab" },
+        })
+        define_research("tactics", {
+            time = 100,
+        })
+        define_entity("lab", {
+            location = { occupation = ground, size = { 2, 2 }, solidity = "solid" },
+            researcher = { "smithing", "tactics" },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("load content");
+
+    let smithing = registry.research("smithing").expect("smithing registered");
+    let expected = ResearchDef::new(
+        resources::cost([("gold", 30)]),
+        200,
+        registry.player_buff("sharp_blades"),
+        ["lab"],
+    );
+    assert_eq!(registry.research_def(smithing), Some(&expected));
+
+    // An omitted cost is free, an omitted buff a pure unlock.
+    let tactics = registry.research("tactics").expect("tactics registered");
+    let expected = ResearchDef::new(resources::Cost::new(), 100, None, Vec::<String>::new());
+    assert_eq!(registry.research_def(tactics), Some(&expected));
+
+    let lab = registry.entity("lab").expect("lab registered");
+    let researcher = lab.researcher.as_ref().expect("lab hosts researches");
+    assert!(researcher.can_research(smithing));
+    assert!(researcher.can_research(tactics));
+}
+
+#[test]
+fn loads_declared_requirements_onto_entities() {
+    let source = r#"
+        local ground = define_layer("ground")
+        define_entity("blacksmith", {
+            location = { occupation = ground, size = 1, solidity = "solid" },
+        })
+        define_entity("mortar", {
+            location = { occupation = ground, size = 1, solidity = "solid" },
+            requires = { "blacksmith" },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("load content");
+
+    assert_eq!(
+        registry.entity("mortar").unwrap().requires,
+        vec!["blacksmith".to_string()]
+    );
+}
+
+#[test]
+fn research_with_unknown_buff_errors() {
+    let source = r#"
+        define_research("smithing", {
+            time = 200,
+            buff = "sharp_blades",
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject an unknown buff name");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("player buff 'sharp_blades' is not defined")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn researcher_with_unknown_research_errors() {
+    let source = r#"
+        local ground = define_layer("ground")
+        define_entity("lab", {
+            location = { occupation = ground, size = 1, solidity = "solid" },
+            researcher = { "smithing" },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject an unknown research name");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("research 'smithing' is not defined")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'mortar' requires 'blacksmith', which is not a registered entity type, tag, or research"
+)]
+fn undeclared_requirement_panics_on_load() {
+    let source = r#"
+        local ground = define_layer("ground")
+        define_entity("mortar", {
+            location = { occupation = ground, size = 1, solidity = "solid" },
+            requires = { "blacksmith" },
+        })
+    "#;
+    let _ = content::load(&engine(), source);
 }
 
 //

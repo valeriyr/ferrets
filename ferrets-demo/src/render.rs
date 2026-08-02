@@ -31,6 +31,7 @@ use ferrets_simulation::{
         owner::OwnerComponent,
         rally::{RallyPointComponent, RallyTarget},
         repair::{RepairComponent, UnderRepairComponent},
+        research::ResearchComponent,
         resource::{HarvestComponent, UnderHarvestComponent},
         tags::TagsComponent,
         train::{TrainComponent, TrainQueueComponent},
@@ -882,6 +883,9 @@ const BUILD_WORK_COLOR: Color = Color::srgb(0.35, 0.55, 1.0);
 const HARVEST_WORK_COLOR: Color = Color::srgb(0.85, 0.7, 0.2);
 const REPAIR_WORK_COLOR: Color = Color::srgb(0.9, 0.5, 0.9);
 const TRAIN_WORK_COLOR: Color = Color::srgb(0.3, 0.9, 0.9);
+// Matches the HUD's research-button teal, so the bar and the button that
+// started it read as the same work.
+const RESEARCH_WORK_COLOR: Color = Color::srgb(0.35, 0.75, 0.65);
 /// A repairer that cannot pay for this tick's work.
 const STALLED_WORK_COLOR: Color = Color::srgb(1.0, 0.3, 0.25);
 
@@ -964,6 +968,7 @@ pub fn draw_work_links(
             | Order::Follow { .. }
             | Order::Guard { .. }
             | Order::Train
+            | Order::Research { .. }
             | Order::Die => continue,
         };
         let Some(end) = end else {
@@ -1036,8 +1041,8 @@ pub fn draw_work_markers(
 
 /// Draws slim bars over entities — energy, then health, then construction
 /// progress while a site goes up, then training progress with a dot per queued
-/// unit — for whichever of those the entity has (run in `Update`). Whatever fog
-/// or hiding keeps off screen stays bare.
+/// unit, then research progress — for whichever of those the entity has (run in
+/// `Update`). Whatever fog or hiding keeps off screen stays bare.
 pub fn draw_status_bars(
     mut gizmos: Gizmos,
     registry: Res<ContentRegistry>,
@@ -1054,11 +1059,24 @@ pub fn draw_status_bars(
             Option<&UnderConstructionComponent>,
             Option<&TrainQueueComponent>,
             Option<&TrainComponent>,
+            Option<&ResearchComponent>,
         ),
         Without<HiddenComponent>,
     >,
 ) {
-    for (info, transform, visibility, health, stats, energy, construction, queue, train) in &query {
+    for (
+        info,
+        transform,
+        visibility,
+        health,
+        stats,
+        energy,
+        construction,
+        queue,
+        train,
+        research,
+    ) in &query
+    {
         if matches!(visibility, Visibility::Hidden) {
             continue;
         }
@@ -1109,6 +1127,16 @@ pub fn draw_status_bars(
             let time = def.build_time.unwrap_or(1).max(1);
             let fraction = construction.progress as f32 / time as f32;
             bar(&mut gizmos, fraction, BUILD_WORK_COLOR, y);
+            y += 4.0;
+        }
+
+        if let Some(research) = research {
+            let time = registry
+                .research_def(research.research)
+                .map_or(1, |def| def.research_time)
+                .max(1);
+            let fraction = research.progress as f32 / time as f32;
+            bar(&mut gizmos, fraction, RESEARCH_WORK_COLOR, y);
             y += 4.0;
         }
 

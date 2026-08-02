@@ -100,6 +100,7 @@ use ferrets_simulation::{
     input::{InputFrames, PlayerFrame, SYNC_LATENCY},
     map::Map,
     player_buffs::PlayerBuffs,
+    player_research::PlayerResearch,
     player_skills::PlayerSkills,
     player_stats::PlayerStats,
     resources::PlayerResources,
@@ -157,6 +158,7 @@ pub fn install_game_resources(world: &mut World) {
     world.insert_resource(PlayerStats::new(player_count));
     world.insert_resource(PlayerSkills::new(player_count));
     world.insert_resource(PlayerBuffs::new(player_count));
+    world.insert_resource(PlayerResearch::new(player_count));
     world.insert_resource(frames);
 }
 
@@ -193,6 +195,7 @@ impl Plugin for SimulationPlugin {
             .insert_resource(PlayerStats::new(player_count))
             .insert_resource(PlayerSkills::new(player_count))
             .insert_resource(PlayerBuffs::new(player_count))
+            .insert_resource(PlayerResearch::new(player_count))
             .insert_resource(frames)
             .init_resource::<ContentRegistry>()
             .init_resource::<EntityIndex>()

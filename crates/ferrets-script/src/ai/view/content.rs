@@ -2,7 +2,11 @@
 //! session.
 
 use ferrets_simulation::content::{
-    entity_stats::EntityStatId, entity_type_def::EntityTypeDef, registry::ContentRegistry,
+    entity_stats::EntityStatId,
+    entity_type_def::EntityTypeDef,
+    registry::ContentRegistry,
+    research::ResearchId,
+    skills::{EntityCastTarget, SkillCaster, SkillId},
 };
 
 /// The static content catalogue a script can consult.
@@ -10,6 +14,8 @@ pub struct ContentView {
     /// Registered resource kinds, in ascending order.
     pub resources: Vec<String>,
     pub entities: Vec<EntityContentView>,
+    pub researches: Vec<ResearchContentView>,
+    pub skills: Vec<SkillContentView>,
 }
 
 impl ContentView {
@@ -19,10 +25,84 @@ impl ContentView {
             resources: registry.resources().map(str::to_string).collect(),
             entities: registry
                 .entities()
-                .map(EntityContentView::from_def)
+                .map(|def| EntityContentView::from_def(def, registry))
+                .collect(),
+            researches: registry
+                .researches()
+                .map(|(name, id)| {
+                    let def = registry
+                        .research_def(id)
+                        .expect("a listed research resolves in its own registry");
+                    ResearchContentView {
+                        name: name.to_string(),
+                        id,
+                        cost: def
+                            .cost
+                            .iter()
+                            .map(|(kind, amount)| (kind.clone(), *amount))
+                            .collect(),
+                        time: def.research_time,
+                        requires: (!def.requires.is_empty()).then(|| def.requires.clone()),
+                    }
+                })
+                .collect(),
+            skills: registry
+                .skills()
+                .map(|(name, id)| {
+                    let def = registry
+                        .skill_def(id)
+                        .expect("a listed skill resolves in its own registry");
+                    let (caster, target) = match &def.caster {
+                        SkillCaster::Entity { target, .. } => (
+                            "entity",
+                            Some(match target {
+                                EntityCastTarget::Caster => "caster",
+                                EntityCastTarget::Ally => "ally",
+                                EntityCastTarget::Enemy => "enemy",
+                            }),
+                        ),
+                        SkillCaster::Player { .. } => ("player", None),
+                    };
+                    SkillContentView {
+                        name: name.to_string(),
+                        id,
+                        caster: caster.to_string(),
+                        target: target.map(str::to_string),
+                        requires: (!def.requires.is_empty()).then(|| def.requires.clone()),
+                    }
+                })
                 .collect(),
         }
     }
+}
+
+/// The fields of one skill definition a script can consult.
+pub struct SkillContentView {
+    pub name: String,
+    /// The registry handle the name resolves to, for the command boundary —
+    /// scripts name skills, commands carry ids.
+    pub id: SkillId,
+    /// Which arm casts: `"entity"` or `"player"`.
+    pub caster: String,
+    /// Who an entity cast acts on: `"caster"`, `"ally"`, or `"enemy"`. `None`
+    /// for a player cast, which lands on the casting player.
+    pub target: Option<String>,
+    /// Requirements for casting. `None` when always available.
+    pub requires: Option<Vec<String>>,
+}
+
+/// The fields of one research definition a script can consult.
+pub struct ResearchContentView {
+    pub name: String,
+    /// The registry handle the name resolves to, for the command boundary —
+    /// scripts name researches, commands carry ids.
+    pub id: ResearchId,
+    /// Price per resource kind, in ascending kind order. Empty means free.
+    pub cost: Vec<(String, u32)>,
+    /// Ticks a researcher works to complete the research.
+    pub time: u32,
+    /// Requirements for starting the research. `None` when always available.
+    pub requires: Option<Vec<String>>,
 }
 
 /// The fields of one entity type definition a script can consult.
@@ -34,6 +114,12 @@ pub struct EntityContentView {
     pub build_time: Option<u32>,
     /// Trainable types. `None` when instances cannot train.
     pub trains: Option<Vec<String>>,
+    /// Hostable researches by name. `None` when instances cannot research.
+    pub researches: Option<Vec<String>>,
+    /// Castable skills by name. `None` when instances have none.
+    pub skills: Option<Vec<String>>,
+    /// Requirements for producing an instance. `None` when always available.
+    pub requires: Option<Vec<String>>,
     /// Constructible types. `None` when instances cannot build.
     pub builds: Option<Vec<String>>,
     /// Footprint width and height in cells.
@@ -58,7 +144,7 @@ pub struct AttackView {
 
 impl EntityContentView {
     /// Snapshots the fields a script can consult from one type definition.
-    pub fn from_def(def: &EntityTypeDef) -> EntityContentView {
+    pub fn from_def(def: &EntityTypeDef, registry: &ContentRegistry) -> EntityContentView {
         EntityContentView {
             name: def.name.clone(),
             cost: def
@@ -72,6 +158,18 @@ impl EntityContentView {
                 .trainer
                 .as_ref()
                 .map(|t| t.trains().map(str::to_string).collect()),
+            researches: def.researcher.as_ref().map(|r| {
+                r.researches()
+                    .filter_map(|id| registry.research_name(id).map(str::to_string))
+                    .collect()
+            }),
+            skills: (!def.skills.is_empty()).then(|| {
+                def.skills
+                    .iter()
+                    .filter_map(|&id| registry.skill_name(id).map(str::to_string))
+                    .collect()
+            }),
+            requires: (!def.requires.is_empty()).then(|| def.requires.clone()),
             builds: def
                 .builder
                 .as_ref()

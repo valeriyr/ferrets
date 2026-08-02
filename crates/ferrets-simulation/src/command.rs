@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::components::rally::RallyTarget;
 use crate::components::stance::Stance;
+use crate::content::research::ResearchId;
 use crate::content::skills::SkillId;
 use crate::order::AttackTarget;
 use crate::simulation_id::SimulationId;
@@ -87,6 +88,11 @@ pub enum PlayerCommand {
     TrainEntity {
         trainer: SimulationId,
         type_name: String,
+    },
+    /// Starts the given research on the `researcher` entity.
+    StartResearch {
+        researcher: SimulationId,
+        research: ResearchId,
     },
     /// Sets or clears the rally point of the `entity`: units it emits take an
     /// order toward the target when they spawn. `None` clears.

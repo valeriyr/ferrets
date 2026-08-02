@@ -14,6 +14,7 @@ use crate::content::{
     player_stats::{PLAYER_BUILTIN_STATS, PlayerStatId},
     projectile::{ProjectileDef, ProjectileId},
     repair::RepairCost,
+    research::{ResearchDef, ResearchId},
     skills::{EntityCastCost, EntityCastEffect, PlayerCastEffect, SkillCaster, SkillDef, SkillId},
     tags,
 };
@@ -42,6 +43,8 @@ pub struct ContentRegistry {
     player_buff_defs: Vec<PlayerBuffDef>,
     skills: BTreeMap<String, SkillId>,
     skill_defs: Vec<SkillDef>,
+    researches: BTreeMap<String, ResearchId>,
+    research_defs: Vec<ResearchDef>,
     projectiles: BTreeMap<String, ProjectileId>,
     projectile_defs: Vec<ProjectileDef>,
 }
@@ -71,6 +74,8 @@ impl Default for ContentRegistry {
             player_buff_defs: Vec::new(),
             skills: BTreeMap::new(),
             skill_defs: Vec::new(),
+            researches: BTreeMap::new(),
+            research_defs: Vec::new(),
             projectiles: BTreeMap::new(),
             projectile_defs: Vec::new(),
         }
@@ -112,6 +117,7 @@ impl ContentRegistry {
         self.validate_corpse(&def);
         self.validate_stats(&def);
         self.validate_skills(&def);
+        self.validate_researcher(&def);
         self.validate_delivery(&def);
         self.validate_repair(&def);
         self.validate_build(&def);
@@ -130,11 +136,27 @@ impl ContentRegistry {
     /// registry, in any registration order.
     ///
     /// Panics if any type trains a type that is not a registered trainable type,
-    /// or builds a type that is not a registered constructible type.
+    /// builds a type that is not a registered constructible type, or carries a
+    /// requirement (on the type itself, a research, or a skill) that does not
+    /// resolve to exactly one of: a registered entity type or tag, or a
+    /// registered research.
     pub fn validate(&self) {
         for def in &self.defs {
             self.validate_trains(def);
             self.validate_builds(def);
+            self.validate_requires(&format!("entity type '{}'", def.name), &def.requires);
+        }
+        for (name, &id) in &self.researches {
+            self.validate_requires(
+                &format!("research '{name}'"),
+                &self.research_defs[id.index()].requires,
+            );
+        }
+        for (name, &id) in &self.skills {
+            self.validate_requires(
+                &format!("skill '{name}'"),
+                &self.skill_defs[id.index()].requires,
+            );
         }
     }
 
@@ -554,6 +576,87 @@ impl ContentRegistry {
         self.skill_defs.get(id.index())
     }
 
+    /// Returns every registered skill with its handle, in ascending name order.
+    pub fn skills(&self) -> impl Iterator<Item = (&str, SkillId)> {
+        self.skills.iter().map(|(name, &id)| (name.as_str(), id))
+    }
+
+    /// Registers a research definition by name and returns its assigned
+    /// [`ResearchId`]. Ids are assigned in registration order, so identical
+    /// content registered in the same order resolves to identical ids
+    /// everywhere. Re-registering a name keeps the first definition and
+    /// returns its existing id.
+    ///
+    /// The research's requirements are forward references, validated by
+    /// [`validate`](Self::validate) once all content is registered.
+    ///
+    /// Panics if `name` is empty, the research costs an unregistered resource
+    /// kind, or it applies a buff this registry never minted.
+    pub fn register_research(
+        &mut self,
+        name: impl Into<String>,
+        research: ResearchDef,
+    ) -> ResearchId {
+        let name = name.into();
+        assert!(!name.is_empty(), "research name must not be empty");
+
+        for kind in research.cost.keys() {
+            assert!(
+                self.has_resource(kind),
+                "research '{name}' costs unregistered resource kind '{kind}'"
+            );
+        }
+        if let Some(buff) = research.buff {
+            assert!(
+                buff.index() < self.player_buff_defs.len(),
+                "research '{name}' references an unregistered player buff"
+            );
+        }
+
+        if let Some(&id) = self.researches.get(&name) {
+            return id;
+        }
+
+        let id = ResearchId::from_index(self.research_defs.len());
+        self.researches.insert(name, id);
+        self.research_defs.push(research);
+        id
+    }
+
+    /// Returns `true` if `name` is a registered research.
+    pub fn has_research(&self, name: &str) -> bool {
+        self.researches.contains_key(name)
+    }
+
+    /// Returns the [`ResearchId`] for the given research name, or `None` if
+    /// not registered.
+    pub fn research(&self, name: &str) -> Option<ResearchId> {
+        self.researches.get(name).copied()
+    }
+
+    /// Returns the research definition for the given handle, or `None` if the
+    /// handle did not come from this registry.
+    pub fn research_def(&self, id: ResearchId) -> Option<&ResearchDef> {
+        self.research_defs.get(id.index())
+    }
+
+    /// Returns the name the given research is registered under, or `None` if
+    /// the handle did not come from this registry.
+    pub fn research_name(&self, id: ResearchId) -> Option<&str> {
+        self.researches
+            .iter()
+            .find(|&(_, &research)| research == id)
+            .map(|(name, _)| name.as_str())
+    }
+
+    /// Returns every registered research with its handle, in ascending name
+    /// order.
+    pub fn researches(&self) -> impl Iterator<Item = (&str, ResearchId)> {
+        self.researches
+            .iter()
+            .map(|(name, &id)| (name.as_str(), id))
+    }
+
     /// Registers a terrain type (grass, water, …): a name and the mask of
     /// navigation layers passable on cells of that terrain. An empty mask means
     /// the terrain is impassable on every layer.
@@ -662,6 +765,42 @@ impl ContentRegistry {
                     ),
                 }
             }
+        }
+    }
+
+    /// Checks that every research the type can host was minted by this registry.
+    fn validate_researcher(&self, def: &EntityTypeDef) {
+        let Some(researcher) = &def.researcher else {
+            return;
+        };
+
+        for research in researcher.researches() {
+            assert!(
+                research.index() < self.research_defs.len(),
+                "entity type '{}' hosts an unregistered research",
+                def.name
+            );
+        }
+    }
+
+    /// Checks that every requirement entry resolves to exactly one vocabulary:
+    /// a research, or an entity type or tag (the two entity readings share
+    /// their meaning, so a name serving both is fine; a name that is both a
+    /// research and an entity term would leave content ambiguous).
+    fn validate_requires(&self, owner: &str, requires: &[String]) {
+        for name in requires {
+            let research = self.researches.contains_key(name);
+            let entity_term = self.defs_by_name.contains_key(name) || self.tags.contains(name);
+            assert!(
+                research || entity_term,
+                "{owner} requires '{name}', which is not a registered entity type, tag, \
+                 or research"
+            );
+            assert!(
+                !(research && entity_term),
+                "{owner} requires '{name}', which names both a research and an entity \
+                 type or tag"
+            );
         }
     }
 

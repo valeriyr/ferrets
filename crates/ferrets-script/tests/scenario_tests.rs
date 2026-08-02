@@ -306,6 +306,8 @@ fn empty_content() -> ContentView {
     ContentView {
         resources: Vec::new(),
         entities: Vec::new(),
+        researches: Vec::new(),
+        skills: Vec::new(),
     }
 }
 
@@ -316,6 +318,7 @@ fn entity(id: u32, type_name: &str, under_construction: bool) -> EntityView {
         x: 0,
         y: 0,
         health: Some(1),
+        energy: None,
         damage: None,
         armor: None,
         idle: true,
@@ -338,6 +341,8 @@ fn view_with(my_entities: Vec<EntityView>) -> GameView {
         resources: Vec::new(),
         supply_provided: 0,
         supply_used: 0,
+        researched: Vec::new(),
+        researching: Vec::new(),
         my_entities,
         ally_entities: Vec::new(),
         enemy_entities: Vec::new(),

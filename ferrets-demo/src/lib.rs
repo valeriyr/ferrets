@@ -145,6 +145,7 @@ pub fn run() {
                 // (unlike the display-only HUD systems in the viewing group).
                 hud::command_card_input,
                 hud::build_card_input,
+                hud::research_card_input,
                 hud::skill_card_input,
                 hud::player_skill_card_input,
                 hud::group_roster_input,
@@ -167,6 +168,9 @@ pub fn run() {
                 hud::update_supply,
                 hud::update_help,
                 hud::update_command_card,
+                // Runs after the card is (re)built and after the click handlers
+                // have applied their hover tints, so its verdict wins the frame.
+                hud::update_card_availability.after(hud::update_command_card),
                 hud::update_player_skill_cooldown,
                 hud::update_skill_cooldowns,
                 hud::update_group_roster,

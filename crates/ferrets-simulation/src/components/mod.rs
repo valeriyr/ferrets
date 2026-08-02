@@ -24,6 +24,7 @@ pub mod patrol;
 pub mod pending_reveal;
 pub mod rally;
 pub mod repair;
+pub mod research;
 pub mod resource;
 pub mod stance;
 pub mod tags;

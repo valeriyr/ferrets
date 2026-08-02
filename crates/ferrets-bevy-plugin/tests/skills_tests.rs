@@ -8,13 +8,15 @@ use ferrets_simulation::{
     components::energy::EnergyComponent,
     content::{
         entity_stats::EntityStatId,
+        research::ResearchDef,
         skills::{
             EntityCastCost, EntityCastEffect, EntityCastTarget, SkillCaster, SkillDef, SkillId,
         },
         stats::ModifierOp,
         {entity_type_def::EntityTypeDef, location::Solidity, registry::ContentRegistry},
     },
-    resources,
+    player_research::PlayerResearch,
+    resources::{self, Cost},
     session::{GameSession, player_slot::PlayerSlot, player_type::PlayerType},
     spawn,
 };
@@ -191,12 +193,68 @@ fn skill_with_lethal_health_cost_is_refused() {
 }
 
 //
+// ─── Requirements ───────────────────────────────────────────────────────────
+//
+
+#[test]
+fn skill_requirement_gates_cast() {
+    let mut app = app();
+    let (mage, mage_id) =
+        spawn::spawn_entity(app.world_mut(), "mage", utils::pos(5, 5), Some(0)).unwrap();
+
+    let war_secret = skill(&app, "war_secret");
+    let base = utils::effective_damage(&app, mage);
+
+    // Before the research, the cast is refused outright.
+    utils::push_command(
+        &mut app,
+        PlayerCommand::UseSkill {
+            skill: war_secret,
+            caster: SkillCasterRef::Entity(mage_id),
+            target: None,
+        },
+    );
+    utils::run_ticks(&mut app, 5);
+    assert_eq!(
+        utils::effective_damage(&app, mage),
+        base,
+        "the gated cast applied nothing"
+    );
+
+    // Completing the research unlocks the same command.
+    let arcana = app
+        .world()
+        .resource::<ContentRegistry>()
+        .research("arcana")
+        .expect("research defined");
+    app.world_mut()
+        .resource_mut::<PlayerResearch>()
+        .complete(0, arcana);
+
+    utils::push_command(
+        &mut app,
+        PlayerCommand::UseSkill {
+            skill: war_secret,
+            caster: SkillCasterRef::Entity(mage_id),
+            target: None,
+        },
+    );
+    utils::run_ticks(&mut app, 5);
+    assert_eq!(
+        utils::effective_damage(&app, mage),
+        base + base,
+        "the unlocked cast applied its buff"
+    );
+}
+
+//
 // ─── Helpers ────────────────────────────────────────────────────────────────
 //
 
 /// One human player and a `mage` whose self-targeted +100% damage buff can be
 /// cast four ways: `battle_focus` (30 energy), `rally` (25 gold), `sacrifice`
-/// (10 health), and `last_rite` (its whole 50 health).
+/// (10 health), and `last_rite` (its whole 50 health) — plus the free
+/// `war_secret`, gated on the `arcana` research.
 fn app() -> App {
     let mut app = utils::make_app(vec![PlayerSlot::occupied(0, PlayerType::Human, None, None)]);
     app.world_mut()
@@ -219,6 +277,7 @@ fn app() -> App {
                 target: EntityCastTarget::Caster,
                 effect: EntityCastEffect::ApplyBuff(frenzy),
             },
+            requires: Vec::new(),
         };
         let battle_focus = registry.register_skill(
             "battle_focus",
@@ -238,13 +297,24 @@ fn app() -> App {
             "last_rite",
             costed(vec![EntityCastCost::Health(FixedU64::from_num(50))]),
         );
+        registry.register_research(
+            "arcana",
+            ResearchDef::new(Cost::new(), 5, None, Vec::<String>::new()),
+        );
+        let war_secret = registry.register_skill(
+            "war_secret",
+            SkillDef {
+                requires: vec!["arcana".to_string()],
+                ..costed(Vec::new())
+            },
+        );
         registry.register(
             EntityTypeDef::new("mage")
                 .with_location(utils::GROUND, NavSize::ONE, Solidity::Solid)
                 .with_health(50)
                 .with_attack(10, 1, 1, 4, 2)
                 .with_energy(100, FixedU64::from_num(1))
-                .with_skills([battle_focus, rally, sacrifice, last_rite]),
+                .with_skills([battle_focus, rally, sacrifice, last_rite, war_secret]),
         );
     }
     app.world_mut().resource::<ContentRegistry>().validate();

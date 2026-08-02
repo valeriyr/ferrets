@@ -21,6 +21,7 @@ use ferrets_simulation::content::{
         location::Solidity,
         registry::ContentRegistry,
         repair::{RepairCost, RepairRate},
+        research::{ResearchDef, ResearcherDef},
         resource::{DepletionPolicy, HarvestData},
         work::WorkPresence,
     },
@@ -583,6 +584,7 @@ fn register_rejects_costed_skill_without_energy_pool() {
                 target: EntityCastTarget::Caster,
                 effect: EntityCastEffect::Damage(FixedU64::from_num(5)),
             },
+            requires: Vec::new(),
         },
     );
     registry.register(
@@ -605,6 +607,7 @@ fn register_accepts_free_skill_without_energy_pool() {
                 target: EntityCastTarget::Caster,
                 effect: EntityCastEffect::Damage(FixedU64::from_num(5)),
             },
+            requires: Vec::new(),
         },
     );
     registry.register(
@@ -629,6 +632,7 @@ fn register_rejects_skill_costing_unregistered_resource() {
                 target: EntityCastTarget::Caster,
                 effect: EntityCastEffect::Damage(FixedU64::from_num(5)),
             },
+            requires: Vec::new(),
         },
     );
 }
@@ -648,6 +652,7 @@ fn register_accepts_resource_costed_skill_without_pools() {
                 target: EntityCastTarget::Caster,
                 effect: EntityCastEffect::Damage(FixedU64::from_num(5)),
             },
+            requires: Vec::new(),
         },
     );
     registry.register(
@@ -672,6 +677,7 @@ fn register_rejects_health_costed_skill_without_health_pool() {
                 target: EntityCastTarget::Caster,
                 effect: EntityCastEffect::Damage(FixedU64::from_num(5)),
             },
+            requires: Vec::new(),
         },
     );
     registry.register(
@@ -892,6 +898,7 @@ fn register_rejects_entity_cast_skill_with_unregistered_buff() {
                 target: EntityCastTarget::Caster,
                 effect: EntityCastEffect::ApplyBuff(buff),
             },
+            requires: Vec::new(),
         },
     );
 }
@@ -909,6 +916,7 @@ fn register_rejects_player_cast_skill_costing_unregistered_resource() {
                 cost: resources::cost([("gold", 25)]),
                 effect: PlayerCastEffect::ApplyBuff(haste),
             },
+            requires: Vec::new(),
         },
     );
 }
@@ -1062,6 +1070,211 @@ fn register_rejects_repair_ratio_without_production_time() {
 }
 
 //
+// ─── Research ─────────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn register_research_assigns_ids_and_resolves_names() {
+    let mut registry = ground_registry();
+    registry.register_resource("gold");
+    let buff = haste_buff(&mut registry);
+
+    let smithing = registry.register_research(
+        "smithing",
+        ResearchDef::new(
+            resources::cost([("gold", 30)]),
+            10,
+            Some(buff),
+            Vec::<String>::new(),
+        ),
+    );
+    let tactics = registry.register_research(
+        "tactics",
+        ResearchDef::new(Cost::new(), 5, None, ["smithing"]),
+    );
+
+    assert!(registry.has_research("smithing"));
+    assert_eq!(registry.research("smithing"), Some(smithing));
+    assert_eq!(registry.research_name(tactics), Some("tactics"));
+    assert_eq!(registry.research_def(smithing).unwrap().research_time, 10);
+    assert_eq!(registry.research_def(tactics).unwrap().buff, None);
+
+    // Re-registering a name keeps the first definition and returns its id.
+    let again =
+        registry.register_research("smithing", ResearchDef::new(Cost::new(), 99, None, ["x"]));
+    assert_eq!(again, smithing);
+    assert_eq!(registry.research_def(smithing).unwrap().research_time, 10);
+}
+
+#[test]
+#[should_panic(expected = "research name must not be empty")]
+fn register_research_rejects_empty_name() {
+    ground_registry().register_research("", ResearchDef::new(Cost::new(), 10, None, ["worker"]));
+}
+
+#[test]
+#[should_panic(expected = "research 'smithing' costs unregistered resource kind 'gold'")]
+fn register_research_rejects_unknown_cost_kind() {
+    ground_registry().register_research(
+        "smithing",
+        ResearchDef::new(
+            resources::cost([("gold", 30)]),
+            10,
+            None,
+            Vec::<String>::new(),
+        ),
+    );
+}
+
+#[test]
+#[should_panic(expected = "research 'smithing' references an unregistered player buff")]
+fn register_research_rejects_unregistered_buff() {
+    // A handle from another registry names a buff this one never minted.
+    let mut foreign = ContentRegistry::default();
+    let buff = haste_buff(&mut foreign);
+    ground_registry().register_research(
+        "smithing",
+        ResearchDef::new(Cost::new(), 10, Some(buff), Vec::<String>::new()),
+    );
+}
+
+#[test]
+#[should_panic(expected = "research_time must be greater than 0")]
+fn research_def_rejects_zero_time() {
+    ResearchDef::new(Cost::new(), 0, None, Vec::<String>::new());
+}
+
+#[test]
+#[should_panic(expected = "requirement names must not be empty")]
+fn research_def_rejects_empty_requirement_name() {
+    ResearchDef::new(Cost::new(), 10, None, [""]);
+}
+
+#[test]
+#[should_panic(expected = "researches must not be empty")]
+fn researcher_def_rejects_empty_catalogue() {
+    ResearcherDef::new([]);
+}
+
+#[test]
+#[should_panic(expected = "entity type 'lab' hosts an unregistered research")]
+fn register_rejects_unregistered_hosted_research() {
+    let mut foreign = ContentRegistry::default();
+    let research =
+        foreign.register_research("smithing", ResearchDef::new(Cost::new(), 10, None, ["x"]));
+    ground_registry().register(
+        EntityTypeDef::new("lab")
+            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_researcher([research]),
+    );
+}
+
+//
+// ─── Requirements ─────────────────────────────────────────────────────────────
+//
+
+// Requirement lists are forward references, checked by `validate()` against the
+// complete registry: each entry must name exactly one of an entity type, a tag,
+// or a research.
+
+#[test]
+fn validate_accepts_type_tag_and_research_requirements() {
+    let mut registry = ground_registry();
+    let smithing =
+        registry.register_research("smithing", ResearchDef::new(Cost::new(), 10, None, ["lab"]));
+    // The knight's requirements name a type registered after it, the reserved
+    // "building" tag, and a research.
+    registry.register(
+        EntityTypeDef::new("knight")
+            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_requires(["lab", tags::BUILDING, "smithing"]),
+    );
+    registry.register(
+        EntityTypeDef::new("lab")
+            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_researcher([smithing]),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'knight' requires 'chapel', which is not a registered entity type, tag, or research"
+)]
+fn validate_rejects_unknown_requirement() {
+    let mut registry = ground_registry();
+    registry.register(
+        EntityTypeDef::new("knight")
+            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_requires(["chapel"]),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'knight' requires 'forge', which names both a research and an entity type or tag"
+)]
+fn validate_rejects_ambiguous_requirement() {
+    let mut registry = ground_registry();
+    registry.register_research(
+        "forge",
+        ResearchDef::new(Cost::new(), 10, None, Vec::<String>::new()),
+    );
+    registry.register(EntityTypeDef::new("forge").with_location(
+        GROUND,
+        NavSize::ONE,
+        Solidity::Solid,
+    ));
+    registry.register(
+        EntityTypeDef::new("knight")
+            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_requires(["forge"]),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "research 'smithing' requires 'chapel', which is not a registered entity type, tag, or research"
+)]
+fn validate_rejects_unknown_research_requirement() {
+    let mut registry = ground_registry();
+    registry.register_research(
+        "smithing",
+        ResearchDef::new(Cost::new(), 10, None, ["chapel"]),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "skill 'war_cry' requires 'chapel', which is not a registered entity type, tag, or research"
+)]
+fn validate_rejects_unknown_skill_requirement() {
+    let mut registry = ground_registry();
+    let haste = haste_buff(&mut registry);
+    let mut skill = player_cast(haste);
+    skill.requires = vec!["chapel".to_string()];
+    registry.register_skill("war_cry", skill);
+    registry.validate();
+}
+
+#[test]
+fn validate_accepts_research_requirement_on_skill() {
+    let mut registry = ground_registry();
+    let haste = haste_buff(&mut registry);
+    registry.register_research(
+        "war_drums",
+        ResearchDef::new(Cost::new(), 10, None, Vec::<String>::new()),
+    );
+    let mut skill = player_cast(haste);
+    skill.requires = vec!["war_drums".to_string()];
+    registry.register_skill("war_cry", skill);
+    registry.validate();
+}
+
+//
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 //
 
@@ -1093,6 +1306,7 @@ fn player_cast(buff: PlayerBuffId) -> SkillDef {
             cost: Cost::new(),
             effect: PlayerCastEffect::ApplyBuff(buff),
         },
+        requires: Vec::new(),
     }
 }
 

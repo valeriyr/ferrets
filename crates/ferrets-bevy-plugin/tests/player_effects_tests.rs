@@ -298,5 +298,6 @@ fn free_skill(buff: PlayerBuffId) -> SkillDef {
             cost: Cost::new(),
             effect: PlayerCastEffect::ApplyBuff(buff),
         },
+        requires: Vec::new(),
     }
 }

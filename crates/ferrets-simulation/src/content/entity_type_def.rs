@@ -14,6 +14,7 @@ use crate::{
         location::{LocationDef, Solidity},
         projectile::ProjectileId,
         repair::{RepairCost, RepairRate, RepairerDef},
+        research::{ResearchId, ResearcherDef},
         resource::{
             DepletionPolicy, HarvestData, ResourceCarrierDef, ResourceSourceDef, ResourceStorageDef,
         },
@@ -59,6 +60,10 @@ pub struct EntityTypeDef {
     /// Content-declared classification tags (e.g. `building`). Each must be a
     /// registered tag.
     pub tags: BTreeSet<String>,
+    /// Requirements for producing an instance — each entry names an entity
+    /// type, a tag, or a research, and all must hold (see
+    /// [`requirements::met`](crate::requirements::met)).
+    pub requires: Vec<String>,
 
     /// Base value of every stat this type carries, seeded into each instance's
     /// [`StatsComponent`](crate::components::entity_stats::StatsComponent) at spawn. The
@@ -96,6 +101,8 @@ pub struct EntityTypeDef {
     pub build_time: Option<u32>,
     /// The entity types instances can train. `None` means instances cannot train.
     pub trainer: Option<TrainerDef>,
+    /// The researches instances can host. `None` means instances cannot research.
+    pub researcher: Option<ResearcherDef>,
     /// The entity types instances can construct. `None` means instances cannot build.
     pub builder: Option<BuilderDef>,
     /// What instances can mend, and on what terms. `None` means instances cannot
@@ -126,6 +133,7 @@ impl EntityTypeDef {
             name,
             race: None,
             tags: BTreeSet::new(),
+            requires: Vec::new(),
             base_stats: BTreeMap::new(),
             location: None,
             dying: None,
@@ -138,6 +146,7 @@ impl EntityTypeDef {
             train_time: None,
             build_time: None,
             trainer: None,
+            researcher: None,
             builder: None,
             repairer: None,
             repair_ratio: None,
@@ -228,6 +237,18 @@ impl EntityTypeDef {
             let tag = tag.into();
             assert!(!tag.is_empty(), "tag names must not be empty");
             self.tags.insert(tag);
+        }
+        self
+    }
+
+    /// Adds production requirements to this type (see [`requires`](Self::requires)).
+    ///
+    /// Panics if any requirement name is empty.
+    pub fn with_requires(mut self, requires: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        for name in requires {
+            let name = name.into();
+            assert!(!name.is_empty(), "requirement names must not be empty");
+            self.requires.push(name);
         }
         self
     }
@@ -436,6 +457,14 @@ impl EntityTypeDef {
     /// Panics if `trains` is empty or any entry is empty.
     pub fn with_trainer(mut self, trains: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.trainer = Some(TrainerDef::new(trains));
+        self
+    }
+
+    /// Allows instances of this type to host the given researches.
+    ///
+    /// Panics if `researches` is empty.
+    pub fn with_researcher(mut self, researches: impl IntoIterator<Item = ResearchId>) -> Self {
+        self.researcher = Some(ResearcherDef::new(researches));
         self
     }
 

@@ -4,7 +4,7 @@
 use bevy::prelude::*;
 use ferrets_bevy_plugin::SimulationPlugin;
 use ferrets_bevy_plugin::ai::AiPlugin;
-use ferrets_demo::ai::{AI_SCRIPT, install_demo_ai};
+use ferrets_demo::ai::{human_ai, install_demo_ai, orc_ai};
 use ferrets_demo::content::CONTENT;
 use ferrets_demo::{map, setup};
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
@@ -15,6 +15,7 @@ use ferrets_script::engine::lua::LuaEngine;
 use ferrets_simulation::components::entity_info::EntityInfoComponent;
 use ferrets_simulation::components::owner::OwnerComponent;
 use ferrets_simulation::content::registry::ContentRegistry;
+use ferrets_simulation::player_research::PlayerResearch;
 use ferrets_simulation::session::{
     GameSession,
     ai_hosting::AiHosting,
@@ -27,15 +28,14 @@ use ferrets_simulation::session::{
 use ferrets_simulation::spawn;
 
 #[test]
-fn ai_script_loads() {
+fn ai_scripts_load() {
     let registry = content::load(&LuaEngine, CONTENT).expect("demo content");
     let content = ContentView::from_registry(&registry);
 
-    let runtime = LuaEngine
-        .load_ai(AI_SCRIPT, &content)
-        .expect("demo ai loads");
-
-    assert_eq!(runtime.period(), 20);
+    for script in [human_ai(), orc_ai()] {
+        let runtime = LuaEngine.load_ai(&script, &content).expect("demo ai loads");
+        assert_eq!(runtime.period(), 20);
+    }
 }
 
 #[test]
@@ -70,21 +70,35 @@ fn ai_builds_economy_and_army() {
         install_demo_ai(world);
     }
 
-    // 50 seconds of game time: the worker line is trained, the barracks
-    // stands, and soldiers are mustering — but the first attack wave (at 5
-    // soldiers) has not marched yet, so nothing has died.
-    for _ in 0..1000 {
+    // 100 seconds of game time: the worker lines are trained, the production
+    // buildings stand, each race's tech is researched — the human forge and
+    // the mortars it unlocks, the orc ritual and the shamans it unlocks — and
+    // soldiers are mustering.
+    for _ in 0..2000 {
         app.world_mut().run_schedule(FixedUpdate);
     }
 
     let world = app.world_mut();
-    assert_eq!(world.resource::<GameSession>().tick(), 1000);
-    assert!(count_owned(world, 1, "barracks") >= 1);
-    assert!(count_owned(world, 2, "war_camp") >= 1);
+    assert_eq!(world.resource::<GameSession>().tick(), 2000);
     assert_eq!(count_owned(world, 1, "peasant"), 5);
     assert_eq!(count_owned(world, 2, "peon"), 5);
+    assert!(count_owned(world, 1, "barracks") >= 1);
+    assert!(count_owned(world, 2, "war_camp") >= 1);
+    assert!(count_owned(world, 1, "blacksmith") >= 1);
     assert!(count_owned(world, 1, "archer") >= 1);
+    assert!(count_owned(world, 1, "mortar") >= 1);
     assert!(count_owned(world, 2, "grunt") >= 1);
+    assert!(count_owned(world, 2, "shaman") >= 1);
+    for (player, research) in [(1, "iron_weapons"), (2, "frenzy_ritual")] {
+        let id = world
+            .resource::<ContentRegistry>()
+            .research(research)
+            .expect("research defined");
+        assert!(
+            world.resource::<PlayerResearch>().is_completed(player, id),
+            "player {player} researched {research}"
+        );
+    }
 }
 
 #[test]

@@ -33,6 +33,7 @@ use crate::{
         entity_stats::EntityStatId,
         projectile::Aim,
         registry::ContentRegistry,
+        research::ResearchId,
         skills::{
             EntityCastCost, EntityCastEffect, EntityCastTarget, PlayerCastEffect, SkillCaster,
             SkillId,
@@ -45,7 +46,9 @@ use crate::{
     input::InputFrames,
     order::{AttackTarget, Order},
     player_buffs::PlayerBuffs,
+    player_research::PlayerResearch,
     player_skills::PlayerSkills,
+    requirements,
     resources::{Cost, PlayerResources},
     selection::Selection,
     session::{GameSession, player_slot::PlayerId},
@@ -253,6 +256,12 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
         }
         PlayerCommand::TrainEntity { trainer, type_name } => {
             train_entity(world, player, *trainer, type_name);
+        }
+        PlayerCommand::StartResearch {
+            researcher,
+            research,
+        } => {
+            start_research(world, player, *researcher, *research);
         }
         PlayerCommand::SetRallyPoint { entity, target } => {
             let Some(entity) = find_owned_interactable(world, player, *entity) else {
@@ -485,17 +494,28 @@ fn train_entity(world: &mut World, player: PlayerId, trainer: SimulationId, type
         return;
     }
 
-    let Some((cost, supply_ok)) = world
+    let Some((cost, supply_ok, requirements_ok)) = world
         .resource::<ContentRegistry>()
         .entity(type_name)
         .filter(|def| def.train_time.is_some())
-        .map(|def| (def.cost.clone(), supply::allows(world, player, def)))
+        .map(|def| {
+            (
+                def.cost.clone(),
+                supply::allows(world, player, def),
+                requirements::met(world, player, &def.requires),
+            )
+        })
     else {
         return;
     };
     // Supply is reserved here, where the resource cost is paid: the queue entry
     // holds it from this moment and hands it to the unit it becomes.
     if !supply_ok {
+        return;
+    }
+    // Requirements gate only the command: an entry already queued keeps
+    // training even when its requirement falls.
+    if !requirements_ok {
         return;
     }
     if !world
@@ -524,6 +544,98 @@ fn train_entity(world: &mut World, player: PlayerId, trainer: SimulationId, type
     if !already_training {
         queue.push(Order::Train, None);
     }
+}
+
+/// Validates and executes a research command: pays the cost up front and pushes
+/// the order; the work refunds on a force cancel.
+fn start_research(
+    world: &mut World,
+    player: PlayerId,
+    researcher: SimulationId,
+    research: ResearchId,
+) {
+    let Some(entity) = find_owned_interactable(world, player, researcher) else {
+        return;
+    };
+    // A building still being constructed cannot research yet.
+    if world
+        .entity(entity)
+        .contains::<UnderConstructionComponent>()
+    {
+        return;
+    }
+    if !entity_def::of(world, entity)
+        .researcher
+        .as_ref()
+        .is_some_and(|r| r.can_research(research))
+    {
+        return;
+    }
+    if world
+        .resource::<PlayerResearch>()
+        .is_completed(player, research)
+    {
+        return;
+    }
+    // One research per topic per player, everywhere: derived from the order
+    // queues themselves, so a researcher that dies never leaves the topic
+    // locked.
+    if research_in_flight(world, player, research) {
+        return;
+    }
+
+    // Resolved defensively: the id arrives over the wire, and an id this
+    // registry never minted is a peer to distrust, not a panic.
+    let Some((cost, requires)) = world
+        .resource::<ContentRegistry>()
+        .research_def(research)
+        .map(|def| (def.cost.clone(), def.requires.clone()))
+    else {
+        return;
+    };
+    if !requirements::met(world, player, &requires) {
+        return;
+    }
+    if !world
+        .resource::<PlayerResources>()
+        .can_afford(player, &cost)
+    {
+        return;
+    }
+    world
+        .resource_mut::<PlayerResources>()
+        .subtract(player, &cost);
+
+    let mut entity_mut = world.entity_mut(entity);
+    let mut queue = entity_mut
+        .get_mut::<OrderQueueComponent>()
+        .expect("simulation entities always have an order queue");
+    queue.push(Order::Research { research }, None);
+}
+
+/// Whether any of the player's entities is already working on or queued for
+/// the given research.
+fn research_in_flight(world: &World, player: PlayerId, research: ResearchId) -> bool {
+    for (_, entity) in world.resource::<EntityIndex>().alive_entries() {
+        let entity_ref = world.entity(entity);
+        if entity_ref
+            .get::<OwnerComponent>()
+            .is_none_or(|owner| owner.player() != player)
+        {
+            continue;
+        }
+        let Some(queue) = entity_ref.get::<OrderQueueComponent>() else {
+            continue;
+        };
+        if queue
+            .0
+            .iter()
+            .any(|entry| matches!(&entry.order, Order::Research { research: r } if *r == research))
+        {
+            return true;
+        }
+    }
+    false
 }
 
 /// Resolves a box selection: interactable entities inside `rect` that are not
@@ -700,6 +812,11 @@ fn use_skill(
     else {
         return;
     };
+    // Requirements answer to the issuing player whoever casts: an entity's
+    // skill unlocks with its owner's research, and locks again with it.
+    if !requirements::met(world, player, &def.requires) {
+        return;
+    }
     match (caster, def.caster) {
         (SkillCasterRef::Player, SkillCaster::Player { cost, effect }) => {
             use_skill_as_player(world, player, skill, def.cooldown, &cost, effect);

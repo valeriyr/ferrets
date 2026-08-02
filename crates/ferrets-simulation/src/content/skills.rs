@@ -113,4 +113,8 @@ pub struct SkillDef {
     pub cooldown: u32,
     /// How the skill is cast, by whom, and what it does.
     pub caster: SkillCaster,
+    /// Requirements for casting, judged against the issuing player — each
+    /// entry names an entity type, a tag, or a research (see
+    /// [`requirements::met`](crate::requirements::met)).
+    pub requires: Vec<String>,
 }

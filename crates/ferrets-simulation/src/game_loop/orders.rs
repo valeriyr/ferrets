@@ -18,7 +18,8 @@
 use bevy_ecs::{entity::Entity, world::World};
 
 use super::{
-    attack, attack_move, build, die, follow, guard, harvest, movement, patrol, repair, train,
+    attack, attack_move, build, die, follow, guard, harvest, movement, patrol, repair, research,
+    train,
 };
 use crate::{
     components::{
@@ -64,6 +65,7 @@ fn dispatch_prepare(entity: Entity, order: &Order, world: &mut World) -> OrderSt
         Order::Guard { .. } => guard::prepare(entity, order, world),
         Order::Follow { .. } => follow::prepare(entity, order, world),
         Order::Train => train::prepare(entity, order, world),
+        Order::Research { .. } => research::prepare(entity, order, world),
         Order::Build { .. } => build::prepare(entity, order, world),
         Order::Harvest { .. } => harvest::prepare(entity, order, world),
         Order::Repair { .. } => repair::prepare(entity, order, world),
@@ -83,6 +85,7 @@ fn dispatch_prepare_suspended(entity: Entity, order: &Order, world: &mut World) 
         Order::Repair { .. } => repair::prepare_suspended(entity, order, world),
         Order::Move { .. } => unreachable!("Move orders never suspend"),
         Order::Train => unreachable!("Train orders never suspend"),
+        Order::Research { .. } => unreachable!("Research orders never suspend"),
         Order::Die => unreachable!("Die orders never suspend"),
     }
 }
@@ -112,6 +115,9 @@ fn dispatch_cancel(
             follow::cancel_processing(entity, order, policy, entry_state, world)
         }
         Order::Train => train::cancel_processing(entity, order, policy, entry_state, world),
+        Order::Research { .. } => {
+            research::cancel_processing(entity, order, policy, entry_state, world)
+        }
         Order::Build { .. } => build::cancel_processing(entity, order, policy, entry_state, world),
         Order::Harvest { .. } => {
             harvest::cancel_processing(entity, order, policy, entry_state, world)
@@ -132,6 +138,7 @@ fn dispatch_process(entity: Entity, order: &Order, world: &mut World) -> Process
         Order::Guard { .. } => guard::process(entity, order, world),
         Order::Follow { .. } => follow::process(entity, order, world),
         Order::Train => Processing::state(train::process(entity, order, world)),
+        Order::Research { .. } => Processing::state(research::process(entity, order, world)),
         Order::Build { .. } => build::process(entity, order, world),
         Order::Harvest { .. } => harvest::process(entity, order, world),
         Order::Repair { .. } => repair::process(entity, order, world),
@@ -155,6 +162,7 @@ fn dispatch_watch(
         | Order::Patrol { .. }
         | Order::Follow { .. }
         | Order::Train
+        | Order::Research { .. }
         | Order::Build { .. }
         | Order::Harvest { .. }
         | Order::Repair { .. }

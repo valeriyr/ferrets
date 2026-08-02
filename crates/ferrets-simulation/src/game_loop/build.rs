@@ -28,6 +28,7 @@ use crate::{
     entity_index::EntityIndex,
     map::Map,
     order::Order,
+    requirements,
     resources::PlayerResources,
     session::player_slot::PlayerId,
     simulation_id::SimulationId,
@@ -183,6 +184,11 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
                 .entity(type_name)
                 .expect("type checked in prepare");
             if !supply::allows(world, player, def) {
+                return Processing::state(OrderState::Finished);
+            }
+            // Requirements gate the placement: a site already standing keeps
+            // its crew even when its requirement falls.
+            if !requirements::met(world, player, &def.requires) {
                 return Processing::state(OrderState::Finished);
             }
             if !world

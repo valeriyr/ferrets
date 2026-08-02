@@ -11,18 +11,23 @@ use ferrets_simulation::{
         entity_skills::SkillsComponent,
         entity_stats::StatsComponent,
         health::HealthComponent,
+        order_queue::OrderQueueComponent,
         owner::OwnerComponent,
         resource::{ResourceCarrierComponent, ResourceSourceComponent},
         stance::StanceComponent,
     },
     content::entity_stats::EntityStatId,
     content::registry::ContentRegistry,
+    content::research::ResearchId,
     content::skills::{EntityCastTarget, SkillCaster, SkillId},
     control_groups::{CONTROL_GROUP_COUNT, ControlGroups},
+    order::Order,
+    player_research::PlayerResearch,
     player_skills::PlayerSkills,
+    requirements,
     resources::PlayerResources,
     selection::Selection,
-    session::{GameResult, GameSession},
+    session::{GameResult, GameSession, player_slot::PlayerId},
     supply,
 };
 
@@ -38,6 +43,12 @@ const BUILD_HOVERED: Color = Color::srgb(0.24, 0.32, 0.44);
 // Skill buttons get a warm violet tint so abilities read apart from train/build.
 const SKILL_NORMAL: Color = Color::srgb(0.26, 0.18, 0.30);
 const SKILL_HOVERED: Color = Color::srgb(0.38, 0.26, 0.44);
+// Research buttons get a teal tint so upgrades read apart from everything else.
+const RESEARCH_NORMAL: Color = Color::srgb(0.14, 0.28, 0.26);
+const RESEARCH_HOVERED: Color = Color::srgb(0.20, 0.40, 0.38);
+// A produce/research button whose action the executor would refuse right now —
+// requirements unmet, or the research already done or under way.
+const CARD_DISABLED: Color = Color::srgb(0.12, 0.12, 0.13);
 // The supply readout turns red the moment there is no headroom left.
 const SUPPLY_NORMAL: Color = Color::srgb(0.85, 0.9, 0.85);
 const SUPPLY_BLOCKED: Color = Color::srgb(1.0, 0.35, 0.3);
@@ -88,6 +99,13 @@ pub struct BuildButton {
     type_name: String,
 }
 
+/// A command-card button that starts a research on the primary researcher.
+#[derive(Component)]
+pub struct ResearchButton {
+    /// The research this button starts.
+    research: ResearchId,
+}
+
 /// A command-card button that casts a skill on the selection.
 #[derive(Component)]
 pub struct PlayerSkillButton {
@@ -124,7 +142,7 @@ pub fn setup_hud(mut commands: Commands, registry: Res<ContentRegistry>) {
                 InGameUi,
                 Node {
                     position_type: PositionType::Absolute,
-                    bottom: Val::Px(98.0),
+                    bottom: Val::Px(116.0),
                     left: Val::Px(10.0),
                     ..default()
                 },
@@ -266,19 +284,20 @@ pub fn setup_hud(mut commands: Commands, registry: Res<ContentRegistry>) {
         GroupRoster,
         Node {
             position_type: PositionType::Absolute,
-            bottom: Val::Px(66.0),
+            bottom: Val::Px(82.0),
             left: Val::Px(10.0),
             column_gap: Val::Px(6.0),
             ..default()
         },
     ));
-    // Command card: train/build buttons for the selected producer (bottom left).
+    // Command card: train/build buttons for the selected producer, sitting
+    // clear above the help line so a wrapped hint never runs into the buttons.
     commands.spawn((
         InGameUi,
         CommandCard,
         Node {
             position_type: PositionType::Absolute,
-            bottom: Val::Px(34.0),
+            bottom: Val::Px(48.0),
             left: Val::Px(10.0),
             column_gap: Val::Px(6.0),
             ..default()
@@ -465,6 +484,20 @@ pub fn update_selection(
                             max_health.to_num::<u32>()
                         ));
                     }
+                    // Effective values, so an upgrade or a running buff shows
+                    // in the reading the moment it lands.
+                    if let Some(damage) = stats
+                        .and_then(|stats| stats.effective(EntityStatId::DAMAGE))
+                        .or_else(|| def.base_stat(EntityStatId::DAMAGE))
+                    {
+                        parts.push(format!("attack {}", damage.to_num::<u32>()));
+                    }
+                    if let Some(speed) = stats
+                        .and_then(|stats| stats.effective(EntityStatId::SPEED))
+                        .or_else(|| def.base_stat(EntityStatId::SPEED))
+                    {
+                        parts.push(format!("speed {:.2}", speed.to_num::<f32>()));
+                    }
                     if let Some(carrier) = carrier
                         && let Some(kind) = &carrier.kind
                     {
@@ -586,7 +619,15 @@ pub fn update_command_card(
     registry: Res<ContentRegistry>,
     entities: Query<&EntityInfoComponent>,
     card: Query<Entity, With<CommandCard>>,
-    buttons: Query<Entity, Or<(With<TrainButton>, With<BuildButton>, With<SkillButton>)>>,
+    buttons: Query<
+        Entity,
+        Or<(
+            With<TrainButton>,
+            With<BuildButton>,
+            With<ResearchButton>,
+            With<SkillButton>,
+        )>,
+    >,
     mut commands: Commands,
 ) {
     if !primary.is_changed() {
@@ -613,6 +654,20 @@ pub fn update_command_card(
         .and_then(|def| def.builder.as_ref())
         .map(|builder| builder.builds().map(String::from).collect::<Vec<_>>())
         .unwrap_or_default();
+    let researches: Vec<(ResearchId, String)> = def
+        .and_then(|def| def.researcher.as_ref())
+        .map(|researcher| {
+            researcher
+                .researches()
+                .map(|id| {
+                    (
+                        id,
+                        pretty_name(registry.research_name(id).unwrap_or("research")),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let skills: Vec<(SkillId, String)> = def
         .map(|def| {
             def.skills
@@ -637,6 +692,12 @@ pub fn update_command_card(
                     type_name: name.clone(),
                 },
                 card_button(&pretty_name(&name), BUILD_NORMAL),
+            ));
+        }
+        for (id, label) in researches {
+            parent.spawn((
+                ResearchButton { research: id },
+                card_button(&label, RESEARCH_NORMAL),
             ));
         }
         for (id, label) in skills {
@@ -665,6 +726,136 @@ pub fn command_card_input(
             Interaction::None => *color = BackgroundColor(BUTTON_NORMAL),
         }
     }
+}
+
+/// Starts the button's research on the primary researcher when clicked. The
+/// executor holds every gate (requirements, completion, the one-per-topic
+/// rule), so a click that slips past the greyed-out tint is still refused.
+pub fn research_card_input(
+    mut buttons: Query<(&Interaction, &ResearchButton), Changed<Interaction>>,
+    primary: Res<Primary>,
+    mut pending: ResMut<PendingInput>,
+) {
+    for (interaction, button) in &mut buttons {
+        if matches!(interaction, Interaction::Pressed)
+            && let Some(researcher) = primary.0
+        {
+            pending.push(PlayerCommand::StartResearch {
+                researcher,
+                research: button.research,
+            });
+        }
+    }
+}
+
+/// What a gated card button does when clicked — the part of it the executor
+/// would judge, paired with the tints its kind rests and hovers in.
+enum CardAction {
+    /// Trains a unit of the type.
+    Train(String),
+    /// Places a building of the type.
+    Build(String),
+    /// Starts the research.
+    Research(ResearchId),
+    /// Casts the skill (whichever arm casts it).
+    Skill(SkillId),
+}
+
+/// Recolors the gated card buttons from what the executor would currently
+/// allow: a train, build, or skill whose requirements are unmet, or a research
+/// that is unmet, done, or already under way, greys out.
+pub fn update_card_availability(world: &mut World) {
+    let player = world.resource::<GameSession>().local_player();
+
+    let mut buttons: Vec<(Entity, Interaction, CardAction)> = Vec::new();
+    let mut query = world.query::<(
+        Entity,
+        &Interaction,
+        Option<&TrainButton>,
+        Option<&BuildButton>,
+        Option<&ResearchButton>,
+        Option<&SkillButton>,
+        Option<&PlayerSkillButton>,
+    )>();
+    for (entity, interaction, train, build, research, skill, player_skill) in query.iter(world) {
+        let action = if let Some(button) = train {
+            CardAction::Train(button.type_name.clone())
+        } else if let Some(button) = build {
+            CardAction::Build(button.type_name.clone())
+        } else if let Some(button) = research {
+            CardAction::Research(button.research)
+        } else if let Some(button) = skill {
+            CardAction::Skill(button.skill)
+        } else if let Some(button) = player_skill {
+            CardAction::Skill(button.skill)
+        } else {
+            continue;
+        };
+        buttons.push((entity, *interaction, action));
+    }
+
+    for (entity, interaction, action) in buttons {
+        let type_requirements_met = |world: &mut World, type_name: &str| {
+            world
+                .resource::<ContentRegistry>()
+                .entity(type_name)
+                .map(|def| def.requires.clone())
+                .is_none_or(|requires| requirements::met(world, player, &requires))
+        };
+        let (available, normal, hovered) = match &action {
+            CardAction::Train(type_name) => (
+                type_requirements_met(world, type_name),
+                BUTTON_NORMAL,
+                BUTTON_HOVERED,
+            ),
+            CardAction::Build(type_name) => (
+                type_requirements_met(world, type_name),
+                BUILD_NORMAL,
+                BUILD_HOVERED,
+            ),
+            CardAction::Research(research) => {
+                let available = !world
+                    .resource::<PlayerResearch>()
+                    .is_completed(player, *research)
+                    && !research_under_way(world, player, *research)
+                    && world
+                        .resource::<ContentRegistry>()
+                        .research_def(*research)
+                        .map(|def| def.requires.clone())
+                        .is_none_or(|requires| requirements::met(world, player, &requires));
+                (available, RESEARCH_NORMAL, RESEARCH_HOVERED)
+            }
+            CardAction::Skill(skill) => {
+                let available = world
+                    .resource::<ContentRegistry>()
+                    .skill_def(*skill)
+                    .map(|def| def.requires.clone())
+                    .is_none_or(|requires| requirements::met(world, player, &requires));
+                (available, SKILL_NORMAL, SKILL_HOVERED)
+            }
+        };
+
+        let color = match (available, interaction) {
+            (false, _) => CARD_DISABLED,
+            (true, Interaction::Hovered | Interaction::Pressed) => hovered,
+            (true, Interaction::None) => normal,
+        };
+        if let Some(mut background) = world.entity_mut(entity).get_mut::<BackgroundColor>() {
+            background.0 = color;
+        }
+    }
+}
+
+/// Whether any of the local player's entities is working on or queued for the
+/// given research.
+fn research_under_way(world: &mut World, player: PlayerId, research: ResearchId) -> bool {
+    let mut query = world.query::<(&OwnerComponent, &OrderQueueComponent)>();
+    query.iter(world).any(|(owner, queue)| {
+        owner.player() == player
+            && queue.0.iter().any(
+                |entry| matches!(&entry.order, Order::Research { research: r } if *r == research),
+            )
+    })
 }
 
 /// Starts placing the button's building when a build button is clicked; the

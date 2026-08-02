@@ -4,6 +4,7 @@ use ferrets_math::fixed_uvec2::FixedUVec2;
 use ferrets_pathfinder::nav_size::NavSize;
 use serde::{Deserialize, Serialize};
 
+use crate::content::research::ResearchId;
 use crate::simulation_id::SimulationId;
 
 /// What an attack is aimed at.
@@ -77,6 +78,8 @@ pub enum Order {
     Follow { target: SimulationId },
     /// Work through the entity's train queue, spawning one unit per completed entry.
     Train,
+    /// Work on the given research until it completes for the owning player.
+    Research { research: ResearchId },
     /// Construct a building of `type_name` at `position`: walk to the site, place
     /// the building, and work until construction completes.
     Build {

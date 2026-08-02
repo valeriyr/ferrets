@@ -11,6 +11,7 @@ pub mod player_stats;
 pub mod projectile;
 pub mod registry;
 pub mod repair;
+pub mod research;
 pub mod resource;
 pub mod selection;
 pub mod skills;

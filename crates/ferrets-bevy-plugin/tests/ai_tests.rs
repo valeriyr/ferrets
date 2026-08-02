@@ -276,6 +276,8 @@ fn install_ai(app: &mut App, scripts: &[(PlayerId, &str)]) {
     let content = ContentView {
         resources: Vec::new(),
         entities: Vec::new(),
+        researches: Vec::new(),
+        skills: Vec::new(),
     };
     let mut runtimes = BTreeMap::new();
     for (player, script) in scripts {

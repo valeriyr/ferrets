@@ -16,6 +16,11 @@ pub struct GameView {
     pub supply_provided: u32,
     /// Supply the player occupies — standing entities plus queued training.
     pub supply_used: u32,
+    /// Researches the player has completed, in ascending name order.
+    pub researched: Vec<String>,
+    /// Researches the player's entities are working on or have queued, in
+    /// ascending name order.
+    pub researching: Vec<String>,
     pub my_entities: Vec<EntityView>,
     /// Entities owned by allied players (teammates), excluding the viewer's own.
     pub ally_entities: Vec<EntityView>,
@@ -32,6 +37,9 @@ pub struct EntityView {
     pub y: u32,
     /// `None` when the type has no health.
     pub health: Option<u32>,
+    /// The current energy pool, floored to whole points. `None` when the type
+    /// has none.
+    pub energy: Option<u32>,
     /// Effective attack damage, `None` when the entity cannot attack.
     pub damage: Option<u32>,
     /// Effective flat armor.

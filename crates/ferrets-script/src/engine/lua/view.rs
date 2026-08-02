@@ -28,6 +28,9 @@ pub(super) fn game_table(lua: &Lua, view: &GameView) -> mlua::Result<Table> {
     supply.set("used", view.supply_used)?;
     table.set("supply", supply)?;
 
+    table.set("researched", strings_table(lua, &view.researched)?)?;
+    table.set("researching", strings_table(lua, &view.researching)?)?;
+
     table.set("my_entities", entities_table(lua, &view.my_entities)?)?;
     table.set("ally_entities", entities_table(lua, &view.ally_entities)?)?;
     table.set("enemy_entities", entities_table(lua, &view.enemy_entities)?)?;
@@ -54,6 +57,7 @@ fn entity_table(lua: &Lua, entity: &EntityView) -> mlua::Result<Table> {
     table.set("x", entity.x)?;
     table.set("y", entity.y)?;
     table.set("health", entity.health)?;
+    table.set("energy", entity.energy)?;
     table.set("damage", entity.damage)?;
     table.set("armor", entity.armor)?;
     table.set("idle", entity.idle)?;
@@ -81,6 +85,36 @@ pub(super) fn content_table(lua: &Lua, content: &ContentView) -> mlua::Result<Ta
         entities.set(entity.name.as_str(), entity_content_table(lua, entity)?)?;
     }
     table.set("entities", entities)?;
+
+    let researches = lua.create_table()?;
+    for research in &content.researches {
+        let entry = lua.create_table()?;
+        let cost = lua.create_table()?;
+        for (kind, amount) in &research.cost {
+            cost.set(kind.as_str(), *amount)?;
+        }
+        entry.set("cost", cost)?;
+        entry.set("time", research.time)?;
+        entry.set(
+            "requires",
+            optional_strings(lua, research.requires.as_deref())?,
+        )?;
+        researches.set(research.name.as_str(), entry)?;
+    }
+    table.set("researches", researches)?;
+
+    let skills = lua.create_table()?;
+    for skill in &content.skills {
+        let entry = lua.create_table()?;
+        entry.set("caster", skill.caster.as_str())?;
+        entry.set("target", skill.target.as_deref())?;
+        entry.set(
+            "requires",
+            optional_strings(lua, skill.requires.as_deref())?,
+        )?;
+        skills.set(skill.name.as_str(), entry)?;
+    }
+    table.set("skills", skills)?;
     Ok(table)
 }
 
@@ -99,6 +133,15 @@ fn entity_content_table(lua: &Lua, entity: &EntityContentView) -> mlua::Result<T
     table.set("train_time", entity.train_time)?;
     table.set("build_time", entity.build_time)?;
     table.set("trains", optional_strings(lua, entity.trains.as_deref())?)?;
+    table.set(
+        "researches",
+        optional_strings(lua, entity.researches.as_deref())?,
+    )?;
+    table.set("skills", optional_strings(lua, entity.skills.as_deref())?)?;
+    table.set(
+        "requires",
+        optional_strings(lua, entity.requires.as_deref())?,
+    )?;
     table.set("builds", optional_strings(lua, entity.builds.as_deref())?)?;
 
     let size = lua.create_table()?;

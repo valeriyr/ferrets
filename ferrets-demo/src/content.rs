@@ -66,12 +66,15 @@ pub const CONTENT: &str = r#"
         target = "ally",
         effect = { heal = "15" },
     })
+    -- Blood rite unlocks with the frenzy ritual (defined below): the button
+    -- sits greyed on every grunt until the war camp finishes the research.
     define_skill("blood_rite", {
         caster = "entity",
         cooldown = 160,
         cost = { health = "8", resources = { gold = 10 } },
         target = "caster",
         effect = { apply_buff = "frenzy" },
+        requires = { "frenzy_ritual" },
     })
 
     -- A player-level rallying call: every unit the caster owns moves half again
@@ -90,6 +93,35 @@ pub const CONTENT: &str = r#"
         cooldown = 300,
         cost = { resources = { gold = 50 } },
         effect = { apply_buff = "war_drums" },
+    })
+
+    -- Upgrades: a research that completes applies a permanent player buff, so
+    -- every unit the player owns — standing or yet to be trained — carries it
+    -- through the ordinary recompute. Iron weapons is the human weapon upgrade,
+    -- researched at the blacksmith; the frenzy ritual quickens every orc
+    -- attack, researched at the war camp once a pig farm stands.
+    define_player_buff("iron_weapons", {
+        stack = "ignore",
+        entity_modifiers = {
+            { entity_stat = "damage", op = "flat", value = "2" },
+        },
+    })
+    define_research("iron_weapons", {
+        cost = { gold = 100, wood = 50 },
+        time = 200,
+        buff = "iron_weapons",
+    })
+    define_player_buff("frenzy_ritual", {
+        stack = "ignore",
+        entity_modifiers = {
+            { entity_stat = "attack_period", op = "percent", value = "-0.25" },
+        },
+    })
+    define_research("frenzy_ritual", {
+        cost = { gold = 150 },
+        time = 240,
+        buff = "frenzy_ritual",
+        requires = { "pig_farm" },
     })
 
     -- The lake boss: a raceless water fortress spawning free ships. Ships are
@@ -199,7 +231,7 @@ pub const CONTENT: &str = r#"
         })
     end
 
-    local function barracks(name, race, trains)
+    local function barracks(name, race, trains, researches)
         define_entity(name, {
             race = race,
             location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
@@ -211,6 +243,7 @@ pub const CONTENT: &str = r#"
             -- patch up than to put up.
             repair_ratio = "0.5",
             trainer = trains,
+            researcher = researches,
             tags = { "building" },
         })
     end
@@ -219,12 +252,25 @@ pub const CONTENT: &str = r#"
     -- Peasants work in the open and swarm: any number of them can share a site, a
     -- repair or a stand of trees, each adding its own tick of work, so a gang of
     -- them raises a building in a fraction of the time one would take.
-    worker("peasant", "human", { "town_hall", "barracks", "farm" }, {
+    worker("peasant", "human", { "town_hall", "barracks", "farm", "blacksmith" }, {
         build = "present_stacking", repair = "present_stacking", wood = "present_stacking",
     })
     main_hall("town_hall", "human", "peasant")
     farm("farm", "human")
     barracks("barracks", "human", { "archer", "mortar", "medic" })
+
+    -- The human tech building: while one stands, mortars unlock, and it hosts
+    -- the iron weapons upgrade.
+    define_entity("blacksmith", {
+        race = "human",
+        location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
+        stats = { max_health = 350, sight_range = 5 },
+        dying = { time = 2 },
+        cost = { gold = 150, wood = 80 },
+        build_time = 100,
+        researcher = { "iron_weapons" },
+        tags = { "building" },
+    })
     define_entity("archer", {
         race = "human",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
@@ -313,6 +359,8 @@ pub const CONTENT: &str = r#"
         cost = { gold = 120, wood = 40 },
         train_time = 90,
         selection = { priority = 10 },
+        -- Siege needs the forge: no mortars until a blacksmith stands.
+        requires = { "blacksmith" },
     })
 
     -- Orc: worker, base, barracks, and a melee unit.
@@ -324,7 +372,7 @@ pub const CONTENT: &str = r#"
     })
     main_hall("great_hall", "orc", "peon")
     farm("pig_farm", "orc")
-    barracks("war_camp", "orc", { "grunt", "shaman" })
+    barracks("war_camp", "orc", { "grunt", "shaman" }, { "frenzy_ritual" })
     define_entity("grunt", {
         race = "orc",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
@@ -367,6 +415,8 @@ pub const CONTENT: &str = r#"
         train_time = 80,
         -- Support trails combat units in a mixed selection, like the medic.
         selection = { priority = 5 },
+        -- A completed research as a requirement: shamans answer the ritual.
+        requires = { "frenzy_ritual" },
     })
 "#;
 

@@ -2,20 +2,35 @@
 //! snapshots, and return command tables that round-trip to player commands;
 //! malformed scripts and results surface as errors rather than panics.
 
+use ferrets_math::FixedI64;
 use ferrets_math::FixedU64;
 use ferrets_math::fixed_urect::FixedURect;
 use ferrets_math::fixed_uvec2::FixedUVec2;
+use ferrets_pathfinder::nav_grid::LayerId;
 use ferrets_pathfinder::nav_pos::NavPos;
+use ferrets_pathfinder::nav_size::NavSize;
 use ferrets_script::ai::view::content::{AttackView, ContentView, EntityContentView};
 use ferrets_script::ai::view::game::{EntityView, GameView};
 use ferrets_script::ai::{AiRuntime, AiVision};
 use ferrets_script::engine::ScriptEngine;
 use ferrets_script::engine::lua::LuaEngine;
 use ferrets_script::error::ScriptError;
-use ferrets_simulation::command::{PlayerCommand, SelectMode};
+use ferrets_simulation::command::{PlayerCommand, SelectMode, SkillCasterRef};
 use ferrets_simulation::components::rally::RallyTarget;
 use ferrets_simulation::components::stance::Stance;
+use ferrets_simulation::content::entity_stats::EntityStatId;
+use ferrets_simulation::content::entity_type_def::EntityTypeDef;
+use ferrets_simulation::content::location::Solidity;
+use ferrets_simulation::content::player_buffs::PlayerBuffDef;
+use ferrets_simulation::content::registry::ContentRegistry;
+use ferrets_simulation::content::research::{ResearchDef, ResearchId};
+use ferrets_simulation::content::skills::{
+    EntityCastEffect, EntityCastTarget, PlayerCastEffect, SkillCaster, SkillDef,
+};
+use ferrets_simulation::content::stack_rule::StackRule;
+use ferrets_simulation::content::stats::{EntityModifier, ModifierOp};
 use ferrets_simulation::order::AttackTarget;
+use ferrets_simulation::resources;
 use ferrets_simulation::simulation_id::SimulationId;
 
 //
@@ -118,6 +133,171 @@ fn think_returns_commands_as_player_commands() {
             PlayerCommand::Stop,
         ]
     );
+}
+
+#[test]
+fn research_command_resolves_name_to_handle() {
+    let source = ai_script(
+        r#"function(state, view)
+            return { { kind = "research", researcher = 5, research = "smithing" } }
+        end"#,
+    );
+    let (content, smithing) = research_content();
+    let mut runtime = load_ai(&source, &content).expect("load ai");
+
+    let commands = runtime.think(&empty_view()).expect("think");
+
+    assert_eq!(
+        commands,
+        vec![PlayerCommand::StartResearch {
+            researcher: SimulationId(5),
+            research: smithing,
+        }]
+    );
+}
+
+#[test]
+fn unknown_research_name_is_command_error() {
+    let source = ai_script(
+        r#"function(state, view)
+            return { { kind = "research", researcher = 5, research = "alchemy" } }
+        end"#,
+    );
+    let mut runtime = load_ai(&source, &empty_content()).expect("load ai");
+
+    let error = runtime.think(&empty_view()).expect_err("must fail");
+
+    assert!(
+        matches!(&error, ScriptError::CommandError(m) if m.contains("unknown research 'alchemy'")),
+        "got {error:?}"
+    );
+}
+
+#[test]
+fn use_skill_command_resolves_name_and_caster() {
+    let source = ai_script(
+        r#"function(state, view)
+            return {
+                { kind = "use_skill", skill = "battle_focus", caster = 12 },
+                { kind = "use_skill", skill = "second_wind", caster = 9, target = 4 },
+                { kind = "use_skill", skill = "war_drums", caster = "player" },
+            }
+        end"#,
+    );
+    let (content, _) = research_content();
+    let skill_id = |name: &str| {
+        content
+            .skills
+            .iter()
+            .find(|skill| skill.name == name)
+            .expect("skill listed")
+            .id
+    };
+    let mut runtime = load_ai(&source, &content).expect("load ai");
+
+    let commands = runtime.think(&empty_view()).expect("think");
+
+    assert_eq!(
+        commands,
+        vec![
+            PlayerCommand::UseSkill {
+                skill: skill_id("battle_focus"),
+                caster: SkillCasterRef::Entity(SimulationId(12)),
+                target: None,
+            },
+            PlayerCommand::UseSkill {
+                skill: skill_id("second_wind"),
+                caster: SkillCasterRef::Entity(SimulationId(9)),
+                target: Some(SimulationId(4)),
+            },
+            PlayerCommand::UseSkill {
+                skill: skill_id("war_drums"),
+                caster: SkillCasterRef::Player,
+                target: None,
+            },
+        ]
+    );
+}
+
+#[test]
+fn unknown_skill_name_is_command_error() {
+    let source = ai_script(
+        r#"function(state, view)
+            return { { kind = "use_skill", skill = "meteor", caster = 5 } }
+        end"#,
+    );
+    let mut runtime = load_ai(&source, &empty_content()).expect("load ai");
+
+    let error = runtime.think(&empty_view()).expect_err("must fail");
+
+    assert!(
+        matches!(&error, ScriptError::CommandError(m) if m.contains("unknown skill 'meteor'")),
+        "got {error:?}"
+    );
+}
+
+#[test]
+fn use_skill_without_caster_is_command_error() {
+    let source = ai_script(
+        r#"function(state, view)
+            return { { kind = "use_skill", skill = "war_drums" } }
+        end"#,
+    );
+    let (content, _) = research_content();
+    let mut runtime = load_ai(&source, &content).expect("load ai");
+
+    let error = runtime.think(&empty_view()).expect_err("must fail");
+
+    assert!(
+        matches!(&error, ScriptError::CommandError(m) if m.contains("field 'caster': missing")),
+        "got {error:?}"
+    );
+}
+
+#[test]
+fn scripts_read_skill_catalogue() {
+    let source = ai_script(
+        r#"function(state, view)
+            local focus = content.skills.battle_focus
+            if focus.caster ~= "entity" then error("wrong caster") end
+            if focus.target ~= "caster" then error("wrong target") end
+            if focus.requires[1] ~= "smithing" then error("wrong requires") end
+            local drums = content.skills.war_drums
+            if drums.caster ~= "player" then error("wrong drums caster") end
+            if drums.target ~= nil then error("drums take no target") end
+            if drums.requires ~= nil then error("drums require nothing") end
+            local lab = content.entities.lab
+            if lab.skills[1] ~= "battle_focus" then error("wrong lab skills") end
+            return {}
+        end"#,
+    );
+    let (content, _) = research_content();
+    let mut runtime = load_ai(&source, &content).expect("load ai");
+
+    assert!(runtime.think(&empty_view()).is_ok());
+}
+
+#[test]
+fn scripts_read_research_catalogue_and_state() {
+    let source = ai_script(
+        r#"function(state, view)
+            local smithing = content.researches.smithing
+            if smithing.cost.gold ~= 30 then error("wrong cost") end
+            if smithing.time ~= 200 then error("wrong time") end
+            if smithing.requires[1] ~= "lab" then error("wrong requires") end
+            if view.researched[1] ~= "smithing" then error("wrong researched") end
+            if view.researching[1] ~= "tactics" then error("wrong researching") end
+            return {}
+        end"#,
+    );
+    let (content, _) = research_content();
+    let mut runtime = load_ai(&source, &content).expect("load ai");
+
+    let mut view = empty_view();
+    view.researched = vec!["smithing".to_string()];
+    view.researching = vec!["tactics".to_string()];
+
+    assert!(runtime.think(&view).is_ok());
 }
 
 #[test]
@@ -585,10 +765,89 @@ fn cell(x: u32, y: u32) -> FixedUVec2 {
     FixedUVec2::from(NavPos::new(x, y))
 }
 
+/// A content view built from a real registry holding the `smithing` research
+/// (30 gold, 200 ticks, requires "lab") and the free `tactics` unlock, plus
+/// the handle `smithing` resolves to. The registry also carries three skills —
+/// `battle_focus` (entity-cast on itself, requires `smithing`), `second_wind`
+/// (entity-cast on an ally), and the player-cast `war_drums` — carried by the
+/// `lab` type where a type is needed.
+fn research_content() -> (ContentView, ResearchId) {
+    let mut registry = ContentRegistry::default();
+    registry.register_layer("ground");
+    registry.register_resource("gold");
+    let smithing = registry.register_research(
+        "smithing",
+        ResearchDef::new(resources::cost([("gold", 30)]), 200, None, ["lab"]),
+    );
+    registry.register_research(
+        "tactics",
+        ResearchDef::new(resources::Cost::new(), 100, None, Vec::<String>::new()),
+    );
+    let battle_focus = registry.register_skill(
+        "battle_focus",
+        SkillDef {
+            cooldown: 5,
+            caster: SkillCaster::Entity {
+                costs: Vec::new(),
+                target: EntityCastTarget::Caster,
+                effect: EntityCastEffect::Damage(FixedU64::ONE),
+            },
+            requires: vec!["smithing".to_string()],
+        },
+    );
+    let second_wind = registry.register_skill(
+        "second_wind",
+        SkillDef {
+            cooldown: 5,
+            caster: SkillCaster::Entity {
+                costs: Vec::new(),
+                target: EntityCastTarget::Ally,
+                effect: EntityCastEffect::Heal(FixedU64::ONE),
+            },
+            requires: Vec::new(),
+        },
+    );
+    let drums = registry.register_player_buff(
+        "drums_haste",
+        PlayerBuffDef {
+            player_modifiers: Vec::new(),
+            entity_modifiers: vec![EntityModifier {
+                stat: EntityStatId::SPEED,
+                op: ModifierOp::PercentAdd,
+                magnitude: FixedI64::ONE,
+            }],
+            duration: Some(10),
+            stack_rule: StackRule::Refresh,
+        },
+    );
+    registry.register_skill(
+        "war_drums",
+        SkillDef {
+            cooldown: 10,
+            caster: SkillCaster::Player {
+                cost: resources::Cost::new(),
+                effect: PlayerCastEffect::ApplyBuff(drums),
+            },
+            requires: Vec::new(),
+        },
+    );
+    registry.register(
+        EntityTypeDef::new("lab")
+            .with_location(LayerId::new(1), NavSize::ONE, Solidity::Solid)
+            .with_researcher([smithing])
+            .with_energy(50, FixedU64::ONE)
+            .with_skills([battle_focus, second_wind]),
+    );
+    registry.validate();
+    (ContentView::from_registry(&registry), smithing)
+}
+
 fn empty_content() -> ContentView {
     ContentView {
         resources: Vec::new(),
         entities: Vec::new(),
+        researches: Vec::new(),
+        skills: Vec::new(),
     }
 }
 
@@ -610,6 +869,9 @@ fn demo_like_content() -> ContentView {
                 harvests: Some(vec!["gold".to_string()]),
                 stores: None,
                 can_move: true,
+                researches: None,
+                skills: None,
+                requires: None,
             },
             EntityContentView {
                 name: "soldier".to_string(),
@@ -627,8 +889,13 @@ fn demo_like_content() -> ContentView {
                 harvests: None,
                 stores: None,
                 can_move: true,
+                researches: None,
+                skills: None,
+                requires: None,
             },
         ],
+        researches: Vec::new(),
+        skills: Vec::new(),
     }
 }
 
@@ -646,6 +913,8 @@ fn view_at_tick(tick: u32) -> GameView {
         resources: Vec::new(),
         supply_provided: 0,
         supply_used: 0,
+        researched: Vec::new(),
+        researching: Vec::new(),
         my_entities: Vec::new(),
         ally_entities: Vec::new(),
         enemy_entities: Vec::new(),
@@ -664,6 +933,8 @@ fn populated_view(tick: u32) -> GameView {
         resources: vec![("gold".to_string(), 120), ("wood".to_string(), 40)],
         supply_provided: 0,
         supply_used: 0,
+        researched: Vec::new(),
+        researching: Vec::new(),
         my_entities: vec![
             EntityView {
                 id: 1,
@@ -671,6 +942,7 @@ fn populated_view(tick: u32) -> GameView {
                 x: 8,
                 y: 9,
                 health: Some(800),
+                energy: None,
                 damage: None,
                 armor: None,
                 idle: false,
@@ -687,6 +959,7 @@ fn populated_view(tick: u32) -> GameView {
                 x: 10,
                 y: 9,
                 health: Some(30),
+                energy: None,
                 damage: None,
                 armor: None,
                 idle: true,
@@ -706,6 +979,7 @@ fn populated_view(tick: u32) -> GameView {
             x: 4,
             y: 4,
             health: None,
+            energy: None,
             damage: None,
             armor: None,
             idle: true,

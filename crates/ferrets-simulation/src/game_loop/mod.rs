@@ -21,6 +21,7 @@ pub mod orders;
 pub mod patrol;
 pub mod pending_reveal;
 pub mod repair;
+pub mod research;
 pub mod stats;
 pub mod tick_counter;
 pub mod train;

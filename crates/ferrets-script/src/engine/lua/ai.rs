@@ -9,6 +9,7 @@ use mlua::{Function, Lua, Table, Value};
 use crate::ai::view::content::ContentView;
 use crate::ai::view::game::GameView;
 use crate::ai::{AiRuntime, AiVision};
+use crate::engine::lua::command::CommandNames;
 use crate::engine::lua::{self, command, view};
 use crate::error::ScriptError;
 
@@ -23,6 +24,9 @@ pub(super) struct LuaAiRuntime {
     vision: AiVision,
     think: Function,
     state: Table,
+    /// Content name → registry handle indexes: a returned command names
+    /// registered content, the command it becomes carries the id.
+    names: CommandNames,
 }
 
 impl LuaAiRuntime {
@@ -58,6 +62,7 @@ impl LuaAiRuntime {
             vision: definition.vision,
             think: definition.think,
             state,
+            names: CommandNames::from_content(content),
         })
     }
 }
@@ -81,7 +86,7 @@ impl AiRuntime for LuaAiRuntime {
             .think
             .call((self.state.clone(), view_table))
             .map_err(lua::from_lua_error)?;
-        command::parse(result)
+        command::parse(result, &self.names)
     }
 }
 

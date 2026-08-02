@@ -14,6 +14,7 @@ use ferrets_simulation::content::{
     projectile::ProjectileDef,
     registry::ContentRegistry,
     repair::{RepairCost, RepairRate},
+    research::ResearchDef,
     resource::HarvestData,
     skills::{
         EntityCastCost, EntityCastEffect, EntityCastTarget, PlayerCastEffect, SkillCaster, SkillDef,
@@ -148,6 +149,17 @@ pub(super) fn register(lua: &Lua, registry: &Rc<RefCell<ContentRegistry>>) -> ml
         })?,
     )?;
 
+    let researches = Rc::clone(registry);
+    globals.set(
+        "define_research",
+        lua.create_function(move |_, (name, table): (String, Table)| {
+            let research =
+                parse_research(&table, &researches.borrow()).map_err(mlua::Error::external)?;
+            researches.borrow_mut().register_research(name, research);
+            Ok(())
+        })?,
+    )?;
+
     let entities = Rc::clone(registry);
     globals.set(
         "define_entity",
@@ -212,6 +224,20 @@ fn build_entity(
     }
     if let Some(trainer) = optional::<Vec<String>>(table, "trainer")? {
         def = def.with_trainer(trainer);
+    }
+    if let Some(researcher) = optional::<Vec<String>>(table, "researcher")? {
+        let ids = researcher
+            .iter()
+            .map(|name| {
+                registry.research(name).ok_or_else(|| {
+                    ScriptError::ContentError(format!("research '{name}' is not defined"))
+                })
+            })
+            .collect::<crate::Result<Vec<_>>>()?;
+        def = def.with_researcher(ids);
+    }
+    if let Some(requires) = optional::<Vec<String>>(table, "requires")? {
+        def = def.with_requires(requires);
     }
     if let Some(builder) = optional::<Table>(table, "builder")? {
         let builds = required::<Vec<String>>(&builder, "builds")?;
@@ -521,7 +547,32 @@ fn parse_skill(table: &Table, registry: &ContentRegistry) -> crate::Result<Skill
             )));
         }
     };
-    Ok(SkillDef { cooldown, caster })
+    let requires = optional::<Vec<String>>(table, "requires")?.unwrap_or_default();
+    Ok(SkillDef {
+        cooldown,
+        caster,
+        requires,
+    })
+}
+
+/// Reads a research definition: a `cost` table of resource amounts, the
+/// research `time` in ticks, an optional player `buff` applied on completion,
+/// and optional `requires` entries. The buff name resolves in the player-buff
+/// registry.
+fn parse_research(table: &Table, registry: &ContentRegistry) -> crate::Result<ResearchDef> {
+    let cost: Cost = match optional::<Table>(table, "cost")? {
+        Some(cost) => pairs::<u32>(&cost, "cost")?.into_iter().collect(),
+        None => Cost::new(),
+    };
+    let time = required::<u32>(table, "time")?;
+    let buff = match optional::<String>(table, "buff")? {
+        Some(name) => Some(registry.player_buff(&name).ok_or_else(|| {
+            ScriptError::ContentError(format!("player buff '{name}' is not defined"))
+        })?),
+        None => None,
+    };
+    let requires = optional::<Vec<String>>(table, "requires")?.unwrap_or_default();
+    Ok(ResearchDef::new(cost, time, buff, requires))
 }
 
 /// Reads an entity cast's `cost` block: any of `resources` (a table of
