@@ -3,14 +3,17 @@
 
 mod utils;
 
-use ferrets_network::control::{ControlChannel, ControlEvent};
-use ferrets_network::error::NetworkError;
-use ferrets_network::lobby::client::{LobbyClient, PollOutcome};
-use ferrets_network::lobby::host::LobbyHost;
-use ferrets_network::message::control::{ControlMessage, LobbyMessage, Occupant};
-use ferrets_network::session_mode::SessionMode;
-use ferrets_network::transport::error::TransportError;
-use ferrets_network::transport::loopback::LoopbackTransport;
+use ferrets_network::{
+    control::{ControlChannel, ControlEvent},
+    error::NetworkError,
+    lobby::{
+        client::{LobbyClient, PollOutcome},
+        host::LobbyHost,
+    },
+    message::control::{ControlMessage, LobbyMessage, Occupant},
+    session_mode::SessionMode,
+    transport::{error::TransportError, loopback::LoopbackTransport},
+};
 use ferrets_simulation::session::ai_hosting::AiHosting;
 
 //

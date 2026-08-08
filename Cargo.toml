@@ -9,9 +9,11 @@ repository = "https://github.com/valeriyr/ferrets"
 resolver = "3"
 members = [
     "crates/ferrets-bevy-plugin",
+    "crates/ferrets-geometry",
     "crates/ferrets-math",
     "crates/ferrets-network",
     "crates/ferrets-pathfinder",
+    "crates/ferrets-physics",
     "crates/ferrets-replay",
     "crates/ferrets-script",
     "crates/ferrets-simulation",
@@ -30,9 +32,11 @@ tokio = { version = "1.52", features = ["full"] }
 
 # Internal crates
 ferrets-bevy-plugin = { path = "crates/ferrets-bevy-plugin" }
+ferrets-geometry = { path = "crates/ferrets-geometry" }
 ferrets-math = { path = "crates/ferrets-math" }
 ferrets-network = { path = "crates/ferrets-network" }
 ferrets-pathfinder = { path = "crates/ferrets-pathfinder" }
+ferrets-physics = { path = "crates/ferrets-physics" }
 ferrets-replay = { path = "crates/ferrets-replay" }
 ferrets-script = { path = "crates/ferrets-script" }
 ferrets-simulation = { path = "crates/ferrets-simulation" }

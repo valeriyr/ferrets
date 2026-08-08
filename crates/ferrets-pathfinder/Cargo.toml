@@ -11,4 +11,5 @@ description = "Deterministic RTS game pathfinding."
 pathfinding = "4.15"
 serde.workspace = true
 
+ferrets-geometry.workspace = true
 ferrets-math.workspace = true

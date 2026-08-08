@@ -5,32 +5,44 @@
 //! [`LobbyHost`]/[`LobbyClient`], the authoritative state is mirrored into the
 //! config each frame for display, and edits go through the host.
 
-use std::sync::mpsc::{self, Receiver, TryRecvError};
-use std::thread;
-
-use bevy::input::keyboard::{Key, KeyboardInput};
-use bevy::prelude::*;
-use ferrets_bevy_plugin::{install_game_resources, install_network_session};
-use ferrets_network::lobby::client::{LobbyClient, PollOutcome};
-use ferrets_network::message::control::Occupant;
-use ferrets_network::session::NetSession;
-use ferrets_network::session_mode::SessionMode;
-use ferrets_network::{bootstrap, lobby::host::LobbyHost};
-use ferrets_simulation::session::{
-    GameSession,
-    ai_hosting::AiHosting,
-    drop_policy::DropPolicy,
-    finish_policy::FinishPolicy,
-    player_slot::{self, PlayerId, PlayerSlot, TeamId},
-    player_type::PlayerType,
+use std::{
+    sync::mpsc::{self, Receiver, TryRecvError},
+    thread,
 };
 
-use ferrets_simulation::map_data::MapData;
-use ferrets_simulation::skirmish::Skirmish;
+use bevy::{
+    input::keyboard::{Key, KeyboardInput},
+    prelude::*,
+};
+use ferrets_bevy_plugin::{install_game_resources, install_network_session};
+use ferrets_network::{
+    bootstrap,
+    lobby::{
+        client::{LobbyClient, PollOutcome},
+        host::LobbyHost,
+    },
+    message::control::Occupant,
+    session::NetSession,
+    session_mode::SessionMode,
+};
+use ferrets_simulation::{
+    map_data::MapData,
+    session::{
+        GameSession,
+        ai_hosting::AiHosting,
+        drop_policy::DropPolicy,
+        finish_policy::FinishPolicy,
+        player_slot::{self, PlayerId, PlayerSlot, TeamId},
+        player_type::PlayerType,
+    },
+    skirmish::Skirmish,
+};
 
-use crate::map;
-use crate::skirmish::CurrentSkirmish;
-use crate::states::{GameState, LobbyMode};
+use crate::{
+    map,
+    skirmish::CurrentSkirmish,
+    states::{GameState, LobbyMode},
+};
 
 /// The TCP port the host binds and clients dial.
 const TCP_PORT: u16 = 4000;

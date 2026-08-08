@@ -6,6 +6,7 @@
 pub mod attack;
 pub mod attack_move;
 pub mod build;
+pub mod chase;
 pub mod dying;
 pub mod energy;
 pub mod entity_buffs;

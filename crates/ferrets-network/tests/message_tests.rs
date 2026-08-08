@@ -1,22 +1,23 @@
 //! The tagged wire envelope: round-trips and canonical byte layout.
 
-use ferrets_math::FixedU64;
-use ferrets_math::fixed_urect::FixedURect;
-use ferrets_math::fixed_uvec2::FixedUVec2;
-use ferrets_network::message::control::{
-    ControlMessage, LobbyMessage, LobbyState, Occupant, SlotInfo, UdpEntry,
+use ferrets_math::{FixedU64, fixed_urect::FixedURect, fixed_uvec2::FixedUVec2};
+use ferrets_network::{
+    message::{
+        Message,
+        control::{ControlMessage, LobbyMessage, LobbyState, Occupant, SlotInfo, UdpEntry},
+        decode, encode,
+        gameplay::GameplayMessage,
+    },
+    session_mode::SessionMode,
 };
-use ferrets_network::message::gameplay::GameplayMessage;
-use ferrets_network::message::{Message, decode, encode};
-use ferrets_network::session_mode::SessionMode;
-use ferrets_simulation::command::{PlayerCommand, SelectMode};
-use ferrets_simulation::components::rally::RallyTarget;
-use ferrets_simulation::components::stance::Stance;
-use ferrets_simulation::input::PlayerFrame;
-use ferrets_simulation::order::AttackTarget;
-use ferrets_simulation::session::drop_policy::DropPolicy;
-use ferrets_simulation::session::finish_policy::FinishPolicy;
-use ferrets_simulation::simulation_id::SimulationId;
+use ferrets_simulation::{
+    command::{PlayerCommand, SelectMode},
+    components::{rally::RallyTarget, stance::Stance},
+    input::PlayerFrame,
+    order::AttackTarget,
+    session::{drop_policy::DropPolicy, finish_policy::FinishPolicy},
+    simulation_id::SimulationId,
+};
 
 //
 // ─── Round-trips ──────────────────────────────────────────────────────────────

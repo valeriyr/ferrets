@@ -7,14 +7,16 @@
 
 use bevy_ecs::world::World;
 
-use crate::components::build::UnderConstructionComponent;
-use crate::components::entity_info::EntityInfoComponent;
-use crate::components::owner::OwnerComponent;
-use crate::components::tags::TagsComponent;
-use crate::content::registry::ContentRegistry;
-use crate::entity_index::EntityIndex;
-use crate::player_research::PlayerResearch;
-use crate::session::player_slot::PlayerId;
+use crate::{
+    components::{
+        build::UnderConstructionComponent, entity_info::EntityInfoComponent, owner::OwnerComponent,
+        tags::TagsComponent,
+    },
+    content::registry::ContentRegistry,
+    entity_index::EntityIndex,
+    player_research::PlayerResearch,
+    session::player_slot::PlayerId,
+};
 
 /// Whether `player` currently meets every entry in `requires`.
 ///

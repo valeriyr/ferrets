@@ -9,26 +9,28 @@
 
 use std::net::SocketAddr;
 
-use ferrets_simulation::input::PlayerFrame;
-use ferrets_simulation::session::ai_hosting::AiHosting;
-use ferrets_simulation::session::player_slot::{PlayerId, PlayerSlot};
-use ferrets_simulation::session::player_type::PlayerType;
+use ferrets_simulation::{
+    input::PlayerFrame,
+    session::{
+        ai_hosting::AiHosting,
+        player_slot::{PlayerId, PlayerSlot},
+        player_type::PlayerType,
+    },
+};
 
-use crate::control::{ControlChannel, ControlEvent};
-use crate::demux;
-use crate::driver::{LockstepDriver, Received};
-use crate::error::NetworkError;
-use crate::lobby::client::LobbyClient;
-use crate::lobby::host::LobbyHost;
-use crate::message::control::{ControlMessage, Occupant, SlotInfo, UdpEntry};
-use crate::peer::{HOST_PEER, PeerId};
-use crate::role::Role;
-use crate::roster::Roster;
-use crate::session_mode::SessionMode;
-use crate::transport::NetworkTransport;
-use crate::transport::error::TransportError;
-use crate::transport::tcp::TcpTransport;
-use crate::transport::udp::UdpTransport;
+use crate::{
+    control::{ControlChannel, ControlEvent},
+    demux,
+    driver::{LockstepDriver, Received},
+    error::NetworkError,
+    lobby::{client::LobbyClient, host::LobbyHost},
+    message::control::{ControlMessage, Occupant, SlotInfo, UdpEntry},
+    peer::{HOST_PEER, PeerId},
+    role::Role,
+    roster::Roster,
+    session_mode::SessionMode,
+    transport::{NetworkTransport, error::TransportError, tcp::TcpTransport, udp::UdpTransport},
+};
 
 /// A live networked session.
 pub struct NetSession {

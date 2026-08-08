@@ -2,30 +2,37 @@
 //! headless game, builds its economy and army.
 
 use bevy::prelude::*;
-use ferrets_bevy_plugin::SimulationPlugin;
-use ferrets_bevy_plugin::ai::AiPlugin;
-use ferrets_demo::ai::{human_ai, install_demo_ai, orc_ai};
-use ferrets_demo::content::CONTENT;
-use ferrets_demo::{map, setup};
-use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
-use ferrets_script::ai::view::content::ContentView;
-use ferrets_script::content;
-use ferrets_script::engine::ScriptEngine;
-use ferrets_script::engine::lua::LuaEngine;
-use ferrets_simulation::components::entity_info::EntityInfoComponent;
-use ferrets_simulation::components::owner::OwnerComponent;
-use ferrets_simulation::content::registry::ContentRegistry;
-use ferrets_simulation::player_research::PlayerResearch;
-use ferrets_simulation::session::{
-    GameSession,
-    ai_hosting::AiHosting,
-    authority::Authority,
-    drop_policy::DropPolicy,
-    finish_policy::FinishPolicy,
-    player_slot::{PlayerId, PlayerSlot},
-    player_type::PlayerType,
+use ferrets_bevy_plugin::{SimulationPlugin, ai::AiPlugin};
+use ferrets_demo::{
+    ai::{human_ai, install_demo_ai, orc_ai},
+    content::CONTENT,
+    map, setup,
 };
-use ferrets_simulation::spawn;
+use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
+use ferrets_script::{
+    ai::view::content::ContentView,
+    content,
+    engine::{ScriptEngine, lua::LuaEngine},
+};
+use ferrets_simulation::{
+    components::{
+        entity_info::EntityInfoComponent, location::LocationComponent, owner::OwnerComponent,
+    },
+    content::registry::ContentRegistry,
+    map::Map,
+    movement_model::MovementModel,
+    player_research::PlayerResearch,
+    session::{
+        GameSession,
+        ai_hosting::AiHosting,
+        authority::Authority,
+        drop_policy::DropPolicy,
+        finish_policy::FinishPolicy,
+        player_slot::{PlayerId, PlayerSlot},
+        player_type::PlayerType,
+    },
+    spawn,
+};
 
 #[test]
 fn ai_scripts_load() {
@@ -41,10 +48,11 @@ fn ai_scripts_load() {
 #[test]
 fn ai_builds_economy_and_army() {
     let slots = vec![
-        // An idle human, so the AIs have something to attack eventually.
+        // An idle human, so the allied AIs have something to march on — the
+        // wave crossing the map is the traversal this test also verifies.
         PlayerSlot::occupied(0, PlayerType::Human, Some("human"), None),
-        PlayerSlot::occupied(1, PlayerType::Ai, Some("human"), None),
-        PlayerSlot::occupied(2, PlayerType::Ai, Some("orc"), None),
+        PlayerSlot::occupied(1, PlayerType::Ai, Some("human"), Some(1)),
+        PlayerSlot::occupied(2, PlayerType::Ai, Some("orc"), Some(1)),
         PlayerSlot::free(3),
     ];
     let mut app = App::new();
@@ -70,16 +78,17 @@ fn ai_builds_economy_and_army() {
         install_demo_ai(world);
     }
 
-    // 100 seconds of game time: the worker lines are trained, the production
-    // buildings stand, each race's tech is researched — the human forge and
-    // the mortars it unlocks, the orc ritual and the shamans it unlocks — and
-    // soldiers are mustering.
-    for _ in 0..2000 {
+    // 350 seconds of game time — the 96×96 map's longer walks stretch the
+    // opening: the worker lines are trained, the production buildings stand,
+    // each race's tech is researched — the human forge and the mortars it
+    // unlocks, the orc ritual and the shamans it unlocks — and soldiers are
+    // mustering.
+    for _ in 0..7000 {
         app.world_mut().run_schedule(FixedUpdate);
     }
 
     let world = app.world_mut();
-    assert_eq!(world.resource::<GameSession>().tick(), 2000);
+    assert_eq!(world.resource::<GameSession>().tick(), 7000);
     assert_eq!(count_owned(world, 1, "peasant"), 5);
     assert_eq!(count_owned(world, 2, "peon"), 5);
     assert!(count_owned(world, 1, "barracks") >= 1);
@@ -99,6 +108,19 @@ fn ai_builds_economy_and_army() {
             "player {player} researched {research}"
         );
     }
+
+    // The mustered wave marched on the idle player across the map — through
+    // a river ford or around the lake — so the army traverses the large map
+    // instead of stalling at the chokepoints.
+    let crossed = world
+        .query::<(&EntityInfoComponent, &OwnerComponent, &LocationComponent)>()
+        .iter(world)
+        .any(|(info, owner, location)| {
+            owner.player() == 1
+                && info.type_name() == "archer"
+                && location.position.x < FixedU64::from_num(48)
+        });
+    assert!(crossed, "the wave must cross the map's rivers");
 }
 
 #[test]
@@ -138,7 +160,7 @@ fn boss_mans_its_fleet_and_defends_the_lake() {
     spawn::spawn_entity(
         app.world_mut(),
         "archer",
-        FixedUVec2::new(FixedU64::from_num(26), FixedU64::from_num(38)),
+        FixedUVec2::new(FixedU64::from_num(40), FixedU64::from_num(53)),
         Some(0),
     )
     .expect("shore archer");
@@ -175,6 +197,57 @@ fn boss_mans_its_fleet_and_defends_the_lake() {
         app.world_mut().run_schedule(FixedUpdate);
     }
     assert_eq!(count_owned(app.world_mut(), map::BOSS, "ship"), 4);
+}
+
+#[test]
+fn ai_economy_runs_under_continuous_movement() {
+    let slots = vec![
+        PlayerSlot::occupied(0, PlayerType::Human, Some("human"), None),
+        PlayerSlot::occupied(1, PlayerType::Ai, Some("human"), Some(1)),
+        PlayerSlot::occupied(2, PlayerType::Ai, Some("orc"), Some(1)),
+        PlayerSlot::free(3),
+    ];
+    let mut data = map::data();
+    data.set_movement_model(MovementModel::Continuous);
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content");
+    let game_map = Map::from_data(&data, &registry);
+
+    let mut app = App::new();
+    app.add_plugins(SimulationPlugin::new(
+        GameSession::configured(
+            0,
+            slots,
+            map::NAME,
+            Authority::Host {
+                ai_hosting: AiHosting::Replicated,
+            },
+            DropPolicy::Automatic,
+            FinishPolicy::Endless,
+        ),
+        game_map,
+    ));
+    app.add_plugins(AiPlugin);
+    {
+        let world = app.world_mut();
+        *world.resource_mut::<ContentRegistry>() =
+            content::load(&LuaEngine, CONTENT).expect("demo content");
+        setup::spawn_demo_scene(world);
+        install_demo_ai(world);
+    }
+
+    for _ in 0..5000 {
+        app.world_mut().run_schedule(FixedUpdate);
+    }
+
+    // The same opening plays out on free positions and pushing: the worker
+    // lines are trained, the production buildings stand, and army units
+    // muster.
+    let world = app.world_mut();
+    assert_eq!(count_owned(world, 1, "peasant"), 5);
+    assert_eq!(count_owned(world, 2, "peon"), 5);
+    assert!(count_owned(world, 1, "barracks") >= 1);
+    assert!(count_owned(world, 2, "war_camp") >= 1);
+    assert!(count_owned(world, 1, "archer") >= 1);
 }
 
 //

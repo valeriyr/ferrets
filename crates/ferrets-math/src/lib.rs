@@ -12,5 +12,7 @@ pub type FixedI64 = fixed::types::I32F32;
 
 /// Unsigned 64-bit fixed-point scalar (32 integer bits, 32 fractional bits).
 ///
-/// Suitable for positions, sizes, and distances.
+/// Suitable for positions, sizes, and distances. The [`fixed`] crate's own
+/// deterministic operations apply, including an exact floor
+/// [`sqrt`](fixed::FixedU64::sqrt).
 pub type FixedU64 = fixed::types::U32F32;

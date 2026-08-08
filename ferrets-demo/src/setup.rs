@@ -7,11 +7,15 @@ use bevy::prelude::*;
 use ferrets_bevy_plugin::instantiate_map;
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_simulation::{
-    content::player_stats::PlayerStatId, map::Map, player_stats::PlayerStats,
-    resources::PlayerResources, session::GameSession, session::player_slot::PlayerId, spawn,
+    content::player_stats::PlayerStatId,
+    map::Map,
+    player_stats::PlayerStats,
+    resources::PlayerResources,
+    session::{GameSession, player_slot::PlayerId},
+    spawn,
 };
 
-use crate::map;
+use crate::{map, settings::Settings};
 
 fn cell(x: u32, y: u32) -> FixedUVec2 {
     FixedUVec2::new(FixedU64::from_num(x), FixedU64::from_num(y))
@@ -37,8 +41,19 @@ pub fn spawn_demo_scene(world: &mut World) {
     // The session names the map; every entry path validated the name, so a
     // miss here is a configuration bug, not user input.
     let name = world.resource::<GameSession>().map().to_string();
-    let map =
+    let mut map =
         map::by_name(&name).unwrap_or_else(|| panic!("the session names an unknown map '{name}'"));
+    // The menu's settings shape the game; a headless harness without them
+    // keeps whatever map it installed itself.
+    let (model, projection) = world.get_resource::<Settings>().map_or_else(
+        || {
+            let map = world.resource::<Map>();
+            (map.movement_model(), map.projection())
+        },
+        |settings| (settings.movement_model, settings.view.projection()),
+    );
+    map.set_movement_model(model);
+    map.set_projection(projection);
     instantiate_map(world, &map);
 
     for (player, race) in &occupied {

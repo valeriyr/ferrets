@@ -2,9 +2,7 @@
 
 use std::io::Write;
 
-use crate::format;
-use crate::header::ReplayHeader;
-use crate::record::TickRecord;
+use crate::{format, header::ReplayHeader, record::TickRecord};
 
 /// Writes a replay to an output stream as the game runs.
 ///

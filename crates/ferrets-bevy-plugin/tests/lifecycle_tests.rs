@@ -3,7 +3,7 @@
 mod utils;
 
 use bevy::prelude::*;
-use ferrets_pathfinder::nav_pos::NavPos;
+use ferrets_geometry::cell_pos::CellPos;
 use ferrets_simulation::{
     components::dying::{CorpseComponent, DyingComponent},
     entity_index::EntityIndex,
@@ -30,7 +30,7 @@ fn destroy_entity_starts_dying_and_removes_after_timer() {
         world
             .resource::<Map>()
             .nav_grid()
-            .is_occupied_by(utils::GROUND, NavPos::new(4, 4))
+            .is_occupied_by(utils::GROUND, CellPos::new(4, 4))
     );
 
     // The dying phase runs its 3-tick timer, then the entity is despawned.
@@ -62,7 +62,7 @@ fn dying_leaves_corpse_that_decays() {
             world
                 .resource::<Map>()
                 .nav_grid()
-                .is_occupied_by(utils::GROUND, NavPos::new(4, 4))
+                .is_occupied_by(utils::GROUND, CellPos::new(4, 4))
         );
         let corpses = world.query::<&CorpseComponent>().iter(world).count();
         assert_eq!(corpses, 1);
@@ -75,6 +75,6 @@ fn dying_leaves_corpse_that_decays() {
         !app.world_mut()
             .resource::<Map>()
             .nav_grid()
-            .is_occupied_by(utils::GROUND, NavPos::new(4, 4))
+            .is_occupied_by(utils::GROUND, CellPos::new(4, 4))
     );
 }

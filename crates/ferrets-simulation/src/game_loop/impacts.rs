@@ -1,26 +1,34 @@
 //! Delivery of a weapon's damage: immediately, or as a shot that lands later.
 
 use bevy_ecs::{entity::Entity, world::World};
+use ferrets_geometry::{
+    cell_pos::CellPos,
+    cell_rect::CellRect,
+    cell_size::CellSize,
+    projection::{self, Projection},
+};
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
-use ferrets_pathfinder::{astar, layer_mask::LayerMask, nav_pos::NavPos, nav_size::NavSize};
+use ferrets_pathfinder::layer_mask::LayerMask;
 
 use super::damage;
-use crate::components::{
-    dying::DyingComponent, entity_info::EntityInfoComponent, health::HealthComponent,
-    location::LocationComponent, owner::OwnerComponent,
+use crate::{
+    components::{
+        dying::DyingComponent, entity_info::EntityInfoComponent, health::HealthComponent,
+        location::LocationComponent, owner::OwnerComponent,
+    },
+    content::{
+        entity_type_def::EntityTypeDef,
+        projectile::Aim,
+        registry::ContentRegistry,
+        splash::{SplashDef, SplashShape},
+    },
+    entity_def,
+    entity_index::EntityIndex,
+    impacts::{PendingImpact, PendingImpacts},
+    map::Map,
+    session::GameSession,
+    simulation_id::SimulationId,
 };
-use crate::content::{
-    entity_type_def::EntityTypeDef,
-    projectile::Aim,
-    registry::ContentRegistry,
-    splash::{SplashDef, SplashShape},
-};
-use crate::entity_def;
-use crate::entity_index::EntityIndex;
-use crate::impacts::{PendingImpact, PendingImpacts};
-use crate::map::Map;
-use crate::session::GameSession;
-use crate::simulation_id::SimulationId;
 
 /// Delivers one hit from `attacker` against `target`.
 ///
@@ -65,12 +73,10 @@ pub fn deliver(
             let target_size = target
                 .and_then(|target| entity_def::of(world, target).location)
                 .map(|location| location.size())
-                .unwrap_or(NavSize::ONE);
-            let distance = astar::rect_distance(
-                world.resource::<Map>().projection(),
-                NavPos::from(origin),
-                NavPos::from(impact),
-                target_size,
+                .unwrap_or(CellSize::ONE);
+            let distance = world.resource::<Map>().projection().rect_distance(
+                CellPos::from(origin),
+                CellRect::new(CellPos::from(impact), target_size),
             );
             let tick = world.resource::<GameSession>().tick();
             let attacker_type = world
@@ -241,18 +247,16 @@ fn blast_victims(
 /// blast does not reach it.
 fn band_fraction(
     splash: &SplashDef,
-    projection: astar::Projection,
+    projection: Projection,
     origin: FixedUVec2,
     impact: FixedUVec2,
     victim: FixedUVec2,
 ) -> Option<FixedU64> {
-    let victim = NavPos::from(victim);
+    let victim = CellPos::from(victim);
     splash
         .bands()
         .find(|&(radius, _)| match splash.shape() {
-            SplashShape::Circular => {
-                astar::in_range(projection, NavPos::from(impact), victim, radius)
-            }
+            SplashShape::Circular => projection.in_range(CellPos::from(impact), victim, radius),
             SplashShape::Line => near_path(projection, origin, impact, victim, radius),
         })
         .map(|(_, fraction)| fraction)
@@ -261,18 +265,21 @@ fn band_fraction(
 /// Whether `victim` lies within `radius` of the shot's path, sampled at one-cell
 /// steps from `origin` to `impact`.
 fn near_path(
-    projection: astar::Projection,
+    projection: Projection,
     origin: FixedUVec2,
     impact: FixedUVec2,
-    victim: NavPos,
+    victim: CellPos,
     radius: u32,
 ) -> bool {
-    let from = NavPos::from(origin);
-    let to = NavPos::from(impact);
-    let steps = astar::chebyshev(from, to);
+    let from = CellPos::from(origin);
+    let to = CellPos::from(impact);
+    // Chebyshev here is sampling density — the number of one-cell steps an
+    // 8-connected walk of the segment takes — not a range metric; the range
+    // check below is the projection's.
+    let steps = projection::chebyshev(from, to);
     for step in 0..=steps {
         let sample = lerp_cell(from, to, step, steps);
-        if astar::in_range(projection, sample, victim, radius) {
+        if projection.in_range(sample, victim, radius) {
             return true;
         }
     }
@@ -280,7 +287,7 @@ fn near_path(
 }
 
 /// The cell `step` of `steps` along the way from `from` to `to`.
-fn lerp_cell(from: NavPos, to: NavPos, step: u32, steps: u32) -> NavPos {
+fn lerp_cell(from: CellPos, to: CellPos, step: u32, steps: u32) -> CellPos {
     if steps == 0 {
         return from;
     }
@@ -289,7 +296,7 @@ fn lerp_cell(from: NavPos, to: NavPos, step: u32, steps: u32) -> NavPos {
         let moved = delta * i64::from(step) / i64::from(steps);
         u32::try_from(i64::from(a) + moved).unwrap_or(a)
     };
-    NavPos::new(along(from.x, to.x), along(from.y, to.y))
+    CellPos::new(along(from.x, to.x), along(from.y, to.y))
 }
 
 /// The damageable entities whose footprint covers `cell`, in [`SimulationId`] order.
@@ -297,11 +304,11 @@ fn lerp_cell(from: NavPos, to: NavPos, step: u32, steps: u32) -> NavPos {
 /// More than one can share a cell when their footprints occupy layers that do not
 /// collide, so this answers with all of them rather than picking one.
 fn occupants_of(world: &mut World, cell: FixedUVec2) -> Vec<Entity> {
-    let cell = NavPos::from(cell);
+    let cell = CellPos::from(cell);
     let mut query = world.query::<(Entity, &EntityInfoComponent, &LocationComponent)>();
-    let candidates: Vec<(Entity, SimulationId, NavPos)> = query
+    let candidates: Vec<(Entity, SimulationId, CellPos)> = query
         .iter(world)
-        .map(|(entity, info, location)| (entity, info.id(), NavPos::from(location.position)))
+        .map(|(entity, info, location)| (entity, info.id(), CellPos::from(location.position)))
         .collect();
 
     let mut found: Vec<(SimulationId, Entity)> = Vec::new();

@@ -12,9 +12,9 @@
 
 use bevy::prelude::*;
 use ferrets_script::scenario::{ObjectiveStatus, ScenarioRuntime};
-use ferrets_simulation::resources::PlayerResources;
-use ferrets_simulation::scenario::Scenario;
-use ferrets_simulation::session::player_slot::PlayerId;
+use ferrets_simulation::{
+    resources::PlayerResources, scenario::Scenario, session::player_slot::PlayerId,
+};
 
 /// The live scenario evaluator and the player whose progress it judges. A
 /// `NonSend` resource because a script runtime is single-threaded; absent

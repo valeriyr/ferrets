@@ -1,14 +1,48 @@
 //! The live map grid of the active game.
 
 use bevy_ecs::prelude::*;
+use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize, projection::Projection};
 use ferrets_pathfinder::{
-    astar::Projection, nav_grid::NavGrid, nav_pos::NavPos, nav_size::NavSize, search,
+    hierarchy::{DEFAULT_CLUSTER_SIZE, NavHierarchy},
+    layer_mask::LayerMask,
+    nav_grid::NavGrid,
+    search,
 };
 
-use crate::components::location::LocationComponent;
-use crate::content::{location::LocationDef, registry::ContentRegistry};
-use crate::map_data::{MapData, MapSlot};
-use crate::session::player_slot::PlayerId;
+use ferrets_math::FixedU64;
+
+use crate::{
+    components::location::LocationComponent,
+    content::{
+        entity_stats::EntityStatId, entity_type_def::EntityTypeDef, location::LocationDef,
+        registry::ContentRegistry,
+    },
+    map_data::{MapData, MapSlot},
+    movement_model::MovementModel,
+    session::player_slot::PlayerId,
+};
+
+/// How an entity's footprint occupies the navigation grid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OccupancyClass {
+    /// A standing footprint on the static plane — what long-range planning
+    /// sees. Placing or clearing one dirties the hierarchy.
+    Static,
+    /// A mover's claim — honored by movement, invisible to the hierarchy.
+    Claim,
+}
+
+impl OccupancyClass {
+    /// The plane an entity of this definition occupies: movers claim their
+    /// cells, everything else stands on the static plane.
+    pub fn of(def: &EntityTypeDef) -> Self {
+        if def.can_move() {
+            OccupancyClass::Claim
+        } else {
+            OccupancyClass::Static
+        }
+    }
+}
 
 /// The active game map.
 #[derive(Resource)]
@@ -17,11 +51,16 @@ pub struct Map {
     name: String,
     /// Movement cost model and range metric used across the entire map.
     projection: Projection,
+    /// How units occupy space and resolve blocking on this map.
+    movement_model: MovementModel,
     /// Grid occupancy data. Dimensions define the playable area in cells.
     nav_grid: NavGrid,
+    /// The hierarchical view of the grid's static plane, one abstraction per
+    /// mover mask.
+    hierarchy: NavHierarchy,
     /// Where each player starts, indexed by player slot id; `None` for a seat
     /// with no start position (an environment combatant's).
-    start_points: Vec<Option<NavPos>>,
+    start_points: Vec<Option<CellPos>>,
 }
 
 impl Map {
@@ -47,11 +86,50 @@ impl Map {
             .slots()
             .iter()
             .map(|slot| match slot {
-                MapSlot::Player { start: (x, y) } => Some(NavPos::new(*x, *y)),
+                MapSlot::Player { start: (x, y) } => Some(CellPos::new(*x, *y)),
                 MapSlot::Environment => None,
             })
             .collect();
-        Self::new(data.name(), data.projection(), nav_grid, start_points)
+        // A continuous game resolves contact between bodies, so every mover
+        // must author one; a cell game never reads the stat.
+        match data.movement_model() {
+            MovementModel::Cell => {}
+            MovementModel::Continuous => {
+                for def in registry.entities() {
+                    if !def.can_move() {
+                        continue;
+                    }
+                    let radius = def.base_stats.get(&EntityStatId::RADIUS);
+                    assert!(
+                        radius.is_some_and(|radius| *radius > FixedU64::ZERO),
+                        "entity type '{}' moves but defines no positive radius, \
+                         which the continuous movement model requires",
+                        def.name
+                    );
+                }
+            }
+        }
+
+        // The hierarchy serves one abstraction per distinct mover mask the
+        // content declares; the registry iterates deterministically.
+        let mut mover_masks: Vec<LayerMask> = Vec::new();
+        for def in registry.entities() {
+            if let Some(location) = def.location
+                && def.can_move()
+                && !mover_masks.contains(&location.occupation())
+            {
+                mover_masks.push(location.occupation());
+            }
+        }
+
+        Self::with_hierarchy_masks(
+            data.name(),
+            data.projection(),
+            data.movement_model(),
+            nav_grid,
+            start_points,
+            &mover_masks,
+        )
     }
 
     /// Marks each cell occupied on the layers its terrain leaves impassable.
@@ -83,29 +161,65 @@ impl Map {
                         data.name()
                     )
                 });
-            let pos = NavPos::new(i as u32 % data.width(), i as u32 / data.width());
+            let pos = CellPos::new(i as u32 % data.width(), i as u32 / data.width());
             nav_grid.set_occupied_by(blocked, pos, true);
         }
     }
 
-    /// Creates a map from loaded content.
+    /// Creates a map from loaded content, without any hierarchy abstractions.
     pub fn new(
         name: impl Into<String>,
         projection: Projection,
+        movement_model: MovementModel,
         nav_grid: NavGrid,
-        start_points: Vec<Option<NavPos>>,
+        start_points: Vec<Option<CellPos>>,
     ) -> Self {
+        Self::with_hierarchy_masks(
+            name,
+            projection,
+            movement_model,
+            nav_grid,
+            start_points,
+            &[],
+        )
+    }
+
+    /// Creates a map from loaded content, building one hierarchy abstraction
+    /// per given mover mask.
+    pub fn with_hierarchy_masks(
+        name: impl Into<String>,
+        projection: Projection,
+        movement_model: MovementModel,
+        nav_grid: NavGrid,
+        start_points: Vec<Option<CellPos>>,
+        mover_masks: &[LayerMask],
+    ) -> Self {
+        let hierarchy = NavHierarchy::build(&nav_grid, DEFAULT_CLUSTER_SIZE, mover_masks);
         Self {
             name: name.into(),
             projection,
+            movement_model,
             nav_grid,
+            hierarchy,
             start_points,
         }
     }
 
+    /// Returns a reference to the hierarchical view of the grid's static
+    /// plane.
+    pub fn hierarchy(&self) -> &NavHierarchy {
+        &self.hierarchy
+    }
+
+    /// Folds every static occupancy change since the last call into the
+    /// hierarchy. Called at one fixed point of the game tick.
+    pub fn refresh_hierarchy(&mut self) {
+        self.hierarchy.refresh(&self.nav_grid);
+    }
+
     /// Returns the start position for the given player, or `None` if the map
     /// has none for that slot.
-    pub fn start_point(&self, player: PlayerId) -> Option<NavPos> {
+    pub fn start_point(&self, player: PlayerId) -> Option<CellPos> {
         self.start_points.get(player as usize).copied().flatten()
     }
 
@@ -117,6 +231,11 @@ impl Map {
     /// Returns the projection that governs movement costs and range metrics.
     pub fn projection(&self) -> Projection {
         self.projection
+    }
+
+    /// Returns how units occupy space and resolve blocking on this map.
+    pub fn movement_model(&self) -> MovementModel {
+        self.movement_model
     }
 
     /// Returns the map width in cells.
@@ -143,7 +262,7 @@ impl Map {
     pub fn can_place_entity(&self, loc: &LocationComponent, location_def: &LocationDef) -> bool {
         self.nav_grid.is_footprint_passable_by(
             location_def.occupation(),
-            NavPos::from(loc.position),
+            CellPos::from(loc.position),
             location_def.size(),
         )
     }
@@ -155,10 +274,10 @@ impl Map {
     /// deterministic. Returns `None` when nothing is free within the search radius.
     pub fn find_placement_near(
         &self,
-        origin: NavPos,
-        size: NavSize,
+        origin: CellPos,
+        size: CellSize,
         location_def: &LocationDef,
-    ) -> Option<NavPos> {
+    ) -> Option<CellPos> {
         /// How far out from the rectangle to search before giving up.
         const MAX_RADIUS: u32 = 8;
 
@@ -172,38 +291,81 @@ impl Map {
         )
     }
 
-    /// Marks every cell in the entity's footprint as occupied.
-    pub fn place_entity(&mut self, loc: &LocationComponent, location_def: &LocationDef) {
-        self.set_footprint(loc, location_def, true);
+    /// Marks every cell in the entity's footprint as occupied on the plane
+    /// its class selects.
+    pub fn place_entity(
+        &mut self,
+        loc: &LocationComponent,
+        location_def: &LocationDef,
+        class: OccupancyClass,
+    ) {
+        self.set_footprint(loc, location_def, class, true);
     }
 
-    /// Clears every cell in the entity's footprint.
-    pub fn displace_entity(&mut self, loc: &LocationComponent, location_def: &LocationDef) {
-        self.set_footprint(loc, location_def, false);
+    /// Clears every cell in the entity's footprint on the plane its class
+    /// selects.
+    pub fn displace_entity(
+        &mut self,
+        loc: &LocationComponent,
+        location_def: &LocationDef,
+        class: OccupancyClass,
+    ) {
+        self.set_footprint(loc, location_def, class, false);
     }
 
     /// Marks or clears every cell in the entity's footprint as occupied based on the `occupied` parameter.
     ///
-    /// No-op for [`Solidity::Passable`] entities — they never claim cells.
+    /// Static footprints dirty the hierarchy; claims never do. No-op for
+    /// [`Solidity::Passable`] entities — they never claim cells.
     fn set_footprint(
         &mut self,
         loc: &LocationComponent,
         location_def: &LocationDef,
+        class: OccupancyClass,
         occupied: bool,
     ) {
         if !location_def.solidity().claims_cells() {
             return;
         }
 
-        let origin = NavPos::from(loc.position);
-        let NavSize { width, height } = location_def.size();
+        let origin = CellPos::from(loc.position);
+        let CellSize { width, height } = location_def.size();
         for dy in 0..height {
             for dx in 0..width {
-                self.nav_grid_mut().set_occupied_by(
-                    location_def.occupation(),
-                    NavPos::new(origin.x + dx, origin.y + dy),
-                    occupied,
-                );
+                let cell = CellPos::new(origin.x + dx, origin.y + dy);
+                match class {
+                    OccupancyClass::Static => {
+                        self.nav_grid
+                            .set_occupied_by(location_def.occupation(), cell, occupied);
+                        self.hierarchy.mark_dirty(cell);
+                    }
+                    OccupancyClass::Claim => {
+                        // One claimant per cell per layer is the cell
+                        // model's contract; the continuous model rebuilds
+                        // the plane from bodies each tick and legally
+                        // collapses shared cells into one bit — and its
+                        // clears belong to that rebuild alone: a footprint
+                        // release keyed on the floored anchor could wipe a
+                        // neighbor's center-cell claim mid-tick.
+                        match self.movement_model {
+                            MovementModel::Cell => {
+                                debug_assert!(
+                                    self.nav_grid.is_claimed_by(location_def.occupation(), cell)
+                                        != occupied,
+                                    "a claim write must flip the cell: claiming needs it \
+                                     free, releasing needs it held"
+                                );
+                            }
+                            MovementModel::Continuous => {
+                                if !occupied {
+                                    continue;
+                                }
+                            }
+                        }
+                        self.nav_grid
+                            .set_claimed_by(location_def.occupation(), cell, occupied);
+                    }
+                }
             }
         }
     }

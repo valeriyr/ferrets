@@ -1,17 +1,23 @@
 //! Writing a replay to a stream and reading it back: round-trips, end-of-stream
 //! handling, and the format and version guards.
 
-use ferrets_replay::buffer::SharedBuffer;
-use ferrets_replay::error::ReplayError;
-use ferrets_replay::header::{FORMAT_VERSION, RecordedGame, ReplayHeader};
-use ferrets_replay::record::TickRecord;
-use ferrets_replay::recorder::Recorder;
-use ferrets_replay::replay::Replay;
-use ferrets_simulation::command::PlayerCommand;
-use ferrets_simulation::session::finish_policy::FinishPolicy;
-use ferrets_simulation::session::player_slot::{PlayerId, PlayerSlot};
-use ferrets_simulation::session::player_type::PlayerType;
-use ferrets_simulation::skirmish::Skirmish;
+use ferrets_replay::{
+    buffer::SharedBuffer,
+    error::ReplayError,
+    header::{FORMAT_VERSION, RecordedGame, ReplayHeader},
+    record::TickRecord,
+    recorder::Recorder,
+    replay::Replay,
+};
+use ferrets_simulation::{
+    command::PlayerCommand,
+    session::{
+        finish_policy::FinishPolicy,
+        player_slot::{PlayerId, PlayerSlot},
+        player_type::PlayerType,
+    },
+    skirmish::Skirmish,
+};
 
 #[test]
 fn round_trips_header_and_records() {

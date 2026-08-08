@@ -3,27 +3,32 @@
 //! surface as errors rather than panics. The contract holds for any engine;
 //! [`engine`] picks the binding the suite runs against.
 
+use ferrets_geometry::cell_size::CellSize;
 use ferrets_math::{FixedI64, FixedU64};
-use ferrets_pathfinder::{nav_grid::LayerId, nav_size::NavSize};
-use ferrets_script::content;
-use ferrets_script::engine::ScriptEngine;
-use ferrets_script::engine::lua::LuaEngine;
-use ferrets_script::error::ScriptError;
-use ferrets_simulation::content::{
-    entity_stats::EntityStatId,
-    entity_type_def::EntityTypeDef,
-    location::Solidity,
-    player_stats::PlayerStatId,
-    repair::{RepairCost, RepairRate},
-    research::ResearchDef,
-    skills::{
-        EntityCastCost, EntityCastEffect, EntityCastTarget, PlayerCastEffect, SkillCaster, SkillDef,
-    },
-    splash::SplashShape,
-    stats::{EntityModifier, ModifierOp, PlayerModifier},
-    work::WorkPresence,
+use ferrets_pathfinder::nav_grid::LayerId;
+use ferrets_script::{
+    content,
+    engine::{ScriptEngine, lua::LuaEngine},
+    error::ScriptError,
 };
-use ferrets_simulation::resources;
+use ferrets_simulation::{
+    content::{
+        entity_stats::EntityStatId,
+        entity_type_def::EntityTypeDef,
+        location::Solidity,
+        player_stats::PlayerStatId,
+        repair::{RepairCost, RepairRate},
+        research::ResearchDef,
+        skills::{
+            EntityCastCost, EntityCastEffect, EntityCastTarget, PlayerCastEffect, SkillCaster,
+            SkillDef,
+        },
+        splash::SplashShape,
+        stats::{EntityModifier, ModifierOp, PlayerModifier},
+        work::WorkPresence,
+    },
+    resources,
+};
 
 //
 // ─── Round-trip ─────────────────────────────────────────────────────────────
@@ -39,8 +44,11 @@ fn loads_races_resources_and_entities() {
 
     let expected = EntityTypeDef::new("archer")
         .with_race("human")
-        .with_location(LayerId::new(1), NavSize::ONE, Solidity::Solid)
-        .with_movement(FixedU64::from_str("0.3").unwrap())
+        .with_location(LayerId::new(1), CellSize::ONE, Solidity::Solid)
+        .with_movement(
+            FixedU64::from_str("0.3").unwrap(),
+            FixedU64::from_str("0.5").unwrap(),
+        )
         .with_health(40)
         .with_dying(2, None)
         .with_attack(6, 4, 4, 7, 3)
@@ -66,7 +74,7 @@ fn declared_acquire_range_overrides_weapon_range_default() {
     let registry = content::load(&engine(), source).expect("load content");
 
     let expected = EntityTypeDef::new("scout")
-        .with_location(LayerId::new(1), NavSize::ONE, Solidity::Solid)
+        .with_location(LayerId::new(1), CellSize::ONE, Solidity::Solid)
         .with_health(20)
         .with_attack(2, 3, 7, 4, 2);
 
@@ -141,7 +149,7 @@ fn parses_armor_bonus_damage_vs_and_energy() {
     let registry = content::load(&engine(), source).expect("load content");
 
     let expected = EntityTypeDef::new("knight")
-        .with_location(LayerId::new(1), NavSize::ONE, Solidity::Solid)
+        .with_location(LayerId::new(1), CellSize::ONE, Solidity::Solid)
         .with_health(100)
         .with_attack(12, 1, 1, 4, 2)
         .with_armor(4)
@@ -616,7 +624,7 @@ fn parses_projectile_and_splash() {
     let registry = content::load(&engine(), source).expect("load content");
 
     let expected = EntityTypeDef::new("mortar")
-        .with_location(LayerId::new(1), NavSize::ONE, Solidity::Solid)
+        .with_location(LayerId::new(1), CellSize::ONE, Solidity::Solid)
         .with_health(30)
         .with_attack(12, 6, 6, 10, 4)
         .with_projectile(registry.projectile("shell").expect("shell is registered"))
@@ -720,7 +728,7 @@ fn parses_selection_priority_and_class() {
     let registry = content::load(&engine(), source).expect("load content");
 
     let expected = EntityTypeDef::new("caster")
-        .with_location(LayerId::new(1), NavSize::ONE, Solidity::Solid)
+        .with_location(LayerId::new(1), CellSize::ONE, Solidity::Solid)
         .with_health(20)
         .with_selection(42, Some("spellcaster"))
         .with_sight_range(12);
@@ -957,7 +965,7 @@ fn loads_occupation_of_several_layers_combined_with_bitwise_or() {
 
     let expected = EntityTypeDef::new("gryphon").with_location(
         LayerId::new(1) | LayerId::new(2),
-        NavSize::ONE,
+        CellSize::ONE,
         Solidity::Solid,
     );
     assert_eq!(registry.entity("gryphon"), Some(&expected));
@@ -974,8 +982,11 @@ fn layer_id_looks_up_defined_layer() {
     "#;
     let registry = content::load(&engine(), source).expect("load content");
 
-    let expected =
-        EntityTypeDef::new("gryphon").with_location(LayerId::new(2), NavSize::ONE, Solidity::Solid);
+    let expected = EntityTypeDef::new("gryphon").with_location(
+        LayerId::new(2),
+        CellSize::ONE,
+        Solidity::Solid,
+    );
     assert_eq!(registry.entity("gryphon"), Some(&expected));
 }
 
@@ -1274,7 +1285,7 @@ const ARCHER: &str = r#"
         race = "human",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
         stats = {
-            speed = "0.3", max_health = 40,
+            speed = "0.3", radius = "0.5", max_health = 40,
             damage = 6, attack_range = 4, attack_period = 7, damage_point = 3,
         },
         dying = { time = 2 },
@@ -1295,7 +1306,7 @@ const BASE: &str = r#"
     define_entity("peasant", {
         race = "human",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
-        stats = { speed = "0.3", max_health = 30, build_range = 1, harvest_range = 1 },
+        stats = { speed = "0.3", radius = "0.5", max_health = 30, build_range = 1, harvest_range = 1 },
         dying = { time = 2 },
         cost = { gold = 50 },
         train_time = 40,

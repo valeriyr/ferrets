@@ -7,21 +7,22 @@ mod utils;
 use std::collections::BTreeMap;
 
 use bevy::prelude::*;
-use ferrets_bevy_plugin::ai::{AiPlugin, AiRuntimes, game_view, install_ai_runtimes};
-use ferrets_bevy_plugin::{install_replay_playback, spawn};
-use ferrets_replay::buffer::SharedBuffer;
+use ferrets_bevy_plugin::{
+    ai::{AiPlugin, AiRuntimes, game_view, install_ai_runtimes},
+    install_replay_playback, spawn,
+};
 use ferrets_replay::{
+    buffer::SharedBuffer,
     header::{RecordedGame, ReplayHeader},
     recorder::Recorder,
     replay::Replay,
 };
-use ferrets_script::ai::AiVision;
-use ferrets_script::ai::view::content::ContentView;
-use ferrets_script::engine::ScriptEngine;
-use ferrets_script::engine::lua::LuaEngine;
-use ferrets_simulation::checksum;
+use ferrets_script::{
+    ai::{AiVision, view::content::ContentView},
+    engine::{ScriptEngine, lua::LuaEngine},
+};
 use ferrets_simulation::{
-    checksum::CHECKSUM_INTERVAL,
+    checksum::{self, CHECKSUM_INTERVAL},
     command::PlayerCommand,
     components::{hidden::HiddenComponent, resource::ResourceSourceComponent},
     input::{InputFrames, PlayerFrame, SYNC_LATENCY},

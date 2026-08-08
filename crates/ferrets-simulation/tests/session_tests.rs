@@ -1,11 +1,11 @@
 //! The game session: lifecycle and participants.
 
-use ferrets_simulation::session::drop_policy::DropPolicy;
-use ferrets_simulation::session::finish_policy::FinishPolicy;
 use ferrets_simulation::session::{
     GameResult, GameSession, Winner,
     ai_hosting::AiHosting,
     authority::Authority,
+    drop_policy::DropPolicy,
+    finish_policy::FinishPolicy,
     player_slot::{Participation, PlayerSlot},
     player_type::PlayerType,
 };

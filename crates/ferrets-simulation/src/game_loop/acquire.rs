@@ -1,7 +1,7 @@
 //! Deterministic hostile-target acquisition shared by auto-engaging behaviors.
 
 use bevy_ecs::{entity::Entity, world::World};
-use ferrets_pathfinder::{astar, nav_pos::NavPos};
+use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect};
 
 use crate::{
     components::{
@@ -34,7 +34,7 @@ pub fn due(id: SimulationId, tick: u32) -> bool {
 ///
 /// A qualifying [`fresh_attacker`] wins; otherwise the nearest hostile,
 /// damageable, interactable entity is chosen — nearest by
-/// [`astar::rect_distance`], the same footprint measure the range gate uses —
+/// [`Projection::rect_distance`], the same footprint measure the range gate uses —
 /// with distance ties resolved to the lower [`SimulationId`], fully
 /// deterministic.
 pub fn find_target(world: &World, seeker: Entity, range: u32) -> Option<SimulationId> {
@@ -44,7 +44,7 @@ pub fn find_target(world: &World, seeker: Entity, range: u32) -> Option<Simulati
         return Some(attacker);
     }
 
-    let from = NavPos::from(entity_def::position(world, seeker));
+    let from = CellPos::from(entity_def::position(world, seeker));
     let mut best: Option<(u32, SimulationId)> = None;
     for (id, _) in world.resource::<EntityIndex>().alive_entries() {
         if !qualifies(world, seeker, id, range) {
@@ -105,11 +105,9 @@ pub(super) fn qualifies(
     }
 
     let (target_position, target_size) = entity_def::footprint(world, target);
-    astar::in_range_of_rect(
-        world.resource::<Map>().projection(),
-        NavPos::from(entity_def::position(world, seeker)),
-        NavPos::from(target_position),
-        target_size,
+    world.resource::<Map>().projection().in_range_of_rect(
+        CellPos::from(entity_def::position(world, seeker)),
+        CellRect::new(CellPos::from(target_position), target_size),
         range,
     )
 }
@@ -127,13 +125,11 @@ pub(super) fn fresh_attacker(world: &World, entity: Entity) -> Option<Simulation
 }
 
 /// Distance from `from` to the footprint of the alive entity with the given id.
-fn footprint_distance(world: &World, from: NavPos, id: SimulationId) -> u32 {
+fn footprint_distance(world: &World, from: CellPos, id: SimulationId) -> u32 {
     let entity = world.resource::<EntityIndex>().alive(id).unwrap();
     let (position, size) = entity_def::footprint(world, entity);
-    astar::rect_distance(
-        world.resource::<Map>().projection(),
-        from,
-        NavPos::from(position),
-        size,
-    )
+    world
+        .resource::<Map>()
+        .projection()
+        .rect_distance(from, CellRect::new(CellPos::from(position), size))
 }

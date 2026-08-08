@@ -4,23 +4,25 @@
 use bevy_ecs::{entity::Entity, world::World};
 use ferrets_math::FixedU64;
 
-use crate::components::{
-    build::UnderConstructionComponent, energy::EnergyComponent, entity_buffs::BuffsComponent,
-    entity_skills::SkillsComponent, entity_stats::StatsComponent, health::HealthComponent,
-    owner::OwnerComponent,
+use crate::{
+    components::{
+        build::UnderConstructionComponent, energy::EnergyComponent, entity_buffs::BuffsComponent,
+        entity_skills::SkillsComponent, entity_stats::StatsComponent, health::HealthComponent,
+        owner::OwnerComponent,
+    },
+    content::{
+        entity_buffs::EntityBuffId,
+        entity_stats::EntityStatId,
+        player_buffs::PlayerBuffId,
+        registry::ContentRegistry,
+        stats::{EntityModifier, PlayerModifier},
+    },
+    entity_index::EntityIndex,
+    player_buffs::PlayerBuffs,
+    player_skills::PlayerSkills,
+    player_stats::PlayerStats,
+    session::{GameSession, player_slot::PlayerId},
 };
-use crate::content::{
-    entity_buffs::EntityBuffId,
-    entity_stats::EntityStatId,
-    player_buffs::PlayerBuffId,
-    registry::ContentRegistry,
-    stats::{EntityModifier, PlayerModifier},
-};
-use crate::entity_index::EntityIndex;
-use crate::player_buffs::PlayerBuffs;
-use crate::player_skills::PlayerSkills;
-use crate::player_stats::PlayerStats;
-use crate::session::{GameSession, player_slot::PlayerId};
 
 /// Applies the buff `id` to `entity`, inserting a [`BuffsComponent`] if it has
 /// none. No-op for an entity with no stat store to modify.

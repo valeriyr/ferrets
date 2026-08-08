@@ -6,8 +6,7 @@ use ferrets_simulation::content::{
     splash::SplashShape, work::WorkPresence,
 };
 
-use crate::engine::ScriptEngine;
-use crate::error::ScriptError;
+use crate::{engine::ScriptEngine, error::ScriptError};
 
 /// Loads content from `source` with the given engine, returning a validated
 /// registry.

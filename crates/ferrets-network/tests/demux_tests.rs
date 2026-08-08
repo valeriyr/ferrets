@@ -1,12 +1,16 @@
 //! Splitting one transport into a control view and a gameplay view: each view
 //! receives only its own channel's messages.
 
-use ferrets_network::demux;
-use ferrets_network::message::control::{ControlMessage, InGameMessage};
-use ferrets_network::message::gameplay::GameplayMessage;
-use ferrets_network::message::{Message, encode};
-use ferrets_network::transport::loopback::LoopbackTransport;
-use ferrets_network::transport::{NetworkTransport, TransportEvent};
+use ferrets_network::{
+    demux,
+    message::{
+        Message,
+        control::{ControlMessage, InGameMessage},
+        encode,
+        gameplay::GameplayMessage,
+    },
+    transport::{NetworkTransport, TransportEvent, loopback::LoopbackTransport},
+};
 
 #[test]
 fn split_routes_each_message_to_its_own_channel() {

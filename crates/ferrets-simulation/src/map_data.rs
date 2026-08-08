@@ -1,9 +1,9 @@
 //! A map described as serializable data, from which a live map is built.
 
-use ferrets_pathfinder::astar::Projection;
+use ferrets_geometry::projection::Projection;
 use serde::{Deserialize, Serialize};
 
-use crate::session::player_slot::PlayerId;
+use crate::{movement_model::MovementModel, session::player_slot::PlayerId};
 
 /// One entity a map opens with.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -45,6 +45,8 @@ pub struct MapData {
     name: String,
     /// Movement cost model and range metric used across the entire map.
     projection: Projection,
+    /// How units occupy space and resolve blocking on this map.
+    movement_model: MovementModel,
     /// Playable width in cells.
     width: u32,
     /// Playable height in cells.
@@ -74,6 +76,7 @@ impl MapData {
         Self {
             name: name.into(),
             projection,
+            movement_model: MovementModel::default(),
             width,
             height,
             terrains: Vec::new(),
@@ -91,6 +94,22 @@ impl MapData {
     /// Returns the movement cost model and range metric used across the map.
     pub fn projection(&self) -> Projection {
         self.projection
+    }
+
+    /// Returns how units occupy space and resolve blocking on this map.
+    pub fn movement_model(&self) -> MovementModel {
+        self.movement_model
+    }
+
+    /// Selects how units occupy space and resolve blocking on this map,
+    /// replacing the default of [`MovementModel::Cell`].
+    pub fn set_movement_model(&mut self, model: MovementModel) {
+        self.movement_model = model;
+    }
+
+    /// Replaces the distance metric the map was constructed with.
+    pub fn set_projection(&mut self, projection: Projection) {
+        self.projection = projection;
     }
 
     /// Returns the playable width in cells.

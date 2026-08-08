@@ -2,23 +2,21 @@
 //! move/send orders. Everything is issued as a `PlayerCommand` through
 //! `PendingInput`, so it flows through the deterministic command pipeline.
 
-use bevy::prelude::*;
-use bevy::window::PrimaryWindow;
+use bevy::{prelude::*, window::PrimaryWindow};
 use ferrets_bevy_plugin::{NetworkActive, PauseIntent, PendingInput};
+use ferrets_geometry::cell_pos::CellPos;
 use ferrets_math::{FixedU64, fixed_urect::FixedURect, fixed_uvec2::FixedUVec2};
-use ferrets_pathfinder::nav_pos::NavPos;
 use ferrets_simulation::{
     command::{PlayerCommand, SelectMode, SkillCasterRef},
-    components::entity_info::EntityInfoComponent,
     components::{
+        entity_info::EntityInfoComponent,
         hidden::HiddenComponent,
         location::LocationComponent,
         owner::OwnerComponent,
         rally::{RallyPointComponent, RallyTarget},
         stance::{Stance, StanceComponent},
     },
-    content::registry::ContentRegistry,
-    content::skills::SkillId,
+    content::{registry::ContentRegistry, skills::SkillId},
     control_groups::ControlGroups,
     map::Map,
     order::AttackTarget,
@@ -123,7 +121,7 @@ fn world_to_cell(world: Vec2) -> Option<(u32, u32)> {
     Some((x as u32, y as u32))
 }
 
-/// Cell as a `FixedUVec2` position (clamped to the non-negative quadrant).
+/// Cell-space position under a world point (clamped to the non-negative quadrant).
 fn world_to_pos(world: Vec2) -> FixedUVec2 {
     FixedUVec2::new(
         FixedU64::from_num((world.x / CELL_PX).max(0.0)),
@@ -131,25 +129,49 @@ fn world_to_pos(world: Vec2) -> FixedUVec2 {
     )
 }
 
-/// A selection rectangle snapped to whole cells, spanning at least one cell, so
-/// even a small drag covers the cells it crossed (and catches the integer-cell
-/// positions of entities inside).
-fn cell_rect(a: Vec2, b: Vec2) -> FixedURect {
-    let (ax, bx) = ((a.x / CELL_PX).max(0.0), (b.x / CELL_PX).max(0.0));
-    let (ay, by) = ((-a.y / CELL_PX).max(0.0), (-b.y / CELL_PX).max(0.0));
-    let min_x = ax.min(bx).floor();
-    let min_y = ay.min(by).floor();
-    let max_x = ax.max(bx).ceil().max(min_x + 1.0);
-    let max_y = ay.max(by).ceil().max(min_y + 1.0);
+/// The world points under the four corners of the screen frame spanned by
+/// `anchor` (a world point) and the cursor. The frame is a screen-aligned
+/// rectangle; under a turned camera its corners land on four distinct world
+/// points, so all four matter.
+fn frame_corners(
+    camera: &Camera,
+    camera_transform: &GlobalTransform,
+    anchor: Vec2,
+    cursor: Vec2,
+) -> Option<[Vec2; 4]> {
+    let a = camera
+        .world_to_viewport(camera_transform, anchor.extend(0.0))
+        .ok()?;
+    let b = camera
+        .world_to_viewport(camera_transform, cursor.extend(0.0))
+        .ok()?;
+    let min = a.min(b);
+    let max = a.max(b);
+    let corner = |v| camera.viewport_to_world_2d(camera_transform, v).ok();
+    Some([
+        corner(min)?,
+        corner(Vec2::new(max.x, min.y))?,
+        corner(max)?,
+        corner(Vec2::new(min.x, max.y))?,
+    ])
+}
+
+/// The cell-space bounding box of world `points` — what a screen frame or
+/// the viewport covers, as the rectangle the selection commands carry.
+fn covering_rect(points: &[Vec2]) -> FixedURect {
+    let min = points.iter().copied().reduce(Vec2::min).unwrap();
+    let max = points.iter().copied().reduce(Vec2::max).unwrap();
+    let low = Vec2::new(min.x / CELL_PX, -max.y / CELL_PX).max(Vec2::ZERO);
+    let high = Vec2::new(max.x / CELL_PX, -min.y / CELL_PX).max(Vec2::ZERO);
     FixedURect::from_corners(
-        FixedUVec2::new(FixedU64::from_num(min_x), FixedU64::from_num(min_y)),
-        FixedUVec2::new(FixedU64::from_num(max_x), FixedU64::from_num(max_y)),
+        FixedUVec2::new(FixedU64::from_num(low.x), FixedU64::from_num(low.y)),
+        FixedUVec2::new(FixedU64::from_num(high.x), FixedU64::from_num(high.y)),
     )
 }
 
-/// The cell rectangle currently visible in the viewport, for on-screen
+/// The rectangle currently visible in the viewport, for on-screen
 /// select-all-of-type (a double-click grabs only what's on screen).
-fn visible_cell_rect(
+fn visible_rect(
     window: &Window,
     camera: &Camera,
     camera_transform: &GlobalTransform,
@@ -160,23 +182,34 @@ fn visible_cell_rect(
             .viewport_to_world_2d(camera_transform, v)
             .unwrap_or(Vec2::ZERO)
     };
-    cell_rect(corner(Vec2::ZERO), corner(size))
+    covering_rect(&[
+        corner(Vec2::ZERO),
+        corner(Vec2::new(size.x, 0.0)),
+        corner(size),
+        corner(Vec2::new(0.0, size.y)),
+    ])
 }
 
-/// The selectable entity whose footprint covers `cell`, preferring the smallest
-/// footprint (a unit standing on/near a building wins over the building).
+/// The selectable entity whose sprite covers the world position, preferring
+/// the smallest footprint (a unit standing on/near a building wins over the
+/// building). Sprites span the entity's fractional position plus its
+/// footprint — the same box they are rendered in — so a mover resting
+/// between cell origins is picked by what is drawn, not by the cell its
+/// position truncates to.
 fn entity_at(
-    cell: (u32, u32),
+    world: Vec2,
     registry: &ContentRegistry,
     entities: &Query<(&EntityInfoComponent, &LocationComponent), Without<HiddenComponent>>,
 ) -> Option<SimulationId> {
+    let x = world.x / CELL_PX;
+    let y = -world.y / CELL_PX;
     let mut best: Option<(u32, SimulationId)> = None;
     for (info, location) in entities {
-        let ox = location.position.x.to_num::<u32>();
-        let oy = location.position.y.to_num::<u32>();
+        let ox = location.position.x.to_num::<f32>();
+        let oy = location.position.y.to_num::<f32>();
         let size = registry.def(info.type_id()).location.unwrap().size();
         let inside =
-            cell.0 >= ox && cell.0 < ox + size.width && cell.1 >= oy && cell.1 < oy + size.height;
+            x >= ox && x < ox + size.width as f32 && y >= oy && y < oy + size.height as f32;
         if inside {
             let area = size.width * size.height;
             if best.is_none_or(|(best_area, _)| area < best_area) {
@@ -229,13 +262,12 @@ pub fn selection_input(
     if let Some(start) = drag.0
         && mouse.pressed(MouseButton::Left)
         && start.distance(cursor) > CLICK_SLOP
+        && let Some(corners) = frame_corners(camera, camera_transform, start, cursor)
     {
-        // Live selection box.
-        gizmos.rect_2d(
-            Isometry2d::from_translation((start + cursor) / 2.0),
-            (cursor - start).abs(),
-            Color::srgb(0.2, 1.0, 0.4),
-        );
+        // Live selection box: a screen-aligned frame, drawn through its
+        // world corners so it stays screen-square under any camera look.
+        let outline = [corners[0], corners[1], corners[2], corners[3], corners[0]];
+        gizmos.linestrip_2d(outline, Color::srgb(0.2, 1.0, 0.4));
     }
 
     if mouse.just_released(MouseButton::Left)
@@ -247,8 +279,7 @@ pub fn selection_input(
         // a click toggles the entity, a box adds its contents.
         let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
         if start.distance(cursor) <= CLICK_SLOP
-            && let Some(cell) = world_to_cell(cursor)
-            && let Some(id) = entity_at(cell, &registry, &entities)
+            && let Some(id) = entity_at(cursor, &registry, &entities)
         {
             let now = time.elapsed_secs();
             let double = last_click
@@ -275,7 +306,7 @@ pub fn selection_input(
                 };
                 pending.push(PlayerCommand::SelectByType {
                     class,
-                    rect: visible_cell_rect(window, camera, camera_transform),
+                    rect: visible_rect(window, camera, camera_transform),
                     mode,
                 });
             } else {
@@ -292,10 +323,10 @@ pub fn selection_input(
             } else {
                 SelectMode::Replace
             };
-            pending.push(PlayerCommand::SelectByRect {
-                rect: cell_rect(start, cursor),
-                mode,
-            });
+            let rect = frame_corners(camera, camera_transform, start, cursor)
+                .map(|corners| covering_rect(&corners))
+                .unwrap_or_else(|| covering_rect(&[start, cursor]));
+            pending.push(PlayerCommand::SelectByRect { rect, mode });
         }
     }
 }
@@ -334,7 +365,7 @@ pub fn order_input(
 
     let flush = !(keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight));
 
-    let target = world_to_cell(cursor).and_then(|cell| entity_at(cell, &registry, &entities));
+    let target = entity_at(cursor, &registry, &entities);
 
     // Only an all-producer selection captures the click; a mixed selection
     // keeps ordering its units around normally.
@@ -487,9 +518,7 @@ pub fn targeting_input(
         TargetedOrder::Guard => {
             // Guard needs an entity under the cursor; a miss keeps the mode
             // armed so the player can click again.
-            let Some(target) =
-                world_to_cell(cursor).and_then(|cell| entity_at(cell, &registry, &entities))
-            else {
+            let Some(target) = entity_at(cursor, &registry, &entities) else {
                 return;
             };
             pending.push(PlayerCommand::Guard { target, flush });
@@ -503,9 +532,7 @@ pub fn targeting_input(
         TargetedOrder::Skill(skill) => {
             // The cast needs an entity under the cursor; a miss keeps the mode
             // armed so the player can click again.
-            let Some(target) =
-                world_to_cell(cursor).and_then(|cell| entity_at(cell, &registry, &entities))
-            else {
+            let Some(target) = entity_at(cursor, &registry, &entities) else {
                 return;
             };
             for &caster in selection.get(session.local_player()) {
@@ -690,7 +717,7 @@ pub fn placement_input(
 
     let passable = map.nav_grid().is_footprint_passable_by(
         location_def.occupation(),
-        NavPos::new(cx, cy),
+        CellPos::new(cx, cy),
         size,
     );
     let center = Vec2::new(

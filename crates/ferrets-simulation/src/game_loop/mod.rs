@@ -20,6 +20,7 @@ pub mod movement;
 pub mod orders;
 pub mod patrol;
 pub mod pending_reveal;
+pub mod pushing;
 pub mod repair;
 pub mod research;
 pub mod stats;

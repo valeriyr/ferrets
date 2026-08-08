@@ -1,9 +1,7 @@
 //! 2D camera: spawn, WASD/arrow pan, and scroll-wheel zoom.
 
-use bevy::input::mouse::AccumulatedMouseScroll;
-use bevy::prelude::*;
-use ferrets_simulation::map::Map;
-use ferrets_simulation::session::GameSession;
+use bevy::{input::mouse::AccumulatedMouseScroll, prelude::*};
+use ferrets_simulation::{map::Map, session::GameSession};
 
 use crate::render::CELL_PX;
 
@@ -14,6 +12,8 @@ const MAX_ZOOM: f32 = 2.0;
 
 /// Clamps a camera translation so the view stays within the map bounds (Bevy y
 /// points up, the map down). Shared by pan/zoom and any programmatic recenter.
+/// The camera moves in world space whatever its look, so the bounds are the
+/// map's own rectangle.
 pub fn clamp_to_map(translation: Vec3, map: &Map) -> Vec3 {
     let max_x = map.width() as f32 * CELL_PX;
     let min_y = -(map.height() as f32 * CELL_PX);
@@ -74,7 +74,13 @@ pub fn pan_zoom(
         dir.x += 1.0;
     }
     if dir != Vec2::ZERO {
-        transform.translation += (dir.normalize() * PAN_SPEED * time.delta_secs()).extend(0.0);
+        // Pan in screen directions: the shift converts through the camera's
+        // own orientation and scale, so W always moves the view up whatever
+        // the look.
+        let step = dir.normalize() * PAN_SPEED * time.delta_secs();
+        let local = Vec3::new(step.x * transform.scale.x, step.y * transform.scale.y, 0.0);
+        let world = transform.rotation * local;
+        transform.translation += world;
     }
 
     transform.translation = clamp_to_map(transform.translation, &map);

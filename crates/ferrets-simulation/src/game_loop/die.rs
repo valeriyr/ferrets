@@ -2,6 +2,8 @@
 //! Called by [`super::orders`] as part of the shared order lifecycle.
 
 use bevy_ecs::{entity::Entity, world::World};
+use ferrets_math::fixed_uvec2::FixedUVec2;
+use ferrets_physics::body;
 
 use crate::{
     components::{
@@ -11,7 +13,7 @@ use crate::{
         order_queue::{CancelPolicy, OrderState},
     },
     entity_def,
-    map::Map,
+    map::{Map, OccupancyClass},
     order::Order,
     spawn,
 };
@@ -77,10 +79,12 @@ fn free_footprint(entity: Entity, world: &mut World) {
     }
 
     let location = *world.entity(entity).get::<LocationComponent>().unwrap();
-    let location_def = entity_def::of(world, entity).location.unwrap();
+    let def = entity_def::of(world, entity);
+    let location_def = def.location.unwrap();
+    let class = OccupancyClass::of(def);
     world
         .resource_mut::<Map>()
-        .displace_entity(&location, &location_def);
+        .displace_entity(&location, &location_def, class);
 }
 
 /// Leaves the entity's configured corpse at its position, if any.
@@ -104,6 +108,10 @@ fn leave_corpse(entity: Entity, world: &mut World) {
         .get::<LocationComponent>()
         .unwrap()
         .position;
+    // Remains rest on the lattice: a continuous mover dies wherever pushing
+    // left it, and the corpse takes the cell the body visually stood on. On
+    // the cell model the two coincide.
+    let cell = FixedUVec2::from(body::center_cell(position));
 
-    spawn::spawn_corpse_entity(world, &corpse_type, position);
+    spawn::spawn_corpse_entity(world, &corpse_type, cell);
 }

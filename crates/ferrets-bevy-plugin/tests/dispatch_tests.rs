@@ -3,8 +3,8 @@
 mod utils;
 
 use bevy::prelude::*;
+use ferrets_geometry::cell_size::CellSize;
 use ferrets_math::FixedU64;
-use ferrets_pathfinder::{astar, nav_size::NavSize};
 use ferrets_simulation::{
     command::PlayerCommand,
     components::resource::{ResourceCarrierComponent, ResourceSourceComponent},
@@ -74,7 +74,7 @@ fn send_to_entity_falls_through_to_follow_for_uncarryable_kinds() {
     utils::run_ticks(&mut app, 11);
     {
         let world = app.world_mut();
-        assert!(astar::chebyshev(utils::cell_of(world, worker), utils::cell_of(world, tree)) <= 1);
+        assert!(utils::within(world, worker, tree, 1));
     }
 
     // Nothing was harvested: the stockpile and the source are untouched.
@@ -167,15 +167,15 @@ fn repair_dispatch_app() -> App {
         registry.register_resource("gold");
         registry.register(
             EntityTypeDef::new("warehouse")
-                .with_location(utils::GROUND, NavSize::new(2, 2), Solidity::Solid)
+                .with_location(utils::GROUND, CellSize::new(2, 2), Solidity::Solid)
                 .with_health(100)
                 .with_tags(["building"])
                 .with_resource_storage(["gold"]),
         );
         registry.register(
             EntityTypeDef::new("handyman")
-                .with_location(utils::GROUND, NavSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5))
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
                 .with_health(20)
                 .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
                 .with_resource_carrier([("gold", HarvestData::new(5, 2, WorkPresence::Present))])

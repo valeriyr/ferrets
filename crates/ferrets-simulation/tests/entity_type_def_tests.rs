@@ -1,8 +1,9 @@
 //! Content validation: every invalid [`EntityTypeDef`] must panic at
 //! construction, not misbehave at runtime.
 
+use ferrets_geometry::cell_size::CellSize;
 use ferrets_math::FixedU64;
-use ferrets_pathfinder::{layer_mask::LayerMask, nav_grid::LayerId, nav_size::NavSize};
+use ferrets_pathfinder::{layer_mask::LayerMask, nav_grid::LayerId};
 use ferrets_simulation::content::{
     dying::DyingDef,
     entity_stats::EntityStatId,
@@ -19,8 +20,8 @@ use ferrets_simulation::content::{
 #[test]
 fn fully_loaded_definition_is_valid() {
     let def = EntityTypeDef::new("factotum")
-        .with_location(GROUND, NavSize::ONE, Solidity::Solid)
-        .with_movement(FixedU64::from_num(0.5))
+        .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+        .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
         .with_health(50)
         .with_dying(3, None)
         .with_attack(10, 1, 1, 4, 2)
@@ -50,13 +51,13 @@ fn empty_name_panics() {
 #[test]
 #[should_panic(expected = "occupation must not be empty")]
 fn empty_occupation_panics() {
-    EntityTypeDef::new("footman").with_location(LayerMask::EMPTY, NavSize::ONE, Solidity::Solid);
+    EntityTypeDef::new("footman").with_location(LayerMask::EMPTY, CellSize::ONE, Solidity::Solid);
 }
 
 #[test]
 #[should_panic(expected = "size dimensions must be greater than 0")]
 fn zero_footprint_panics() {
-    EntityTypeDef::new("footman").with_location(GROUND, NavSize::new(0, 2), Solidity::Solid);
+    EntityTypeDef::new("footman").with_location(GROUND, CellSize::new(0, 2), Solidity::Solid);
 }
 
 //
@@ -183,5 +184,5 @@ fn empty_storage_kind_panics() {
 const GROUND: LayerId = LayerId::new(1);
 
 fn footman() -> EntityTypeDef {
-    EntityTypeDef::new("footman").with_location(GROUND, NavSize::ONE, Solidity::Solid)
+    EntityTypeDef::new("footman").with_location(GROUND, CellSize::ONE, Solidity::Solid)
 }

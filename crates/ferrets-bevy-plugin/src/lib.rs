@@ -96,6 +96,7 @@ use ferrets_simulation::{
     content::registry::ContentRegistry,
     control_groups::ControlGroups,
     entity_index::EntityIndex,
+    game_loop::movement::MovePlanShare,
     impacts::PendingImpacts,
     input::{InputFrames, PlayerFrame, SYNC_LATENCY},
     map::Map,
@@ -145,9 +146,15 @@ fn warmup_input_frames(slots: &[PlayerSlot]) -> InputFrames {
     frames
 }
 
-/// (Re)sizes the per-player simulation resources to the session's slots. Call
-/// at game start once [`GameSession`] holds the finalized configuration (e.g.
-/// from a lobby), since the plugin is built before the real slots are known.
+/// (Re)installs the per-game simulation resources: sizes the per-player
+/// stores to the session's slots and resets the transient state a previous
+/// game in the same app may have left behind (pending impacts and input,
+/// shared movement plans, the entity index and id generator). Call at game
+/// start once [`GameSession`] holds the finalized configuration (e.g. from a
+/// lobby), since the plugin is built before the real slots are known. The
+/// map-shaped resources — [`Map`] and [`VisibilityGrid`] — are not installed
+/// here: the scene spawner builds them from the game's map data (see
+/// [`instantiate_map`]).
 pub fn install_game_resources(world: &mut World) {
     let session = world.resource::<GameSession>();
     let player_count = session.slots().len();
@@ -160,6 +167,11 @@ pub fn install_game_resources(world: &mut World) {
     world.insert_resource(PlayerBuffs::new(player_count));
     world.insert_resource(PlayerResearch::new(player_count));
     world.insert_resource(frames);
+    world.insert_resource(EntityIndex::default());
+    world.insert_resource(SimulationIdGenerator::default());
+    world.insert_resource(PendingImpacts::default());
+    world.insert_resource(PendingInput::default());
+    world.insert_resource(MovePlanShare::default());
 }
 
 /// Drives the ferrets simulation from Bevy's `FixedUpdate` schedule.
@@ -202,6 +214,7 @@ impl Plugin for SimulationPlugin {
             .init_resource::<PendingImpacts>()
             .init_resource::<SimulationIdGenerator>()
             .init_resource::<PendingInput>()
+            .init_resource::<MovePlanShare>()
             .add_systems(
                 FixedUpdate,
                 // flush_input and command_executor run whenever the session is active
@@ -241,7 +254,15 @@ impl Plugin for SimulationPlugin {
                     // flee response executes on the same tick it was decided.
                     systems::flee,
                     systems::auto_engage,
+                    // The hierarchy's one mutation point: fold in footprint
+                    // changes before orders path against it, never lazily at
+                    // query time.
+                    systems::refresh_nav_hierarchy,
                     systems::tick_orders,
+                    // Continuous-model contact: bodies moved by their orders
+                    // this tick push each other apart before anything reads
+                    // the settled positions.
+                    systems::resolve_pushing,
                     // Shots released earlier land here — the same point in the tick
                     // where a hit delivered without a projectile is applied, so both
                     // delivery paths reach their victims on the same schedule.

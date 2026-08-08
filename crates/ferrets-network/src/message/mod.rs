@@ -10,9 +10,7 @@ pub mod gameplay;
 
 use serde::{Deserialize, Serialize};
 
-use crate::message::control::ControlMessage;
-use crate::message::error::MessageError;
-use crate::message::gameplay::GameplayMessage;
+use crate::message::{control::ControlMessage, error::MessageError, gameplay::GameplayMessage};
 
 /// A result whose error is a [`MessageError`].
 pub type Result<T> = std::result::Result<T, MessageError>;

@@ -5,7 +5,7 @@
 mod utils;
 
 use bevy::prelude::*;
-use ferrets_pathfinder::nav_pos::NavPos;
+use ferrets_geometry::cell_pos::CellPos;
 use ferrets_simulation::{
     command::PlayerCommand,
     components::{
@@ -95,7 +95,7 @@ fn defend_unit_destroys_enemy_in_acquire_range_and_returns_home() {
 
     let world = app.world_mut();
     utils::assert_despawned(world, barracks);
-    assert_eq!(utils::cell_of(world, sentry), NavPos::new(10, 10));
+    assert_eq!(utils::cell_of(world, sentry), CellPos::new(10, 10));
     assert!(utils::order_queue_is_empty(world, sentry));
 }
 
@@ -120,7 +120,7 @@ fn stand_ground_unit_fires_in_weapon_range_and_never_moves() {
     utils::run_ticks(&mut app, 30);
     {
         let world = app.world_mut();
-        assert_eq!(utils::cell_of(world, sentry), NavPos::new(10, 10));
+        assert_eq!(utils::cell_of(world, sentry), CellPos::new(10, 10));
         assert_eq!(world.get::<HealthComponent>(ghost).unwrap().current(), 20);
     }
 
@@ -133,9 +133,9 @@ fn stand_ground_unit_fires_in_weapon_range_and_never_moves() {
     utils::run_ticks(&mut app, 30);
 
     let world = app.world_mut();
-    assert_eq!(utils::cell_of(world, sentry), NavPos::new(10, 10));
+    assert_eq!(utils::cell_of(world, sentry), CellPos::new(10, 10));
     assert!(world.get::<HealthComponent>(ghost2).unwrap().current() < 20);
-    assert_ne!(utils::cell_of(world, ghost2), NavPos::new(11, 10));
+    assert_ne!(utils::cell_of(world, ghost2), CellPos::new(11, 10));
 }
 
 #[test]
@@ -157,7 +157,7 @@ fn hold_fire_unit_never_engages() {
     utils::run_ticks(&mut app, 30);
     let world = app.world_mut();
     assert_eq!(world.get::<HealthComponent>(ghost).unwrap().current(), 20);
-    assert_eq!(utils::cell_of(world, sentry), NavPos::new(10, 10));
+    assert_eq!(utils::cell_of(world, sentry), CellPos::new(10, 10));
     assert!(utils::order_queue_is_empty(world, sentry));
 }
 
@@ -181,7 +181,7 @@ fn ordered_unit_is_not_hijacked_by_idle_engagement() {
 
     utils::run_ticks(&mut app, 50);
     let world = app.world_mut();
-    assert_eq!(utils::cell_of(world, sentry), NavPos::new(20, 10));
+    assert_eq!(utils::cell_of(world, sentry), CellPos::new(20, 10));
     assert_eq!(world.get::<HealthComponent>(ghost).unwrap().current(), 20);
 }
 
@@ -199,7 +199,7 @@ fn leashed_chase_abandons_fled_target_and_returns_home() {
     let world = app.world_mut();
     assert!(world.get::<HealthComponent>(ghost).is_some(), "ghost lives");
     assert!(world.get::<HealthComponent>(ghost).unwrap().current() < 20);
-    assert_eq!(utils::cell_of(world, archer), NavPos::new(10, 10));
+    assert_eq!(utils::cell_of(world, archer), CellPos::new(10, 10));
     assert!(utils::order_queue_is_empty(world, archer));
 }
 

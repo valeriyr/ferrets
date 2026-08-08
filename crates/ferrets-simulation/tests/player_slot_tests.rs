@@ -1,10 +1,14 @@
 //! Composing session slots from a map's seats and a scenario's cast.
 
-use ferrets_pathfinder::astar::Projection;
-use ferrets_simulation::map_data::MapData;
-use ferrets_simulation::scenario::{Scenario, ScenarioPlayer};
-use ferrets_simulation::session::player_slot::{self, PlayerSlot};
-use ferrets_simulation::session::player_type::PlayerType;
+use ferrets_geometry::projection::Projection;
+use ferrets_simulation::{
+    map_data::MapData,
+    scenario::{Scenario, ScenarioPlayer},
+    session::{
+        player_slot::{self, PlayerSlot},
+        player_type::PlayerType,
+    },
+};
 
 //
 // ─── Vacant slots ─────────────────────────────────────────────────────────────

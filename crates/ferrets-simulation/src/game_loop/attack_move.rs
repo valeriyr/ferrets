@@ -2,10 +2,13 @@
 //! Called by [`super::orders`] as part of the shared order lifecycle.
 
 use bevy_ecs::{entity::Entity, world::World};
-use ferrets_pathfinder::nav_size::NavSize;
+use ferrets_geometry::cell_size::CellSize;
 
-use super::orders::Processing;
-use super::{acquire, chase, chase::Destination};
+use super::{
+    acquire,
+    chase::{self, Destination},
+    orders::Processing,
+};
 use crate::{
     components::{
         attack_move::AttackMoveComponent,
@@ -90,7 +93,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
         projection,
         position,
         target,
-        NavSize::ONE,
+        CellSize::ONE,
         0,
     ) {
         Destination::Arrived | Destination::OutOfReach => Processing::state(OrderState::Finished),

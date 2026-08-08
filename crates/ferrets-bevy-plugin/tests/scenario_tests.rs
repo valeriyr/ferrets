@@ -10,10 +10,12 @@ use bevy::prelude::*;
 use ferrets_bevy_plugin::{
     ScenarioObjectives, install_scenario_runtime, instantiate_map, instantiate_scenario,
 };
-use ferrets_pathfinder::{astar::Projection, nav_pos::NavPos};
-use ferrets_script::ai::view::content::ContentView;
-use ferrets_script::engine::ScriptEngine;
-use ferrets_script::engine::lua::LuaEngine;
+use ferrets_geometry::{cell_pos::CellPos, projection::Projection};
+
+use ferrets_script::{
+    ai::view::content::ContentView,
+    engine::{ScriptEngine, lua::LuaEngine},
+};
 use ferrets_simulation::{
     components::{entity_info::EntityInfoComponent, resource::ResourceSourceComponent},
     content::registry::ContentRegistry,
@@ -150,7 +152,7 @@ fn instantiate_builds_declared_scene() {
     let map = app.world().resource::<Map>();
     assert_eq!(map.name(), "mission");
     assert_eq!((map.width(), map.height()), (16, 16));
-    assert_eq!(map.start_point(0), Some(NavPos::new(2, 2)));
+    assert_eq!(map.start_point(0), Some(CellPos::new(2, 2)));
 
     let mut placed: Vec<(String, Option<u32>)> = app
         .world_mut()

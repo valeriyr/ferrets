@@ -6,12 +6,12 @@
 use ferrets_math::{fixed_urect::FixedURect, fixed_uvec2::FixedUVec2};
 use serde::{Deserialize, Serialize};
 
-use crate::components::rally::RallyTarget;
-use crate::components::stance::Stance;
-use crate::content::research::ResearchId;
-use crate::content::skills::SkillId;
-use crate::order::AttackTarget;
-use crate::simulation_id::SimulationId;
+use crate::{
+    components::{rally::RallyTarget, stance::Stance},
+    content::{research::ResearchId, skills::SkillId},
+    order::AttackTarget,
+    simulation_id::SimulationId,
+};
 
 /// How a selection command combines with the player's existing selection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

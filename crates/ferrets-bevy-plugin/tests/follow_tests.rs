@@ -2,7 +2,7 @@
 
 mod utils;
 
-use ferrets_pathfinder::{astar, nav_pos::NavPos};
+use ferrets_geometry::cell_pos::CellPos;
 use ferrets_simulation::{command::PlayerCommand, spawn};
 
 #[test]
@@ -27,12 +27,7 @@ fn follow_tracks_moving_target() {
     utils::run_ticks(&mut app, 7);
     {
         let world = app.world_mut();
-        assert!(
-            astar::chebyshev(
-                utils::cell_of(world, follower),
-                utils::cell_of(world, leader)
-            ) <= 1
-        );
+        assert!(utils::within(world, follower, leader, 1));
     }
 
     // The leader walks away; the follower keeps up.
@@ -48,13 +43,8 @@ fn follow_tracks_moving_target() {
     utils::run_ticks(&mut app, 20);
     {
         let world = app.world_mut();
-        assert!(
-            utils::cell_of(world, leader) == NavPos::new(14, 9)
-                && astar::chebyshev(
-                    utils::cell_of(world, follower),
-                    utils::cell_of(world, leader)
-                ) <= 1
-        );
+        assert!(utils::cell_of(world, leader) == CellPos::new(14, 9));
+        assert!(utils::within(world, follower, leader, 1));
     }
 
     // The follow order keeps running for as long as the target is alive.

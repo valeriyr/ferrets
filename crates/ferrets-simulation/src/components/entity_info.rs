@@ -2,8 +2,7 @@
 
 use bevy_ecs::prelude::*;
 
-use crate::content::entity_type_def::EntityTypeId;
-use crate::simulation_id::SimulationId;
+use crate::{content::entity_type_def::EntityTypeId, simulation_id::SimulationId};
 
 /// Every entity carries this component. [`SimulationId`] is identical on all clients
 /// because entities are spawned in the same deterministic order everywhere.

@@ -1,32 +1,34 @@
 //! The content-DSL binding: `define_*` host functions and the table readers
 //! that map an entity table onto the [`EntityTypeDef`] builder.
 
-use std::cell::RefCell;
-use std::rc::Rc;
+use ferrets_geometry::cell_size::CellSize;
+use std::{cell::RefCell, rc::Rc};
 
 use ferrets_math::{FixedI64, FixedU64};
-use ferrets_pathfinder::{layer_mask::LayerMask, nav_size::NavSize};
-use ferrets_simulation::content::{
-    entity_buffs::EntityBuffDef,
-    entity_stats::EntityStatId,
-    entity_type_def::EntityTypeDef,
-    player_buffs::PlayerBuffDef,
-    projectile::ProjectileDef,
-    registry::ContentRegistry,
-    repair::{RepairCost, RepairRate},
-    research::ResearchDef,
-    resource::HarvestData,
-    skills::{
-        EntityCastCost, EntityCastEffect, EntityCastTarget, PlayerCastEffect, SkillCaster, SkillDef,
+use ferrets_pathfinder::layer_mask::LayerMask;
+use ferrets_simulation::{
+    content::{
+        entity_buffs::EntityBuffDef,
+        entity_stats::EntityStatId,
+        entity_type_def::EntityTypeDef,
+        player_buffs::PlayerBuffDef,
+        projectile::ProjectileDef,
+        registry::ContentRegistry,
+        repair::{RepairCost, RepairRate},
+        research::ResearchDef,
+        resource::HarvestData,
+        skills::{
+            EntityCastCost, EntityCastEffect, EntityCastTarget, PlayerCastEffect, SkillCaster,
+            SkillDef,
+        },
+        stack_rule::StackRule,
+        stats::{EntityModifier, ModifierOp, PlayerModifier},
     },
-    stack_rule::StackRule,
-    stats::{EntityModifier, ModifierOp, PlayerModifier},
+    resources::Cost,
 };
-use ferrets_simulation::resources::Cost;
 use mlua::{Lua, Table, Value};
 
-use crate::content;
-use crate::error::ScriptError;
+use crate::{content, error::ScriptError};
 
 /// Installs the `define_*` globals, each registering into `registry` — the one
 /// assigner of every derived id, so what a script observes (the layer id
@@ -192,7 +194,7 @@ fn build_entity(
     let solidity = required::<String>(&location, "solidity")?;
     def = def.with_location(
         occupation,
-        nav_size(&location)?,
+        cell_size(&location)?,
         content::solidity(&solidity)?,
     );
 
@@ -425,16 +427,16 @@ fn stat_value(name: &str, value: Value) -> crate::Result<FixedU64> {
 
 /// Reads `location.size`: an integer `n` means an `n×n` footprint; a `{w, h}`
 /// array gives the two dimensions.
-fn nav_size(location: &Table) -> crate::Result<NavSize> {
+fn cell_size(location: &Table) -> crate::Result<CellSize> {
     match required::<Value>(location, "size")? {
         Value::Integer(side) => {
             let side = dimension(side)?;
-            Ok(NavSize::new(side, side))
+            Ok(CellSize::new(side, side))
         }
         Value::Table(size) => {
             let width = index(&size, 1)?;
             let height = index(&size, 2)?;
-            Ok(NavSize::new(width, height))
+            Ok(CellSize::new(width, height))
         }
         other => Err(ScriptError::ContentError(format!(
             "size must be an integer or {{width, height}}, got {}",

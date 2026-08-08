@@ -5,11 +5,10 @@
 //! the single exception — any visible entity can be selected.
 
 use bevy_ecs::{entity::Entity, world::World};
-use ferrets_math::{FixedU64, fixed_urect::FixedURect};
-use ferrets_pathfinder::nav_size::NavSize;
+use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
+use ferrets_math::{FixedU64, fixed_urect::FixedURect, fixed_uvec2::FixedUVec2};
 
-use super::repair;
-use super::stats;
+use super::{repair, stats};
 use crate::{
     command::{PlayerCommand, SelectMode, SkillCasterRef},
     components::{
@@ -156,7 +155,7 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
                     entity,
                     Order::Move {
                         target: *target,
-                        size: NavSize::ONE,
+                        size: CellSize::ONE,
                         range: 0,
                     },
                     CancelPolicy::from_bool(*flush),
@@ -345,8 +344,12 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
             type_name,
             position,
         } => {
-            // Sandbox spawn: no-op if the type is unknown or the cell is blocked.
-            spawn::spawn_entity(world, type_name, *position, Some(player));
+            // Sandbox spawn: no-op if the type is unknown or the cell is
+            // blocked. The position comes off the wire, so it is floored to
+            // the cell origin the spawn contract requires rather than
+            // trusted to be one.
+            let corner = FixedUVec2::from(CellPos::from(*position));
+            spawn::spawn_entity(world, type_name, corner, Some(player));
         }
     }
 }
@@ -644,6 +647,8 @@ fn research_in_flight(world: &World, player: PlayerId, research: ResearchId) -> 
 /// Buildings are excluded from a rect selection (they can still be selected
 /// individually). When the box holds no own units it falls back to a single
 /// other-owner entity so an enemy or neutral can still be boxed to inspect it.
+/// The rectangle tests footprint centers, so boxing matches what an entity
+/// is drawn as even when a continuous mover rests between cell origins.
 fn resolve_box_selection(world: &World, player: PlayerId, rect: &FixedURect) -> Vec<SimulationId> {
     let index = world.resource::<EntityIndex>();
     let in_rect: Vec<(SimulationId, Entity)> = index
@@ -651,10 +656,8 @@ fn resolve_box_selection(world: &World, player: PlayerId, rect: &FixedURect) -> 
         .into_iter()
         .filter(|&(id, entity)| {
             index.interactable(world, id).is_some()
-                && world
-                    .entity(entity)
-                    .get::<LocationComponent>()
-                    .is_some_and(|loc| rect.contains(loc.position))
+                && world.entity(entity).contains::<LocationComponent>()
+                && rect.contains(entity_def::footprint_center(world, entity))
                 && !world
                     .entity(entity)
                     .get::<TagsComponent>()
@@ -705,10 +708,8 @@ fn resolve_type_selection(
                     .entity(entity)
                     .get::<OwnerComponent>()
                     .is_some_and(|owner| owner.player() == player)
-                && world
-                    .entity(entity)
-                    .get::<LocationComponent>()
-                    .is_some_and(|loc| rect.contains(loc.position))
+                && world.entity(entity).contains::<LocationComponent>()
+                && rect.contains(entity_def::footprint_center(world, entity))
                 && world
                     .entity(entity)
                     .get::<EntityInfoComponent>()

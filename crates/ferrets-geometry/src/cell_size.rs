@@ -1,13 +1,13 @@
-//! Navigation grid footprint size.
+//! Grid footprint size.
 
-/// Footprint of an entity on the navigation grid, in whole cells.
+/// Footprint of an entity on the cell grid, in whole cells.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub struct NavSize {
+pub struct CellSize {
     pub width: u32,
     pub height: u32,
 }
 
-impl NavSize {
+impl CellSize {
     /// A 1×1 footprint — the default for most units.
     pub const ONE: Self = Self::new(1, 1);
 

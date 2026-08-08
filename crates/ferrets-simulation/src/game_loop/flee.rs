@@ -1,9 +1,8 @@
 //! Flee response: fleeing-stance entities run from whatever damaged them.
 
 use bevy_ecs::world::World;
+use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
-use ferrets_pathfinder::nav_pos::NavPos;
-use ferrets_pathfinder::nav_size::NavSize;
 
 use crate::{
     components::{
@@ -71,7 +70,7 @@ pub fn tick(world: &mut World) {
             queue.push(
                 Order::Move {
                     target,
-                    size: NavSize::ONE,
+                    size: CellSize::ONE,
                     range: 0,
                 },
                 Some(CancelPolicy::Soft),
@@ -85,8 +84,8 @@ pub fn tick(world: &mut World) {
 /// an axis the two share (no direction to flee) the entity steps toward higher
 /// coordinates.
 fn flee_target(world: &World, from: FixedUVec2, attacker: FixedUVec2) -> FixedUVec2 {
-    let from_cell = NavPos::from(from);
-    let attacker_cell = NavPos::from(attacker);
+    let from_cell = CellPos::from(from);
+    let attacker_cell = CellPos::from(attacker);
     let grid = world.resource::<Map>().nav_grid();
     let (width, height) = (grid.width(), grid.height());
 

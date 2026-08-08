@@ -6,12 +6,14 @@
 
 use std::net::SocketAddr;
 
-use ferrets_simulation::session::player_slot::{PlayerId, TeamId};
+use ferrets_simulation::session::{
+    drop_policy::DropPolicy,
+    finish_policy::FinishPolicy,
+    player_slot::{PlayerId, TeamId},
+};
 use serde::{Deserialize, Serialize};
 
 use crate::{peer::PeerId, session_mode::SessionMode};
-use ferrets_simulation::session::drop_policy::DropPolicy;
-use ferrets_simulation::session::finish_policy::FinishPolicy;
 
 /// Who occupies a player slot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

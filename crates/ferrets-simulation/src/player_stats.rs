@@ -15,9 +15,13 @@
 use bevy_ecs::prelude::*;
 use ferrets_math::FixedU64;
 
-use crate::content::player_stats::{self, PlayerStatId};
-use crate::content::stats::{EntityModifier, PlayerModifier, StatStore};
-use crate::session::player_slot::PlayerId;
+use crate::{
+    content::{
+        player_stats::{self, PlayerStatId},
+        stats::{EntityModifier, PlayerModifier, StatStore},
+    },
+    session::player_slot::PlayerId,
+};
 
 /// One player's stats and the modifiers currently applied to them.
 #[derive(Debug, Clone, Default)]

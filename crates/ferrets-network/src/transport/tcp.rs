@@ -7,21 +7,31 @@
 //! lockstep driver's host relay forwards each client's frames to the others. I/O
 //! runs on a `tokio` runtime on a background thread, driven through `SocketIo`.
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::future::Future;
-use std::io;
-use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
-use std::sync::Arc;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    future::Future,
+    io,
+    net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs},
+    sync::Arc,
+};
 
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream as TokioStream;
-use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
-use tokio::sync::mpsc::{self, UnboundedReceiver};
-use tokio::sync::oneshot;
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::{
+        TcpStream as TokioStream,
+        tcp::{OwnedReadHalf, OwnedWriteHalf},
+    },
+    sync::{
+        mpsc::{self, UnboundedReceiver},
+        oneshot,
+    },
+};
 
-use super::error::TransportError;
-use super::socket_io::{ObservedAddrs, SharedState, SocketIo};
-use super::{ConnectionState, NetworkTransport, TransportEvent};
+use super::{
+    ConnectionState, NetworkTransport, TransportEvent,
+    error::TransportError,
+    socket_io::{ObservedAddrs, SharedState, SocketIo},
+};
 use crate::peer::{HOST_PEER, PeerId};
 
 /// An established set of connections: `(peer id, stream)` per remote.

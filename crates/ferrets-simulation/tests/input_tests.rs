@@ -1,8 +1,10 @@
 //! The committed-input store: first-write-wins recording and readiness
 //! relative to the players a tick requires.
 
-use ferrets_simulation::command::PlayerCommand;
-use ferrets_simulation::input::{InputFrames, PlayerFrame};
+use ferrets_simulation::{
+    command::PlayerCommand,
+    input::{InputFrames, PlayerFrame},
+};
 
 #[test]
 fn tick_is_not_ready_while_required_player_is_missing() {

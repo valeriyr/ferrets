@@ -11,11 +11,12 @@
 
 use std::collections::BTreeMap;
 
-use bevy::ecs::world::EntityRef;
-use bevy::prelude::*;
-use ferrets_pathfinder::nav_pos::NavPos;
-use ferrets_script::ai::view::game::{EntityView, GameView};
-use ferrets_script::ai::{AiRuntime, AiVision};
+use bevy::{ecs::world::EntityRef, prelude::*};
+use ferrets_geometry::cell_pos::CellPos;
+use ferrets_script::ai::{
+    AiRuntime, AiVision,
+    view::game::{EntityView, GameView},
+};
 use ferrets_simulation::{
     components::{
         build::UnderConstructionComponent,
@@ -44,8 +45,10 @@ use ferrets_simulation::{
     visibility::VisibilityGrid,
 };
 
-use crate::network::NetworkSession;
-use crate::{SimulationSet, replay, session_is_active, session_is_not_paused, systems};
+use crate::{
+    SimulationSet, network::NetworkSession, replay, session_is_active, session_is_not_paused,
+    systems,
+};
 
 /// Ticks a think is offset per player id, spreading the work so co-hosted
 /// brains do not all think on the same tick.
@@ -334,8 +337,8 @@ fn research_views(world: &World, player: PlayerId) -> (Vec<String>, Vec<String>)
 fn entity_view(entity: &EntityRef, id: SimulationId, hidden: bool) -> EntityView {
     let cell = entity
         .get::<LocationComponent>()
-        .map_or(NavPos::new(0, 0), |location| {
-            NavPos::from(location.position)
+        .map_or(CellPos::new(0, 0), |location| {
+            CellPos::from(location.position)
         });
     EntityView {
         id: id.0,

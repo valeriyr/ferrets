@@ -5,8 +5,10 @@
 //! reach the player's own stats and its entity modifiers descend to every unit
 //! the player owns.
 
-use super::stack_rule::StackRule;
-use super::stats::{EntityModifier, PlayerModifier};
+use super::{
+    stack_rule::StackRule,
+    stats::{EntityModifier, PlayerModifier},
+};
 
 /// A handle to a registered player buff, assigned in registration order.
 ///

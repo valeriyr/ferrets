@@ -1,18 +1,19 @@
 //! The host side of the lobby: the authoritative slot list and state broadcast.
 
-use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::{collections::HashMap, net::SocketAddr};
 
-use ferrets_simulation::session::drop_policy::DropPolicy;
-use ferrets_simulation::session::finish_policy::FinishPolicy;
-use ferrets_simulation::session::player_slot::{PlayerId, TeamId};
-
-use crate::control::{ControlChannel, ControlEvent};
-use crate::message::control::{
-    ControlMessage, LobbyMessage, LobbyState, Occupant, SlotInfo, UdpEntry,
+use ferrets_simulation::session::{
+    drop_policy::DropPolicy,
+    finish_policy::FinishPolicy,
+    player_slot::{PlayerId, TeamId},
 };
-use crate::peer::PeerId;
-use crate::session_mode::SessionMode;
+
+use crate::{
+    control::{ControlChannel, ControlEvent},
+    message::control::{ControlMessage, LobbyMessage, LobbyState, Occupant, SlotInfo, UdpEntry},
+    peer::PeerId,
+    session_mode::SessionMode,
+};
 
 /// The host side of the lobby.
 pub struct LobbyHost {

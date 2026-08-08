@@ -7,6 +7,7 @@
 //! smooth and stays locked to the simulation cadence (it can never outrun it).
 //! Unit shapes rotate to point in their facing direction.
 
+use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use std::{
     collections::{HashMap, HashSet},
     f32::consts::FRAC_PI_2,
@@ -16,7 +17,7 @@ use bevy::prelude::*;
 
 use crate::{map, scenario::CurrentScenario, states::InGameUi};
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2, fixed_vec2::FixedVec2};
-use ferrets_pathfinder::{nav_pos::NavPos, nav_size::NavSize};
+
 use ferrets_simulation::{
     components::{
         build::{BuildComponent, UnderConstructionComponent},
@@ -36,8 +37,9 @@ use ferrets_simulation::{
         tags::TagsComponent,
         train::{TrainComponent, TrainQueueComponent},
     },
-    content::tags,
-    content::{entity_stats::EntityStatId, registry::ContentRegistry, resource::ResourceSourceDef},
+    content::{
+        entity_stats::EntityStatId, registry::ContentRegistry, resource::ResourceSourceDef, tags,
+    },
     impacts::PendingImpacts,
     order::Order,
     selection::Selection,
@@ -110,7 +112,7 @@ pub fn toggle_fog_reveal(keys: Res<ButtonInput<KeyCode>>, mut reveal: ResMut<Fog
 }
 
 /// World-space center of a footprint, in pixels (Bevy y points up, sim y down).
-pub(crate) fn world_center(position: FixedUVec2, size: NavSize) -> Vec3 {
+pub(crate) fn world_center(position: FixedUVec2, size: CellSize) -> Vec3 {
     let cx = position.x.to_num::<f32>() + size.width as f32 / 2.0;
     let cy = position.y.to_num::<f32>() + size.height as f32 / 2.0;
     Vec3::new(cx * CELL_PX, -cy * CELL_PX, 1.0)
@@ -544,7 +546,7 @@ pub fn draw_shots(
             .iter()
             .find(|(info, _)| info.id() == shot.attacker)
             .map(|(_, transform)| transform.translation)
-            .unwrap_or_else(|| world_center(shot.origin, NavSize::ONE));
+            .unwrap_or_else(|| world_center(shot.origin, CellSize::ONE));
         // Every shot is aimed at an entity, and the damage follows that entity
         // wherever it moves, so the shot is drawn heading there. The committed point
         // is the fallback for a target that is gone or out of sight — and, once a
@@ -553,10 +555,10 @@ pub fn draw_shots(
             .iter()
             .find(|(info, _)| Some(info.id()) == shot.target)
             .map(|(_, transform)| transform.translation)
-            .unwrap_or_else(|| world_center(shot.impact, NavSize::ONE));
+            .unwrap_or_else(|| world_center(shot.impact, CellSize::ONE));
         let at = from.lerp(to, progress);
 
-        let cell = NavPos::new(
+        let cell = CellPos::new(
             (at.x / CELL_PX).max(0.0) as u32,
             (-at.y / CELL_PX).max(0.0) as u32,
         );
@@ -652,7 +654,7 @@ pub fn draw_rally(
             // The move lands in the cell containing the position, so mark that
             // cell's center rather than the raw sub-cell position.
             RallyTarget::Position(position) => {
-                world_center(FixedUVec2::from(NavPos::from(position)), NavSize::ONE)
+                world_center(FixedUVec2::from(CellPos::from(position)), CellSize::ONE)
             }
             RallyTarget::Entity(id) => {
                 // A vanished target leaves nothing to point at.
@@ -775,7 +777,12 @@ pub fn update_fog_overlay(
                 CellVisibility::Visible => 0.0,
             }
         };
-        sprite.color = Color::srgba(0.0, 0.0, 0.0, alpha);
+        let color = Color::srgba(0.0, 0.0, 0.0, alpha);
+        // Write only on change: an unconditional write re-dirties every
+        // fog sprite every frame, and the renderer re-extracts them all.
+        if sprite.color != color {
+            sprite.color = color;
+        }
     }
 }
 
@@ -859,7 +866,7 @@ pub fn draw_ghosts(
 
 /// The ghost outline for a building of `type_name` occupying `size` cells —
 /// matched to what [`attach_sprites`] draws for the live building.
-fn ghost_shape(type_name: &str, size: NavSize) -> GhostShape {
+fn ghost_shape(type_name: &str, size: CellSize) -> GhostShape {
     let circumradius = size.width.min(size.height) as f32 * CELL_PX * 0.45;
     match shape_for(type_name) {
         Shape::Hexagon => GhostShape::Polygon {
@@ -938,9 +945,9 @@ pub fn draw_work_links(
                 let size = registry
                     .entity(type_name)
                     .and_then(|def| def.location)
-                    .map_or(NavSize::ONE, |location| location.size());
+                    .map_or(CellSize::ONE, |location| location.size());
                 (
-                    Some(world_center(FixedUVec2::from(NavPos::from(*position)), size).truncate()),
+                    Some(world_center(FixedUVec2::from(CellPos::from(*position)), size).truncate()),
                     BUILD_WORK_COLOR,
                 )
             }
@@ -988,6 +995,7 @@ pub fn draw_work_links(
 pub fn draw_work_markers(
     mut gizmos: Gizmos,
     registry: Res<ContentRegistry>,
+    cameras: Query<&Transform, With<Camera2d>>,
     // Anchored on the interpolated transforms, so a ring follows a walking
     // patient instead of stepping cell to cell behind it.
     jobs: Query<
@@ -1002,6 +1010,7 @@ pub fn draw_work_markers(
         Without<HiddenComponent>,
     >,
 ) {
+    let camera = cameras.single().ok().cloned().unwrap_or_default();
     for (info, transform, visibility, harvest, repair, construction) in &jobs {
         if matches!(visibility, Visibility::Hidden) {
             continue;
@@ -1026,12 +1035,21 @@ pub fn draw_work_markers(
             crew += construction.builders.len();
         }
 
-        let top = center.y + size.height as f32 * CELL_PX / 2.0 + 13.0;
+        // The crew count reads as HUD: its offsets pass through the
+        // camera's orientation and scale, staying screen-aligned whatever
+        // the world's look.
+        let anchored = |offset: Vec2| {
+            center
+                + (camera.rotation
+                    * Vec3::new(offset.x * camera.scale.x, offset.y * camera.scale.y, 0.0))
+                .truncate()
+        };
+        let top = size.height as f32 * CELL_PX / 2.0 + 13.0;
         let gap = 7.0;
-        let left = center.x - crew.saturating_sub(1) as f32 * gap / 2.0;
+        let left = -(crew.saturating_sub(1) as f32) * gap / 2.0;
         for i in 0..crew {
             gizmos.circle_2d(
-                Vec2::new(left + i as f32 * gap, top),
+                anchored(Vec2::new(left + i as f32 * gap, top)),
                 2.5,
                 Color::srgb(0.95, 0.95, 0.98),
             );
@@ -1046,6 +1064,7 @@ pub fn draw_work_markers(
 pub fn draw_status_bars(
     mut gizmos: Gizmos,
     registry: Res<ContentRegistry>,
+    cameras: Query<&Transform, With<Camera2d>>,
     // Anchored on the interpolated transforms, so the bars glide with the
     // sprites they sit over.
     query: Query<
@@ -1064,6 +1083,7 @@ pub fn draw_status_bars(
         Without<HiddenComponent>,
     >,
 ) {
+    let camera = cameras.single().ok().cloned().unwrap_or_default();
     for (
         info,
         transform,
@@ -1084,22 +1104,31 @@ pub fn draw_status_bars(
         let size = def.location.unwrap().size();
         let center = transform.translation.truncate();
         let half_width = size.width as f32 * CELL_PX * 0.4;
-        let mut y = center.y + size.height as f32 * CELL_PX / 2.0 + 4.0;
+        let mut y = size.height as f32 * CELL_PX / 2.0 + 4.0;
 
+        // Bars read as HUD, not as paint on the ground: their offsets pass
+        // through the camera's own orientation and scale, so they stay
+        // screen-aligned whatever the world's look.
+        let anchored = move |offset: Vec2| {
+            center
+                + (camera.rotation
+                    * Vec3::new(offset.x * camera.scale.x, offset.y * camera.scale.y, 0.0))
+                .truncate()
+        };
         let bar = |gizmos: &mut Gizmos, fraction: f32, color: Color, y: f32| {
-            let left = Vec2::new(center.x - half_width, y);
-            let right = Vec2::new(center.x + half_width, y);
+            let left = Vec2::new(-half_width, y);
+            let right = Vec2::new(half_width, y);
             let fill = left.lerp(right, fraction.clamp(0.0, 1.0));
             // Two rows of lines stand in for a filled rect (gizmos have no fill).
             for row in [0.0, 1.0] {
                 let offset = Vec2::new(0.0, row);
                 gizmos.line_2d(
-                    left + offset,
-                    right + offset,
+                    anchored(left + offset),
+                    anchored(right + offset),
                     Color::srgba(0.0, 0.0, 0.0, 0.7),
                 );
                 if fraction > 0.0 {
-                    gizmos.line_2d(left + offset, fill + offset, color);
+                    gizmos.line_2d(anchored(left + offset), anchored(fill + offset), color);
                 }
             }
         };
@@ -1158,10 +1187,10 @@ pub fn draw_status_bars(
             // the trainer without selecting it.
             let queued = queue.map_or(0, |queue| queue.0.len());
             let gap = 7.0;
-            let left = center.x - queued.saturating_sub(1) as f32 * gap / 2.0;
+            let left = -(queued.saturating_sub(1) as f32) * gap / 2.0;
             for i in 0..queued {
                 gizmos.circle_2d(
-                    Vec2::new(left + i as f32 * gap, y + 5.0),
+                    anchored(Vec2::new(left + i as f32 * gap, y + 5.0)),
                     2.5,
                     TRAIN_WORK_COLOR,
                 );

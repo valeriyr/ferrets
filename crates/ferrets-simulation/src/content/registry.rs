@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use bevy_ecs::prelude::*;
+use ferrets_geometry::cell_size::CellSize;
 use ferrets_math::FixedU64;
 use ferrets_pathfinder::{layer_id::LayerId, layer_mask::LayerMask};
 
@@ -706,6 +707,13 @@ impl ContentRegistry {
         assert!(
             def.location.is_some(),
             "entity type '{}' has no location",
+            def.name
+        );
+        // Movement plans one cell per mover: paths, claims, and the
+        // continuous body all assume the footprint is a single cell.
+        assert!(
+            !def.can_move() || def.location.is_some_and(|l| l.size() == CellSize::ONE),
+            "entity type '{}' moves but has a footprint larger than one cell",
             def.name
         );
     }

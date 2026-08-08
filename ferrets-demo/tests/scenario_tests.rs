@@ -2,14 +2,18 @@
 //! and resolves to victory once a barracks and three archers are fielded,
 //! defeat once everything is gone.
 
-use ferrets_demo::content::CONTENT;
-use ferrets_demo::scenario::builtin_mission;
-use ferrets_script::ai::view::content::ContentView;
-use ferrets_script::ai::view::game::{EntityView, GameView};
-use ferrets_script::content;
-use ferrets_script::engine::ScriptEngine;
-use ferrets_script::engine::lua::LuaEngine;
-use ferrets_script::scenario::Outcome;
+use ferrets_demo::{content::CONTENT, scenario::builtin_mission};
+use ferrets_geometry::projection::Projection;
+use ferrets_script::{
+    ai::view::{
+        content::ContentView,
+        game::{EntityView, GameView},
+    },
+    content,
+    engine::{ScriptEngine, lua::LuaEngine},
+    scenario::Outcome,
+};
+use ferrets_simulation::movement_model::MovementModel;
 
 #[test]
 fn mission_wins_with_barracks_and_three_archers() {
@@ -62,7 +66,10 @@ fn load_mission() -> Box<dyn ferrets_script::scenario::ScenarioRuntime> {
     let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
     let view = ContentView::from_registry(&registry);
     LuaEngine
-        .load_scenario(&builtin_mission().script, &view)
+        .load_scenario(
+            &builtin_mission(Projection::Isometric, MovementModel::Cell).script,
+            &view,
+        )
         .expect("mission loads")
 }
 

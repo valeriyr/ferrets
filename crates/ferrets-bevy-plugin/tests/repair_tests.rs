@@ -2,11 +2,11 @@
 
 mod utils;
 
+use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use std::collections::BTreeSet;
 
 use bevy::prelude::*;
 use ferrets_math::{FixedI64, FixedU64};
-use ferrets_pathfinder::{astar, nav_pos::NavPos, nav_size::NavSize};
 use ferrets_simulation::{
     command::PlayerCommand,
     components::{
@@ -596,7 +596,7 @@ fn boxed_in_hidden_worker_finishes_job_and_waits_to_reappear() {
         FixedU64::from_num(100),
         "the job finished regardless"
     );
-    utils::assert_reveal_deferred_then_lands_on(&mut app, worker, NavPos::new(9, 9));
+    utils::assert_reveal_deferred_then_lands_on(&mut app, worker, CellPos::new(9, 9));
 }
 
 #[test]
@@ -683,13 +683,9 @@ fn mender_in_open_follows_patient_that_walks_away() {
         FixedU64::from_num(100),
         "the work carried on once the orderly caught up"
     );
-    let gap = astar::chebyshev(
-        utils::cell_of(app.world_mut(), orderly),
-        utils::cell_of(app.world_mut(), patient),
-    );
     assert!(
-        gap <= 1,
-        "and it followed rather than staying put, gap {gap}"
+        utils::within(app.world_mut(), orderly, patient, 1),
+        "and it followed rather than staying put"
     );
 }
 
@@ -765,14 +761,14 @@ fn app() -> App {
         // Tagged and damageable, but nothing produces it, so nothing paces a repair.
         registry.register(
             EntityTypeDef::new("monolith")
-                .with_location(utils::GROUND, NavSize::new(2, 2), Solidity::Solid)
+                .with_location(utils::GROUND, CellSize::new(2, 2), Solidity::Solid)
                 .with_health(100)
                 .with_tags(["building"]),
         );
         registry.register(
             EntityTypeDef::new("soldier")
-                .with_location(utils::GROUND, NavSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5))
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
                 .with_health(20)
                 .with_train_time(20),
         );
@@ -781,16 +777,16 @@ fn app() -> App {
         registry.register_tag("flesh");
         registry.register(
             EntityTypeDef::new("casualty")
-                .with_location(utils::GROUND, NavSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5))
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
                 .with_health(100)
                 .with_train_time(20)
                 .with_tags(["flesh"]),
         );
         registry.register(
             EntityTypeDef::new("orderly")
-                .with_location(utils::GROUND, NavSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5))
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
                 .with_health(30)
                 .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
                 .with_stat(EntityStatId::REPAIR_RANGE, FixedU64::ONE)
@@ -833,8 +829,8 @@ fn app() -> App {
         // cells — the field-medic shape rather than the workshop one.
         registry.register(
             EntityTypeDef::new("medic")
-                .with_location(utils::GROUND, NavSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5))
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
                 .with_health(30)
                 .with_energy(50, FixedU64::ZERO)
                 .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
@@ -866,7 +862,7 @@ fn app() -> App {
 /// declaring how its repair time relates to that.
 fn building(name: &str, repair_ratio: Option<FixedU64>) -> EntityTypeDef {
     let def = EntityTypeDef::new(name)
-        .with_location(utils::GROUND, NavSize::new(2, 2), Solidity::Solid)
+        .with_location(utils::GROUND, CellSize::new(2, 2), Solidity::Solid)
         .with_health(100)
         .with_cost([("gold", 200)])
         .with_build_time(20)
@@ -907,8 +903,8 @@ fn repairer(
     cost: RepairCost,
 ) -> EntityTypeDef {
     let def = EntityTypeDef::new(name)
-        .with_location(utils::GROUND, NavSize::ONE, Solidity::Solid)
-        .with_movement(FixedU64::from_num(0.5))
+        .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+        .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
         .with_health(20)
         .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
         .with_stat(EntityStatId::REPAIR_RANGE, FixedU64::ONE);

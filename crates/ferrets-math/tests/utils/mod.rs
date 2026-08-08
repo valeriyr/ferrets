@@ -1,8 +1,6 @@
 #![allow(dead_code)]
 
-use ferrets_math::fixed_uvec2::FixedUVec2;
-use ferrets_math::fixed_vec2::FixedVec2;
-use ferrets_math::{FixedI64, FixedU64};
+use ferrets_math::{FixedI64, FixedU64, fixed_uvec2::FixedUVec2, fixed_vec2::FixedVec2};
 
 pub fn scalar(n: i32) -> FixedI64 {
     FixedI64::from_num(n)

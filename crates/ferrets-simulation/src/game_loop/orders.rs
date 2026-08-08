@@ -26,6 +26,8 @@ use crate::{
         location::LocationComponent,
         order_queue::{CancelPolicy, OrderQueueComponent, OrderState},
     },
+    map::Map,
+    movement_model::MovementModel,
     order::Order,
 };
 
@@ -240,8 +242,15 @@ pub fn watch_tick(entity: Entity, queue: &mut OrderQueueComponent, world: &mut W
         .get::<LocationComponent>()
         .unwrap()
         .position;
-    if movement::is_mid_crossing(position) {
-        return;
+    match world.resource::<Map>().movement_model() {
+        // A continuous mover's position is a free point with no crossing
+        // state to finish — watchers may always interrupt.
+        MovementModel::Continuous => {}
+        MovementModel::Cell => {
+            if movement::is_mid_crossing(position) {
+                return;
+            }
+        }
     }
 
     let watcher_order = watcher.order.clone();
@@ -324,7 +333,7 @@ pub fn process_tick(entity: Entity, queue: &mut OrderQueueComponent, world: &mut
 }
 
 /// Prepare the front entry until it is `InProcessing` or the queue is empty.
-fn prepare_front(entity: Entity, queue: &mut OrderQueueComponent, world: &mut World) {
+pub(crate) fn prepare_front(entity: Entity, queue: &mut OrderQueueComponent, world: &mut World) {
     while let Some(front) = queue.front() {
         let state = front.state;
         let order = front.order.clone();

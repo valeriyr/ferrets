@@ -2,7 +2,7 @@
 
 mod utils;
 
-use ferrets_pathfinder::nav_pos::NavPos;
+use ferrets_geometry::cell_pos::CellPos;
 use ferrets_simulation::{command::PlayerCommand, map::Map, spawn};
 
 #[test]
@@ -17,14 +17,14 @@ fn passable_entities_never_claim_cells() {
         !world
             .resource::<Map>()
             .nav_grid()
-            .is_occupied_by(utils::GROUND, NavPos::new(5, 5))
+            .is_occupied_by(utils::GROUND, CellPos::new(5, 5))
     );
     let (_, _) = spawn::spawn_entity(world, "soldier", utils::pos(5, 5), Some(0)).unwrap();
     assert!(
         world
             .resource::<Map>()
             .nav_grid()
-            .is_occupied_by(utils::GROUND, NavPos::new(5, 5))
+            .is_occupied_by(utils::GROUND, CellPos::new(5, 5))
     );
 
     // The ghost walks away — it collides with the world for pathing, but its
@@ -39,11 +39,11 @@ fn passable_entities_never_claim_cells() {
     );
 
     utils::run_ticks(&mut app, 10);
-    assert_eq!(utils::cell_of(app.world_mut(), ghost), NavPos::new(9, 5));
+    assert_eq!(utils::cell_of(app.world_mut(), ghost), CellPos::new(9, 5));
     assert!(
         !app.world_mut()
             .resource::<Map>()
             .nav_grid()
-            .is_occupied_by(utils::GROUND, NavPos::new(9, 5))
+            .is_occupied_by(utils::GROUND, CellPos::new(9, 5))
     );
 }

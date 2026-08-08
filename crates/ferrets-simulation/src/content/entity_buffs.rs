@@ -5,8 +5,7 @@
 //! carrier — modifiers descend, never climb, so nothing here can touch the
 //! owner's player stats.
 
-use super::stack_rule::StackRule;
-use super::stats::EntityModifier;
+use super::{stack_rule::StackRule, stats::EntityModifier};
 
 /// A handle to a registered entity buff, assigned in registration order.
 ///

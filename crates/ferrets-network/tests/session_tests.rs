@@ -3,18 +3,24 @@
 
 mod utils;
 
-use ferrets_network::bootstrap;
-use ferrets_network::message::control::{ControlMessage, InGameMessage, Occupant};
-use ferrets_network::peer::{HOST_PEER, PeerId};
-use ferrets_network::session::NetSession;
-use ferrets_network::session_mode::SessionMode;
-use ferrets_network::transport::loopback::LoopbackTransport;
-use ferrets_simulation::input::PlayerFrame;
-use ferrets_simulation::session::ai_hosting::AiHosting;
-use ferrets_simulation::session::drop_policy::DropPolicy;
-use ferrets_simulation::session::finish_policy::FinishPolicy;
-use ferrets_simulation::session::player_slot::{PlayerId, PlayerSlot};
-use ferrets_simulation::session::player_type::PlayerType;
+use ferrets_network::{
+    bootstrap,
+    message::control::{ControlMessage, InGameMessage, Occupant},
+    peer::{HOST_PEER, PeerId},
+    session::NetSession,
+    session_mode::SessionMode,
+    transport::loopback::LoopbackTransport,
+};
+use ferrets_simulation::{
+    input::PlayerFrame,
+    session::{
+        ai_hosting::AiHosting,
+        drop_policy::DropPolicy,
+        finish_policy::FinishPolicy,
+        player_slot::{PlayerId, PlayerSlot},
+        player_type::PlayerType,
+    },
+};
 
 /// The peer the host assigns to the one client that joins these two-node tests
 /// (the host is [`HOST_PEER`]).

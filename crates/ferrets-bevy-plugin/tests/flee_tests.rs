@@ -3,7 +3,7 @@
 
 mod utils;
 
-use ferrets_pathfinder::{astar, nav_pos::NavPos};
+use ferrets_geometry::cell_pos::CellPos;
 use ferrets_simulation::{
     command::PlayerCommand,
     components::{
@@ -41,10 +41,9 @@ fn damaged_worker_abandons_harvest_and_runs() {
     let world = app.world_mut();
     // The worker survives by running: alive, and no longer at the mine.
     assert!(world.get_entity(worker).is_ok(), "worker fled and survived");
-    let distance = astar::chebyshev(utils::cell_of(world, worker), utils::cell_of(world, mine));
     assert!(
-        distance > 2,
-        "worker left the mine, got distance {distance}"
+        !utils::within(world, worker, mine, 2),
+        "worker left the mine"
     );
 }
 
@@ -75,5 +74,5 @@ fn fleeing_soldier_runs_instead_of_fighting_back() {
         Stance::Flee
     );
     // And it ran: the runner is no longer on its starting cell.
-    assert_ne!(utils::cell_of(world, runner), NavPos::new(10, 10));
+    assert_ne!(utils::cell_of(world, runner), CellPos::new(10, 10));
 }

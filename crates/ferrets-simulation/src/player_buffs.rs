@@ -7,10 +7,11 @@
 
 use bevy_ecs::prelude::*;
 
-use crate::buffs_store::BuffsStore;
-use crate::content::player_buffs::PlayerBuffId;
-use crate::content::stack_rule::StackRule;
-use crate::session::player_slot::PlayerId;
+use crate::{
+    buffs_store::BuffsStore,
+    content::{player_buffs::PlayerBuffId, stack_rule::StackRule},
+    session::player_slot::PlayerId,
+};
 
 /// The active buffs of all players in the session, indexed by [`PlayerId`] —
 /// the player-level counterpart of the per-entity buffs component, sharing its

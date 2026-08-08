@@ -15,6 +15,8 @@ mod process_player_skills;
 mod recompute_entity_stats;
 mod recompute_player_stats;
 mod recompute_visibility;
+mod refresh_nav_hierarchy;
+mod resolve_pushing;
 mod tick_counter;
 mod tick_orders;
 
@@ -35,5 +37,7 @@ pub use process_player_skills::process_player_skills;
 pub use recompute_entity_stats::recompute_entity_stats;
 pub use recompute_player_stats::recompute_player_stats;
 pub use recompute_visibility::recompute_visibility;
+pub use refresh_nav_hierarchy::refresh_nav_hierarchy;
+pub use resolve_pushing::resolve_pushing;
 pub use tick_counter::tick_counter;
 pub use tick_orders::tick_orders;

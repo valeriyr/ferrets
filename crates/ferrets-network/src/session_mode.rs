@@ -1,7 +1,6 @@
 //! The session mode a lobby agrees on.
 
-use ferrets_simulation::session::ai_hosting::AiHosting;
-use ferrets_simulation::session::authority::Authority;
+use ferrets_simulation::session::{ai_hosting::AiHosting, authority::Authority};
 use serde::{Deserialize, Serialize};
 
 use crate::topology::Topology;

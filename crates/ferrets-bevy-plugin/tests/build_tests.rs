@@ -3,8 +3,8 @@
 mod utils;
 
 use bevy::prelude::*;
+use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
 use ferrets_math::{FixedI64, FixedU64};
-use ferrets_pathfinder::{astar, nav_pos::NavPos, nav_size::NavSize};
 use ferrets_simulation::{
     command::PlayerCommand,
     components::{
@@ -17,6 +17,7 @@ use ferrets_simulation::{
         entity_stats::EntityStatId, entity_type_def::EntityTypeDef, location::Solidity,
         registry::ContentRegistry, work::WorkPresence,
     },
+    map::Map,
     session::{GameSession, player_slot::PlayerSlot, player_type::PlayerType},
     simulation_id::SimulationId,
     spawn,
@@ -57,8 +58,13 @@ fn build_constructs_building() {
     assert_eq!(under_construction(world), 0);
 
     let worker_cell = utils::cell_of(world, worker);
-    let nearest = NavPos::new(worker_cell.x.clamp(10, 11), worker_cell.y.clamp(10, 11));
-    assert!(astar::chebyshev(worker_cell, nearest) <= 1);
+    let site = CellRect::new(CellPos::new(10, 10), CellSize::new(2, 2));
+    assert!(
+        world
+            .resource::<Map>()
+            .projection()
+            .in_range_of_rect(worker_cell, site, 1)
+    );
     utils::run_ticks(&mut app, 1);
     assert!(utils::order_queue_is_empty(app.world_mut(), worker));
 
@@ -386,7 +392,7 @@ fn boxed_in_builder_finishes_site_and_waits_to_reappear() {
         0,
         "the site finished on time"
     );
-    utils::assert_reveal_deferred_then_lands_on(&mut app, worker, NavPos::new(9, 9));
+    utils::assert_reveal_deferred_then_lands_on(&mut app, worker, CellPos::new(9, 9));
 }
 
 #[test]
@@ -617,8 +623,8 @@ fn surveyor_app() -> App {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
         registry.register(
             EntityTypeDef::new("surveyor")
-                .with_location(utils::GROUND, NavSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5))
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
                 .with_health(20)
                 .with_stat(EntityStatId::BUILD_RANGE, FixedU64::from_num(3))
                 .with_builder(["depot"], WorkPresence::Present),

@@ -12,9 +12,7 @@
 //! and install them with [`install_replay_recorder`]/[`install_replay_playback`].
 
 use bevy::prelude::*;
-use ferrets_replay::record::TickRecord;
-use ferrets_replay::recorder::Recorder;
-use ferrets_replay::replay::Replay;
+use ferrets_replay::{record::TickRecord, recorder::Recorder, replay::Replay};
 use ferrets_simulation::{
     checksum::{self, CHECKSUM_INTERVAL},
     command::PlayerCommand,

@@ -7,12 +7,14 @@ pub mod finish_policy;
 pub mod player_slot;
 pub mod player_type;
 
-use crate::session::ai_hosting::AiHosting;
-use crate::session::authority::Authority;
-use crate::session::drop_policy::DropPolicy;
-use crate::session::finish_policy::FinishPolicy;
-use crate::session::player_slot::{Participation, PlayerId, PlayerSlot, TeamId};
-use crate::session::player_type::PlayerType;
+use crate::session::{
+    ai_hosting::AiHosting,
+    authority::Authority,
+    drop_policy::DropPolicy,
+    finish_policy::FinishPolicy,
+    player_slot::{Participation, PlayerId, PlayerSlot, TeamId},
+    player_type::PlayerType,
+};
 use bevy_ecs::prelude::*;
 
 /// Lifecycle state of the simulation.

@@ -2,9 +2,8 @@
 //! Called by [`super::orders`] as part of the shared order lifecycle.
 
 use bevy_ecs::{entity::Entity, world::World};
+use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::fixed_uvec2::FixedUVec2;
-use ferrets_pathfinder::nav_pos::NavPos;
-use ferrets_pathfinder::nav_size::NavSize;
 
 use crate::{
     components::{
@@ -142,7 +141,7 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> OrderState 
 
     if train_component.progress >= train_time {
         let (position, size) = entity_def::footprint(world, entity);
-        let origin = NavPos::from(position);
+        let origin = CellPos::from(position);
 
         let placement =
             world
@@ -193,7 +192,7 @@ fn send_to_rally(trainer: Entity, unit: Entity, world: &mut World) {
     let order = match target {
         RallyTarget::Position(position) => Some(Order::Move {
             target: position,
-            size: NavSize::ONE,
+            size: CellSize::ONE,
             range: 0,
         }),
         RallyTarget::Entity(id) => executor::resolve_send_to_entity(world, unit, id),

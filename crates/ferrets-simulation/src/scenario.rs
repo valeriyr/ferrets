@@ -9,10 +9,14 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::map_data::MapData;
-use crate::resources::StartingStock;
-use crate::session::player_slot::{PlayerId, TeamId};
-use crate::session::player_type::PlayerType;
+use crate::{
+    map_data::MapData,
+    resources::StartingStock,
+    session::{
+        player_slot::{PlayerId, TeamId},
+        player_type::PlayerType,
+    },
+};
 
 /// One authored cast assignment: who occupies one of the map's player seats.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

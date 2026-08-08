@@ -2,13 +2,10 @@
 
 use bevy::prelude::*;
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
-use ferrets_simulation::components::resource::ResourceSourceComponent;
-use ferrets_simulation::content::registry::ContentRegistry;
-use ferrets_simulation::map::Map;
-use ferrets_simulation::map_data::MapData;
-use ferrets_simulation::session::GameSession;
-use ferrets_simulation::spawn;
-use ferrets_simulation::visibility::VisibilityGrid;
+use ferrets_simulation::{
+    components::resource::ResourceSourceComponent, content::registry::ContentRegistry, map::Map,
+    map_data::MapData, session::GameSession, spawn, visibility::VisibilityGrid,
+};
 
 /// Builds the described map in the world: installs the live grid and spawns
 /// the declared placements.

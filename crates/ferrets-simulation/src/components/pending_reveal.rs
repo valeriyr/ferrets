@@ -1,7 +1,7 @@
 //! Marker for a hidden entity still waiting for a free cell to reappear on.
 
 use bevy_ecs::prelude::*;
-use ferrets_pathfinder::{nav_pos::NavPos, nav_size::NavSize};
+use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 
 /// Tags a hidden entity whose reveal could not find a free cell near its target
 /// footprint, recording the anchor to retry against.
@@ -13,7 +13,7 @@ use ferrets_pathfinder::{nav_pos::NavPos, nav_size::NavSize};
 #[derive(Component, Debug, Clone, Copy)]
 pub struct PendingRevealComponent {
     /// Footprint origin the reveal searches around.
-    pub around: NavPos,
+    pub around: CellPos,
     /// Footprint size the reveal searches around.
-    pub around_size: NavSize,
+    pub around_size: CellSize,
 }

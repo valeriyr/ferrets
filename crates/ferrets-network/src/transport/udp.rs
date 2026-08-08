@@ -7,14 +7,17 @@
 //! lossy by design — the lockstep driver's redundancy window recovers dropped
 //! datagrams, so this layer adds no acknowledgement of its own.
 
-use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::{collections::HashMap, net::SocketAddr};
 
-use tokio::net::UdpSocket;
-use tokio::sync::mpsc::{self, UnboundedReceiver};
+use tokio::{
+    net::UdpSocket,
+    sync::mpsc::{self, UnboundedReceiver},
+};
 
-use super::socket_io::{ObservedAddrs, SharedState, SocketIo};
-use super::{ConnectionState, NetworkTransport, TransportEvent};
+use super::{
+    ConnectionState, NetworkTransport, TransportEvent,
+    socket_io::{ObservedAddrs, SharedState, SocketIo},
+};
 use crate::peer::PeerId;
 
 /// Generous upper bound for one datagram; a frame batch is far smaller.

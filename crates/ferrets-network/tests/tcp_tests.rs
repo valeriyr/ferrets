@@ -3,11 +3,12 @@
 
 mod utils;
 
-use std::net::TcpListener;
-use std::time::{Duration, Instant};
+use std::{
+    net::TcpListener,
+    time::{Duration, Instant},
+};
 
-use ferrets_network::transport::tcp::TcpTransport;
-use ferrets_network::transport::{NetworkTransport, TransportEvent};
+use ferrets_network::transport::{NetworkTransport, TransportEvent, tcp::TcpTransport};
 
 //
 // ─── Localhost exchange ─────────────────────────────────────────────────────

@@ -2,15 +2,15 @@
 
 mod utils;
 
+use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::FixedU64;
-use ferrets_pathfinder::{nav_pos::NavPos, nav_size::NavSize};
+
 use ferrets_simulation::{
     command::PlayerCommand,
     components::{attack::AttackComponent, dying::DyingComponent, health::HealthComponent},
     content::{
-        entity_stats::EntityStatId,
-        stats::ModifierOp,
-        {entity_type_def::EntityTypeDef, location::Solidity, registry::ContentRegistry},
+        entity_stats::EntityStatId, entity_type_def::EntityTypeDef, location::Solidity,
+        registry::ContentRegistry, stats::ModifierOp,
     },
     entity_index::EntityIndex,
     game_loop,
@@ -57,7 +57,7 @@ fn attack_kills_adjacent_target() {
             world
                 .resource::<Map>()
                 .nav_grid()
-                .is_occupied_by(utils::GROUND, NavPos::new(6, 5))
+                .is_occupied_by(utils::GROUND, CellPos::new(6, 5))
         );
     }
 
@@ -93,7 +93,10 @@ fn attack_chases_target_out_of_range() {
     utils::assert_despawned(app.world_mut(), target);
 
     // The attacker stopped within attack range of the target's cell.
-    assert_eq!(utils::cell_of(app.world_mut(), attacker), NavPos::new(9, 5));
+    assert_eq!(
+        utils::cell_of(app.world_mut(), attacker),
+        CellPos::new(9, 5)
+    );
 
     utils::run_ticks(&mut app, 1);
     assert!(utils::order_queue_is_empty(app.world_mut(), attacker));
@@ -150,8 +153,8 @@ fn send_to_entity_does_not_attack_ally() {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
         registry.register(
             EntityTypeDef::new("soldier")
-                .with_location(utils::GROUND, NavSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5))
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
                 .with_health(30)
                 .with_dying(2, None)
                 .with_attack(10, 1, 1, 4, 2),

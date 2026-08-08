@@ -3,30 +3,32 @@
 //! inconsistency, so a referenced type must be registered before the type that
 //! references it.
 
+use ferrets_geometry::cell_size::CellSize;
 use ferrets_math::{FixedI64, FixedU64};
-use ferrets_pathfinder::{layer_mask::LayerMask, nav_grid::LayerId, nav_size::NavSize};
-use ferrets_simulation::content::{
-    entity_buffs::EntityBuffDef,
-    entity_stats::EntityStatId,
-    player_buffs::{PlayerBuffDef, PlayerBuffId},
-    player_stats::PlayerStatId,
-    skills::{
-        EntityCastCost, EntityCastEffect, EntityCastTarget, PlayerCastEffect, SkillCaster, SkillDef,
-    },
-    stack_rule::StackRule,
-    stats::{EntityModifier, ModifierOp},
-    tags,
-    {
+use ferrets_pathfinder::{layer_mask::LayerMask, nav_grid::LayerId};
+use ferrets_simulation::{
+    content::{
+        entity_buffs::EntityBuffDef,
+        entity_stats::EntityStatId,
         entity_type_def::EntityTypeDef,
         location::Solidity,
+        player_buffs::{PlayerBuffDef, PlayerBuffId},
+        player_stats::PlayerStatId,
         registry::ContentRegistry,
         repair::{RepairCost, RepairRate},
         research::{ResearchDef, ResearcherDef},
         resource::{DepletionPolicy, HarvestData},
+        skills::{
+            EntityCastCost, EntityCastEffect, EntityCastTarget, PlayerCastEffect, SkillCaster,
+            SkillDef,
+        },
+        stack_rule::StackRule,
+        stats::{EntityModifier, ModifierOp},
+        tags,
         work::WorkPresence,
     },
+    resources::{self, Cost},
 };
-use ferrets_simulation::resources::{self, Cost};
 
 //
 // ─── Identity ─────────────────────────────────────────────────────────────────
@@ -117,22 +119,22 @@ fn validate_accepts_registered_production_catalogues() {
 
     registry.register(
         EntityTypeDef::new("soldier")
-            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
             .with_train_time(4),
     );
     registry.register(
         EntityTypeDef::new("depot")
-            .with_location(GROUND, NavSize::new(2, 2), Solidity::Solid)
+            .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
             .with_build_time(6),
     );
     registry.register(
         EntityTypeDef::new("barracks")
-            .with_location(GROUND, NavSize::new(2, 2), Solidity::Solid)
+            .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
             .with_trainer(["soldier"]),
     );
     registry.register(
         EntityTypeDef::new("worker")
-            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
             .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
             .with_builder(["depot"], WorkPresence::Hidden),
     );
@@ -148,13 +150,13 @@ fn validate_accepts_production_cycle() {
     let mut registry = ground_registry();
     registry.register(
         EntityTypeDef::new("town_hall")
-            .with_location(GROUND, NavSize::new(2, 2), Solidity::Solid)
+            .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
             .with_build_time(6)
             .with_trainer(["worker"]),
     );
     registry.register(
         EntityTypeDef::new("worker")
-            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
             .with_train_time(4)
             .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
             .with_builder(["town_hall"], WorkPresence::Hidden),
@@ -171,7 +173,7 @@ fn validate_rejects_unknown_trained_type() {
     let mut registry = ground_registry();
     registry.register(
         EntityTypeDef::new("barracks")
-            .with_location(GROUND, NavSize::new(2, 2), Solidity::Solid)
+            .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
             .with_trainer(["ghost"]),
     );
     registry.validate();
@@ -183,12 +185,12 @@ fn validate_rejects_untrainable_trained_type() {
     let mut registry = ground_registry();
     registry.register(EntityTypeDef::new("statue").with_location(
         GROUND,
-        NavSize::ONE,
+        CellSize::ONE,
         Solidity::Solid,
     ));
     registry.register(
         EntityTypeDef::new("barracks")
-            .with_location(GROUND, NavSize::new(2, 2), Solidity::Solid)
+            .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
             .with_trainer(["statue"]),
     );
     registry.validate();
@@ -202,7 +204,7 @@ fn validate_rejects_unknown_built_type() {
     let mut registry = ground_registry();
     registry.register(
         EntityTypeDef::new("worker")
-            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
             .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
             .with_builder(["nexus"], WorkPresence::Hidden),
     );
@@ -215,12 +217,12 @@ fn validate_rejects_unconstructible_built_type() {
     let mut registry = ground_registry();
     registry.register(EntityTypeDef::new("statue").with_location(
         GROUND,
-        NavSize::ONE,
+        CellSize::ONE,
         Solidity::Solid,
     ));
     registry.register(
         EntityTypeDef::new("worker")
-            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
             .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
             .with_builder(["statue"], WorkPresence::Hidden),
     );
@@ -237,17 +239,17 @@ fn register_accepts_terminating_corpse_chains() {
 
     registry.register(
         EntityTypeDef::new("bones")
-            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
             .with_dying(2, None),
     );
     registry.register(
         EntityTypeDef::new("corpse")
-            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
             .with_dying(2, Some("bones")),
     );
     registry.register(
         EntityTypeDef::new("soldier")
-            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
             .with_dying(3, Some("corpse")),
     );
 }
@@ -258,7 +260,7 @@ fn register_rejects_unknown_corpse_type() {
     let mut registry = ground_registry();
     registry.register(
         EntityTypeDef::new("soldier")
-            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
             .with_dying(3, Some("ghost")),
     );
 }
@@ -269,12 +271,12 @@ fn register_rejects_corpse_without_dying_phase() {
     let mut registry = ground_registry();
     registry.register(EntityTypeDef::new("statue").with_location(
         GROUND,
-        NavSize::ONE,
+        CellSize::ONE,
         Solidity::Solid,
     ));
     registry.register(
         EntityTypeDef::new("soldier")
-            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
             .with_dying(3, Some("statue")),
     );
 }
@@ -287,14 +289,14 @@ fn register_rejects_corpse_with_live_gameplay_data() {
     let mut registry = ground_registry();
     registry.register(
         EntityTypeDef::new("bones")
-            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
             .with_health(10)
             .with_attack(1, 1, 1, 2, 1)
             .with_dying(2, None),
     );
     registry.register(
         EntityTypeDef::new("soldier")
-            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
             .with_dying(3, Some("bones")),
     );
 }
@@ -309,7 +311,7 @@ fn register_cannot_form_corpse_cycle() {
     // its own corpse is not registered yet.
     registry.register(
         EntityTypeDef::new("corpse")
-            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
             .with_dying(2, Some("bones")),
     );
 }
@@ -420,7 +422,7 @@ fn register_accepts_occupation_of_several_registered_layers() {
     let air = registry.register_layer("air");
     registry.register(EntityTypeDef::new("griffon_rider").with_location(
         ground | air,
-        NavSize::ONE,
+        CellSize::ONE,
         Solidity::Solid,
     ));
 
@@ -435,7 +437,7 @@ fn register_rejects_occupation_mixing_in_unregistered_layer() {
     let ground = registry.register_layer("ground");
     registry.register(EntityTypeDef::new("griffon_rider").with_location(
         ground | LayerId::new(2),
-        NavSize::ONE,
+        CellSize::ONE,
         Solidity::Solid,
     ));
 }
@@ -500,7 +502,7 @@ fn register_rejects_non_positive_max_health() {
     let mut registry = ground_registry();
     registry.register(
         EntityTypeDef::new("worker")
-            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
             .with_health(0),
     );
 }
@@ -511,8 +513,8 @@ fn register_rejects_non_positive_speed() {
     let mut registry = ground_registry();
     registry.register(
         EntityTypeDef::new("worker")
-            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
-            .with_movement(FixedU64::ZERO),
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+            .with_movement(FixedU64::ZERO, FixedU64::from_num(0.5)),
     );
 }
 
@@ -522,7 +524,7 @@ fn register_rejects_non_positive_supply_provided() {
     let mut registry = ground_registry();
     registry.register(
         EntityTypeDef::new("worker")
-            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
             .with_stat(EntityStatId::SUPPLY_PROVIDED, FixedU64::ZERO),
     );
 }
@@ -533,7 +535,7 @@ fn register_rejects_non_positive_supply_cost() {
     let mut registry = ground_registry();
     registry.register(
         EntityTypeDef::new("worker")
-            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
             .with_stat(EntityStatId::SUPPLY_COST, FixedU64::ZERO),
     );
 }
@@ -544,7 +546,7 @@ fn register_rejects_zero_attack_range() {
     let mut registry = ground_registry();
     registry.register(
         EntityTypeDef::new("worker")
-            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
             .with_attack(10, 0, 1, 2, 1),
     );
 }
@@ -555,7 +557,7 @@ fn register_rejects_zero_attack_period() {
     let mut registry = ground_registry();
     registry.register(
         EntityTypeDef::new("worker")
-            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
             .with_attack(10, 1, 1, 0, 0),
     );
 }
@@ -566,7 +568,7 @@ fn register_rejects_zero_damage_point() {
     let mut registry = ground_registry();
     registry.register(
         EntityTypeDef::new("worker")
-            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
             .with_attack(10, 1, 1, 2, 0),
     );
 }
@@ -589,7 +591,7 @@ fn register_rejects_costed_skill_without_energy_pool() {
     );
     registry.register(
         EntityTypeDef::new("caster")
-            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
             .with_health(20)
             .with_skills([jolt]),
     );
@@ -612,7 +614,7 @@ fn register_accepts_free_skill_without_energy_pool() {
     );
     registry.register(
         EntityTypeDef::new("caster")
-            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
             .with_health(20)
             .with_skills([shout]),
     );
@@ -657,7 +659,7 @@ fn register_accepts_resource_costed_skill_without_pools() {
     );
     registry.register(
         EntityTypeDef::new("caster")
-            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
             .with_health(20)
             .with_skills([rally]),
     );
@@ -682,7 +684,7 @@ fn register_rejects_health_costed_skill_without_health_pool() {
     );
     registry.register(
         EntityTypeDef::new("caster")
-            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
             .with_skills([rite]),
     );
 }
@@ -695,7 +697,7 @@ fn register_rejects_fractional_attack_period() {
     let mut registry = ground_registry();
     registry.register(
         EntityTypeDef::new("worker")
-            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
             .with_stat(EntityStatId::ATTACK_PERIOD, FixedU64::from_num(0.5)),
     );
 }
@@ -706,7 +708,7 @@ fn register_rejects_damage_point_beyond_attack_period() {
     let mut registry = ground_registry();
     registry.register(
         EntityTypeDef::new("worker")
-            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
             .with_attack(10, 1, 1, 2, 5),
     );
 }
@@ -717,7 +719,7 @@ fn register_rejects_health_regen_without_pool() {
     let mut registry = ground_registry();
     registry.register(
         EntityTypeDef::new("wall")
-            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
             .with_stat(EntityStatId::HEALTH_REGEN, FixedU64::from_num(0.5)),
     );
 }
@@ -728,7 +730,7 @@ fn register_rejects_energy_regen_without_pool() {
     let mut registry = ground_registry();
     registry.register(
         EntityTypeDef::new("wall")
-            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
             .with_health(20)
             .with_stat(EntityStatId::ENERGY_REGEN, FixedU64::from_num(0.5)),
     );
@@ -740,7 +742,7 @@ fn register_rejects_repair_speed_without_capability() {
     let mut registry = ground_registry();
     registry.register(
         EntityTypeDef::new("worker")
-            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
             .with_health(20)
             .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE),
     );
@@ -752,7 +754,7 @@ fn register_rejects_builder_without_reach() {
     let mut registry = ground_registry();
     registry.register(
         EntityTypeDef::new("worker")
-            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
             .with_builder(["depot"], WorkPresence::Hidden),
     );
 }
@@ -763,7 +765,7 @@ fn register_rejects_build_range_without_capability() {
     let mut registry = ground_registry();
     registry.register(
         EntityTypeDef::new("soldier")
-            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
             .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE),
     );
 }
@@ -773,7 +775,7 @@ fn register_rejects_build_range_without_capability() {
 fn register_rejects_carrier_without_reach() {
     gold_registry_with(
         EntityTypeDef::new("worker")
-            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
             .with_resource_carrier([("gold", HarvestData::new(5, 2, WorkPresence::Present))]),
     );
 }
@@ -784,7 +786,7 @@ fn register_rejects_harvest_range_without_capability() {
     let mut registry = ground_registry();
     registry.register(
         EntityTypeDef::new("soldier")
-            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
             .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE),
     );
 }
@@ -795,7 +797,7 @@ fn register_rejects_attacker_without_weapon_stats() {
     let mut registry = ground_registry();
     registry.register(
         EntityTypeDef::new("worker")
-            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
             .with_stat(EntityStatId::DAMAGE, FixedU64::from_num(5)),
     );
 }
@@ -929,7 +931,7 @@ fn register_rejects_type_declaring_player_cast_skill() {
     let war_cry = registry.register_skill("war_cry", player_cast(haste));
     registry.register(
         EntityTypeDef::new("caster")
-            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
             .with_health(20)
             .with_skills([war_cry]),
     );
@@ -945,7 +947,7 @@ fn register_rejects_repairer_without_rate() {
     let mut registry = ground_registry();
     registry.register(
         EntityTypeDef::new("worker")
-            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
             .with_health(20)
             .with_repairer(
                 ["building"],
@@ -964,7 +966,7 @@ fn register_rejects_repairer_without_reach() {
     let mut registry = ground_registry();
     registry.register(
         EntityTypeDef::new("worker")
-            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
             .with_health(20)
             .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
             .with_repairer(
@@ -986,7 +988,7 @@ fn register_rejects_repairer_mending_unknown_tag() {
     let mut registry = ground_registry();
     registry.register(
         EntityTypeDef::new("worker")
-            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
             .with_health(20)
             .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
             .with_stat(EntityStatId::REPAIR_RANGE, FixedU64::ONE)
@@ -1007,7 +1009,7 @@ fn register_rejects_pro_rata_repair_without_factor() {
     let mut registry = ground_registry();
     registry.register(
         EntityTypeDef::new("worker")
-            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
             .with_health(20)
             .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
             .with_stat(EntityStatId::REPAIR_RANGE, FixedU64::ONE)
@@ -1029,7 +1031,7 @@ fn register_rejects_energy_paid_repair_without_pool() {
     registry.register_tag("biological");
     registry.register(
         EntityTypeDef::new("medic")
-            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
             .with_health(20)
             .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
             .with_stat(EntityStatId::REPAIR_RANGE, FixedU64::from_num(2))
@@ -1063,7 +1065,7 @@ fn register_rejects_repair_ratio_without_production_time() {
     let mut registry = ground_registry();
     registry.register(
         EntityTypeDef::new("monolith")
-            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
             .with_health(100)
             .with_repair_ratio(FixedU64::ONE),
     );
@@ -1164,7 +1166,7 @@ fn register_rejects_unregistered_hosted_research() {
         foreign.register_research("smithing", ResearchDef::new(Cost::new(), 10, None, ["x"]));
     ground_registry().register(
         EntityTypeDef::new("lab")
-            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
             .with_researcher([research]),
     );
 }
@@ -1186,12 +1188,12 @@ fn validate_accepts_type_tag_and_research_requirements() {
     // "building" tag, and a research.
     registry.register(
         EntityTypeDef::new("knight")
-            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
             .with_requires(["lab", tags::BUILDING, "smithing"]),
     );
     registry.register(
         EntityTypeDef::new("lab")
-            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
             .with_researcher([smithing]),
     );
     registry.validate();
@@ -1205,7 +1207,7 @@ fn validate_rejects_unknown_requirement() {
     let mut registry = ground_registry();
     registry.register(
         EntityTypeDef::new("knight")
-            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
             .with_requires(["chapel"]),
     );
     registry.validate();
@@ -1223,12 +1225,12 @@ fn validate_rejects_ambiguous_requirement() {
     );
     registry.register(EntityTypeDef::new("forge").with_location(
         GROUND,
-        NavSize::ONE,
+        CellSize::ONE,
         Solidity::Solid,
     ));
     registry.register(
         EntityTypeDef::new("knight")
-            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
             .with_requires(["forge"]),
     );
     registry.validate();
@@ -1295,7 +1297,7 @@ fn gold_registry_with(def: EntityTypeDef) {
 }
 
 fn worker() -> EntityTypeDef {
-    EntityTypeDef::new("worker").with_location(GROUND, NavSize::ONE, Solidity::Solid)
+    EntityTypeDef::new("worker").with_location(GROUND, CellSize::ONE, Solidity::Solid)
 }
 
 /// A player-cast buff skill.

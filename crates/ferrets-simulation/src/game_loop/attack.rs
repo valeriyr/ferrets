@@ -2,11 +2,14 @@
 //! Called by [`super::orders`] as part of the shared order lifecycle.
 
 use bevy_ecs::{entity::Entity, world::World};
-use ferrets_pathfinder::{astar, nav_pos::NavPos, nav_size::NavSize};
+use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
+use ferrets_physics::body;
 
-use super::chase::{self, Destination};
-use super::impacts;
-use super::orders::Processing;
+use super::{
+    chase::{self, Destination},
+    impacts,
+    orders::Processing,
+};
 use crate::{
     components::{
         attack::AttackComponent,
@@ -104,7 +107,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
             let (at, size) = entity_def::footprint(world, target);
             (Some(target), at, size)
         }
-        AttackTarget::Position(cell) => (None, cell, NavSize::ONE),
+        AttackTarget::Position(cell) => (None, cell, CellSize::ONE),
     };
 
     let position = world
@@ -128,13 +131,14 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
         .min(attack_period);
 
     if let Some(leash) = order.attack_leash() {
-        // Footprint-based like every range check, so leashes measure the same
-        // distances acquisition did.
-        if !astar::in_range_of_rect(
-            world.resource::<Map>().projection(),
-            NavPos::from(leash.anchor),
-            NavPos::from(target_position),
-            target_size,
+        // Footprint-based like every range check, and judged exactly like
+        // the chase below (standing cell for the anchor's own body, floored
+        // anchor for the target) — a mid-cell target must not read as
+        // leashed to the leash and out of range to the chase, or the one
+        // extra walk breaks a stand-ground stance's never-move promise.
+        if !world.resource::<Map>().projection().in_range_of_rect(
+            body::center_cell(leash.anchor),
+            CellRect::new(CellPos::from(target_position), target_size),
             leash.radius,
         ) {
             return Processing::state(OrderState::Finished);

@@ -5,8 +5,9 @@
 #![allow(clippy::type_complexity, clippy::too_many_arguments)]
 
 use bevy::prelude::*;
-use ferrets_bevy_plugin::ai::AiPlugin;
-use ferrets_bevy_plugin::{NetworkPlugin, ReplayPlayback, ReplayPlugin, SimulationPlugin};
+use ferrets_bevy_plugin::{
+    NetworkPlugin, ReplayPlayback, ReplayPlugin, SimulationPlugin, ai::AiPlugin,
+};
 use ferrets_simulation::session::GameSession;
 
 use crate::states::GameState;
@@ -23,10 +24,12 @@ mod menu;
 mod render;
 mod replay;
 pub mod scenario;
+pub mod settings;
 pub mod setup;
 pub mod skirmish;
 mod states;
 mod time;
+mod view;
 
 /// Builds the demo app and runs it until the window closes.
 pub fn run() {
@@ -45,6 +48,8 @@ pub fn run() {
         // The void outside the playable field; the field itself is drawn as
         // terrain tiles.
         .insert_resource(ClearColor(Color::srgb(0.09, 0.09, 0.11)))
+        .init_resource::<settings::Settings>()
+        .init_resource::<view::WorldView>()
         .init_resource::<time::TickTimer>()
         .init_resource::<input::DragStart>()
         .init_resource::<input::InputMode>()
@@ -58,6 +63,7 @@ pub fn run() {
         // Camera and content exist for every screen; the game scene is set up on
         // entering InGame once the lobby has configured the session.
         .add_systems(Startup, (camera::spawn_camera, content::register_all))
+        .add_systems(Update, (view::sync_view, view::apply_view).chain())
         // Main menu.
         .add_systems(OnEnter(GameState::Menu), menu::setup_menu)
         .add_systems(OnExit(GameState::Menu), menu::teardown_menu)
@@ -203,6 +209,10 @@ pub fn run() {
                     .chain(),
             )
                 .run_if(in_state(GameState::InGame)),
+        )
+        .add_systems(
+            Update,
+            (debug::draw_hierarchy, debug::draw_bodies).run_if(in_state(GameState::InGame)),
         );
 
     app.run();

@@ -12,18 +12,20 @@ mod content;
 mod scenario;
 mod view;
 
-use std::cell::RefCell;
-use std::rc::Rc;
+use std::{cell::RefCell, rc::Rc};
 
 use mlua::{Lua, Table, Value, Variadic};
 
 use ferrets_simulation::content::registry::ContentRegistry;
 
-use crate::ai::view::content::ContentView;
-use crate::engine::ScriptEngine;
-use crate::engine::lua::ai::LuaAiRuntime;
-use crate::engine::lua::scenario::LuaScenarioRuntime;
-use crate::error::ScriptError;
+use crate::{
+    ai::view::content::ContentView,
+    engine::{
+        ScriptEngine,
+        lua::{ai::LuaAiRuntime, scenario::LuaScenarioRuntime},
+    },
+    error::ScriptError,
+};
 
 /// Loads content and AI scripts authored in Lua.
 pub struct LuaEngine;

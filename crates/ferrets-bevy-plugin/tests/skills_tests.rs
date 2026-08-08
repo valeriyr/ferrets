@@ -1,19 +1,21 @@
 //! Entity skills: using a skill applies its effect and pays its costs.
 
 use bevy::prelude::*;
+use ferrets_geometry::cell_size::CellSize;
 use ferrets_math::FixedU64;
-use ferrets_pathfinder::nav_size::NavSize;
 use ferrets_simulation::{
     command::{PlayerCommand, SkillCasterRef},
     components::energy::EnergyComponent,
     content::{
         entity_stats::EntityStatId,
+        entity_type_def::EntityTypeDef,
+        location::Solidity,
+        registry::ContentRegistry,
         research::ResearchDef,
         skills::{
             EntityCastCost, EntityCastEffect, EntityCastTarget, SkillCaster, SkillDef, SkillId,
         },
         stats::ModifierOp,
-        {entity_type_def::EntityTypeDef, location::Solidity, registry::ContentRegistry},
     },
     player_research::PlayerResearch,
     resources::{self, Cost},
@@ -310,7 +312,7 @@ fn app() -> App {
         );
         registry.register(
             EntityTypeDef::new("mage")
-                .with_location(utils::GROUND, NavSize::ONE, Solidity::Solid)
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
                 .with_health(50)
                 .with_attack(10, 1, 1, 4, 2)
                 .with_energy(100, FixedU64::from_num(1))

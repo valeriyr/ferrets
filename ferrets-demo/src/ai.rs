@@ -9,12 +9,14 @@ use std::collections::BTreeMap;
 
 use bevy::prelude::*;
 use ferrets_bevy_plugin::ai::{AiRuntimes, install_ai_runtimes, sourced_ai_players};
-use ferrets_script::ai::view::content::ContentView;
-use ferrets_script::engine::ScriptEngine;
-use ferrets_script::engine::lua::LuaEngine;
-use ferrets_simulation::content::registry::ContentRegistry;
-use ferrets_simulation::session::GameSession;
-use ferrets_simulation::session::player_slot::PlayerId;
+use ferrets_script::{
+    ai::view::content::ContentView,
+    engine::{ScriptEngine, lua::LuaEngine},
+};
+use ferrets_simulation::{
+    content::registry::ContentRegistry,
+    session::{GameSession, player_slot::PlayerId},
+};
 
 /// The chassis both race brains run on: pure helpers plus the economy, build,
 /// research, and attack routines. Prepended to each brain, so its locals are
@@ -23,7 +25,7 @@ use ferrets_simulation::session::player_slot::PlayerId;
 /// the stockpile.
 const COMMON_AI: &str = r#"
     local MAX_WORKERS = 5
-    local ARMY_ATTACK_AT = 5
+    local ARMY_ATTACK_AT = 8
     local MAX_QUEUE = 2
 
     -- Candidate structure cells relative to the hall's origin, tried in turn.

@@ -3,8 +3,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use bevy_ecs::prelude::*;
-use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
+use ferrets_math::FixedU64;
 
+use crate::components::chase::ChaseState;
 use crate::simulation_id::SimulationId;
 
 /// The crew mending an entity, present exactly while somebody is on the job.
@@ -27,7 +28,7 @@ pub struct RepairComponent {
     pub inside_job: bool,
     /// `(own position, target position)` when the last chase started. Both
     /// unchanged on resume means the chase made no progress and never will.
-    pub last_chase: Option<(FixedUVec2, FixedUVec2)>,
+    pub last_chase: ChaseState,
     /// Consecutive ticks spent unable to pay for the work.
     pub stalled: u32,
     /// Fractional cost carried between ticks, by resource kind. Work lands

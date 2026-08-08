@@ -1,17 +1,22 @@
 //! The AI-DSL binding: a hardened, session-long Lua state hosting one brain.
 
-use std::cell::RefCell;
-use std::rc::Rc;
+use std::{cell::RefCell, rc::Rc};
 
 use ferrets_simulation::command::PlayerCommand;
 use mlua::{Function, Lua, Table, Value};
 
-use crate::ai::view::content::ContentView;
-use crate::ai::view::game::GameView;
-use crate::ai::{AiRuntime, AiVision};
-use crate::engine::lua::command::CommandNames;
-use crate::engine::lua::{self, command, view};
-use crate::error::ScriptError;
+use crate::{
+    ai::{
+        AiRuntime, AiVision,
+        view::{content::ContentView, game::GameView},
+    },
+    engine::lua::{
+        self,
+        command::{self, CommandNames},
+        view,
+    },
+    error::ScriptError,
+};
 
 /// A live Lua brain for one AI player.
 ///

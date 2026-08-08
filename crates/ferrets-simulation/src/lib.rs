@@ -13,6 +13,7 @@ pub mod impacts;
 pub mod input;
 pub mod map;
 pub mod map_data;
+pub mod movement_model;
 pub mod order;
 pub mod player_buffs;
 pub mod player_research;

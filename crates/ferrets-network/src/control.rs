@@ -6,10 +6,11 @@
 
 use std::net::SocketAddr;
 
-use crate::message::control::ControlMessage;
-use crate::message::{self, Message};
-use crate::peer::PeerId;
-use crate::transport::{ConnectionState, NetworkTransport, TransportEvent};
+use crate::{
+    message::{self, Message, control::ControlMessage},
+    peer::PeerId,
+    transport::{ConnectionState, NetworkTransport, TransportEvent},
+};
 
 /// Something the control channel observed since the last poll.
 #[derive(Debug, Clone, PartialEq, Eq)]

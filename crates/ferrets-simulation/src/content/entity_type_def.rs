@@ -1,9 +1,10 @@
 //! Definition of a single entity type — the content-level blueprint for spawning.
 
+use ferrets_geometry::cell_size::CellSize;
 use std::collections::{BTreeMap, BTreeSet};
 
 use ferrets_math::FixedU64;
-use ferrets_pathfinder::{layer_mask::LayerMask, nav_size::NavSize};
+use ferrets_pathfinder::layer_mask::LayerMask;
 
 use crate::{
     components::tags::TagsComponent,
@@ -264,8 +265,9 @@ impl EntityTypeDef {
     /// Enables movement for this entity type at the given speed (grid units per tick).
     ///
     /// Panics if `speed` is `0`.
-    pub fn with_movement(mut self, speed: FixedU64) -> Self {
+    pub fn with_movement(mut self, speed: FixedU64, radius: FixedU64) -> Self {
         self.base_stats.insert(EntityStatId::SPEED, speed);
+        self.base_stats.insert(EntityStatId::RADIUS, radius);
         self
     }
 
@@ -342,7 +344,7 @@ impl EntityTypeDef {
     pub fn with_location(
         mut self,
         occupation: impl Into<LayerMask>,
-        size: NavSize,
+        size: CellSize,
         solidity: Solidity,
     ) -> Self {
         self.location = Some(LocationDef::new(occupation, size, solidity));

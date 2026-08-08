@@ -1,15 +1,14 @@
 #![allow(dead_code)]
 
-use bevy::ecs::entity::EntityNotSpawnedError;
-use bevy::prelude::*;
+use bevy::{ecs::entity::EntityNotSpawnedError, prelude::*};
 use ferrets_bevy_plugin::{PendingInput, SimulationPlugin};
+use ferrets_geometry::{
+    cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize, projection::Projection,
+};
 use ferrets_math::{FixedI64, FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_pathfinder::{
-    astar,
-    astar::Projection,
+    layer_mask::LayerMask,
     nav_grid::{LayerId, NavGrid},
-    nav_pos::NavPos,
-    nav_size::NavSize,
 };
 use ferrets_simulation::{
     command::{PlayerCommand, SelectMode},
@@ -41,6 +40,7 @@ use ferrets_simulation::{
     entity_def,
     input::{InputFrames, PlayerFrame},
     map::Map,
+    movement_model::MovementModel,
     order::AttackTarget,
     resources::{self, PlayerResources},
     selection::Selection,
@@ -89,7 +89,13 @@ pub fn make_app(slots: Vec<PlayerSlot>) -> App {
             DropPolicy::Automatic,
             FinishPolicy::Endless,
         ),
-        Map::new("test", Projection::Isometric, nav_grid, vec![]),
+        Map::new(
+            "test",
+            Projection::Isometric,
+            MovementModel::Cell,
+            nav_grid,
+            vec![],
+        ),
     ));
     app.insert_resource(registry);
     app
@@ -147,8 +153,8 @@ pub fn selection_app() -> App {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
         registry.register(
             EntityTypeDef::new("soldier")
-                .with_location(GROUND, NavSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5))
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
                 .with_health(30)
                 .with_dying(1, None)
                 .with_attack(10, 1, 3, 2, 1)
@@ -156,13 +162,13 @@ pub fn selection_app() -> App {
         );
         registry.register(
             EntityTypeDef::new("critter")
-                .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
                 .with_health(1)
                 .with_dying(1, None),
         );
         registry.register(
             EntityTypeDef::new("keep")
-                .with_location(GROUND, NavSize::new(2, 2), Solidity::Solid)
+                .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
                 .with_health(100)
                 .with_tags(["building"]),
         );
@@ -238,8 +244,8 @@ pub fn assert_despawned(world: &mut World, entity: Entity) {
 }
 
 /// The cell the entity currently stands on.
-pub fn cell_of(world: &mut World, entity: Entity) -> NavPos {
-    NavPos::from(world.get::<LocationComponent>(entity).unwrap().position)
+pub fn cell_of(world: &mut World, entity: Entity) -> CellPos {
+    CellPos::from(world.get::<LocationComponent>(entity).unwrap().position)
 }
 
 /// Marks or clears every cell of the map's ground layer, used to box a worker in.
@@ -249,7 +255,7 @@ pub fn set_all_cells_occupied(world: &mut World, occupied: bool) {
     let (width, height) = (grid.width(), grid.height());
     for y in 0..height {
         for x in 0..width {
-            grid.set_occupied(GROUND, NavPos::new(x, y), occupied);
+            grid.set_occupied(GROUND, CellPos::new(x, y), occupied);
         }
     }
 }
@@ -257,7 +263,7 @@ pub fn set_all_cells_occupied(world: &mut World, occupied: bool) {
 /// Asserts `worker` is boxed in — hidden with its reveal queued — then frees `cell`
 /// and checks the scheduled retry brings it back onto exactly that cell, dropping
 /// both markers.
-pub fn assert_reveal_deferred_then_lands_on(app: &mut App, worker: Entity, cell: NavPos) {
+pub fn assert_reveal_deferred_then_lands_on(app: &mut App, worker: Entity, cell: CellPos) {
     assert!(
         app.world().get::<HiddenComponent>(worker).is_some(),
         "a boxed-in worker stays off the map"
@@ -301,17 +307,27 @@ pub fn single_owned_of_type(world: &mut World, type_name: &str, player: PlayerId
     entities[0]
 }
 
+/// Whether two entities stand within `distance` of each other, measured the
+/// way the map itself measures — under its projection.
+pub fn within(world: &mut World, a: Entity, b: Entity, distance: u32) -> bool {
+    let (cell_a, cell_b) = (cell_of(world, a), cell_of(world, b));
+    world
+        .resource::<Map>()
+        .projection()
+        .in_range(cell_a, cell_b, distance)
+}
+
 /// Asserts `unit` stands within one cell of `building`'s footprint.
 pub fn assert_adjacent_to_footprint(world: &mut World, unit: Entity, building: Entity) {
     let origin = cell_of(world, building);
     let size = entity_def::of(world, building).location.unwrap().size();
     let unit_cell = cell_of(world, unit);
-    let nearest = NavPos::new(
-        unit_cell.x.clamp(origin.x, origin.x + size.width - 1),
-        unit_cell.y.clamp(origin.y, origin.y + size.height - 1),
-    );
     assert!(
-        astar::chebyshev(unit_cell, nearest) <= 1,
+        world.resource::<Map>().projection().in_range_of_rect(
+            unit_cell,
+            CellRect::new(origin, size),
+            1
+        ),
         "expected {unit_cell:?} adjacent to the footprint at {origin:?}"
     );
 }
@@ -410,6 +426,21 @@ pub fn effective_damage(app: &App, entity: Entity) -> FixedU64 {
         .unwrap()
 }
 
+/// Swaps the harness map for a 32×32 one with the given projection and
+/// movement model, a ground hierarchy included. Call before any spawns.
+pub fn install_map(app: &mut App, projection: Projection, model: MovementModel) {
+    let mut grid = NavGrid::new(32, 32);
+    grid.add_layer(GROUND);
+    app.world_mut().insert_resource(Map::with_hierarchy_masks(
+        "test",
+        projection,
+        model,
+        grid,
+        vec![],
+        &[LayerMask::from(GROUND)],
+    ));
+}
+
 /// App with the combat content roster — an attacking soldier (50 hp, 3-tick
 /// dying phase) and an immobile dummy that leaves decaying bones — one human
 /// player, session started.
@@ -420,8 +451,8 @@ pub fn combat_app() -> App {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
         registry.register(
             EntityTypeDef::new("soldier")
-                .with_location(GROUND, NavSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5))
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
                 .with_health(50)
                 .with_dying(3, None)
                 .with_attack(10, 1, 1, 4, 2),
@@ -429,12 +460,12 @@ pub fn combat_app() -> App {
         // Registered before `dummy`, which leaves it as a corpse.
         registry.register(
             EntityTypeDef::new("bones")
-                .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
                 .with_dying(2, None),
         );
         registry.register(
             EntityTypeDef::new("dummy")
-                .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
                 .with_health(20)
                 .with_dying(3, Some("bones")),
         );
@@ -474,7 +505,7 @@ pub fn supply_app() -> App {
         // Registered before `pioneer`, which builds it.
         registry.register(
             EntityTypeDef::new("camp")
-                .with_location(GROUND, NavSize::new(2, 2), Solidity::Solid)
+                .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
                 .with_health(100)
                 .with_dying(2, None)
                 .with_cost([("gold", 20)])
@@ -484,8 +515,8 @@ pub fn supply_app() -> App {
         // Registered before `lodge`, which trains it.
         registry.register(
             EntityTypeDef::new("settler")
-                .with_location(GROUND, NavSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5))
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
                 .with_health(20)
                 .with_dying(2, None)
                 .with_cost([("gold", 10)])
@@ -496,7 +527,7 @@ pub fn supply_app() -> App {
         // costless types can be watched from the same trainer.
         registry.register(
             EntityTypeDef::new("lodge")
-                .with_location(GROUND, NavSize::new(2, 2), Solidity::Solid)
+                .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
                 .with_health(100)
                 .with_dying(2, None)
                 .with_trainer(["settler", "worker"]),
@@ -504,8 +535,8 @@ pub fn supply_app() -> App {
         // Works from outside the site, so a camp going up stays observable.
         registry.register(
             EntityTypeDef::new("pioneer")
-                .with_location(GROUND, NavSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5))
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
                 .with_health(20)
                 .with_dying(2, None)
                 .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
@@ -530,8 +561,8 @@ pub fn player_effects_app() -> App {
         registry.register_resource("gold");
         registry.register(
             EntityTypeDef::new("runner")
-                .with_location(GROUND, NavSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5))
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
                 .with_health(20)
                 .with_dying(2, None),
         );
@@ -604,8 +635,8 @@ pub fn research_app() -> App {
         );
         let soldier = |name: &str| {
             EntityTypeDef::new(name)
-                .with_location(GROUND, NavSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5))
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
                 .with_health(30)
                 .with_dying(2, None)
                 .with_attack(10, 1, 1, 4, 2)
@@ -617,7 +648,7 @@ pub fn research_app() -> App {
         registry.register(soldier("knight").with_requires(["workshop"]));
         registry.register(
             EntityTypeDef::new("lab")
-                .with_location(GROUND, NavSize::new(2, 2), Solidity::Solid)
+                .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
                 .with_health(100)
                 .with_dying(2, None)
                 .with_researcher([smithing, tactics])
@@ -625,7 +656,7 @@ pub fn research_app() -> App {
         );
         registry.register(
             EntityTypeDef::new("guardhouse")
-                .with_location(GROUND, NavSize::new(2, 2), Solidity::Solid)
+                .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
                 .with_health(100)
                 .with_dying(2, None)
                 .with_trainer(["pikeman", "halberdier", "knight"]),
@@ -669,8 +700,8 @@ pub fn register_orders_content(app: &mut App) {
         registry.register_resource("wood");
         registry.register(
             EntityTypeDef::new("soldier")
-                .with_location(GROUND, NavSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5))
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
                 .with_health(30)
                 .with_dying(2, None)
                 .with_attack(10, 1, 1, 4, 2)
@@ -680,7 +711,7 @@ pub fn register_orders_content(app: &mut App) {
         // Registered before `worker`, which builds it.
         registry.register(
             EntityTypeDef::new("depot")
-                .with_location(GROUND, NavSize::new(2, 2), Solidity::Solid)
+                .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
                 .with_health(100)
                 .with_dying(2, None)
                 .with_cost([("gold", 50)])
@@ -689,8 +720,8 @@ pub fn register_orders_content(app: &mut App) {
         );
         registry.register(
             EntityTypeDef::new("worker")
-                .with_location(GROUND, NavSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5))
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
                 .with_health(20)
                 .with_dying(2, None)
                 .with_cost([("gold", 10)])
@@ -704,8 +735,8 @@ pub fn register_orders_content(app: &mut App) {
         // is what makes `WorkPresence` observable.
         registry.register(
             EntityTypeDef::new("mason")
-                .with_location(GROUND, NavSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5))
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
                 .with_health(20)
                 .with_dying(2, None)
                 .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
@@ -714,8 +745,8 @@ pub fn register_orders_content(app: &mut App) {
         // Same catalogue again, and any number of them can crowd one site.
         registry.register(
             EntityTypeDef::new("carpenter")
-                .with_location(GROUND, NavSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5))
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
                 .with_health(20)
                 .with_dying(2, None)
                 .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
@@ -723,8 +754,8 @@ pub fn register_orders_content(app: &mut App) {
         );
         registry.register(
             EntityTypeDef::new("lumberjack")
-                .with_location(GROUND, NavSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5))
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
                 .with_health(20)
                 .with_dying(2, None)
                 .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
@@ -734,8 +765,8 @@ pub fn register_orders_content(app: &mut App) {
         // has to get to put the load down.
         registry.register(
             EntityTypeDef::new("prospector")
-                .with_location(GROUND, NavSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5))
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
                 .with_health(20)
                 .with_dying(2, None)
                 .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::from_num(3))
@@ -745,8 +776,8 @@ pub fn register_orders_content(app: &mut App) {
         // a trip long enough to watch a crew form and break up while it lasts.
         registry.register(
             EntityTypeDef::new("logger")
-                .with_location(GROUND, NavSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5))
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
                 .with_health(20)
                 .with_dying(2, None)
                 .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
@@ -757,7 +788,7 @@ pub fn register_orders_content(app: &mut App) {
         );
         registry.register(
             EntityTypeDef::new("barracks")
-                .with_location(GROUND, NavSize::new(2, 2), Solidity::Solid)
+                .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
                 .with_health(100)
                 .with_dying(2, None)
                 .with_cost([("gold", 40)])
@@ -766,31 +797,31 @@ pub fn register_orders_content(app: &mut App) {
         );
         registry.register(
             EntityTypeDef::new("mine")
-                .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
                 .with_resource_source("gold", DepletionPolicy::Destroy),
         );
         registry.register(
             EntityTypeDef::new("tree")
-                .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
                 .with_resource_source("wood", DepletionPolicy::Destroy),
         );
         registry.register(
             EntityTypeDef::new("geyser")
-                .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
                 .with_resource_source("gold", DepletionPolicy::Persist),
         );
         registry.register(
             EntityTypeDef::new("ghost")
-                .with_location(GROUND, NavSize::ONE, Solidity::Passable)
-                .with_movement(FixedU64::from_num(0.5))
+                .with_location(GROUND, CellSize::ONE, Solidity::Passable)
+                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
                 .with_health(20),
         );
         // A soldier variant that notices enemies well beyond its weapon range,
         // for the stance and auto-engagement suites.
         registry.register(
             EntityTypeDef::new("sentry")
-                .with_location(GROUND, NavSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5))
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
                 .with_health(30)
                 .with_dying(2, None)
                 .with_attack(10, 1, 5, 4, 2)
@@ -801,8 +832,8 @@ pub fn register_orders_content(app: &mut App) {
         // A ranged sentry, for suites that need hits without an adjacent chaser.
         registry.register(
             EntityTypeDef::new("archer")
-                .with_location(GROUND, NavSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5))
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
                 .with_health(30)
                 .with_dying(2, None)
                 .with_attack(10, 3, 5, 4, 2)
@@ -810,4 +841,10 @@ pub fn register_orders_content(app: &mut App) {
         );
     }
     app.world_mut().resource::<ContentRegistry>().validate();
+}
+
+/// A position pinned to the bit — captured from a probe run and asserted
+/// exactly ever after: any drift is a lockstep desync.
+pub fn position_bits(x: u64, y: u64) -> FixedUVec2 {
+    FixedUVec2::new(FixedU64::from_bits(x), FixedU64::from_bits(y))
 }

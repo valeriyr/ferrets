@@ -9,17 +9,19 @@
 use bevy_ecs::world::World;
 use ferrets_math::FixedU64;
 
-use crate::components::build::UnderConstructionComponent;
-use crate::components::entity_stats::StatsComponent;
-use crate::components::owner::OwnerComponent;
-use crate::components::train::TrainQueueComponent;
-use crate::content::entity_stats::EntityStatId;
-use crate::content::entity_type_def::EntityTypeDef;
-use crate::content::player_stats::PlayerStatId;
-use crate::content::registry::ContentRegistry;
-use crate::entity_index::EntityIndex;
-use crate::player_stats::PlayerStats;
-use crate::session::player_slot::PlayerId;
+use crate::{
+    components::{
+        build::UnderConstructionComponent, entity_stats::StatsComponent, owner::OwnerComponent,
+        train::TrainQueueComponent,
+    },
+    content::{
+        entity_stats::EntityStatId, entity_type_def::EntityTypeDef, player_stats::PlayerStatId,
+        registry::ContentRegistry,
+    },
+    entity_index::EntityIndex,
+    player_stats::PlayerStats,
+    session::player_slot::PlayerId,
+};
 
 /// The supply available to `player`: everything its standing entities provide,
 /// held under the player's `max_supply` ceiling when it has one.

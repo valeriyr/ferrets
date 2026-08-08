@@ -1,13 +1,15 @@
 //! Tests for the per-player stat store's modifier fold.
 
 use ferrets_math::{FixedI64, FixedU64};
-use ferrets_simulation::content::{
-    entity_stats::EntityStatId,
-    player_stats::PlayerStatId,
-    registry::ContentRegistry,
-    stats::{EntityModifier, ModifierOp, PlayerModifier},
+use ferrets_simulation::{
+    content::{
+        entity_stats::EntityStatId,
+        player_stats::PlayerStatId,
+        registry::ContentRegistry,
+        stats::{EntityModifier, ModifierOp, PlayerModifier},
+    },
+    player_stats::PlayerStats,
 };
-use ferrets_simulation::player_stats::PlayerStats;
 
 //
 // ─── Base values ──────────────────────────────────────────────────────────────

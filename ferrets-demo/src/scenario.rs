@@ -10,13 +10,15 @@
 
 use bevy::prelude::*;
 use ferrets_bevy_plugin::{install_game_resources, install_scenario_runtime, instantiate_scenario};
-use ferrets_pathfinder::astar::Projection;
-use ferrets_script::ai::view::content::ContentView;
-use ferrets_script::engine::ScriptEngine;
-use ferrets_script::engine::lua::LuaEngine;
+use ferrets_geometry::projection::Projection;
+use ferrets_script::{
+    ai::view::content::ContentView,
+    engine::{ScriptEngine, lua::LuaEngine},
+};
 use ferrets_simulation::{
     content::registry::ContentRegistry,
     map_data::{MapData, Placement},
+    movement_model::MovementModel,
     resources::StartingStock,
     scenario::{Scenario, ScenarioPlayer},
     session::{
@@ -30,7 +32,7 @@ use ferrets_simulation::{
     },
 };
 
-use crate::{setup, states::GameState};
+use crate::{settings::Settings, setup, states::GameState};
 
 /// The scenario script. The engine holds the objective list (id + label,
 /// fixing the display order); the script only reports which are met and the
@@ -94,8 +96,9 @@ pub struct CurrentScenario(pub Scenario);
 /// The starting stockpile is enough to build the barracks (200 gold, 100 wood)
 /// and train three archers (240 gold) without harvesting, so the objective is
 /// the point rather than the economy.
-pub fn builtin_mission() -> Scenario {
-    let mut map = MapData::new("build_army", Projection::Isometric, 32, 32);
+pub fn builtin_mission(projection: Projection, movement_model: MovementModel) -> Scenario {
+    let mut map = MapData::new("build_army", projection, 32, 32);
+    map.set_movement_model(movement_model);
     map.fill_terrain("grass");
     map.add_player_slot(START);
 
@@ -148,7 +151,8 @@ pub fn start_scenario(world: &mut World) {
         return;
     }
 
-    let scenario = builtin_mission();
+    let settings = *world.resource::<Settings>();
+    let scenario = builtin_mission(settings.view.projection(), settings.movement_model);
     let content = ContentView::from_registry(world.resource::<ContentRegistry>());
     let runtime = match LuaEngine.load_scenario(&scenario.script, &content) {
         Ok(runtime) => runtime,

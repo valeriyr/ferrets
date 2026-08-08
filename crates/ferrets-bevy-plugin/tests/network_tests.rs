@@ -8,24 +8,29 @@ use ferrets_bevy_plugin::{
     DropConfig, NetworkPlugin, NetworkSession, ReplayPlugin, SimulationPlugin,
     install_network_session,
 };
+use ferrets_geometry::{cell_size::CellSize, projection::Projection};
 use ferrets_math::FixedU64;
-use ferrets_network::message::control::{ControlMessage, InGameMessage};
-use ferrets_network::role::Role;
-use ferrets_network::roster::Roster;
-use ferrets_network::session::NetSession;
-use ferrets_network::transport::NetworkTransport;
-use ferrets_network::transport::loopback::LoopbackTransport;
-use ferrets_pathfinder::{astar::Projection, nav_grid::NavGrid, nav_size::NavSize};
-use ferrets_replay::buffer::SharedBuffer;
-use ferrets_replay::header::{RecordedGame, ReplayHeader};
-use ferrets_replay::recorder::Recorder;
-use ferrets_replay::replay::Replay;
+use ferrets_network::{
+    message::control::{ControlMessage, InGameMessage},
+    role::Role,
+    roster::Roster,
+    session::NetSession,
+    transport::{NetworkTransport, loopback::LoopbackTransport},
+};
+use ferrets_pathfinder::nav_grid::NavGrid;
+use ferrets_replay::{
+    buffer::SharedBuffer,
+    header::{RecordedGame, ReplayHeader},
+    recorder::Recorder,
+    replay::Replay,
+};
 use ferrets_simulation::{
     checksum::state_checksum,
     command::PlayerCommand,
     content::{entity_type_def::EntityTypeDef, location::Solidity, registry::ContentRegistry},
     input::{InputFrames, PlayerFrame},
     map::Map,
+    movement_model::MovementModel,
     session::{
         GameResult, GameSession, Winner, ai_hosting::AiHosting, authority::Authority,
         drop_policy::DropPolicy, finish_policy::FinishPolicy, player_slot::PlayerSlot,
@@ -1340,7 +1345,13 @@ fn net_app_with_slots(
     let mut app = App::new();
     app.add_plugins(SimulationPlugin::new(
         session,
-        Map::new("test", Projection::Isometric, nav_grid, vec![]),
+        Map::new(
+            "test",
+            Projection::Isometric,
+            MovementModel::Cell,
+            nav_grid,
+            vec![],
+        ),
     ));
     app.add_plugins(NetworkPlugin);
     // Supplies idle frames for AI slots with no installed runtime, as in a
@@ -1363,8 +1374,8 @@ fn net_app_with_slots(
 /// destroy a building through the command pipeline; nothing attacks unordered.
 fn harness_soldier() -> EntityTypeDef {
     EntityTypeDef::new("soldier")
-        .with_location(GROUND, NavSize::ONE, Solidity::Solid)
-        .with_movement(FixedU64::from_num(0.5))
+        .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+        .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
         .with_health(30)
         .with_dying(2, None)
         .with_attack(10, 1, 1, 4, 2)
@@ -1374,7 +1385,7 @@ fn harness_soldier() -> EntityTypeDef {
 /// destructible, no combat of its own.
 fn harness_base() -> EntityTypeDef {
     EntityTypeDef::new("base")
-        .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+        .with_location(GROUND, CellSize::ONE, Solidity::Solid)
         .with_health(30)
         .with_dying(2, None)
         .with_tags(["building"])

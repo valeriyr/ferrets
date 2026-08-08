@@ -16,10 +16,12 @@ use ferrets_simulation::{
         resource::{ResourceCarrierComponent, ResourceSourceComponent},
         stance::StanceComponent,
     },
-    content::entity_stats::EntityStatId,
-    content::registry::ContentRegistry,
-    content::research::ResearchId,
-    content::skills::{EntityCastTarget, SkillCaster, SkillId},
+    content::{
+        entity_stats::EntityStatId,
+        registry::ContentRegistry,
+        research::ResearchId,
+        skills::{EntityCastTarget, SkillCaster, SkillId},
+    },
     control_groups::{CONTROL_GROUP_COUNT, ControlGroups},
     order::Order,
     player_research::PlayerResearch,
@@ -31,8 +33,10 @@ use ferrets_simulation::{
     supply,
 };
 
-use crate::input::{InputMode, Primary, TargetedOrder};
-use crate::states::{GameState, InGameUi};
+use crate::{
+    input::{InputMode, Primary, TargetedOrder},
+    states::{GameState, InGameUi},
+};
 
 const BUTTON_NORMAL: Color = Color::srgb(0.20, 0.20, 0.24);
 const BUTTON_HOVERED: Color = Color::srgb(0.30, 0.30, 0.38);

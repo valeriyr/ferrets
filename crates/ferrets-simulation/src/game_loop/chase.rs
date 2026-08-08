@@ -5,10 +5,16 @@
 //! no progress.
 
 use bevy_ecs::{entity::Entity, world::World};
+use ferrets_geometry::{
+    cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize, projection::Projection,
+};
 use ferrets_math::{FixedI64, fixed_uvec2::FixedUVec2, fixed_vec2::FixedVec2};
-use ferrets_pathfinder::{astar, astar::Projection, nav_pos::NavPos, nav_size::NavSize};
+use ferrets_physics::body;
 
-use crate::{components::location::LocationComponent, entity_def, map::Map, order::Order};
+use crate::{
+    components::chase::ChaseState, components::location::LocationComponent, entity_def, map::Map,
+    order::Order,
+};
 
 /// Where a chaser stands relative to its destination this tick.
 pub enum Destination {
@@ -20,13 +26,6 @@ pub enum Destination {
     OutOfReach,
 }
 
-/// `(chaser position, destination position)` recorded when the last chase move
-/// started. When both are unchanged on resume the chase made no progress and
-/// never will. For a stationary destination only the chaser position can change,
-/// so this reduces to tracking the chaser; for a moving destination it gives up
-/// only when neither has moved.
-pub type ChaseState = Option<(FixedUVec2, FixedUVec2)>;
-
 /// Decides whether `from` is within `range` of the footprint at `destination`
 /// with `destination_size`, and otherwise whether to walk toward it or give up.
 pub fn advance(
@@ -34,21 +33,26 @@ pub fn advance(
     projection: Projection,
     from: FixedUVec2,
     destination: FixedUVec2,
-    destination_size: NavSize,
+    destination_size: CellSize,
     range: u32,
 ) -> Destination {
-    if astar::in_range_of_rect(
-        projection,
-        NavPos::from(from),
-        NavPos::from(destination),
-        destination_size,
+    // The chaser judges itself by the cell under its body's center — the
+    // cell it visually stands on and claims. A continuous body pressed
+    // against its destination rests with a fractional anchor whose floor
+    // is one cell short, and floor-judging it would re-walk that phantom
+    // step forever. The destination stays anchor-floored: that is the cell
+    // the walk below plans toward and accepts by, so both verdicts name
+    // the same spot.
+    if projection.in_range_of_rect(
+        body::center_cell(from),
+        CellRect::new(CellPos::from(destination), destination_size),
         range,
     ) {
         *last_chase = None;
         return Destination::Arrived;
     }
 
-    let progress = (from, destination);
+    let progress = (body::center_cell(from), CellPos::from(destination));
     if *last_chase == Some(progress) {
         return Destination::OutOfReach;
     }
@@ -72,7 +76,7 @@ pub fn advance(
 /// A no-op while the unit's middle is inside the footprint, so the previous facing
 /// is kept rather than zeroed. Orders call this once in range so a unit faces what
 /// it acts on.
-pub fn face(world: &mut World, entity: Entity, target: FixedUVec2, target_size: NavSize) {
+pub fn face(world: &mut World, entity: Entity, target: FixedUVec2, target_size: CellSize) {
     let middle = center_of(entity_def::footprint(world, entity));
 
     let facing = nearest_point_on(target, target_size, middle) - middle;
@@ -94,7 +98,7 @@ pub fn face_entity(world: &mut World, entity: Entity, target: Entity) {
 /// The point of the footprint at `origin`/`size` closest to `from`, clamping each
 /// axis into the footprint's span. Continuous rather than per-cell, so a unit part
 /// way across a cell turns smoothly instead of in steps.
-fn nearest_point_on(origin: FixedUVec2, size: NavSize, from: FixedVec2) -> FixedVec2 {
+fn nearest_point_on(origin: FixedUVec2, size: CellSize, from: FixedVec2) -> FixedVec2 {
     let span = |start: FixedI64, cells: u32, value: FixedI64| {
         value.clamp(start, start + FixedI64::from_num(cells))
     };
@@ -126,7 +130,7 @@ pub fn advance_to_entity(
 }
 
 /// The middle of a footprint, in world units.
-fn center_of((origin, size): (FixedUVec2, NavSize)) -> FixedVec2 {
+fn center_of((origin, size): (FixedUVec2, CellSize)) -> FixedVec2 {
     let half = |cells: u32| FixedI64::from_num(cells) / 2;
     FixedVec2::new(
         origin.x.to_num::<FixedI64>() + half(size.width),

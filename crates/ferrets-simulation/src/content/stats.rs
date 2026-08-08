@@ -8,8 +8,7 @@
 
 use ferrets_math::{FixedI64, FixedU64};
 
-use crate::content::entity_stats::EntityStatId;
-use crate::content::player_stats::PlayerStatId;
+use crate::content::{entity_stats::EntityStatId, player_stats::PlayerStatId};
 
 /// How a modifier's magnitude folds into a stat's effective value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

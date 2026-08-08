@@ -1,28 +1,33 @@
 //! Debug overlay: a live input/sim readout, gizmos, and sandbox spawn.
 
-use bevy::prelude::*;
-use bevy::window::PrimaryWindow;
+use bevy::{prelude::*, window::PrimaryWindow};
 use ferrets_bevy_plugin::PendingInput;
+use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
-use ferrets_pathfinder::{nav_pos::NavPos, nav_size::NavSize};
+
+use ferrets_physics::body;
 use ferrets_simulation::{
     command::PlayerCommand,
     components::{
-        entity_info::EntityInfoComponent, hidden::HiddenComponent, location::LocationComponent,
-        order_queue::OrderQueueComponent, patrol::PatrolComponent,
+        entity_info::EntityInfoComponent, entity_stats::StatsComponent, hidden::HiddenComponent,
+        location::LocationComponent, movement::MoveComponent, order_queue::OrderQueueComponent,
+        patrol::PatrolComponent,
     },
-    content::registry::ContentRegistry,
+    content::{entity_stats::EntityStatId, registry::ContentRegistry},
     map::Map,
+    movement_model::MovementModel,
     order::{AttackTarget, Order},
     selection::Selection,
     session::GameSession,
     visibility::VisibilityGrid,
 };
 
-use crate::input::InputMode;
-use crate::map;
-use crate::render::{CELL_PX, FogReveal, world_center};
-use crate::states::InGameUi;
+use crate::{
+    input::InputMode,
+    map,
+    render::{CELL_PX, FogReveal, world_center},
+    states::InGameUi,
+};
 
 /// Toggleable debug options.
 #[derive(Resource)]
@@ -111,6 +116,7 @@ pub fn debug_readout(
     session: Res<GameSession>,
     selection: Res<Selection>,
     mode: Res<InputMode>,
+    map: Res<Map>,
     registry: Res<ContentRegistry>,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
@@ -140,10 +146,16 @@ pub fn debug_readout(
         InputMode::Targeting(_) => "targeting",
     };
 
+    let model_str = match map.movement_model() {
+        MovementModel::Cell => "cell",
+        MovementModel::Continuous => "continuous",
+    };
+
     if let Ok(mut text) = text.single_mut() {
         **text = format!(
-            "tick {} | cursor {} | hover {} | LMB {} RMB {} | selected {} | {}",
+            "tick {} | {} | cursor {} | hover {} | LMB {} RMB {} | selected {} | {}",
             session.tick(),
+            model_str,
             cell_str,
             hover_str,
             mouse.pressed(MouseButton::Left) as u8,
@@ -179,7 +191,7 @@ pub fn draw_grid(
     if let Some(ground) = registry.layer(map::GROUND) {
         for y in 0..map.height() {
             for x in 0..map.width() {
-                if nav_grid.is_occupied(ground, NavPos::new(x, y))
+                if nav_grid.is_occupied(ground, CellPos::new(x, y))
                     && (reveal.0 || fog.is_visible_to(&session, local, x, y))
                 {
                     fill_cell(&mut gizmos, x, y);
@@ -195,6 +207,143 @@ pub fn draw_grid(
     for y in 0..=map.height() {
         let yp = -(y as f32) * CELL_PX;
         gizmos.line_2d(Vec2::new(0.0, yp), Vec2::new(w * CELL_PX, yp), line);
+    }
+}
+
+/// Draws each mover's collision circle and a line from its center to the
+/// one cell it claims while the debug overlay is on and the game runs the
+/// continuous model (run in `Update`). The circle is the contact truth, the
+/// line points at the claim derived from it — together they make occupancy
+/// checkable at a glance: bodies may touch and even share a claimed cell,
+/// but circles must never interpenetrate. Fogged movers stay undrawn, like
+/// the grid's occupancy fill.
+pub fn draw_bodies(
+    mut gizmos: Gizmos,
+    debug: Res<DebugState>,
+    map: Res<Map>,
+    session: Res<GameSession>,
+    fog: Res<VisibilityGrid>,
+    reveal: Res<FogReveal>,
+    registry: Res<ContentRegistry>,
+    movers: Query<
+        (&EntityInfoComponent, &LocationComponent, &StatsComponent),
+        Without<HiddenComponent>,
+    >,
+) {
+    const BODY: Color = Color::srgb(0.35, 0.9, 1.0);
+    const CLAIM: Color = Color::srgba(0.35, 0.9, 1.0, 0.5);
+
+    if !debug.grid {
+        return;
+    }
+    match map.movement_model() {
+        MovementModel::Cell => return,
+        MovementModel::Continuous => {}
+    }
+
+    let local = session.local_player();
+    for (info, location, stats) in &movers {
+        let def = registry.def(info.type_id());
+        let claims = def
+            .location
+            .is_some_and(|location| location.solidity().claims_cells());
+        if !def.can_move() || !claims {
+            continue;
+        }
+        let cell = body::center_cell(location.position);
+        if !(reveal.0 || fog.is_visible_to(&session, local, cell.x, cell.y)) {
+            continue;
+        }
+        let Some(radius) = stats.effective(EntityStatId::RADIUS) else {
+            continue;
+        };
+
+        let center = Vec2::new(
+            (location.position.x.to_num::<f32>() + 0.5) * CELL_PX,
+            -(location.position.y.to_num::<f32>() + 0.5) * CELL_PX,
+        );
+        gizmos.circle_2d(center, radius.to_num::<f32>() * CELL_PX, BODY);
+
+        let claimed = Vec2::new(
+            (cell.x as f32 + 0.5) * CELL_PX,
+            -(cell.y as f32 + 0.5) * CELL_PX,
+        );
+        gizmos.line_2d(center, claimed, CLAIM);
+        gizmos.circle_2d(claimed, 2.0, CLAIM);
+    }
+}
+
+/// Draws the pathfinding hierarchy while the debug overlay is on: cluster
+/// borders, the entrances crossing them, and each selected unit's plan — its
+/// refined cells and the corridor crossings still ahead (run in `Update`).
+pub fn draw_hierarchy(
+    mut gizmos: Gizmos,
+    map: Res<Map>,
+    registry: Res<ContentRegistry>,
+    debug: Res<DebugState>,
+    selection: Res<Selection>,
+    session: Res<GameSession>,
+    units: Query<(&EntityInfoComponent, &LocationComponent, &MoveComponent)>,
+) {
+    const CLUSTER: Color = Color::srgba(0.9, 0.7, 0.1, 0.5);
+    const ENTRANCE: Color = Color::srgba(0.9, 0.7, 0.1, 0.9);
+    const SEGMENT: Color = Color::srgb(0.2, 0.9, 0.9);
+    const CORRIDOR: Color = Color::srgba(0.2, 0.9, 0.9, 0.5);
+
+    if !debug.grid {
+        return;
+    }
+    let hierarchy = map.hierarchy();
+    let (w, h) = (map.width() as f32, map.height() as f32);
+
+    // Cluster borders.
+    let size = hierarchy.cluster_size();
+    for x in (size..map.width()).step_by(size as usize) {
+        let xp = x as f32 * CELL_PX;
+        gizmos.line_2d(Vec2::new(xp, 0.0), Vec2::new(xp, -h * CELL_PX), CLUSTER);
+    }
+    for y in (size..map.height()).step_by(size as usize) {
+        let yp = -(y as f32) * CELL_PX;
+        gizmos.line_2d(Vec2::new(0.0, yp), Vec2::new(w * CELL_PX, yp), CLUSTER);
+    }
+
+    // Entrances of every mover mask the hierarchy serves.
+    let cell_center =
+        |cell: CellPos| world_center(FixedUVec2::from(cell), CellSize::ONE).truncate();
+    for (_, layer) in registry.layers() {
+        if !hierarchy.serves(layer) {
+            continue;
+        }
+        for transition in hierarchy.transitions(layer) {
+            gizmos.line_2d(
+                cell_center(transition.a),
+                cell_center(transition.b),
+                ENTRANCE,
+            );
+            gizmos.circle_2d(cell_center(transition.a), CELL_PX * 0.15, ENTRANCE);
+        }
+    }
+
+    // Each selected unit's plan: the refined segment cell by cell, then the
+    // corridor crossings still ahead.
+    let local = session.local_player();
+    for (info, location, movement) in &units {
+        if !selection.get(local).contains(&info.id()) {
+            continue;
+        }
+        let size = registry.def(info.type_id()).location.unwrap().size();
+        let mut from = world_center(location.position, size).truncate();
+        for cell in movement.path.iter().rev() {
+            let to = cell_center(*cell);
+            gizmos.line_2d(from, to, SEGMENT);
+            from = to;
+        }
+        for crossing in movement.corridor.iter().rev() {
+            let to = cell_center(crossing.from);
+            gizmos.line_2d(from, to, CORRIDOR);
+            gizmos.circle_2d(to, CELL_PX * 0.2, CORRIDOR);
+            from = cell_center(crossing.to);
+        }
     }
 }
 
@@ -231,10 +380,10 @@ pub fn draw_orders(
 
     // A destination is named by the first cell of its footprint, so a line drawn to
     // the position alone points at a corner of what the unit is walking to.
-    let footprint_center = |position: FixedUVec2, size: NavSize| {
-        world_center(FixedUVec2::from(NavPos::from(position)), size).truncate()
+    let footprint_center = |position: FixedUVec2, size: CellSize| {
+        world_center(FixedUVec2::from(CellPos::from(position)), size).truncate()
     };
-    let cell_center = |position: FixedUVec2| footprint_center(position, NavSize::ONE);
+    let cell_center = |position: FixedUVec2| footprint_center(position, CellSize::ONE);
     let entity_center = |id| {
         targets
             .iter()
@@ -270,7 +419,7 @@ pub fn draw_orders(
                     let size = registry
                         .entity(type_name)
                         .and_then(|def| def.location)
-                        .map_or(NavSize::ONE, |location| location.size());
+                        .map_or(CellSize::ONE, |location| location.size());
                     (Some(footprint_center(*position, size)), BUILD)
                 }
                 Order::Repair { target } => (entity_center(*target), REPAIR),

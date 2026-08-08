@@ -1,0 +1,13 @@
+[package]
+name = "ferrets-geometry"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Deterministic RTS spatial geometry: cells, projections, and their metrics."
+
+[dependencies]
+serde.workspace = true
+
+ferrets-math.workspace = true

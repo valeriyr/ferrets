@@ -5,9 +5,10 @@
 
 use bevy_ecs::prelude::*;
 
-use crate::buffs_store::BuffsStore;
-use crate::content::entity_buffs::EntityBuffId;
-use crate::content::stack_rule::StackRule;
+use crate::{
+    buffs_store::BuffsStore,
+    content::{entity_buffs::EntityBuffId, stack_rule::StackRule},
+};
 
 /// The active buffs on an entity.
 #[derive(Component, Debug, Clone, Default, PartialEq, Eq)]

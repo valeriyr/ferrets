@@ -63,6 +63,10 @@ impl EntityStatId {
     /// Supply instances occupy in their owner's pool, from the moment they are
     /// queued for training.
     pub const SUPPLY_COST: EntityStatId = EntityStatId(18);
+    /// The radius of an instance's circular body in cells, where the
+    /// continuous movement model resolves contact. Every mover defines one;
+    /// half a cell makes resting neighbors touch at one-cell spacing.
+    pub const RADIUS: EntityStatId = EntityStatId(19);
 
     /// Creates an entity stat id for the given registration index.
     pub(crate) fn from_index(index: usize) -> Self {
@@ -78,7 +82,7 @@ impl EntityStatId {
 
 /// The built-in entity stats, registered first and in this order, so their
 /// assigned ids equal the [`EntityStatId`] constants above.
-pub(crate) const ENTITY_BUILTIN_STATS: [BuiltinStat<EntityStatId>; 19] = [
+pub(crate) const ENTITY_BUILTIN_STATS: [BuiltinStat<EntityStatId>; 20] = [
     // Current health settles under this ceiling, so a zero would turn any debuff
     // that reached it into an instant kill.
     stats::builtin(EntityStatId::MAX_HEALTH, "max_health", FixedU64::ONE),
@@ -116,6 +120,9 @@ pub(crate) const ENTITY_BUILTIN_STATS: [BuiltinStat<EntityStatId>; 19] = [
         FixedU64::ZERO,
     ),
     stats::builtin(EntityStatId::SUPPLY_COST, "supply_cost", FixedU64::ZERO),
+    // Fractional cells, authored below 1 — a whole-number floor would raise
+    // the values rather than guard them.
+    stats::builtin(EntityStatId::RADIUS, "radius", FixedU64::ZERO),
 ];
 
 // Floors and names are looked up by `EntityStatId::index`, so every entry must sit at

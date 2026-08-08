@@ -6,21 +6,18 @@
 
 use std::collections::BTreeMap;
 
-use ferrets_math::FixedU64;
-use ferrets_math::fixed_urect::FixedURect;
-use ferrets_math::fixed_uvec2::FixedUVec2;
-use ferrets_pathfinder::nav_pos::NavPos;
-use ferrets_simulation::command::{PlayerCommand, SelectMode, SkillCasterRef};
-use ferrets_simulation::components::rally::RallyTarget;
-use ferrets_simulation::components::stance::Stance;
-use ferrets_simulation::content::research::ResearchId;
-use ferrets_simulation::content::skills::SkillId;
-use ferrets_simulation::order::AttackTarget;
-use ferrets_simulation::simulation_id::SimulationId;
+use ferrets_geometry::cell_pos::CellPos;
+use ferrets_math::{FixedU64, fixed_urect::FixedURect, fixed_uvec2::FixedUVec2};
+use ferrets_simulation::{
+    command::{PlayerCommand, SelectMode, SkillCasterRef},
+    components::{rally::RallyTarget, stance::Stance},
+    content::{research::ResearchId, skills::SkillId},
+    order::AttackTarget,
+    simulation_id::SimulationId,
+};
 use mlua::{Table, Value};
 
-use crate::ai::view::content::ContentView;
-use crate::error::ScriptError;
+use crate::{ai::view::content::ContentView, error::ScriptError};
 
 /// The name → handle indexes a command batch resolves against: scripts name
 /// registered content, the commands they become carry ids.
@@ -170,7 +167,7 @@ fn command(table: &Table, index: usize, names: &CommandNames) -> crate::Result<P
 
 /// World position of the cell's origin corner.
 fn cell(x: u32, y: u32) -> FixedUVec2 {
-    FixedUVec2::from(NavPos::new(x, y))
+    FixedUVec2::from(CellPos::new(x, y))
 }
 
 /// The `caster` of a use_skill command: an entity id, or the string

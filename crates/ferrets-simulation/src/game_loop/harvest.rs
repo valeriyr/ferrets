@@ -2,12 +2,14 @@
 //! Called by [`super::orders`] as part of the shared order lifecycle.
 
 use bevy_ecs::{entity::Entity, world::World};
-use ferrets_pathfinder::{astar, nav_pos::NavPos, nav_size::NavSize};
+use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
 
-use super::chase::{self, Destination};
-use super::crew;
-use super::orders::Processing;
-use super::work;
+use super::{
+    chase::{self, Destination},
+    crew,
+    orders::Processing,
+    work,
+};
 use crate::{
     components::{
         build::UnderConstructionComponent,
@@ -430,9 +432,9 @@ fn stop_work(world: &mut World, entity: Entity, harvest: &mut HarvestComponent) 
 }
 
 /// The cell and footprint size the entity stands on, used as the reveal anchor.
-fn own_footprint(world: &World, entity: Entity) -> (NavPos, NavSize) {
+fn own_footprint(world: &World, entity: Entity) -> (CellPos, CellSize) {
     let (position, size) = entity_def::footprint(world, entity);
-    (NavPos::from(position), size)
+    (CellPos::from(position), size)
 }
 
 /// Picks the source to harvest from: the trip in progress, the ordered target,
@@ -477,7 +479,7 @@ fn resolve_source(
         }
     }
 
-    let position = NavPos::from(
+    let position = CellPos::from(
         world
             .entity(entity)
             .get::<LocationComponent>()
@@ -522,7 +524,7 @@ fn resolve_storage(
         return Some(target);
     }
 
-    let position = NavPos::from(
+    let position = CellPos::from(
         world
             .entity(entity)
             .get::<LocationComponent>()
@@ -538,7 +540,7 @@ fn resolve_storage(
 /// [`SimulationId`], so the result is deterministic.
 fn nearest(
     world: &World,
-    from: NavPos,
+    from: CellPos,
     max_distance: Option<u32>,
     filter: impl Fn(SimulationId, Entity) -> bool,
 ) -> Option<SimulationId> {
@@ -550,13 +552,13 @@ fn nearest(
             continue;
         }
         let (position, size) = entity_def::footprint(world, entity);
-        let origin = NavPos::from(position);
+        let origin = CellPos::from(position);
         if let Some(max) = max_distance
-            && !astar::in_range_of_rect(projection, from, origin, size, max)
+            && !projection.in_range_of_rect(from, CellRect::new(origin, size), max)
         {
             continue;
         }
-        let distance = astar::rect_distance(projection, from, origin, size);
+        let distance = projection.rect_distance(from, CellRect::new(origin, size));
         // Ascending id iteration: strictly-closer wins, ties keep the lower id.
         if best.is_none_or(|(best_distance, _)| distance < best_distance) {
             best = Some((distance, id));

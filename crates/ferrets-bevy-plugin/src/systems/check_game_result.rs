@@ -1,11 +1,14 @@
 use bevy::prelude::*;
-use ferrets_script::ai::AiVision;
-use ferrets_script::scenario::Outcome;
-use ferrets_simulation::game_loop;
-use ferrets_simulation::session::{GameResult, GameSession, Winner, finish_policy::FinishPolicy};
+use ferrets_script::{ai::AiVision, scenario::Outcome};
+use ferrets_simulation::{
+    game_loop,
+    session::{GameResult, GameSession, Winner, finish_policy::FinishPolicy},
+};
 
-use crate::ai;
-use crate::scenario::{ScenarioObjectives, ScenarioRuntimes};
+use crate::{
+    ai,
+    scenario::{ScenarioObjectives, ScenarioRuntimes},
+};
 
 /// Applies the session's finish policy at the end of the tick, ending the game
 /// once it is decided: the built-in last-standing check, a scripted scenario's

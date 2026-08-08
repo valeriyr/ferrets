@@ -2,8 +2,10 @@
 
 use mlua::{Lua, Table, Value};
 
-use crate::ai::view::content::{ContentView, EntityContentView};
-use crate::ai::view::game::{EntityView, GameView};
+use crate::ai::view::{
+    content::{ContentView, EntityContentView},
+    game::{EntityView, GameView},
+};
 
 /// Encodes a game view as the `view` table a think call receives.
 pub(super) fn game_table(lua: &Lua, view: &GameView) -> mlua::Result<Table> {

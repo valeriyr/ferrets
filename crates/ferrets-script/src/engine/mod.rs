@@ -11,9 +11,10 @@ pub mod lua;
 
 use ferrets_simulation::content::registry::ContentRegistry;
 
-use crate::ai::AiRuntime;
-use crate::ai::view::content::ContentView;
-use crate::scenario::ScenarioRuntime;
+use crate::{
+    ai::{AiRuntime, view::content::ContentView},
+    scenario::ScenarioRuntime,
+};
 
 /// A scripting runtime: one loader per script-facing layer of the game.
 pub trait ScriptEngine {

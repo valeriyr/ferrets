@@ -9,13 +9,17 @@
 //! This sits above the transport layer (it understands the [`Message`] envelope)
 //! while still presenting a [`NetworkTransport`] to each channel.
 
-use std::collections::VecDeque;
-use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
+use std::{
+    collections::VecDeque,
+    net::SocketAddr,
+    sync::{Arc, Mutex},
+};
 
-use crate::message::{self, Message};
-use crate::peer::PeerId;
-use crate::transport::{ConnectionState, NetworkTransport, TransportEvent};
+use crate::{
+    message::{self, Message},
+    peer::PeerId,
+    transport::{ConnectionState, NetworkTransport, TransportEvent},
+};
 
 /// One of the two planes a split socket carries.
 #[derive(Clone, Copy)]

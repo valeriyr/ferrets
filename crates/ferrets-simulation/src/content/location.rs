@@ -1,6 +1,7 @@
 //! Content-defined location property struct and its footprint solidity.
 
-use ferrets_pathfinder::{layer_mask::LayerMask, nav_size::NavSize};
+use ferrets_geometry::cell_size::CellSize;
+use ferrets_pathfinder::layer_mask::LayerMask;
 
 /// Whether an entity's footprint blocks the cells it stands on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,7 +35,7 @@ pub struct LocationDef {
     /// Whether the footprint also claims the occupied layers.
     solidity: Solidity,
     /// Footprint in whole grid cells.
-    size: NavSize,
+    size: CellSize,
 }
 
 impl LocationDef {
@@ -42,7 +43,7 @@ impl LocationDef {
     ///
     /// Panics if `occupation` is empty or `size` has a zero dimension.
     #[inline]
-    pub fn new(occupation: impl Into<LayerMask>, size: NavSize, solidity: Solidity) -> Self {
+    pub fn new(occupation: impl Into<LayerMask>, size: CellSize, solidity: Solidity) -> Self {
         let occupation = occupation.into();
 
         assert!(
@@ -75,7 +76,7 @@ impl LocationDef {
 
     /// Returns the entity's footprint size in grid cells.
     #[inline]
-    pub fn size(&self) -> NavSize {
+    pub fn size(&self) -> CellSize {
         self.size
     }
 }

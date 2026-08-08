@@ -2,8 +2,7 @@
 
 use bevy_ecs::prelude::*;
 
-use crate::session::GameSession;
-use crate::session::player_slot::PlayerId;
+use crate::session::{GameSession, player_slot::PlayerId};
 
 /// The player that owns this entity.
 ///

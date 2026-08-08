@@ -1,12 +1,13 @@
 //! The lockstep driver: broadcasting and decoding frames and checksums over a
 //! transport, with peer-to-slot translation.
 
-use ferrets_network::driver::{LockstepDriver, PeerChecksum};
-use ferrets_network::role::Role;
-use ferrets_network::roster::Roster;
-use ferrets_network::transport::loopback::LoopbackTransport;
-use ferrets_simulation::command::PlayerCommand;
-use ferrets_simulation::input::PlayerFrame;
+use ferrets_network::{
+    driver::{LockstepDriver, PeerChecksum},
+    role::Role,
+    roster::Roster,
+    transport::loopback::LoopbackTransport,
+};
+use ferrets_simulation::{command::PlayerCommand, input::PlayerFrame};
 
 //
 // ─── Frame exchange ─────────────────────────────────────────────────────────

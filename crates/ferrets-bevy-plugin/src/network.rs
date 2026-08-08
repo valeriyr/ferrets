@@ -9,15 +9,15 @@
 //! [`SimulationPlugin`](crate::SimulationPlugin) for every game: the systems run
 //! only once a [`NetworkSession`] is installed, which a local game never does.
 
-use std::collections::btree_map::Entry;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 
 use bevy::prelude::*;
-use ferrets_network::message::control::{ControlMessage, InGameMessage};
-use ferrets_network::session::NetSession;
-use ferrets_simulation::checksum;
+use ferrets_network::{
+    message::control::{ControlMessage, InGameMessage},
+    session::NetSession,
+};
 use ferrets_simulation::{
-    checksum::CHECKSUM_INTERVAL,
+    checksum::{self, CHECKSUM_INTERVAL},
     input::{InputFrames, SYNC_LATENCY},
     session::{
         GameResult, GameSession, authority::Authority, drop_policy::DropPolicy,

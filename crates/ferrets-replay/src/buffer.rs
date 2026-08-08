@@ -1,7 +1,9 @@
 //! In-memory byte streams for recording and playback.
 
-use std::io::{self, Write};
-use std::sync::{Arc, Mutex};
+use std::{
+    io::{self, Write},
+    sync::{Arc, Mutex},
+};
 
 /// An owned, `Send + 'static` byte sink whose clones share one buffer: bytes
 /// written through any clone can be read back through any other.

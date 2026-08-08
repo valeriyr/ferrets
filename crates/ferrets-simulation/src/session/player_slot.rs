@@ -2,9 +2,11 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::map_data::{MapData, MapSlot};
-use crate::scenario::Scenario;
-use crate::session::player_type::PlayerType;
+use crate::{
+    map_data::{MapData, MapSlot},
+    scenario::Scenario,
+    session::player_type::PlayerType,
+};
 
 /// A player unique ID, used to identify players in the simulation and replays.
 pub type PlayerId = u8;

@@ -6,7 +6,7 @@
 mod utils;
 
 use bevy::prelude::{App, Entity};
-use ferrets_pathfinder::nav_size::NavSize;
+use ferrets_geometry::cell_size::CellSize;
 use ferrets_simulation::{
     content::{entity_type_def::EntityTypeDef, location::Solidity, registry::ContentRegistry},
     session::{
@@ -376,14 +376,14 @@ fn register_bases_content(app: &mut App) {
     let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
     registry.register(
         EntityTypeDef::new("base")
-            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
             .with_health(30)
             .with_dying(2, None)
             .with_tags(["building"]),
     );
     registry.register(
         EntityTypeDef::new("soldier")
-            .with_location(GROUND, NavSize::ONE, Solidity::Solid)
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
             .with_health(30)
             .with_dying(2, None),
     );

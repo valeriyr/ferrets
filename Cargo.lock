@@ -2351,9 +2351,11 @@ name = "ferrets-bevy-plugin"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "ferrets-geometry",
  "ferrets-math",
  "ferrets-network",
  "ferrets-pathfinder",
+ "ferrets-physics",
  "ferrets-replay",
  "ferrets-script",
  "ferrets-simulation",
@@ -2365,13 +2367,23 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "ferrets-bevy-plugin",
+ "ferrets-geometry",
  "ferrets-math",
  "ferrets-network",
  "ferrets-pathfinder",
+ "ferrets-physics",
  "ferrets-replay",
  "ferrets-script",
  "ferrets-simulation",
  "rfd",
+]
+
+[[package]]
+name = "ferrets-geometry"
+version = "0.1.0"
+dependencies = [
+ "ferrets-math",
+ "serde",
 ]
 
 [[package]]
@@ -2400,9 +2412,19 @@ dependencies = [
 name = "ferrets-pathfinder"
 version = "0.1.0"
 dependencies = [
+ "ferrets-geometry",
  "ferrets-math",
  "pathfinding",
  "serde",
+]
+
+[[package]]
+name = "ferrets-physics"
+version = "0.1.0"
+dependencies = [
+ "ferrets-geometry",
+ "ferrets-math",
+ "ferrets-pathfinder",
 ]
 
 [[package]]
@@ -2419,6 +2441,7 @@ dependencies = [
 name = "ferrets-script"
 version = "0.1.0"
 dependencies = [
+ "ferrets-geometry",
  "ferrets-math",
  "ferrets-pathfinder",
  "ferrets-simulation",
@@ -2431,8 +2454,10 @@ name = "ferrets-simulation"
 version = "0.1.0"
 dependencies = [
  "bevy_ecs",
+ "ferrets-geometry",
  "ferrets-math",
  "ferrets-pathfinder",
+ "ferrets-physics",
  "serde",
  "xxhash-rust",
 ]

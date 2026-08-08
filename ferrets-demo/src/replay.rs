@@ -5,19 +5,23 @@
 //! module supplies the files they read and write, and the menu/teardown plumbing
 //! around them.
 
-use std::fs::File;
-use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    fs::File,
+    path::PathBuf,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use bevy::prelude::*;
 use ferrets_bevy_plugin::{
-    BlockedStreak, DesyncTracker, NetworkActive, NetworkSession, PauseIntent, PendingPause,
-    ReplayPlayback, ReplayRecorder, install_game_resources, install_replay_playback,
+    BlockedStreak, ControlLinks, DesyncTracker, NetworkActive, NetworkSession, PauseIntent,
+    PendingPause, ReplayPlayback, ReplayRecorder, install_game_resources, install_replay_playback,
     install_replay_recorder,
 };
-use ferrets_replay::header::{RecordedGame, ReplayHeader};
-use ferrets_replay::recorder::Recorder;
-use ferrets_replay::replay::Replay;
+use ferrets_replay::{
+    header::{RecordedGame, ReplayHeader},
+    recorder::Recorder,
+    replay::Replay,
+};
 use ferrets_simulation::{
     entity_index::EntityIndex,
     session::{
@@ -27,10 +31,13 @@ use ferrets_simulation::{
     simulation_id::SimulationIdGenerator,
 };
 
-use crate::map;
-use crate::scenario::CurrentScenario;
-use crate::skirmish::CurrentSkirmish;
-use crate::states::{GameState, InGameUi};
+use crate::{
+    map,
+    scenario::{self, CurrentScenario},
+    settings,
+    skirmish::CurrentSkirmish,
+    states::{GameState, InGameUi},
+};
 
 /// Set by the menu to ask for a replay to be opened; consumed by
 /// [`start_watching`].
@@ -130,7 +137,9 @@ pub fn start_watching(world: &mut World) {
     // own session; a skirmish spells its out in the recording.
     let (slots, map_name, finish_policy, scenario) = match game {
         RecordedGame::Scenario(name) => {
-            let mission = crate::scenario::builtin_mission();
+            let settings = *world.resource::<settings::Settings>();
+            let mission =
+                scenario::builtin_mission(settings.view.projection(), settings.movement_model);
             if name != mission.name {
                 eprintln!("the replay needs unknown scenario '{name}'");
                 return;
@@ -240,8 +249,10 @@ pub fn teardown_session(world: &mut World) {
     world.remove_resource::<RecordingPath>();
 
     // These network resources live for the app's lifetime, so reset (not remove)
-    // their per-game state — stale checksums or a pending pause would otherwise
-    // bleed into the next network game.
+    // their per-game state — stale checksums, a pending pause, or a peer
+    // recorded as lost would otherwise bleed into the next network game (a
+    // lost host id, in particular, would abort the next session on sight).
+    world.insert_resource(ControlLinks::default());
     world.insert_resource(DesyncTracker::default());
     world.insert_resource(BlockedStreak::default());
     world.insert_resource(PendingPause::default());

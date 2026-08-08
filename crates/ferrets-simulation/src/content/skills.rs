@@ -8,8 +8,7 @@
 use ferrets_math::FixedU64;
 use serde::{Deserialize, Serialize};
 
-use super::entity_buffs::EntityBuffId;
-use super::player_buffs::PlayerBuffId;
+use super::{entity_buffs::EntityBuffId, player_buffs::PlayerBuffId};
 use crate::resources::Cost;
 
 /// A handle to a registered skill, assigned in registration order.

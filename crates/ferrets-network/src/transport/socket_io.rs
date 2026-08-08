@@ -7,19 +7,21 @@
 //! over them. The async task (UDP datagram loop, TCP connection tasks) is supplied
 //! by each transport.
 
-use std::collections::HashMap;
-use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::{Arc, Mutex};
-use std::thread::JoinHandle;
+use std::{
+    collections::HashMap,
+    net::SocketAddr,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU8, Ordering},
+    },
+    thread::JoinHandle,
+};
 
 use crossbeam_channel::Receiver;
-use tokio::sync::mpsc::UnboundedSender;
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc::UnboundedSender, oneshot};
 
 use super::{ConnectionState, TransportEvent};
-use crate::peer::PeerId;
-use crate::transport::error::TransportError;
+use crate::{peer::PeerId, transport::error::TransportError};
 
 /// Per-peer source addresses a background task observed on connect, shared with
 /// the synchronous handle. Empty for transports that do not track them.

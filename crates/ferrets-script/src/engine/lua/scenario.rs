@@ -1,16 +1,16 @@
 //! The scenario-DSL binding: a hardened, session-long Lua state hosting one
 //! scenario's objectives and win/loss check.
 
-use std::cell::RefCell;
-use std::rc::Rc;
+use std::{cell::RefCell, rc::Rc};
 
 use mlua::{Function, Lua, Table, Value};
 
-use crate::ai::view::content::ContentView;
-use crate::ai::view::game::GameView;
-use crate::engine::lua::{self, view};
-use crate::error::ScriptError;
-use crate::scenario::{ObjectiveStatus, Outcome, ScenarioRuntime, ScenarioStatus};
+use crate::{
+    ai::view::{content::ContentView, game::GameView},
+    engine::lua::{self, view},
+    error::ScriptError,
+    scenario::{ObjectiveStatus, Outcome, ScenarioRuntime, ScenarioStatus},
+};
 
 /// A live Lua evaluator for one scenario.
 ///

@@ -2,15 +2,13 @@
 //! and a minimum-damage floor keeps a heavily-armored target killable.
 
 use bevy::prelude::*;
+use ferrets_geometry::cell_size::CellSize;
 use ferrets_math::FixedU64;
-use ferrets_pathfinder::nav_size::NavSize;
-use ferrets_simulation::content::{
-    entity_type_def::EntityTypeDef, location::Solidity, registry::ContentRegistry,
+use ferrets_simulation::{
+    content::{entity_type_def::EntityTypeDef, location::Solidity, registry::ContentRegistry},
+    session::{GameSession, player_slot::PlayerSlot, player_type::PlayerType},
+    spawn,
 };
-use ferrets_simulation::session::GameSession;
-use ferrets_simulation::session::player_slot::PlayerSlot;
-use ferrets_simulation::session::player_type::PlayerType;
-use ferrets_simulation::spawn;
 
 mod utils;
 
@@ -85,27 +83,27 @@ fn app() -> App {
         registry.register_tag("armored");
         registry.register(
             EntityTypeDef::new("grunt")
-                .with_location(utils::GROUND, NavSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5))
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
                 .with_health(50)
                 .with_attack(10, 1, 1, 4, 2)
                 .with_bonus_damage_vs([("armored", 10u32)]),
         );
         registry.register(
             EntityTypeDef::new("tank")
-                .with_location(utils::GROUND, NavSize::ONE, Solidity::Solid)
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
                 .with_health(200)
                 .with_armor(3)
                 .with_tags(["armored"]),
         );
         registry.register(
             EntityTypeDef::new("scout")
-                .with_location(utils::GROUND, NavSize::ONE, Solidity::Solid)
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
                 .with_health(200),
         );
         registry.register(
             EntityTypeDef::new("fortress")
-                .with_location(utils::GROUND, NavSize::ONE, Solidity::Solid)
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
                 .with_health(200)
                 .with_armor(100),
         );

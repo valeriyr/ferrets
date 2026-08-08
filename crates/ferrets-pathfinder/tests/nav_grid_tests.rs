@@ -2,7 +2,8 @@
 
 mod utils;
 
-use ferrets_pathfinder::{nav_grid::NavGrid, nav_size::NavSize};
+use ferrets_geometry::cell_size::CellSize;
+use ferrets_pathfinder::nav_grid::NavGrid;
 
 //
 // ─── Layers ───────────────────────────────────────────────────────────────────
@@ -204,7 +205,7 @@ fn set_occupied_by_does_not_affect_unmasked_layers() {
 fn footprint_is_passable_when_all_cells_are_free() {
     let grid = utils::grid(8, 8);
 
-    assert!(grid.is_footprint_passable_by(utils::GROUND, utils::nav(2, 2), NavSize::new(3, 2)));
+    assert!(grid.is_footprint_passable_by(utils::GROUND, utils::nav(2, 2), CellSize::new(3, 2)));
 }
 
 #[test]
@@ -212,12 +213,56 @@ fn footprint_is_blocked_by_any_occupied_cell() {
     let mut grid = utils::grid(8, 8);
     grid.set_occupied(utils::GROUND, utils::nav(3, 3), true);
 
-    assert!(!grid.is_footprint_passable_by(utils::GROUND, utils::nav(2, 2), NavSize::new(3, 2)));
+    assert!(!grid.is_footprint_passable_by(utils::GROUND, utils::nav(2, 2), CellSize::new(3, 2)));
 }
 
 #[test]
 fn footprint_reaching_out_of_bounds_is_blocked() {
     let grid = utils::grid(8, 8);
 
-    assert!(!grid.is_footprint_passable_by(utils::GROUND, utils::nav(7, 7), NavSize::new(2, 2)));
+    assert!(!grid.is_footprint_passable_by(utils::GROUND, utils::nav(7, 7), CellSize::new(2, 2)));
+}
+
+//
+// ─── Unit claims ──────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn claim_blocks_movement_queries_but_not_static_ones() {
+    let mut grid = utils::grid(8, 8);
+    grid.set_claimed_by(utils::GROUND, utils::nav(3, 3), true);
+
+    assert!(grid.is_occupied_by(utils::GROUND, utils::nav(3, 3)));
+    assert!(!grid.is_statically_occupied_by(utils::GROUND, utils::nav(3, 3)));
+    assert!(grid.is_statically_passable_by(utils::GROUND, utils::nav(3, 3)));
+}
+
+#[test]
+fn released_claim_frees_cell() {
+    let mut grid = utils::grid(8, 8);
+    grid.set_claimed_by(utils::GROUND, utils::nav(3, 3), true);
+    grid.set_claimed_by(utils::GROUND, utils::nav(3, 3), false);
+
+    assert!(grid.is_passable_by(utils::GROUND, utils::nav(3, 3)));
+}
+
+#[test]
+fn static_occupancy_blocks_both_query_planes() {
+    let mut grid = utils::grid(8, 8);
+    grid.set_occupied(utils::GROUND, utils::nav(3, 3), true);
+
+    assert!(grid.is_occupied_by(utils::GROUND, utils::nav(3, 3)));
+    assert!(grid.is_statically_occupied_by(utils::GROUND, utils::nav(3, 3)));
+}
+
+#[test]
+fn clear_claims_releases_units_but_keeps_statics() {
+    let mut grid = utils::grid(8, 8);
+    grid.set_claimed_by(utils::GROUND, utils::nav(2, 2), true);
+    grid.set_occupied(utils::GROUND, utils::nav(5, 5), true);
+
+    grid.clear_claims();
+
+    assert!(grid.is_passable_by(utils::GROUND, utils::nav(2, 2)));
+    assert!(grid.is_statically_occupied_by(utils::GROUND, utils::nav(5, 5)));
 }

@@ -3,9 +3,11 @@
 
 mod utils;
 
-use ferrets_pathfinder::nav_pos::NavPos;
+use ferrets_geometry::cell_pos::CellPos;
 use ferrets_simulation::{
-    command::PlayerCommand, components::health::HealthComponent, components::stance::Stance, spawn,
+    command::PlayerCommand,
+    components::{health::HealthComponent, stance::Stance},
+    spawn,
 };
 
 //
@@ -33,7 +35,7 @@ fn attack_move_destroys_enemy_near_path_and_reaches_destination() {
     utils::run_ticks(&mut app, 140);
     let world = app.world_mut();
     utils::assert_despawned(world, barracks);
-    assert_eq!(utils::cell_of(world, sentry), NavPos::new(20, 10));
+    assert_eq!(utils::cell_of(world, sentry), CellPos::new(20, 10));
     assert!(utils::order_queue_is_empty(world, sentry));
 }
 
@@ -59,7 +61,7 @@ fn attack_move_reengages_until_path_is_clear() {
     let world = app.world_mut();
     utils::assert_despawned(world, first);
     utils::assert_despawned(world, second);
-    assert_eq!(utils::cell_of(world, sentry), NavPos::new(20, 10));
+    assert_eq!(utils::cell_of(world, sentry), CellPos::new(20, 10));
 }
 
 #[test]
@@ -111,7 +113,7 @@ fn attack_move_without_enemies_reaches_destination() {
 
     utils::run_ticks(&mut app, 50);
     let world = app.world_mut();
-    assert_eq!(utils::cell_of(world, sentry), NavPos::new(20, 10));
+    assert_eq!(utils::cell_of(world, sentry), CellPos::new(20, 10));
     assert!(utils::order_queue_is_empty(world, sentry));
 }
 
@@ -134,6 +136,6 @@ fn unarmed_unit_attack_moves_like_plain_move() {
 
     utils::run_ticks(&mut app, 60);
     let world = app.world_mut();
-    assert_eq!(utils::cell_of(world, worker), NavPos::new(20, 10));
+    assert_eq!(utils::cell_of(world, worker), CellPos::new(20, 10));
     assert_eq!(world.get::<HealthComponent>(ghost).unwrap().current(), 20);
 }

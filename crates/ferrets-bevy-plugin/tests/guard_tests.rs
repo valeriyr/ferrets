@@ -3,7 +3,7 @@
 
 mod utils;
 
-use ferrets_pathfinder::{astar, nav_pos::NavPos};
+use ferrets_geometry::cell_pos::CellPos;
 use ferrets_simulation::{command::PlayerCommand, spawn};
 
 //
@@ -38,10 +38,9 @@ fn guard_follows_moving_ward() {
 
     utils::run_ticks(&mut app, 80);
     let world = app.world_mut();
-    let distance = astar::chebyshev(utils::cell_of(world, sentry), utils::cell_of(world, worker));
     assert!(
-        distance <= 3,
-        "guard trails the ward, got distance {distance}"
+        utils::within(world, sentry, worker, 3),
+        "guard trails the ward"
     );
     // Still guarding.
     assert!(!utils::order_queue_is_empty(world, sentry));
@@ -67,13 +66,9 @@ fn guard_of_building_holds_station() {
 
     utils::run_ticks(&mut app, 40);
     let world = app.world_mut();
-    let distance = astar::chebyshev(
-        utils::cell_of(world, sentry),
-        utils::cell_of(world, barracks),
-    );
     assert!(
-        distance <= 3,
-        "guard stations near the ward, got {distance}"
+        utils::within(world, sentry, barracks, 3),
+        "guard stations near the ward"
     );
     assert!(!utils::order_queue_is_empty(world, sentry));
 }
@@ -102,7 +97,7 @@ fn guard_finishes_when_ward_dies() {
 
     let world = app.world_mut();
     assert!(utils::order_queue_is_empty(world, sentry));
-    assert_eq!(utils::cell_of(world, sentry), NavPos::new(5, 10));
+    assert_eq!(utils::cell_of(world, sentry), CellPos::new(5, 10));
 }
 
 //
@@ -161,5 +156,5 @@ fn guard_on_hostile_ward_is_refused() {
     utils::run_ticks(&mut app, 5);
     let world = app.world_mut();
     assert!(utils::order_queue_is_empty(world, sentry));
-    assert_eq!(utils::cell_of(world, sentry), NavPos::new(5, 10));
+    assert_eq!(utils::cell_of(world, sentry), CellPos::new(5, 10));
 }

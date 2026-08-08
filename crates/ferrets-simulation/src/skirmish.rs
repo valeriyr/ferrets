@@ -2,8 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::session::finish_policy::FinishPolicy;
-use crate::session::player_slot::PlayerSlot;
+use crate::session::{finish_policy::FinishPolicy, player_slot::PlayerSlot};
 
 /// A lobby-made game — the counterpart of a scenario. Where a scenario is an
 /// authored package resolved by name, a skirmish has no identity of its own:

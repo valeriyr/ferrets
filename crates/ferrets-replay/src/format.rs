@@ -8,9 +8,11 @@
 
 use std::io::{Read, Write};
 
-use crate::error::ReplayError;
-use crate::header::{FORMAT_VERSION, ReplayHeader};
-use crate::record::TickRecord;
+use crate::{
+    error::ReplayError,
+    header::{FORMAT_VERSION, ReplayHeader},
+    record::TickRecord,
+};
 
 /// Identifies a ferrets replay stream.
 const MAGIC: [u8; 4] = *b"FREP";

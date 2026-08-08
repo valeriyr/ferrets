@@ -8,12 +8,14 @@ use bevy_ecs::{
     query::{With, Without},
     world::World,
 };
-use ferrets_pathfinder::nav_pos::NavPos;
+use ferrets_geometry::cell_pos::CellPos;
 
-use super::chase::{self, Destination};
-use super::crew;
-use super::orders::Processing;
-use super::work;
+use super::{
+    chase::{self, Destination},
+    crew,
+    orders::Processing,
+    work,
+};
 use crate::{
     components::{
         build::{BuildComponent, UnderConstructionComponent},
@@ -97,7 +99,7 @@ pub fn cancel_processing(
         if leave_crew(world, building_id, entity) {
             abandon_site(world, entity, building_id, type_name);
         }
-        work::leave(world, entity, NavPos::from(position), size);
+        work::leave(world, entity, CellPos::from(position), size);
     }
 
     OrderState::Finished
@@ -133,7 +135,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
             type_def.cost.clone(),
         )
     };
-    let site_origin = NavPos::from(position);
+    let site_origin = CellPos::from(position);
     let size = building_location_def.size();
 
     let Some(building_id) = build_component.building else {
@@ -302,7 +304,7 @@ fn abandon_site(world: &mut World, entity: Entity, site: SimulationId, type_name
 fn site_under_way_at(
     world: &mut World,
     type_name: &str,
-    origin: NavPos,
+    origin: CellPos,
     owner: Option<PlayerId>,
 ) -> Option<SimulationId> {
     let mut query = world.query_filtered::<(
@@ -319,7 +321,7 @@ fn site_under_way_at(
         .iter(world)
         .filter(|(info, location, site_owner)| {
             info.type_name() == type_name
-                && NavPos::from(location.position) == origin
+                && CellPos::from(location.position) == origin
                 && site_owner.map(|o| o.player()) == owner
         })
         .map(|(info, _, _)| info.id())

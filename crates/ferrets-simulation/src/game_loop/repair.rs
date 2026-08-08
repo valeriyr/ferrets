@@ -1,16 +1,18 @@
 //! Repair order implementation.
 //! Called by [`super::orders`] as part of the shared order lifecycle.
 
+use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use std::collections::BTreeMap;
 
 use bevy_ecs::{entity::Entity, world::World};
 use ferrets_math::FixedU64;
-use ferrets_pathfinder::{nav_pos::NavPos, nav_size::NavSize};
 
-use super::chase::{self, Destination};
-use super::crew;
-use super::orders::Processing;
-use super::work;
+use super::{
+    chase::{self, Destination},
+    crew,
+    orders::Processing,
+    work,
+};
 use crate::{
     components::{
         build::UnderConstructionComponent,
@@ -386,11 +388,11 @@ fn leave_job(world: &mut World, entity: Entity, target: SimulationId) {
     let (around, around_size) = match world.resource::<EntityIndex>().alive(target) {
         Some(target) => {
             let (position, size) = entity_def::footprint(world, target);
-            (NavPos::from(position), size)
+            (CellPos::from(position), size)
         }
         None => (
-            NavPos::from(entity_def::position(world, entity)),
-            NavSize::ONE,
+            CellPos::from(entity_def::position(world, entity)),
+            CellSize::ONE,
         ),
     };
     work::leave(world, entity, around, around_size);

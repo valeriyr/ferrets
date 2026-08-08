@@ -2,36 +2,38 @@
 //! snapshots, and return command tables that round-trip to player commands;
 //! malformed scripts and results surface as errors rather than panics.
 
-use ferrets_math::FixedI64;
-use ferrets_math::FixedU64;
-use ferrets_math::fixed_urect::FixedURect;
-use ferrets_math::fixed_uvec2::FixedUVec2;
+use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
+use ferrets_math::{FixedI64, FixedU64, fixed_urect::FixedURect, fixed_uvec2::FixedUVec2};
 use ferrets_pathfinder::nav_grid::LayerId;
-use ferrets_pathfinder::nav_pos::NavPos;
-use ferrets_pathfinder::nav_size::NavSize;
-use ferrets_script::ai::view::content::{AttackView, ContentView, EntityContentView};
-use ferrets_script::ai::view::game::{EntityView, GameView};
-use ferrets_script::ai::{AiRuntime, AiVision};
-use ferrets_script::engine::ScriptEngine;
-use ferrets_script::engine::lua::LuaEngine;
-use ferrets_script::error::ScriptError;
-use ferrets_simulation::command::{PlayerCommand, SelectMode, SkillCasterRef};
-use ferrets_simulation::components::rally::RallyTarget;
-use ferrets_simulation::components::stance::Stance;
-use ferrets_simulation::content::entity_stats::EntityStatId;
-use ferrets_simulation::content::entity_type_def::EntityTypeDef;
-use ferrets_simulation::content::location::Solidity;
-use ferrets_simulation::content::player_buffs::PlayerBuffDef;
-use ferrets_simulation::content::registry::ContentRegistry;
-use ferrets_simulation::content::research::{ResearchDef, ResearchId};
-use ferrets_simulation::content::skills::{
-    EntityCastEffect, EntityCastTarget, PlayerCastEffect, SkillCaster, SkillDef,
+use ferrets_script::{
+    ai::{
+        AiRuntime, AiVision,
+        view::{
+            content::{AttackView, ContentView, EntityContentView},
+            game::{EntityView, GameView},
+        },
+    },
+    engine::{ScriptEngine, lua::LuaEngine},
+    error::ScriptError,
 };
-use ferrets_simulation::content::stack_rule::StackRule;
-use ferrets_simulation::content::stats::{EntityModifier, ModifierOp};
-use ferrets_simulation::order::AttackTarget;
-use ferrets_simulation::resources;
-use ferrets_simulation::simulation_id::SimulationId;
+use ferrets_simulation::{
+    command::{PlayerCommand, SelectMode, SkillCasterRef},
+    components::{rally::RallyTarget, stance::Stance},
+    content::{
+        entity_stats::EntityStatId,
+        entity_type_def::EntityTypeDef,
+        location::Solidity,
+        player_buffs::PlayerBuffDef,
+        registry::ContentRegistry,
+        research::{ResearchDef, ResearchId},
+        skills::{EntityCastEffect, EntityCastTarget, PlayerCastEffect, SkillCaster, SkillDef},
+        stack_rule::StackRule,
+        stats::{EntityModifier, ModifierOp},
+    },
+    order::AttackTarget,
+    resources,
+    simulation_id::SimulationId,
+};
 
 //
 // ─── Round-trip ─────────────────────────────────────────────────────────────
@@ -762,7 +764,7 @@ const COUNTER: &str = r#"
 "#;
 
 fn cell(x: u32, y: u32) -> FixedUVec2 {
-    FixedUVec2::from(NavPos::new(x, y))
+    FixedUVec2::from(CellPos::new(x, y))
 }
 
 /// A content view built from a real registry holding the `smithing` research
@@ -833,7 +835,7 @@ fn research_content() -> (ContentView, ResearchId) {
     );
     registry.register(
         EntityTypeDef::new("lab")
-            .with_location(LayerId::new(1), NavSize::ONE, Solidity::Solid)
+            .with_location(LayerId::new(1), CellSize::ONE, Solidity::Solid)
             .with_researcher([smithing])
             .with_energy(50, FixedU64::ONE)
             .with_skills([battle_focus, second_wind]),

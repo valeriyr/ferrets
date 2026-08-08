@@ -1,15 +1,18 @@
 //! The demo's embedded content script and map: they load, validate, and agree
 //! with each other.
 
-use ferrets_demo::content::CONTENT;
-use ferrets_demo::map;
+use ferrets_demo::{content::CONTENT, map};
+use ferrets_geometry::cell_pos::CellPos;
 use ferrets_math::FixedU64;
-use ferrets_pathfinder::nav_pos::NavPos;
 use ferrets_script::{content, engine::lua::LuaEngine};
-use ferrets_simulation::content::entity_stats::EntityStatId;
-use ferrets_simulation::content::skills::{EntityCastTarget, PlayerCastEffect, SkillCaster};
-use ferrets_simulation::content::work::WorkPresence;
-use ferrets_simulation::map::Map;
+use ferrets_simulation::{
+    content::{
+        entity_stats::EntityStatId,
+        skills::{EntityCastTarget, PlayerCastEffect, SkillCaster},
+        work::WorkPresence,
+    },
+    map::Map,
+};
 
 #[test]
 fn content_loads_and_validates() {
@@ -184,11 +187,11 @@ fn map_builds_against_content_with_lake_blocking_ground() {
     let water = registry.layer(map::WATER).unwrap();
 
     // The lake center floats ships and blocks walkers; a corner is the inverse.
-    let lake = NavPos::new(32, 32);
+    let lake = CellPos::new(48, 48);
     assert!(!live.nav_grid().is_passable(ground, lake));
     assert!(live.nav_grid().is_passable(water, lake));
 
-    let corner = NavPos::new(1, 1);
+    let corner = CellPos::new(1, 1);
     assert!(live.nav_grid().is_passable(ground, corner));
     assert!(!live.nav_grid().is_passable(water, corner));
 }
@@ -212,7 +215,7 @@ fn boss_placements_sit_on_water() {
             .expect("boss placement type has a location");
         for dy in 0..size.height {
             for dx in 0..size.width {
-                let cell = NavPos::new(placement.cell.0 + dx, placement.cell.1 + dy);
+                let cell = CellPos::new(placement.cell.0 + dx, placement.cell.1 + dy);
                 assert!(
                     live.nav_grid().is_passable(water, cell),
                     "boss '{}' cell ({}, {}) is not open water",

@@ -46,9 +46,11 @@ cargo run -p ferrets-demo
 ```text
 crates/
 ├── ferrets-bevy-plugin  Bevy integration for the ferrets simulation
+├── ferrets-geometry     Cell-grid geometry and the projection distance metrics
 ├── ferrets-math         Fixed-point math primitives for deterministic simulation
 ├── ferrets-network      Lockstep P2P networking for deterministic multiplayer
 ├── ferrets-pathfinder   Deterministic RTS pathfinding
+├── ferrets-physics      Contact resolution for continuous-model unit bodies
 ├── ferrets-replay       Replay recording and deterministic playback
 ├── ferrets-script       Lua scripting runtime and game content loading
 ├── ferrets-simulation   Deterministic RTS simulation core

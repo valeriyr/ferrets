@@ -1,14 +1,10 @@
 //! A loaded replay: its header and per-tick recorded input.
 
-use std::collections::BTreeMap;
-use std::io::Read;
+use std::{collections::BTreeMap, io::Read};
 
-use ferrets_simulation::command::PlayerCommand;
-use ferrets_simulation::session::player_slot::PlayerId;
+use ferrets_simulation::{command::PlayerCommand, session::player_slot::PlayerId};
 
-use crate::format;
-use crate::header::ReplayHeader;
-use crate::record::TickRecord;
+use crate::{format, header::ReplayHeader, record::TickRecord};
 
 /// A replay loaded from a stream.
 #[derive(Debug)]

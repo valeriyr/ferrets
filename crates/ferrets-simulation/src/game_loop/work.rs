@@ -5,7 +5,7 @@
 //! verbs cannot drift apart.
 
 use bevy_ecs::{entity::Entity, world::World};
-use ferrets_pathfinder::{nav_pos::NavPos, nav_size::NavSize};
+use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 
 use crate::{
     components::entity_stats::StatsComponent,
@@ -29,7 +29,7 @@ pub(super) fn enter(world: &mut World, entity: Entity, presence: WorkPresence) {
 ///
 /// The reveal is queued rather than retried, because the callers all finish their
 /// order in the same tick and are in no position to retry it themselves.
-pub(super) fn leave(world: &mut World, entity: Entity, around: NavPos, around_size: NavSize) {
+pub(super) fn leave(world: &mut World, entity: Entity, around: CellPos, around_size: CellSize) {
     spawn::reveal_entity_near_or_retry(world, entity, around, around_size);
 }
 

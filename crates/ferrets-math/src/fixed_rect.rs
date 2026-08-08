@@ -2,9 +2,7 @@
 
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::FixedI64;
-
-use crate::fixed_vec2::FixedVec2;
+use crate::{FixedI64, fixed_vec2::FixedVec2};
 
 /// Axis-aligned bounding rectangle with [`FixedI64`] coordinates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

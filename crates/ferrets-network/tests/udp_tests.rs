@@ -4,8 +4,7 @@ mod utils;
 
 use std::net::UdpSocket;
 
-use ferrets_network::transport::udp::UdpTransport;
-use ferrets_network::transport::{NetworkTransport, TransportEvent};
+use ferrets_network::transport::{NetworkTransport, TransportEvent, udp::UdpTransport};
 
 //
 // ─── Localhost exchange ─────────────────────────────────────────────────────

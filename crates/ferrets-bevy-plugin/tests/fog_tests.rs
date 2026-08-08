@@ -6,14 +6,16 @@ mod utils;
 
 use bevy::prelude::*;
 use ferrets_bevy_plugin::ai::game_view;
+use ferrets_geometry::cell_size::CellSize;
 use ferrets_math::FixedU64;
-use ferrets_pathfinder::nav_size::NavSize;
 use ferrets_script::ai::AiVision;
 use ferrets_simulation::{
     command::PlayerCommand,
     content::{entity_type_def::EntityTypeDef, location::Solidity, registry::ContentRegistry},
     session::{
-        GameSession, player_slot::PlayerId, player_slot::PlayerSlot, player_type::PlayerType,
+        GameSession,
+        player_slot::{PlayerId, PlayerSlot},
+        player_type::PlayerType,
     },
     spawn,
     visibility::{CellVisibility, VisibilityGrid},
@@ -152,16 +154,16 @@ fn fog_app(slots: Vec<PlayerSlot>) -> App {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
         registry.register(
             EntityTypeDef::new("scout")
-                .with_location(utils::GROUND, NavSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5))
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
                 .with_health(20)
                 .with_dying(1, None)
                 .with_sight_range(6),
         );
         registry.register(
             EntityTypeDef::new("sniper")
-                .with_location(utils::GROUND, NavSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5))
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
                 .with_health(30)
                 .with_dying(1, None)
                 .with_attack(10, 8, 8, 2, 1)
@@ -169,7 +171,7 @@ fn fog_app(slots: Vec<PlayerSlot>) -> App {
         );
         registry.register(
             EntityTypeDef::new("dummy")
-                .with_location(utils::GROUND, NavSize::ONE, Solidity::Solid)
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
                 .with_health(20)
                 .with_dying(1, None)
                 .with_sight_range(3),

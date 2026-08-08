@@ -3,7 +3,11 @@
 
 use bevy_ecs::{entity::Entity, world::World};
 
-use super::{acquire, attack_move, chase, chase::Destination, orders::Processing};
+use super::{
+    acquire, attack_move,
+    chase::{self, Destination},
+    orders::Processing,
+};
 use crate::{
     components::{
         guard::GuardComponent,

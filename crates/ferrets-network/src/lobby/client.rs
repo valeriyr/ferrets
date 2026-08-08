@@ -4,13 +4,12 @@ use std::net::{TcpListener, UdpSocket};
 
 use ferrets_simulation::session::player_slot::{PlayerId, TeamId};
 
-use crate::control::{ControlChannel, ControlEvent};
-use crate::message::control::{
-    ControlMessage, LobbyMessage, LobbyState, Occupant, SlotInfo, UdpEntry,
+use crate::{
+    control::{ControlChannel, ControlEvent},
+    message::control::{ControlMessage, LobbyMessage, LobbyState, Occupant, SlotInfo, UdpEntry},
+    peer::PeerId,
+    transport::error::TransportError,
 };
-use crate::peer::PeerId;
-
-use crate::transport::error::TransportError;
 
 /// The host's start signal, surfaced to the client once the game begins.
 /// Carries the endpoint tables the mode needs: UDP gameplay endpoints for a

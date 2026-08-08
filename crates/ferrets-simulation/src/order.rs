@@ -1,11 +1,10 @@
 //! Internal resolved orders — what entity systems actually execute each tick.
 
+use ferrets_geometry::cell_size::CellSize;
 use ferrets_math::fixed_uvec2::FixedUVec2;
-use ferrets_pathfinder::nav_size::NavSize;
 use serde::{Deserialize, Serialize};
 
-use crate::content::research::ResearchId;
-use crate::simulation_id::SimulationId;
+use crate::{content::research::ResearchId, simulation_id::SimulationId};
 
 /// What an attack is aimed at.
 ///
@@ -47,12 +46,12 @@ pub struct Leash {
 pub enum Order {
     /// Move to within `range` grid cells of the footprint at `target` with the given
     /// `size`, in simulation coordinates. `range` of `0` requires reaching the
-    /// footprint itself. A bare cell is a footprint of [`NavSize::ONE`]; naming the
+    /// footprint itself. A bare cell is a footprint of [`CellSize::ONE`]; naming the
     /// whole of a larger destination is what lets a unit stop at the near side of a
     /// building rather than walking round to the corner its position names.
     Move {
         target: FixedUVec2,
-        size: NavSize,
+        size: CellSize,
         range: u32,
     },
     /// Attack what `target` names — an entity, or a cell for a weapon that sends its
@@ -100,7 +99,7 @@ pub enum Order {
 impl Order {
     /// If this order is a move order, returns the destination footprint and range.
     /// Otherwise, returns `None`.
-    pub fn move_params(&self) -> Option<(FixedUVec2, NavSize, u32)> {
+    pub fn move_params(&self) -> Option<(FixedUVec2, CellSize, u32)> {
         match self {
             Order::Move {
                 target,

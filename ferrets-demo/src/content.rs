@@ -129,7 +129,7 @@ pub const CONTENT: &str = r#"
     define_entity("ship", {
         location = { occupation = WATER, size = 1, solidity = "solid" },
         stats = {
-            speed = "0.25", max_health = 80,
+            speed = "0.25", radius = "0.5", max_health = 80,
             damage = 12, attack_range = 5, acquire_range = 8, attack_period = 10, damage_point = 4,
             -- Sees past its acquire range so its circular vision covers the square it
             -- can auto-engage.
@@ -167,7 +167,7 @@ pub const CONTENT: &str = r#"
             race = race,
             location = { occupation = GROUND, size = 1, solidity = "solid" },
             stats = {
-                speed = "0.3", max_health = 30, sight_range = 4,
+                speed = "0.3", radius = "0.5", max_health = 30, sight_range = 4,
                 -- Mends at the rate it builds, and bills a quarter of the price for
                 -- a full restore, so repairing is cheaper than rebuilding. It works
                 -- from the next cell over.
@@ -206,8 +206,9 @@ pub const CONTENT: &str = r#"
             race = race,
             location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
             -- Enough starting headroom for the first few units; farms carry the
-            -- army beyond it.
-            stats = { max_health = 800, sight_range = 7, supply_provided = 10 },
+            -- army beyond it. Sight reaches the mine placed by the base, so
+            -- the economy never depends on a lucky scout.
+            stats = { max_health = 800, sight_range = 9, supply_provided = 10 },
             dying = { time = 2 },
             cost = { gold = 400 },
             build_time = 200,
@@ -275,7 +276,7 @@ pub const CONTENT: &str = r#"
         race = "human",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
         stats = {
-            speed = "0.3", max_health = 40,
+            speed = "0.3", radius = "0.5", max_health = 40,
             damage = 6, attack_range = 4, acquire_range = 7, attack_period = 7, damage_point = 3,
             -- 0.1/tick is 2 energy a second, so a 30-cost cast is earned over ~15s
             -- rather than handed back instantly: energy gates the skills, not the
@@ -308,7 +309,7 @@ pub const CONTENT: &str = r#"
         race = "human",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
         stats = {
-            speed = "0.3", max_health = 45, sight_range = 9,
+            speed = "0.3", radius = "0.5", max_health = 45, sight_range = 9,
             -- Half a point of energy per point of health (see the repairer cost
             -- below) means a full 200-point pool restores 400 health across a squad.
             max_energy = 200, energy_regen = "0.2",
@@ -340,7 +341,7 @@ pub const CONTENT: &str = r#"
         race = "human",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
         stats = {
-            speed = "0.2", max_health = 35,
+            speed = "0.2", radius = "0.5", max_health = 35,
             damage = 14, attack_range = 7, acquire_range = 9, attack_period = 20, damage_point = 8,
             sight_range = 11,
             supply_cost = 1,
@@ -377,7 +378,7 @@ pub const CONTENT: &str = r#"
         race = "orc",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
         stats = {
-            speed = "0.3", max_health = 60,
+            speed = "0.3", radius = "0.5", max_health = 60,
             damage = 10, attack_range = 1, acquire_range = 5, attack_period = 6, damage_point = 3,
             -- Heavy melee: flat armor blunts each incoming hit.
             armor = 3,
@@ -403,7 +404,7 @@ pub const CONTENT: &str = r#"
         race = "orc",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
         stats = {
-            speed = "0.3", max_health = 35,
+            speed = "0.3", radius = "0.5", max_health = 35,
             max_energy = 80, energy_regen = "0.2",
             sight_range = 8,
             supply_cost = 1,

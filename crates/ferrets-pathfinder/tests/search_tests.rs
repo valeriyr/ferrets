@@ -2,10 +2,9 @@
 
 mod utils;
 
+use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_pathfinder::{
     nav_grid::NavGrid,
-    nav_pos::NavPos,
-    nav_size::NavSize,
     search::{self, Expansion},
 };
 
@@ -172,8 +171,8 @@ fn placement_returns_free_anchor_cell_first() {
         &grid,
         utils::GROUND,
         utils::nav(3, 3),
-        NavSize::new(2, 2),
-        NavSize::ONE,
+        CellSize::new(2, 2),
+        CellSize::ONE,
         8,
     );
 
@@ -196,8 +195,8 @@ fn placement_skips_occupied_anchor_and_picks_first_ring_cell() {
         &grid,
         utils::GROUND,
         utils::nav(3, 3),
-        NavSize::new(2, 2),
-        NavSize::ONE,
+        CellSize::new(2, 2),
+        CellSize::ONE,
         8,
     );
 
@@ -219,8 +218,8 @@ fn placement_requires_whole_spawn_footprint() {
         &grid,
         utils::GROUND,
         utils::nav(3, 3),
-        NavSize::ONE,
-        NavSize::new(2, 2),
+        CellSize::ONE,
+        CellSize::new(2, 2),
         8,
     );
 
@@ -246,8 +245,8 @@ fn placement_gives_up_beyond_max_radius() {
         &grid,
         utils::GROUND,
         utils::nav(3, 3),
-        NavSize::new(2, 2),
-        NavSize::ONE,
+        CellSize::new(2, 2),
+        CellSize::ONE,
         1,
     );
 
@@ -258,10 +257,10 @@ fn placement_gives_up_beyond_max_radius() {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 //
 
-fn find_through_blocked(grid: &NavGrid, pos: NavPos) -> Option<NavPos> {
+fn find_through_blocked(grid: &NavGrid, pos: CellPos) -> Option<CellPos> {
     search::find_nearest_free_pos(grid, utils::GROUND, pos, Expansion::ThroughBlocked)
 }
 
-fn find_through_passable(grid: &NavGrid, pos: NavPos) -> Option<NavPos> {
+fn find_through_passable(grid: &NavGrid, pos: CellPos) -> Option<CellPos> {
     search::find_nearest_free_pos(grid, utils::GROUND, pos, Expansion::ThroughPassable)
 }

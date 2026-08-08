@@ -1,7 +1,6 @@
 //! One simulated tick's recorded input.
 
-use ferrets_simulation::command::PlayerCommand;
-use ferrets_simulation::session::player_slot::PlayerId;
+use ferrets_simulation::{command::PlayerCommand, session::player_slot::PlayerId};
 use serde::{Deserialize, Serialize};
 
 /// The realized input for a single tick.

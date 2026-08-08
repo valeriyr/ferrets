@@ -4,8 +4,8 @@
 mod utils;
 
 use bevy::prelude::*;
+use ferrets_geometry::cell_size::CellSize;
 use ferrets_math::FixedU64;
-use ferrets_pathfinder::nav_size::NavSize;
 use ferrets_simulation::{
     components::build::UnderConstructionComponent,
     content::{
@@ -156,14 +156,14 @@ fn app() -> App {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
         registry.register(
             EntityTypeDef::new("troll")
-                .with_location(utils::GROUND, NavSize::ONE, Solidity::Solid)
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
                 .with_health(40)
                 .with_dying(3, None)
                 .with_stat(EntityStatId::HEALTH_REGEN, FixedU64::from_num(0.5)),
         );
         registry.register(
             EntityTypeDef::new("dummy")
-                .with_location(utils::GROUND, NavSize::ONE, Solidity::Solid)
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
                 .with_health(20),
         );
     }

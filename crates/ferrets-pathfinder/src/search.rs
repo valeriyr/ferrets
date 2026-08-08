@@ -2,9 +2,8 @@
 
 use std::collections::{HashSet, VecDeque};
 
-use crate::{layer_mask::LayerMask, nav_size::NavSize};
-
-use super::{nav_grid::NavGrid, nav_pos::NavPos};
+use crate::{layer_mask::LayerMask, nav_grid::NavGrid};
+use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 
 /// Controls how the BFS expands when it encounters a blocked cell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,11 +40,11 @@ const DIRECTIONS: [(i32, i32); 8] = [
 pub fn find_placement_near(
     grid: &NavGrid,
     layer_mask: impl Into<LayerMask>,
-    around: NavPos,
-    around_size: NavSize,
-    spawn_size: NavSize,
+    around: CellPos,
+    around_size: CellSize,
+    spawn_size: CellSize,
     max_radius: u32,
-) -> Option<NavPos> {
+) -> Option<CellPos> {
     let layer_mask = layer_mask.into();
 
     for radius in 0..=max_radius {
@@ -56,7 +55,7 @@ pub fn find_placement_near(
 
         for y in min_y..=max_y {
             for x in min_x..=max_x {
-                let candidate = NavPos::new(x, y);
+                let candidate = CellPos::new(x, y);
                 if grid.is_footprint_passable_by(layer_mask, candidate, spawn_size) {
                     return Some(candidate);
                 }
@@ -73,9 +72,9 @@ pub fn find_placement_near(
 pub fn find_nearest_free_pos(
     grid: &NavGrid,
     layer_mask: impl Into<LayerMask>,
-    around: NavPos,
+    around: CellPos,
     expansion: Expansion,
-) -> Option<NavPos> {
+) -> Option<CellPos> {
     let layer_mask = layer_mask.into();
 
     if grid.is_passable_by(layer_mask, around) {
@@ -105,7 +104,7 @@ pub fn find_nearest_free_pos(
             if nx < 0 || ny < 0 || nx >= w || ny >= h {
                 continue;
             }
-            let neighbor = NavPos::new(nx as u32, ny as u32);
+            let neighbor = CellPos::new(nx as u32, ny as u32);
             if !visited.insert(neighbor) {
                 continue;
             }

@@ -1,4 +1,4 @@
-use ferrets_pathfinder::nav_size::NavSize;
+use ferrets_geometry::cell_size::CellSize;
 
 //
 // ─── Construction ─────────────────────────────────────────────────────────────
@@ -6,7 +6,7 @@ use ferrets_pathfinder::nav_size::NavSize;
 
 #[test]
 fn new_stores_dimensions() {
-    let size = NavSize::new(3, 2);
+    let size = CellSize::new(3, 2);
 
     assert_eq!(size.width, 3);
     assert_eq!(size.height, 2);
@@ -14,12 +14,12 @@ fn new_stores_dimensions() {
 
 #[test]
 fn one_is_unit_footprint() {
-    assert_eq!(NavSize::ONE, NavSize::new(1, 1));
+    assert_eq!(CellSize::ONE, CellSize::new(1, 1));
 }
 
 #[test]
 fn default_is_zero_by_zero() {
-    let size = NavSize::default();
+    let size = CellSize::default();
 
     assert_eq!(size.width, 0);
     assert_eq!(size.height, 0);

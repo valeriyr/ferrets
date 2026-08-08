@@ -3,12 +3,15 @@
 //! report per-objective progress plus an outcome; malformed scripts and results
 //! surface as errors rather than panics.
 
-use ferrets_script::ai::view::content::ContentView;
-use ferrets_script::ai::view::game::{EntityView, GameView};
-use ferrets_script::engine::ScriptEngine;
-use ferrets_script::engine::lua::LuaEngine;
-use ferrets_script::error::ScriptError;
-use ferrets_script::scenario::{ObjectiveStatus, Outcome, ScenarioRuntime, ScenarioStatus};
+use ferrets_script::{
+    ai::view::{
+        content::ContentView,
+        game::{EntityView, GameView},
+    },
+    engine::{ScriptEngine, lua::LuaEngine},
+    error::ScriptError,
+    scenario::{ObjectiveStatus, Outcome, ScenarioRuntime, ScenarioStatus},
+};
 
 /// A build-an-army scenario: win with a finished barracks and three archers,
 /// lose if every unit is gone. Mirrors the demo mission.

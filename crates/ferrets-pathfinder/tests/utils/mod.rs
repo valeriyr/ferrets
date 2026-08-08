@@ -1,9 +1,11 @@
 #![allow(dead_code)]
 
+use ferrets_geometry::cell_pos::CellPos;
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_pathfinder::{
+    hierarchy::NavHierarchy,
+    layer_mask::LayerMask,
     nav_grid::{LayerId, NavGrid},
-    nav_pos::NavPos,
 };
 
 pub const GROUND: LayerId = LayerId::new(1);
@@ -13,8 +15,8 @@ pub fn world(x: u32, y: u32) -> FixedUVec2 {
     FixedUVec2::new(FixedU64::from_num(x), FixedU64::from_num(y))
 }
 
-pub fn nav(x: u32, y: u32) -> NavPos {
-    NavPos::new(x, y)
+pub fn nav(x: u32, y: u32) -> CellPos {
+    CellPos::new(x, y)
 }
 
 /// Creates a grid of the given size with GROUND and AIR layers, all cells passable.
@@ -31,7 +33,7 @@ pub fn grid(width: u32, height: u32) -> NavGrid {
 ///
 /// Only the cells at Chebyshev distance exactly `radius` from `center` are blocked;
 /// the interior remains open. Cells outside the grid boundary are silently skipped.
-pub fn hollow_ring_grid(grid_size: u32, center: NavPos, radius: u32) -> NavGrid {
+pub fn hollow_ring_grid(grid_size: u32, center: CellPos, radius: u32) -> NavGrid {
     let mut grid = grid(grid_size, grid_size);
 
     let radius = radius as i32;
@@ -52,4 +54,9 @@ pub fn hollow_ring_grid(grid_size: u32, center: NavPos, radius: u32) -> NavGrid 
     }
 
     grid
+}
+
+/// Builds the hierarchy for the GROUND mask only.
+pub fn build_ground(grid: &NavGrid, cluster_size: u32) -> NavHierarchy {
+    NavHierarchy::build(grid, cluster_size, &[LayerMask::from(GROUND)])
 }

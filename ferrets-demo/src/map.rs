@@ -1,33 +1,36 @@
-//! Demo map: a 64×64 grass field with a start point in each of the four corners
-//! and a boss lake in the center.
+//! Demo map: a 96×96 grass field split into four quadrants by rivers, with a
+//! start point in each corner and a boss lake in the center.
 //!
 //! Cells are `(x, y)` with `x` right and `y` down. Start points are indexed
 //! `[top-left, bottom-right, bottom-left, top-right]`, so the first two slots sit
 //! on opposite corners (a natural 1v1):
 //!
 //! ```text
-//! y=0 +-----------------------------------------+
-//! y=8 |  P0#(8,8)                    (52,8)#P3  |
-//!     |     $(14,8)                 $(46,8)     |
-//!     |                                         |
-//! y=32|               ~~~≈F≈~~~                 |
-//!     |                                         |
-//!     |     $(14,52)               $(46,52)     |
-//! y=52|  P2#(8,52)                  (52,52)#P1  |
-//! y=63+-----------------------------------------+
+//! y=0 +---------------------|---------------------+
+//! y=12|  P0#(12,12)         |          (78,12)#P3 |
+//!     |     $(21,12)        =           $(69,12)  |
+//!     |                     |                     |
+//! y=48|---=------------~~~≈≈F≈≈~~~------------=---|
+//!     |                     |                     |
+//!     |     $(21,78)        =           $(69,78)  |
+//! y=78|  P2#(12,78)         |          (78,78)#P1 |
+//! y=95+---------------------|---------------------+
 //! ```
 //!
-//! `#` start/base, `$` gold mine, `~` the lake, `F` the boss sea fortress. Each
-//! corner also has a small tree grove. The mines and groves are neutral map
-//! placements; the fortress and its ships belong to the boss slot; each lobby
-//! slot's base is spawned by the game for its occupant. The camera opens framed
-//! on the local player's start point.
+//! `#` start/base, `$` gold mine, `~` the lake, `F` the boss sea fortress, `|`/`-`
+//! the rivers, `=` their fords — the three-cell gaps that make each quadrant
+//! border a chokepoint. Each corner also has a small tree grove. The mines and
+//! groves are neutral map placements; the fortress and its ships belong to the
+//! boss slot; each lobby slot's base is spawned by the game for its occupant.
+//! The camera opens framed on the local player's start point.
 
-use ferrets_pathfinder::astar::Projection;
+use ferrets_geometry::projection::Projection;
 use ferrets_script::engine::lua::LuaEngine;
-use ferrets_simulation::map::Map;
-use ferrets_simulation::map_data::{MapData, Placement};
-use ferrets_simulation::session::player_slot::PlayerId;
+use ferrets_simulation::{
+    map::Map,
+    map_data::{MapData, Placement},
+    session::player_slot::PlayerId,
+};
 
 use crate::content;
 
@@ -42,52 +45,59 @@ pub const WATER: &str = "water";
 /// owner-tagged placements and the lobby's appended slot must agree on it.
 pub const BOSS: PlayerId = 4;
 
-const WIDTH: u32 = 64;
-const HEIGHT: u32 = 64;
+const WIDTH: u32 = 96;
+const HEIGHT: u32 = 96;
 
 /// The lake: a circle of water terrain in the map center.
-const LAKE_CENTER: (u32, u32) = (32, 32);
-const LAKE_RADIUS_SQ: i64 = 36;
+const LAKE_CENTER: (u32, u32) = (48, 48);
+const LAKE_RADIUS_SQ: i64 = 81;
+
+/// The rivers: one-cell water lines along the map's middle axes, from each
+/// edge to the lake, each broken by a three-cell ford.
+const RIVER_AXIS: u32 = 48;
+/// The fords: the spans left open in the near-edge and far-edge river arms.
+const FORD_NEAR: (u32, u32) = (18, 20);
+const FORD_FAR: (u32, u32) = (75, 77);
 
 /// The boss fortress footprint origin (3×3, roughly centered in the lake).
-const FORTRESS: (u32, u32) = (30, 30);
+const FORTRESS: (u32, u32) = (46, 46);
 /// Boss ship cells, spread around the fortress on open water.
-const SHIPS: [(u32, u32); 3] = [(28, 34), (36, 30), (34, 36)];
+const SHIPS: [(u32, u32); 3] = [(44, 50), (52, 46), (50, 52)];
 
 /// Player start cells, one per corner, indexed by slot id.
-pub const START_POINTS: [(u32, u32); 4] = [(8, 8), (52, 52), (8, 52), (52, 8)];
+pub const START_POINTS: [(u32, u32); 4] = [(12, 12), (78, 78), (12, 78), (78, 12)];
 /// Gold mine cells: one near each start point.
-const GOLD_MINES: [(u32, u32); 4] = [(14, 8), (46, 52), (14, 52), (46, 8)];
+const GOLD_MINES: [(u32, u32); 4] = [(21, 12), (69, 78), (21, 78), (69, 12)];
 /// Tree cells (1×1 wood sources): a grove near each start.
 const TREES: &[(u32, u32)] = &[
     // Grove near player 0.
-    (4, 12),
-    (5, 12),
-    (6, 12),
-    (4, 13),
-    (5, 13),
-    (6, 13),
+    (8, 16),
+    (9, 16),
+    (10, 16),
+    (8, 17),
+    (9, 17),
+    (10, 17),
     // Grove near player 1.
-    (57, 50),
-    (58, 50),
-    (59, 50),
-    (57, 51),
-    (58, 51),
-    (59, 51),
+    (83, 76),
+    (84, 76),
+    (85, 76),
+    (83, 77),
+    (84, 77),
+    (85, 77),
     // Grove near player 2.
-    (4, 47),
-    (5, 47),
-    (6, 47),
-    (4, 48),
-    (5, 48),
-    (6, 48),
+    (8, 73),
+    (9, 73),
+    (10, 73),
+    (8, 74),
+    (9, 74),
+    (10, 74),
     // Grove near player 3.
-    (57, 12),
-    (58, 12),
-    (59, 12),
-    (57, 13),
-    (58, 13),
-    (59, 13),
+    (83, 16),
+    (84, 16),
+    (85, 16),
+    (83, 17),
+    (84, 17),
+    (85, 17),
 ];
 
 /// Returns `true` if the cell lies within the lake.
@@ -95,6 +105,18 @@ pub fn in_lake(x: u32, y: u32) -> bool {
     let dx = x as i64 - LAKE_CENTER.0 as i64;
     let dy = y as i64 - LAKE_CENTER.1 as i64;
     dx * dx + dy * dy <= LAKE_RADIUS_SQ
+}
+
+/// Returns `true` if the cell lies on a river: the middle axes outside the
+/// lake, minus the fords.
+fn in_river(x: u32, y: u32) -> bool {
+    if in_lake(x, y) {
+        return false;
+    }
+    let ford = |along: u32| {
+        (FORD_NEAR.0..=FORD_NEAR.1).contains(&along) || (FORD_FAR.0..=FORD_FAR.1).contains(&along)
+    };
+    (x == RIVER_AXIS && !ford(y)) || (y == RIVER_AXIS && !ford(x))
 }
 
 /// Looks up a map this game knows by name. The session names its map — like
@@ -112,7 +134,7 @@ pub fn data() -> MapData {
     data.fill_terrain("grass");
     for y in 0..HEIGHT {
         for x in 0..WIDTH {
-            if in_lake(x, y) {
+            if in_lake(x, y) || in_river(x, y) {
                 data.set_terrain((x, y), "water");
             }
         }

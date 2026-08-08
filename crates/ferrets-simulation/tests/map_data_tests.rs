@@ -1,8 +1,11 @@
 //! Authoring a [`MapData`]: the mutators keep the described map consistent —
 //! everything stays in bounds and the terrain always covers the whole grid.
 
-use ferrets_pathfinder::astar::Projection;
-use ferrets_simulation::map_data::{MapData, Placement};
+use ferrets_geometry::projection::Projection;
+use ferrets_simulation::{
+    map_data::{MapData, Placement},
+    movement_model::MovementModel,
+};
 
 //
 // ─── Construction ─────────────────────────────────────────────────────────────
@@ -25,6 +28,25 @@ fn new_map_declares_no_terrain() {
 #[should_panic(expected = "map dimensions must be greater than 0")]
 fn zero_dimension_panics() {
     MapData::new("field", Projection::Isometric, 4, 0);
+}
+
+//
+// ─── Movement model ───────────────────────────────────────────────────────────
+//
+
+#[test]
+fn movement_model_defaults_to_cell() {
+    let data = MapData::new("field", Projection::Isometric, 4, 3);
+
+    assert_eq!(data.movement_model(), MovementModel::Cell);
+}
+
+#[test]
+fn set_movement_model_replaces_default() {
+    let mut data = MapData::new("field", Projection::Isometric, 4, 3);
+    data.set_movement_model(MovementModel::Continuous);
+
+    assert_eq!(data.movement_model(), MovementModel::Continuous);
 }
 
 //

@@ -21,20 +21,37 @@ impl FixedUVec2 {
         Self { x, y }
     }
 
-    /// Squared Euclidean distance to `other`.
-    #[inline]
-    pub fn distance_squared(self, other: Self) -> FixedU64 {
-        let dx = if self.x > other.x {
-            self.x - other.x
-        } else {
-            other.x - self.x
-        };
-        let dy = if self.y > other.y {
-            self.y - other.y
-        } else {
-            other.y - self.y
-        };
-        dx * dx + dy * dy
+    /// Euclidean length, rounded down to the type's precision.
+    ///
+    /// Exact to the last bit: with 32 fractional bits,
+    /// `isqrt(x_bits² + y_bits²)` *is* the result's raw representation, so
+    /// no precision is shed squaring or summing.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the squared length overflows the widened intermediate —
+    /// possible only for a vector longer than the coordinate space is wide.
+    pub fn length(self) -> FixedU64 {
+        let x = self.x.to_bits() as u128;
+        let y = self.y.to_bits() as u128;
+        // Each square fits: bits ≤ 2⁶⁴ − 1, so bits² < 2¹²⁸. Only the sum
+        // can overflow — and any sum that fits roots back into range, since
+        // isqrt of a `u128` always fits a `u64`.
+        let sum = (x * x)
+            .checked_add(y * y)
+            .expect("offsets this long do not fit the coordinate space");
+        FixedU64::from_bits(sum.isqrt() as u64)
+    }
+
+    /// Euclidean distance to `other`, rounded down to the type's precision —
+    /// the [`length`](Self::length) of the offset between the two points.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the distance overflows [`FixedU64`] (see
+    /// [`length`](Self::length)).
+    pub fn distance(self, other: Self) -> FixedU64 {
+        Self::new(self.x.abs_diff(other.x), self.y.abs_diff(other.y)).length()
     }
 }
 

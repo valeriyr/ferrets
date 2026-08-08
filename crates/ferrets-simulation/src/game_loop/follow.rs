@@ -3,8 +3,10 @@
 
 use bevy_ecs::{entity::Entity, world::World};
 
-use super::chase::{self, Destination};
-use super::orders::Processing;
+use super::{
+    chase::{self, Destination},
+    orders::Processing,
+};
 use crate::{
     components::{
         follow::FollowComponent,

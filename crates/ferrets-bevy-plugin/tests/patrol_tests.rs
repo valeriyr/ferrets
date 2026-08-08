@@ -4,7 +4,7 @@
 mod utils;
 
 use bevy::prelude::*;
-use ferrets_pathfinder::nav_pos::NavPos;
+use ferrets_geometry::cell_pos::CellPos;
 use ferrets_simulation::{command::PlayerCommand, spawn};
 
 //
@@ -29,13 +29,13 @@ fn patrol_ping_pongs_between_endpoints() {
 
     // Two legs take ~28 ticks; 80 covers both endpoints more than once.
     let cells = trace(&mut app, sentry, 80);
-    assert!(cells.contains(&NavPos::new(12, 10)), "reaches the target");
+    assert!(cells.contains(&CellPos::new(12, 10)), "reaches the target");
     let first_arrival = cells
         .iter()
-        .position(|&c| c == NavPos::new(12, 10))
+        .position(|&c| c == CellPos::new(12, 10))
         .unwrap();
     assert!(
-        cells[first_arrival..].contains(&NavPos::new(5, 10)),
+        cells[first_arrival..].contains(&CellPos::new(5, 10)),
         "returns to the start"
     );
     // Still patrolling — the order never finishes on its own.
@@ -69,7 +69,7 @@ fn patrol_engages_en_route_and_resumes_route() {
     utils::assert_despawned(app.world_mut(), barracks);
     let last_quarter = &cells[150..];
     assert!(
-        last_quarter.contains(&NavPos::new(12, 10)) && last_quarter.contains(&NavPos::new(5, 10)),
+        last_quarter.contains(&CellPos::new(12, 10)) && last_quarter.contains(&CellPos::new(5, 10)),
         "route resumed after the fight"
     );
 }
@@ -79,7 +79,7 @@ fn patrol_engages_en_route_and_resumes_route() {
 //
 
 /// Runs `ticks` one at a time, collecting the cell the entity stands on each tick.
-fn trace(app: &mut App, entity: Entity, ticks: u32) -> Vec<NavPos> {
+fn trace(app: &mut App, entity: Entity, ticks: u32) -> Vec<CellPos> {
     let mut cells = Vec::new();
     for _ in 0..ticks {
         utils::run_ticks(app, 1);

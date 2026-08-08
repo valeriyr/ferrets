@@ -7,14 +7,16 @@
 use bevy_ecs::{entity::Entity, world::World};
 use ferrets_math::FixedU64;
 
-use crate::components::{
-    entity_info::EntityInfoComponent, entity_stats::StatsComponent, health::HealthComponent,
-    tags::TagsComponent,
+use crate::{
+    components::{
+        entity_info::EntityInfoComponent, entity_stats::StatsComponent, health::HealthComponent,
+        tags::TagsComponent,
+    },
+    content::{entity_stats::EntityStatId, entity_type_def::EntityTypeDef},
+    session::GameSession,
+    simulation_id::SimulationId,
+    spawn,
 };
-use crate::content::{entity_stats::EntityStatId, entity_type_def::EntityTypeDef};
-use crate::session::GameSession;
-use crate::simulation_id::SimulationId;
-use crate::spawn;
 
 /// The damage one full-strength hit from `attacker_def` deals to `target`.
 ///

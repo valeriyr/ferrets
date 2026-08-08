@@ -1,8 +1,8 @@
 //! Simulation entity creation, destruction, and map presence.
 
 use bevy_ecs::{entity::Entity, world::World};
+use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::{FixedI64, fixed_uvec2::FixedUVec2, fixed_vec2::FixedVec2};
-use ferrets_pathfinder::{nav_pos::NavPos, nav_size::NavSize};
 
 use crate::{
     components::{
@@ -24,15 +24,13 @@ use crate::{
         tags::TagsComponent,
         train::TrainQueueComponent,
     },
-    content::{
-        entity_stats::EntityStatId,
-        {location::LocationDef, registry::ContentRegistry},
-    },
+    content::{entity_stats::EntityStatId, location::LocationDef, registry::ContentRegistry},
     control_groups::ControlGroups,
     entity_def,
     entity_index::EntityIndex,
     game_loop::movement::is_mid_crossing,
-    map::Map,
+    map::{Map, OccupancyClass},
+    movement_model::MovementModel,
     order::Order,
     selection::Selection,
     session::player_slot::PlayerId,
@@ -46,6 +44,9 @@ const DEFAULT_FACING: FixedVec2 = FixedVec2::new(FixedI64::ZERO, FixedI64::ONE);
 /// Spawns an entity of the given type at `position`, owned by `owner`
 /// (`None` spawns a neutral entity).
 ///
+/// `position` must lie exactly on a cell's origin corner — a fresh entity is
+/// at rest, and rest positions are lattice points.
+///
 /// Returns `(entity, simulation_id)`, or `None` if `type_name` is not registered
 /// or the position is blocked on the nav grid.
 pub fn spawn_entity(
@@ -54,6 +55,10 @@ pub fn spawn_entity(
     position: FixedUVec2,
     owner: Option<PlayerId>,
 ) -> Option<(Entity, SimulationId)> {
+    debug_assert!(
+        !is_mid_crossing(position),
+        "entities spawn at rest: position must lie exactly on a cell origin"
+    );
     let (
         type_id,
         location_def,
@@ -152,9 +157,10 @@ pub fn spawn_entity(
 
     let entity = entity_mut.id();
 
+    let class = OccupancyClass::of(world.resource::<ContentRegistry>().def(type_id));
     world
         .resource_mut::<Map>()
-        .place_entity(&location, &location_def);
+        .place_entity(&location, &location_def, class);
     world.resource_mut::<EntityIndex>().insert_alive(id, entity);
 
     Some((entity, id))
@@ -178,16 +184,28 @@ pub fn spawn_entity(
 ///
 /// Returns `(entity, simulation_id)`, or `None` if `type_name` is not
 /// registered or the footprint is blocked.
+///
+/// `position` must lie exactly on a cell's origin corner, like every rest
+/// position.
 pub fn spawn_corpse_entity(
     world: &mut World,
     type_name: &str,
     position: FixedUVec2,
 ) -> Option<(Entity, SimulationId)> {
-    let (type_id, location_def, dying_def) = {
+    debug_assert!(
+        !is_mid_crossing(position),
+        "remains spawn at rest: position must lie exactly on a cell origin"
+    );
+    let (type_id, location_def, dying_def, class) = {
         let registry = world.resource::<ContentRegistry>();
         let type_id = registry.type_id(type_name)?;
         let type_def = registry.entity(type_name)?;
-        (type_id, type_def.location?, type_def.dying.clone())
+        (
+            type_id,
+            type_def.location?,
+            type_def.dying.clone(),
+            OccupancyClass::of(type_def),
+        )
     };
 
     let location = LocationComponent::new(position, DEFAULT_FACING);
@@ -199,7 +217,7 @@ pub fn spawn_corpse_entity(
     }
     world
         .resource_mut::<Map>()
-        .place_entity(&location, &location_def);
+        .place_entity(&location, &location_def, class);
 
     let id = world.resource_mut::<SimulationIdGenerator>().generate();
     let dying_time = dying_def.as_ref().map(|d| d.dying_time()).unwrap_or(0);
@@ -239,12 +257,14 @@ pub(crate) fn hide_entity(world: &mut World, entity: Entity) {
             .entity(entity)
             .get::<LocationComponent>()
             .expect("only entities with LocationComponent can be hidden");
-        let location_def = entity_def::of(world, entity)
+        let def = entity_def::of(world, entity);
+        let location_def = def
             .location
             .expect("only entities with LocationDef can be hidden");
+        let class = OccupancyClass::of(def);
         world
             .resource_mut::<Map>()
-            .displace_entity(&location, &location_def);
+            .displace_entity(&location, &location_def, class);
     }
     // Hiding is the inverse of a pending reveal: drop any stale retry so a new hide
     // is not undone by `process_pending_reveals` on a later tick. This is the part
@@ -266,8 +286,8 @@ pub(crate) fn hide_entity(world: &mut World, entity: Entity) {
 pub(crate) fn reveal_entity_near(
     world: &mut World,
     entity: Entity,
-    around: NavPos,
-    around_size: NavSize,
+    around: CellPos,
+    around_size: CellSize,
 ) -> bool {
     if !world.entity(entity).contains::<HiddenComponent>() {
         return true;
@@ -299,8 +319,8 @@ pub(crate) fn reveal_entity_near(
 pub(crate) fn reveal_entity_near_or_retry(
     world: &mut World,
     entity: Entity,
-    around: NavPos,
-    around_size: NavSize,
+    around: CellPos,
+    around_size: CellSize,
 ) {
     if reveal_entity_near(world, entity, around, around_size) {
         return;
@@ -313,7 +333,8 @@ pub(crate) fn reveal_entity_near_or_retry(
 }
 
 /// Puts a hidden entity back on the map at `cell`.
-fn place_hidden_at(world: &mut World, entity: Entity, cell: NavPos, location_def: &LocationDef) {
+fn place_hidden_at(world: &mut World, entity: Entity, cell: CellPos, location_def: &LocationDef) {
+    let class = OccupancyClass::of(entity_def::of(world, entity));
     let mut entity_mut = world.entity_mut(entity);
 
     entity_mut.remove::<HiddenComponent>();
@@ -326,7 +347,7 @@ fn place_hidden_at(world: &mut World, entity: Entity, cell: NavPos, location_def
     let location = *location;
     world
         .resource_mut::<Map>()
-        .place_entity(&location, location_def);
+        .place_entity(&location, location_def, class);
 }
 
 /// Starts the dying phase for an alive entity.
@@ -334,7 +355,9 @@ fn place_hidden_at(world: &mut World, entity: Entity, cell: NavPos, location_def
 /// The entity immediately leaves the alive set: it is removed from every
 /// player's selection, all queued orders are force-cancelled, and a `Die` order
 /// is queued. The entity stays in the world as dying — still holding its
-/// footprint on the nav grid — until the `Die` order completes and frees it.
+/// footprint on the nav grid under the cell model, while the continuous
+/// rebuild stops counting its body — until the `Die` order completes and
+/// frees it.
 ///
 /// No-op if the entity is already dying or has died.
 pub fn destroy_entity(world: &mut World, entity: Entity) {
@@ -353,18 +376,25 @@ pub fn destroy_entity(world: &mut World, entity: Entity) {
 
     // The entity keeps its footprint through the dying phase, but the movement
     // state that knows which cell a crossing claimed is about to be cancelled —
-    // so a mid-crossing entity snaps onto its claimed cell.
-    if is_mid_crossing(location.position)
-        && let Some(claimed) = world
-            .entity(entity)
-            .get::<MoveComponent>()
-            .and_then(|mc| mc.path.last().copied())
-    {
-        world
-            .entity_mut(entity)
-            .get_mut::<LocationComponent>()
-            .expect("only entities with LocationComponent can be moving")
-            .position = FixedUVec2::from(claimed);
+    // so a mid-crossing entity snaps onto its claimed cell. Continuous
+    // movers die where they stand: their positions are free points and their
+    // claim already tracks the floored cell.
+    match world.resource::<Map>().movement_model() {
+        MovementModel::Cell => {
+            if is_mid_crossing(location.position)
+                && let Some(claimed) = world
+                    .entity(entity)
+                    .get::<MoveComponent>()
+                    .and_then(|mc| mc.path.last().copied())
+            {
+                world
+                    .entity_mut(entity)
+                    .get_mut::<LocationComponent>()
+                    .expect("only entities with LocationComponent can be moving")
+                    .position = FixedUVec2::from(claimed);
+            }
+        }
+        MovementModel::Continuous => {}
     }
 
     world.resource_mut::<Selection>().remove(id);

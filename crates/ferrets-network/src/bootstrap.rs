@@ -8,13 +8,13 @@
 
 use std::net::ToSocketAddrs;
 
-use crate::control::ControlChannel;
-use crate::lobby::client::LobbyClient;
-use crate::lobby::host::LobbyHost;
-use crate::session_mode::SessionMode;
-use crate::transport::tcp::TcpTransport;
-use ferrets_simulation::session::drop_policy::DropPolicy;
-use ferrets_simulation::session::finish_policy::FinishPolicy;
+use crate::{
+    control::ControlChannel,
+    lobby::{client::LobbyClient, host::LobbyHost},
+    session_mode::SessionMode,
+    transport::tcp::TcpTransport,
+};
+use ferrets_simulation::session::{drop_policy::DropPolicy, finish_policy::FinishPolicy};
 
 /// Opens a lobby as the host: binds `addr` and accepts clients continuously. The
 /// lobby has `capacity` slots (slot `0` is the host) and new slots default to

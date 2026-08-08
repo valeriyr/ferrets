@@ -2,8 +2,8 @@
 //! band, and it outlives the unit that fired it.
 
 use bevy::prelude::*;
+use ferrets_geometry::cell_size::CellSize;
 use ferrets_math::FixedU64;
-use ferrets_pathfinder::nav_size::NavSize;
 use ferrets_simulation::{
     command::{PlayerCommand, SelectMode},
     components::location::LocationComponent,
@@ -300,7 +300,7 @@ fn app() -> App {
         );
         registry.register(
             EntityTypeDef::new("gunner")
-                .with_location(utils::GROUND, NavSize::ONE, Solidity::Solid)
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
                 .with_health(40)
                 .with_attack(20, 6, 6, 4, 2)
                 .with_bonus_damage_vs([("armored", 12u32)])
@@ -318,27 +318,27 @@ fn app() -> App {
         );
         registry.register(
             EntityTypeDef::new("sieger")
-                .with_location(utils::GROUND, NavSize::ONE, Solidity::Solid)
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
                 .with_health(40)
                 .with_attack(20, 8, 8, 30, 2)
                 .with_projectile(lob),
         );
         registry.register(
             EntityTypeDef::new("runner")
-                .with_location(utils::GROUND, NavSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5))
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
                 .with_health(60),
         );
         registry.register(
             EntityTypeDef::new("tank")
-                .with_location(utils::GROUND, NavSize::ONE, Solidity::Solid)
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
                 .with_health(100)
                 .with_armor(6)
                 .with_tags(["armored"]),
         );
         registry.register(
             EntityTypeDef::new("dummy")
-                .with_location(utils::GROUND, NavSize::ONE, Solidity::Solid)
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
                 .with_health(100),
         );
     }

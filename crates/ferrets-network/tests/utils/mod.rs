@@ -2,13 +2,13 @@
 
 use std::time::{Duration, Instant};
 
-use ferrets_network::control::ControlChannel;
-use ferrets_network::lobby::client::LobbyClient;
-use ferrets_network::lobby::host::LobbyHost;
-use ferrets_network::session_mode::SessionMode;
-use ferrets_network::transport::NetworkTransport;
-use ferrets_simulation::session::drop_policy::DropPolicy;
-use ferrets_simulation::session::finish_policy::FinishPolicy;
+use ferrets_network::{
+    control::ControlChannel,
+    lobby::{client::LobbyClient, host::LobbyHost},
+    session_mode::SessionMode,
+    transport::NetworkTransport,
+};
+use ferrets_simulation::session::{drop_policy::DropPolicy, finish_policy::FinishPolicy};
 
 /// A lobby host over `transport` in the given `mode`, with the suite's
 /// baseline choices for everything else: automatic drops, last-standing

@@ -5,7 +5,8 @@
 mod utils;
 
 use bevy::prelude::*;
-use ferrets_pathfinder::{nav_pos::NavPos, nav_size::NavSize};
+use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
+
 use ferrets_simulation::{
     command::PlayerCommand,
     components::{
@@ -48,7 +49,7 @@ fn trained_unit_moves_to_rally_position() {
     utils::run_ticks(&mut app, 30);
     let world = app.world_mut();
     let soldier = utils::single_owned_of_type(world, "soldier", 0);
-    assert_eq!(utils::cell_of(world, soldier), NavPos::new(5, 10));
+    assert_eq!(utils::cell_of(world, soldier), CellPos::new(5, 10));
 }
 
 #[test]
@@ -282,7 +283,7 @@ fn rally_app() -> App {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
         registry.register(
             EntityTypeDef::new("hall")
-                .with_location(utils::GROUND, NavSize::new(2, 2), Solidity::Solid)
+                .with_location(utils::GROUND, CellSize::new(2, 2), Solidity::Solid)
                 .with_health(100)
                 .with_dying(2, None)
                 .with_trainer(["worker"]),
