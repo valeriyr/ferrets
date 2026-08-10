@@ -7,6 +7,7 @@ use crate::components::chase::ChaseState;
 /// Per-entity in-flight attack-move state.
 #[derive(Component, Debug, Default)]
 pub struct AttackMoveComponent {
-    /// `(own position, destination)` when the last walk leg started.
+    /// The last walk leg's chase round toward the destination; identical
+    /// rounds accumulate until the walk gives up (see [`ChaseState`]).
     pub last_chase: ChaseState,
 }

@@ -92,6 +92,16 @@ pub enum Order {
     /// tick at a time until the pool is full, it is gone, or the work can no longer
     /// be paid for.
     Repair { target: SimulationId },
+    /// Ride inside the transporter with the given id: walk into its load range,
+    /// then disappear aboard until it unloads.
+    Board { target: SimulationId },
+    /// Fetch the entity with the given id aboard: walk into own load range of
+    /// it, then take it in. The holder-side mirror of [`Board`](Self::Board).
+    Load { target: SimulationId },
+    /// Let every passenger out, one at a time. With a destination, walk into
+    /// unload range of it first and send each freed passenger marching there;
+    /// without one, freed passengers go to the rally point, if set.
+    Unload { at: Option<FixedUVec2> },
     /// Wait out the dying phase, then leave the world.
     Die,
 }
@@ -186,6 +196,34 @@ impl Order {
     pub fn repair_target(&self) -> Option<SimulationId> {
         match self {
             Order::Repair { target } => Some(*target),
+            _ => None,
+        }
+    }
+
+    /// If this order is a board order, returns the transporter's id. Otherwise,
+    /// returns `None`.
+    pub fn board_target(&self) -> Option<SimulationId> {
+        match self {
+            Order::Board { target } => Some(*target),
+            _ => None,
+        }
+    }
+
+    /// If this order is a load order, returns the fetched entity's id.
+    /// Otherwise, returns `None`.
+    pub fn load_target(&self) -> Option<SimulationId> {
+        match self {
+            Order::Load { target } => Some(*target),
+            _ => None,
+        }
+    }
+
+    /// If this order is an unload order, returns its destination — the outer
+    /// `Option` says whether this is an unload order at all, the inner one
+    /// whether it names a destination. Otherwise, returns `None`.
+    pub fn unload_at(&self) -> Option<Option<FixedUVec2>> {
+        match self {
+            Order::Unload { at } => Some(*at),
             _ => None,
         }
     }

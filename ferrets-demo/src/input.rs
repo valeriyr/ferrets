@@ -80,6 +80,20 @@ pub enum TargetedOrder {
     Patrol,
     /// `G` — guard the clicked entity.
     Guard,
+    /// `T` — follow the clicked entity, explicitly: the smart right-click
+    /// reads a click on a friendly transporter as boarding, so tailing one
+    /// needs its own verb.
+    Follow,
+    /// `B` — board the clicked transporter, explicitly: the smart right-click
+    /// reads a click on a damaged one as repairing, so climbing into it needs
+    /// its own verb.
+    Board,
+    /// Armed from the command card — the primary transporter fetches the
+    /// clicked unit aboard.
+    Load,
+    /// Armed from the command card — unload the primary transporter at the
+    /// clicked position.
+    Unload,
     /// `Q` — shell the clicked cell. Only weapons that send their shots to a cell
     /// take the order; the rest ignore it.
     AttackGround,
@@ -456,6 +470,10 @@ pub fn order_mode_input(
         TargetedOrder::Patrol
     } else if keys.just_pressed(KeyCode::KeyG) {
         TargetedOrder::Guard
+    } else if keys.just_pressed(KeyCode::KeyT) {
+        TargetedOrder::Follow
+    } else if keys.just_pressed(KeyCode::KeyB) {
+        TargetedOrder::Board
     } else if keys.just_pressed(KeyCode::KeyQ) {
         TargetedOrder::AttackGround
     } else {
@@ -471,6 +489,7 @@ pub fn targeting_input(
     registry: Res<ContentRegistry>,
     session: Res<GameSession>,
     selection: Res<Selection>,
+    primary: Res<Primary>,
     mut mode: ResMut<InputMode>,
     mut pending: ResMut<PendingInput>,
     interactions: Query<&Interaction>,
@@ -523,11 +542,46 @@ pub fn targeting_input(
             };
             pending.push(PlayerCommand::Guard { target, flush });
         }
+        TargetedOrder::Follow => {
+            let Some(target) = entity_at(cursor, &registry, &entities) else {
+                return;
+            };
+            pending.push(PlayerCommand::Follow { target, flush });
+        }
+        TargetedOrder::Board => {
+            let Some(target) = entity_at(cursor, &registry, &entities) else {
+                return;
+            };
+            pending.push(PlayerCommand::Board { target, flush });
+        }
         TargetedOrder::AttackGround => {
             pending.push(PlayerCommand::Attack {
                 target: AttackTarget::Position(world_to_pos(cursor)),
                 flush,
             });
+        }
+        TargetedOrder::Load => {
+            // The fetch needs an entity under the cursor; a miss keeps the mode
+            // armed so the player can click again.
+            let Some(target) = entity_at(cursor, &registry, &entities) else {
+                return;
+            };
+            if let Some(transport) = primary.0 {
+                pending.push(PlayerCommand::Load {
+                    transport,
+                    target,
+                    flush,
+                });
+            }
+        }
+        TargetedOrder::Unload => {
+            if let Some(transport) = primary.0 {
+                pending.push(PlayerCommand::Unload {
+                    transport,
+                    at: Some(world_to_pos(cursor)),
+                    flush,
+                });
+            }
         }
         TargetedOrder::Skill(skill) => {
             // The cast needs an entity under the cursor; a miss keeps the mode

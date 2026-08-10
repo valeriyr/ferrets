@@ -199,16 +199,11 @@ fn process_continuous(entity: Entity, order: &Order, world: &mut World) -> Order
         .map_or(target, |&waypoint| FixedUVec2::from(waypoint));
     let distance = position.distance(pursued);
     if distance < move_component.best_distance {
-        move_component.best_distance = distance;
-        move_component.wait_ticks = 0;
-        move_component.frustration = 0;
-        move_component.detoured = false;
+        move_component.record_progress(distance);
     } else {
         move_component.wait_ticks += 1;
         if move_component.wait_ticks >= CONTINUOUS_STUCK_TICKS {
-            move_component.wait_ticks = 0;
-            move_component.frustration += 1;
-            if move_component.frustration > GIVE_UP_ESCALATIONS {
+            if move_component.escalate() > GIVE_UP_ESCALATIONS {
                 return OrderState::Finished;
             }
 
@@ -248,10 +243,7 @@ fn process_continuous(entity: Entity, order: &Order, world: &mut World) -> Order
                 if let Some(cells) = cells
                     && !cells.is_empty()
                 {
-                    move_component.detoured = true;
-                    move_component.path.pop();
-                    move_component.path.extend(cells.into_iter().rev());
-                    move_component.best_distance = FixedU64::MAX;
+                    move_component.splice_detour(cells);
                 }
             }
         }
@@ -284,8 +276,7 @@ fn process_continuous(entity: Entity, order: &Order, world: &mut World) -> Order
         if point_order && current_cell == CellPos::from(target) {
             // Already standing on the goal cell — a plan would be empty;
             // walk the last sub-cell stretch to the spot directly.
-            move_component.path.push(CellPos::from(target));
-            move_component.best_distance = FixedU64::MAX;
+            move_component.pursue(CellPos::from(target));
         } else {
             match next_segment(
                 world,
@@ -298,11 +289,7 @@ fn process_continuous(entity: Entity, order: &Order, world: &mut World) -> Order
             ) {
                 None => return OrderState::Finished,
                 Some(segment) if segment.is_empty() => return OrderState::Finished,
-                Some(segment) => {
-                    move_component.path = segment.into_iter().rev().collect();
-                    // A fresh segment pursues a fresh waypoint.
-                    move_component.best_distance = FixedU64::MAX;
-                }
+                Some(segment) => move_component.pursue_segment(segment),
             }
         }
     }
@@ -335,21 +322,50 @@ fn process_continuous(entity: Entity, order: &Order, world: &mut World) -> Order
         desired,
         radius,
     );
-    if new_pos == position && desired != position {
-        // Fully walled off: a push pressed the body against a footprint,
-        // and from this off-lattice spot even a fresh plan's first line
-        // clips the corner. Regain the cell's own lattice point — always
-        // reachable, since pulling the circle inward only shrinks what it
-        // overlaps — and replan from there, where cell-resolution plans
-        // are body-safe.
-        let regained = projection.step_toward(position, FixedUVec2::from(current_cell), speed);
-        world
-            .entity_mut(entity)
-            .get_mut::<LocationComponent>()
-            .unwrap()
-            .position = regained;
-        move_component.path.clear();
-        move_component.best_distance = FixedU64::MAX;
+    // A slide that dropped an axis and kept next to nothing of the step is a
+    // body pressed diagonally into a footprint corner: the free axis converges
+    // on the corner's tangent line without ever clearing it, and the crumbs it
+    // yields keep reading as progress, so the stall clock never fires either.
+    // Pressed and crawling is walled, just slower about it.
+    let pressed_crawl =
+        new_pos != desired && position.distance(new_pos) < speed / FixedU64::from_num(8);
+    if (new_pos == position || pressed_crawl) && desired != position {
+        // Walled off: a push pressed the body against a footprint, and from
+        // this off-lattice spot the straight line to the waypoint clips the
+        // corner. Regain the cell's own lattice point — always reachable,
+        // since pulling the circle inward only shrinks what it overlaps —
+        // then resume the same waypoint, through a claim-aware detour when
+        // one exists: the geometry that walled the body off once will wall
+        // it off again from the same lattice point, and the pinning crowd
+        // shows up in the claim plane, not the static one. The lattice point
+        // is held as a real waypoint rather than stepped toward once: a
+        // single step can land short, and a replan from short used to walk
+        // straight back into the corner — a full-speed ping-pong. Each
+        // regain escalates, because the loop it breaks yields a fresh
+        // record every pass and never trips the stall clock on its own.
+        if move_component.escalate() > GIVE_UP_ESCALATIONS {
+            return OrderState::Finished;
+        }
+        let detour = match move_component.path.last() {
+            Some(&waypoint) if !move_component.detoured => {
+                let map = world.resource::<Map>();
+                hpa::detour(
+                    map.nav_grid(),
+                    map.hierarchy(),
+                    projection,
+                    occupation,
+                    current_cell,
+                    waypoint,
+                )
+            }
+            _ => None,
+        };
+        if let Some(cells) = detour
+            && !cells.is_empty()
+        {
+            move_component.splice_detour(cells);
+        }
+        move_component.regain(current_cell);
         world.entity_mut(entity).insert(move_component);
         return OrderState::InProcessing;
     }
@@ -376,20 +392,16 @@ fn process_continuous(entity: Entity, order: &Order, world: &mut World) -> Order
     }
     // Intermediate waypoints pop within half a body of slack — pushes make
     // exact hits rare, and the next waypoint pulls from far ahead anyway.
-    // The final one pops only on the exact spot, so arrival stays precise.
-    let reached = if final_waypoint {
+    // The final one pops only on the exact spot, so arrival stays precise —
+    // and so does a regained lattice point, whose whole purpose is standing
+    // exactly on it.
+    let reached = if final_waypoint || move_component.regaining {
         new_pos == waypoint
     } else {
         new_pos.distance(waypoint) <= FixedU64::from_num(0.5)
     };
     if reached {
-        // A consumed waypoint is progress; the next one starts its own
-        // record.
-        move_component.path.pop();
-        move_component.best_distance = FixedU64::MAX;
-        move_component.wait_ticks = 0;
-        move_component.frustration = 0;
-        move_component.detoured = false;
+        move_component.consume_waypoint();
     }
     world.entity_mut(entity).insert(move_component);
     OrderState::InProcessing
@@ -511,9 +523,7 @@ fn process_cell(entity: Entity, order: &Order, world: &mut World) -> OrderState 
             effective_range,
         );
     }
-    move_component.wait_ticks = 0;
-    move_component.frustration = 0;
-    move_component.detoured = false;
+    move_component.forgive();
 
     // Claim the next cell and release the current one before any position
     // change. Claims live on the grid's unit plane, invisible to the
@@ -852,9 +862,7 @@ fn resolve_blocked_crossing(
         world.entity_mut(entity).insert(move_component);
         return OrderState::InProcessing;
     }
-    move_component.wait_ticks = 0;
-    move_component.frustration += 1;
-    if move_component.frustration > GIVE_UP_ESCALATIONS {
+    if move_component.escalate() > GIVE_UP_ESCALATIONS {
         return OrderState::Finished;
     }
 
@@ -889,11 +897,7 @@ fn resolve_blocked_crossing(
     }
 
     // Full repath: throw the plan away; the next plan honors unit claims.
-    move_component.path.clear();
-    move_component.corridor.clear();
-    move_component.plan = None;
-    move_component.avoid_claims = true;
-    move_component.detoured = false;
+    move_component.repath_avoiding_claims();
     world.entity_mut(entity).insert(move_component);
     OrderState::InProcessing
 }
@@ -928,9 +932,7 @@ fn swap_crossings(
         let mut blocker_mut = world.entity_mut(blocker);
         let mut counter_move = blocker_mut.get_mut::<MoveComponent>().unwrap();
         counter_move.moving_from = next_cell;
-        counter_move.wait_ticks = 0;
-        counter_move.frustration = 0;
-        counter_move.detoured = false;
+        counter_move.forgive();
         if blocker_new == current_pos {
             counter_move.path.pop();
         }
@@ -944,9 +946,7 @@ fn swap_crossings(
 
     // This entity's own crossing, without the usual claim juggling.
     move_component.moving_from = current_cell;
-    move_component.wait_ticks = 0;
-    move_component.frustration = 0;
-    move_component.detoured = false;
+    move_component.forgive();
     let new_pos = projection.step_toward(position, next_pos, speed);
     {
         let mut entity_mut = world.entity_mut(entity);

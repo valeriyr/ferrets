@@ -41,6 +41,11 @@ pub struct MoveComponent {
     /// must escalate instead, while a long way round keeps consuming
     /// waypoints and never escalates.
     pub best_distance: FixedU64,
+    /// The pursued waypoint is a lattice point the walk regains after being
+    /// walled off, and pops only on exact arrival: the ordinary half-body
+    /// slack would consume it early and leave the body off-lattice, still
+    /// pressed into the corner it was regaining from.
+    pub regaining: bool,
 }
 
 impl MoveComponent {
@@ -58,6 +63,89 @@ impl MoveComponent {
         self.plan = None;
     }
 
+    /// Forgives every blockage escalation: the stall clock, the frustration
+    /// ladder, and the spent local detour all reset — the way ahead is clear.
+    pub fn forgive(&mut self) {
+        self.wait_ticks = 0;
+        self.frustration = 0;
+        self.detoured = false;
+    }
+
+    /// Records a new closest distance to the pursued waypoint. Closing in is
+    /// progress, so every escalation is forgiven along with it.
+    pub fn record_progress(&mut self, distance: FixedU64) {
+        self.best_distance = distance;
+        self.forgive();
+    }
+
+    /// One blockage escalation: the stall clock restarts and the frustration
+    /// ladder climbs a rung. Returns the new rung, for the caller's give-up
+    /// budget.
+    pub fn escalate(&mut self) -> u32 {
+        self.wait_ticks = 0;
+        self.frustration += 1;
+        self.frustration
+    }
+
+    /// Takes up a freshly refined segment, walked front to back; the first
+    /// waypoint starts its own progress record.
+    pub fn pursue_segment(&mut self, segment: Vec<CellPos>) {
+        self.path = segment.into_iter().rev().collect();
+        self.best_distance = FixedU64::MAX;
+    }
+
+    /// Takes up `waypoint` as the immediate next target, with its own
+    /// progress record.
+    pub fn pursue(&mut self, waypoint: CellPos) {
+        self.path.push(waypoint);
+        self.best_distance = FixedU64::MAX;
+    }
+
+    /// Replaces the pursued waypoint with a detour that rejoins it, walked
+    /// front to back, and marks the blockage's one local detour spent.
+    pub fn splice_detour(&mut self, cells: Vec<CellPos>) {
+        self.detoured = true;
+        self.path.pop();
+        self.path.extend(cells.into_iter().rev());
+        self.best_distance = FixedU64::MAX;
+    }
+
+    /// Holds `lattice` as the immediate waypoint, to be regained exactly: the
+    /// pop stays precise (see [`Self::regaining`]) and the escalation state
+    /// stays — the body is only being put back where it was walled off.
+    pub fn regain(&mut self, lattice: CellPos) {
+        self.path.push(lattice);
+        self.regaining = true;
+        self.best_distance = FixedU64::MAX;
+    }
+
+    /// Consumes the reached waypoint; the next one starts its own progress
+    /// record. An ordinary waypoint is progress and forgives every
+    /// escalation; a regained lattice point is not — it only put the body
+    /// back where it was walled off, and forgiving there would let a loop of
+    /// wall, regain, wall reset its own give-up clock each pass.
+    pub fn consume_waypoint(&mut self) {
+        self.path.pop();
+        self.best_distance = FixedU64::MAX;
+        self.wait_ticks = 0;
+        if self.regaining {
+            self.regaining = false;
+        } else {
+            self.frustration = 0;
+            self.detoured = false;
+        }
+    }
+
+    /// Throws the whole plan away and asks the next one to honor unit claims
+    /// — the last rung of the blockage ladder.
+    pub fn repath_avoiding_claims(&mut self) {
+        self.path.clear();
+        self.corridor.clear();
+        self.plan = None;
+        self.avoid_claims = true;
+        self.detoured = false;
+    }
+
     /// Creates a new `MoveComponent` with the given entity position.
     #[inline]
     pub fn new(from: CellPos) -> Self {
@@ -71,6 +159,7 @@ impl MoveComponent {
             moving_from: from,
             wait_ticks: 0,
             best_distance: FixedU64::MAX,
+            regaining: false,
         }
     }
 }

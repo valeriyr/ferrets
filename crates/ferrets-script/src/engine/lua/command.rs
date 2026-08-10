@@ -117,6 +117,14 @@ fn command(table: &Table, index: usize, names: &CommandNames) -> crate::Result<P
             target: SimulationId(integer(table, index, "target")?),
             flush: flush(table, index)?,
         }),
+        "follow" => Ok(PlayerCommand::Follow {
+            target: SimulationId(integer(table, index, "target")?),
+            flush: flush(table, index)?,
+        }),
+        "board" => Ok(PlayerCommand::Board {
+            target: SimulationId(integer(table, index, "target")?),
+            flush: flush(table, index)?,
+        }),
         "stance" => Ok(PlayerCommand::SetStance {
             stance: stance(table, index)?,
         }),
@@ -160,6 +168,25 @@ fn command(table: &Table, index: usize, names: &CommandNames) -> crate::Result<P
             position: cell(integer(table, index, "x")?, integer(table, index, "y")?),
             flush: flush(table, index)?,
         }),
+        "load" => Ok(PlayerCommand::Load {
+            transport: SimulationId(integer(table, index, "transport")?),
+            target: SimulationId(integer(table, index, "target")?),
+            flush: flush(table, index)?,
+        }),
+        "unload" => {
+            let x = optional_integer(table, index, "x")?;
+            let y = optional_integer(table, index, "y")?;
+            let at = match (x, y) {
+                (Some(x), Some(y)) => Some(cell(x, y)),
+                (None, None) => None,
+                _ => return Err(element_error(index, "unload cell needs both x and y")),
+            };
+            Ok(PlayerCommand::Unload {
+                transport: SimulationId(integer(table, index, "transport")?),
+                at,
+                flush: flush(table, index)?,
+            })
+        }
         "stop" => Ok(PlayerCommand::Stop),
         other => Err(element_error(index, &format!("unknown kind '{other}'"))),
     }

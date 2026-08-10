@@ -31,6 +31,7 @@ use ferrets_simulation::{
         resource::{ResourceCarrierComponent, ResourceSourceComponent},
         stance::StanceComponent,
         train::TrainQueueComponent,
+        transport::{BoardedComponent, TransporterComponent},
     },
     content::{entity_stats::EntityStatId, registry::ContentRegistry},
     entity_index::EntityIndex,
@@ -374,6 +375,14 @@ fn entity_view(entity: &EntityRef, id: SimulationId, hidden: bool) -> EntityView
         resource_amount: entity
             .get::<ResourceSourceComponent>()
             .map(|source| source.amount),
+        boarded: entity
+            .get::<BoardedComponent>()
+            .map(|boarded| boarded.holder.0),
+        passengers: entity
+            .get::<TransporterComponent>()
+            .map_or_else(Vec::new, |transporter| {
+                transporter.passengers.iter().map(|id| id.0).collect()
+            }),
     }
 }
 

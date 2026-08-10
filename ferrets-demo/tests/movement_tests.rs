@@ -109,10 +109,10 @@ fn continuous_group_move_settles_without_milling() {
     assert_eq!(
         resting,
         vec![
-            utils::position_bits(0x13_bd9e_c68b, 0x13_df97_b67b),
-            utils::position_bits(0x14_a221_bf4f, 0x14_52ff_89b4),
-            utils::position_bits(0x14_d1e9_68ec, 0x15_4e7f_f596),
-            utils::position_bits(0x15_82be_54fe, 0x13_d82c_bb59),
+            utils::position_bits(0x13_fdbc_670e, 0x13_e110_733d),
+            utils::position_bits(0x14_0fe9_1264, 0x14_e07c_6fda),
+            utils::position_bits(0x14_e7d6_a434, 0x13_528b_9488),
+            utils::position_bits(0x15_0870_d286, 0x14_8e2f_d75b),
         ]
     );
 
@@ -130,15 +130,15 @@ fn continuous_group_move_settles_without_milling() {
 }
 
 #[test]
-fn harvest_of_unreachable_tree_gives_up() {
+fn harvest_of_unreachable_tree_switches_to_reachable_neighbor() {
     let mut app = scenario_app(MovementModel::Continuous);
 
-    // A tree fully ringed by other trees: no cell within harvest range is
-    // passable, so the chase can never arrive. The order must finish — a
-    // continuous mover's position wobbles by bits under pushing, and a
-    // chase that compared exact positions instead of cells re-walked at
-    // the grove's edge forever.
-    let mut ring_target = None;
+    // A tree fully ringed by other trees: no cell within harvest range of it
+    // is passable, so the chase can never arrive — but the ring itself is
+    // wood, so the order must swap to a reachable neighbor of the same kind
+    // instead of giving up or grinding at the grove's edge forever.
+    let mut center = None;
+    let mut ring = Vec::new();
     for y in 20..23 {
         for x in 20..23 {
             let (tree, id) = spawn::spawn_entity(
@@ -157,10 +157,13 @@ fn harvest_of_unreachable_tree_gives_up() {
                 .unwrap()
                 .amount = 400;
             if (x, y) == (21, 21) {
-                ring_target = Some(id);
+                center = Some(id);
+            } else {
+                ring.push(tree);
             }
         }
     }
+    let center = center.unwrap();
     let (worker, _) = spawn::spawn_entity(
         app.world_mut(),
         "peasant",
@@ -173,21 +176,43 @@ fn harvest_of_unreachable_tree_gives_up() {
         .entity_mut(worker)
         .get_mut::<OrderQueueComponent>()
         .unwrap()
-        .push(
-            Order::Harvest {
-                target: ring_target.unwrap(),
-            },
-            None,
-        );
+        .push(Order::Harvest { target: center }, None);
 
     utils::run_ticks(&mut app, 400);
 
     assert!(
-        app.world()
+        !app.world()
             .entity(worker)
             .get::<OrderQueueComponent>()
             .is_some_and(|queue| queue.0.is_empty()),
-        "a harvest whose target cannot be reached must give up"
+        "the harvest keeps working the grove instead of giving up"
+    );
+    let world = app.world();
+    let center_entity = world
+        .resource::<ferrets_simulation::entity_index::EntityIndex>()
+        .alive(center)
+        .expect("the walled tree still stands");
+    assert_eq!(
+        world
+            .entity(center_entity)
+            .get::<ResourceSourceComponent>()
+            .unwrap()
+            .amount,
+        400,
+        "the unreachable tree is never touched"
+    );
+    let ring_left: u32 = ring
+        .iter()
+        .map(|&tree| {
+            world
+                .entity(tree)
+                .get::<ResourceSourceComponent>()
+                .map_or(0, |source| source.amount)
+        })
+        .sum();
+    assert!(
+        ring_left < 8 * 400,
+        "the worker chops a reachable neighbor of the same kind"
     );
 }
 

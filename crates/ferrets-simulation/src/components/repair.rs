@@ -26,8 +26,8 @@ pub struct RepairComponent {
     /// cannot be asked to move. One that mends from the open closes on its target
     /// every tick instead, because a patient can walk away from the hands mending it.
     pub inside_job: bool,
-    /// `(own position, target position)` when the last chase started. Both
-    /// unchanged on resume means the chase made no progress and never will.
+    /// The last chase round toward the target; identical rounds accumulate
+    /// until the chase gives up (see [`ChaseState`]).
     pub last_chase: ChaseState,
     /// Consecutive ticks spent unable to pay for the work.
     pub stalled: u32,

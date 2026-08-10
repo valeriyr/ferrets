@@ -74,6 +74,12 @@ fn entity_table(lua: &Lua, entity: &EntityView) -> mlua::Result<Table> {
     table.set("under_construction", entity.under_construction)?;
     table.set("stance", entity.stance.as_deref())?;
     table.set("resource_amount", entity.resource_amount)?;
+    table.set("boarded", entity.boarded)?;
+    let passengers = lua.create_table()?;
+    for (index, id) in entity.passengers.iter().enumerate() {
+        passengers.set(index + 1, *id)?;
+    }
+    table.set("passengers", passengers)?;
     Ok(table)
 }
 

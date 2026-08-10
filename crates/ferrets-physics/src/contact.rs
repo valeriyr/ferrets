@@ -20,8 +20,9 @@ fn cell_share_creep() -> FixedI64 {
 /// One pass of pairwise separation: the displacement each body takes from
 /// every contact it is in, clamped per axis to [`max_push`].
 ///
-/// Overlapping bodies shove each other apart along their offset, half the
-/// overlap each. A contact that needs to pass (see [`needs_swerve`]) also
+/// Overlapping bodies shove each other apart along their offset — half the
+/// overlap each between equals, the whole of it to a body pressed by a
+/// walker it is not pressing back. A contact that needs to pass (see [`needs_swerve`]) also
 /// gets a clockwise sideways share — the traffic rule that keeps exactly
 /// aligned meetings moving: lattice walking aligns positions bit for bit, so
 /// dead-straight head-on contacts are the common case, and a purely radial
@@ -61,17 +62,37 @@ pub fn separations(bodies: &[Body]) -> Vec<FixedVec2> {
             }
 
             let overlap = reach - distance;
-            let half = if overlap > FixedI64::ZERO {
-                overlap / FixedI64::from_num(2)
+            let total = if overlap > FixedI64::ZERO {
+                overlap
             } else {
                 // Cell-sharing without body overlap: a steady creep apart.
-                cell_share_creep()
+                cell_share_creep() * FixedI64::from_num(2)
             };
-            let lateral = if needs_swerve(&bodies[first], &bodies[second], dx, dy) {
-                half / FixedI64::from_num(4)
-            } else {
-                FixedI64::ZERO
+            // Pressure yields to intent: a body pressed by a walker it is not
+            // itself pressing takes three quarters of the separation, so the
+            // walker mostly keeps its line and the contest ends instead of
+            // trading equal shoves forever — the churn that pinned workers at
+            // crowded drop-offs. Not the whole of it: a walker that loses
+            // nothing to contact rams arriving crowds into piles packed too
+            // tight for the rest-creep to relax back to one body per cell.
+            // Mutual presses and settled piles split evenly, as before.
+            let presses_second = presses_toward(&bodies[first], dx, dy);
+            let presses_first = presses_toward(&bodies[second], -dx, -dy);
+            let quarter = total / FixedI64::from_num(4);
+            let (first_share, second_share) = match (presses_second, presses_first) {
+                (true, false) => (quarter, total - quarter),
+                (false, true) => (total - quarter, quarter),
+                _ => (total / FixedI64::from_num(2), total / FixedI64::from_num(2)),
             };
+            let swerve = needs_swerve(&bodies[first], &bodies[second], dx, dy);
+            let lateral = |share: FixedI64| {
+                if swerve {
+                    share / FixedI64::from_num(4)
+                } else {
+                    FixedI64::ZERO
+                }
+            };
+            let (first_lateral, second_lateral) = (lateral(first_share), lateral(second_share));
             let (unit_x, unit_y) = if distance > FixedI64::ZERO {
                 (dx / distance, dy / distance)
             } else {
@@ -79,10 +100,10 @@ pub fn separations(bodies: &[Body]) -> Vec<FixedVec2> {
             };
             // Each side's swerve is the clockwise perpendicular of its own
             // outward direction, so the two swerves point apart.
-            pushes[first].x -= unit_x * half + unit_y * lateral;
-            pushes[first].y -= unit_y * half - unit_x * lateral;
-            pushes[second].x += unit_x * half + unit_y * lateral;
-            pushes[second].y += unit_y * half - unit_x * lateral;
+            pushes[first].x -= unit_x * first_share + unit_y * first_lateral;
+            pushes[first].y -= unit_y * first_share - unit_x * first_lateral;
+            pushes[second].x += unit_x * second_share + unit_y * second_lateral;
+            pushes[second].y += unit_y * second_share - unit_x * second_lateral;
         }
     }
     for push in &mut pushes {
@@ -110,16 +131,19 @@ fn needs_swerve(first: &Body, second: &Body, dx: FixedI64, dy: FixedI64) -> bool
     if dx == FixedI64::ZERO && dy == FixedI64::ZERO {
         return first.heading.is_some() || second.heading.is_some();
     }
-    let toward_second = first
-        .heading
-        .is_some_and(|heading| heading.x * dx + heading.y * dy > FixedI64::ZERO);
-    let toward_first = second
-        .heading
-        .is_some_and(|heading| heading.x * dx + heading.y * dy < FixedI64::ZERO);
+    let toward_second = presses_toward(first, dx, dy);
+    let toward_first = presses_toward(second, -dx, -dy);
     match (first.heading, second.heading) {
         (None, None) => false,
         (Some(_), None) => toward_second,
         (None, Some(_)) => toward_first,
         (Some(_), Some(_)) => toward_second && toward_first,
     }
+}
+
+/// Whether `body`'s heading has a component along the offset `(dx, dy)` —
+/// it is pressing toward whatever stands there.
+fn presses_toward(body: &Body, dx: FixedI64, dy: FixedI64) -> bool {
+    body.heading
+        .is_some_and(|heading| heading.x * dx + heading.y * dy > FixedI64::ZERO)
 }

@@ -148,11 +148,11 @@ fn pushing_never_commits_into_walls() {
         assert_eq!(
             cells,
             vec![
-                CellPos::new(7, 6),
-                CellPos::new(6, 4),
                 CellPos::new(7, 5),
-                CellPos::new(7, 3),
                 CellPos::new(7, 4),
+                CellPos::new(7, 6),
+                CellPos::new(7, 2),
+                CellPos::new(7, 3),
             ]
         );
     }
@@ -323,12 +323,12 @@ fn crowded_group_settles_and_stops_milling() {
     assert_eq!(
         cells,
         vec![
+            CellPos::new(5, 4),
             CellPos::new(5, 5),
-            CellPos::new(5, 6),
             CellPos::new(6, 4),
             CellPos::new(6, 5),
-            CellPos::new(6, 6),
             CellPos::new(7, 5),
+            CellPos::new(7, 6),
         ]
     );
 }
@@ -382,15 +382,15 @@ fn crowd_of_ten_rests_one_per_cell() {
         cells,
         vec![
             CellPos::new(11, 3),
-            CellPos::new(11, 4),
+            CellPos::new(11, 5),
             CellPos::new(12, 2),
+            CellPos::new(12, 3),
             CellPos::new(12, 4),
             CellPos::new(12, 5),
-            CellPos::new(12, 6),
-            CellPos::new(13, 3),
+            CellPos::new(13, 2),
             CellPos::new(13, 4),
+            CellPos::new(13, 5),
             CellPos::new(14, 3),
-            CellPos::new(14, 4),
         ]
     );
 }

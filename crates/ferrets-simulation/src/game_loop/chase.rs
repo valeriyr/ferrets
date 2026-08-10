@@ -12,7 +12,10 @@ use ferrets_math::{FixedI64, fixed_uvec2::FixedUVec2, fixed_vec2::FixedVec2};
 use ferrets_physics::body;
 
 use crate::{
-    components::chase::ChaseState, components::location::LocationComponent, entity_def, map::Map,
+    components::chase::{ChaseRound, ChaseState},
+    components::location::LocationComponent,
+    entity_def,
+    map::Map,
     order::Order,
 };
 
@@ -40,23 +43,36 @@ pub fn advance(
     // cell it visually stands on and claims. A continuous body pressed
     // against its destination rests with a fractional anchor whose floor
     // is one cell short, and floor-judging it would re-walk that phantom
-    // step forever. The destination stays anchor-floored: that is the cell
-    // the walk below plans toward and accepts by, so both verdicts name
-    // the same spot.
-    if projection.in_range_of_rect(
-        body::center_cell(from),
-        CellRect::new(CellPos::from(destination), destination_size),
-        range,
-    ) {
+    // step forever. The anchor's own floor also counts: a body nudged off
+    // its arrival spot by a working neighbor straddles the boundary with
+    // its center a hair past it, still standing at the work for any eye —
+    // and re-walking that hair loses the spot-contest forever. The
+    // destination stays anchor-floored: that is the cell the walk below
+    // plans toward and accepts by, so both verdicts name the same spot.
+    let goal = CellRect::new(CellPos::from(destination), destination_size);
+    if projection.in_range_of_rect(body::center_cell(from), goal, range)
+        || projection.in_range_of_rect(CellPos::from(from), goal, range)
+    {
         *last_chase = None;
         return Destination::Arrived;
     }
 
-    let progress = (body::center_cell(from), CellPos::from(destination));
-    if *last_chase == Some(progress) {
-        return Destination::OutOfReach;
+    let (own, destination_cell) = (body::center_cell(from), CellPos::from(destination));
+    match last_chase {
+        Some(round) if (round.own, round.destination) == (own, destination_cell) => {
+            round.repeats += 1;
+            if round.exhausted() {
+                return Destination::OutOfReach;
+            }
+        }
+        _ => {
+            *last_chase = Some(ChaseRound {
+                own,
+                destination: destination_cell,
+                repeats: 0,
+            });
+        }
     }
-    *last_chase = Some(progress);
     Destination::Walk(Order::Move {
         target: destination,
         size: destination_size,

@@ -176,6 +176,8 @@ pub const CONTENT: &str = r#"
                 -- stand of trees from the same distance.
                 build_range = 1, harvest_range = 1,
                 supply_cost = 1,
+                -- One shelter slot: a worker fits in a bunker or a pig farm.
+                cargo_size = 1,
             },
             dying = { time = 2 },
             cost = { gold = 50 },
@@ -253,12 +255,39 @@ pub const CONTENT: &str = r#"
     -- Peasants work in the open and swarm: any number of them can share a site, a
     -- repair or a stand of trees, each adding its own tick of work, so a gang of
     -- them raises a building in a fraction of the time one would take.
-    worker("peasant", "human", { "town_hall", "barracks", "farm", "blacksmith" }, {
+    worker("peasant", "human", { "town_hall", "barracks", "farm", "blacksmith", "bunker" }, {
         build = "present_stacking", repair = "present_stacking", wood = "present_stacking",
     })
     main_hall("town_hall", "human", "peasant")
     farm("farm", "human")
     barracks("barracks", "human", { "archer", "mortar", "medic" })
+
+    -- The human garrison: the living step inside and the armed among them fire
+    -- their own weapons out, untouchable until the walls come down — and when
+    -- they do, whoever fits through the ruins walks away.
+    define_entity("bunker", {
+        race = "human",
+        location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
+        stats = {
+            max_health = 400, sight_range = 7,
+            cargo_capacity = 4,
+            -- Boarding steps over the threshold; unloading spills everyone out
+            -- at once, so a garrison empties the moment it is told to.
+            load_range = 1, unload_range = 1, load_period = 0, unload_period = 0,
+        },
+        dying = { time = 2 },
+        -- Stone and earthworks: no call on the wood line, which the demo
+        -- economy keeps stretched over the upgrades.
+        cost = { gold = 100 },
+        build_time = 80,
+        transporter = {
+            carries = { "biological" },
+            boarding = "own",
+            fate = "eject",
+            conduct = "fight",
+        },
+        tags = { "building" },
+    })
 
     -- The human tech building: while one stands, mortars unlock, and it hosts
     -- the iron weapons upgrade.
@@ -286,6 +315,7 @@ pub const CONTENT: &str = r#"
             -- what it can auto-engage.
             sight_range = 10,
             supply_cost = 1,
+            cargo_size = 1,
         },
         dying = { time = 2 },
         tags = { "biological" },
@@ -317,6 +347,7 @@ pub const CONTENT: &str = r#"
             -- price says nothing about how long it takes to patch up.
             repair_speed = "1.0", repair_range = 2,
             supply_cost = 1,
+            cargo_size = 1,
         },
         dying = { time = 2 },
         tags = { "biological" },
@@ -345,6 +376,8 @@ pub const CONTENT: &str = r#"
             damage = 14, attack_range = 7, acquire_range = 9, attack_period = 20, damage_point = 8,
             sight_range = 11,
             supply_cost = 1,
+            -- The tube and its crew take two shelter slots.
+            cargo_size = 2,
         },
         dying = { time = 2 },
         tags = { "biological" },
@@ -372,7 +405,33 @@ pub const CONTENT: &str = r#"
         build = "hidden", repair = "present", wood = "present",
     })
     main_hall("great_hall", "orc", "peon")
-    farm("pig_farm", "orc")
+
+    -- The orc farm is also a shelter, for the workforce alone: peons crawl in
+    -- one at a time and sit out a raid unseen — the army stands and fights.
+    -- Nobody fights from a pig sty, and whoever is still inside when it burns
+    -- burns with it. (Named by type, not tag: the one place the demo admits
+    -- by exact type name.)
+    define_entity("pig_farm", {
+        race = "orc",
+        location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
+        stats = {
+            max_health = 200, sight_range = 3, supply_provided = 6,
+            cargo_capacity = 4,
+            -- A crawl space, not a door: one body a second each way.
+            load_range = 1, unload_range = 1,
+            load_period = 20, unload_period = 20,
+        },
+        dying = { time = 2 },
+        cost = { gold = 40, wood = 20 },
+        build_time = 60,
+        transporter = {
+            carries = { "peon" },
+            boarding = "own",
+            fate = "destroy",
+            conduct = "shelter",
+        },
+        tags = { "building" },
+    })
     barracks("war_camp", "orc", { "grunt", "shaman" }, { "frenzy_ritual" })
     define_entity("grunt", {
         race = "orc",
@@ -387,6 +446,7 @@ pub const CONTENT: &str = r#"
             health_regen = "0.05",
             sight_range = 8,
             supply_cost = 1,
+            cargo_size = 1,
         },
         dying = { time = 2 },
         tags = { "biological" },
@@ -408,6 +468,7 @@ pub const CONTENT: &str = r#"
             max_energy = 80, energy_regen = "0.2",
             sight_range = 8,
             supply_cost = 1,
+            cargo_size = 1,
         },
         dying = { time = 2 },
         tags = { "biological" },

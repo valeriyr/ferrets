@@ -67,6 +67,23 @@ impl EntityStatId {
     /// continuous movement model resolves contact. Every mover defines one;
     /// half a cell makes resting neighbors touch at one-cell spacing.
     pub const RADIUS: EntityStatId = EntityStatId(19);
+    /// Transporter slots one instance occupies as a passenger. Declaring it is
+    /// what makes a type transportable.
+    pub const CARGO_SIZE: EntityStatId = EntityStatId(20);
+    /// How close a boarder must be to its transporter, in cells.
+    pub const LOAD_RANGE: EntityStatId = EntityStatId(21);
+    /// How close a transporter must be to an unload destination before it
+    /// starts letting passengers out, in cells.
+    pub const UNLOAD_RANGE: EntityStatId = EntityStatId(22);
+    /// Minimum ticks between successive boardings into one transporter. Zero
+    /// admits passengers as fast as they arrive.
+    pub const LOAD_PERIOD: EntityStatId = EntityStatId(23);
+    /// Minimum ticks between successive passenger exits from one transporter.
+    /// Zero lets everyone out at once.
+    pub const UNLOAD_PERIOD: EntityStatId = EntityStatId(24);
+    /// Total transporter slots aboard one instance. Each passenger consumes
+    /// its [`CARGO_SIZE`](Self::CARGO_SIZE) of them.
+    pub const CARGO_CAPACITY: EntityStatId = EntityStatId(25);
 
     /// Creates an entity stat id for the given registration index.
     pub(crate) fn from_index(index: usize) -> Self {
@@ -82,7 +99,7 @@ impl EntityStatId {
 
 /// The built-in entity stats, registered first and in this order, so their
 /// assigned ids equal the [`EntityStatId`] constants above.
-pub(crate) const ENTITY_BUILTIN_STATS: [BuiltinStat<EntityStatId>; 20] = [
+pub(crate) const ENTITY_BUILTIN_STATS: [BuiltinStat<EntityStatId>; 26] = [
     // Current health settles under this ceiling, so a zero would turn any debuff
     // that reached it into an instant kill.
     stats::builtin(EntityStatId::MAX_HEALTH, "max_health", FixedU64::ONE),
@@ -123,6 +140,22 @@ pub(crate) const ENTITY_BUILTIN_STATS: [BuiltinStat<EntityStatId>; 20] = [
     // Fractional cells, authored below 1 — a whole-number floor would raise
     // the values rather than guard them.
     stats::builtin(EntityStatId::RADIUS, "radius", FixedU64::ZERO),
+    // A passenger occupying zero slots would ride for free past any capacity.
+    stats::builtin(EntityStatId::CARGO_SIZE, "cargo_size", FixedU64::ONE),
+    // Zero range can only be satisfied by standing inside the target's footprint.
+    stats::builtin(EntityStatId::LOAD_RANGE, "load_range", FixedU64::ONE),
+    stats::builtin(EntityStatId::UNLOAD_RANGE, "unload_range", FixedU64::ONE),
+    // No floor: zero is a meaningful pace — an unmetered transfer.
+    stats::builtin(EntityStatId::LOAD_PERIOD, "load_period", FixedU64::ZERO),
+    stats::builtin(EntityStatId::UNLOAD_PERIOD, "unload_period", FixedU64::ZERO),
+    // No fold floor: a debuff may seal the hold entirely — nobody new boards,
+    // whoever is aboard stays. Authoring a sealed hold is still rejected:
+    // registration requires the declared value to be positive.
+    stats::builtin(
+        EntityStatId::CARGO_CAPACITY,
+        "cargo_capacity",
+        FixedU64::ZERO,
+    ),
 ];
 
 // Floors and names are looked up by `EntityStatId::index`, so every entry must sit at

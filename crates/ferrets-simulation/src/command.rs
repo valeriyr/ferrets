@@ -113,6 +113,31 @@ pub enum PlayerCommand {
     /// mend it.
     /// `flush` cancels existing orders before issuing this one; `false` appends.
     Repair { target: SimulationId, flush: bool },
+    /// Issues a follow order to the current selection: stay close to `target`,
+    /// chasing it as it moves — the explicit form of what a send-to-entity falls
+    /// back to, for when an earlier reading (boarding, repairing) would win.
+    /// `flush` cancels existing orders before issuing this one; `false` appends.
+    Follow { target: SimulationId, flush: bool },
+    /// Issues a board order to every selected entity: ride inside the `target`
+    /// transporter — the explicit form of the send-to-entity reading, for when
+    /// an earlier reading (repairing a damaged holder) would win.
+    /// `flush` cancels existing orders before issuing this one; `false` appends.
+    Board { target: SimulationId, flush: bool },
+    /// Issues a load order to the `transport` entity: fetch `target` aboard.
+    /// `flush` cancels existing orders before issuing this one; `false` appends.
+    Load {
+        transport: SimulationId,
+        target: SimulationId,
+        flush: bool,
+    },
+    /// Issues an unload order to the `transport` entity: let every passenger out,
+    /// walking into unload range of `at` first when one is given.
+    /// `flush` cancels existing orders before issuing this one; `false` appends.
+    Unload {
+        transport: SimulationId,
+        at: Option<FixedUVec2>,
+        flush: bool,
+    },
     /// Stops the current orders.
     Stop,
     /// Spawns a fully-formed entity of `type_name` for the issuing player at

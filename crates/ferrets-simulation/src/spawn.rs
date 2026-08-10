@@ -23,8 +23,12 @@ use crate::{
         stance::{Stance, StanceComponent},
         tags::TagsComponent,
         train::TrainQueueComponent,
+        transport::{BoardedComponent, GarrisonFireComponent, TransporterComponent},
     },
-    content::{entity_stats::EntityStatId, location::LocationDef, registry::ContentRegistry},
+    content::{
+        entity_stats::EntityStatId, location::LocationDef, registry::ContentRegistry,
+        transport::PassengerFate,
+    },
     control_groups::ControlGroups,
     entity_def,
     entity_index::EntityIndex,
@@ -67,6 +71,7 @@ pub fn spawn_entity(
         can_move,
         has_health,
         has_trainer,
+        has_transporter,
         has_resource_source,
         has_resource_carrier,
         tags,
@@ -83,6 +88,7 @@ pub fn spawn_entity(
             type_def.can_move(),
             type_def.has_health(),
             type_def.trainer.is_some(),
+            type_def.can_transport(),
             type_def.resource_source.is_some(),
             type_def.resource_carrier.is_some(),
             type_def.tags.clone(),
@@ -141,6 +147,14 @@ pub fn spawn_entity(
             TrainQueueComponent::default(),
             RallyPointComponent::default(),
         ));
+    }
+    if has_transporter {
+        entity_mut.insert(TransporterComponent::default());
+        // A holder without one yet: trainers already carry theirs, and the two
+        // roles share the rally point.
+        if !entity_mut.contains::<RallyPointComponent>() {
+            entity_mut.insert(RallyPointComponent::default());
+        }
     }
     if has_resource_source {
         entity_mut.insert(ResourceSourceComponent::default());
@@ -400,6 +414,9 @@ pub fn destroy_entity(world: &mut World, entity: Entity) {
     world.resource_mut::<Selection>().remove(id);
     world.resource_mut::<ControlGroups>().remove(id);
 
+    settle_passengers(world, entity);
+    leave_holder(world, entity, id);
+
     let dying_time = entity_def::of(world, entity)
         .dying
         .as_ref()
@@ -415,6 +432,60 @@ pub fn destroy_entity(world: &mut World, entity: Entity) {
     }
 
     world.resource_mut::<EntityIndex>().mark_dying(id);
+}
+
+/// Applies a dying transporter's declared passenger fate to everyone aboard.
+///
+/// Ejection is one placement attempt per passenger, in id order so earlier ids
+/// take the closer cells on every peer; a passenger the ring scan cannot place
+/// dies with its holder rather than lingering hidden with nothing holding it.
+fn settle_passengers(world: &mut World, entity: Entity) {
+    let Some(passengers) = world
+        .entity_mut(entity)
+        .get_mut::<TransporterComponent>()
+        .map(|mut transporter| std::mem::take(&mut transporter.passengers))
+    else {
+        return;
+    };
+    if passengers.is_empty() {
+        return;
+    }
+    let fate = entity_def::of(world, entity)
+        .transporter
+        .as_ref()
+        .expect("a passenger list belongs to a transporter")
+        .passenger_fate();
+    let (around, around_size) = entity_def::footprint(world, entity);
+    let around = CellPos::from(around);
+
+    for id in passengers {
+        let Some(passenger) = world.resource::<EntityIndex>().alive(id) else {
+            continue;
+        };
+        world
+            .entity_mut(passenger)
+            .remove::<(BoardedComponent, GarrisonFireComponent)>();
+        match fate {
+            PassengerFate::Destroy => destroy_entity(world, passenger),
+            PassengerFate::Eject => {
+                if !reveal_entity_near(world, passenger, around, around_size) {
+                    destroy_entity(world, passenger);
+                }
+            }
+        }
+    }
+}
+
+/// Takes a dying passenger off its holder's list, freeing the slots it held.
+fn leave_holder(world: &mut World, entity: Entity, id: SimulationId) {
+    let Some(boarded) = world.entity_mut(entity).take::<BoardedComponent>() else {
+        return;
+    };
+    if let Some(holder) = world.resource::<EntityIndex>().alive(boarded.holder)
+        && let Some(mut transporter) = world.entity_mut(holder).get_mut::<TransporterComponent>()
+    {
+        transporter.passengers.remove(&id);
+    }
 }
 
 /// Removes a dead entity from the world after its dying phase has completed.

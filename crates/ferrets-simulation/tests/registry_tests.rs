@@ -25,6 +25,7 @@ use ferrets_simulation::{
         stack_rule::StackRule,
         stats::{EntityModifier, ModifierOp},
         tags,
+        transport::{BoardingPolicy, PassengerConduct, PassengerFate},
         work::WorkPresence,
     },
     resources::{self, Cost},
@@ -800,6 +801,153 @@ fn register_rejects_attacker_without_weapon_stats() {
             .with_location(GROUND, CellSize::ONE, Solidity::Solid)
             .with_stat(EntityStatId::DAMAGE, FixedU64::from_num(5)),
     );
+}
+
+//
+// ─── Transport ────────────────────────────────────────────────────────────────
+//
+
+#[test]
+#[should_panic(expected = "can transport but is missing load_range")]
+fn register_rejects_transporter_without_reach() {
+    let mut registry = ground_registry();
+    registry.register_tag("infantry");
+    registry.register(
+        EntityTypeDef::new("wagon")
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+            .with_stat(EntityStatId::CARGO_CAPACITY, FixedU64::from_num(4))
+            .with_transporter(
+                ["infantry"],
+                BoardingPolicy::Own,
+                PassengerFate::Destroy,
+                PassengerConduct::Shelter,
+            ),
+    );
+}
+
+#[test]
+#[should_panic(expected = "has a non-positive cargo_capacity stat")]
+fn register_rejects_zero_cargo_capacity() {
+    let mut registry = ground_registry();
+    registry.register_tag("infantry");
+    registry.register(
+        EntityTypeDef::new("wagon")
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+            .with_stat(EntityStatId::CARGO_CAPACITY, FixedU64::ZERO)
+            .with_stat(EntityStatId::LOAD_RANGE, FixedU64::ONE)
+            .with_stat(EntityStatId::UNLOAD_RANGE, FixedU64::ONE)
+            .with_stat(EntityStatId::LOAD_PERIOD, FixedU64::ZERO)
+            .with_stat(EntityStatId::UNLOAD_PERIOD, FixedU64::ZERO)
+            .with_transporter(
+                ["infantry"],
+                BoardingPolicy::Own,
+                PassengerFate::Destroy,
+                PassengerConduct::Shelter,
+            ),
+    );
+}
+
+#[test]
+#[should_panic(expected = "can transport but is missing cargo_capacity")]
+fn register_rejects_transporter_without_capacity() {
+    let mut registry = ground_registry();
+    registry.register_tag("infantry");
+    registry.register(
+        EntityTypeDef::new("wagon")
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+            .with_stat(EntityStatId::LOAD_RANGE, FixedU64::ONE)
+            .with_stat(EntityStatId::UNLOAD_RANGE, FixedU64::ONE)
+            .with_stat(EntityStatId::LOAD_PERIOD, FixedU64::ZERO)
+            .with_stat(EntityStatId::UNLOAD_PERIOD, FixedU64::ZERO)
+            .with_transporter(
+                ["infantry"],
+                BoardingPolicy::Own,
+                PassengerFate::Destroy,
+                PassengerConduct::Shelter,
+            ),
+    );
+}
+
+#[test]
+#[should_panic(expected = "declares unload_period but cannot transport")]
+fn register_rejects_transport_stat_without_capability() {
+    let mut registry = ground_registry();
+    registry.register(
+        EntityTypeDef::new("soldier")
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+            .with_stat(EntityStatId::UNLOAD_PERIOD, FixedU64::from_num(2)),
+    );
+}
+
+#[test]
+#[should_panic(expected = "can transport and so cannot declare cargo_size")]
+fn register_rejects_transportable_transporter() {
+    let mut registry = ground_registry();
+    registry.register_tag("infantry");
+    registry.register(
+        EntityTypeDef::new("wagon")
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+            .with_stat(EntityStatId::CARGO_CAPACITY, FixedU64::from_num(4))
+            .with_stat(EntityStatId::LOAD_RANGE, FixedU64::ONE)
+            .with_stat(EntityStatId::UNLOAD_RANGE, FixedU64::ONE)
+            .with_stat(EntityStatId::LOAD_PERIOD, FixedU64::ZERO)
+            .with_stat(EntityStatId::UNLOAD_PERIOD, FixedU64::ZERO)
+            .with_stat(EntityStatId::CARGO_SIZE, FixedU64::from_num(2))
+            .with_transporter(
+                ["infantry"],
+                BoardingPolicy::Own,
+                PassengerFate::Destroy,
+                PassengerConduct::Shelter,
+            ),
+    );
+}
+
+#[test]
+#[should_panic(expected = "carries 'critters', which is not a registered entity type or tag")]
+fn validate_rejects_unresolved_carries_entry() {
+    let mut registry = ground_registry();
+    registry.register(
+        EntityTypeDef::new("wagon")
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+            .with_stat(EntityStatId::CARGO_CAPACITY, FixedU64::from_num(4))
+            .with_stat(EntityStatId::LOAD_RANGE, FixedU64::ONE)
+            .with_stat(EntityStatId::UNLOAD_RANGE, FixedU64::ONE)
+            .with_stat(EntityStatId::LOAD_PERIOD, FixedU64::ZERO)
+            .with_stat(EntityStatId::UNLOAD_PERIOD, FixedU64::ZERO)
+            .with_transporter(
+                ["critters"],
+                BoardingPolicy::Own,
+                PassengerFate::Destroy,
+                PassengerConduct::Shelter,
+            ),
+    );
+    registry.validate();
+}
+
+#[test]
+fn validate_accepts_carries_entry_registered_later() {
+    let mut registry = ground_registry();
+    registry.register(
+        EntityTypeDef::new("wagon")
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+            .with_stat(EntityStatId::CARGO_CAPACITY, FixedU64::from_num(4))
+            .with_stat(EntityStatId::LOAD_RANGE, FixedU64::ONE)
+            .with_stat(EntityStatId::UNLOAD_RANGE, FixedU64::ONE)
+            .with_stat(EntityStatId::LOAD_PERIOD, FixedU64::ZERO)
+            .with_stat(EntityStatId::UNLOAD_PERIOD, FixedU64::ZERO)
+            .with_transporter(
+                ["footman"],
+                BoardingPolicy::Own,
+                PassengerFate::Destroy,
+                PassengerConduct::Shelter,
+            ),
+    );
+    registry.register(
+        EntityTypeDef::new("footman")
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+            .with_stat(EntityStatId::CARGO_SIZE, FixedU64::ONE),
+    );
+    registry.validate();
 }
 
 //

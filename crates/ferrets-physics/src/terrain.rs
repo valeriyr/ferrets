@@ -18,6 +18,11 @@ pub fn body_fits(grid: &NavGrid, mask: LayerMask, position: FixedUVec2, radius: 
 /// when the body fits there, else the desired point with one axis dropped —
 /// sliding along whatever blocked it — else the position unmoved. A caller
 /// seeing no movement out of a wanted one knows the body is walled off.
+///
+/// The kept axis is the step's dominant one: a walk skimming a wall wants to
+/// keep its along-wall progress, not be diverted down its own faint sideways
+/// component — that diversion is how a body rounding a corner slid off along
+/// the wrong face. Ties keep the x axis, deterministically.
 pub fn slide_toward(
     grid: &NavGrid,
     mask: LayerMask,
@@ -25,14 +30,17 @@ pub fn slide_toward(
     desired: FixedUVec2,
     radius: FixedU64,
 ) -> FixedUVec2 {
-    [
-        desired,
-        FixedUVec2::new(desired.x, position.y),
-        FixedUVec2::new(position.x, desired.y),
-    ]
-    .into_iter()
-    .find(|&candidate| body_fits(grid, mask, candidate, radius))
-    .unwrap_or(position)
+    let along_x = FixedUVec2::new(desired.x, position.y);
+    let along_y = FixedUVec2::new(position.x, desired.y);
+    let candidates = if desired.x.abs_diff(position.x) >= desired.y.abs_diff(position.y) {
+        [desired, along_x, along_y]
+    } else {
+        [desired, along_y, along_x]
+    };
+    candidates
+        .into_iter()
+        .find(|&candidate| body_fits(grid, mask, candidate, radius))
+        .unwrap_or(position)
 }
 
 /// `position` displaced by a signed push per axis, clamped at the map's

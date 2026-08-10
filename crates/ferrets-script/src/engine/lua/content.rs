@@ -227,6 +227,18 @@ fn build_entity(
     if let Some(trainer) = optional::<Vec<String>>(table, "trainer")? {
         def = def.with_trainer(trainer);
     }
+    if let Some(transporter) = optional::<Table>(table, "transporter")? {
+        let carries = required::<Vec<String>>(&transporter, "carries")?;
+        let boarding = required::<String>(&transporter, "boarding")?;
+        let fate = required::<String>(&transporter, "fate")?;
+        let conduct = required::<String>(&transporter, "conduct")?;
+        def = def.with_transporter(
+            carries,
+            content::boarding_policy(&boarding)?,
+            content::passenger_fate(&fate)?,
+            content::passenger_conduct(&conduct)?,
+        );
+    }
     if let Some(researcher) = optional::<Vec<String>>(table, "researcher")? {
         let ids = researcher
             .iter()

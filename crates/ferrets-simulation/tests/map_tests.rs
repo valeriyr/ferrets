@@ -114,6 +114,41 @@ fn continuous_map_rejects_mover_without_radius() {
 }
 
 #[test]
+#[should_panic(
+    expected = "entity type 'runner' authors a radius beyond half its footprint's narrow side"
+)]
+fn continuous_map_rejects_radius_beyond_footprint() {
+    let mut registry = lake_registry();
+    let ground = registry.layer("ground").unwrap();
+    registry.register(
+        EntityTypeDef::new("runner")
+            .with_location(ground, CellSize::ONE, Solidity::Solid)
+            .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.75)),
+    );
+
+    let mut data = MapData::new("pond", Projection::Isometric, 4, 4);
+    data.set_movement_model(MovementModel::Continuous);
+
+    Map::from_data(&data, &registry);
+}
+
+#[test]
+fn continuous_map_accepts_radius_at_half_footprint() {
+    let mut registry = lake_registry();
+    let ground = registry.layer("ground").unwrap();
+    registry.register(
+        EntityTypeDef::new("runner")
+            .with_location(ground, CellSize::ONE, Solidity::Solid)
+            .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5)),
+    );
+
+    let mut data = MapData::new("pond", Projection::Isometric, 4, 4);
+    data.set_movement_model(MovementModel::Continuous);
+
+    Map::from_data(&data, &registry);
+}
+
+#[test]
 fn cell_map_accepts_mover_without_radius() {
     let mut registry = lake_registry();
     let ground = registry.layer("ground").unwrap();

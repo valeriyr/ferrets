@@ -62,6 +62,19 @@ pub fn radius(world: &World, entity: Entity) -> FixedU64 {
         .expect("movers define a radius stat")
 }
 
+/// The whole-number value of one of `entity`'s stats.
+///
+/// Panics if `entity` is not a simulation entity, or carries no such stat —
+/// for stats whose presence the caller's capability check already vouches for.
+pub fn stat_u32(world: &World, entity: Entity, stat: EntityStatId) -> u32 {
+    world
+        .entity(entity)
+        .get::<StatsComponent>()
+        .expect("simulation entity must have a stat store")
+        .effective_as_u32(stat)
+        .expect("the capability pairs the entity with this stat")
+}
+
 /// Returns where `entity` stands and how much room it takes.
 ///
 /// The two belong together — a footprint is neither without the other — and they

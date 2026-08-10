@@ -9,7 +9,10 @@ use ferrets_simulation::{
     command::{PlayerCommand, SelectMode},
     components::{
         hidden::HiddenComponent,
-        resource::{HarvestingComponent, ResourceSourceComponent, UnderHarvestComponent},
+        resource::{
+            HarvestingComponent, ResourceCarrierComponent, ResourceSourceComponent,
+            UnderHarvestComponent,
+        },
     },
     resources::PlayerResources,
     simulation_id::SimulationId,
@@ -383,8 +386,232 @@ fn carrier_that_works_alone_waits_for_source_another_holds() {
 }
 
 //
+// ─── Unreachable sources and kind lock ────────────────────────────────────────
+//
+
+#[test]
+fn carrier_switches_to_nearby_source_when_ordered_one_unreachable() {
+    let mut app = utils::orders_app();
+    let (_, worker_id) = utils::spawn_owned(&mut app, "worker", 5, 5, 0);
+    utils::spawn_owned(&mut app, "depot", 2, 4, 0);
+
+    // The ordered mine sits inside a boulder ring; another gold source stands
+    // in the open beside it.
+    let (walled, walled_id) =
+        spawn::spawn_entity(app.world_mut(), "mine", utils::pos(20, 20), None).unwrap();
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(walled)
+        .unwrap()
+        .amount = 10;
+    ring_with_boulders(&mut app, 20, 20);
+    let (open, _) = spawn::spawn_entity(app.world_mut(), "mine", utils::pos(16, 20), None).unwrap();
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(open)
+        .unwrap()
+        .amount = 5;
+
+    utils::select(&mut app, worker_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SendToEntity {
+            target: walled_id,
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, 400);
+
+    assert_eq!(
+        utils::gold(app.world()),
+        5,
+        "the load came from the open mine beside the walled one"
+    );
+    assert_eq!(
+        app.world()
+            .get::<ResourceSourceComponent>(walled)
+            .unwrap()
+            .amount,
+        10,
+        "the walled mine was never touched"
+    );
+}
+
+#[test]
+fn carrier_waits_in_place_when_unreachable_source_is_only_one_around() {
+    let mut app = utils::orders_app();
+    let (worker, worker_id) = utils::spawn_owned(&mut app, "worker", 5, 5, 0);
+    utils::spawn_owned(&mut app, "depot", 2, 4, 0);
+
+    let (walled, walled_id) =
+        spawn::spawn_entity(app.world_mut(), "mine", utils::pos(20, 20), None).unwrap();
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(walled)
+        .unwrap()
+        .amount = 10;
+    ring_with_boulders(&mut app, 20, 20);
+
+    utils::select(&mut app, worker_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SendToEntity {
+            target: walled_id,
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, 300);
+
+    assert!(
+        !utils::order_queue_is_empty(app.world_mut(), worker),
+        "the only source around is merely blocked, so the order waits it out"
+    );
+    assert_eq!(utils::gold(app.world()), 0);
+}
+
+#[test]
+fn waiting_carrier_resumes_when_way_to_source_opens() {
+    let mut app = utils::orders_app();
+    let (_, worker_id) = utils::spawn_owned(&mut app, "worker", 5, 5, 0);
+    utils::spawn_owned(&mut app, "depot", 2, 4, 0);
+
+    let (walled, walled_id) =
+        spawn::spawn_entity(app.world_mut(), "mine", utils::pos(20, 20), None).unwrap();
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(walled)
+        .unwrap()
+        .amount = 5;
+    let ring = ring_with_boulders(&mut app, 20, 20);
+
+    utils::select(&mut app, worker_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SendToEntity {
+            target: walled_id,
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, 100);
+    assert_eq!(utils::gold(app.world()), 0, "the ring still stands");
+
+    for boulder in ring {
+        spawn::destroy_entity(app.world_mut(), boulder);
+    }
+    utils::run_ticks(&mut app, 300);
+
+    assert_eq!(
+        utils::gold(app.world()),
+        5,
+        "the retry finds the way open and the trip completes"
+    );
+}
+
+#[test]
+fn foreign_load_is_wasted_at_first_transfer_not_delivered() {
+    let mut app = utils::orders_app();
+    let (forager, forager_id) = utils::spawn_owned(&mut app, "forager", 5, 5, 0);
+    utils::spawn_owned(&mut app, "depot", 2, 4, 0);
+    let (tree, tree_id) =
+        spawn::spawn_entity(app.world_mut(), "tree", utils::pos(9, 5), None).unwrap();
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(tree)
+        .unwrap()
+        .amount = 5;
+
+    // Three gold in hand when the order names wood: the worker walks straight
+    // to the tree — no storage detour — and the gold is gone the moment the
+    // wood is in hand.
+    {
+        let mut carrier = app
+            .world_mut()
+            .get_mut::<ResourceCarrierComponent>(forager)
+            .unwrap();
+        carrier.kind = Some("gold".to_string());
+        carrier.amount = 3;
+    }
+
+    utils::select(&mut app, forager_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SendToEntity {
+            target: tree_id,
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, 200);
+
+    assert_eq!(utils::gold(app.world()), 0, "the gold load was wasted");
+    assert_eq!(utils::wood(app.world()), 5, "a clean wood load arrived");
+    assert!(utils::order_queue_is_empty(app.world_mut(), forager));
+}
+
+#[test]
+fn order_locked_to_wood_does_not_switch_to_gold() {
+    let mut app = utils::orders_app();
+    // The forager can carry either kind; only the order's lock is on trial.
+    let (forager, forager_id) = utils::spawn_owned(&mut app, "forager", 5, 5, 0);
+    utils::spawn_owned(&mut app, "depot", 2, 4, 0);
+
+    // One tree holding exactly one load, with a gold mine right beside it.
+    let (tree, tree_id) =
+        spawn::spawn_entity(app.world_mut(), "tree", utils::pos(9, 5), None).unwrap();
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(tree)
+        .unwrap()
+        .amount = 5;
+    let (mine, _) = spawn::spawn_entity(app.world_mut(), "mine", utils::pos(10, 5), None).unwrap();
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(mine)
+        .unwrap()
+        .amount = 10;
+
+    utils::select(&mut app, forager_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SendToEntity {
+            target: tree_id,
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, 200);
+
+    assert_eq!(utils::wood(app.world()), 5, "the tree's one load arrived");
+    assert_eq!(
+        utils::gold(app.world()),
+        0,
+        "a wood order never drifts to gold, however close the mine stands"
+    );
+    assert_eq!(
+        app.world()
+            .get::<ResourceSourceComponent>(mine)
+            .unwrap()
+            .amount,
+        10
+    );
+    assert!(
+        utils::order_queue_is_empty(app.world_mut(), forager),
+        "with no wood left anywhere near, the order gives up"
+    );
+}
+
+//
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 //
+
+/// Surrounds the cell at (`x`, `y`) with eight boulders, sealing whatever
+/// stands there off from every walkable neighbor. Returns the ring.
+fn ring_with_boulders(app: &mut App, x: u32, y: u32) -> Vec<Entity> {
+    let mut ring = Vec::new();
+    for dx in -1i32..=1 {
+        for dy in -1i32..=1 {
+            if dx == 0 && dy == 0 {
+                continue;
+            }
+            let (bx, by) = ((x as i32 + dx) as u32, (y as i32 + dy) as u32);
+            let (boulder, _) =
+                spawn::spawn_entity(app.world_mut(), "boulder", utils::pos(bx, by), None).unwrap();
+            ring.push(boulder);
+        }
+    }
+    ring
+}
 
 /// Selects both carriers and sends the pair to one target, as a player crowding a
 /// source would.

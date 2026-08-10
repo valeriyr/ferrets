@@ -259,6 +259,10 @@ impl Plugin for SimulationPlugin {
                     // query time.
                     systems::refresh_nav_hierarchy,
                     systems::tick_orders,
+                    // Garrisoned passengers fight outside the order lifecycle,
+                    // right after it: their shots join this tick's impacts on
+                    // the same schedule as ordered attacks.
+                    systems::process_garrison_attacks,
                     // Continuous-model contact: bodies moved by their orders
                     // this tick push each other apart before anything reads
                     // the settled positions.
@@ -277,8 +281,7 @@ impl Plugin for SimulationPlugin {
                     // applied.
                     systems::process_entity_skills,
                     systems::process_player_skills,
-                    systems::process_energy_regen,
-                    systems::process_health_regen,
+                    (systems::process_energy_regen, systems::process_health_regen).chain(),
                     systems::check_game_result,
                     systems::tick_counter,
                 )

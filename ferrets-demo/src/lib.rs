@@ -154,6 +154,8 @@ pub fn run() {
                 hud::research_card_input,
                 hud::skill_card_input,
                 hud::player_skill_card_input,
+                hud::load_card_input,
+                hud::unload_card_input,
                 hud::group_roster_input,
                 input::order_mode_input,
                 input::targeting_input,

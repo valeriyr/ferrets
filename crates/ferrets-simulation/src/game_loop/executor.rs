@@ -8,7 +8,7 @@ use bevy_ecs::{entity::Entity, world::World};
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::{FixedU64, fixed_urect::FixedURect, fixed_uvec2::FixedUVec2};
 
-use super::{repair, stats};
+use super::{board, repair, stats};
 use crate::{
     command::{PlayerCommand, SelectMode, SkillCasterRef},
     components::{
@@ -326,6 +326,74 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
                 );
             }
         }
+        PlayerCommand::Follow { target, flush } => {
+            if world
+                .resource::<EntityIndex>()
+                .interactable(world, *target)
+                .is_none()
+            {
+                return;
+            }
+            for entity in commanded_selection_excluding(world, player, *target) {
+                push_order(
+                    world,
+                    entity,
+                    Order::Follow { target: *target },
+                    CancelPolicy::from_bool(*flush),
+                );
+            }
+        }
+        PlayerCommand::Board { target, flush } => {
+            // Entities the target will not take aboard drop the order in
+            // `prepare`, so a mixed selection simply sends the ones that fit.
+            if world
+                .resource::<EntityIndex>()
+                .interactable(world, *target)
+                .is_none()
+            {
+                return;
+            }
+            for entity in commanded_selection_excluding(world, player, *target) {
+                push_order(
+                    world,
+                    entity,
+                    Order::Board { target: *target },
+                    CancelPolicy::from_bool(*flush),
+                );
+            }
+        }
+        PlayerCommand::Load {
+            transport,
+            target,
+            flush,
+        } => {
+            let Some(entity) = find_owned_interactable(world, player, *transport) else {
+                return;
+            };
+            push_order(
+                world,
+                entity,
+                Order::Load { target: *target },
+                CancelPolicy::from_bool(*flush),
+            );
+        }
+        PlayerCommand::Unload {
+            transport,
+            at,
+            flush,
+        } => {
+            // Only the holder's owner opens the hold, whoever the passengers
+            // belong to.
+            let Some(entity) = find_owned_interactable(world, player, *transport) else {
+                return;
+            };
+            push_order(
+                world,
+                entity,
+                Order::Unload { at: *at },
+                CancelPolicy::from_bool(*flush),
+            );
+        }
         PlayerCommand::Stop => {
             for entity in commanded_selection(world, player) {
                 if let Some(mut queue) = world.entity_mut(entity).get_mut::<OrderQueueComponent>() {
@@ -413,6 +481,12 @@ pub(super) fn resolve_send_to_entity(
     // carrier still delivers to a storage that happens to be hurt.
     if repair::would_repair(world, entity, target) {
         return Some(Order::Repair { target: target_id });
+    }
+
+    // A transporter with room takes the unit aboard — after repair, so a worker
+    // sent to a damaged transport patches it up instead of climbing in.
+    if board::would_board(world, entity, target) {
+        return Some(Order::Board { target: target_id });
     }
 
     let hostile = owner::are_hostile(

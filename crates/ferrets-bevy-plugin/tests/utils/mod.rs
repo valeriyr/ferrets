@@ -22,6 +22,7 @@ use ferrets_simulation::{
         owner::OwnerComponent,
         pending_reveal::PendingRevealComponent,
         train::TrainQueueComponent,
+        transport::TransporterComponent,
     },
     content::{
         entity_buffs::{EntityBuffDef, EntityBuffId},
@@ -33,8 +34,10 @@ use ferrets_simulation::{
         research::{ResearchDef, ResearchId},
         resource::{DepletionPolicy, HarvestData},
         skills::{PlayerCastEffect, SkillCaster, SkillDef},
+        splash::SplashShape,
         stack_rule::StackRule,
         stats::{EntityModifier, ModifierOp},
+        transport::{BoardingPolicy, PassengerConduct, PassengerFate},
         work::WorkPresence,
     },
     entity_def,
@@ -344,6 +347,11 @@ pub fn count_of_type(world: &mut World, type_name: &str) -> usize {
 /// Player 0's stockpile of gold.
 pub fn gold(world: &World) -> u32 {
     world.resource::<PlayerResources>().amount(0, "gold")
+}
+
+/// Player 0's stockpile of wood.
+pub fn wood(world: &World) -> u32 {
+    world.resource::<PlayerResources>().amount(0, "wood")
 }
 
 /// Grants `amount` gold to player 0's stockpile.
@@ -667,6 +675,179 @@ pub fn research_app() -> App {
     app
 }
 
+/// App with the transport roster — riflemen and grunts (tagged "infantry",
+/// cargo sizes 1 and 2), an untransportable `civilian`, an own-only `wagon`
+/// and an allies-welcome `ferry` (capacity 4, metered loading/unloading, cargo
+/// destroyed with them), an immobile `bunker` carrying riflemen by type name
+/// whose passengers fight and are ejected on death, and a splashing `bombard`
+/// — players 0 and 1 on one team against player 2, session started.
+pub fn transport_app() -> App {
+    let mut app = make_app(vec![
+        PlayerSlot::occupied(0, PlayerType::Human, None, Some(1)),
+        PlayerSlot::occupied(1, PlayerType::Human, None, Some(1)),
+        PlayerSlot::occupied(2, PlayerType::Human, None, Some(2)),
+    ]);
+    {
+        let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
+        registry.register_tag("infantry");
+        registry.register(
+            EntityTypeDef::new("rifleman")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
+                .with_health(30)
+                .with_dying(2, None)
+                .with_attack(10, 3, 5, 4, 2)
+                .with_sight_range(8)
+                .with_tags(["infantry"])
+                .with_stat(EntityStatId::CARGO_SIZE, FixedU64::ONE),
+        );
+        registry.register(
+            EntityTypeDef::new("grunt")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
+                .with_health(20)
+                .with_dying(2, None)
+                .with_tags(["infantry"])
+                .with_stat(EntityStatId::CARGO_SIZE, FixedU64::from_num(2)),
+        );
+        registry.register(
+            EntityTypeDef::new("civilian")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
+                .with_health(20)
+                .with_dying(2, None)
+                .with_tags(["infantry"]),
+        );
+        let carrier = |name: &str, boarding: BoardingPolicy| {
+            EntityTypeDef::new(name)
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
+                .with_health(60)
+                .with_dying(2, None)
+                .with_stat(EntityStatId::CARGO_CAPACITY, FixedU64::from_num(4))
+                .with_stat(EntityStatId::LOAD_RANGE, FixedU64::from_num(2))
+                .with_stat(EntityStatId::UNLOAD_RANGE, FixedU64::ONE)
+                .with_stat(EntityStatId::LOAD_PERIOD, FixedU64::from_num(3))
+                .with_stat(EntityStatId::UNLOAD_PERIOD, FixedU64::from_num(2))
+                .with_transporter(
+                    ["infantry"],
+                    boarding,
+                    PassengerFate::Destroy,
+                    PassengerConduct::Shelter,
+                )
+        };
+        registry.register(carrier("wagon", BoardingPolicy::Own));
+        registry.register(carrier("ferry", BoardingPolicy::Allies));
+        registry.register(
+            EntityTypeDef::new("bunker")
+                .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
+                .with_health(200)
+                .with_dying(2, None)
+                .with_sight_range(8)
+                .with_stat(EntityStatId::CARGO_CAPACITY, FixedU64::from_num(4))
+                .with_stat(EntityStatId::LOAD_RANGE, FixedU64::ONE)
+                .with_stat(EntityStatId::UNLOAD_RANGE, FixedU64::ONE)
+                .with_stat(EntityStatId::LOAD_PERIOD, FixedU64::ZERO)
+                .with_stat(EntityStatId::UNLOAD_PERIOD, FixedU64::ZERO)
+                .with_transporter(
+                    ["rifleman"],
+                    BoardingPolicy::Own,
+                    PassengerFate::Eject,
+                    PassengerConduct::Fight,
+                ),
+        );
+        registry.register(
+            EntityTypeDef::new("bombard")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_health(40)
+                .with_dying(2, None)
+                .with_attack(20, 6, 6, 4, 2)
+                .with_sight_range(10)
+                .with_splash(
+                    SplashShape::Circular,
+                    vec![(2, FixedU64::from_num(0.5))],
+                    GROUND,
+                    true,
+                ),
+        );
+    }
+    app.world_mut().resource::<ContentRegistry>().validate();
+    app.world_mut().resource_mut::<GameSession>().start();
+    app
+}
+
+/// App on a continuous-model map with a solid 3x3 `keep` and a `runner`
+/// (speed 0.3, radius 0.5), session started.
+pub fn corner_app() -> App {
+    let mut app = make_app(vec![PlayerSlot::occupied(0, PlayerType::Human, None, None)]);
+    install_map(&mut app, Projection::Isometric, MovementModel::Continuous);
+    {
+        let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
+        registry.register(
+            EntityTypeDef::new("keep")
+                .with_location(GROUND, CellSize::new(3, 3), Solidity::Solid)
+                .with_health(100),
+        );
+        registry.register(
+            EntityTypeDef::new("runner")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_movement(FixedU64::from_num(0.3), FixedU64::from_num(0.5))
+                .with_health(20),
+        );
+    }
+    app.world_mut().resource::<ContentRegistry>().validate();
+    app.world_mut().resource_mut::<GameSession>().start();
+    app
+}
+
+/// The ids currently riding inside `holder`.
+pub fn passengers_of(world: &World, holder: Entity) -> Vec<SimulationId> {
+    world
+        .get::<TransporterComponent>(holder)
+        .map(|transporter| transporter.passengers.iter().copied().collect())
+        .unwrap_or_default()
+}
+
+/// Runs until `holder` carries exactly `count` passengers, within `limit` ticks.
+pub fn run_until_aboard(app: &mut App, holder: Entity, count: usize, limit: u32) {
+    for _ in 0..limit {
+        if passengers_of(app.world(), holder).len() == count {
+            return;
+        }
+        run_ticks(app, 1);
+    }
+    assert_eq!(
+        passengers_of(app.world(), holder).len(),
+        count,
+        "expected {count} passengers within {limit} ticks"
+    );
+}
+
+/// Issues an unload command for `transport` as the local player.
+pub fn unload(app: &mut App, transport: SimulationId, at: Option<FixedUVec2>) {
+    push_command(
+        app,
+        PlayerCommand::Unload {
+            transport,
+            at,
+            flush: true,
+        },
+    );
+}
+
+/// Selects `unit` and right-clicks `target` — the send-to-entity intent that
+/// resolves to boarding when the target is a transporter with room.
+pub fn send_to(app: &mut App, unit: SimulationId, target: SimulationId) {
+    select(app, unit);
+    push_command(
+        app,
+        PlayerCommand::SendToEntity {
+            target,
+            flush: true,
+        },
+    );
+}
+
 /// The handle the given research name resolves to in the app's registry.
 pub fn research_id(app: &App, name: &str) -> ResearchId {
     app.world()
@@ -794,6 +975,26 @@ pub fn register_orders_content(app: &mut App) {
                 .with_cost([("gold", 40)])
                 .with_build_time(4)
                 .with_trainer(["soldier"]),
+        );
+        // A plain obstacle, for walling sources off.
+        registry.register(
+            EntityTypeDef::new("boulder")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_health(50),
+        );
+        // Carries either resource, so only an order's kind lock keeps a wood
+        // trip off the gold.
+        registry.register(
+            EntityTypeDef::new("forager")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
+                .with_health(20)
+                .with_dying(2, None)
+                .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
+                .with_resource_carrier([
+                    ("gold", HarvestData::new(5, 2, WorkPresence::Present)),
+                    ("wood", HarvestData::new(5, 2, WorkPresence::Present)),
+                ]),
         );
         registry.register(
             EntityTypeDef::new("mine")

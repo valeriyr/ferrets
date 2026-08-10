@@ -41,7 +41,7 @@ pub struct ResourceCarrierComponent {
 }
 
 /// Per-entity in-flight harvest state.
-#[derive(Component, Debug, Default)]
+#[derive(Component, Debug)]
 pub struct HarvestComponent {
     /// Ticks spent on the current harvest trip.
     pub progress: u32,
@@ -50,10 +50,35 @@ pub struct HarvestComponent {
     /// The source this order settled on, kept across deliveries so the carrier
     /// returns to it instead of searching again.
     pub source: Option<SimulationId>,
+    /// The resource kind this order harvests, so a wood order does not drift
+    /// to gold. Named by the order's target or the load in hand and never
+    /// reassigned; an order that can name no kind has nothing to harvest and
+    /// never starts.
+    pub kind: String,
+    /// Ticks left standing in place before the walk to a source the carrier
+    /// could not reach is retried.
+    pub wait: u32,
     /// Set once at least one trip has completed for this order; a storage-targeted
     /// order delivers the current load first, then keeps harvesting.
     pub delivered_initial_load: bool,
-    /// `(own position, destination position)` when the last chase started. Both
-    /// unchanged on resume means the chase made no progress and never will.
+    /// The last chase round toward the source or storage being walked to;
+    /// identical rounds accumulate until the chase gives up (see
+    /// [`ChaseState`]).
     pub last_chase: ChaseState,
+}
+
+impl HarvestComponent {
+    /// Creates in-flight harvest state for an order collecting `kind`, settled
+    /// on `source` when the order targeted one.
+    pub fn new(kind: String, source: Option<SimulationId>) -> Self {
+        Self {
+            progress: 0,
+            harvesting: None,
+            source,
+            kind,
+            wait: 0,
+            delivered_initial_load: false,
+            last_chase: None,
+        }
+    }
 }

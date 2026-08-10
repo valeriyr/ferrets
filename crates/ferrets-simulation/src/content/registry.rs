@@ -123,6 +123,7 @@ impl ContentRegistry {
         self.validate_repair(&def);
         self.validate_build(&def);
         self.validate_harvest(&def);
+        self.validate_transport(&def);
 
         let id = EntityTypeId::from_index(self.defs.len());
         self.defs_by_name.insert(def.name.clone(), id);
@@ -145,6 +146,7 @@ impl ContentRegistry {
         for def in &self.defs {
             self.validate_trains(def);
             self.validate_builds(def);
+            self.validate_carries(def);
             self.validate_requires(&format!("entity type '{}'", def.name), &def.requires);
         }
         for (name, &id) in &self.researches {
@@ -819,7 +821,8 @@ impl ContentRegistry {
     /// cycle (`damage_point <= attack_period`).
     /// Content's own custom stats are engine-transparent and not checked here.
     fn validate_stats(&self, def: &EntityTypeDef) {
-        // Declaring any of these at zero says nothing an omitted stat would not.
+        // Declaring any of these at zero says nothing an omitted stat would not
+        // — or, for a capacity, declares a capability that can never act.
         for stat in [
             EntityStatId::MAX_HEALTH,
             EntityStatId::SPEED,
@@ -827,6 +830,7 @@ impl ContentRegistry {
             EntityStatId::REPAIR_SPEED,
             EntityStatId::SUPPLY_PROVIDED,
             EntityStatId::SUPPLY_COST,
+            EntityStatId::CARGO_CAPACITY,
         ] {
             if let Some(value) = def.base_stat(stat) {
                 assert!(
@@ -919,6 +923,58 @@ impl ContentRegistry {
                 def.name
             );
         }
+    }
+
+    /// Checks that a transport capability carries the stats the orders read, that
+    /// none of those stats is declared by something that cannot transport, and
+    /// that a transporter is not itself transportable.
+    fn validate_transport(&self, def: &EntityTypeDef) {
+        // Every transport stat is read only through a transport capability, so any
+        // one alone is content that can never take effect.
+        for stat in [
+            EntityStatId::CARGO_CAPACITY,
+            EntityStatId::LOAD_RANGE,
+            EntityStatId::UNLOAD_RANGE,
+            EntityStatId::LOAD_PERIOD,
+            EntityStatId::UNLOAD_PERIOD,
+        ] {
+            if def.base_stat(stat).is_some() {
+                assert!(
+                    def.can_transport(),
+                    "entity type '{}' declares {} but cannot transport",
+                    def.name,
+                    ENTITY_BUILTIN_STATS[stat.index()].name,
+                );
+            }
+        }
+
+        if !def.can_transport() {
+            return;
+        }
+
+        // All of them, the periods included: zero is the unmetered pace, and the
+        // author writes it rather than having the engine assume it.
+        for stat in [
+            EntityStatId::CARGO_CAPACITY,
+            EntityStatId::LOAD_RANGE,
+            EntityStatId::UNLOAD_RANGE,
+            EntityStatId::LOAD_PERIOD,
+            EntityStatId::UNLOAD_PERIOD,
+        ] {
+            assert!(
+                def.base_stat(stat).is_some(),
+                "entity type '{}' can transport but is missing {}",
+                def.name,
+                ENTITY_BUILTIN_STATS[stat.index()].name,
+            );
+        }
+        // A transporter riding inside another would nest holders; keeping the two
+        // capabilities apart makes that unrepresentable.
+        assert!(
+            def.base_stat(EntityStatId::CARGO_SIZE).is_none(),
+            "entity type '{}' can transport and so cannot declare cargo_size",
+            def.name
+        );
     }
 
     /// Checks that a carrying capability carries the reach the order reads, and that
@@ -1149,6 +1205,23 @@ impl ContentRegistry {
             "entity type '{}' uses '{corpse_type}' as a corpse type, but '{corpse_type}' defines live-gameplay data that remains never use",
             user.name
         );
+    }
+
+    /// Checks that every admission-list entry resolves to a registered entity
+    /// type or tag. Carried types may register after their carrier, so this
+    /// runs in the deferred pass.
+    fn validate_carries(&self, def: &EntityTypeDef) {
+        let Some(transporter) = &def.transporter else {
+            return;
+        };
+
+        for name in transporter.carries() {
+            assert!(
+                self.defs_by_name.contains_key(name) || self.tags.contains(name),
+                "entity type '{}' carries '{name}', which is not a registered entity type or tag",
+                def.name
+            );
+        }
     }
 
     /// Checks that every type in the definition's build catalogue is a

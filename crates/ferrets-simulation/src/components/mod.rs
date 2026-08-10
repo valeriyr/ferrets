@@ -30,3 +30,4 @@ pub mod resource;
 pub mod stance;
 pub mod tags;
 pub mod train;
+pub mod transport;

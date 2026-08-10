@@ -14,7 +14,7 @@ use super::damage;
 use crate::{
     components::{
         dying::DyingComponent, entity_info::EntityInfoComponent, health::HealthComponent,
-        location::LocationComponent, owner::OwnerComponent,
+        hidden::HiddenComponent, location::LocationComponent, owner::OwnerComponent,
     },
     content::{
         entity_type_def::EntityTypeDef,
@@ -30,15 +30,18 @@ use crate::{
     simulation_id::SimulationId,
 };
 
-/// Delivers one hit from `attacker` against `target`.
+/// Delivers one hit from `attacker` against `target`, released from `origin`
+/// — the attacker's own position, or its holder's for a weapon fired from
+/// inside something else, whose bearer stands nowhere.
 ///
 /// A type with a projectile releases a shot that lands after its flight time; one
 /// without applies the damage now. A target-following shot damages `target` wherever
 /// it has moved to and centres its blast there; a cell-aimed one commits to the cell
 /// `target` occupied at release, so a target that keeps moving escapes it.
-pub fn deliver(
+pub(super) fn deliver(
     world: &mut World,
     attacker: Entity,
+    origin: FixedUVec2,
     target: Option<Entity>,
     aimed_at: FixedUVec2,
     damage: FixedU64,
@@ -51,7 +54,6 @@ pub fn deliver(
         return;
     };
     let target_id = target.and_then(|target| target_id(world, target));
-    let origin = position_of(world, attacker);
     let impact = aimed_at;
 
     let projectile = entity_def::of(world, attacker).projectile;
@@ -208,8 +210,11 @@ fn blast_victims(
             continue;
         }
         let entity_ref = world.entity(entity);
-        // Only damageable entities that are not already dying.
-        if entity_ref.get::<HealthComponent>().is_none() || entity_ref.contains::<DyingComponent>()
+        // Only damageable entities that are not already dying. Hidden entities
+        // hold no cells and their position is stale, so no blast reaches them.
+        if entity_ref.get::<HealthComponent>().is_none()
+            || entity_ref.contains::<DyingComponent>()
+            || entity_ref.contains::<HiddenComponent>()
         {
             continue;
         }
@@ -314,7 +319,11 @@ fn occupants_of(world: &mut World, cell: FixedUVec2) -> Vec<Entity> {
     let mut found: Vec<(SimulationId, Entity)> = Vec::new();
     for (entity, id, origin) in candidates {
         let entity_ref = world.entity(entity);
-        if entity_ref.get::<HealthComponent>().is_none() || entity_ref.contains::<DyingComponent>()
+        // Hidden entities hold no cells and their position is stale, so a shot
+        // arriving at the cell one stood on finds nobody there.
+        if entity_ref.get::<HealthComponent>().is_none()
+            || entity_ref.contains::<DyingComponent>()
+            || entity_ref.contains::<HiddenComponent>()
         {
             continue;
         }

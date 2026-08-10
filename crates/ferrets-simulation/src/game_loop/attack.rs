@@ -3,6 +3,7 @@
 
 use bevy_ecs::{entity::Entity, world::World};
 use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
+use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_physics::body;
 
 use super::{
@@ -23,6 +24,18 @@ use crate::{
     map::Map,
     order::{AttackTarget, Order},
 };
+
+/// One weapon's readings for a tick of fighting.
+pub(super) struct Weapon {
+    /// How far the weapon reaches, in cells.
+    pub(super) range: u32,
+    /// The damage one landed hit carries.
+    pub(super) damage: FixedU64,
+    /// Ticks in one full attack cycle.
+    pub(super) attack_period: u32,
+    /// The tick within the cycle the hit lands on.
+    pub(super) damage_point: u32,
+}
 
 /// Called once when an Attack order becomes the front `New` entry.
 ///
@@ -115,20 +128,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
         .get::<LocationComponent>()
         .unwrap()
         .position;
-    let stats = world
-        .entity(entity)
-        .get::<StatsComponent>()
-        .expect("attackers have a stat store");
-    let range = stats.effective_as_u32(EntityStatId::ATTACK_RANGE).unwrap();
-    let damage = stats.effective(EntityStatId::DAMAGE).unwrap();
-    let attack_period = stats.effective_as_u32(EntityStatId::ATTACK_PERIOD).unwrap();
-    // Registration keeps the authored damage point inside the authored cycle, but
-    // the two stats take modifiers independently, so a shortened cycle can leave
-    // the hit beyond its end — where the phase counter would never reach it.
-    let damage_point = stats
-        .effective_as_u32(EntityStatId::DAMAGE_POINT)
-        .unwrap()
-        .min(attack_period);
+    let weapon = weapon(world, entity);
 
     if let Some(leash) = order.attack_leash() {
         // Footprint-based like every range check, and judged exactly like
@@ -151,7 +151,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
             world,
             position,
             target,
-            range,
+            weapon.range,
         ),
         None => chase::advance(
             &mut attack_component.last_chase,
@@ -159,7 +159,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
             position,
             target_position,
             target_size,
-            range,
+            weapon.range,
         ),
     };
     match destination {
@@ -175,16 +175,65 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
 
     chase::face(world, entity, target_position, target_size);
 
-    attack_component.phase += 1;
-
-    if attack_component.phase == damage_point {
-        impacts::deliver(world, entity, target, target_position, damage);
-    }
-
-    if attack_component.phase == attack_period {
-        attack_component.phase = 0;
-    }
+    swing(
+        world,
+        entity,
+        position,
+        target,
+        target_position,
+        &weapon,
+        &mut attack_component.phase,
+    );
 
     world.entity_mut(entity).insert(attack_component);
     Processing::state(OrderState::InProcessing)
+}
+
+/// Reads `entity`'s weapon stats, fresh for this tick so modifiers land.
+///
+/// Panics if `entity` cannot attack — callers check the capability first.
+pub(super) fn weapon(world: &World, entity: Entity) -> Weapon {
+    let stats = world
+        .entity(entity)
+        .get::<StatsComponent>()
+        .expect("attackers have a stat store");
+    let range = stats.effective_as_u32(EntityStatId::ATTACK_RANGE).unwrap();
+    let damage = stats.effective(EntityStatId::DAMAGE).unwrap();
+    let attack_period = stats.effective_as_u32(EntityStatId::ATTACK_PERIOD).unwrap();
+    // Registration keeps the authored damage point inside the authored cycle, but
+    // the two stats take modifiers independently, so a shortened cycle can leave
+    // the hit beyond its end — where the phase counter would never reach it.
+    let damage_point = stats
+        .effective_as_u32(EntityStatId::DAMAGE_POINT)
+        .unwrap()
+        .min(attack_period);
+
+    Weapon {
+        range,
+        damage,
+        attack_period,
+        damage_point,
+    }
+}
+
+/// Advances one swing of `weapon` by a tick: the hit leaves `origin` when the
+/// phase reaches the damage point, and the cycle restarts at its end.
+pub(super) fn swing(
+    world: &mut World,
+    attacker: Entity,
+    origin: FixedUVec2,
+    target: Option<Entity>,
+    aimed_at: FixedUVec2,
+    weapon: &Weapon,
+    phase: &mut u32,
+) {
+    *phase += 1;
+
+    if *phase == weapon.damage_point {
+        impacts::deliver(world, attacker, origin, target, aimed_at, weapon.damage);
+    }
+
+    if *phase == weapon.attack_period {
+        *phase = 0;
+    }
 }

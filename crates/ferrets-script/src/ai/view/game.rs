@@ -58,4 +58,9 @@ pub struct EntityView {
     pub stance: Option<String>,
     /// Remaining amount in a resource source. `None` when not a source.
     pub resource_amount: Option<u32>,
+    /// The holder this entity rides in. `None` when not aboard anything.
+    pub boarded: Option<u32>,
+    /// The ids riding inside this entity, in ascending order. Empty when it
+    /// carries nobody.
+    pub passengers: Vec<u32>,
 }

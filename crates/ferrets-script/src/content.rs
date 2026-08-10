@@ -2,8 +2,13 @@
 
 use ferrets_math::FixedU64;
 use ferrets_simulation::content::{
-    location::Solidity, projectile::Aim, registry::ContentRegistry, resource::DepletionPolicy,
-    splash::SplashShape, work::WorkPresence,
+    location::Solidity,
+    projectile::Aim,
+    registry::ContentRegistry,
+    resource::DepletionPolicy,
+    splash::SplashShape,
+    transport::{BoardingPolicy, PassengerConduct, PassengerFate},
+    work::WorkPresence,
 };
 
 use crate::{engine::ScriptEngine, error::ScriptError};
@@ -69,6 +74,39 @@ pub(crate) fn work_presence(value: &str) -> crate::Result<WorkPresence> {
         "present_stacking" => Ok(WorkPresence::PresentStacking),
         other => Err(ScriptError::ContentError(format!(
             "unknown work presence '{other}'"
+        ))),
+    }
+}
+
+/// Maps a boarding-policy name to its enum.
+pub(crate) fn boarding_policy(value: &str) -> crate::Result<BoardingPolicy> {
+    match value {
+        "own" => Ok(BoardingPolicy::Own),
+        "allies" => Ok(BoardingPolicy::Allies),
+        other => Err(ScriptError::ContentError(format!(
+            "unknown boarding policy '{other}'"
+        ))),
+    }
+}
+
+/// Maps a passenger-fate name to its enum.
+pub(crate) fn passenger_fate(value: &str) -> crate::Result<PassengerFate> {
+    match value {
+        "destroy" => Ok(PassengerFate::Destroy),
+        "eject" => Ok(PassengerFate::Eject),
+        other => Err(ScriptError::ContentError(format!(
+            "unknown passenger fate '{other}'"
+        ))),
+    }
+}
+
+/// Maps a passenger-conduct name to its enum.
+pub(crate) fn passenger_conduct(value: &str) -> crate::Result<PassengerConduct> {
+    match value {
+        "shelter" => Ok(PassengerConduct::Shelter),
+        "fight" => Ok(PassengerConduct::Fight),
+        other => Err(ScriptError::ContentError(format!(
+            "unknown passenger conduct '{other}'"
         ))),
     }
 }

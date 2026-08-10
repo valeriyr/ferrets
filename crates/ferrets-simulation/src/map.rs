@@ -106,6 +106,22 @@ impl Map {
                          which the continuous movement model requires",
                         def.name
                     );
+                    // The planner clears routes for the footprint; a body
+                    // circle wider than the footprint's inscribed circle
+                    // pokes into cells no plan ever cleared and walls
+                    // itself mid-corridor.
+                    let size = def
+                        .location
+                        .expect("validated content defines a location for movers")
+                        .size();
+                    let bound = FixedU64::from_num(size.width.min(size.height)) / 2;
+                    assert!(
+                        radius.is_some_and(|radius| *radius <= bound),
+                        "entity type '{}' authors a radius beyond half its \
+                         footprint's narrow side ({bound}), which the \
+                         continuous movement model cannot route",
+                        def.name
+                    );
                 }
             }
         }

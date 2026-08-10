@@ -32,14 +32,15 @@ fn head_on_pair_swerves_apart() {
 /// A walker pressing into a parked body must flow around it, so the contact
 /// swerves.
 #[test]
-fn walker_pressing_rester_swerves() {
+fn walker_pressing_rester_shoves_it_aside() {
     let pushes =
         contact::separations(&[utils::walking(2.0, 5.0, 1.0, 0.0), utils::resting(2.5, 5.0)]);
 
     assert_eq!(
         pushes,
-        vec![utils::push(-0.25, 0.0625), utils::push(0.25, -0.0625)],
-        "a walker against a parked body must swerve around it"
+        vec![utils::push(-0.125, 0.03125), utils::push(0.375, -0.09375)],
+        "a parked body yields three quarters of the separation to the walker \
+         pressing it, swerving aside; the walker mostly keeps its line"
     );
 }
 
@@ -65,9 +66,9 @@ fn coincident_walkers_separate() {
 //
 
 /// Companions marching the same way press one-sidedly at most: the follower
-/// toward the leader, the leader away. A sideways share under their
-/// sustained contact would roll them around each other, so they part along
-/// the straight line between them.
+/// toward the leader, the leader away — so the leader takes the whole
+/// separation, bumped along its own way. A sideways share under their
+/// sustained contact would roll them around each other, so no swerve.
 #[test]
 fn same_way_pair_parts_radially() {
     let pushes = contact::separations(&[
@@ -77,7 +78,7 @@ fn same_way_pair_parts_radially() {
 
     assert_eq!(
         pushes,
-        vec![utils::push(-0.25, 0.0), utils::push(0.25, 0.0)],
+        vec![utils::push(-0.125, 0.0), utils::push(0.375, 0.0)],
         "same-way companions must not swerve around each other"
     );
 }

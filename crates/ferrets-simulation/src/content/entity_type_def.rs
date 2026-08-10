@@ -23,6 +23,7 @@ use crate::{
         skills::SkillId,
         splash::{SplashDef, SplashShape},
         train::TrainerDef,
+        transport::{BoardingPolicy, PassengerConduct, PassengerFate, TransporterDef},
         work::WorkPresence,
     },
     resources::{self, Cost},
@@ -102,6 +103,9 @@ pub struct EntityTypeDef {
     pub build_time: Option<u32>,
     /// The entity types instances can train. `None` means instances cannot train.
     pub trainer: Option<TrainerDef>,
+    /// The passengers instances admit aboard, and on what terms. `None` means
+    /// instances cannot carry passengers.
+    pub transporter: Option<TransporterDef>,
     /// The researches instances can host. `None` means instances cannot research.
     pub researcher: Option<ResearcherDef>,
     /// The entity types instances can construct. `None` means instances cannot build.
@@ -147,6 +151,7 @@ impl EntityTypeDef {
             train_time: None,
             build_time: None,
             trainer: None,
+            transporter: None,
             researcher: None,
             builder: None,
             repairer: None,
@@ -205,6 +210,11 @@ impl EntityTypeDef {
     /// Whether instances can mend other entities.
     pub fn can_repair(&self) -> bool {
         self.repairer.is_some()
+    }
+
+    /// Whether instances can carry passengers.
+    pub fn can_transport(&self) -> bool {
+        self.transporter.is_some()
     }
 
     /// Ticks to produce one instance, however it is produced. `None` means nothing
@@ -459,6 +469,27 @@ impl EntityTypeDef {
     /// Panics if `trains` is empty or any entry is empty.
     pub fn with_trainer(mut self, trains: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.trainer = Some(TrainerDef::new(trains));
+        self
+    }
+
+    /// Allows instances of this type to carry passengers matching the
+    /// `carries` type names or tags, on the given terms. How much fits aboard
+    /// is the `cargo_capacity` stat.
+    ///
+    /// Panics if `carries` is empty or contains an empty name.
+    pub fn with_transporter(
+        mut self,
+        carries: impl IntoIterator<Item = impl Into<String>>,
+        boarding: BoardingPolicy,
+        passenger_fate: PassengerFate,
+        conduct: PassengerConduct,
+    ) -> Self {
+        self.transporter = Some(TransporterDef::new(
+            carries,
+            boarding,
+            passenger_fate,
+            conduct,
+        ));
         self
     }
 

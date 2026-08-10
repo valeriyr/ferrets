@@ -9,7 +9,7 @@ pub struct AttackComponent {
     /// Current position inside the attack cycle. Counts up each tick: the hit lands
     /// when it reaches `damage_point`, and the cycle restarts at `attack_period`.
     pub phase: u32,
-    /// `(own position, target position)` when the last chase started. Both
-    /// unchanged on resume means the chase made no progress and never will.
+    /// The last chase round toward the target; identical rounds accumulate
+    /// until the chase gives up (see [`ChaseState`]).
     pub last_chase: ChaseState,
 }

@@ -2,19 +2,18 @@
 //! Called by [`super::orders`] as part of the shared order lifecycle.
 
 use bevy_ecs::{entity::Entity, world::World};
-use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
+use ferrets_geometry::cell_pos::CellPos;
 use ferrets_math::fixed_uvec2::FixedUVec2;
 
+use super::rally;
 use crate::{
     components::{
-        order_queue::{CancelPolicy, OrderQueueComponent, OrderState},
+        order_queue::{CancelPolicy, OrderState},
         owner::OwnerComponent,
-        rally::{RallyPointComponent, RallyTarget},
         train::{TrainComponent, TrainQueueComponent},
     },
     content::registry::ContentRegistry,
     entity_def,
-    game_loop::executor,
     map::Map,
     order::Order,
     resources::PlayerResources,
@@ -157,7 +156,7 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> OrderState 
             if let Some((unit, _)) =
                 spawn::spawn_entity(world, &type_name, FixedUVec2::from(cell), owner)
             {
-                send_to_rally(entity, unit, world);
+                rally::send(world, entity, unit);
             }
 
             let mut entity_mut = world.entity_mut(entity);
@@ -173,33 +172,4 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> OrderState 
 
     world.entity_mut(entity).insert(train_component);
     OrderState::InProcessing
-}
-
-/// Sends a freshly spawned unit toward the trainer's rally point, if one is set.
-///
-/// A position rallies as a plain move; an entity resolves like a send-to-entity
-/// intent from the unit's own perspective (e.g. a worker harvests a source, a
-/// soldier attacks a hostile). A rally target gone by spawn time issues nothing.
-fn send_to_rally(trainer: Entity, unit: Entity, world: &mut World) {
-    let Some(target) = world
-        .entity(trainer)
-        .get::<RallyPointComponent>()
-        .and_then(|rally| rally.0)
-    else {
-        return;
-    };
-
-    let order = match target {
-        RallyTarget::Position(position) => Some(Order::Move {
-            target: position,
-            size: CellSize::ONE,
-            range: 0,
-        }),
-        RallyTarget::Entity(id) => executor::resolve_send_to_entity(world, unit, id),
-    };
-    if let Some(order) = order
-        && let Some(mut queue) = world.entity_mut(unit).get_mut::<OrderQueueComponent>()
-    {
-        queue.push(order, None);
-    }
 }

@@ -954,6 +954,8 @@ fn populated_view(tick: u32) -> GameView {
                 under_construction: false,
                 stance: None,
                 resource_amount: None,
+                boarded: None,
+                passengers: Vec::new(),
             },
             EntityView {
                 id: 2,
@@ -971,6 +973,8 @@ fn populated_view(tick: u32) -> GameView {
                 under_construction: false,
                 stance: Some("flee".to_string()),
                 resource_amount: None,
+                boarded: None,
+                passengers: Vec::new(),
             },
         ],
         ally_entities: Vec::new(),
@@ -991,6 +995,8 @@ fn populated_view(tick: u32) -> GameView {
             under_construction: false,
             stance: None,
             resource_amount: Some(900),
+            boarded: None,
+            passengers: Vec::new(),
         }],
     }
 }

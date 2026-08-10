@@ -277,20 +277,23 @@ const COMMON_AI: &str = r#"
                 marched = true
             end
         end
+        -- A garrisoned fighter reads idle (no orders while aboard) but cannot
+        -- march; it holds its post instead.
         for _, f in ipairs(fighters) do
-            if f.idle then send(f, "attack_move") end
+            if f.idle and not f.hidden then send(f, "attack_move") end
         end
         for _, e in ipairs(escorts) do
-            if e.idle then send(e, "move") end
+            if e.idle and not e.hidden then send(e, "move") end
         end
         return marched
     end
 "#;
 
 /// The human brain: peasant economy, barracks, then the blacksmith for the
-/// iron weapons upgrade and the mortars it unlocks; a medic walks with every
-/// few archers, archers burn energy on battle focus when a foe is in reach,
-/// and war drums sound as a wave marches.
+/// iron weapons upgrade and the mortars it unlocks, then a bunker a pair of
+/// archers mans for base defense; a medic walks with every few archers,
+/// archers burn energy on battle focus when a foe is in reach, and war drums
+/// sound as a wave marches.
 const HUMAN_AI: &str = r#"
     define_ai("human", {
         period = 20,
@@ -303,6 +306,7 @@ const HUMAN_AI: &str = r#"
             local workers = group(groups, "peasant")
             local barracks = group(groups, "barracks")
             local smithies = group(groups, "blacksmith")
+            local bunkers = group(groups, "bunker")
             local archers = group(groups, "archer")
             local mortars = group(groups, "mortar")
             local medics = group(groups, "medic")
@@ -312,7 +316,8 @@ const HUMAN_AI: &str = r#"
 
             -- The barracks, then the forge that unlocks mortars and hosts the
             -- weapon upgrade — a one-time purchase farms would otherwise
-            -- always outbid — then a farm whenever headroom runs dry.
+            -- always outbid — then a farm whenever headroom runs dry, and
+            -- once the army production is fed, the bunker the defense mans.
             local wanted = nil
             if #barracks == 0 then
                 wanted = "barracks"
@@ -320,6 +325,8 @@ const HUMAN_AI: &str = r#"
                 wanted = "blacksmith"
             elseif budget.supply < 2 then
                 wanted = "farm"
+            elseif #bunkers == 0 then
+                wanted = "bunker"
             end
             local builder_id =
                 build_next(commands, state, view, workers, hall, wanted, budget)
@@ -345,6 +352,23 @@ const HUMAN_AI: &str = r#"
                     trained = "mortar"
                 end
                 if train_from(commands, budget, b, trained) then break end
+            end
+
+            -- Man the bunker: once the army has archers to spare, two step
+            -- inside and fire their own bows out, untouchable while it
+            -- stands; the rest form the wave. Boarded explicitly — a smart
+            -- send onto a damaged bunker would read as a repair intent.
+            local bunker = bunkers[1]
+            if bunker ~= nil and not bunker.under_construction and #archers > 2 then
+                local manned = #bunker.passengers
+                for _, a in ipairs(archers) do
+                    if manned >= 2 then break end
+                    if a.idle and not a.hidden then
+                        commands[#commands + 1] = { kind = "select", id = a.id }
+                        commands[#commands + 1] = { kind = "board", target = bunker.id }
+                        manned = manned + 1
+                    end
+                end
             end
 
             -- Battle focus: an archer with a foe in reach burns its energy on
@@ -376,7 +400,8 @@ const HUMAN_AI: &str = r#"
 /// The orc brain: peon economy, war camp, then the pig farm the frenzy ritual
 /// waits on; shamans join the grunts once the ritual is in (they require it)
 /// and mend the wounded, grunts buy frenzy with their own blood when a foe is
-/// at the gates, and war drums sound as a wave marches.
+/// at the gates, peons crawl into a pig farm while raiders are near and come
+/// back out to work once they leave, and war drums sound as a wave marches.
 const ORC_AI: &str = r#"
     define_ai("orc", {
         period = 20,
@@ -426,6 +451,35 @@ const ORC_AI: &str = r#"
                     trained = "shaman"
                 end
                 if train_from(commands, budget, c, trained) then break end
+            end
+
+            -- The farms shelter the workforce: a peon with a raider close by
+            -- crawls into the nearest one with room and sits the raid out —
+            -- and once no enemy is near a farm, whoever hides inside is let
+            -- back out to work. Boarded explicitly: a raided farm is usually
+            -- a damaged farm, and a smart send onto one would put the peon to
+            -- work repairing it in the open instead of hiding inside.
+            for _, w in ipairs(workers) do
+                if not w.hidden then
+                    local threat = nearest(w, view.enemy_entities)
+                    if threat ~= nil and within(w, threat, 6) then
+                        local shelter = nearest(w, farms, function(f)
+                            return not f.under_construction and #f.passengers < 4
+                        end)
+                        if shelter ~= nil then
+                            commands[#commands + 1] = { kind = "select", id = w.id }
+                            commands[#commands + 1] = { kind = "board", target = shelter.id }
+                        end
+                    end
+                end
+            end
+            for _, f in ipairs(farms) do
+                if #f.passengers > 0 then
+                    local threat = nearest(f, view.enemy_entities)
+                    if threat == nil or not within(f, threat, 10) then
+                        commands[#commands + 1] = { kind = "unload", transport = f.id }
+                    end
+                end
             end
 
             -- Blood rite: a healthy grunt with a foe at the gates buys frenzy

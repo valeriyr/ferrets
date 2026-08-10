@@ -16,7 +16,7 @@ use bevy_ecs::{
 use crate::{
     components::{
         build::UnderConstructionComponent, repair::UnderRepairComponent,
-        resource::UnderHarvestComponent,
+        resource::UnderHarvestComponent, transport::TransporterComponent,
     },
     entity_def,
     entity_index::EntityIndex,
@@ -58,6 +58,16 @@ impl Crew for UnderRepairComponent {
 
     fn members_mut(&mut self) -> &mut BTreeSet<SimulationId> {
         &mut self.repairers
+    }
+}
+
+impl Crew for TransporterComponent {
+    fn members(&self) -> &BTreeSet<SimulationId> {
+        &self.passengers
+    }
+
+    fn members_mut(&mut self) -> &mut BTreeSet<SimulationId> {
+        &mut self.passengers
     }
 }
 

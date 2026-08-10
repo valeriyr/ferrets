@@ -18,8 +18,8 @@
 use bevy_ecs::{entity::Entity, world::World};
 
 use super::{
-    attack, attack_move, build, die, follow, guard, harvest, movement, patrol, repair, research,
-    train,
+    attack, attack_move, board, build, die, follow, guard, harvest, load, movement, patrol, repair,
+    research, train, unload,
 };
 use crate::{
     components::{
@@ -71,6 +71,9 @@ fn dispatch_prepare(entity: Entity, order: &Order, world: &mut World) -> OrderSt
         Order::Build { .. } => build::prepare(entity, order, world),
         Order::Harvest { .. } => harvest::prepare(entity, order, world),
         Order::Repair { .. } => repair::prepare(entity, order, world),
+        Order::Board { .. } => board::prepare(entity, order, world),
+        Order::Load { .. } => load::prepare(entity, order, world),
+        Order::Unload { .. } => unload::prepare(entity, order, world),
         Order::Die => die::prepare(entity, order, world),
     }
 }
@@ -85,6 +88,9 @@ fn dispatch_prepare_suspended(entity: Entity, order: &Order, world: &mut World) 
         Order::Build { .. } => build::prepare_suspended(entity, order, world),
         Order::Harvest { .. } => harvest::prepare_suspended(entity, order, world),
         Order::Repair { .. } => repair::prepare_suspended(entity, order, world),
+        Order::Board { .. } => board::prepare_suspended(entity, order, world),
+        Order::Load { .. } => load::prepare_suspended(entity, order, world),
+        Order::Unload { .. } => unload::prepare_suspended(entity, order, world),
         Order::Move { .. } => unreachable!("Move orders never suspend"),
         Order::Train => unreachable!("Train orders never suspend"),
         Order::Research { .. } => unreachable!("Research orders never suspend"),
@@ -127,6 +133,11 @@ fn dispatch_cancel(
         Order::Repair { .. } => {
             repair::cancel_processing(entity, order, policy, entry_state, world)
         }
+        Order::Board { .. } => board::cancel_processing(entity, order, policy, entry_state, world),
+        Order::Load { .. } => load::cancel_processing(entity, order, policy, entry_state, world),
+        Order::Unload { .. } => {
+            unload::cancel_processing(entity, order, policy, entry_state, world)
+        }
         Order::Die => die::cancel_processing(entity, order, policy, entry_state, world),
     }
 }
@@ -144,6 +155,9 @@ fn dispatch_process(entity: Entity, order: &Order, world: &mut World) -> Process
         Order::Build { .. } => build::process(entity, order, world),
         Order::Harvest { .. } => harvest::process(entity, order, world),
         Order::Repair { .. } => repair::process(entity, order, world),
+        Order::Board { .. } => board::process(entity, order, world),
+        Order::Load { .. } => load::process(entity, order, world),
+        Order::Unload { .. } => unload::process(entity, order, world),
         Order::Die => Processing::state(die::process(entity, order, world)),
     }
 }
@@ -168,6 +182,9 @@ fn dispatch_watch(
         | Order::Build { .. }
         | Order::Harvest { .. }
         | Order::Repair { .. }
+        | Order::Board { .. }
+        | Order::Load { .. }
+        | Order::Unload { .. }
         | Order::Die => None,
     }
 }
@@ -291,6 +308,12 @@ pub fn watch_tick(entity: Entity, queue: &mut OrderQueueComponent, world: &mut W
 /// After this call the front entry (if any) is `New`, `InProcessing`, or `Suspended`.
 pub fn process_tick(entity: Entity, queue: &mut OrderQueueComponent, world: &mut World) {
     let Some(front) = queue.0.front() else { return };
+    // An order pushed onto this queue after its prepare ran — by another
+    // entity's processing, e.g. a transporter dispatching a passenger it just
+    // let out — waits for the next tick's prepare.
+    if front.state == OrderState::New {
+        return;
+    }
     debug_assert_eq!(
         front.state,
         OrderState::InProcessing,

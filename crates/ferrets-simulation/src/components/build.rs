@@ -27,7 +27,7 @@ pub struct BuildComponent {
     /// The building being constructed, once it has been placed on the map or an
     /// already-started site has been taken up.
     pub building: Option<SimulationId>,
-    /// `(own position, site position)` when the last chase started. Both
-    /// unchanged on resume means the chase made no progress and never will.
+    /// The last chase round toward the site; identical rounds accumulate
+    /// until the chase gives up (see [`ChaseState`]).
     pub last_chase: ChaseState,
 }

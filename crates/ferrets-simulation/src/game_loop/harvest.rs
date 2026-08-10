@@ -42,9 +42,13 @@ use crate::{
 /// a seam says nothing about how close it has to get to put the load down.
 const DELIVERY_DISTANCE: u32 = 1;
 
-/// How far away a replacement source may be when the current one is gone, in
-/// grid cells.
+/// How far away a replacement source may be when the current one is gone or
+/// cannot be reached, in grid cells.
 const SOURCE_SEARCH_RADIUS: u32 = 12;
+
+/// How long a carrier stands before retrying the walk to a source it could not
+/// reach, in ticks.
+const BLOCKED_SOURCE_RETRY_PERIOD: u32 = 8;
 
 /// Called once when a Harvest order becomes the front `New` entry.
 ///
@@ -77,10 +81,27 @@ pub fn prepare(entity: Entity, order: &Order, world: &mut World) -> OrderState {
         return OrderState::Finished;
     }
 
-    world.entity_mut(entity).insert(HarvestComponent {
-        source: is_source.then_some(target_id),
-        ..Default::default()
-    });
+    // The order's kind: a source target names it outright, a storage target
+    // inherits the carried load's. With neither there is nothing to harvest,
+    // and the order refuses outright.
+    let kind = if is_source {
+        target_def
+            .resource_source
+            .as_ref()
+            .map(|source| source.kind().to_string())
+    } else {
+        world
+            .entity(entity)
+            .get::<ResourceCarrierComponent>()
+            .and_then(|carrier| carrier.kind.clone())
+    };
+    let Some(kind) = kind else {
+        return OrderState::Finished;
+    };
+
+    world
+        .entity_mut(entity)
+        .insert(HarvestComponent::new(kind, is_source.then_some(target_id)));
     OrderState::InProcessing
 }
 
@@ -112,19 +133,25 @@ pub fn cancel_processing(
 ///
 /// Each tick the carrier either delivers or harvests:
 ///
-/// - **Deliver** when carrying a full load, when the order targeted a storage and
-///   the initial load has not been dropped off yet, or when no source is left.
-///   Walks to the nearest accepting storage of the owner and adds the load to the
-///   player's stockpile.
+/// - **Deliver** when carrying a full load of the order's kind, when the order
+///   targeted a storage and the initial load has not been dropped off yet, or
+///   when no source is left. Walks to the nearest accepting storage of the
+///   owner and adds the load to the player's stockpile. A load of some other
+///   kind is never delivered: it is wasted at the first transfer instead — a
+///   wood-laden worker sent to gold walks straight to the gold and the wood
+///   is gone the moment the gold is in hand.
 /// - **Harvest** otherwise: walks to the source, takes it up as the carrier's
 ///   declared presence for the kind allows — waiting in place while a source it
 ///   cannot share is worked — and works for the source's harvest time, then
 ///   transfers up to a full load. A depleted source is destroyed or left empty
 ///   on the map, per its [`DepletionPolicy`].
 ///
-/// The loop continues until no source is available and nothing is carried, the
-/// carried load cannot be delivered anywhere, or the carrier cannot reach its
-/// destination.
+/// The order is locked to one resource kind — the first load or source it
+/// touches — and never drifts to another. A source the carrier cannot reach is
+/// swapped for a nearby one of the same kind, or waited out in place when it is
+/// the only one around. The loop ends when no source of the order's kind is
+/// left and nothing is carried, or the carried load cannot be delivered
+/// anywhere.
 pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
     let Some(mut harvest_component) = world.entity_mut(entity).take::<HarvestComponent>() else {
         return Processing::state(OrderState::Finished);
@@ -159,6 +186,13 @@ fn advance(
         .unwrap()
         .clone();
 
+    // Standing out a blocked path: the retry timer runs down before the
+    // carrier looks at the map again.
+    if harvest_component.wait > 0 {
+        harvest_component.wait -= 1;
+        return Processing::state(OrderState::InProcessing);
+    }
+
     // A trip whose source vanished mid-work is abandoned: the carrier stops working
     // and comes back onto the map before anything else happens.
     if let Some(harvesting_id) = harvest_component.harvesting
@@ -184,16 +218,14 @@ fn advance(
         .unwrap()
         .position;
 
-    let source = resolve_source(
-        entity,
-        order,
-        harvest_component,
-        carried_kind.as_deref(),
-        &carrier_def,
-        world,
-    );
+    let source = resolve_source(entity, order, harvest_component, &carrier_def, world);
 
-    let carrying = carried_amount > 0;
+    // A load of some other kind than the order's counts for nothing here: it
+    // is never banked — the first transfer below replaces it — so a
+    // wood-laden worker sent to gold walks straight to the gold, no storage
+    // detour.
+    let carrying =
+        carried_amount > 0 && carried_kind.as_deref() == Some(harvest_component.kind.as_str());
     let carried_capacity = carried_kind
         .as_deref()
         .and_then(|kind| carrier_def.harvest_data(kind))
@@ -257,7 +289,7 @@ fn advance(
     }
 
     let Some(source_id) = source else {
-        // Nothing carried and no source left.
+        // Nothing carried and no source of the order's kind left anywhere near.
         return Processing::state(OrderState::Finished);
     };
     let source_entity = world
@@ -273,7 +305,26 @@ fn advance(
         source_entity,
         work::reach(world, entity, EntityStatId::HARVEST_RANGE),
     ) {
-        Destination::OutOfReach => return Processing::state(OrderState::Finished),
+        Destination::OutOfReach => {
+            // The way to this source is shut, not the source spent: pick
+            // another of the same kind beside it, and with none to pick wait
+            // here for the way to open — the order gives up only when no
+            // source of its kind is left at all.
+            let (source_position, _) = entity_def::footprint(world, source_entity);
+            let kind = harvest_component.kind.as_str();
+            let replacement = nearest(
+                world,
+                CellPos::from(source_position),
+                Some(SOURCE_SEARCH_RADIUS),
+                |id, _| id != source_id && source_matches(world, id, &carrier_def, kind),
+            );
+            harvest_component.last_chase = None;
+            match replacement {
+                Some(replacement) => harvest_component.source = Some(replacement),
+                None => harvest_component.wait = BLOCKED_SOURCE_RETRY_PERIOD,
+            }
+            return Processing::state(OrderState::InProcessing);
+        }
         Destination::Walk(move_order) => return Processing::suspend(move_order),
         Destination::Arrived => {}
     }
@@ -319,16 +370,21 @@ fn advance(
             .get::<ResourceSourceComponent>()
             .unwrap()
             .amount;
-        let take = harvest_data
-            .capacity()
-            .saturating_sub(carried_amount)
-            .min(available);
+        // A load of some other kind is wasted here, not banked: the hands
+        // take the new kind and drop whatever they held — sending a
+        // wood-laden worker to gold costs the wood.
+        let kept = if carried_kind.as_deref() == Some(source_kind.as_str()) {
+            carried_amount
+        } else {
+            0
+        };
+        let take = harvest_data.capacity().saturating_sub(kept).min(available);
 
         {
             let mut entity_mut = world.entity_mut(entity);
             let mut carrier = entity_mut.get_mut::<ResourceCarrierComponent>().unwrap();
             carrier.kind = Some(source_kind);
-            carrier.amount += take;
+            carrier.amount = kept + take;
         }
 
         let remaining = {
@@ -437,44 +493,33 @@ fn own_footprint(world: &World, entity: Entity) -> (CellPos, CellSize) {
     (CellPos::from(position), size)
 }
 
-/// Picks the source to harvest from: the trip in progress, the ordered target,
-/// the last source worked, or the nearest matching source within
+/// Picks the source to harvest from: the trip in progress, the source the order
+/// settled on, the ordered target, or the nearest matching source within
 /// [`SOURCE_SEARCH_RADIUS`] — in that priority order.
 ///
-/// Only sources of kinds the carrier can carry qualify; when the carrier holds
-/// a partial load, only sources of the same resource kind do.
+/// The settled source outranks the ordered target: it starts as the target and
+/// moves only when a replacement is picked, which must then stick.
+///
+/// Only live sources of the order's own kind, with anything left in them,
+/// qualify.
 fn resolve_source(
     entity: Entity,
     order: &Order,
     hc: &HarvestComponent,
-    carried_kind: Option<&str>,
     carrier_def: &ResourceCarrierDef,
     world: &World,
 ) -> Option<SimulationId> {
-    let matches = |id: SimulationId| -> bool {
-        let Some(source) = world.resource::<EntityIndex>().interactable(world, id) else {
-            return false;
-        };
-        let source_ref = world.entity(source);
-        let Some(source_def) = entity_def::of(world, source).resource_source.as_ref() else {
-            return false;
-        };
-        source_ref
-            .get::<ResourceSourceComponent>()
-            .is_some_and(|s| s.amount > 0)
-            && carrier_def.can_carry(source_def.kind())
-            && carried_kind.is_none_or(|kind| source_def.kind() == kind)
-    };
+    let kind = hc.kind.as_str();
 
     let target_id = order
         .harvest_target()
         .expect("Harvest order must have a target");
 
-    for candidate in [hc.harvesting, Some(target_id), hc.source]
+    for candidate in [hc.harvesting, hc.source, Some(target_id)]
         .into_iter()
         .flatten()
     {
-        if matches(candidate) {
+        if source_matches(world, candidate, carrier_def, kind) {
             return Some(candidate);
         }
     }
@@ -487,8 +532,30 @@ fn resolve_source(
             .position,
     );
     nearest(world, position, Some(SOURCE_SEARCH_RADIUS), |id, _| {
-        matches(id)
+        source_matches(world, id, carrier_def, kind)
     })
+}
+
+/// Whether `id` is a live source of `kind`, with anything left in it, that the
+/// carrier can carry from.
+fn source_matches(
+    world: &World,
+    id: SimulationId,
+    carrier_def: &ResourceCarrierDef,
+    kind: &str,
+) -> bool {
+    let Some(source) = world.resource::<EntityIndex>().interactable(world, id) else {
+        return false;
+    };
+    let Some(source_def) = entity_def::of(world, source).resource_source.as_ref() else {
+        return false;
+    };
+    world
+        .entity(source)
+        .get::<ResourceSourceComponent>()
+        .is_some_and(|s| s.amount > 0)
+        && carrier_def.can_carry(source_def.kind())
+        && source_def.kind() == kind
 }
 
 /// Picks the storage to deliver to: the ordered target if it qualifies, otherwise

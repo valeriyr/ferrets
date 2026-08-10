@@ -124,6 +124,19 @@ pub struct SkillButton {
     skill: SkillId,
 }
 
+/// A command-card button that unloads the primary transporter's passengers.
+#[derive(Component)]
+pub struct UnloadButton {
+    /// `false` unloads in place; `true` arms a click that names the
+    /// destination.
+    at_point: bool,
+}
+
+/// A command-card button that arms a click naming the unit the primary
+/// transporter fetches aboard.
+#[derive(Component)]
+pub struct LoadButton;
+
 /// The control-group roster container; a chip per non-empty group is a child.
 #[derive(Component)]
 pub struct GroupRoster;
@@ -419,7 +432,7 @@ pub fn update_help(
     mut text: Query<&mut Text, With<HelpText>>,
 ) {
     let mut message = String::from(
-        "LMB select (Shift add, dbl-click all of type) | RMB move/harvest/attack | F/R/G/Q orders | X stance | B war drums | 1-0 groups (Ctrl set) | V reveal | F1 debug | F2 spawn",
+        "LMB select (Shift add, dbl-click all of type) | RMB move/harvest/attack | F/R/G/T/B/Q orders | X stance | 1-0 groups (Ctrl set) | V reveal | F1 debug | F2 spawn",
     );
 
     let local = session.local_player();
@@ -630,6 +643,8 @@ pub fn update_command_card(
             With<BuildButton>,
             With<ResearchButton>,
             With<SkillButton>,
+            With<UnloadButton>,
+            With<LoadButton>,
         )>,
     >,
     mut commands: Commands,
@@ -680,6 +695,7 @@ pub fn update_command_card(
                 .collect()
         })
         .unwrap_or_default();
+    let transports = def.is_some_and(|def| def.can_transport());
 
     commands.entity(card).with_children(|parent| {
         for name in trains {
@@ -707,6 +723,17 @@ pub fn update_command_card(
         for (id, label) in skills {
             parent.spawn((SkillButton { skill: id }, card_button(&label, SKILL_NORMAL)));
         }
+        if transports {
+            parent.spawn((LoadButton, card_button("Load", BUTTON_NORMAL)));
+            parent.spawn((
+                UnloadButton { at_point: false },
+                card_button("Unload", BUTTON_NORMAL),
+            ));
+            parent.spawn((
+                UnloadButton { at_point: true },
+                card_button("Unload To", BUTTON_NORMAL),
+            ));
+        }
     });
 }
 
@@ -728,6 +755,46 @@ pub fn command_card_input(
             }
             Interaction::Hovered => *color = BackgroundColor(BUTTON_HOVERED),
             Interaction::None => *color = BackgroundColor(BUTTON_NORMAL),
+        }
+    }
+}
+
+/// Arms the fetch-aboard click when the load button is clicked.
+pub fn load_card_input(
+    mut buttons: Query<&Interaction, (With<LoadButton>, Changed<Interaction>)>,
+    primary: Res<Primary>,
+    mut mode: ResMut<InputMode>,
+) {
+    for interaction in &mut buttons {
+        if matches!(interaction, Interaction::Pressed) && primary.0.is_some() {
+            *mode = InputMode::Targeting(TargetedOrder::Load);
+        }
+    }
+}
+
+/// Unloads the primary transporter when an unload button is clicked: in place,
+/// or — for the at-point button — by arming a click that names the destination.
+pub fn unload_card_input(
+    mut buttons: Query<(&Interaction, &UnloadButton), Changed<Interaction>>,
+    primary: Res<Primary>,
+    mut mode: ResMut<InputMode>,
+    mut pending: ResMut<PendingInput>,
+) {
+    for (interaction, button) in &mut buttons {
+        if !matches!(interaction, Interaction::Pressed) {
+            continue;
+        }
+        let Some(transport) = primary.0 else {
+            continue;
+        };
+        if button.at_point {
+            *mode = InputMode::Targeting(TargetedOrder::Unload);
+        } else {
+            pending.push(PlayerCommand::Unload {
+                transport,
+                at: None,
+                flush: true,
+            });
         }
     }
 }

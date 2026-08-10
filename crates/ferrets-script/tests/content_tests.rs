@@ -25,6 +25,7 @@ use ferrets_simulation::{
         },
         splash::SplashShape,
         stats::{EntityModifier, ModifierOp, PlayerModifier},
+        transport::{BoardingPolicy, PassengerConduct, PassengerFate},
         work::WorkPresence,
     },
     resources,
@@ -204,6 +205,163 @@ fn parses_repairer_and_repair_ratio() {
     assert!(
         !repairer.self_repair(),
         "self-repair is off unless declared"
+    );
+}
+
+#[test]
+fn parses_transporter() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_tag("infantry")
+
+        define_entity("footman", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = { max_health = 60, speed = "0.3", radius = "0.5", cargo_size = 1 },
+            tags = { "infantry" },
+        })
+
+        define_entity("wagon", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = {
+                max_health = 150, speed = "0.25", radius = "0.5", cargo_capacity = 6,
+                load_range = 2, unload_range = 3, load_period = 4, unload_period = 8,
+            },
+            transporter = {
+                carries = { "infantry", "footman" },
+                boarding = "allies",
+                fate = "eject",
+                conduct = "fight",
+            },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("load content");
+
+    let wagon = registry.entity("wagon").expect("wagon defined");
+    let transporter = wagon.transporter.as_ref().expect("wagon can transport");
+    assert_eq!(
+        transporter.carries().collect::<Vec<_>>(),
+        ["footman", "infantry"]
+    );
+    assert_eq!(transporter.boarding(), BoardingPolicy::Allies);
+    assert_eq!(transporter.passenger_fate(), PassengerFate::Eject);
+    assert_eq!(transporter.conduct(), PassengerConduct::Fight);
+    assert_eq!(
+        wagon.base_stat(EntityStatId::CARGO_CAPACITY),
+        Some(FixedU64::from_num(6))
+    );
+    assert_eq!(
+        wagon.base_stat(EntityStatId::LOAD_RANGE),
+        Some(FixedU64::from_num(2))
+    );
+    assert_eq!(
+        wagon.base_stat(EntityStatId::UNLOAD_PERIOD),
+        Some(FixedU64::from_num(8))
+    );
+
+    let footman = registry.entity("footman").expect("footman defined");
+    assert_eq!(
+        footman.base_stat(EntityStatId::CARGO_SIZE),
+        Some(FixedU64::ONE)
+    );
+}
+
+#[test]
+fn parses_sheltering_transporter() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_tag("infantry")
+
+        define_entity("cart", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = {
+                max_health = 100, cargo_capacity = 2,
+                load_range = 1, unload_range = 1, load_period = 0, unload_period = 0,
+            },
+            transporter = { carries = { "infantry" }, boarding = "own", fate = "destroy", conduct = "shelter" },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("load content");
+
+    let transporter = registry
+        .entity("cart")
+        .expect("cart defined")
+        .transporter
+        .as_ref()
+        .expect("cart can transport");
+    assert_eq!(transporter.boarding(), BoardingPolicy::Own);
+    assert_eq!(transporter.passenger_fate(), PassengerFate::Destroy);
+    assert_eq!(transporter.conduct(), PassengerConduct::Shelter);
+}
+
+#[test]
+fn unknown_passenger_conduct_errors() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_tag("infantry")
+
+        define_entity("cart", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = {
+                max_health = 100, cargo_capacity = 2,
+                load_range = 1, unload_range = 1, load_period = 0, unload_period = 0,
+            },
+            transporter = { carries = { "infantry" }, boarding = "own", fate = "destroy", conduct = "mutiny" },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject an unknown passenger conduct");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("unknown passenger conduct 'mutiny'")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn unknown_boarding_policy_errors() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_tag("infantry")
+
+        define_entity("cart", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = {
+                max_health = 100, cargo_capacity = 2,
+                load_range = 1, unload_range = 1, load_period = 0, unload_period = 0,
+            },
+            transporter = { carries = { "infantry" }, boarding = "anyone", fate = "destroy", conduct = "shelter" },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject an unknown boarding policy");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("unknown boarding policy 'anyone'")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn unknown_passenger_fate_errors() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_tag("infantry")
+
+        define_entity("cart", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = {
+                max_health = 100, cargo_capacity = 2,
+                load_range = 1, unload_range = 1, load_period = 0, unload_period = 0,
+            },
+            transporter = { carries = { "infantry" }, boarding = "own", fate = "scatter", conduct = "shelter" },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject an unknown passenger fate");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("unknown passenger fate 'scatter'")),
+        "unexpected error: {error:?}"
     );
 }
 

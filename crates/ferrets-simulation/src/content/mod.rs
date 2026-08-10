@@ -20,4 +20,5 @@ pub mod stack_rule;
 pub mod stats;
 pub mod tags;
 pub mod train;
+pub mod transport;
 pub mod work;

@@ -90,6 +90,8 @@ fn entity(type_name: &str, under_construction: bool) -> EntityView {
         under_construction,
         stance: None,
         resource_amount: None,
+        boarded: None,
+        passengers: Vec::new(),
     }
 }
 

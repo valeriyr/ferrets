@@ -433,6 +433,12 @@ pub fn draw_orders(
                     gizmos.circle_2d(home, CELL_PX * 0.25, COMBAT);
                     continue;
                 }
+                Order::Board { target } => (entity_center(*target), GUARD),
+                Order::Load { target } => (entity_center(*target), GUARD),
+                Order::Unload { at } => match at {
+                    Some(position) => (Some(cell_center(*position)), GUARD),
+                    None => continue,
+                },
                 Order::Train | Order::Research { .. } | Order::Die => continue,
             };
             // A vanished target leaves nothing to point at.

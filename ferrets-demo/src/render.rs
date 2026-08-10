@@ -36,6 +36,7 @@ use ferrets_simulation::{
         resource::{HarvestComponent, UnderHarvestComponent},
         tags::TagsComponent,
         train::{TrainComponent, TrainQueueComponent},
+        transport::TransporterComponent,
     },
     content::{
         entity_stats::EntityStatId, registry::ContentRegistry, resource::ResourceSourceDef, tags,
@@ -893,6 +894,8 @@ const TRAIN_WORK_COLOR: Color = Color::srgb(0.3, 0.9, 0.9);
 // Matches the HUD's research-button teal, so the bar and the button that
 // started it read as the same work.
 const RESEARCH_WORK_COLOR: Color = Color::srgb(0.35, 0.75, 0.65);
+/// The dot color for passengers riding inside a transporter.
+const PASSENGER_COLOR: Color = Color::srgb(0.95, 0.85, 0.35);
 /// A repairer that cannot pay for this tick's work.
 const STALLED_WORK_COLOR: Color = Color::srgb(1.0, 0.3, 0.25);
 
@@ -976,6 +979,9 @@ pub fn draw_work_links(
             | Order::Guard { .. }
             | Order::Train
             | Order::Research { .. }
+            | Order::Board { .. }
+            | Order::Load { .. }
+            | Order::Unload { .. }
             | Order::Die => continue,
         };
         let Some(end) = end else {
@@ -1079,6 +1085,7 @@ pub fn draw_status_bars(
             Option<&TrainQueueComponent>,
             Option<&TrainComponent>,
             Option<&ResearchComponent>,
+            Option<&TransporterComponent>,
         ),
         Without<HiddenComponent>,
     >,
@@ -1095,6 +1102,7 @@ pub fn draw_status_bars(
         queue,
         train,
         research,
+        transporter,
     ) in &query
     {
         if matches!(visibility, Visibility::Hidden) {
@@ -1193,6 +1201,22 @@ pub fn draw_status_bars(
                     anchored(Vec2::new(left + i as f32 * gap, y + 5.0)),
                     2.5,
                     TRAIN_WORK_COLOR,
+                );
+            }
+            y += 10.0;
+        }
+
+        // A dot per passenger, like the trainer's queue dots, so a manned
+        // bunker or a loaded shelter reads at a glance.
+        let aboard = transporter.map_or(0, |transporter| transporter.passengers.len());
+        if aboard > 0 {
+            let gap = 7.0;
+            let left = -(aboard.saturating_sub(1) as f32) * gap / 2.0;
+            for i in 0..aboard {
+                gizmos.circle_2d(
+                    anchored(Vec2::new(left + i as f32 * gap, y + 5.0)),
+                    2.5,
+                    PASSENGER_COLOR,
                 );
             }
         }
