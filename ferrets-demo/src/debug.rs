@@ -5,6 +5,7 @@ use ferrets_bevy_plugin::PendingInput;
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 
+use ferrets_content::{entity_stats::EntityStatId, registry::ContentRegistry};
 use ferrets_physics::body;
 use ferrets_simulation::{
     command::PlayerCommand,
@@ -13,7 +14,6 @@ use ferrets_simulation::{
         location::LocationComponent, movement::MoveComponent, order_queue::OrderQueueComponent,
         patrol::PatrolComponent,
     },
-    content::{entity_stats::EntityStatId, registry::ContentRegistry},
     map::Map,
     movement_model::MovementModel,
     order::{AttackTarget, Order},

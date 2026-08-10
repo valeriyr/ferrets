@@ -9,7 +9,8 @@ use std::collections::BTreeSet;
 
 use bevy_ecs::prelude::*;
 
-use crate::{content::research::ResearchId, session::player_slot::PlayerId};
+use crate::session::player_slot::PlayerId;
+use ferrets_content::research::ResearchId;
 
 /// The completed researches of all players in the session, indexed by
 /// [`PlayerId`].

@@ -8,10 +8,12 @@
 use bevy_ecs::prelude::*;
 use ferrets_math::FixedU64;
 
-use crate::content::{
+use ferrets_content::{
     entity_stats::{self, EntityStatId},
-    stats::{EntityModifier, StatStore},
+    stats::EntityModifier,
 };
+
+use crate::stat_store::StatStore;
 
 /// Per-entity store of stat base and effective values, indexed by
 /// [`EntityStatId`].

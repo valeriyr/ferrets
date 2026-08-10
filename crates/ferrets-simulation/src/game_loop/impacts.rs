@@ -16,18 +16,18 @@ use crate::{
         dying::DyingComponent, entity_info::EntityInfoComponent, health::HealthComponent,
         hidden::HiddenComponent, location::LocationComponent, owner::OwnerComponent,
     },
-    content::{
-        entity_type_def::EntityTypeDef,
-        projectile::Aim,
-        registry::ContentRegistry,
-        splash::{SplashDef, SplashShape},
-    },
     entity_def,
     entity_index::EntityIndex,
     impacts::{PendingImpact, PendingImpacts},
     map::Map,
     session::GameSession,
     simulation_id::SimulationId,
+};
+use ferrets_content::{
+    entity_type_def::EntityTypeDef,
+    projectile::Aim,
+    registry::ContentRegistry,
+    splash::{SplashDef, SplashShape},
 };
 
 /// Delivers one hit from `attacker` against `target`, released from `origin`

@@ -2,10 +2,12 @@
 //! and a minimum-damage floor keeps a heavily-armored target killable.
 
 use bevy::prelude::*;
+use ferrets_content::{
+    entity_type_def::EntityTypeDef, location::Solidity, registry::ContentRegistry,
+};
 use ferrets_geometry::cell_size::CellSize;
 use ferrets_math::FixedU64;
 use ferrets_simulation::{
-    content::{entity_type_def::EntityTypeDef, location::Solidity, registry::ContentRegistry},
     session::{GameSession, player_slot::PlayerSlot, player_type::PlayerType},
     spawn,
 };

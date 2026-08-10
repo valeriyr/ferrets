@@ -3,6 +3,10 @@
 mod utils;
 
 use bevy::prelude::*;
+use ferrets_content::{
+    entity_stats::EntityStatId, entity_type_def::EntityTypeDef, location::Solidity,
+    registry::ContentRegistry, work::WorkPresence,
+};
 use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
 use ferrets_math::{FixedI64, FixedU64};
 use ferrets_simulation::{
@@ -12,10 +16,6 @@ use ferrets_simulation::{
         entity_info::EntityInfoComponent,
         hidden::HiddenComponent,
         location::LocationComponent,
-    },
-    content::{
-        entity_stats::EntityStatId, entity_type_def::EntityTypeDef, location::Solidity,
-        registry::ContentRegistry, work::WorkPresence,
     },
     map::Map,
     session::{GameSession, player_slot::PlayerSlot, player_type::PlayerType},

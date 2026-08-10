@@ -9,14 +9,12 @@ use std::collections::BTreeMap;
 
 use bevy::prelude::*;
 use ferrets_bevy_plugin::ai::{AiRuntimes, install_ai_runtimes, sourced_ai_players};
+use ferrets_content::registry::ContentRegistry;
 use ferrets_script::{
     ai::view::content::ContentView,
     engine::{ScriptEngine, lua::LuaEngine},
 };
-use ferrets_simulation::{
-    content::registry::ContentRegistry,
-    session::{GameSession, player_slot::PlayerId},
-};
+use ferrets_simulation::session::{GameSession, player_slot::PlayerId};
 
 /// The chassis both race brains run on: pure helpers plus the economy, build,
 /// research, and attack routines. Prepended to each brain, so its locals are

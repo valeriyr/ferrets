@@ -16,13 +16,13 @@ use crate::{
         location::LocationComponent,
         order_queue::{CancelPolicy, OrderState},
     },
-    content::entity_stats::EntityStatId,
     entity_def,
     map::Map,
     order::{AttackTarget, Leash, Order},
     session::GameSession,
     simulation_id::SimulationId,
 };
+use ferrets_content::entity_stats::EntityStatId;
 
 /// Called once when an AttackMove order becomes the front `New` entry.
 ///

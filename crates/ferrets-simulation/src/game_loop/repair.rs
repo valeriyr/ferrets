@@ -23,18 +23,19 @@ use crate::{
         owner::OwnerComponent,
         repair::{RepairComponent, UnderRepairComponent},
     },
-    content::{
-        entity_stats::EntityStatId,
-        repair::{RepairCost, RepairRate, RepairerDef},
-    },
     entity_def,
     entity_index::EntityIndex,
     map::Map,
     order::Order,
-    resources::{Cost, PlayerResources},
+    resources::PlayerResources,
     session::GameSession,
     simulation_id::SimulationId,
     spawn,
+};
+use ferrets_content::{
+    costs::Cost,
+    entity_stats::EntityStatId,
+    repair::{RepairCost, RepairRate, RepairerDef},
 };
 
 /// The fractional cost carried between ticks, by resource kind.

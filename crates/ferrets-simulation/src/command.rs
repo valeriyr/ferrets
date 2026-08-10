@@ -8,10 +8,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     components::{rally::RallyTarget, stance::Stance},
-    content::{research::ResearchId, skills::SkillId},
     order::AttackTarget,
     simulation_id::SimulationId,
 };
+use ferrets_content::{research::ResearchId, skills::SkillId};
 
 /// How a selection command combines with the player's existing selection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -43,7 +43,7 @@ pub enum PlayerCommand {
     /// Selects the given entity, combining with the current selection per `mode`.
     SelectById { id: SimulationId, mode: SelectMode },
     /// Selects all entities inside `rect` sharing the selection class `class`
-    /// (see [`EntityTypeDef::selection_class`](crate::content::entity_type_def::EntityTypeDef::selection_class)),
+    /// (see [`EntityTypeDef::selection_class`](ferrets_content::entity_type_def::EntityTypeDef::selection_class)),
     /// combining with the current selection per `mode`.
     SelectByType {
         class: String,

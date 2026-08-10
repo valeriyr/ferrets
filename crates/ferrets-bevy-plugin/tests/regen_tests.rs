@@ -4,14 +4,14 @@
 mod utils;
 
 use bevy::prelude::*;
+use ferrets_content::{
+    entity_stats::EntityStatId, entity_type_def::EntityTypeDef, location::Solidity,
+    registry::ContentRegistry, stats::ModifierOp,
+};
 use ferrets_geometry::cell_size::CellSize;
 use ferrets_math::FixedU64;
 use ferrets_simulation::{
     components::build::UnderConstructionComponent,
-    content::{
-        entity_stats::EntityStatId, entity_type_def::EntityTypeDef, location::Solidity,
-        registry::ContentRegistry, stats::ModifierOp,
-    },
     game_loop,
     session::{GameSession, player_slot::PlayerSlot, player_type::PlayerType},
     spawn,

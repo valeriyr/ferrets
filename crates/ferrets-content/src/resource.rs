@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::content::work::WorkPresence;
+use crate::work::WorkPresence;
 
 /// What happens to a source when harvesting empties it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

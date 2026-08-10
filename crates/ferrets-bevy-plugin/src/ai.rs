@@ -12,6 +12,7 @@
 use std::collections::BTreeMap;
 
 use bevy::{ecs::world::EntityRef, prelude::*};
+use ferrets_content::{entity_stats::EntityStatId, registry::ContentRegistry};
 use ferrets_geometry::cell_pos::CellPos;
 use ferrets_script::ai::{
     AiRuntime, AiVision,
@@ -33,7 +34,6 @@ use ferrets_simulation::{
         train::TrainQueueComponent,
         transport::{BoardedComponent, TransporterComponent},
     },
-    content::{entity_stats::EntityStatId, registry::ContentRegistry},
     entity_index::EntityIndex,
     input::{InputFrames, PlayerFrame, SYNC_LATENCY},
     map::Map,

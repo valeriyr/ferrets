@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 
 use ferrets_math::FixedU64;
 
-use crate::{content::work::WorkPresence, resources::Cost};
+use crate::{costs::Cost, work::WorkPresence};
 
 /// How fast the work goes, before the repairer's `repair_speed` stat scales it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

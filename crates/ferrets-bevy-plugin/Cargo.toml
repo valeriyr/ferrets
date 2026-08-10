@@ -10,13 +10,14 @@ description = "Bevy integration for the ferrets simulation."
 [dependencies]
 bevy.workspace = true
 
+ferrets-content.workspace = true
 ferrets-geometry.workspace = true
 ferrets-math.workspace = true
 ferrets-network.workspace = true
-ferrets-pathfinder.workspace = true
 ferrets-replay.workspace = true
 ferrets-script.workspace = true
 ferrets-simulation.workspace = true
 
 [dev-dependencies]
+ferrets-pathfinder.workspace = true
 ferrets-physics.workspace = true

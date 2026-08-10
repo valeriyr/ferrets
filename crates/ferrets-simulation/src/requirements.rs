@@ -12,11 +12,11 @@ use crate::{
         build::UnderConstructionComponent, entity_info::EntityInfoComponent, owner::OwnerComponent,
         tags::TagsComponent,
     },
-    content::registry::ContentRegistry,
     entity_index::EntityIndex,
     player_research::PlayerResearch,
     session::player_slot::PlayerId,
 };
+use ferrets_content::registry::ContentRegistry;
 
 /// Whether `player` currently meets every entry in `requires`.
 ///

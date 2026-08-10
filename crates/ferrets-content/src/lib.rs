@@ -1,6 +1,8 @@
-//! Content registry — type definitions for all entity types.
+//! Content vocabulary — type definitions for everything content declares,
+//! and the registry that holds them.
 
 pub mod build;
+pub mod costs;
 pub mod dying;
 pub mod entity_buffs;
 pub mod entity_stats;

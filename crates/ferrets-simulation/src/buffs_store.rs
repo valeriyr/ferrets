@@ -4,7 +4,7 @@
 //! the buff id kind so both sites share one stacking and expiry
 //! implementation.
 
-use crate::content::stack_rule::StackRule;
+use ferrets_content::stack_rule::StackRule;
 
 /// One active buff instance: its registered id (the stacking and removal
 /// identity), its remaining ticks, and how many stacks are active.

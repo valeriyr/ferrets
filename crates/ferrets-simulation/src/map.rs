@@ -13,13 +13,13 @@ use ferrets_math::FixedU64;
 
 use crate::{
     components::location::LocationComponent,
-    content::{
-        entity_stats::EntityStatId, entity_type_def::EntityTypeDef, location::LocationDef,
-        registry::ContentRegistry,
-    },
     map_data::{MapData, MapSlot},
     movement_model::MovementModel,
     session::player_slot::PlayerId,
+};
+use ferrets_content::{
+    entity_stats::EntityStatId, entity_type_def::EntityTypeDef, location::LocationDef,
+    registry::ContentRegistry,
 };
 
 /// How an entity's footprint occupies the navigation grid.

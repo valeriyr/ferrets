@@ -2,12 +2,13 @@
 
 use bevy_ecs::prelude::*;
 
-use crate::{content::entity_type_def::EntityTypeId, simulation_id::SimulationId};
+use crate::simulation_id::SimulationId;
+use ferrets_content::entity_type_def::EntityTypeId;
 
 /// Every entity carries this component. [`SimulationId`] is identical on all clients
 /// because entities are spawned in the same deterministic order everywhere.
 ///
-/// [`EntityTypeDef`]: crate::content::entity_type_def::EntityTypeDef
+/// [`EntityTypeDef`]: ferrets_content::entity_type_def::EntityTypeDef
 #[derive(Component, Debug, Clone, PartialEq, Eq)]
 pub struct EntityInfoComponent {
     /// Unique ID for this entity.

@@ -3,8 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::player_buffs::PlayerBuffId;
-use crate::resources::Cost;
+use crate::{costs::Cost, player_buffs::PlayerBuffId};
 
 /// A handle to a registered research, assigned in registration order.
 ///

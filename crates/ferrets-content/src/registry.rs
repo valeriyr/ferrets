@@ -7,10 +7,10 @@ use ferrets_geometry::cell_size::CellSize;
 use ferrets_math::FixedU64;
 use ferrets_pathfinder::{layer_id::LayerId, layer_mask::LayerMask};
 
-use super::entity_type_def::{EntityTypeDef, EntityTypeId};
-use crate::content::{
+use crate::{
     entity_buffs::{EntityBuffDef, EntityBuffId},
     entity_stats::{ENTITY_BUILTIN_STATS, EntityStatId},
+    entity_type_def::{EntityTypeDef, EntityTypeId},
     player_buffs::{PlayerBuffDef, PlayerBuffId},
     player_stats::{PLAYER_BUILTIN_STATS, PlayerStatId},
     projectile::{ProjectileDef, ProjectileId},

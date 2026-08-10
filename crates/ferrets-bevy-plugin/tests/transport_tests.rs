@@ -3,6 +3,7 @@
 
 mod utils;
 
+use ferrets_content::{entity_stats::EntityStatId, stats::ModifierOp};
 use ferrets_geometry::cell_pos::CellPos;
 use ferrets_simulation::{
     command::{PlayerCommand, SelectMode},
@@ -13,7 +14,6 @@ use ferrets_simulation::{
         rally::RallyTarget,
         transport::{BoardedComponent, GarrisonFireComponent},
     },
-    content::{entity_stats::EntityStatId, stats::ModifierOp},
     entity_index::EntityIndex,
     game_loop,
     map::Map,

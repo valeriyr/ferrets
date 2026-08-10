@@ -18,6 +18,9 @@ use bevy::prelude::*;
 use crate::{map, scenario::CurrentScenario, states::InGameUi};
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2, fixed_vec2::FixedVec2};
 
+use ferrets_content::{
+    entity_stats::EntityStatId, registry::ContentRegistry, resource::ResourceSourceDef, tags,
+};
 use ferrets_simulation::{
     components::{
         build::{BuildComponent, UnderConstructionComponent},
@@ -37,9 +40,6 @@ use ferrets_simulation::{
         tags::TagsComponent,
         train::{TrainComponent, TrainQueueComponent},
         transport::TransporterComponent,
-    },
-    content::{
-        entity_stats::EntityStatId, registry::ContentRegistry, resource::ResourceSourceDef, tags,
     },
     impacts::PendingImpacts,
     order::Order,

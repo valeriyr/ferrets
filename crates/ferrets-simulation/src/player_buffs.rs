@@ -1,17 +1,14 @@
 //! Active buffs on each player.
 //!
 //! A player-level buff is a registered
-//! [`PlayerBuffDef`](crate::content::player_buffs::PlayerBuffDef) held by the player:
+//! [`PlayerBuffDef`](ferrets_content::player_buffs::PlayerBuffDef) held by the player:
 //! its player modifiers reach the player's own stats, and its entity modifiers
 //! reach every unit the player owns.
 
 use bevy_ecs::prelude::*;
 
-use crate::{
-    buffs_store::BuffsStore,
-    content::{player_buffs::PlayerBuffId, stack_rule::StackRule},
-    session::player_slot::PlayerId,
-};
+use crate::{buffs_store::BuffsStore, session::player_slot::PlayerId};
+use ferrets_content::{player_buffs::PlayerBuffId, stack_rule::StackRule};
 
 /// The active buffs of all players in the session, indexed by [`PlayerId`] —
 /// the player-level counterpart of the per-entity buffs component, sharing its

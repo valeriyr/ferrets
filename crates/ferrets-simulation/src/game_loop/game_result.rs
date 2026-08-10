@@ -7,7 +7,6 @@ use bevy_ecs::world::World;
 
 use crate::{
     components::{owner::OwnerComponent, tags::TagsComponent},
-    content::tags,
     entity_index::EntityIndex,
     session::{
         GameResult, GameSession, Winner,
@@ -15,6 +14,7 @@ use crate::{
         player_slot::{PlayerId, PlayerSlot},
     },
 };
+use ferrets_content::tags;
 
 /// Ends the session, under [`FinishPolicy::LastStanding`], once the players still
 /// holding a building are all on one side.

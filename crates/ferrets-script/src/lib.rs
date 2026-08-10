@@ -2,7 +2,7 @@
 //!
 //! Game content — races, resource kinds, and entity types — is authored as a Lua
 //! script (`define_race`, `define_resource`, `define_entity`) and loaded once at
-//! startup into a [`ContentRegistry`](ferrets_simulation::content::registry::ContentRegistry).
+//! startup into a [`ContentRegistry`](ferrets_content::registry::ContentRegistry).
 //! The content script runs only at load time and produces plain data (numbers
 //! converted to fixed-point at the boundary), so it never executes inside the
 //! deterministic tick loop.

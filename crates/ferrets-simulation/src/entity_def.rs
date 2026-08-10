@@ -8,10 +8,10 @@ use crate::{
     components::{
         entity_info::EntityInfoComponent, entity_stats::StatsComponent, location::LocationComponent,
     },
-    content::{
-        entity_stats::EntityStatId, entity_type_def::EntityTypeDef, registry::ContentRegistry,
-    },
     simulation_id::SimulationId,
+};
+use ferrets_content::{
+    entity_stats::EntityStatId, entity_type_def::EntityTypeDef, registry::ContentRegistry,
 };
 
 /// Returns the [`SimulationId`] `entity` was spawned with.

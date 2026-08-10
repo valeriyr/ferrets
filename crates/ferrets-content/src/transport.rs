@@ -3,8 +3,6 @@
 
 use std::collections::BTreeSet;
 
-use crate::components::tags::TagsComponent;
-
 /// Whose units a transporter admits aboard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BoardingPolicy {
@@ -77,10 +75,10 @@ impl TransporterDef {
 
     /// Returns `true` if a candidate with the given type name and tags is one
     /// this entity will carry.
-    pub fn admits(&self, candidate_type: &str, candidate_tags: Option<&TagsComponent>) -> bool {
+    pub fn admits(&self, candidate_type: &str, candidate_has_tag: impl Fn(&str) -> bool) -> bool {
         self.carries.iter().any(|name| {
             let name = name.as_str();
-            name == candidate_type || candidate_tags.is_some_and(|tags| tags.contains(name))
+            name == candidate_type || candidate_has_tag(name)
         })
     }
 

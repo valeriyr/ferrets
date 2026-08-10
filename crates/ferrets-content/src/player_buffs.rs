@@ -5,7 +5,7 @@
 //! reach the player's own stats and its entity modifiers descend to every unit
 //! the player owns.
 
-use super::{
+use crate::{
     stack_rule::StackRule,
     stats::{EntityModifier, PlayerModifier},
 };

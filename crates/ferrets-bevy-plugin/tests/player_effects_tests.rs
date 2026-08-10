@@ -4,22 +4,22 @@
 mod utils;
 
 use bevy::prelude::*;
+use ferrets_content::{
+    costs::Cost,
+    entity_buffs::EntityBuffDef,
+    entity_stats::EntityStatId,
+    player_buffs::{PlayerBuffDef, PlayerBuffId},
+    player_stats::PlayerStatId,
+    registry::ContentRegistry,
+    skills::{PlayerCastEffect, SkillCaster, SkillDef},
+    stack_rule::StackRule,
+    stats::{EntityModifier, ModifierOp, PlayerModifier},
+};
 use ferrets_math::{FixedI64, FixedU64};
 use ferrets_simulation::{
     command::{PlayerCommand, SkillCasterRef},
-    content::{
-        entity_buffs::EntityBuffDef,
-        entity_stats::EntityStatId,
-        player_buffs::{PlayerBuffDef, PlayerBuffId},
-        player_stats::PlayerStatId,
-        registry::ContentRegistry,
-        skills::{PlayerCastEffect, SkillCaster, SkillDef},
-        stack_rule::StackRule,
-        stats::{EntityModifier, ModifierOp, PlayerModifier},
-    },
     game_loop,
     player_stats::PlayerStats,
-    resources::Cost,
 };
 
 //

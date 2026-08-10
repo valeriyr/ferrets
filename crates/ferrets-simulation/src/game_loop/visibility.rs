@@ -8,10 +8,10 @@ use crate::{
         entity_stats::StatsComponent, hidden::HiddenComponent, location::LocationComponent,
         owner::OwnerComponent,
     },
-    content::entity_stats::EntityStatId,
     session::player_slot::PlayerId,
     visibility::VisibilityGrid,
 };
+use ferrets_content::entity_stats::EntityStatId;
 
 /// Recomputes the visibility grid for the current tick.
 ///

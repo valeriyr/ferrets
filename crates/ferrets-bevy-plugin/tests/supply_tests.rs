@@ -3,11 +3,11 @@
 
 mod utils;
 
+use ferrets_content::player_stats::PlayerStatId;
 use ferrets_math::FixedU64;
 use ferrets_simulation::{
     command::PlayerCommand, components::build::UnderConstructionComponent,
-    content::player_stats::PlayerStatId, player_stats::PlayerStats, simulation_id::SimulationId,
-    spawn, supply,
+    player_stats::PlayerStats, simulation_id::SimulationId, spawn, supply,
 };
 
 //

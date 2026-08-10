@@ -1,7 +1,6 @@
 //! Loading game content from a script into a [`ContentRegistry`].
 
-use ferrets_math::FixedU64;
-use ferrets_simulation::content::{
+use ferrets_content::{
     location::Solidity,
     projectile::Aim,
     registry::ContentRegistry,
@@ -10,6 +9,7 @@ use ferrets_simulation::content::{
     transport::{BoardingPolicy, PassengerConduct, PassengerFate},
     work::WorkPresence,
 };
+use ferrets_math::FixedU64;
 
 use crate::{engine::ScriptEngine, error::ScriptError};
 

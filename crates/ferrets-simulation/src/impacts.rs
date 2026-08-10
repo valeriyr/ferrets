@@ -3,10 +3,8 @@
 use bevy_ecs::prelude::*;
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 
-use crate::{
-    content::{entity_type_def::EntityTypeId, projectile::ProjectileId},
-    simulation_id::SimulationId,
-};
+use crate::simulation_id::SimulationId;
+use ferrets_content::{entity_type_def::EntityTypeId, projectile::ProjectileId};
 
 /// One shot in flight.
 ///

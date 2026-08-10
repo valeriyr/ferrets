@@ -5,13 +5,13 @@ mod utils;
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::FixedU64;
 
+use ferrets_content::{
+    entity_stats::EntityStatId, entity_type_def::EntityTypeDef, location::Solidity,
+    registry::ContentRegistry, stats::ModifierOp,
+};
 use ferrets_simulation::{
     command::PlayerCommand,
     components::{attack::AttackComponent, dying::DyingComponent, health::HealthComponent},
-    content::{
-        entity_stats::EntityStatId, entity_type_def::EntityTypeDef, location::Solidity,
-        registry::ContentRegistry, stats::ModifierOp,
-    },
     entity_index::EntityIndex,
     game_loop,
     map::Map,

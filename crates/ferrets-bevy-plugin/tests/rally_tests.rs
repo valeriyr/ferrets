@@ -7,13 +7,15 @@ mod utils;
 use bevy::prelude::*;
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 
+use ferrets_content::{
+    entity_type_def::EntityTypeDef, location::Solidity, registry::ContentRegistry,
+};
 use ferrets_simulation::{
     command::PlayerCommand,
     components::{
         rally::{RallyPointComponent, RallyTarget},
         resource::ResourceSourceComponent,
     },
-    content::{entity_type_def::EntityTypeDef, location::Solidity, registry::ContentRegistry},
     resources::PlayerResources,
     session::{GameSession, player_slot::PlayerSlot, player_type::PlayerType},
     spawn,

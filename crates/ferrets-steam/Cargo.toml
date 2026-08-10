@@ -8,4 +8,3 @@ repository.workspace = true
 description = "Steam platform integration: achievements and P2P transport."
 
 [dependencies]
-ferrets-network.workspace = true

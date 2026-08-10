@@ -1,18 +1,16 @@
 //! The demo's embedded content script and map: they load, validate, and agree
 //! with each other.
 
+use ferrets_content::{
+    entity_stats::EntityStatId,
+    skills::{EntityCastTarget, PlayerCastEffect, SkillCaster},
+    work::WorkPresence,
+};
 use ferrets_demo::{content::CONTENT, map};
 use ferrets_geometry::cell_pos::CellPos;
 use ferrets_math::FixedU64;
 use ferrets_script::{content, engine::lua::LuaEngine};
-use ferrets_simulation::{
-    content::{
-        entity_stats::EntityStatId,
-        skills::{EntityCastTarget, PlayerCastEffect, SkillCaster},
-        work::WorkPresence,
-    },
-    map::Map,
-};
+use ferrets_simulation::map::Map;
 
 #[test]
 fn content_loads_and_validates() {

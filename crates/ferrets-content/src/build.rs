@@ -1,6 +1,6 @@
 //! Content-defined construction-catalogue property struct.
 
-use crate::content::work::WorkPresence;
+use crate::work::WorkPresence;
 
 /// Content-defined construction catalogue: which entity types this entity can
 /// build, and how it attends the site while building them.

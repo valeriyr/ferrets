@@ -10,18 +10,18 @@ use crate::{
         entity_skills::SkillsComponent, entity_stats::StatsComponent, health::HealthComponent,
         owner::OwnerComponent,
     },
-    content::{
-        entity_buffs::EntityBuffId,
-        entity_stats::EntityStatId,
-        player_buffs::PlayerBuffId,
-        registry::ContentRegistry,
-        stats::{EntityModifier, PlayerModifier},
-    },
     entity_index::EntityIndex,
     player_buffs::PlayerBuffs,
     player_skills::PlayerSkills,
     player_stats::PlayerStats,
     session::{GameSession, player_slot::PlayerId},
+};
+use ferrets_content::{
+    entity_buffs::EntityBuffId,
+    entity_stats::EntityStatId,
+    player_buffs::PlayerBuffId,
+    registry::ContentRegistry,
+    stats::{EntityModifier, PlayerModifier},
 };
 
 /// Applies the buff `id` to `entity`, inserting a [`BuffsComponent`] if it has

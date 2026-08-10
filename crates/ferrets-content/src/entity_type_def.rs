@@ -7,37 +7,34 @@ use ferrets_math::FixedU64;
 use ferrets_pathfinder::layer_mask::LayerMask;
 
 use crate::{
-    components::tags::TagsComponent,
-    content::{
-        build::BuilderDef,
-        dying::DyingDef,
-        entity_stats::EntityStatId,
-        location::{LocationDef, Solidity},
-        projectile::ProjectileId,
-        repair::{RepairCost, RepairRate, RepairerDef},
-        research::{ResearchId, ResearcherDef},
-        resource::{
-            DepletionPolicy, HarvestData, ResourceCarrierDef, ResourceSourceDef, ResourceStorageDef,
-        },
-        selection::SelectionDef,
-        skills::SkillId,
-        splash::{SplashDef, SplashShape},
-        train::TrainerDef,
-        transport::{BoardingPolicy, PassengerConduct, PassengerFate, TransporterDef},
-        work::WorkPresence,
+    build::BuilderDef,
+    costs::{self, Cost},
+    dying::DyingDef,
+    entity_stats::EntityStatId,
+    location::{LocationDef, Solidity},
+    projectile::ProjectileId,
+    repair::{RepairCost, RepairRate, RepairerDef},
+    research::{ResearchId, ResearcherDef},
+    resource::{
+        DepletionPolicy, HarvestData, ResourceCarrierDef, ResourceSourceDef, ResourceStorageDef,
     },
-    resources::{self, Cost},
+    selection::SelectionDef,
+    skills::SkillId,
+    splash::{SplashDef, SplashShape},
+    train::TrainerDef,
+    transport::{BoardingPolicy, PassengerConduct, PassengerFate, TransporterDef},
+    work::WorkPresence,
 };
 
 /// Stable handle for a registered entity type, assigned in registration order by
-/// [`ContentRegistry`](crate::content::registry::ContentRegistry). Cheap to store
+/// [`ContentRegistry`](crate::registry::ContentRegistry). Cheap to store
 /// on an entity and to resolve back to its [`EntityTypeDef`] in O(1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct EntityTypeId(u32);
 
 impl EntityTypeId {
     /// Wraps a registration index. Registry-internal: handles are minted only by
-    /// [`ContentRegistry`](crate::content::registry::ContentRegistry).
+    /// [`ContentRegistry`](crate::registry::ContentRegistry).
     pub(crate) fn from_index(index: usize) -> Self {
         Self(u32::try_from(index).expect("entity type count fits in u32"))
     }
@@ -54,7 +51,7 @@ impl EntityTypeId {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EntityTypeDef {
     /// Unique type name used to look up this definition in
-    /// [`ContentRegistry`](crate::content::registry::ContentRegistry).
+    /// [`ContentRegistry`](crate::registry::ContentRegistry).
     pub name: String,
     /// The race this type belongs to, by registered race name. `None` means the
     /// type is race-neutral (e.g. resource sources, critters).
@@ -75,7 +72,7 @@ pub struct EntityTypeDef {
     pub base_stats: BTreeMap<EntityStatId, FixedU64>,
     /// Navigation and footprint properties shared by all instances of this type.
     /// Mandatory for every spawnable type; enforced by
-    /// [`ContentRegistry::validate`](crate::content::registry::ContentRegistry::validate).
+    /// [`ContentRegistry::validate`](crate::registry::ContentRegistry::validate).
     pub location: Option<LocationDef>,
     /// Dying-phase properties. `None` means a destroyed instance is removed
     /// from the world immediately, with no dying phase.
@@ -176,12 +173,12 @@ impl EntityTypeDef {
     /// The total bonus damage one hit deals to a target with the given type name
     /// and tags, summed over every matching
     /// [`bonus_damage_vs`](Self::bonus_damage_vs) key.
-    pub fn bonus_against(&self, target_type: &str, target_tags: Option<&TagsComponent>) -> u32 {
+    pub fn bonus_against(&self, target_type: &str, target_has_tag: impl Fn(&str) -> bool) -> u32 {
         self.bonus_damage_vs
             .iter()
             .filter(|(key, _)| {
                 let key = key.as_str();
-                key == target_type || target_tags.is_some_and(|tags| tags.contains(key))
+                key == target_type || target_has_tag(key)
             })
             .map(|(_, &amount)| amount)
             .sum()
@@ -234,7 +231,7 @@ impl EntityTypeDef {
     /// (resource sources, critters) omit this.
     ///
     /// The race must be registered before this type — see
-    /// [`ContentRegistry::register`](crate::content::registry::ContentRegistry::register).
+    /// [`ContentRegistry::register`](crate::registry::ContentRegistry::register).
     pub fn with_race(mut self, race: impl Into<String>) -> Self {
         self.race = Some(race.into());
         self
@@ -348,7 +345,7 @@ impl EntityTypeDef {
     /// they stand on.
     ///
     /// The occupation layers must be registered before this type — see
-    /// [`ContentRegistry::register`](crate::content::registry::ContentRegistry::register).
+    /// [`ContentRegistry::register`](crate::registry::ContentRegistry::register).
     ///
     /// Panics if `occupation` is empty or `size` has a zero dimension.
     pub fn with_location(
@@ -392,7 +389,7 @@ impl EntityTypeDef {
     /// landing them at the damage point.
     ///
     /// The projectile must be registered before this type — see
-    /// [`ContentRegistry::register`](crate::content::registry::ContentRegistry::register).
+    /// [`ContentRegistry::register`](crate::registry::ContentRegistry::register).
     pub fn with_projectile(mut self, projectile: ProjectileId) -> Self {
         self.projectile = Some(projectile);
         self
@@ -435,7 +432,7 @@ impl EntityTypeDef {
     ///
     /// Panics if an entry has an empty resource kind or a zero amount.
     pub fn with_cost(mut self, cost: impl IntoIterator<Item = (impl Into<String>, u32)>) -> Self {
-        let cost = resources::cost(cost);
+        let cost = costs::cost(cost);
 
         for (kind, amount) in &cost {
             assert!(!kind.is_empty(), "cost resource kinds must not be empty");

@@ -4,28 +4,25 @@
 use ferrets_geometry::cell_size::CellSize;
 use std::{cell::RefCell, rc::Rc};
 
+use ferrets_content::{
+    costs::Cost,
+    entity_buffs::EntityBuffDef,
+    entity_stats::EntityStatId,
+    entity_type_def::EntityTypeDef,
+    player_buffs::PlayerBuffDef,
+    projectile::ProjectileDef,
+    registry::ContentRegistry,
+    repair::{RepairCost, RepairRate},
+    research::ResearchDef,
+    resource::HarvestData,
+    skills::{
+        EntityCastCost, EntityCastEffect, EntityCastTarget, PlayerCastEffect, SkillCaster, SkillDef,
+    },
+    stack_rule::StackRule,
+    stats::{EntityModifier, ModifierOp, PlayerModifier},
+};
 use ferrets_math::{FixedI64, FixedU64};
 use ferrets_pathfinder::layer_mask::LayerMask;
-use ferrets_simulation::{
-    content::{
-        entity_buffs::EntityBuffDef,
-        entity_stats::EntityStatId,
-        entity_type_def::EntityTypeDef,
-        player_buffs::PlayerBuffDef,
-        projectile::ProjectileDef,
-        registry::ContentRegistry,
-        repair::{RepairCost, RepairRate},
-        research::ResearchDef,
-        resource::HarvestData,
-        skills::{
-            EntityCastCost, EntityCastEffect, EntityCastTarget, PlayerCastEffect, SkillCaster,
-            SkillDef,
-        },
-        stack_rule::StackRule,
-        stats::{EntityModifier, ModifierOp, PlayerModifier},
-    },
-    resources::Cost,
-};
 use mlua::{Lua, Table, Value};
 
 use crate::{content, error::ScriptError};

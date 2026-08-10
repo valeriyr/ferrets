@@ -2,7 +2,7 @@
 
 use bevy_ecs::prelude::*;
 
-use crate::content::skills::SkillId;
+use ferrets_content::skills::SkillId;
 
 /// An entity's skills, each paired with the ticks remaining on its cooldown.
 #[derive(Component, Debug, Clone, Default, PartialEq, Eq)]

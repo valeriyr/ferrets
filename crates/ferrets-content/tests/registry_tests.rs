@@ -3,33 +3,30 @@
 //! inconsistency, so a referenced type must be registered before the type that
 //! references it.
 
+use ferrets_content::{
+    costs::{self, Cost},
+    entity_buffs::EntityBuffDef,
+    entity_stats::EntityStatId,
+    entity_type_def::EntityTypeDef,
+    location::Solidity,
+    player_buffs::{PlayerBuffDef, PlayerBuffId},
+    player_stats::PlayerStatId,
+    registry::ContentRegistry,
+    repair::{RepairCost, RepairRate},
+    research::{ResearchDef, ResearcherDef},
+    resource::{DepletionPolicy, HarvestData},
+    skills::{
+        EntityCastCost, EntityCastEffect, EntityCastTarget, PlayerCastEffect, SkillCaster, SkillDef,
+    },
+    stack_rule::StackRule,
+    stats::{EntityModifier, ModifierOp},
+    tags,
+    transport::{BoardingPolicy, PassengerConduct, PassengerFate},
+    work::WorkPresence,
+};
 use ferrets_geometry::cell_size::CellSize;
 use ferrets_math::{FixedI64, FixedU64};
 use ferrets_pathfinder::{layer_mask::LayerMask, nav_grid::LayerId};
-use ferrets_simulation::{
-    content::{
-        entity_buffs::EntityBuffDef,
-        entity_stats::EntityStatId,
-        entity_type_def::EntityTypeDef,
-        location::Solidity,
-        player_buffs::{PlayerBuffDef, PlayerBuffId},
-        player_stats::PlayerStatId,
-        registry::ContentRegistry,
-        repair::{RepairCost, RepairRate},
-        research::{ResearchDef, ResearcherDef},
-        resource::{DepletionPolicy, HarvestData},
-        skills::{
-            EntityCastCost, EntityCastEffect, EntityCastTarget, PlayerCastEffect, SkillCaster,
-            SkillDef,
-        },
-        stack_rule::StackRule,
-        stats::{EntityModifier, ModifierOp},
-        tags,
-        transport::{BoardingPolicy, PassengerConduct, PassengerFate},
-        work::WorkPresence,
-    },
-    resources::{self, Cost},
-};
 
 //
 // ─── Identity ─────────────────────────────────────────────────────────────────
@@ -631,7 +628,7 @@ fn register_rejects_skill_costing_unregistered_resource() {
         SkillDef {
             cooldown: 10,
             caster: SkillCaster::Entity {
-                costs: vec![EntityCastCost::Resources(resources::cost([("wood", 5)]))],
+                costs: vec![EntityCastCost::Resources(costs::cost([("wood", 5)]))],
                 target: EntityCastTarget::Caster,
                 effect: EntityCastEffect::Damage(FixedU64::from_num(5)),
             },
@@ -651,7 +648,7 @@ fn register_accepts_resource_costed_skill_without_pools() {
         SkillDef {
             cooldown: 10,
             caster: SkillCaster::Entity {
-                costs: vec![EntityCastCost::Resources(resources::cost([("gold", 25)]))],
+                costs: vec![EntityCastCost::Resources(costs::cost([("gold", 25)]))],
                 target: EntityCastTarget::Caster,
                 effect: EntityCastEffect::Damage(FixedU64::from_num(5)),
             },
@@ -1063,7 +1060,7 @@ fn register_rejects_player_cast_skill_costing_unregistered_resource() {
         SkillDef {
             cooldown: 10,
             caster: SkillCaster::Player {
-                cost: resources::cost([("gold", 25)]),
+                cost: costs::cost([("gold", 25)]),
                 effect: PlayerCastEffect::ApplyBuff(haste),
             },
             requires: Vec::new(),
@@ -1232,7 +1229,7 @@ fn register_research_assigns_ids_and_resolves_names() {
     let smithing = registry.register_research(
         "smithing",
         ResearchDef::new(
-            resources::cost([("gold", 30)]),
+            costs::cost([("gold", 30)]),
             10,
             Some(buff),
             Vec::<String>::new(),
@@ -1267,12 +1264,7 @@ fn register_research_rejects_empty_name() {
 fn register_research_rejects_unknown_cost_kind() {
     ground_registry().register_research(
         "smithing",
-        ResearchDef::new(
-            resources::cost([("gold", 30)]),
-            10,
-            None,
-            Vec::<String>::new(),
-        ),
+        ResearchDef::new(costs::cost([("gold", 30)]), 10, None, Vec::<String>::new()),
     );
 }
 

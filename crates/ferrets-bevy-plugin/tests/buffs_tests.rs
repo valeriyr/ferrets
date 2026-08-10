@@ -1,9 +1,7 @@
 //! Buff pipeline: a buff modifies effective stats for its duration, then reverts.
 
-use ferrets_simulation::{
-    content::{entity_stats::EntityStatId, stats::ModifierOp},
-    game_loop, spawn,
-};
+use ferrets_content::{entity_stats::EntityStatId, stats::ModifierOp};
+use ferrets_simulation::{game_loop, spawn};
 
 mod utils;
 

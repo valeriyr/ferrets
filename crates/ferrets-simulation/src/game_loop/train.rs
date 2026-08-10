@@ -12,13 +12,13 @@ use crate::{
         owner::OwnerComponent,
         train::{TrainComponent, TrainQueueComponent},
     },
-    content::registry::ContentRegistry,
     entity_def,
     map::Map,
     order::Order,
     resources::PlayerResources,
     spawn,
 };
+use ferrets_content::registry::ContentRegistry;
 
 /// Called once when a Train order becomes the front `New` entry.
 ///

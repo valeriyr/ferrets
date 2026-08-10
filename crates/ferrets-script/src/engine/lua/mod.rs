@@ -16,7 +16,7 @@ use std::{cell::RefCell, rc::Rc};
 
 use mlua::{Lua, Table, Value, Variadic};
 
-use ferrets_simulation::content::registry::ContentRegistry;
+use ferrets_content::registry::ContentRegistry;
 
 use crate::{
     ai::view::content::ContentView,

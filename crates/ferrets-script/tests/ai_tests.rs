@@ -2,6 +2,18 @@
 //! snapshots, and return command tables that round-trip to player commands;
 //! malformed scripts and results surface as errors rather than panics.
 
+use ferrets_content::{
+    costs,
+    entity_stats::EntityStatId,
+    entity_type_def::EntityTypeDef,
+    location::Solidity,
+    player_buffs::PlayerBuffDef,
+    registry::ContentRegistry,
+    research::{ResearchDef, ResearchId},
+    skills::{EntityCastEffect, EntityCastTarget, PlayerCastEffect, SkillCaster, SkillDef},
+    stack_rule::StackRule,
+    stats::{EntityModifier, ModifierOp},
+};
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::{FixedI64, FixedU64, fixed_urect::FixedURect, fixed_uvec2::FixedUVec2};
 use ferrets_pathfinder::nav_grid::LayerId;
@@ -19,19 +31,7 @@ use ferrets_script::{
 use ferrets_simulation::{
     command::{PlayerCommand, SelectMode, SkillCasterRef},
     components::{rally::RallyTarget, stance::Stance},
-    content::{
-        entity_stats::EntityStatId,
-        entity_type_def::EntityTypeDef,
-        location::Solidity,
-        player_buffs::PlayerBuffDef,
-        registry::ContentRegistry,
-        research::{ResearchDef, ResearchId},
-        skills::{EntityCastEffect, EntityCastTarget, PlayerCastEffect, SkillCaster, SkillDef},
-        stack_rule::StackRule,
-        stats::{EntityModifier, ModifierOp},
-    },
     order::AttackTarget,
-    resources,
     simulation_id::SimulationId,
 };
 
@@ -779,11 +779,11 @@ fn research_content() -> (ContentView, ResearchId) {
     registry.register_resource("gold");
     let smithing = registry.register_research(
         "smithing",
-        ResearchDef::new(resources::cost([("gold", 30)]), 200, None, ["lab"]),
+        ResearchDef::new(costs::cost([("gold", 30)]), 200, None, ["lab"]),
     );
     registry.register_research(
         "tactics",
-        ResearchDef::new(resources::Cost::new(), 100, None, Vec::<String>::new()),
+        ResearchDef::new(costs::Cost::new(), 100, None, Vec::<String>::new()),
     );
     let battle_focus = registry.register_skill(
         "battle_focus",
@@ -827,7 +827,7 @@ fn research_content() -> (ContentView, ResearchId) {
         SkillDef {
             cooldown: 10,
             caster: SkillCaster::Player {
-                cost: resources::Cost::new(),
+                cost: costs::Cost::new(),
                 effect: PlayerCastEffect::ApplyBuff(drums),
             },
             requires: Vec::new(),

@@ -6,12 +6,14 @@ mod utils;
 
 use bevy::prelude::*;
 use ferrets_bevy_plugin::ai::game_view;
+use ferrets_content::{
+    entity_type_def::EntityTypeDef, location::Solidity, registry::ContentRegistry,
+};
 use ferrets_geometry::cell_size::CellSize;
 use ferrets_math::FixedU64;
 use ferrets_script::ai::AiVision;
 use ferrets_simulation::{
     command::PlayerCommand,
-    content::{entity_type_def::EntityTypeDef, location::Solidity, registry::ContentRegistry},
     session::{
         GameSession,
         player_slot::{PlayerId, PlayerSlot},

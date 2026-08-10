@@ -1,10 +1,11 @@
 //! Bevy wiring for building a described map into a world.
 
 use bevy::prelude::*;
+use ferrets_content::registry::ContentRegistry;
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_simulation::{
-    components::resource::ResourceSourceComponent, content::registry::ContentRegistry, map::Map,
-    map_data::MapData, session::GameSession, spawn, visibility::VisibilityGrid,
+    components::resource::ResourceSourceComponent, map::Map, map_data::MapData,
+    session::GameSession, spawn, visibility::VisibilityGrid,
 };
 
 /// Builds the described map in the world: installs the live grid and spawns

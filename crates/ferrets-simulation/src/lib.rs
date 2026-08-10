@@ -4,7 +4,6 @@ pub mod buffs_store;
 pub mod checksum;
 pub mod command;
 pub mod components;
-pub mod content;
 pub mod control_groups;
 pub mod entity_def;
 pub mod entity_index;
@@ -27,6 +26,7 @@ pub mod session;
 pub mod simulation_id;
 pub mod skirmish;
 pub mod spawn;
+mod stat_store;
 pub mod supply;
 pub mod visibility;
 

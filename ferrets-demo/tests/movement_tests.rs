@@ -6,6 +6,7 @@ mod utils;
 
 use bevy::prelude::*;
 use ferrets_bevy_plugin::{SimulationPlugin, instantiate_scenario};
+use ferrets_content::registry::ContentRegistry;
 use ferrets_demo::{content::CONTENT, scenario};
 use ferrets_geometry::{cell_size::CellSize, projection::Projection};
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
@@ -15,7 +16,6 @@ use ferrets_simulation::{
         location::LocationComponent, order_queue::OrderQueueComponent,
         resource::ResourceSourceComponent,
     },
-    content::registry::ContentRegistry,
     map::Map,
     movement_model::MovementModel,
     order::Order,

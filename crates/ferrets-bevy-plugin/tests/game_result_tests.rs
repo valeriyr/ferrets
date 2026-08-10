@@ -6,9 +6,11 @@
 mod utils;
 
 use bevy::prelude::{App, Entity};
+use ferrets_content::{
+    entity_type_def::EntityTypeDef, location::Solidity, registry::ContentRegistry,
+};
 use ferrets_geometry::cell_size::CellSize;
 use ferrets_simulation::{
-    content::{entity_type_def::EntityTypeDef, location::Solidity, registry::ContentRegistry},
     session::{
         GameResult, GameSession, Winner,
         finish_policy::FinishPolicy,

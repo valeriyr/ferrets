@@ -92,8 +92,8 @@ pub use systems::flush_input;
 use std::sync::Mutex;
 
 use bevy::prelude::*;
+use ferrets_content::registry::ContentRegistry;
 use ferrets_simulation::{
-    content::registry::ContentRegistry,
     control_groups::ControlGroups,
     entity_index::EntityIndex,
     game_loop::movement::MovePlanShare,

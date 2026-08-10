@@ -6,7 +6,7 @@
 
 use ferrets_math::FixedU64;
 
-use crate::content::stats::{self, BuiltinStat};
+use crate::stats::{self, BuiltinStat};
 
 /// A handle to a registered player stat, assigned in registration order.
 ///
@@ -54,7 +54,7 @@ const _: () = {
 /// The smallest effective value the player stat at registration `index` may
 /// fold to. Content-declared player stats carry no engine meaning, so they have
 /// no floor beyond the non-negative clamp.
-pub(crate) fn floor_of(index: usize) -> FixedU64 {
+pub fn floor_of(index: usize) -> FixedU64 {
     match PLAYER_BUILTIN_STATS.get(index) {
         Some(builtin) => builtin.floor,
         None => FixedU64::ZERO,

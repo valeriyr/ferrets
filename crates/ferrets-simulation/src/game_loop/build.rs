@@ -25,7 +25,6 @@ use crate::{
         order_queue::{CancelPolicy, OrderState},
         owner::OwnerComponent,
     },
-    content::{entity_stats::EntityStatId, registry::ContentRegistry, work::WorkPresence},
     entity_def,
     entity_index::EntityIndex,
     map::Map,
@@ -36,6 +35,7 @@ use crate::{
     simulation_id::SimulationId,
     spawn, supply,
 };
+use ferrets_content::{entity_stats::EntityStatId, registry::ContentRegistry, work::WorkPresence};
 
 /// Called once when a Build order becomes the front `New` entry.
 ///

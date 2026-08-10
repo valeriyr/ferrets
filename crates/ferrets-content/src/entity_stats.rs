@@ -6,7 +6,7 @@
 
 use ferrets_math::FixedU64;
 
-use crate::content::stats::{self, BuiltinStat};
+use crate::stats::{self, BuiltinStat};
 
 /// A handle to a registered entity stat, assigned in registration order.
 ///
@@ -171,7 +171,7 @@ const _: () = {
 /// The smallest effective value the entity stat at registration `index` may
 /// fold to. Content-declared entity stats carry no engine meaning, so they have
 /// no floor beyond the non-negative clamp.
-pub(crate) fn floor_of(index: usize) -> FixedU64 {
+pub fn floor_of(index: usize) -> FixedU64 {
     match ENTITY_BUILTIN_STATS.get(index) {
         Some(builtin) => builtin.floor,
         None => FixedU64::ZERO,

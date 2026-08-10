@@ -5,9 +5,9 @@
 
 use bevy::prelude::*;
 use ferrets_bevy_plugin::instantiate_map;
+use ferrets_content::player_stats::PlayerStatId;
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_simulation::{
-    content::player_stats::PlayerStatId,
     map::Map,
     player_stats::PlayerStats,
     resources::PlayerResources,

@@ -7,11 +7,8 @@
 use bevy_ecs::{entity::Entity, world::World};
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 
-use crate::{
-    components::entity_stats::StatsComponent,
-    content::{entity_stats::EntityStatId, work::WorkPresence},
-    spawn,
-};
+use crate::{components::entity_stats::StatsComponent, spawn};
+use ferrets_content::{entity_stats::EntityStatId, work::WorkPresence};
 
 /// Takes a worker off the map for a job its presence says it disappears into,
 /// which frees any of the job's cells it was standing on.

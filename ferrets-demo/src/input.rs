@@ -4,6 +4,7 @@
 
 use bevy::{prelude::*, window::PrimaryWindow};
 use ferrets_bevy_plugin::{NetworkActive, PauseIntent, PendingInput};
+use ferrets_content::{registry::ContentRegistry, skills::SkillId};
 use ferrets_geometry::cell_pos::CellPos;
 use ferrets_math::{FixedU64, fixed_urect::FixedURect, fixed_uvec2::FixedUVec2};
 use ferrets_simulation::{
@@ -16,7 +17,6 @@ use ferrets_simulation::{
         rally::{RallyPointComponent, RallyTarget},
         stance::{Stance, StanceComponent},
     },
-    content::{registry::ContentRegistry, skills::SkillId},
     control_groups::ControlGroups,
     map::Map,
     order::AttackTarget,

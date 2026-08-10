@@ -10,13 +10,13 @@
 
 use bevy::prelude::*;
 use ferrets_bevy_plugin::{install_game_resources, install_scenario_runtime, instantiate_scenario};
+use ferrets_content::registry::ContentRegistry;
 use ferrets_geometry::projection::Projection;
 use ferrets_script::{
     ai::view::content::ContentView,
     engine::{ScriptEngine, lua::LuaEngine},
 };
 use ferrets_simulation::{
-    content::registry::ContentRegistry,
     map_data::{MapData, Placement},
     movement_model::MovementModel,
     resources::StartingStock,

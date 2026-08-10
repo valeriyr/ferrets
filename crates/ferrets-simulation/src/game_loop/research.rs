@@ -9,13 +9,13 @@ use crate::{
         owner::OwnerComponent,
         research::ResearchComponent,
     },
-    content::registry::ContentRegistry,
     entity_def,
     game_loop::stats,
     order::Order,
     player_research::PlayerResearch,
     resources::PlayerResources,
 };
+use ferrets_content::registry::ContentRegistry;
 
 /// Called once when a Research order becomes the front `New` entry.
 ///

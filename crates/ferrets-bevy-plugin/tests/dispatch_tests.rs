@@ -3,20 +3,20 @@
 mod utils;
 
 use bevy::prelude::*;
+use ferrets_content::{
+    entity_stats::EntityStatId,
+    entity_type_def::EntityTypeDef,
+    location::Solidity,
+    registry::ContentRegistry,
+    repair::{RepairCost, RepairRate},
+    resource::HarvestData,
+    work::WorkPresence,
+};
 use ferrets_geometry::cell_size::CellSize;
 use ferrets_math::FixedU64;
 use ferrets_simulation::{
     command::PlayerCommand,
     components::resource::{ResourceCarrierComponent, ResourceSourceComponent},
-    content::{
-        entity_stats::EntityStatId,
-        entity_type_def::EntityTypeDef,
-        location::Solidity,
-        registry::ContentRegistry,
-        repair::{RepairCost, RepairRate},
-        resource::HarvestData,
-        work::WorkPresence,
-    },
     resources::PlayerResources,
     session::{GameSession, player_slot::PlayerSlot, player_type::PlayerType},
     spawn,

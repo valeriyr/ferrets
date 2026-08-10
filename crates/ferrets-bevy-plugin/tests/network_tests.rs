@@ -8,6 +8,9 @@ use ferrets_bevy_plugin::{
     DropConfig, NetworkPlugin, NetworkSession, ReplayPlugin, SimulationPlugin,
     install_network_session,
 };
+use ferrets_content::{
+    entity_type_def::EntityTypeDef, location::Solidity, registry::ContentRegistry,
+};
 use ferrets_geometry::{cell_size::CellSize, projection::Projection};
 use ferrets_math::FixedU64;
 use ferrets_network::{
@@ -27,7 +30,6 @@ use ferrets_replay::{
 use ferrets_simulation::{
     checksum::state_checksum,
     command::PlayerCommand,
-    content::{entity_type_def::EntityTypeDef, location::Solidity, registry::ContentRegistry},
     input::{InputFrames, PlayerFrame},
     map::Map,
     movement_model::MovementModel,

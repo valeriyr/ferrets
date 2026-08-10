@@ -9,7 +9,8 @@ use std::collections::BTreeMap;
 
 use bevy_ecs::prelude::*;
 
-use crate::{content::skills::SkillId, session::player_slot::PlayerId};
+use crate::session::player_slot::PlayerId;
+use ferrets_content::skills::SkillId;
 
 /// Skill cooldowns for all players in the session, indexed by [`PlayerId`].
 #[derive(Resource, Debug, Default)]

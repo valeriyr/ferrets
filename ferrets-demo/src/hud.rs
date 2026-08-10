@@ -2,6 +2,12 @@
 
 use bevy::prelude::*;
 use ferrets_bevy_plugin::{PendingInput, ReplayPlayback, ScenarioObjectives};
+use ferrets_content::{
+    entity_stats::EntityStatId,
+    registry::ContentRegistry,
+    research::ResearchId,
+    skills::{EntityCastTarget, SkillCaster, SkillId},
+};
 use ferrets_simulation::{
     command::{PlayerCommand, SelectMode, SkillCasterRef},
     components::{
@@ -15,12 +21,6 @@ use ferrets_simulation::{
         owner::OwnerComponent,
         resource::{ResourceCarrierComponent, ResourceSourceComponent},
         stance::StanceComponent,
-    },
-    content::{
-        entity_stats::EntityStatId,
-        registry::ContentRegistry,
-        research::ResearchId,
-        skills::{EntityCastTarget, SkillCaster, SkillId},
     },
     control_groups::{CONTROL_GROUP_COUNT, ControlGroups},
     order::Order,

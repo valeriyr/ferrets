@@ -1,18 +1,16 @@
 [package]
-name = "ferrets-script"
+name = "ferrets-content"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Lua scripting runtime and game content loading."
+description = "Content vocabulary and registry for the game engine."
 
 [dependencies]
-mlua = { version = "0.12", features = ["vendored", "lua54"] }
-thiserror.workspace = true
+bevy_ecs.workspace = true
+serde.workspace = true
 
-ferrets-content.workspace = true
 ferrets-geometry.workspace = true
 ferrets-math.workspace = true
 ferrets-pathfinder.workspace = true
-ferrets-simulation.workspace = true

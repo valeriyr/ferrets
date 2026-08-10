@@ -11,12 +11,12 @@ use crate::{
         order_queue::OrderQueueComponent,
         stance::{Stance, StanceComponent},
     },
-    content::entity_stats::EntityStatId,
     entity_def,
     entity_index::EntityIndex,
     order::{AttackTarget, Leash, Order},
     session::GameSession,
 };
+use ferrets_content::entity_stats::EntityStatId;
 
 /// Engages idle entities per their stance, once per due tick (see
 /// [`acquire::due`]).

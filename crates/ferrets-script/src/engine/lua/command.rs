@@ -6,12 +6,12 @@
 
 use std::collections::BTreeMap;
 
+use ferrets_content::{research::ResearchId, skills::SkillId};
 use ferrets_geometry::cell_pos::CellPos;
 use ferrets_math::{FixedU64, fixed_urect::FixedURect, fixed_uvec2::FixedUVec2};
 use ferrets_simulation::{
     command::{PlayerCommand, SelectMode, SkillCasterRef},
     components::{rally::RallyTarget, stance::Stance},
-    content::{research::ResearchId, skills::SkillId},
     order::AttackTarget,
     simulation_id::SimulationId,
 };

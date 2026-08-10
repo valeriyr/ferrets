@@ -8,10 +8,11 @@ repository.workspace = true
 description = "Deterministic RTS game simulation."
 
 [dependencies]
-bevy_ecs = "0.18"
+bevy_ecs.workspace = true
 serde.workspace = true
 xxhash-rust = { version = "0.8", features = ["xxh64"] }
 
+ferrets-content.workspace = true
 ferrets-geometry.workspace = true
 ferrets-math.workspace = true
 ferrets-pathfinder.workspace = true

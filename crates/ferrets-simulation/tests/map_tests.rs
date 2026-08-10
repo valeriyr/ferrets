@@ -2,6 +2,12 @@
 //! registers the content's layer vocabulary, and per-cell terrain seeds which
 //! layers each cell blocks.
 
+use ferrets_content::{
+    entity_stats::EntityStatId,
+    entity_type_def::EntityTypeDef,
+    location::{LocationDef, Solidity},
+    registry::ContentRegistry,
+};
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize, projection::Projection};
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2, fixed_vec2::FixedVec2};
 use ferrets_pathfinder::{
@@ -10,12 +16,6 @@ use ferrets_pathfinder::{
 };
 use ferrets_simulation::{
     components::location::LocationComponent,
-    content::{
-        entity_stats::EntityStatId,
-        entity_type_def::EntityTypeDef,
-        location::{LocationDef, Solidity},
-        registry::ContentRegistry,
-    },
     map::{Map, OccupancyClass},
     map_data::MapData,
     movement_model::MovementModel,

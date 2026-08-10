@@ -2,6 +2,23 @@
 
 use bevy::{ecs::entity::EntityNotSpawnedError, prelude::*};
 use ferrets_bevy_plugin::{PendingInput, SimulationPlugin};
+use ferrets_content::{
+    costs,
+    entity_buffs::{EntityBuffDef, EntityBuffId},
+    entity_stats::EntityStatId,
+    entity_type_def::EntityTypeDef,
+    location::Solidity,
+    player_buffs::PlayerBuffDef,
+    registry::ContentRegistry,
+    research::{ResearchDef, ResearchId},
+    resource::{DepletionPolicy, HarvestData},
+    skills::{PlayerCastEffect, SkillCaster, SkillDef},
+    splash::SplashShape,
+    stack_rule::StackRule,
+    stats::{EntityModifier, ModifierOp},
+    transport::{BoardingPolicy, PassengerConduct, PassengerFate},
+    work::WorkPresence,
+};
 use ferrets_geometry::{
     cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize, projection::Projection,
 };
@@ -24,28 +41,12 @@ use ferrets_simulation::{
         train::TrainQueueComponent,
         transport::TransporterComponent,
     },
-    content::{
-        entity_buffs::{EntityBuffDef, EntityBuffId},
-        entity_stats::EntityStatId,
-        entity_type_def::EntityTypeDef,
-        location::Solidity,
-        player_buffs::PlayerBuffDef,
-        registry::ContentRegistry,
-        research::{ResearchDef, ResearchId},
-        resource::{DepletionPolicy, HarvestData},
-        skills::{PlayerCastEffect, SkillCaster, SkillDef},
-        splash::SplashShape,
-        stack_rule::StackRule,
-        stats::{EntityModifier, ModifierOp},
-        transport::{BoardingPolicy, PassengerConduct, PassengerFate},
-        work::WorkPresence,
-    },
     entity_def,
     input::{InputFrames, PlayerFrame},
     map::Map,
     movement_model::MovementModel,
     order::AttackTarget,
-    resources::{self, PlayerResources},
+    resources::PlayerResources,
     selection::Selection,
     session::{
         GameSession,
@@ -592,7 +593,7 @@ pub fn player_effects_app() -> App {
             SkillDef {
                 cooldown: 20,
                 caster: SkillCaster::Player {
-                    cost: resources::cost([("gold", 10)]),
+                    cost: costs::cost([("gold", 10)]),
                     effect: PlayerCastEffect::ApplyBuff(drums_haste),
                 },
                 requires: Vec::new(),
@@ -631,7 +632,7 @@ pub fn research_app() -> App {
         let smithing = registry.register_research(
             "smithing",
             ResearchDef::new(
-                resources::cost([("gold", 30)]),
+                costs::cost([("gold", 30)]),
                 10,
                 Some(sharp_blades),
                 Vec::<String>::new(),
@@ -639,7 +640,7 @@ pub fn research_app() -> App {
         );
         let tactics = registry.register_research(
             "tactics",
-            ResearchDef::new(resources::cost([("gold", 20)]), 10, None, ["smithing"]),
+            ResearchDef::new(costs::cost([("gold", 20)]), 10, None, ["smithing"]),
         );
         let soldier = |name: &str| {
             EntityTypeDef::new(name)

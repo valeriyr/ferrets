@@ -6,6 +6,15 @@ use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use std::collections::BTreeSet;
 
 use bevy::prelude::*;
+use ferrets_content::{
+    costs,
+    entity_stats::EntityStatId,
+    entity_type_def::EntityTypeDef,
+    location::Solidity,
+    registry::ContentRegistry,
+    repair::{RepairCost, RepairRate},
+    work::WorkPresence,
+};
 use ferrets_math::{FixedI64, FixedU64};
 use ferrets_simulation::{
     command::PlayerCommand,
@@ -13,15 +22,6 @@ use ferrets_simulation::{
         build::UnderConstructionComponent, energy::EnergyComponent, entity_stats::StatsComponent,
         hidden::HiddenComponent, location::LocationComponent, repair::UnderRepairComponent,
     },
-    content::{
-        entity_stats::EntityStatId,
-        entity_type_def::EntityTypeDef,
-        location::Solidity,
-        registry::ContentRegistry,
-        repair::{RepairCost, RepairRate},
-        work::WorkPresence,
-    },
-    resources,
     session::{GameSession, player_slot::PlayerSlot, player_type::PlayerType},
     simulation_id::SimulationId,
     spawn,
@@ -850,7 +850,7 @@ fn app() -> App {
             "hauler",
             WorkPresence::PresentStacking,
             Some(5),
-            RepairCost::PerTick(resources::cost([("gold", 1)])),
+            RepairCost::PerTick(costs::cost([("gold", 1)])),
         ));
     }
     app.world_mut().resource::<ContentRegistry>().validate();

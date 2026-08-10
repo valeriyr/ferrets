@@ -12,13 +12,13 @@ use ferrets_bevy_plugin::{
 };
 use ferrets_geometry::{cell_pos::CellPos, projection::Projection};
 
+use ferrets_content::registry::ContentRegistry;
 use ferrets_script::{
     ai::view::content::ContentView,
     engine::{ScriptEngine, lua::LuaEngine},
 };
 use ferrets_simulation::{
     components::{entity_info::EntityInfoComponent, resource::ResourceSourceComponent},
-    content::registry::ContentRegistry,
     map::Map,
     map_data::{MapData, Placement},
     resources::{PlayerResources, StartingStock},

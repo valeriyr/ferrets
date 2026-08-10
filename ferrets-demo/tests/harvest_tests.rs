@@ -5,6 +5,7 @@ mod utils;
 
 use bevy::prelude::*;
 use ferrets_bevy_plugin::SimulationPlugin;
+use ferrets_content::registry::ContentRegistry;
 use ferrets_demo::{content::CONTENT, map, setup};
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_script::{content, engine::lua::LuaEngine};
@@ -13,7 +14,6 @@ use ferrets_simulation::{
         entity_info::EntityInfoComponent, location::LocationComponent,
         order_queue::OrderQueueComponent,
     },
-    content::registry::ContentRegistry,
     order::Order,
     resources::PlayerResources,
     session::{

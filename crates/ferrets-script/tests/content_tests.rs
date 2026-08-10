@@ -3,6 +3,22 @@
 //! surface as errors rather than panics. The contract holds for any engine;
 //! [`engine`] picks the binding the suite runs against.
 
+use ferrets_content::{
+    costs,
+    entity_stats::EntityStatId,
+    entity_type_def::EntityTypeDef,
+    location::Solidity,
+    player_stats::PlayerStatId,
+    repair::{RepairCost, RepairRate},
+    research::ResearchDef,
+    skills::{
+        EntityCastCost, EntityCastEffect, EntityCastTarget, PlayerCastEffect, SkillCaster, SkillDef,
+    },
+    splash::SplashShape,
+    stats::{EntityModifier, ModifierOp, PlayerModifier},
+    transport::{BoardingPolicy, PassengerConduct, PassengerFate},
+    work::WorkPresence,
+};
 use ferrets_geometry::cell_size::CellSize;
 use ferrets_math::{FixedI64, FixedU64};
 use ferrets_pathfinder::nav_grid::LayerId;
@@ -10,25 +26,6 @@ use ferrets_script::{
     content,
     engine::{ScriptEngine, lua::LuaEngine},
     error::ScriptError,
-};
-use ferrets_simulation::{
-    content::{
-        entity_stats::EntityStatId,
-        entity_type_def::EntityTypeDef,
-        location::Solidity,
-        player_stats::PlayerStatId,
-        repair::{RepairCost, RepairRate},
-        research::ResearchDef,
-        skills::{
-            EntityCastCost, EntityCastEffect, EntityCastTarget, PlayerCastEffect, SkillCaster,
-            SkillDef,
-        },
-        splash::SplashShape,
-        stats::{EntityModifier, ModifierOp, PlayerModifier},
-        transport::{BoardingPolicy, PassengerConduct, PassengerFate},
-        work::WorkPresence,
-    },
-    resources,
 };
 
 //
@@ -394,7 +391,7 @@ fn parses_flat_per_tick_repair_cost() {
 
     assert_eq!(
         repairer.cost(),
-        &RepairCost::PerTick(resources::cost([("gold", 2u32)]))
+        &RepairCost::PerTick(costs::cost([("gold", 2u32)]))
     );
     assert!(repairer.self_repair());
     assert_eq!(
@@ -582,7 +579,7 @@ fn parses_player_cast_skill() {
         Some(&SkillDef {
             cooldown: 30,
             caster: SkillCaster::Player {
-                cost: resources::cost([("gold", 25)]),
+                cost: costs::cost([("gold", 25)]),
                 effect: PlayerCastEffect::ApplyBuff(haste),
             },
             requires: Vec::new(),
@@ -970,7 +967,7 @@ fn parses_research_with_buff_and_requirements() {
 
     let smithing = registry.research("smithing").expect("smithing registered");
     let expected = ResearchDef::new(
-        resources::cost([("gold", 30)]),
+        costs::cost([("gold", 30)]),
         200,
         registry.player_buff("sharp_blades"),
         ["lab"],
@@ -979,7 +976,7 @@ fn parses_research_with_buff_and_requirements() {
 
     // An omitted cost is free, an omitted buff a pure unlock.
     let tactics = registry.research("tactics").expect("tactics registered");
-    let expected = ResearchDef::new(resources::Cost::new(), 100, None, Vec::<String>::new());
+    let expected = ResearchDef::new(costs::Cost::new(), 100, None, Vec::<String>::new());
     assert_eq!(registry.research_def(tactics), Some(&expected));
 
     let lab = registry.entity("lab").expect("lab registered");

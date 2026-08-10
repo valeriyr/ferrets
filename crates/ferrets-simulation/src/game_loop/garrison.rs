@@ -11,12 +11,12 @@ use bevy_ecs::{entity::Entity, world::World};
 use super::{acquire, attack};
 use crate::{
     components::transport::{GarrisonFireComponent, TransporterComponent},
-    content::transport::PassengerConduct,
     entity_def,
     entity_index::EntityIndex,
     session::GameSession,
     simulation_id::SimulationId,
 };
+use ferrets_content::transport::PassengerConduct;
 
 /// Advances every garrisoned attacker's fight by one tick.
 ///

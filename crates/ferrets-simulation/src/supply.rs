@@ -14,13 +14,13 @@ use crate::{
         build::UnderConstructionComponent, entity_stats::StatsComponent, owner::OwnerComponent,
         train::TrainQueueComponent,
     },
-    content::{
-        entity_stats::EntityStatId, entity_type_def::EntityTypeDef, player_stats::PlayerStatId,
-        registry::ContentRegistry,
-    },
     entity_index::EntityIndex,
     player_stats::PlayerStats,
     session::player_slot::PlayerId,
+};
+use ferrets_content::{
+    entity_stats::EntityStatId, entity_type_def::EntityTypeDef, player_stats::PlayerStatId,
+    registry::ContentRegistry,
 };
 
 /// The supply available to `player`: everything its standing entities provide,

@@ -1,7 +1,7 @@
 //! The static content catalogue a script can consult, snapshotted once per
 //! session.
 
-use ferrets_simulation::content::{
+use ferrets_content::{
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     registry::ContentRegistry,

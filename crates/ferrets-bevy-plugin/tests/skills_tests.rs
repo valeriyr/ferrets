@@ -1,24 +1,22 @@
 //! Entity skills: using a skill applies its effect and pays its costs.
 
 use bevy::prelude::*;
+use ferrets_content::{
+    costs::{self, Cost},
+    entity_stats::EntityStatId,
+    entity_type_def::EntityTypeDef,
+    location::Solidity,
+    registry::ContentRegistry,
+    research::ResearchDef,
+    skills::{EntityCastCost, EntityCastEffect, EntityCastTarget, SkillCaster, SkillDef, SkillId},
+    stats::ModifierOp,
+};
 use ferrets_geometry::cell_size::CellSize;
 use ferrets_math::FixedU64;
 use ferrets_simulation::{
     command::{PlayerCommand, SkillCasterRef},
     components::energy::EnergyComponent,
-    content::{
-        entity_stats::EntityStatId,
-        entity_type_def::EntityTypeDef,
-        location::Solidity,
-        registry::ContentRegistry,
-        research::ResearchDef,
-        skills::{
-            EntityCastCost, EntityCastEffect, EntityCastTarget, SkillCaster, SkillDef, SkillId,
-        },
-        stats::ModifierOp,
-    },
     player_research::PlayerResearch,
-    resources::{self, Cost},
     session::{GameSession, player_slot::PlayerSlot, player_type::PlayerType},
     spawn,
 };
@@ -287,9 +285,7 @@ fn app() -> App {
         );
         let rally = registry.register_skill(
             "rally",
-            costed(vec![EntityCastCost::Resources(resources::cost([(
-                "gold", 25,
-            )]))]),
+            costed(vec![EntityCastCost::Resources(costs::cost([("gold", 25)]))]),
         );
         let sacrifice = registry.register_skill(
             "sacrifice",

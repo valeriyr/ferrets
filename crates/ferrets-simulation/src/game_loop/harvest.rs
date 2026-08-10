@@ -21,11 +21,6 @@ use crate::{
             ResourceSourceComponent, UnderHarvestComponent,
         },
     },
-    content::{
-        entity_stats::EntityStatId,
-        resource::{DepletionPolicy, ResourceCarrierDef},
-        work::WorkPresence,
-    },
     entity_def,
     entity_index::EntityIndex,
     map::Map,
@@ -34,6 +29,11 @@ use crate::{
     session::player_slot::PlayerId,
     simulation_id::SimulationId,
     spawn,
+};
+use ferrets_content::{
+    entity_stats::EntityStatId,
+    resource::{DepletionPolicy, ResourceCarrierDef},
+    work::WorkPresence,
 };
 
 /// How close the carrier must be to a storage to hand its load over, in grid cells.

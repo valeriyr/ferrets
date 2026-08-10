@@ -4,8 +4,8 @@
 //! Times are in ticks (20 Hz), tuned short so mechanics are quick to test.
 
 use bevy::prelude::*;
+use ferrets_content::registry::ContentRegistry;
 use ferrets_script::{content, engine::lua::LuaEngine};
-use ferrets_simulation::content::registry::ContentRegistry;
 
 /// The demo's content, as a Lua script. It declares the ground and water
 /// navigation layers (named by [`crate::map::GROUND`] and

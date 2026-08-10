@@ -3,6 +3,7 @@
 
 use bevy::prelude::*;
 use ferrets_bevy_plugin::{SimulationPlugin, ai::AiPlugin};
+use ferrets_content::registry::ContentRegistry;
 use ferrets_demo::{
     ai::{human_ai, install_demo_ai, orc_ai},
     content::CONTENT,
@@ -18,7 +19,6 @@ use ferrets_simulation::{
     components::{
         entity_info::EntityInfoComponent, location::LocationComponent, owner::OwnerComponent,
     },
-    content::registry::ContentRegistry,
     map::Map,
     movement_model::MovementModel,
     player_research::PlayerResearch,

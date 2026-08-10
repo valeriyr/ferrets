@@ -4,7 +4,8 @@ use ferrets_geometry::cell_size::CellSize;
 use ferrets_math::fixed_uvec2::FixedUVec2;
 use serde::{Deserialize, Serialize};
 
-use crate::{content::research::ResearchId, simulation_id::SimulationId};
+use crate::simulation_id::SimulationId;
+use ferrets_content::research::ResearchId;
 
 /// What an attack is aimed at.
 ///

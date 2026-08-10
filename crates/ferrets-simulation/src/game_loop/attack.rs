@@ -18,12 +18,12 @@ use crate::{
         location::LocationComponent,
         order_queue::{CancelPolicy, OrderState},
     },
-    content::entity_stats::EntityStatId,
     entity_def,
     entity_index::EntityIndex,
     map::Map,
     order::{AttackTarget, Order},
 };
+use ferrets_content::entity_stats::EntityStatId;
 
 /// One weapon's readings for a tick of fighting.
 pub(super) struct Weapon {

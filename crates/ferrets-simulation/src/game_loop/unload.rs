@@ -17,7 +17,6 @@ use crate::{
             BoardedComponent, GarrisonFireComponent, TransporterComponent, UnloadComponent,
         },
     },
-    content::entity_stats::EntityStatId,
     entity_def,
     entity_index::EntityIndex,
     map::Map,
@@ -25,6 +24,7 @@ use crate::{
     simulation_id::SimulationId,
     spawn,
 };
+use ferrets_content::entity_stats::EntityStatId;
 
 /// Called once when an Unload order becomes the front `New` entry.
 ///

@@ -2,7 +2,7 @@
 
 use bevy_ecs::prelude::*;
 
-use crate::content::research::ResearchId;
+use ferrets_content::research::ResearchId;
 
 /// Per-entity in-flight research state.
 #[derive(Component, Debug)]

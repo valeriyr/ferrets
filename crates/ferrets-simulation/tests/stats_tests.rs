@@ -1,15 +1,13 @@
 //! Tests for the stat store's modifier fold.
 
-use ferrets_math::{FixedI64, FixedU64};
-use ferrets_simulation::{
-    components::entity_stats::StatsComponent,
-    content::{
-        entity_stats::EntityStatId,
-        player_stats::PlayerStatId,
-        registry::ContentRegistry,
-        stats::{EntityModifier, ModifierOp},
-    },
+use ferrets_content::{
+    entity_stats::EntityStatId,
+    player_stats::PlayerStatId,
+    registry::ContentRegistry,
+    stats::{EntityModifier, ModifierOp},
 };
+use ferrets_math::{FixedI64, FixedU64};
+use ferrets_simulation::components::entity_stats::StatsComponent;
 
 //
 // ─── Combine ──────────────────────────────────────────────────────────────────

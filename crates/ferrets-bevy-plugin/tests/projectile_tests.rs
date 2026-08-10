@@ -2,18 +2,18 @@
 //! band, and it outlives the unit that fired it.
 
 use bevy::prelude::*;
+use ferrets_content::{
+    entity_type_def::EntityTypeDef,
+    location::Solidity,
+    projectile::{Aim, ProjectileDef},
+    registry::ContentRegistry,
+    splash::SplashShape,
+};
 use ferrets_geometry::cell_size::CellSize;
 use ferrets_math::FixedU64;
 use ferrets_simulation::{
     command::{PlayerCommand, SelectMode},
     components::location::LocationComponent,
-    content::{
-        entity_type_def::EntityTypeDef,
-        location::Solidity,
-        projectile::{Aim, ProjectileDef},
-        registry::ContentRegistry,
-        splash::SplashShape,
-    },
     impacts::PendingImpacts,
     order::AttackTarget,
     session::{GameSession, player_slot::PlayerSlot, player_type::PlayerType},

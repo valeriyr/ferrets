@@ -16,7 +16,6 @@ use crate::{
         tags::TagsComponent,
         transport::{BoardComponent, BoardedComponent, TransporterComponent},
     },
-    content::{entity_stats::EntityStatId, transport::BoardingPolicy},
     entity_def,
     entity_index::EntityIndex,
     order::Order,
@@ -24,6 +23,7 @@ use crate::{
     session::GameSession,
     spawn,
 };
+use ferrets_content::{entity_stats::EntityStatId, transport::BoardingPolicy};
 
 /// Called once when a Board order becomes the front `New` entry.
 ///
@@ -191,10 +191,10 @@ pub(super) fn would_board(world: &World, entity: Entity, target: Entity) -> bool
         return false;
     }
 
-    if !transporter.admits(
-        &entity_def.name,
-        world.entity(entity).get::<TagsComponent>(),
-    ) {
+    let entity_tags = world.entity(entity).get::<TagsComponent>();
+    if !transporter.admits(&entity_def.name, |tag| {
+        entity_tags.is_some_and(|tags| tags.contains(tag))
+    }) {
         return false;
     }
 

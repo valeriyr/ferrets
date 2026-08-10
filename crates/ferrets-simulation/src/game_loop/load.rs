@@ -14,7 +14,6 @@ use crate::{
         order_queue::{CancelPolicy, OrderQueueComponent, OrderState},
         transport::LoadComponent,
     },
-    content::entity_stats::EntityStatId,
     entity_def,
     entity_index::EntityIndex,
     map::Map,
@@ -22,6 +21,7 @@ use crate::{
     order::Order,
     session::GameSession,
 };
+use ferrets_content::entity_stats::EntityStatId;
 
 /// Called once when a Load order becomes the front `New` entry.
 ///

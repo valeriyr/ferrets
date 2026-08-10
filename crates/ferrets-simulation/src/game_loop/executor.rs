@@ -28,17 +28,6 @@ use crate::{
         tags::TagsComponent,
         train::TrainQueueComponent,
     },
-    content::{
-        entity_stats::EntityStatId,
-        projectile::Aim,
-        registry::ContentRegistry,
-        research::ResearchId,
-        skills::{
-            EntityCastCost, EntityCastEffect, EntityCastTarget, PlayerCastEffect, SkillCaster,
-            SkillId,
-        },
-        tags,
-    },
     control_groups::{CONTROL_GROUP_COUNT, ControlGroups},
     entity_def,
     entity_index::EntityIndex,
@@ -48,11 +37,22 @@ use crate::{
     player_research::PlayerResearch,
     player_skills::PlayerSkills,
     requirements,
-    resources::{Cost, PlayerResources},
+    resources::PlayerResources,
     selection::Selection,
     session::{GameSession, player_slot::PlayerId},
     simulation_id::SimulationId,
     spawn, supply,
+};
+use ferrets_content::{
+    costs::Cost,
+    entity_stats::EntityStatId,
+    projectile::Aim,
+    registry::ContentRegistry,
+    research::ResearchId,
+    skills::{
+        EntityCastCost, EntityCastEffect, EntityCastTarget, PlayerCastEffect, SkillCaster, SkillId,
+    },
+    tags,
 };
 
 /// Processes the frame for `current_tick` once every player the tick requires

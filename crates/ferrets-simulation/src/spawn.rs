@@ -25,10 +25,6 @@ use crate::{
         train::TrainQueueComponent,
         transport::{BoardedComponent, GarrisonFireComponent, TransporterComponent},
     },
-    content::{
-        entity_stats::EntityStatId, location::LocationDef, registry::ContentRegistry,
-        transport::PassengerFate,
-    },
     control_groups::ControlGroups,
     entity_def,
     entity_index::EntityIndex,
@@ -39,6 +35,10 @@ use crate::{
     selection::Selection,
     session::player_slot::PlayerId,
     simulation_id::{SimulationId, SimulationIdGenerator},
+};
+use ferrets_content::{
+    entity_stats::EntityStatId, location::LocationDef, registry::ContentRegistry,
+    transport::PassengerFate,
 };
 
 /// Look direction a freshly spawned entity starts with: south, `+y` (sim `y`

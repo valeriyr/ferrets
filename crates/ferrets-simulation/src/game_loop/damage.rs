@@ -12,11 +12,11 @@ use crate::{
         entity_info::EntityInfoComponent, entity_stats::StatsComponent, health::HealthComponent,
         tags::TagsComponent,
     },
-    content::{entity_stats::EntityStatId, entity_type_def::EntityTypeDef},
     session::GameSession,
     simulation_id::SimulationId,
     spawn,
 };
+use ferrets_content::{entity_stats::EntityStatId, entity_type_def::EntityTypeDef};
 
 /// The damage one full-strength hit from `attacker_def` deals to `target`.
 ///
@@ -51,7 +51,10 @@ pub fn resolve_scaled(
     let target_type = target_ref
         .get::<EntityInfoComponent>()
         .map_or("", |info| info.type_name());
-    let bonus = attacker_def.bonus_against(target_type, target_ref.get::<TagsComponent>());
+    let target_tags = target_ref.get::<TagsComponent>();
+    let bonus = attacker_def.bonus_against(target_type, |tag| {
+        target_tags.is_some_and(|tags| tags.contains(tag))
+    });
     let armor = target_ref
         .get::<StatsComponent>()
         .and_then(|stats| stats.effective(EntityStatId::ARMOR))

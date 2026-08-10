@@ -14,5 +14,7 @@ serde.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 
-ferrets-math.workspace = true
 ferrets-simulation.workspace = true
+
+[dev-dependencies]
+ferrets-math.workspace = true

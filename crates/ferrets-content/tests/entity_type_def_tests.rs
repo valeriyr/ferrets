@@ -1,10 +1,7 @@
 //! Content validation: every invalid [`EntityTypeDef`] must panic at
 //! construction, not misbehave at runtime.
 
-use ferrets_geometry::cell_size::CellSize;
-use ferrets_math::FixedU64;
-use ferrets_pathfinder::{layer_mask::LayerMask, nav_grid::LayerId};
-use ferrets_simulation::content::{
+use ferrets_content::{
     dying::DyingDef,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
@@ -12,6 +9,9 @@ use ferrets_simulation::content::{
     resource::{DepletionPolicy, HarvestData},
     work::WorkPresence,
 };
+use ferrets_geometry::cell_size::CellSize;
+use ferrets_math::FixedU64;
+use ferrets_pathfinder::{layer_mask::LayerMask, nav_grid::LayerId};
 
 //
 // ─── Happy path ───────────────────────────────────────────────────────────────
@@ -175,6 +175,37 @@ fn empty_storage_accepts_panics() {
 #[should_panic(expected = "accepted resource kinds must not be empty")]
 fn empty_storage_kind_panics() {
     footman().with_resource_storage(["gold", ""]);
+}
+
+//
+// ─── Bonus damage ─────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn bonus_against_sums_type_and_tag_matches() {
+    let def = footman().with_bonus_damage_vs([("keep", 10u32), ("building", 5u32)]);
+
+    assert_eq!(def.bonus_against("keep", |tag| tag == "building"), 15);
+}
+
+#[test]
+fn bonus_against_without_match_is_zero() {
+    let def = footman().with_bonus_damage_vs([("building", 5u32)]);
+
+    assert_eq!(def.bonus_against("footman", |_| false), 0);
+}
+
+#[test]
+fn bonus_against_ignores_tags_absent_from_bonus_keys() {
+    let def = footman().with_bonus_damage_vs([("building", 5u32)]);
+
+    assert_eq!(def.bonus_against("footman", |tag| tag == "armored"), 0);
+}
+
+#[test]
+#[should_panic(expected = "bonus_damage_vs keys must not be empty")]
+fn empty_bonus_key_panics() {
+    footman().with_bonus_damage_vs([("", 5u32)]);
 }
 
 //

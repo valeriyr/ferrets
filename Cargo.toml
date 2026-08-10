@@ -9,6 +9,7 @@ repository = "https://github.com/valeriyr/ferrets"
 resolver = "3"
 members = [
     "crates/ferrets-bevy-plugin",
+    "crates/ferrets-content",
     "crates/ferrets-geometry",
     "crates/ferrets-math",
     "crates/ferrets-network",
@@ -25,6 +26,7 @@ members = [
 # External crates
 bcs = "0.2"
 bevy = { version = "0.18", default-features = false }
+bevy_ecs = "0.18"
 crossbeam-channel = "0.5"
 serde = { version = "1.0", features = ["derive"] }
 thiserror = "2.0"
@@ -32,6 +34,7 @@ tokio = { version = "1.52", features = ["full"] }
 
 # Internal crates
 ferrets-bevy-plugin = { path = "crates/ferrets-bevy-plugin" }
+ferrets-content = { path = "crates/ferrets-content" }
 ferrets-geometry = { path = "crates/ferrets-geometry" }
 ferrets-math = { path = "crates/ferrets-math" }
 ferrets-network = { path = "crates/ferrets-network" }
@@ -41,4 +44,3 @@ ferrets-replay = { path = "crates/ferrets-replay" }
 ferrets-script = { path = "crates/ferrets-script" }
 ferrets-simulation = { path = "crates/ferrets-simulation" }
 ferrets-steam = { path = "crates/ferrets-steam" }
-

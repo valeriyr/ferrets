@@ -9,7 +9,7 @@
 
 pub mod lua;
 
-use ferrets_simulation::content::registry::ContentRegistry;
+use ferrets_content::registry::ContentRegistry;
 
 use crate::{
     ai::{AiRuntime, view::content::ContentView},
