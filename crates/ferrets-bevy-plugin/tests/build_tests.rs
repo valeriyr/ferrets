@@ -381,7 +381,7 @@ fn boxed_in_builder_finishes_site_and_waits_to_reappear() {
     assert!(app.world_mut().get::<HiddenComponent>(worker).is_some());
 
     // Take away every cell it could come back out onto, then let the work finish.
-    utils::set_all_cells_occupied(app.world_mut(), true);
+    utils::set_all_cells_statically_occupied(app.world_mut(), true);
     utils::run_ticks(&mut app, 6);
 
     // The walls are up regardless: the building is not held back by having nowhere

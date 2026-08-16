@@ -1,5 +1,5 @@
 //! `CellRect` grid rectangle: construction, containment, cell enumeration,
-//! and unions.
+//! unions, and low-side growth.
 
 mod utils;
 
@@ -117,4 +117,117 @@ fn union_with_self_is_identity() {
     let rect = CellRect::new(utils::nav(3, 5), CellSize::new(2, 3));
 
     assert_eq!(rect.union(rect), rect);
+}
+
+//
+// ─── grown_low ────────────────────────────────────────────────────────────────
+//
+// A 1×1 goal at (10,5) grown for a 2×2 footprint:
+//
+// . E E   y=4   E = the growth, up-left of the goal only
+// . E G   y=5   G = the original cell — the far corner never moves
+//   ↑
+//  x=9
+//
+
+#[test]
+fn grown_low_grows_toward_low_coordinates_only() {
+    let goal = CellRect::cell(utils::nav(10, 5));
+
+    assert_eq!(
+        goal.grown_low(CellSize::new(2, 2)),
+        CellRect::new(utils::nav(9, 4), CellSize::new(2, 2))
+    );
+}
+
+#[test]
+fn grown_low_keeps_far_edge_when_clamped_at_grid_origin() {
+    // The origin cannot go below zero, and the growth must not leak to the
+    // far sides instead: the end stays exactly where it was.
+    let goal = CellRect::new(utils::nav(1, 0), CellSize::new(2, 2));
+
+    assert_eq!(
+        goal.grown_low(CellSize::new(3, 3)),
+        CellRect::new(utils::nav(0, 0), CellSize::new(3, 2))
+    );
+}
+
+#[test]
+fn grown_low_is_identity_for_single_cell_footprint() {
+    let goal = CellRect::new(utils::nav(4, 4), CellSize::new(2, 3));
+
+    assert_eq!(goal.grown_low(CellSize::ONE), goal);
+}
+
+#[test]
+#[should_panic(expected = "size dimensions must be greater than 0")]
+fn grown_low_panics_on_zero_size() {
+    CellRect::cell(utils::nav(4, 4)).grown_low(CellSize::new(0, 1));
+}
+
+//
+// ─── accepted_by ──────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn accepted_by_grows_low_for_ranged_stop() {
+    // The goal grows low by the footprint, so an anchor's distance to it
+    // equals the footprint's nearest-edge distance to the original goal.
+    let goal = CellRect::cell(utils::nav(10, 5));
+
+    assert_eq!(
+        goal.accepted_by(CellSize::new(2, 2), 2),
+        CellRect::new(utils::nav(9, 4), CellSize::new(2, 2))
+    );
+}
+
+#[test]
+fn accepted_by_keeps_goal_for_zero_stop() {
+    // Standing on the goal footprint means the anchor itself does, so the
+    // rect stays as ordered even for a wide footprint.
+    let goal = CellRect::cell(utils::nav(10, 5));
+
+    assert_eq!(goal.accepted_by(CellSize::new(2, 2), 0), goal);
+}
+
+#[test]
+fn accepted_by_is_identity_for_single_cell_footprint_at_any_stop() {
+    let goal = CellRect::new(utils::nav(4, 4), CellSize::new(2, 2));
+
+    for stop in 0..3 {
+        assert_eq!(goal.accepted_by(CellSize::ONE, stop), goal);
+    }
+}
+
+//
+// ─── intersects ───────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn rects_sharing_cells_intersect() {
+    let a = CellRect::new(utils::nav(2, 2), CellSize::new(2, 2));
+    let b = CellRect::new(utils::nav(3, 3), CellSize::new(2, 2));
+
+    assert!(a.intersects(b));
+    assert!(b.intersects(a));
+}
+
+#[test]
+fn rect_contains_smaller_rect_intersects() {
+    let outer = CellRect::new(utils::nav(1, 1), CellSize::new(4, 4));
+    let inner = CellRect::new(utils::nav(2, 2), CellSize::ONE);
+
+    assert!(outer.intersects(inner));
+    assert!(inner.intersects(outer));
+}
+
+#[test]
+fn edge_adjacent_rects_do_not_intersect() {
+    // Touching along an edge shares no cell: cells are whole units, and the
+    // rect ending at x 3 leaves x 4 to its neighbor.
+    let a = CellRect::new(utils::nav(2, 2), CellSize::new(2, 2));
+    let b = CellRect::new(utils::nav(4, 2), CellSize::new(2, 2));
+
+    assert!(!a.intersects(b));
+    assert!(!b.intersects(a));
 }

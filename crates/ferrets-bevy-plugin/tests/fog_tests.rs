@@ -169,6 +169,7 @@ fn fog_app(slots: Vec<PlayerSlot>) -> App {
                 .with_health(30)
                 .with_dying(1, None)
                 .with_attack(10, 8, 8, 2, 1)
+                .with_targets(utils::GROUND)
                 .with_sight_range(3),
         );
         registry.register(

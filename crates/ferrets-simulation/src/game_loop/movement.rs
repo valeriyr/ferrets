@@ -13,6 +13,7 @@ use ferrets_pathfinder::{
     hierarchy::ClusterPos,
     hpa::{self, Crossing, PathShape, PlanTarget},
     layer_mask::LayerMask,
+    mover_shape::MoverShape,
 };
 use ferrets_physics::{body, terrain};
 
@@ -29,9 +30,25 @@ const MAX_ACCEPTANCE_GROWTH: u32 = 4;
 /// Blockage escalations a walk may burn before giving up where it stands.
 const GIVE_UP_ESCALATIONS: u32 = 8;
 
-/// One shared plan's identity: the mover mask's bits, the goal (cell,
-/// footprint, stop distance), and the start's cluster and region.
-type ShareKey = (u32, CellPos, (u32, u32), u32, ClusterPos, u32);
+/// One shared plan's identity. The mover's shape is part of it because each
+/// shape has its own abstraction: a corridor planned for one clearance means
+/// nothing to another, and their independently-minted region numbers are not
+/// comparable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct ShareKey {
+    /// The shape the plan routes.
+    shape: MoverShape,
+    /// The goal footprint's anchor cell.
+    goal: CellPos,
+    /// The goal footprint's size.
+    goal_size: CellSize,
+    /// The stop distance the plan accepts.
+    stop_distance: u32,
+    /// The cluster the plan starts from.
+    cluster: ClusterPos,
+    /// The start's connectivity region under the shape's abstraction.
+    region: u32,
+}
 
 /// One tick's shared movement plans: a fanned group order plans its abstract
 /// corridor once per start cluster, and every unit refines its own cells
@@ -57,7 +74,6 @@ impl MovePlanShare {
 
 use crate::{
     components::{
-        entity_stats::StatsComponent,
         hidden::HiddenComponent,
         location::LocationComponent,
         movement::MoveComponent,
@@ -71,7 +87,7 @@ use crate::{
     order::Order,
     session::GameSession,
 };
-use ferrets_content::entity_stats::EntityStatId;
+use ferrets_content::{entity_stats::EntityStatId, location::Solidity};
 
 /// Called once when a Move order becomes the front `New` entry.
 ///
@@ -167,13 +183,10 @@ fn process_continuous(entity: Entity, order: &Order, world: &mut World) -> Order
         .get::<LocationComponent>()
         .unwrap()
         .position;
-    let speed = world
-        .entity(entity)
-        .get::<StatsComponent>()
-        .and_then(|stats| stats.effective(EntityStatId::SPEED))
+    let speed = entity_def::effective_stat(world, entity, EntityStatId::SPEED)
         .expect("movable entities have a speed stat");
     let location_def = entity_def::of(world, entity).location.unwrap();
-    let occupation = location_def.occupation();
+    let shape = MoverShape::new(location_def.occupation(), location_def.size());
 
     let Some(mut move_component) = world.entity_mut(entity).take::<MoveComponent>() else {
         return OrderState::Finished;
@@ -188,10 +201,10 @@ fn process_continuous(entity: Entity, order: &Order, world: &mut World) -> Order
     // reset whenever a waypoint is consumed, so a walk that stops closing
     // in escalates within a bounded number of ticks however it is shoved
     // around, while a long way round never does.
-    // The mover is judged by the cell under its body's center — the cell
-    // it visually stands on and claims. Its anchor's floor sits one cell
-    // short whenever a push pressed it against what it walks toward.
-    let current_cell = body::center_cell(position);
+    // The mover is judged by its rounded anchor — the cell its claim is
+    // stamped on. The position's floor sits one cell short whenever a push
+    // pressed the body against what it walks toward.
+    let current_cell = body::anchor(position);
     let projection = world.resource::<Map>().projection();
     let pursued = move_component
         .path
@@ -216,7 +229,7 @@ fn process_continuous(entity: Entity, order: &Order, world: &mut World) -> Order
             let effective_range = acceptance(range, move_component.frustration);
             if range == 0
                 && projection.in_range_of_rect(current_cell, goal, effective_range + 1)
-                && resting_ally_within(world, entity, occupation, goal, effective_range)
+                && resting_ally_within(world, entity, shape.mask, goal, effective_range)
             {
                 return OrderState::Finished;
             }
@@ -235,8 +248,8 @@ fn process_continuous(entity: Entity, order: &Order, world: &mut World) -> Order
                         map.nav_grid(),
                         map.hierarchy(),
                         projection,
-                        occupation,
                         current_cell,
+                        shape,
                         waypoint,
                     )
                 };
@@ -252,14 +265,20 @@ fn process_continuous(entity: Entity, order: &Order, world: &mut World) -> Order
     // An uncrowded point order lands exactly on the ordered spot, to the
     // bit — a lattice target is just a spot that happens to be a cell
     // origin. Contested spots do not grind forever: the stall clock raises
-    // frustration, and a frustrated walk accepts by cells like everything
-    // ranged or footprinted.
+    // frustration, and a frustrated walk accepts by cells like every ranged
+    // or wider-than-one-cell move.
     let arrived = if range == 0 && size == CellSize::ONE && move_component.frustration == 0 {
         position == target
     } else {
+        // One check serves both contracts, because the two distances differ
+        // on purpose: the goal expands by the mover's footprint only for a
+        // ranged order (`accepted_by` is the identity at range 0, keeping a
+        // point destination an anchor contract), while the measured distance
+        // is the effective acceptance — the order's own range for a ranged
+        // walk, the frustration ring for a crowded point move.
         projection.in_range_of_rect(
             current_cell,
-            CellRect::new(CellPos::from(target), size),
+            CellRect::new(CellPos::from(target), size).accepted_by(shape.size, range),
             effective_range,
         )
     };
@@ -281,7 +300,8 @@ fn process_continuous(entity: Entity, order: &Order, world: &mut World) -> Order
             match next_segment(
                 world,
                 &mut move_component,
-                occupation,
+                shape,
+                location_def.solidity(),
                 position,
                 target,
                 size,
@@ -317,8 +337,9 @@ fn process_continuous(entity: Entity, order: &Order, world: &mut World) -> Order
     let radius = entity_def::radius(world, entity);
     let new_pos = terrain::slide_toward(
         world.resource::<Map>().nav_grid(),
-        occupation,
+        shape.mask,
         position,
+        shape.size,
         desired,
         radius,
     );
@@ -353,8 +374,8 @@ fn process_continuous(entity: Entity, order: &Order, world: &mut World) -> Order
                     map.nav_grid(),
                     map.hierarchy(),
                     projection,
-                    occupation,
                     current_cell,
+                    shape,
                     waypoint,
                 )
             }
@@ -416,8 +437,8 @@ fn process_continuous(entity: Entity, order: &Order, world: &mut World) -> Order
 ///    calculate a path if needed, claim the next cell in the nav grid, and begin
 ///    the crossing.
 ///
-/// The nav grid occupation for a cell is claimed when the entity **starts** crossing
-/// into it, not on arrival. `path.last()` is the active crossing target; it is popped
+/// A crossing's cells are claimed when the entity **starts** crossing into
+/// them, not on arrival. `path.last()` is the active crossing target; it is popped
 /// only when the entity arrives, so no separate current-target field is needed.
 ///
 /// `MoveComponent` is taken from the entity at the start and reinserted on
@@ -430,13 +451,10 @@ fn process_cell(entity: Entity, order: &Order, world: &mut World) -> OrderState 
         .get::<LocationComponent>()
         .unwrap()
         .position;
-    let speed = world
-        .entity(entity)
-        .get::<StatsComponent>()
-        .and_then(|stats| stats.effective(EntityStatId::SPEED))
+    let speed = entity_def::effective_stat(world, entity, EntityStatId::SPEED)
         .expect("movable entities have a speed stat");
     let location_def = entity_def::of(world, entity).location.unwrap();
-    let occupation = location_def.occupation();
+    let shape = MoverShape::new(location_def.occupation(), location_def.size());
 
     let Some(mut move_component) = world.entity_mut(entity).take::<MoveComponent>() else {
         return OrderState::Finished;
@@ -474,9 +492,11 @@ fn process_cell(entity: Entity, order: &Order, world: &mut World) -> OrderState 
     // into a ring; ranged walks keep their exact contract — a chase that
     // finished short would break its parent order's range semantics.
     let effective_range = acceptance(range, move_component.frustration);
+    // Expansion keyed on the order's range, distance on the effective
+    // acceptance — see the cell model's arrival check for why they differ.
     if projection.in_range_of_rect(
         CellPos::from(position),
-        CellRect::new(CellPos::from(target), size),
+        CellRect::new(CellPos::from(target), size).accepted_by(shape.size, range),
         effective_range,
     ) {
         return OrderState::Finished;
@@ -487,7 +507,8 @@ fn process_cell(entity: Entity, order: &Order, world: &mut World) -> OrderState 
         match next_segment(
             world,
             &mut move_component,
-            occupation,
+            shape,
+            location_def.solidity(),
             position,
             target,
             size,
@@ -505,18 +526,19 @@ fn process_cell(entity: Entity, order: &Order, world: &mut World) -> OrderState 
     // Start a crossing into the next cell.
     let next_cell = *move_component.path.last().unwrap();
 
-    if world
-        .resource::<Map>()
-        .nav_grid()
-        .is_occupied_by(occupation, next_cell)
-    {
+    if !world.resource::<Map>().can_step_footprint(
+        shape.mask,
+        shape.size,
+        CellPos::from(position),
+        next_cell,
+    ) {
         return resolve_blocked_crossing(
             entity,
             world,
             move_component,
             position,
             speed,
-            occupation,
+            shape,
             target,
             size,
             range,
@@ -525,27 +547,14 @@ fn process_cell(entity: Entity, order: &Order, world: &mut World) -> OrderState 
     }
     move_component.forgive();
 
-    // Claim the next cell and release the current one before any position
-    // change. Claims live on the grid's unit plane, invisible to the
+    // Claim the footprint entered and release the one left behind, before any
+    // position change. Claims live on the grid's unit plane, invisible to the
     // hierarchy. Passable entities never claim cells.
     let current_cell = CellPos::from(position);
     if location_def.solidity().claims_cells() {
-        let mut map = world.resource_mut::<Map>();
-        // One claimant per cell per layer is the cell model's contract:
-        // a release must find the cell held, a claim must find it free —
-        // a violation means somebody's claim was silently overwritten.
-        debug_assert!(
-            map.nav_grid().is_claimed_by(occupation, current_cell),
-            "a crossing must release the cell the mover holds"
-        );
-        debug_assert!(
-            !map.nav_grid().is_claimed_by(occupation, next_cell),
-            "a crossing must claim a free cell"
-        );
-        map.nav_grid_mut()
-            .set_claimed_by(occupation, current_cell, false);
-        map.nav_grid_mut()
-            .set_claimed_by(occupation, next_cell, true);
+        world
+            .resource_mut::<Map>()
+            .step_claim(shape.mask, shape.size, current_cell, next_cell);
     }
 
     move_component.moving_from = current_cell;
@@ -581,14 +590,15 @@ fn process_cell(entity: Entity, order: &Order, world: &mut World) -> OrderState 
 fn next_segment(
     world: &mut World,
     move_component: &mut MoveComponent,
-    occupation: LayerMask,
+    shape: MoverShape,
+    solidity: Solidity,
     position: FixedUVec2,
     target: FixedUVec2,
     size: CellSize,
     range: u32,
 ) -> Option<Vec<CellPos>> {
-    let from = body::center_cell(position);
-    let shape = match world.resource::<Map>().movement_model() {
+    let from = body::anchor(position);
+    let path_shape = match world.resource::<Map>().movement_model() {
         MovementModel::Cell => PathShape::CellSteps,
         MovementModel::Continuous => PathShape::Waypoints,
     };
@@ -598,7 +608,7 @@ fn next_segment(
         let map = world.resource::<Map>();
         let projection = map.projection();
         if move_component.corridor.is_empty()
-            && projection.in_range_of_rect(from, CellRect::new(plan.cell, plan.size), plan.stop)
+            && projection.in_reach(from, shape.size, plan.rect(), plan.stop)
         {
             // As close as the plan gets; the caller already checked the
             // order's own goal and found it unsatisfied.
@@ -608,11 +618,11 @@ fn next_segment(
             map.nav_grid(),
             map.hierarchy(),
             projection,
-            occupation,
             from,
+            shape,
             &mut move_component.corridor,
             plan,
-            shape,
+            path_shape,
         );
         match refined {
             Some(segment) => return Some(segment),
@@ -629,42 +639,55 @@ fn next_segment(
     // mask offers.
     let (projection, serves, region) = {
         let map = world.resource::<Map>();
-        let region = if map.hierarchy().serves(occupation) {
-            map.hierarchy().region_of(occupation, from)
+        let region = if map.hierarchy().serves(shape) {
+            map.hierarchy().region_of(from, shape)
         } else {
             None
         };
-        (map.projection(), map.hierarchy().serves(occupation), region)
+        (map.projection(), map.hierarchy().serves(shape), region)
     };
     if move_component.avoid_claims || !serves {
         move_component.avoid_claims = false;
-        let map = world.resource::<Map>();
-        return astar::find_path(
-            map.nav_grid(),
-            projection,
-            occupation,
-            position,
-            target,
-            size,
-            range,
-        )
-        .map(|path| path.into_iter().map(CellPos::from).collect());
+        // The mover's own footprint claim would wall this claim-honoring
+        // search in at its start — a wide mover overlaps its own claim from
+        // every neighboring anchor — so it is lifted for exactly this query
+        // and put straight back. A passable mover claims nothing, so there
+        // is nothing to lift; cells under its body may be someone else's
+        // claim, and lifting those would route it through ground others hold.
+        let own = if solidity.claims_cells() {
+            world
+                .resource_mut::<Map>()
+                .take_claim(shape.mask, from, shape.size)
+        } else {
+            Vec::new()
+        };
+        let path = {
+            let map = world.resource::<Map>();
+            astar::find_path(
+                map.nav_grid(),
+                projection,
+                position,
+                shape,
+                target,
+                size,
+                range,
+            )
+        };
+        world.resource_mut::<Map>().restore_claim(shape.mask, &own);
+        return path.map(|path| path.into_iter().map(CellPos::from).collect());
     }
 
     // A fresh plan: reuse the tick's shared corridor for this goal and start
     // locality, planning it once for the whole fanned group.
     let region = region?;
     let tick = world.resource::<GameSession>().tick();
-    let key: ShareKey = {
-        let map = world.resource::<Map>();
-        (
-            *occupation,
-            CellPos::from(target),
-            (size.width, size.height),
-            range,
-            map.hierarchy().cluster_of(from),
-            region,
-        )
+    let key = ShareKey {
+        shape,
+        goal: CellPos::from(target),
+        goal_size: size,
+        stop_distance: range,
+        cluster: world.resource::<Map>().hierarchy().cluster_of(from),
+        region,
     };
 
     let shared = world
@@ -680,11 +703,11 @@ fn next_segment(
             map.nav_grid(),
             map.hierarchy(),
             projection,
-            occupation,
             from,
+            shape,
             &mut move_component.corridor,
             plan_target,
-            shape,
+            path_shape,
         );
         match refined {
             Some(segment) => return Some(segment),
@@ -702,11 +725,13 @@ fn next_segment(
             map.nav_grid(),
             map.hierarchy(),
             projection,
-            occupation,
             from,
-            CellPos::from(target),
-            size,
-            range,
+            shape,
+            PlanTarget {
+                cell: CellPos::from(target),
+                size,
+                stop: range,
+            },
         )?
     };
     world
@@ -721,11 +746,11 @@ fn next_segment(
         map.nav_grid(),
         map.hierarchy(),
         projection,
-        occupation,
         from,
+        shape,
         &mut move_component.corridor,
         plan_target,
-        shape,
+        path_shape,
     )
 }
 
@@ -751,7 +776,7 @@ fn resolve_blocked_crossing(
     mut move_component: MoveComponent,
     position: FixedUVec2,
     speed: FixedU64,
-    occupation: LayerMask,
+    shape: MoverShape,
     target: FixedUVec2,
     size: CellSize,
     range: u32,
@@ -761,7 +786,7 @@ fn resolve_blocked_crossing(
     let next_cell = *move_component.path.last().unwrap();
     let projection = world.resource::<Map>().projection();
 
-    if let Some(blocker) = claimant_at(world, occupation, next_cell) {
+    if let Some(blocker) = claimant_at(world, shape.mask, next_cell) {
         let blocker_position = world
             .entity(blocker)
             .get::<LocationComponent>()
@@ -771,14 +796,17 @@ fn resolve_blocked_crossing(
 
         // Swap: the blocker rests on my next cell and wants mine — the
         // head-on case. Both crossings run at once; no claim bit changes
-        // hands visibly, each side keeps exactly one cell claimed — which
-        // is only an identity when both occupy the same layers, so unequal
-        // masks fall through to the other rungs instead of leaking the
-        // wider mask's bits on the exchanged cells.
+        // hands visibly, each side keeps exactly its own claim — which is
+        // only an identity when both occupy the same layers **and the same
+        // footprint**, so unequal shapes fall through to the other rungs:
+        // exchanging a 1×1 claim for a 2×2 one would leave ghost-claimed
+        // cells behind one body and unclaimed cells under the other.
         if blocker_at_rest
             && entity_def::of(world, blocker)
                 .location
-                .is_some_and(|location| location.occupation() == occupation)
+                .is_some_and(|location| {
+                    location.occupation() == shape.mask && location.size() == shape.size
+                })
             && world
                 .entity(blocker)
                 .get::<MoveComponent>()
@@ -840,7 +868,12 @@ fn resolve_blocked_crossing(
             // Yield: ask it to step out of the walk's way, then wait below
             // while it does. The pushed order is prepared here — the tick's
             // own prepare phase has already passed.
-            if let Some(aside) = yield_target(world, occupation, next_cell, current_cell) {
+            if let Some(aside) = yield_target(
+                world,
+                blocker,
+                CellRect::new(current_cell, shape.size),
+                next_cell,
+            ) {
                 let mut queue = world
                     .entity_mut(blocker)
                     .take::<OrderQueueComponent>()
@@ -881,8 +914,8 @@ fn resolve_blocked_crossing(
                 map.nav_grid(),
                 map.hierarchy(),
                 projection,
-                occupation,
                 current_cell,
+                shape,
                 rejoin,
             )
         };
@@ -922,10 +955,7 @@ fn swap_crossings(
 
     // The counterpart's crossing starts here; its own order processing
     // continues it as any other mid-crossing tick.
-    let blocker_speed = world
-        .entity(blocker)
-        .get::<StatsComponent>()
-        .and_then(|stats| stats.effective(EntityStatId::SPEED))
+    let blocker_speed = entity_def::effective_stat(world, blocker, EntityStatId::SPEED)
         .expect("movable entities have a speed stat");
     let blocker_new = projection.step_toward(next_pos, current_pos, blocker_speed);
     {
@@ -990,18 +1020,17 @@ fn claimant_at(world: &mut World, mask: LayerMask, cell: CellPos) -> Option<Enti
         }
 
         let holds = if is_mid_crossing(candidate_position) {
+            // A crossing holds its destination *footprint* — step_claim
+            // claimed every entered cell, not the anchor alone.
             world
                 .entity(candidate)
                 .get::<MoveComponent>()
                 .and_then(|movement| movement.path.last().copied())
-                == Some(cell)
+                .is_some_and(|destination| {
+                    CellRect::new(destination, location_def.size()).contains(cell)
+                })
         } else {
-            let origin = CellPos::from(candidate_position);
-            let CellSize { width, height } = location_def.size();
-            cell.x >= origin.x
-                && cell.x < origin.x + width
-                && cell.y >= origin.y
-                && cell.y < origin.y + height
+            CellRect::new(CellPos::from(candidate_position), location_def.size()).contains(cell)
         };
         if holds {
             return Some(candidate);
@@ -1065,19 +1094,25 @@ fn allied(world: &World, a: Entity, b: Entity) -> bool {
     }
 }
 
-/// The best free cell an idle blocker at `blocker_cell` steps aside to:
-/// farthest from the mover's direction of travel, ties broken by cell order.
-/// `None` when it is boxed in.
+/// The best free cell an idle blocker steps aside to: a whole-footprint step
+/// off its own anchor, on its own mask, farthest from the mover's direction
+/// of travel, ties broken by cell order. `None` when it is boxed in.
+///
+/// `toward` is the contested cell the mover is crossing into, which fixes
+/// the direction to step away from; `mover` is the mover's standing
+/// footprint, which the blocker must not step onto.
 fn yield_target(
     world: &World,
-    mask: LayerMask,
-    blocker_cell: CellPos,
-    mover_cell: CellPos,
+    blocker: Entity,
+    mover: CellRect,
+    toward: CellPos,
 ) -> Option<CellPos> {
+    let location_def = entity_def::of(world, blocker).location?;
+    let (mask, size) = (location_def.occupation(), location_def.size());
+    let anchor = CellPos::from(entity_def::position(world, blocker));
     let map = world.resource::<Map>();
-    let grid = map.nav_grid();
-    let direction_x = blocker_cell.x as i64 - mover_cell.x as i64;
-    let direction_y = blocker_cell.y as i64 - mover_cell.y as i64;
+    let direction_x = toward.x as i64 - mover.origin.x as i64;
+    let direction_y = toward.y as i64 - mover.origin.y as i64;
 
     let mut best: Option<(i64, CellPos)> = None;
     for offset_y in -1i64..=1 {
@@ -1085,20 +1120,31 @@ fn yield_target(
             if offset_x == 0 && offset_y == 0 {
                 continue;
             }
-            let x = blocker_cell.x as i64 + offset_x;
-            let y = blocker_cell.y as i64 + offset_y;
+            let x = anchor.x as i64 + offset_x;
+            let y = anchor.y as i64 + offset_y;
             if x < 0 || y < 0 {
                 continue;
             }
             let candidate = CellPos::new(x as u32, y as u32);
-            if candidate == mover_cell || !grid.is_passable_by(mask, candidate) {
+            if CellRect::new(candidate, size).intersects(mover)
+                || !map.can_step_footprint(mask, size, anchor, candidate)
+            {
                 continue;
             }
             // The corner rule the blocker's own crossing will enforce.
             if offset_x != 0
                 && offset_y != 0
-                && !(grid.is_passable_by(mask, CellPos::new(candidate.x, blocker_cell.y))
-                    && grid.is_passable_by(mask, CellPos::new(blocker_cell.x, candidate.y)))
+                && !(map.can_step_footprint(
+                    mask,
+                    size,
+                    anchor,
+                    CellPos::new(candidate.x, anchor.y),
+                ) && map.can_step_footprint(
+                    mask,
+                    size,
+                    anchor,
+                    CellPos::new(anchor.x, candidate.y),
+                ))
             {
                 continue;
             }

@@ -2,19 +2,21 @@
 
 mod utils;
 
-use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
+use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize, projection::Projection};
 use ferrets_math::FixedU64;
 
 use ferrets_content::{
     entity_stats::EntityStatId, entity_type_def::EntityTypeDef, location::Solidity,
     registry::ContentRegistry, stats::ModifierOp,
 };
+use ferrets_physics::body;
 use ferrets_simulation::{
     command::PlayerCommand,
     components::{attack::AttackComponent, dying::DyingComponent, health::HealthComponent},
     entity_index::EntityIndex,
     game_loop,
     map::Map,
+    movement_model::MovementModel,
     order::AttackTarget,
     session::{GameSession, player_slot::PlayerSlot, player_type::PlayerType},
     simulation_id::SimulationId,
@@ -69,6 +71,64 @@ fn attack_kills_adjacent_target() {
     utils::run_ticks(&mut app, 1);
     assert!(utils::order_queue_is_empty(app.world_mut(), attacker));
     assert!(app.world_mut().get::<AttackComponent>(attacker).is_none());
+}
+
+#[test]
+fn wide_attacker_stops_at_its_edge_reach() {
+    let mut app = utils::combat_app();
+    let world = app.world_mut();
+    // Range is rect to rect: the ballista's reach is measured from its
+    // nearest footprint edge, so it stops a full body earlier than a
+    // single-cell attacker with the same range stat would.
+    let (ballista, ballista_id) =
+        spawn::spawn_entity(world, "ballista", utils::pos(2, 5), Some(0)).unwrap();
+    let (target, target_id) = spawn::spawn_entity(world, "dummy", utils::pos(10, 5), None).unwrap();
+
+    utils::select(&mut app, ballista_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Attack {
+            target: AttackTarget::Entity(target_id),
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, 60);
+    utils::assert_despawned(app.world_mut(), target);
+
+    // Anchored at (7,5) the footprint's east edge sits at x=8, two cells
+    // from the target — exactly the weapon's range.
+    assert_eq!(
+        utils::cell_of(app.world_mut(), ballista),
+        CellPos::new(7, 5)
+    );
+}
+
+#[test]
+fn wide_attacker_stops_at_its_edge_reach_continuous() {
+    // The same edge-reach contract under the continuous model, whose arrival
+    // check is a separate code path.
+    let mut app = utils::combat_app();
+    utils::install_map(&mut app, Projection::Isometric, MovementModel::Continuous);
+    let world = app.world_mut();
+    let (ballista, ballista_id) =
+        spawn::spawn_entity(world, "ballista", utils::pos(2, 5), Some(0)).unwrap();
+    let (target, target_id) = spawn::spawn_entity(world, "dummy", utils::pos(10, 5), None).unwrap();
+
+    utils::select(&mut app, ballista_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Attack {
+            target: AttackTarget::Entity(target_id),
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, 80);
+    utils::assert_despawned(app.world_mut(), target);
+
+    // A continuous body rests at a fractional position; the cell it stands
+    // on for every judgement is its body anchor.
+    let position = utils::position_of(app.world_mut(), ballista);
+    assert_eq!(body::anchor(position), CellPos::new(7, 5));
 }
 
 #[test]
@@ -157,7 +217,8 @@ fn send_to_entity_does_not_attack_ally() {
                 .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
                 .with_health(30)
                 .with_dying(2, None)
-                .with_attack(10, 1, 1, 4, 2),
+                .with_attack(10, 1, 1, 4, 2)
+                .with_targets(utils::GROUND),
         );
         registry.validate();
     }

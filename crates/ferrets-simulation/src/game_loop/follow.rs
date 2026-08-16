@@ -10,7 +10,6 @@ use super::{
 use crate::{
     components::{
         follow::FollowComponent,
-        location::LocationComponent,
         order_queue::{CancelPolicy, OrderState},
     },
     entity_def,
@@ -87,16 +86,10 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
         return Processing::state(OrderState::Finished);
     };
 
-    let position = world
-        .entity(entity)
-        .get::<LocationComponent>()
-        .unwrap()
-        .position;
-
     match chase::advance_to_entity(
         &mut follow_component.last_chase,
         world,
-        position,
+        entity,
         target,
         FOLLOW_DISTANCE,
     ) {

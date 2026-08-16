@@ -38,11 +38,13 @@ impl DyingDef {
     }
 
     /// Returns the duration of the dying phase in ticks.
+    #[inline]
     pub fn dying_time(&self) -> u32 {
         self.dying_time
     }
 
     /// Returns the entity type left behind when the dying phase completes.
+    #[inline]
     pub fn corpse_type(&self) -> Option<&str> {
         self.corpse_type.as_deref()
     }

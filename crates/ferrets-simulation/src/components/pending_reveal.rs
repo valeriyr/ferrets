@@ -12,7 +12,7 @@ use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 /// off the map.
 #[derive(Component, Debug, Clone, Copy)]
 pub struct PendingRevealComponent {
-    /// Footprint origin the reveal searches around.
+    /// Footprint anchor the reveal searches around.
     pub around: CellPos,
     /// Footprint size the reveal searches around.
     pub around_size: CellSize,

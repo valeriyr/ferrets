@@ -8,11 +8,12 @@ use ferrets_content::{
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     location::Solidity,
+    morph::{MorphCancel, MorphPlacement, MorphTime, MorphTransition},
     player_buffs::PlayerBuffDef,
     registry::ContentRegistry,
     research::{ResearchDef, ResearchId},
     resource::{DepletionPolicy, HarvestData},
-    skills::{PlayerCastEffect, SkillCaster, SkillDef},
+    skills::{EntityCastCost, PlayerCastEffect, SkillCaster, SkillDef},
     splash::SplashShape,
     stack_rule::StackRule,
     stats::{EntityModifier, ModifierOp},
@@ -24,7 +25,7 @@ use ferrets_geometry::{
 };
 use ferrets_math::{FixedI64, FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_pathfinder::{
-    layer_mask::LayerMask,
+    mover_shape::MoverShape,
     nav_grid::{LayerId, NavGrid},
 };
 use ferrets_simulation::{
@@ -162,6 +163,7 @@ pub fn selection_app() -> App {
                 .with_health(30)
                 .with_dying(1, None)
                 .with_attack(10, 1, 3, 2, 1)
+                .with_targets(GROUND)
                 .with_sight_range(5),
         );
         registry.register(
@@ -175,6 +177,155 @@ pub fn selection_app() -> App {
                 .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
                 .with_health(100)
                 .with_tags(["building"]),
+        );
+    }
+    app.world_mut().resource::<ContentRegistry>().validate();
+    app.world_mut().resource_mut::<GameSession>().start();
+    app
+}
+
+/// App on the cell model with hierarchy abstractions for both a walking 1×1
+/// `soldier` and a parked 2×2 `wagon` — the blocked-crossing rungs only fire
+/// when the plan was made claim-blind, which takes the hierarchy. One human
+/// player, session started.
+pub fn cell_crowd_app() -> App {
+    let mut app = make_app(vec![PlayerSlot::occupied(0, PlayerType::Human, None, None)]);
+    {
+        let mut grid = NavGrid::new(32, 32);
+        grid.add_layer(GROUND);
+        app.world_mut().insert_resource(Map::with_hierarchy_shapes(
+            "test",
+            Projection::Isometric,
+            MovementModel::Cell,
+            grid,
+            vec![],
+            &[
+                MoverShape::point(GROUND),
+                MoverShape::new(GROUND, CellSize::new(2, 2)),
+            ],
+        ));
+    }
+    {
+        let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
+        registry.register(
+            EntityTypeDef::new("soldier")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
+                .with_health(30)
+                .with_dying(2, None),
+        );
+        registry.register(
+            EntityTypeDef::new("wagon")
+                .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
+                .with_movement(FixedU64::from_num(0.3), FixedU64::ONE)
+                .with_health(60)
+                .with_dying(2, None),
+        );
+    }
+    app.world_mut().resource::<ContentRegistry>().validate();
+    app.world_mut().resource_mut::<GameSession>().start();
+    app
+}
+
+/// App with the form-change roster on the given movement model — a `whelp`
+/// (1×1 mover, 30 hp) declaring three transitions: growing into the same-layer
+/// 3×3 `giant`, an instant committed change into the 10-hp `husk` paid in
+/// blood, and a timed change into the poolless `wisp` (which changes back);
+/// plus a `shrine` (2×2 building) that unroots into the same-size `golem`
+/// mover. One human player, session started.
+pub fn morph_app(model: MovementModel) -> App {
+    let mut app = make_app(vec![PlayerSlot::occupied(0, PlayerType::Human, None, None)]);
+    install_map(&mut app, Projection::Isometric, model);
+    {
+        let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
+        registry.register_resource("gold");
+        registry.register(
+            EntityTypeDef::new("whelp")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
+                .with_health(30)
+                .with_dying(2, None)
+                .with_cost([("gold", 10)])
+                .with_train_time(20)
+                .with_morphs([
+                    MorphTransition::new(
+                        "giant",
+                        MorphTime::Constant(10),
+                        MorphPlacement::Reserve,
+                        MorphCancel::Refundable,
+                        Vec::new(),
+                        Vec::<String>::new(),
+                    ),
+                    MorphTransition::new(
+                        "husk",
+                        MorphTime::Constant(0),
+                        MorphPlacement::Revalidate,
+                        MorphCancel::Committed,
+                        vec![EntityCastCost::Health(FixedU64::from_num(10))],
+                        Vec::<String>::new(),
+                    ),
+                    MorphTransition::new(
+                        "wisp",
+                        MorphTime::Constant(10),
+                        MorphPlacement::Revalidate,
+                        MorphCancel::Forfeit,
+                        Vec::new(),
+                        Vec::<String>::new(),
+                    ),
+                ]),
+        );
+        registry.register(
+            EntityTypeDef::new("giant")
+                .with_location(GROUND, CellSize::new(3, 3), Solidity::Solid)
+                .with_movement(FixedU64::from_num(0.3), FixedU64::ONE)
+                .with_health(60)
+                .with_dying(2, None),
+        );
+        registry.register(
+            EntityTypeDef::new("husk")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
+                .with_health(10)
+                .with_dying(2, None),
+        );
+        registry.register(
+            EntityTypeDef::new("wisp")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
+                .with_morphs([MorphTransition::new(
+                    "whelp",
+                    MorphTime::Constant(10),
+                    MorphPlacement::Revalidate,
+                    MorphCancel::Forfeit,
+                    Vec::new(),
+                    Vec::<String>::new(),
+                )]),
+        );
+        registry.register(
+            EntityTypeDef::new("shrine")
+                .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
+                .with_health(100)
+                .with_dying(2, None)
+                .with_tags(["building"])
+                // Trains the whelp, and its unrooted form does not: the one
+                // role whose live state is pre-paid, so what happens to the
+                // queue across the change is a contract worth pinning.
+                .with_trainer(["whelp"])
+                .with_morphs([MorphTransition::new(
+                    "golem",
+                    MorphTime::Constant(10),
+                    MorphPlacement::Reserve,
+                    MorphCancel::Refundable,
+                    Vec::new(),
+                    Vec::<String>::new(),
+                )]),
+        );
+        registry.register(
+            EntityTypeDef::new("golem")
+                .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
+                .with_movement(FixedU64::from_num(0.3), FixedU64::ONE)
+                .with_health(50)
+                .with_dying(2, None),
         );
     }
     app.world_mut().resource::<ContentRegistry>().validate();
@@ -249,17 +400,27 @@ pub fn assert_despawned(world: &mut World, entity: Entity) {
 
 /// The cell the entity currently stands on.
 pub fn cell_of(world: &mut World, entity: Entity) -> CellPos {
-    CellPos::from(world.get::<LocationComponent>(entity).unwrap().position)
+    CellPos::from(position_of(world, entity))
+}
+
+/// The entity's continuous position — sub-cell precise, where [`cell_of`]
+/// floors it to a cell.
+pub fn position_of(world: &mut World, entity: Entity) -> FixedUVec2 {
+    world.get::<LocationComponent>(entity).unwrap().position
 }
 
 /// Marks or clears every cell of the map's ground layer, used to box a worker in.
-pub fn set_all_cells_occupied(world: &mut World, occupied: bool) {
+/// Cells already in the desired state — a standing building's — stay untouched,
+/// since a static write must flip its cell.
+pub fn set_all_cells_statically_occupied(world: &mut World, occupied: bool) {
     let mut map = world.resource_mut::<Map>();
-    let grid = map.nav_grid_mut();
-    let (width, height) = (grid.width(), grid.height());
+    let (width, height) = (map.width(), map.height());
     for y in 0..height {
         for x in 0..width {
-            grid.set_occupied(GROUND, CellPos::new(x, y), occupied);
+            let cell = CellPos::new(x, y);
+            if map.nav_grid().is_statically_occupied_by(GROUND, cell) != occupied {
+                map.set_static_occupied(GROUND, cell, occupied);
+            }
         }
     }
 }
@@ -279,8 +440,7 @@ pub fn assert_reveal_deferred_then_lands_on(app: &mut App, worker: Entity, cell:
 
     app.world_mut()
         .resource_mut::<Map>()
-        .nav_grid_mut()
-        .set_occupied(GROUND, cell, false);
+        .set_static_occupied(GROUND, cell, false);
     run_ticks(app, 1);
 
     assert!(app.world().get::<HiddenComponent>(worker).is_none());
@@ -440,13 +600,13 @@ pub fn effective_damage(app: &App, entity: Entity) -> FixedU64 {
 pub fn install_map(app: &mut App, projection: Projection, model: MovementModel) {
     let mut grid = NavGrid::new(32, 32);
     grid.add_layer(GROUND);
-    app.world_mut().insert_resource(Map::with_hierarchy_masks(
+    app.world_mut().insert_resource(Map::with_hierarchy_shapes(
         "test",
         projection,
         model,
         grid,
         vec![],
-        &[LayerMask::from(GROUND)],
+        &[MoverShape::point(GROUND)],
     ));
 }
 
@@ -464,7 +624,8 @@ pub fn combat_app() -> App {
                 .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
                 .with_health(50)
                 .with_dying(3, None)
-                .with_attack(10, 1, 1, 4, 2),
+                .with_attack(10, 1, 1, 4, 2)
+                .with_targets(GROUND),
         );
         // Registered before `dummy`, which leaves it as a corpse.
         registry.register(
@@ -477,6 +638,17 @@ pub fn combat_app() -> App {
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
                 .with_health(20)
                 .with_dying(3, Some("bones")),
+        );
+        // A wide attacker, so a chase threads a 2x2 chaser footprint: reach
+        // is rect to rect, measured from its nearest edge.
+        registry.register(
+            EntityTypeDef::new("ballista")
+                .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
+                .with_movement(FixedU64::from_num(0.5), FixedU64::ONE)
+                .with_health(80)
+                .with_dying(3, None)
+                .with_attack(10, 2, 2, 4, 2)
+                .with_targets(GROUND),
         );
     }
     app.world_mut().resource::<ContentRegistry>().validate();
@@ -649,6 +821,7 @@ pub fn research_app() -> App {
                 .with_health(30)
                 .with_dying(2, None)
                 .with_attack(10, 1, 1, 4, 2)
+                .with_targets(GROUND)
                 .with_cost([("gold", 10)])
                 .with_train_time(5)
         };
@@ -698,6 +871,7 @@ pub fn transport_app() -> App {
                 .with_health(30)
                 .with_dying(2, None)
                 .with_attack(10, 3, 5, 4, 2)
+                .with_targets(GROUND)
                 .with_sight_range(8)
                 .with_tags(["infantry"])
                 .with_stat(EntityStatId::CARGO_SIZE, FixedU64::ONE),
@@ -763,6 +937,7 @@ pub fn transport_app() -> App {
                 .with_health(40)
                 .with_dying(2, None)
                 .with_attack(20, 6, 6, 4, 2)
+                .with_targets(GROUND)
                 .with_sight_range(10)
                 .with_splash(
                     SplashShape::Circular,
@@ -887,8 +1062,19 @@ pub fn register_orders_content(app: &mut App) {
                 .with_health(30)
                 .with_dying(2, None)
                 .with_attack(10, 1, 1, 4, 2)
+                .with_targets(GROUND)
                 .with_cost([("gold", 30)])
                 .with_train_time(4),
+        );
+        // A wide continuous mover: 2x2 footprint with the largest legal body
+        // circle (radius = half the narrow side), for mixed-size contact and
+        // claim tests.
+        registry.register(
+            EntityTypeDef::new("wagon")
+                .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
+                .with_movement(FixedU64::from_num(0.5), FixedU64::ONE)
+                .with_health(60)
+                .with_dying(2, None),
         );
         // Registered before `worker`, which builds it.
         registry.register(
@@ -1027,6 +1213,7 @@ pub fn register_orders_content(app: &mut App) {
                 .with_health(30)
                 .with_dying(2, None)
                 .with_attack(10, 1, 5, 4, 2)
+                .with_targets(GROUND)
                 // Sees farther than it auto-engages, so its circular vision
                 // covers everything within acquisition range.
                 .with_sight_range(8),
@@ -1039,6 +1226,7 @@ pub fn register_orders_content(app: &mut App) {
                 .with_health(30)
                 .with_dying(2, None)
                 .with_attack(10, 3, 5, 4, 2)
+                .with_targets(GROUND)
                 .with_sight_range(8),
         );
     }

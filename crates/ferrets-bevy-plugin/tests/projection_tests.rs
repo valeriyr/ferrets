@@ -5,9 +5,7 @@ mod utils;
 
 use ferrets_geometry::{cell_pos::CellPos, projection::Projection};
 use ferrets_math::FixedU64;
-use ferrets_simulation::{
-    command::PlayerCommand, components::location::LocationComponent, movement_model::MovementModel,
-};
+use ferrets_simulation::{command::PlayerCommand, movement_model::MovementModel};
 
 #[test]
 fn orthogonal_diagonal_walk_takes_its_priced_time() {
@@ -58,15 +56,8 @@ fn orthogonal_bodies_separate_as_circles() {
     // Resting circles keep a full Euclidean body apart — not merely a
     // Chebyshev one, which would allow diagonal centers √2 closer.
     let world = app.world_mut();
-    let position_of = |entity: bevy::prelude::Entity| {
-        world
-            .entity(entity)
-            .get::<LocationComponent>()
-            .unwrap()
-            .position
-    };
-    let a = position_of(first.0);
-    let b = position_of(second.0);
+    let a = utils::position_of(world, first.0);
+    let b = utils::position_of(world, second.0);
     let dx = (a.x.abs_diff(b.x).to_bits() as u128).pow(2);
     let dy = (a.y.abs_diff(b.y).to_bits() as u128).pow(2);
     let minimum = (FixedU64::from_num(0.99).to_bits() as u128).pow(2);

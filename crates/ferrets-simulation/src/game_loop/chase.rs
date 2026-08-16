@@ -35,6 +35,7 @@ pub fn advance(
     last_chase: &mut ChaseState,
     projection: Projection,
     from: FixedUVec2,
+    from_size: CellSize,
     destination: FixedUVec2,
     destination_size: CellSize,
     range: u32,
@@ -49,15 +50,21 @@ pub fn advance(
     // and re-walking that hair loses the spot-contest forever. The
     // destination stays anchor-floored: that is the cell the walk below
     // plans toward and accepts by, so both verdicts name the same spot.
+    //
+    // Both sides are footprints: a wide chaser reaches as far as its nearest
+    // edge, which is also how acquisition measures — the two must agree, or a
+    // wide unit would acquire a target it then walks straight past.
     let goal = CellRect::new(CellPos::from(destination), destination_size);
-    if projection.in_range_of_rect(body::center_cell(from), goal, range)
-        || projection.in_range_of_rect(CellPos::from(from), goal, range)
+    let standing = CellRect::new(body::anchor(from), from_size);
+    let floored = CellRect::new(CellPos::from(from), from_size);
+    if projection.in_range_for_rects(standing, goal, range)
+        || projection.in_range_for_rects(floored, goal, range)
     {
         *last_chase = None;
         return Destination::Arrived;
     }
 
-    let (own, destination_cell) = (body::center_cell(from), CellPos::from(destination));
+    let (own, destination_cell) = (body::anchor(from), CellPos::from(destination));
     match last_chase {
         Some(round) if (round.own, round.destination) == (own, destination_cell) => {
             round.repeats += 1;
@@ -128,10 +135,11 @@ fn nearest_point_on(origin: FixedUVec2, size: CellSize, from: FixedVec2) -> Fixe
 pub fn advance_to_entity(
     last_chase: &mut ChaseState,
     world: &World,
-    from: FixedUVec2,
+    chaser: Entity,
     destination: Entity,
     range: u32,
 ) -> Destination {
+    let (from, from_size) = entity_def::footprint(world, chaser);
     let (destination_position, destination_size) = entity_def::footprint(world, destination);
     let projection = world.resource::<Map>().projection();
 
@@ -139,6 +147,7 @@ pub fn advance_to_entity(
         last_chase,
         projection,
         from,
+        from_size,
         destination_position,
         destination_size,
         range,

@@ -8,6 +8,7 @@ use ferrets_content::{
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     location::Solidity,
+    morph::{MorphCancel, MorphPlacement, MorphTime},
     player_stats::PlayerStatId,
     repair::{RepairCost, RepairRate},
     research::ResearchDef,
@@ -50,6 +51,7 @@ fn loads_races_resources_and_entities() {
         .with_health(40)
         .with_dying(2, None)
         .with_attack(6, 4, 4, 7, 3)
+        .with_targets(LayerId::new(1))
         .with_cost([("gold", 80)])
         .with_train_time(60);
 
@@ -67,6 +69,7 @@ fn declared_acquire_range_overrides_weapon_range_default() {
                 max_health = 20,
                 damage = 2, attack_range = 3, acquire_range = 7, attack_period = 4, damage_point = 2,
             },
+            targets = GROUND,
         })
     "#;
     let registry = content::load(&engine(), source).expect("load content");
@@ -74,7 +77,8 @@ fn declared_acquire_range_overrides_weapon_range_default() {
     let expected = EntityTypeDef::new("scout")
         .with_location(LayerId::new(1), CellSize::ONE, Solidity::Solid)
         .with_health(20)
-        .with_attack(2, 3, 7, 4, 2);
+        .with_attack(2, 3, 7, 4, 2)
+        .with_targets(LayerId::new(1));
 
     assert_eq!(registry.entity("scout"), Some(&expected));
 }
@@ -142,6 +146,7 @@ fn parses_armor_bonus_damage_vs_and_energy() {
                 armor = 4, max_energy = 50, energy_regen = "0.5",
             },
             bonus_damage_vs = { armored = 8, dragon = 15 },
+            targets = GROUND,
         })
     "#;
     let registry = content::load(&engine(), source).expect("load content");
@@ -151,6 +156,7 @@ fn parses_armor_bonus_damage_vs_and_energy() {
         .with_health(100)
         .with_attack(12, 1, 1, 4, 2)
         .with_armor(4)
+        .with_targets(LayerId::new(1))
         .with_bonus_damage_vs([("armored", 8u32), ("dragon", 15u32)])
         .with_energy(50, FixedU64::from_str("0.5").unwrap());
 
@@ -774,6 +780,7 @@ fn parses_projectile_and_splash() {
                 layers = GROUND,
                 friendly_fire = true,
             },
+            targets = GROUND,
         })
     "#;
     let registry = content::load(&engine(), source).expect("load content");
@@ -782,6 +789,7 @@ fn parses_projectile_and_splash() {
         .with_location(LayerId::new(1), CellSize::ONE, Solidity::Solid)
         .with_health(30)
         .with_attack(12, 6, 6, 10, 4)
+        .with_targets(LayerId::new(1))
         .with_projectile(registry.projectile("shell").expect("shell is registered"))
         .with_splash(
             SplashShape::Circular,
@@ -1444,6 +1452,7 @@ const ARCHER: &str = r#"
             damage = 6, attack_range = 4, attack_period = 7, damage_point = 3,
         },
         dying = { time = 2 },
+        targets = GROUND,
         cost = { gold = 80 },
         train_time = 60,
     })
@@ -1502,4 +1511,153 @@ fn attacker_with(block: &str) -> String {
         }})
         "#
     )
+}
+
+#[test]
+fn morph_transitions_round_trip() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_resource("gold")
+        define_tag("winged")
+        define_entity_stat("morph_time")
+
+        define_entity("walker", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = { speed = 1, radius = "0.5", max_energy = 50, morph_time = 20 },
+            morphs = {
+                { into = "flier",
+                  time = { stat = "morph_time" },
+                  placement = "revalidate",
+                  cancel = "committed",
+                  cost = { energy = "20" },
+                  requires = { "winged" } },
+                { into = "statue",
+                  time = 40,
+                  placement = "reserve",
+                  cancel = "refundable",
+                  cost = { resources = { gold = 30 } } },
+            },
+        })
+        define_entity("flier", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = { speed = 1, radius = "0.5" },
+        })
+        define_entity("statue", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = { max_health = 100 },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("content loads");
+
+    let walker = registry.entity("walker").expect("walker is registered");
+    let [first, second] = walker.morphs.as_slice() else {
+        panic!("walker declares exactly two transitions");
+    };
+
+    let morph_time = registry
+        .entity_stat("morph_time")
+        .expect("morph_time is declared");
+    assert_eq!(first.into_type(), "flier");
+    assert_eq!(first.time(), MorphTime::Stat(morph_time));
+    assert_eq!(first.placement(), MorphPlacement::Revalidate);
+    assert_eq!(first.cancel(), MorphCancel::Committed);
+    assert_eq!(
+        first.costs(),
+        [EntityCastCost::Energy(FixedU64::from_num(20))]
+    );
+    assert_eq!(first.requires(), ["winged"]);
+
+    assert_eq!(second.into_type(), "statue");
+    assert_eq!(second.time(), MorphTime::Constant(40));
+    assert_eq!(second.placement(), MorphPlacement::Reserve);
+    assert_eq!(second.cancel(), MorphCancel::Refundable);
+    assert_eq!(
+        second.costs(),
+        [EntityCastCost::Resources(costs::cost([("gold", 30)]))]
+    );
+    assert!(second.requires().is_empty());
+}
+
+#[test]
+fn unknown_morph_placement_errors() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_entity("walker", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = { speed = 1, radius = "0.5" },
+            morphs = {
+                { into = "flier", time = 20, placement = "hover", cancel = "committed" },
+            },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject an unknown morph placement");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("morph placement must be 'reserve' or 'revalidate', found 'hover'")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn unknown_morph_cancel_errors() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_entity("walker", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = { speed = 1, radius = "0.5" },
+            morphs = {
+                { into = "flier", time = 20, placement = "reserve", cancel = "maybe" },
+            },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject an unknown morph cancel");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("morph cancel must be 'committed', 'forfeit', or 'refundable', found 'maybe'")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn morph_time_of_wrong_shape_errors() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_entity("walker", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = { speed = 1, radius = "0.5" },
+            morphs = {
+                { into = "flier", time = "fast", placement = "reserve", cancel = "committed" },
+            },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject a morph time that is neither ticks nor a stat table");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("morph time must be a tick count or a { stat = ... } table, found string")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn unknown_morph_time_stat_errors() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_entity("walker", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = { speed = 1, radius = "0.5" },
+            morphs = {
+                { into = "flier", time = { stat = "bogus" }, placement = "reserve", cancel = "committed" },
+            },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject a morph time naming an unknown stat");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("morph time stat 'bogus' is not defined")),
+        "unexpected error: {error:?}"
+    );
 }

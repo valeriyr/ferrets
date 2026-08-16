@@ -1,7 +1,7 @@
 //! Resolution from a spawned entity to what the simulation knows about it.
 
 use bevy_ecs::{entity::Entity, world::World};
-use ferrets_geometry::cell_size::CellSize;
+use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 
 use crate::{
@@ -62,11 +62,20 @@ pub fn radius(world: &World, entity: Entity) -> FixedU64 {
         .expect("movers define a radius stat")
 }
 
+/// The current effective value of one of `entity`'s stats, or `None` when it
+/// carries no such stat.
+pub fn effective_stat(world: &World, entity: Entity, stat: EntityStatId) -> Option<FixedU64> {
+    world
+        .entity(entity)
+        .get::<StatsComponent>()
+        .and_then(|stats| stats.effective(stat))
+}
+
 /// The whole-number value of one of `entity`'s stats.
 ///
 /// Panics if `entity` is not a simulation entity, or carries no such stat —
 /// for stats whose presence the caller's capability check already vouches for.
-pub fn stat_u32(world: &World, entity: Entity, stat: EntityStatId) -> u32 {
+pub fn effective_stat_u32(world: &World, entity: Entity, stat: EntityStatId) -> u32 {
     world
         .entity(entity)
         .get::<StatsComponent>()
@@ -88,6 +97,15 @@ pub fn footprint(world: &World, entity: Entity) -> (FixedUVec2, CellSize) {
         .expect("validated content defines a location")
         .size();
     (position(world, entity), size)
+}
+
+/// The footprint `entity` stands on as a rect of whole cells, anchored at
+/// its floored position — the value every rect-to-rect measure takes.
+///
+/// Panics if `entity` is not a simulation entity, or its type declares no location.
+pub fn footprint_rect(world: &World, entity: Entity) -> CellRect {
+    let (position, size) = footprint(world, entity);
+    CellRect::new(CellPos::from(position), size)
 }
 
 /// The center of the footprint `entity` stands on, in world units with

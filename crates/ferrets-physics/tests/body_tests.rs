@@ -3,43 +3,31 @@
 
 mod utils;
 
-use ferrets_geometry::cell_pos::CellPos;
+use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::FixedU64;
 use ferrets_physics::body;
 
 //
-// ─── Center cell ──────────────────────────────────────────────────────────────
+// ─── Anchor ───────────────────────────────────────────────────────────────────
 //
 
 #[test]
 fn body_on_lattice_anchor_stands_on_own_cell() {
-    assert_eq!(
-        body::center_cell(utils::position(5.0, 5.0)),
-        CellPos::new(5, 5)
-    );
+    assert_eq!(body::anchor(utils::position(5.0, 5.0)), CellPos::new(5, 5));
 }
 
 /// The claimed cell follows the visual majority of the body.
 #[test]
 fn body_past_half_cell_stands_on_next_cell() {
-    assert_eq!(
-        body::center_cell(utils::position(5.6, 5.0)),
-        CellPos::new(6, 5)
-    );
-    assert_eq!(
-        body::center_cell(utils::position(5.4, 5.0)),
-        CellPos::new(5, 5)
-    );
+    assert_eq!(body::anchor(utils::position(5.6, 5.0)), CellPos::new(6, 5));
+    assert_eq!(body::anchor(utils::position(5.4, 5.0)), CellPos::new(5, 5));
 }
 
 /// Exactly halfway rounds toward the next cell — the center sits on the
 /// boundary and the boundary belongs to the cell it opens.
 #[test]
 fn body_at_exact_half_stands_on_next_cell() {
-    assert_eq!(
-        body::center_cell(utils::position(5.5, 5.0)),
-        CellPos::new(6, 5)
-    );
+    assert_eq!(body::anchor(utils::position(5.5, 5.0)), CellPos::new(6, 5));
 }
 
 //
@@ -55,7 +43,11 @@ fn body_at_exact_half_stands_on_next_cell() {
 #[test]
 fn body_on_lattice_anchor_overlaps_one_cell() {
     assert_eq!(
-        body::overlapped_cells(utils::position(5.0, 5.0), FixedU64::from_num(0.5)),
+        body::overlapped_cells(
+            utils::position(5.0, 5.0),
+            CellSize::ONE,
+            FixedU64::from_num(0.5)
+        ),
         vec![CellPos::new(5, 5)]
     );
 }
@@ -64,7 +56,11 @@ fn body_on_lattice_anchor_overlaps_one_cell() {
 #[test]
 fn body_straddling_border_overlaps_both_cells() {
     assert_eq!(
-        body::overlapped_cells(utils::position(5.3, 5.0), FixedU64::from_num(0.5)),
+        body::overlapped_cells(
+            utils::position(5.3, 5.0),
+            CellSize::ONE,
+            FixedU64::from_num(0.5)
+        ),
         vec![CellPos::new(5, 5), CellPos::new(6, 5)]
     );
 }
@@ -73,7 +69,11 @@ fn body_straddling_border_overlaps_both_cells() {
 #[test]
 fn body_near_corner_overlaps_four_cells() {
     assert_eq!(
-        body::overlapped_cells(utils::position(5.3, 5.3), FixedU64::from_num(0.5)),
+        body::overlapped_cells(
+            utils::position(5.3, 5.3),
+            CellSize::ONE,
+            FixedU64::from_num(0.5)
+        ),
         vec![
             CellPos::new(5, 5),
             CellPos::new(6, 5),
@@ -88,7 +88,82 @@ fn body_near_corner_overlaps_four_cells() {
 #[test]
 fn wide_body_overlaps_its_block() {
     assert_eq!(
-        body::overlapped_cells(utils::position(5.0, 5.0), FixedU64::from_num(1.0)).len(),
+        body::overlapped_cells(
+            utils::position(5.0, 5.0),
+            CellSize::ONE,
+            FixedU64::from_num(1.0)
+        )
+        .len(),
         9
     );
+}
+
+//
+// ─── Multi-cell footprints ────────────────────────────────────────────────────
+//
+
+/// A footprint's circle sits half a footprint past its anchor, so a two-cell
+/// body is centered on the lattice corner its four cells meet at — not half a
+/// cell in, which would hang it off its own footprint's near side.
+#[test]
+fn multi_cell_body_is_centered_on_its_footprint() {
+    assert_eq!(
+        body::center(utils::position(5.0, 5.0), CellSize::new(2, 2)),
+        utils::position(6.0, 6.0)
+    );
+    assert_eq!(
+        body::center(utils::position(5.0, 5.0), CellSize::ONE),
+        utils::position(5.5, 5.5)
+    );
+}
+
+/// The inscribed circle of a two-cell footprint resting on its anchor reaches
+/// exactly its own four cells and no further:
+///
+///   ┌───┬───┐
+///   │ ( │ ) │   four cells, boundaries touched but not crossed
+///   ├───┼───┤
+///   │ ( │ ) │
+///   └───┴───┘
+#[test]
+fn multi_cell_body_overlaps_exactly_its_footprint() {
+    assert_eq!(
+        body::overlapped_cells(
+            utils::position(5.0, 5.0),
+            CellSize::new(2, 2),
+            FixedU64::from_num(1.0)
+        ),
+        vec![
+            CellPos::new(5, 5),
+            CellPos::new(6, 5),
+            CellPos::new(5, 6),
+            CellPos::new(6, 6),
+        ]
+    );
+}
+
+/// A body's circle grows with its footprint, so a wider body still reaches
+/// only its own cells: the inscribed radius is what keeps a footprint's
+/// physical presence inside the cells the planner cleared for it.
+#[test]
+fn inscribed_circle_never_leaves_its_footprint() {
+    for size in [1, 2, 3] {
+        let footprint = CellSize::new(size, size);
+        let overlapped = body::overlapped_cells(
+            utils::position(5.0, 5.0),
+            footprint,
+            FixedU64::from_num(size) / 2,
+        );
+        assert_eq!(
+            overlapped.len() as u32,
+            size * size,
+            "a {size}-cell body reached outside its own footprint"
+        );
+        assert!(
+            overlapped
+                .iter()
+                .all(|cell| (5..5 + size).contains(&cell.x) && (5..5 + size).contains(&cell.y)),
+            "a {size}-cell body's cells are not its footprint's: {overlapped:?}"
+        );
+    }
 }

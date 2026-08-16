@@ -82,16 +82,13 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
         return Processing::suspend(attack);
     }
 
-    let position = world
-        .entity(entity)
-        .get::<LocationComponent>()
-        .unwrap()
-        .position;
+    let (position, size) = entity_def::footprint(world, entity);
     let projection = world.resource::<Map>().projection();
     match chase::advance(
         &mut driver.last_chase,
         projection,
         position,
+        size,
         target,
         CellSize::ONE,
         0,
@@ -126,7 +123,7 @@ pub(super) fn engagement(world: &World, entity: Entity) -> Option<Order> {
         .entity(entity)
         .get::<StatsComponent>()
         .and_then(|stats| stats.effective_as_u32(EntityStatId::ACQUIRE_RANGE))?;
-    let target = acquire::find_target(world, entity, acquire_range)?;
+    let target = acquire::find_target(world, entity, entity, acquire_range)?;
     Some(leashed_attack(world, entity, target, acquire_range))
 }
 
@@ -137,7 +134,7 @@ pub(super) fn engagement_on(world: &World, entity: Entity, target: SimulationId)
         .entity(entity)
         .get::<StatsComponent>()
         .and_then(|stats| stats.effective_as_u32(EntityStatId::ACQUIRE_RANGE))?;
-    if !acquire::qualifies(world, entity, target, acquire_range) {
+    if !acquire::qualifies(world, entity, entity, target, acquire_range) {
         return None;
     }
     Some(leashed_attack(world, entity, target, acquire_range))

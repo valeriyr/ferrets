@@ -124,7 +124,7 @@ fn ai_builds_economy_and_army() {
 }
 
 #[test]
-fn boss_mans_its_fleet_and_defends_the_lake() {
+fn boss_mans_its_fleet_and_defends_lake() {
     // One idle human plus the boss slot the demo map's fleet belongs to.
     let slots = vec![
         PlayerSlot::occupied(0, PlayerType::Human, Some("human"), None),

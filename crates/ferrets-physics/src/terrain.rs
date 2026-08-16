@@ -1,15 +1,22 @@
 //! Bodies against standing terrain: what a circle may overlap, and how a
 //! displacement commits without entering what it may not.
 
+use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::{FixedI64, FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_pathfinder::{layer_mask::LayerMask, nav_grid::NavGrid};
 
 use crate::body;
 
-/// Whether a body anchored at `position` overlaps only statically passable
-/// cells.
-pub fn body_fits(grid: &NavGrid, mask: LayerMask, position: FixedUVec2, radius: FixedU64) -> bool {
-    body::overlapped_cells(position, radius)
+/// Whether a body of `size` anchored at `position` overlaps only statically
+/// passable cells.
+pub fn body_fits(
+    grid: &NavGrid,
+    mask: LayerMask,
+    position: FixedUVec2,
+    size: CellSize,
+    radius: FixedU64,
+) -> bool {
+    body::overlapped_cells(position, size, radius)
         .into_iter()
         .all(|cell| grid.is_statically_passable_by(mask, cell))
 }
@@ -23,13 +30,30 @@ pub fn body_fits(grid: &NavGrid, mask: LayerMask, position: FixedUVec2, radius: 
 /// keep its along-wall progress, not be diverted down its own faint sideways
 /// component — that diversion is how a body rounding a corner slid off along
 /// the wrong face. Ties keep the x axis, deterministically.
+///
+/// A body that already clips blocked ground — a building raised against its
+/// edge — is not frozen by that clip: a step may keep the blocked cells the
+/// body already overlaps, it just may not overlap a new one. The clip never
+/// spreads to fresh cells, so the body walks itself free; within the cells
+/// it already clips it moves freely, which is accepted over freezing.
 pub fn slide_toward(
     grid: &NavGrid,
     mask: LayerMask,
     position: FixedUVec2,
+    size: CellSize,
     desired: FixedUVec2,
     radius: FixedU64,
 ) -> FixedUVec2 {
+    let clipped: Vec<CellPos> = body::overlapped_cells(position, size, radius)
+        .into_iter()
+        .filter(|&cell| !grid.is_statically_passable_by(mask, cell))
+        .collect();
+    let fits = |candidate: FixedUVec2| {
+        body::overlapped_cells(candidate, size, radius)
+            .into_iter()
+            .all(|cell| grid.is_statically_passable_by(mask, cell) || clipped.contains(&cell))
+    };
+
     let along_x = FixedUVec2::new(desired.x, position.y);
     let along_y = FixedUVec2::new(position.x, desired.y);
     let candidates = if desired.x.abs_diff(position.x) >= desired.y.abs_diff(position.y) {
@@ -39,7 +63,7 @@ pub fn slide_toward(
     };
     candidates
         .into_iter()
-        .find(|&candidate| body_fits(grid, mask, candidate, radius))
+        .find(|&candidate| fits(candidate))
         .unwrap_or(position)
 }
 

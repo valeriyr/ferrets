@@ -19,7 +19,9 @@ use ferrets_math::{FixedI64, FixedU64, fixed_uvec2::FixedUVec2, fixed_vec2::Fixe
 use xxhash_rust::xxh64::Xxh64;
 
 use crate::{
-    components::{health::HealthComponent, location::LocationComponent},
+    components::{
+        entity_info::EntityInfoComponent, health::HealthComponent, location::LocationComponent,
+    },
     entity_index::EntityIndex,
     resources::PlayerResources,
 };
@@ -95,8 +97,14 @@ impl Checksum {
 pub fn state_checksum(world: &World) -> u64 {
     let mut hasher = Checksum::new();
 
-    // Entities in id order: position, facing, and health are the state most
+    // Entities in id order: type, position, facing, and health are the state most
     // likely to diverge. Alive then dying, each sorted by SimulationId.
+    //
+    // The type is folded because it is no longer immortal — a form change swaps
+    // it, and with it the unit's layer, footprint and capabilities. Without this
+    // a peer that changed form while another did not would only be caught by
+    // whatever position or health drift followed, and not at all when both forms
+    // share a maximum.
     let index = world.resource::<EntityIndex>();
 
     for (id, entity) in index.all_entries() {
@@ -104,6 +112,9 @@ pub fn state_checksum(world: &World) -> u64 {
 
         let entity = world.entity(entity);
 
+        if let Some(info) = entity.get::<EntityInfoComponent>() {
+            hasher.write_u32(info.type_id().index() as u32);
+        }
         if let Some(location) = entity.get::<LocationComponent>() {
             hasher.write_fixed_uvec2(location.position);
             hasher.write_fixed_vec2(location.facing);

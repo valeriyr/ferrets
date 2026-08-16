@@ -9,6 +9,7 @@ use ferrets_content::{
     entity_buffs::EntityBuffDef,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
+    morph::{MorphCancel, MorphPlacement, MorphTime, MorphTransition},
     player_buffs::PlayerBuffDef,
     projectile::ProjectileDef,
     registry::ContentRegistry,
@@ -309,6 +310,15 @@ fn build_entity(
         let friendly_fire = required_flag(&splash, "friendly_fire")?;
         def = def.with_splash(shape, bands, LayerMask::from(layers), friendly_fire);
     }
+    if let Some(targets) = optional::<u32>(table, "targets")? {
+        def = def.with_targets(LayerMask::from(targets));
+    }
+    if let Some(targetable) = optional::<u32>(table, "targetable")? {
+        def = def.with_targetable(LayerMask::from(targetable));
+    }
+    if let Some(morphs) = optional::<Vec<Table>>(table, "morphs")? {
+        def = def.with_morphs(parse_morphs(morphs, registry)?);
+    }
     if let Some(skills) = optional::<Vec<String>>(table, "skills")? {
         let ids = skills
             .iter()
@@ -608,6 +618,70 @@ fn parse_entity_cast_cost(cost: &Table) -> crate::Result<Vec<EntityCastCost>> {
         ));
     }
     Ok(costs)
+}
+
+/// Reads the `morphs` list: each entry names the destination type and the
+/// terms — `time` (a tick count, or `{ stat = ... }` naming a registered
+/// entity stat), `placement`, `cancel`, an optional `cost` block shaped like a
+/// skill cost, and an optional `requires` list.
+fn parse_morphs(
+    morphs: Vec<Table>,
+    registry: &ContentRegistry,
+) -> crate::Result<Vec<MorphTransition>> {
+    let mut transitions = Vec::with_capacity(morphs.len());
+    for entry in morphs {
+        let into = required::<String>(&entry, "into")?;
+        let time = match required::<Value>(&entry, "time")? {
+            Value::Integer(ticks) => MorphTime::Constant(u32::try_from(ticks).map_err(|_| {
+                ScriptError::ContentError(format!(
+                    "morph time {ticks} must be a non-negative tick count"
+                ))
+            })?),
+            Value::Table(time) => {
+                let name = required::<String>(&time, "stat")?;
+                let stat = registry.entity_stat(&name).ok_or_else(|| {
+                    ScriptError::ContentError(format!("morph time stat '{name}' is not defined"))
+                })?;
+                MorphTime::Stat(stat)
+            }
+            other => {
+                return Err(ScriptError::ContentError(format!(
+                    "morph time must be a tick count or a {{ stat = ... }} table, \
+                     found {}",
+                    other.type_name()
+                )));
+            }
+        };
+        let placement = match required::<String>(&entry, "placement")?.as_str() {
+            "reserve" => MorphPlacement::Reserve,
+            "revalidate" => MorphPlacement::Revalidate,
+            other => {
+                return Err(ScriptError::ContentError(format!(
+                    "morph placement must be 'reserve' or 'revalidate', found '{other}'"
+                )));
+            }
+        };
+        let cancel = match required::<String>(&entry, "cancel")?.as_str() {
+            "committed" => MorphCancel::Committed,
+            "forfeit" => MorphCancel::Forfeit,
+            "refundable" => MorphCancel::Refundable,
+            other => {
+                return Err(ScriptError::ContentError(format!(
+                    "morph cancel must be 'committed', 'forfeit', or 'refundable', \
+                     found '{other}'"
+                )));
+            }
+        };
+        let costs = match optional::<Table>(&entry, "cost")? {
+            Some(cost) => parse_entity_cast_cost(&cost)?,
+            None => Vec::new(),
+        };
+        let requires = optional::<Vec<String>>(&entry, "requires")?.unwrap_or_default();
+        transitions.push(MorphTransition::new(
+            into, time, placement, cancel, costs, requires,
+        ));
+    }
+    Ok(transitions)
 }
 
 /// Reads a player cast's `cost` block: a `resources` table of amounts — the

@@ -254,7 +254,7 @@ fn set_team_updates_slot() {
 //
 
 #[test]
-fn environment_slot_is_an_occupied_raceless_teamless_ai() {
+fn environment_slot_is_occupied_raceless_teamless_ai() {
     let slot = PlayerSlot::environment(4);
 
     assert_eq!(slot.participation(), Some(Participation::Environment));
@@ -340,7 +340,7 @@ fn player_with_no_team_is_allied_with_no_one_but_itself() {
 }
 
 #[test]
-fn is_winner_covers_the_whole_team_or_the_lone_player() {
+fn is_winner_covers_whole_team_or_lone_player() {
     let session = teams(&[Some(1), Some(1), None]);
     // A team victory: every member of that team shares it, no one else.
     assert!(session.is_winner(0, Winner::Team(1)));

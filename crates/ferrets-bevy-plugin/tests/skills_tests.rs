@@ -311,6 +311,7 @@ fn app() -> App {
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
                 .with_health(50)
                 .with_attack(10, 1, 1, 4, 2)
+                .with_targets(utils::GROUND)
                 .with_energy(100, FixedU64::from_num(1))
                 .with_skills([battle_focus, rally, sacrifice, last_rite, war_secret]),
         );

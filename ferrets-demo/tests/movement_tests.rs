@@ -5,30 +5,21 @@
 mod utils;
 
 use bevy::prelude::*;
-use ferrets_bevy_plugin::{SimulationPlugin, instantiate_scenario};
-use ferrets_content::registry::ContentRegistry;
-use ferrets_demo::{content::CONTENT, scenario};
-use ferrets_geometry::{cell_size::CellSize, projection::Projection};
+use ferrets_geometry::cell_size::CellSize;
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
-use ferrets_script::{content, engine::lua::LuaEngine};
 use ferrets_simulation::{
     components::{
         location::LocationComponent, order_queue::OrderQueueComponent,
         resource::ResourceSourceComponent,
     },
-    map::Map,
     movement_model::MovementModel,
     order::Order,
-    session::{
-        GameSession, ai_hosting::AiHosting, authority::Authority, drop_policy::DropPolicy,
-        finish_policy::FinishPolicy, player_slot::PlayerSlot, player_type::PlayerType,
-    },
     spawn,
 };
 
 #[test]
 fn continuous_group_move_settles_without_milling() {
-    let mut app = scenario_app(MovementModel::Continuous);
+    let mut app = utils::scenario_app(MovementModel::Continuous);
 
     // The mission's own worker pair plus two more packed beside them, as
     // freshly trained units leave a building — a marching column whose
@@ -131,7 +122,7 @@ fn continuous_group_move_settles_without_milling() {
 
 #[test]
 fn harvest_of_unreachable_tree_switches_to_reachable_neighbor() {
-    let mut app = scenario_app(MovementModel::Continuous);
+    let mut app = utils::scenario_app(MovementModel::Continuous);
 
     // A tree fully ringed by other trees: no cell within harvest range of it
     // is passable, so the chase can never arrive — but the ring itself is
@@ -220,51 +211,9 @@ fn harvest_of_unreachable_tree_switches_to_reachable_neighbor() {
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 //
 
-/// A headless single-player game on the built-in mission's map and content,
-/// forced onto the given movement model.
-fn scenario_app(model: MovementModel) -> App {
-    let slots = vec![PlayerSlot::occupied(
-        0,
-        PlayerType::Human,
-        Some("human"),
-        None,
-    )];
-    let mission = scenario::builtin_mission(Projection::Isometric, model);
-    let registry = content::load(&LuaEngine, CONTENT).expect("demo content");
-    let game_map = Map::from_data(&mission.map, &registry);
-
-    let mut app = App::new();
-    app.add_plugins(SimulationPlugin::new(
-        GameSession::configured(
-            0,
-            slots,
-            "build_army",
-            Authority::Host {
-                ai_hosting: AiHosting::Replicated,
-            },
-            DropPolicy::Automatic,
-            FinishPolicy::Endless,
-        ),
-        game_map,
-    ));
-    {
-        let world = app.world_mut();
-        *world.resource_mut::<ContentRegistry>() = registry;
-        instantiate_scenario(world, &mission);
-        world.resource_mut::<GameSession>().start();
-    }
-    app
-}
-
 fn positions(app: &mut App, units: &[Entity]) -> Vec<FixedUVec2> {
     units
         .iter()
-        .map(|&unit| {
-            app.world()
-                .entity(unit)
-                .get::<LocationComponent>()
-                .unwrap()
-                .position
-        })
+        .map(|&unit| utils::position_of(app.world_mut(), unit))
         .collect()
 }

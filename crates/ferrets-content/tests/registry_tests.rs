@@ -9,6 +9,7 @@ use ferrets_content::{
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     location::Solidity,
+    morph::{MorphCancel, MorphPlacement, MorphTime, MorphTransition},
     player_buffs::{PlayerBuffDef, PlayerBuffId},
     player_stats::PlayerStatId,
     registry::ContentRegistry,
@@ -48,6 +49,41 @@ fn register_rejects_duplicate_type() {
 #[should_panic(expected = "entity type 'worker' has no location")]
 fn register_rejects_missing_location() {
     ContentRegistry::default().register(EntityTypeDef::new("worker"));
+}
+
+#[test]
+fn register_accepts_square_multi_cell_mover() {
+    let mut registry = ground_registry();
+    registry.register(
+        EntityTypeDef::new("gryphon")
+            .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
+            .with_movement(FixedU64::ONE, FixedU64::ONE),
+    );
+}
+
+#[test]
+#[should_panic(expected = "entity type 'wagon' moves but has a non-square footprint")]
+fn register_rejects_oblong_mover() {
+    // Clearance is one number per mover and its body is a circle inscribed in
+    // the footprint, so an oblong would need per-axis clearance and a rule for
+    // whether the footprint turns with the mover.
+    let mut registry = ground_registry();
+    registry.register(
+        EntityTypeDef::new("wagon")
+            .with_location(GROUND, CellSize::new(2, 3), Solidity::Solid)
+            .with_movement(FixedU64::ONE, FixedU64::ONE),
+    );
+}
+
+#[test]
+fn register_accepts_oblong_footprint_on_something_that_cannot_move() {
+    // Only movers are constrained: a 3x2 wall is a perfectly good building.
+    let mut registry = ground_registry();
+    registry.register(EntityTypeDef::new("wall").with_location(
+        GROUND,
+        CellSize::new(3, 2),
+        Solidity::Solid,
+    ));
 }
 
 //
@@ -290,6 +326,7 @@ fn register_rejects_corpse_with_live_gameplay_data() {
             .with_location(GROUND, CellSize::ONE, Solidity::Solid)
             .with_health(10)
             .with_attack(1, 1, 1, 2, 1)
+            .with_targets(GROUND)
             .with_dying(2, None),
     );
     registry.register(
@@ -488,6 +525,60 @@ fn register_terrain_rejects_duplicate_name() {
 #[should_panic(expected = "terrain name must not be empty")]
 fn empty_terrain_name_panics() {
     ContentRegistry::default().register_terrain("", LayerMask::EMPTY);
+}
+
+#[test]
+fn validate_accepts_mover_whose_layers_one_terrain_passes_together() {
+    let mut registry = ContentRegistry::default();
+    let ground = registry.register_layer("ground");
+    let water = registry.register_layer("water");
+    registry.register_terrain("grass", ground);
+    registry.register_terrain("water", water);
+    // A shore terrain passes both, so a shore mover has somewhere to stand.
+    registry.register_terrain("shallows", ground | water);
+    registry.register(
+        EntityTypeDef::new("barge")
+            .with_location(ground | water, CellSize::ONE, Solidity::Solid)
+            .with_movement(FixedU64::ONE, FixedU64::from_num(0.5)),
+    );
+
+    registry.validate();
+}
+
+#[test]
+#[should_panic(expected = "entity type 'barge' moves on layers")]
+fn validate_rejects_mover_no_terrain_passes_together() {
+    let mut registry = ContentRegistry::default();
+    let ground = registry.register_layer("ground");
+    let water = registry.register_layer("water");
+    registry.register_terrain("grass", ground);
+    registry.register_terrain("water", water);
+    // Occupation is conjunctive, so this asks for terrain passing ground *and*
+    // water — which is a shore, and no terrain here is one.
+    registry.register(
+        EntityTypeDef::new("barge")
+            .with_location(ground | water, CellSize::ONE, Solidity::Solid)
+            .with_movement(FixedU64::ONE, FixedU64::from_num(0.5)),
+    );
+
+    registry.validate();
+}
+
+#[test]
+fn validate_ignores_layers_of_things_that_cannot_move() {
+    let mut registry = ContentRegistry::default();
+    let ground = registry.register_layer("ground");
+    let air = registry.register_layer("air");
+    registry.register_terrain("grass", ground);
+    // A tall building occupies ground and air at once and never moves, so no
+    // terrain has to pass the pair for it to stand where it was placed.
+    registry.register(EntityTypeDef::new("tower").with_location(
+        ground | air,
+        CellSize::new(2, 2),
+        Solidity::Solid,
+    ));
+
+    registry.validate();
 }
 
 //
@@ -707,7 +798,31 @@ fn register_rejects_damage_point_beyond_attack_period() {
     registry.register(
         EntityTypeDef::new("worker")
             .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-            .with_attack(10, 1, 1, 2, 5),
+            .with_attack(10, 1, 1, 2, 5)
+            .with_targets(GROUND),
+    );
+}
+
+#[test]
+#[should_panic(expected = "entity type 'archer' has a weapon but does not declare targets")]
+fn register_rejects_weapon_without_targets() {
+    let mut registry = ground_registry();
+    registry.register(
+        EntityTypeDef::new("archer")
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+            .with_attack(5, 4, 4, 7, 3),
+    );
+}
+
+#[test]
+#[should_panic(expected = "entity type 'scarecrow' declares targets but has no weapon to aim")]
+fn register_rejects_targets_without_weapon() {
+    let mut registry = ground_registry();
+    registry.register(
+        EntityTypeDef::new("scarecrow")
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+            .with_health(10)
+            .with_targets(GROUND),
     );
 }
 
@@ -1417,6 +1532,250 @@ fn validate_accepts_research_requirement_on_skill() {
 }
 
 //
+// ─── Morph transitions ────────────────────────────────────────────────────────
+//
+
+#[test]
+fn validate_accepts_transitions_naming_each_other() {
+    let mut registry = ground_registry();
+    registry.register(
+        EntityTypeDef::new("walker")
+            .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
+            .with_movement(FixedU64::ONE, FixedU64::ONE)
+            .with_morphs([morph_into("flier")]),
+    );
+    registry.register(
+        EntityTypeDef::new("flier")
+            .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
+            .with_movement(FixedU64::ONE, FixedU64::ONE)
+            .with_morphs([morph_into("walker")]),
+    );
+
+    registry.validate();
+}
+
+#[test]
+fn validate_accepts_one_way_transition() {
+    let mut registry = ground_registry();
+    registry.register(
+        EntityTypeDef::new("walker")
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+            .with_movement(FixedU64::ONE, FixedU64::from_num(0.5))
+            .with_morphs([morph_into("flier")]),
+    );
+    registry.register(
+        EntityTypeDef::new("flier")
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+            .with_movement(FixedU64::ONE, FixedU64::from_num(0.5)),
+    );
+
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'walker' morphing into 'flier' names a type that is not registered"
+)]
+fn validate_rejects_transition_into_unregistered_type() {
+    let mut registry = ground_registry();
+    registry.register(
+        EntityTypeDef::new("walker")
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+            .with_movement(FixedU64::ONE, FixedU64::from_num(0.5))
+            .with_morphs([morph_into("flier")]),
+    );
+
+    registry.validate();
+}
+
+#[test]
+#[should_panic(expected = "odd footprint difference")]
+fn validate_rejects_transition_with_odd_footprint_difference() {
+    // Recentring shifts the anchor by half the size difference per axis: a
+    // 1x1 -> 2x2 transition would land it between lattice points.
+    let mut registry = ground_registry();
+    registry.register(
+        EntityTypeDef::new("walker")
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+            .with_movement(FixedU64::ONE, FixedU64::from_num(0.5))
+            .with_morphs([morph_into("giant")]),
+    );
+    registry.register(
+        EntityTypeDef::new("giant")
+            .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
+            .with_movement(FixedU64::ONE, FixedU64::ONE),
+    );
+
+    registry.validate();
+}
+
+#[test]
+fn validate_accepts_transition_with_even_footprint_difference() {
+    // 1x1 -> 3x3 recentres by a whole cell per axis, which stays on lattice.
+    let mut registry = ground_registry();
+    registry.register(
+        EntityTypeDef::new("walker")
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+            .with_movement(FixedU64::ONE, FixedU64::from_num(0.5))
+            .with_morphs([morph_into("giant")]),
+    );
+    registry.register(
+        EntityTypeDef::new("giant")
+            .with_location(GROUND, CellSize::new(3, 3), Solidity::Solid)
+            .with_movement(FixedU64::ONE, FixedU64::ONE),
+    );
+
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'walker' morphing into 'flier' requires 'jet_pack', which is \
+                not a registered entity type, tag, or research"
+)]
+fn validate_rejects_transition_with_unresolved_requirement() {
+    let mut registry = ground_registry();
+    registry.register(
+        EntityTypeDef::new("walker")
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+            .with_movement(FixedU64::ONE, FixedU64::from_num(0.5))
+            .with_morphs([MorphTransition::new(
+                "flier",
+                MorphTime::Constant(20),
+                MorphPlacement::Revalidate,
+                MorphCancel::Committed,
+                Vec::new(),
+                ["jet_pack"],
+            )]),
+    );
+    registry.register(
+        EntityTypeDef::new("flier")
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+            .with_movement(FixedU64::ONE, FixedU64::from_num(0.5)),
+    );
+
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'walker' morphing into 'flier' reads its time from a stat the \
+                type does not carry"
+)]
+fn validate_rejects_transition_timed_by_undeclared_stat() {
+    let mut registry = ground_registry();
+    let stat = registry.register_entity_stat("change_time");
+    registry.register(
+        EntityTypeDef::new("walker")
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+            .with_movement(FixedU64::ONE, FixedU64::from_num(0.5))
+            .with_morphs([MorphTransition::new(
+                "flier",
+                MorphTime::Stat(stat),
+                MorphPlacement::Revalidate,
+                MorphCancel::Committed,
+                Vec::new(),
+                Vec::<String>::new(),
+            )]),
+    );
+    registry.register(
+        EntityTypeDef::new("flier")
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+            .with_movement(FixedU64::ONE, FixedU64::from_num(0.5)),
+    );
+
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'walker' morphing into 'flier' has an energy cost but no \
+                max_energy stat"
+)]
+fn validate_rejects_transition_with_energy_cost_but_no_energy_pool() {
+    let mut registry = ground_registry();
+    registry.register(
+        EntityTypeDef::new("walker")
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+            .with_movement(FixedU64::ONE, FixedU64::from_num(0.5))
+            .with_morphs([MorphTransition::new(
+                "flier",
+                MorphTime::Constant(20),
+                MorphPlacement::Revalidate,
+                MorphCancel::Committed,
+                vec![EntityCastCost::Energy(FixedU64::from_num(20))],
+                Vec::<String>::new(),
+            )]),
+    );
+    registry.register(
+        EntityTypeDef::new("flier")
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+            .with_movement(FixedU64::ONE, FixedU64::from_num(0.5)),
+    );
+
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'walker' morphing into 'flier' costs unregistered resource \
+                kind 'gold'"
+)]
+fn validate_rejects_transition_with_unregistered_resource_cost() {
+    let mut registry = ground_registry();
+    registry.register(
+        EntityTypeDef::new("walker")
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+            .with_movement(FixedU64::ONE, FixedU64::from_num(0.5))
+            .with_morphs([MorphTransition::new(
+                "flier",
+                MorphTime::Constant(20),
+                MorphPlacement::Revalidate,
+                MorphCancel::Committed,
+                vec![EntityCastCost::Resources(costs::cost([("gold", 50)]))],
+                Vec::<String>::new(),
+            )]),
+    );
+    registry.register(
+        EntityTypeDef::new("flier")
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+            .with_movement(FixedU64::ONE, FixedU64::from_num(0.5)),
+    );
+
+    registry.validate();
+}
+
+#[test]
+fn validate_accepts_transition_with_payable_costs() {
+    let mut registry = ground_registry();
+    registry.register_resource("gold");
+    registry.register(
+        EntityTypeDef::new("walker")
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+            .with_movement(FixedU64::ONE, FixedU64::from_num(0.5))
+            .with_energy(100, FixedU64::from_num(0.1))
+            .with_morphs([MorphTransition::new(
+                "flier",
+                MorphTime::Constant(20),
+                MorphPlacement::Reserve,
+                MorphCancel::Refundable,
+                vec![
+                    EntityCastCost::Resources(costs::cost([("gold", 50)])),
+                    EntityCastCost::Energy(FixedU64::from_num(20)),
+                ],
+                Vec::<String>::new(),
+            )]),
+    );
+    registry.register(
+        EntityTypeDef::new("flier")
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+            .with_movement(FixedU64::ONE, FixedU64::from_num(0.5)),
+    );
+
+    registry.validate();
+}
+
+//
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 //
 
@@ -1466,5 +1825,17 @@ fn haste_buff(registry: &mut ContentRegistry) -> PlayerBuffId {
             duration: Some(10),
             stack_rule: StackRule::Refresh,
         },
+    )
+}
+
+/// A free, timed, committed transition into the named type.
+fn morph_into(into: &str) -> MorphTransition {
+    MorphTransition::new(
+        into,
+        MorphTime::Constant(20),
+        MorphPlacement::Revalidate,
+        MorphCancel::Committed,
+        Vec::new(),
+        Vec::<String>::new(),
     )
 }

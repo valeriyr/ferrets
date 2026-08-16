@@ -23,10 +23,8 @@ fn head_on_movers_swap_in_corridor() {
         let world = app.world_mut();
         let mut map = world.resource_mut::<Map>();
         for x in 1..=8 {
-            map.nav_grid_mut()
-                .set_occupied_by(utils::GROUND, CellPos::new(x, 4), true);
-            map.nav_grid_mut()
-                .set_occupied_by(utils::GROUND, CellPos::new(x, 6), true);
+            map.set_static_occupied(utils::GROUND, CellPos::new(x, 4), true);
+            map.set_static_occupied(utils::GROUND, CellPos::new(x, 6), true);
         }
     }
     let (left, left_id) = utils::spawn_owned(&mut app, "soldier", 2, 5, 0);
@@ -53,6 +51,86 @@ fn head_on_movers_swap_in_corridor() {
 
     assert_eq!(utils::cell_of(app.world_mut(), left), CellPos::new(7, 5));
     assert_eq!(utils::cell_of(app.world_mut(), right), CellPos::new(2, 5));
+}
+
+#[test]
+fn wide_walk_reaches_goal_and_reclaims_footprint() {
+    let mut app = utils::orders_app();
+    // A cell-model wide walk end to end: claims are law here, so the wagon
+    // must carry its whole 2x2 claim along the route and settle it exactly.
+    let (wagon, id) = utils::spawn_owned(&mut app, "wagon", 2, 2, 0);
+
+    utils::select(&mut app, id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Move {
+            target: utils::pos(10, 6),
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, 200);
+
+    let world = app.world_mut();
+    assert_eq!(utils::cell_of(world, wagon), CellPos::new(10, 6));
+    let grid = world.resource::<Map>().nav_grid();
+    for (x, y) in [(10, 6), (11, 6), (10, 7), (11, 7)] {
+        assert!(
+            grid.is_claimed_by(utils::GROUND, CellPos::new(x, y)),
+            "the settled footprint cell ({x}, {y}) is unclaimed"
+        );
+    }
+    for (x, y) in [(2, 2), (3, 2), (2, 3), (3, 3)] {
+        assert!(
+            !grid.is_claimed_by(utils::GROUND, CellPos::new(x, y)),
+            "the spawn footprint cell ({x}, {y}) was never released"
+        );
+    }
+}
+
+#[test]
+fn head_on_unequal_sizes_never_swap() {
+    let mut app = utils::orders_app();
+    // A corridor exactly the wagon's height: the soldier cannot slip past,
+    // and the swap rung is refused between unequal sizes — trading claims
+    // with a body of another footprint would corrupt the one-claimant-per-
+    // cell contract. Nobody teleports through; the meeting ends with both
+    // giving up on their own side.
+    {
+        let world = app.world_mut();
+        let mut map = world.resource_mut::<Map>();
+        for x in 0..32 {
+            map.set_static_occupied(utils::GROUND, CellPos::new(x, 4), true);
+            map.set_static_occupied(utils::GROUND, CellPos::new(x, 7), true);
+        }
+    }
+    let (wagon, wagon_id) = utils::spawn_owned(&mut app, "wagon", 2, 5, 0);
+
+    utils::select(&mut app, wagon_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Move {
+            target: utils::pos(12, 5),
+            flush: true,
+        },
+    );
+    // Let the walk plan its clear straight line, then park a soldier on it:
+    // the meeting arises mid-walk, where the crowd ladder runs. An equal
+    // body would resolve it by the swap rung; the unequal pair must not.
+    utils::run_ticks(&mut app, utils::APPLY + 2);
+    let (soldier, _) = utils::spawn_owned(&mut app, "soldier", 8, 5, 0);
+
+    utils::run_ticks(&mut app, 400);
+
+    let world = app.world_mut();
+    let wagon_cell = utils::cell_of(world, wagon);
+    let soldier_cell = utils::cell_of(world, soldier);
+    // The exact end state: the wagon walks up to the soldier — footprint
+    // cells 6..=7, abutting it — burns its escalations against a blocker it
+    // may neither swap with nor push planning through, and gives up in
+    // place. The soldier never moves: a corridor its own width leaves the
+    // yield rung nowhere to step either.
+    assert_eq!(wagon_cell, CellPos::new(6, 5));
+    assert_eq!(soldier_cell, CellPos::new(8, 5));
 }
 
 #[test]

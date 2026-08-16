@@ -2,8 +2,11 @@
 //! with each other.
 
 use ferrets_content::{
+    costs,
     entity_stats::EntityStatId,
-    skills::{EntityCastTarget, PlayerCastEffect, SkillCaster},
+    morph::{MorphCancel, MorphPlacement, MorphTime},
+    skills::{EntityCastCost, EntityCastTarget, PlayerCastEffect, SkillCaster},
+    targeting,
     work::WorkPresence,
 };
 use ferrets_demo::{content::CONTENT, map};
@@ -34,11 +37,18 @@ fn content_loads_and_validates() {
         "shaman",
         "ship",
         "sea_fortress",
+        "gryphon",
+        "gryphon_aloft",
+        "zeppelin",
     ] {
         assert!(registry.entity(name).is_some(), "missing entity '{name}'");
     }
     assert!(registry.has_race("human") && registry.has_race("orc"));
-    assert!(registry.has_layer(map::GROUND) && registry.has_layer(map::WATER));
+    assert!(
+        registry.has_layer(map::GROUND)
+            && registry.has_layer(map::WATER)
+            && registry.has_layer(map::AIR)
+    );
     assert!(registry.has_terrain("grass") && registry.has_terrain("water"));
 }
 
@@ -194,6 +204,192 @@ fn map_builds_against_content_with_lake_blocking_ground() {
     assert!(!live.nav_grid().is_passable(water, corner));
 }
 
+//
+// ─── Air layer ─────────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn fliers_live_on_air_alone() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    let air = registry.layer(map::AIR).expect("air layer is registered");
+
+    for flier in ["gryphon_aloft", "zeppelin"] {
+        let occupation = registry
+            .entity(flier)
+            .and_then(|def| def.location.as_ref())
+            .map(|location| location.occupation())
+            .expect("the flier has a location");
+
+        assert!(
+            occupation == *air,
+            "'{flier}' occupies {occupation} rather than the air layer alone, so surface \
+             occupancy would block it"
+        );
+    }
+}
+
+#[test]
+fn air_layer_is_open_where_ground_and_water_are_blocked() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    let data = map::data();
+    let live = Map::from_data(&data, &registry);
+
+    let ground = registry.layer(map::GROUND).unwrap();
+    let water = registry.layer(map::WATER).unwrap();
+    let air = registry.layer(map::AIR).unwrap();
+
+    // Open water blocks walkers, dry land blocks ships, and the air is open over
+    // both: this is the whole of what the layer buys.
+    for cell in [CellPos::new(48, 48), CellPos::new(1, 1)] {
+        assert!(
+            live.nav_grid().is_passable(air, cell),
+            "air is blocked at ({}, {})",
+            cell.x,
+            cell.y
+        );
+    }
+    assert!(!live.nav_grid().is_passable(ground, CellPos::new(48, 48)));
+    assert!(!live.nav_grid().is_passable(water, CellPos::new(1, 1)));
+}
+
+#[test]
+fn only_tall_fortress_occupies_air() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    let air = registry.layer(map::AIR).expect("air layer is registered");
+
+    // Exactly one standing thing is tall enough to be in a flier's way. If more
+    // ever are, the air layer stops being mostly open and every flight across
+    // the map changes character, which is worth having to say deliberately.
+    let tall: Vec<&str> = registry
+        .entities()
+        .filter(|def| !def.can_move())
+        .filter(|def| {
+            def.location
+                .is_some_and(|location| location.occupation() & air != 0)
+        })
+        .map(|def| def.name.as_str())
+        .collect();
+
+    assert_eq!(tall, ["sea_fortress"]);
+}
+
+//
+// ─── Targeting layers ──────────────────────────────────────────────────────────
+//
+
+#[test]
+fn only_melee_and_siege_exclude_air() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    let air = registry.layer(map::AIR).expect("air layer is registered");
+
+    // Every weapon declares its layers; what stays deliberate per type is what
+    // it leaves out. Only the axe and the shell cannot answer what flies.
+    let grounded: Vec<&str> = registry
+        .entities()
+        .filter(|def| def.can_attack())
+        .filter(|def| def.attack.is_some_and(|attack| attack.targets() & air == 0))
+        .map(|def| def.name.as_str())
+        .collect();
+
+    assert_eq!(grounded, ["grunt", "mortar"]);
+}
+
+#[test]
+fn narrowed_weapons_still_reach_lake_boss() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+
+    // The boss and its fleet live on the water layer, so a weapon narrowed with a
+    // whitelist of ground and air would silently stop being able to fight them.
+    // This is the regression that made "narrow by exclusion" the rule.
+    for attacker in ["grunt", "mortar"] {
+        let attacker = registry.entity(attacker).expect("attacker is registered");
+        for victim in ["ship", "sea_fortress"] {
+            let victim = registry.entity(victim).expect("victim is registered");
+            assert!(
+                targeting::reaches(attacker, victim),
+                "'{}' can no longer reach '{}', so the lake boss is unfightable",
+                attacker.name,
+                victim.name
+            );
+        }
+    }
+}
+
+#[test]
+fn melee_cannot_reach_flier_but_ranged_can() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    let flier = registry.entity("gryphon_aloft").expect("flier");
+
+    assert!(
+        !targeting::reaches(registry.entity("grunt").expect("grunt"), flier),
+        "melee reaches the air, so taking off would never shake a pursuer"
+    );
+    assert!(
+        !targeting::reaches(registry.entity("mortar").expect("mortar"), flier),
+        "siege reaches the air, so it would shell a flier its blast cannot touch"
+    );
+    // The shaman is deliberately absent: it carries skills, not a weapon, so
+    // it reaches nothing — the old reach-everything default used to hide that.
+    // The watch tower is absent for the same reason: it only watches, and the
+    // bolts belong to its upgrade.
+    for answer in ["archer", "ship", "guard_tower"] {
+        let answer = registry.entity(answer).expect("anti-air is registered");
+        assert!(
+            targeting::reaches(answer, flier),
+            "'{}' cannot reach a flier, so nothing on that side answers one",
+            answer.name
+        );
+    }
+}
+
+#[test]
+fn watch_tower_stands_on_ground_and_answers_to_anti_air() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    let ground = registry.layer(map::GROUND).unwrap();
+    let air = registry.layer(map::AIR).unwrap();
+
+    let tower = registry.entity("watch_tower").expect("tower is registered");
+    let occupation = tower
+        .location
+        .map(|location| location.occupation())
+        .expect("the tower has a location");
+
+    // It holds the ground alone, so fliers pass over it...
+    assert_eq!(occupation, *ground);
+    // ...yet it is answerable in the air, which occupation could not have said.
+    assert_eq!(targeting::targetable(tower), ground | air);
+}
+
+#[test]
+fn watch_tower_watches_and_guard_tower_fights() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    let watch = registry.entity("watch_tower").expect("tower is registered");
+    let guard = registry
+        .entity("guard_tower")
+        .expect("upgraded tower is registered");
+
+    // The watcher is unarmed; the bolts are what the upgrade buys.
+    assert!(
+        watch.base_stat(EntityStatId::DAMAGE).is_none(),
+        "the watch tower carries a weapon, so the upgrade buys nothing"
+    );
+    assert!(
+        guard.base_stat(EntityStatId::DAMAGE).is_some(),
+        "the guard tower is unarmed, so nothing on the orc side answers fliers"
+    );
+    // And the upgrade trades eyes for those bolts: the watcher sees farther
+    // than the fighter it becomes.
+    assert_eq!(
+        watch.base_stat(EntityStatId::SIGHT_RANGE),
+        Some(FixedU64::from_num(12))
+    );
+    assert_eq!(
+        guard.base_stat(EntityStatId::SIGHT_RANGE),
+        Some(FixedU64::from_num(10)),
+        "the watch tower must outsee its armed upgrade"
+    );
+}
+
 #[test]
 fn boss_placements_sit_on_water() {
     let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
@@ -224,4 +420,81 @@ fn boss_placements_sit_on_water() {
             }
         }
     }
+}
+
+#[test]
+fn gryphon_edges_wear_different_terms() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+
+    // Taking off checks nothing early and costs a beat of energy, read from the
+    // form's own quickenable stat; landing is free, paced by a plain tick
+    // count, and reserves its ground. Both are committed.
+    let grounded = registry.entity("gryphon").expect("gryphon is registered");
+    let [take_off] = grounded.morphs.as_slice() else {
+        panic!("the grounded gryphon declares exactly one transition");
+    };
+    let morph_time = registry
+        .entity_stat("morph_time")
+        .expect("demo declares its morph_time stat");
+    assert_eq!(take_off.into_type(), "gryphon_aloft");
+    assert_eq!(
+        take_off.time(),
+        MorphTime::Stat(morph_time),
+        "the take-off window is not the quickenable stat"
+    );
+    assert_eq!(take_off.placement(), MorphPlacement::Revalidate);
+    assert_eq!(take_off.cancel(), MorphCancel::Committed);
+    assert_eq!(
+        take_off.costs(),
+        [EntityCastCost::Energy(FixedU64::from_num(20))]
+    );
+
+    let aloft = registry
+        .entity("gryphon_aloft")
+        .expect("airborne form is registered");
+    let [landing] = aloft.morphs.as_slice() else {
+        panic!("the airborne gryphon declares exactly one transition");
+    };
+    assert_eq!(landing.into_type(), "gryphon");
+    assert_eq!(landing.time(), MorphTime::Constant(20));
+    assert_eq!(landing.placement(), MorphPlacement::Reserve);
+    assert_eq!(landing.cancel(), MorphCancel::Committed);
+    assert!(landing.costs().is_empty(), "landing is free");
+    assert!(
+        aloft.train_time.is_none() && aloft.cost.is_empty(),
+        "the airborne form is not producible, only changeable into"
+    );
+}
+
+#[test]
+fn tower_upgrade_is_paid_and_refundable() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+
+    let tower = registry.entity("watch_tower").expect("tower is registered");
+    let [upgrade] = tower.morphs.as_slice() else {
+        panic!("the watch tower declares exactly one transition");
+    };
+    assert_eq!(upgrade.into_type(), "guard_tower");
+    assert_eq!(upgrade.time(), MorphTime::Constant(60));
+    assert_eq!(upgrade.placement(), MorphPlacement::Reserve);
+    assert_eq!(upgrade.cancel(), MorphCancel::Refundable);
+    assert_eq!(
+        upgrade.costs(),
+        [EntityCastCost::Resources(costs::cost([
+            ("gold", 80),
+            ("wood", 20)
+        ]))]
+    );
+
+    let upgraded = registry
+        .entity("guard_tower")
+        .expect("upgraded tower is registered");
+    assert!(
+        upgraded.train_time.is_none() && upgraded.build_time.is_none(),
+        "the upgraded tower is not producible, only changeable into"
+    );
+    assert!(
+        upgraded.tags.contains("building"),
+        "an upgraded tower must still count as a standing base"
+    );
 }

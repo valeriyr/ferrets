@@ -5,7 +5,7 @@ mod utils;
 
 use ferrets_pathfinder::{
     hierarchy::{ClusterPos, NavHierarchy, Transition},
-    layer_mask::LayerMask,
+    mover_shape::MoverShape,
 };
 
 //
@@ -70,7 +70,9 @@ fn narrow_entrance_yields_middle_transition() {
     let hierarchy = utils::build_ground(&grid, 4);
 
     assert_eq!(
-        hierarchy.transitions(utils::GROUND).collect::<Vec<_>>(),
+        hierarchy
+            .transitions(utils::on_ground())
+            .collect::<Vec<_>>(),
         vec![transition(3, 2, 4, 2)]
     );
 }
@@ -84,7 +86,9 @@ fn wide_entrance_yields_transitions_at_both_ends() {
     let hierarchy = utils::build_ground(&grid, 8);
 
     assert_eq!(
-        hierarchy.transitions(utils::GROUND).collect::<Vec<_>>(),
+        hierarchy
+            .transitions(utils::on_ground())
+            .collect::<Vec<_>>(),
         vec![transition(7, 0, 8, 0), transition(7, 7, 8, 7)]
     );
 }
@@ -102,7 +106,9 @@ fn wall_splits_border_into_separate_entrances() {
     let hierarchy = utils::build_ground(&grid, 4);
 
     assert_eq!(
-        hierarchy.transitions(utils::GROUND).collect::<Vec<_>>(),
+        hierarchy
+            .transitions(utils::on_ground())
+            .collect::<Vec<_>>(),
         vec![transition(3, 3, 4, 3)]
     );
 }
@@ -117,7 +123,7 @@ fn blocked_border_yields_no_transitions() {
 
     let hierarchy = utils::build_ground(&grid, 4);
 
-    assert_eq!(hierarchy.transitions(utils::GROUND).count(), 0);
+    assert_eq!(hierarchy.transitions(utils::on_ground()).count(), 0);
 }
 
 #[test]
@@ -129,7 +135,9 @@ fn horizontal_border_pairs_upper_and_lower_cells() {
     let hierarchy = utils::build_ground(&grid, 4);
 
     assert_eq!(
-        hierarchy.transitions(utils::GROUND).collect::<Vec<_>>(),
+        hierarchy
+            .transitions(utils::on_ground())
+            .collect::<Vec<_>>(),
         vec![transition(2, 3, 2, 4)]
     );
 }
@@ -143,8 +151,31 @@ fn edge_clusters_shorter_than_cluster_size_still_extract() {
     let hierarchy = utils::build_ground(&grid, 4);
 
     assert_eq!(
-        hierarchy.transitions(utils::GROUND).collect::<Vec<_>>(),
+        hierarchy
+            .transitions(utils::on_ground())
+            .collect::<Vec<_>>(),
         vec![transition(3, 2, 4, 2)]
+    );
+}
+
+#[test]
+fn wide_shape_entrance_middle_respects_footprint_reach() {
+    // The same fully open 4-tall border as the narrow case, seen by a 2x2:
+    // anchors at y=3 would hang off the south edge, so the run is y=0..=2 and
+    // its middle lands one cell higher than the narrow shape's.
+    let grid = utils::grid(8, 4);
+    let narrow = utils::on_ground();
+    let wide = utils::square_on_ground(2);
+
+    let hierarchy = utils::build_for(&grid, 4, &[narrow, wide]);
+
+    assert_eq!(
+        hierarchy.transitions(narrow).collect::<Vec<_>>(),
+        vec![transition(3, 2, 4, 2)]
+    );
+    assert_eq!(
+        hierarchy.transitions(wide).collect::<Vec<_>>(),
+        vec![transition(3, 1, 4, 1)]
     );
 }
 
@@ -158,8 +189,8 @@ fn open_grid_is_one_region() {
 
     let hierarchy = utils::build_ground(&grid, 4);
 
-    assert_eq!(hierarchy.region_count(utils::GROUND), 1);
-    assert!(hierarchy.same_region(utils::GROUND, utils::nav(0, 0), utils::nav(7, 7)));
+    assert_eq!(hierarchy.region_count(utils::on_ground()), 1);
+    assert!(hierarchy.same_region(utils::nav(0, 0), utils::on_ground(), utils::nav(7, 7)));
 }
 
 #[test]
@@ -173,10 +204,13 @@ fn wall_splits_grid_into_two_regions() {
 
     let hierarchy = utils::build_ground(&grid, 4);
 
-    assert_eq!(hierarchy.region_count(utils::GROUND), 2);
-    assert!(!hierarchy.same_region(utils::GROUND, utils::nav(0, 0), utils::nav(7, 7)));
-    assert!(hierarchy.same_region(utils::GROUND, utils::nav(0, 0), utils::nav(3, 7)));
-    assert_eq!(hierarchy.region_of(utils::GROUND, utils::nav(4, 3)), None);
+    assert_eq!(hierarchy.region_count(utils::on_ground()), 2);
+    assert!(!hierarchy.same_region(utils::nav(0, 0), utils::on_ground(), utils::nav(7, 7)));
+    assert!(hierarchy.same_region(utils::nav(0, 0), utils::on_ground(), utils::nav(3, 7)));
+    assert_eq!(
+        hierarchy.region_of(utils::nav(4, 3), utils::on_ground()),
+        None
+    );
 }
 
 #[test]
@@ -189,8 +223,8 @@ fn corner_touching_areas_are_separate_regions() {
 
     let hierarchy = utils::build_ground(&grid, 4);
 
-    assert_eq!(hierarchy.region_count(utils::GROUND), 2);
-    assert!(!hierarchy.same_region(utils::GROUND, utils::nav(1, 0), utils::nav(0, 1)));
+    assert_eq!(hierarchy.region_count(utils::on_ground()), 2);
+    assert!(!hierarchy.same_region(utils::nav(1, 0), utils::on_ground(), utils::nav(0, 1)));
 }
 
 #[test]
@@ -199,8 +233,14 @@ fn out_of_bounds_cell_has_no_region() {
 
     let hierarchy = utils::build_ground(&grid, 4);
 
-    assert_eq!(hierarchy.region_of(utils::GROUND, utils::nav(4, 0)), None);
-    assert_eq!(hierarchy.region_of(utils::GROUND, utils::nav(0, 4)), None);
+    assert_eq!(
+        hierarchy.region_of(utils::nav(4, 0), utils::on_ground()),
+        None
+    );
+    assert_eq!(
+        hierarchy.region_of(utils::nav(0, 4), utils::on_ground()),
+        None
+    );
 }
 
 #[test]
@@ -212,19 +252,90 @@ fn masks_have_independent_regions() {
         grid.set_occupied(utils::GROUND, utils::nav(4, y), true);
     }
 
-    let hierarchy = NavHierarchy::build(
-        &grid,
-        4,
-        &[
-            LayerMask::from(utils::GROUND),
-            LayerMask::from(utils::AIR),
-            utils::GROUND | utils::AIR,
-        ],
-    );
+    let both = MoverShape::point(utils::GROUND | utils::AIR);
+    let hierarchy = NavHierarchy::build(&grid, 4, &[utils::on_ground(), utils::in_air(), both]);
 
-    assert_eq!(hierarchy.region_count(utils::GROUND), 2);
-    assert_eq!(hierarchy.region_count(utils::AIR), 1);
-    assert_eq!(hierarchy.region_count(utils::GROUND | utils::AIR), 2);
+    assert_eq!(hierarchy.region_count(utils::on_ground()), 2);
+    assert_eq!(hierarchy.region_count(utils::in_air()), 1);
+    assert_eq!(hierarchy.region_count(both), 2);
+}
+
+//
+// ─── Clearance ────────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn wide_mover_does_not_connect_through_narrow_gap() {
+    // A wall down x=4 with a single-cell hole at y=2:
+    //
+    //   . . . . X . . .
+    //   . . . . X . . .
+    //   . . . .   . . .   <- the one-cell gap
+    //   . . . . X . . .
+    //
+    // A single-cell mover crosses it, a two-cell one cannot fit and so its
+    // halves are genuinely separate regions — the whole point of clearance.
+    let mut grid = utils::grid(8, 8);
+    for y in 0..8 {
+        if y != 2 {
+            grid.set_occupied(utils::GROUND, utils::nav(4, y), true);
+        }
+    }
+
+    let narrow = utils::on_ground();
+    let wide = utils::square_on_ground(2);
+    let hierarchy = utils::build_for(&grid, 4, &[narrow, wide]);
+
+    assert_eq!(hierarchy.region_count(narrow), 1);
+    assert!(hierarchy.same_region(utils::nav(0, 2), narrow, utils::nav(6, 2)));
+
+    assert_eq!(
+        hierarchy.region_count(wide),
+        2,
+        "a two-cell mover squeezed through a one-cell gap"
+    );
+    assert!(!hierarchy.same_region(utils::nav(0, 2), wide, utils::nav(6, 2)));
+}
+
+#[test]
+fn wide_mover_connects_through_gap_it_fits() {
+    // The same wall with a two-cell hole at y=2..=3 lets both through.
+    let mut grid = utils::grid(8, 8);
+    for y in 0..8 {
+        if y != 2 && y != 3 {
+            grid.set_occupied(utils::GROUND, utils::nav(4, y), true);
+        }
+    }
+
+    let wide = utils::square_on_ground(2);
+    let hierarchy = utils::build_for(&grid, 4, &[wide]);
+
+    assert_eq!(hierarchy.region_count(wide), 1);
+    assert!(hierarchy.same_region(utils::nav(0, 2), wide, utils::nav(6, 2)));
+}
+
+#[test]
+fn wide_mover_has_no_region_where_its_footprint_would_not_fit() {
+    // A cell one step from a wall is a legal anchor for a single-cell mover and
+    // not for a wider one, whose footprint would reach into the wall.
+    let mut grid = utils::grid(8, 8);
+    for y in 0..8 {
+        grid.set_occupied(utils::GROUND, utils::nav(5, y), true);
+    }
+
+    let hierarchy = utils::build_for(&grid, 4, &[utils::on_ground(), utils::square_on_ground(2)]);
+
+    // Region ids are minted in flood order, row-major from the origin, so
+    // the left half is region 0 — pinned, because peers replay the flood.
+    assert_eq!(
+        hierarchy.region_of(utils::nav(4, 0), utils::on_ground()),
+        Some(0)
+    );
+    assert_eq!(
+        hierarchy.region_of(utils::nav(4, 0), utils::square_on_ground(2)),
+        None,
+        "anchoring a two-cell footprint at x=4 reaches into the wall at x=5"
+    );
 }
 
 //
@@ -245,10 +356,15 @@ fn refresh_re_derives_marked_borders() {
     hierarchy.refresh(&grid);
 
     assert_eq!(
-        hierarchy.transitions(utils::GROUND).collect::<Vec<_>>(),
+        hierarchy
+            .transitions(utils::on_ground())
+            .collect::<Vec<_>>(),
         vec![transition(3, 1, 4, 1), transition(3, 3, 4, 3)]
     );
-    assert_eq!(hierarchy.region_of(utils::GROUND, utils::nav(3, 2)), None);
+    assert_eq!(
+        hierarchy.region_of(utils::nav(3, 2), utils::on_ground()),
+        None
+    );
 }
 
 #[test]
@@ -265,10 +381,12 @@ fn refresh_restores_entrance_when_footprint_clears() {
     hierarchy.refresh(&grid);
 
     assert_eq!(
-        hierarchy.transitions(utils::GROUND).collect::<Vec<_>>(),
+        hierarchy
+            .transitions(utils::on_ground())
+            .collect::<Vec<_>>(),
         vec![transition(3, 2, 4, 2)]
     );
-    assert_eq!(hierarchy.region_count(utils::GROUND), 1);
+    assert_eq!(hierarchy.region_count(utils::on_ground()), 1);
 }
 
 #[test]
@@ -282,14 +400,14 @@ fn unmarked_changes_stay_stale_until_marked() {
 
     // Refresh without any mark: the hierarchy must not chase the grid.
     hierarchy.refresh(&grid);
-    assert_eq!(hierarchy.transitions(utils::GROUND).count(), 1);
-    assert_eq!(hierarchy.region_count(utils::GROUND), 1);
+    assert_eq!(hierarchy.transitions(utils::on_ground()).count(), 1);
+    assert_eq!(hierarchy.region_count(utils::on_ground()), 1);
 
     // One marked cell of the wall re-derives its whole border and refloods.
     hierarchy.mark_dirty(utils::nav(4, 0));
     hierarchy.refresh(&grid);
-    assert_eq!(hierarchy.transitions(utils::GROUND).count(), 0);
-    assert_eq!(hierarchy.region_count(utils::GROUND), 2);
+    assert_eq!(hierarchy.transitions(utils::on_ground()).count(), 0);
+    assert_eq!(hierarchy.region_count(utils::on_ground()), 2);
 }
 
 #[test]
@@ -306,10 +424,39 @@ fn unit_claims_are_invisible_to_hierarchy() {
     hierarchy.refresh(&grid);
 
     assert_eq!(
-        hierarchy.transitions(utils::GROUND).collect::<Vec<_>>(),
+        hierarchy
+            .transitions(utils::on_ground())
+            .collect::<Vec<_>>(),
         vec![transition(3, 2, 4, 2)]
     );
-    assert_eq!(hierarchy.region_count(utils::GROUND), 1);
+    assert_eq!(hierarchy.region_count(utils::on_ground()), 1);
+}
+
+#[test]
+fn refresh_re_derives_wide_transitions_from_changes_past_border() {
+    // 8×4, cluster 4: the wide shape's only entrance over the x=3|4 border sits
+    // at its middle. A wall at x=5 lies on no border, but a 2×2 anchored at
+    // (4,0) or (4,1) covers it — so the entrance must re-derive, or the
+    // hierarchy keeps offering crossings the footprint no longer fits.
+    let mut grid = utils::grid(8, 4);
+    let wide = utils::square_on_ground(2);
+    let mut hierarchy = utils::build_for(&grid, 4, &[wide]);
+
+    assert_eq!(
+        hierarchy.transitions(wide).collect::<Vec<_>>(),
+        vec![transition(3, 1, 4, 1)]
+    );
+
+    grid.set_occupied(utils::GROUND, utils::nav(5, 1), true);
+    hierarchy.mark_dirty(utils::nav(5, 1));
+    hierarchy.refresh(&grid);
+
+    // Anchors (4,0) and (4,1) now reach into the wall; only y=2 pairs survive
+    // (y=3 anchors always ran off the grid's south edge).
+    assert_eq!(
+        hierarchy.transitions(wide).collect::<Vec<_>>(),
+        vec![transition(3, 2, 4, 2)]
+    );
 }
 
 //
@@ -319,9 +466,10 @@ fn unit_claims_are_invisible_to_hierarchy() {
 #[test]
 fn rebuilding_from_same_grid_yields_identical_hierarchy() {
     let grid = utils::hollow_ring_grid(32, utils::nav(16, 16), 6);
+    let shapes = [utils::on_ground(), utils::square_on_ground(2)];
 
-    let first = utils::build_ground(&grid, 8);
-    let second = utils::build_ground(&grid, 8);
+    let first = utils::build_for(&grid, 8, &shapes);
+    let second = utils::build_for(&grid, 8, &shapes);
 
     assert_eq!(first, second);
 }
@@ -331,12 +479,23 @@ fn rebuilding_from_same_grid_yields_identical_hierarchy() {
 //
 
 #[test]
-#[should_panic(expected = "no hierarchy built for mask")]
-fn querying_unknown_mask_panics() {
+#[should_panic(expected = "no hierarchy built for shape")]
+fn querying_unserved_layer_panics() {
     let grid = utils::grid(4, 4);
     let hierarchy = utils::build_ground(&grid, 4);
 
-    hierarchy.region_of(utils::AIR, utils::nav(0, 0));
+    hierarchy.region_of(utils::nav(0, 0), utils::in_air());
+}
+
+#[test]
+#[should_panic(expected = "no hierarchy built for shape")]
+fn querying_unserved_footprint_panics() {
+    // Same layer, wider footprint: a distinct abstraction, because a wide mover
+    // genuinely has fewer ways through the map than a narrow one.
+    let grid = utils::grid(8, 8);
+    let hierarchy = utils::build_ground(&grid, 4);
+
+    hierarchy.region_of(utils::nav(0, 0), utils::square_on_ground(2));
 }
 
 //

@@ -19,7 +19,8 @@ use crate::{map, scenario::CurrentScenario, states::InGameUi};
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2, fixed_vec2::FixedVec2};
 
 use ferrets_content::{
-    entity_stats::EntityStatId, registry::ContentRegistry, resource::ResourceSourceDef, tags,
+    entity_stats::EntityStatId, entity_type_def::EntityTypeDef, morph::MorphTime,
+    registry::ContentRegistry, resource::ResourceSourceDef, tags,
 };
 use ferrets_simulation::{
     components::{
@@ -31,6 +32,7 @@ use ferrets_simulation::{
         health::HealthComponent,
         hidden::HiddenComponent,
         location::LocationComponent,
+        morph::MorphComponent,
         order_queue::OrderQueueComponent,
         owner::OwnerComponent,
         rally::{RallyPointComponent, RallyTarget},
@@ -119,6 +121,32 @@ pub(crate) fn world_center(position: FixedUVec2, size: CellSize) -> Vec3 {
     Vec3::new(cx * CELL_PX, -cy * CELL_PX, 1.0)
 }
 
+/// How far up the screen an airborne sprite is drawn from the cell it is over,
+/// and how far its shadow sits below it.
+const AIR_LIFT_PX: f32 = CELL_PX * 0.9;
+
+/// The draw offset for a type: airborne things are lifted up the screen and
+/// drawn over everything on the ground.
+///
+/// Altitude is presentation only — the simulation knows nothing about it, and a
+/// flier's position is the cell it is over. The lift is what makes an air unit
+/// crossing a lake or a keep read as passing above it rather than through it.
+///
+/// Airborne means occupying the air *alone*: something that holds the air on
+/// top of a surface — a fortress tall enough to wall the sky — stands on that
+/// surface and casts no flight shadow.
+pub(crate) fn air_lift(registry: &ContentRegistry, def: &EntityTypeDef) -> Vec3 {
+    let airborne = match (registry.layer(map::AIR), def.location) {
+        (Some(air), Some(location)) => location.occupation() == *air,
+        _ => false,
+    };
+    if airborne {
+        Vec3::new(0.0, AIR_LIFT_PX, 1.0)
+    } else {
+        Vec3::ZERO
+    }
+}
+
 fn color_for(
     owner: Option<&OwnerComponent>,
     source: Option<&ResourceSourceDef>,
@@ -147,9 +175,9 @@ fn color_for(
 
 /// The placeholder shape used for an entity type.
 enum Shape {
-    /// Melee units — a triangle that points where it faces.
+    /// The archer — a triangle that points where it faces.
     Triangle,
-    /// Ranged units — a diamond.
+    /// The grunt — a diamond.
     Diamond,
     /// Siege units (those whose hits burst) — a pentagon.
     Pentagon,
@@ -163,6 +191,20 @@ enum Shape {
     Fortress,
     /// Support units — a disc bearing a lighter cross.
     Cross,
+    /// The gryphon pair — a beast with a saddle disc and a wing bar whose
+    /// span tells the two forms apart.
+    Gryphon {
+        /// Whether this is the airborne form, wearing the full wingspan.
+        aloft: bool,
+    },
+    /// The zeppelin — an envelope longer than it is wide, with a gondola
+    /// slung amidships and a tail fin across the stern.
+    Zeppelin,
+    /// The watch tower — a square base bearing a lighter lookout platform.
+    WatchTower,
+    /// The guard tower — the watch tower's armed upgrade: the lookout gains
+    /// a darker four-point turret.
+    GuardTower,
     /// Main buildings and resource sources — a square.
     Square,
 }
@@ -178,6 +220,11 @@ fn shape_for(type_name: &str) -> Shape {
         "ship" => Shape::Ship,
         "barracks" | "war_camp" => Shape::Hexagon,
         "sea_fortress" => Shape::Fortress,
+        "gryphon" => Shape::Gryphon { aloft: false },
+        "gryphon_aloft" => Shape::Gryphon { aloft: true },
+        "zeppelin" => Shape::Zeppelin,
+        "watch_tower" => Shape::WatchTower,
+        "guard_tower" => Shape::GuardTower,
         _ => Shape::Square,
     }
 }
@@ -205,7 +252,7 @@ pub fn attach_sprites(
     for (entity, info, location, owner) in &query {
         let def = registry.def(info.type_id());
         let size = def.location.unwrap().size();
-        let center = world_center(location.position, size);
+        let center = world_center(location.position, size) + air_lift(&registry, def);
         let color = color_for(owner, def.resource_source.as_ref(), &session);
         let radius = size.width.min(size.height) as f32 * CELL_PX * 0.45;
 
@@ -306,6 +353,83 @@ pub fn attach_sprites(
                     ));
                 });
             }
+            Shape::Gryphon { aloft } => {
+                // The beast's body points where it goes and a lighter disc
+                // marks the saddle its archer fights from. The wing bar
+                // across the shoulders tells the forms apart at a glance:
+                // tucked short on the ground, spread to a full span aloft.
+                let wing_span = if aloft { radius * 3.2 } else { radius * 1.4 };
+                let wing = Vec2::new(wing_span, radius * 0.4);
+                entity.insert((
+                    Mesh2d(meshes.add(RegularPolygon::new(radius * 0.95, 3))),
+                    MeshMaterial2d(materials.add(color)),
+                    Directional,
+                ));
+                entity.with_children(|parent| {
+                    parent.spawn((
+                        Sprite::from_color(color.lighter(0.12), wing),
+                        Transform::from_translation(Vec3::new(0.0, -radius * 0.2, 0.1)),
+                    ));
+                    parent.spawn((
+                        Mesh2d(meshes.add(Circle::new(radius * 0.3))),
+                        MeshMaterial2d(materials.add(color.lighter(0.3))),
+                        Transform::from_translation(Vec3::new(0.0, 0.0, 0.2)),
+                    ));
+                });
+            }
+            Shape::Zeppelin => {
+                // The envelope's nose leads the facing; the darker gondola
+                // hangs amidships and the fin crosses the stern.
+                let gondola = Vec2::new(radius * 0.35, radius * 0.8);
+                let fin = Vec2::new(radius * 0.9, radius * 0.18);
+                entity.insert((
+                    Mesh2d(meshes.add(Ellipse::new(radius * 0.6, radius * 1.05))),
+                    MeshMaterial2d(materials.add(color)),
+                    Directional,
+                ));
+                entity.with_children(|parent| {
+                    parent.spawn((
+                        Sprite::from_color(color.darker(0.12), gondola),
+                        Transform::from_translation(Vec3::new(0.0, -radius * 0.1, 0.1)),
+                    ));
+                    parent.spawn((
+                        Sprite::from_color(color.darker(0.12), fin),
+                        Transform::from_translation(Vec3::new(0.0, -radius * 0.95, 0.1)),
+                    ));
+                });
+            }
+            Shape::WatchTower => {
+                // A square base bearing a lighter round lookout — the height
+                // that makes it answerable to anti-air, unarmed until upgraded.
+                let px = Vec2::new(size.width as f32, size.height as f32) * CELL_PX * 0.85;
+                entity.insert(Sprite::from_color(color, px));
+                entity.with_children(|parent| {
+                    parent.spawn((
+                        Mesh2d(meshes.add(Circle::new(radius * 0.55))),
+                        MeshMaterial2d(materials.add(color.lighter(0.18))),
+                        Transform::from_translation(Vec3::new(0.0, 0.0, 0.1)),
+                    ));
+                });
+            }
+            Shape::GuardTower => {
+                // The watch tower's silhouette with a darker four-point turret
+                // mounted on the lookout — the visible difference the upgrade
+                // buys.
+                let px = Vec2::new(size.width as f32, size.height as f32) * CELL_PX * 0.85;
+                entity.insert(Sprite::from_color(color, px));
+                entity.with_children(|parent| {
+                    parent.spawn((
+                        Mesh2d(meshes.add(Circle::new(radius * 0.55))),
+                        MeshMaterial2d(materials.add(color.lighter(0.18))),
+                        Transform::from_translation(Vec3::new(0.0, 0.0, 0.1)),
+                    ));
+                    parent.spawn((
+                        Mesh2d(meshes.add(RegularPolygon::new(radius * 0.42, 4))),
+                        MeshMaterial2d(materials.add(color.darker(0.1))),
+                        Transform::from_translation(Vec3::new(0.0, 0.0, 0.2)),
+                    ));
+                });
+            }
             Shape::Square => {
                 let px = Vec2::new(size.width as f32, size.height as f32) * CELL_PX * 0.85;
                 entity.insert(Sprite::from_color(color, px));
@@ -316,6 +440,32 @@ pub fn attach_sprites(
             PrevPos(center),
             Renderable,
         ));
+    }
+}
+
+/// Strips the render components of any entity whose type was rewritten, so
+/// [`attach_sprites`] rebuilds the new form's shape — a gryphon that lands
+/// must stop wearing its flight silhouette.
+///
+/// `Changed` also fires the tick a component is added, but a freshly spawned
+/// entity is not yet [`Renderable`], so only real type rewrites pass the
+/// filter.
+pub fn refresh_changed_sprites(
+    mut commands: Commands,
+    query: Query<Entity, (Changed<EntityInfoComponent>, With<Renderable>)>,
+) {
+    for entity in &query {
+        commands
+            .entity(entity)
+            .remove::<(
+                Renderable,
+                Directional,
+                PrevPos,
+                Mesh2d,
+                MeshMaterial2d<ColorMaterial>,
+                Sprite,
+            )>()
+            .despawn_related::<Children>();
     }
 }
 
@@ -342,8 +492,9 @@ pub fn record_prev(
     mut query: Query<(&EntityInfoComponent, &LocationComponent, &mut PrevPos)>,
 ) {
     for (info, location, mut prev) in &mut query {
-        let size = registry.def(info.type_id()).location.unwrap().size();
-        prev.0 = world_center(location.position, size);
+        let def = registry.def(info.type_id());
+        let size = def.location.unwrap().size();
+        prev.0 = world_center(location.position, size) + air_lift(&registry, def);
     }
 }
 
@@ -371,8 +522,9 @@ pub fn interpolate_sprites(
     for (info, location, prev, mut transform, mut visibility, hidden, owner, directional) in
         &mut query
     {
-        let size = registry.def(info.type_id()).location.unwrap().size();
-        let curr = world_center(location.position, size);
+        let def = registry.def(info.type_id());
+        let size = def.location.unwrap().size();
+        let curr = world_center(location.position, size) + air_lift(&registry, def);
         // Snap rather than slide across teleports/reveals.
         transform.translation = if prev.0.distance(curr) > 1.5 * CELL_PX {
             curr
@@ -406,6 +558,40 @@ pub fn interpolate_sprites(
         } else {
             Visibility::Visible
         };
+    }
+}
+
+/// Draws a shadow on the ground under every airborne entity (run in `Update`).
+///
+/// The lift alone could read as a unit standing further up the map, so the pair
+/// is what says "above": the shadow marks the cell the flier actually occupies,
+/// and the gap between them is the altitude.
+pub fn draw_air_shadows(
+    mut gizmos: Gizmos,
+    registry: Res<ContentRegistry>,
+    query: Query<
+        (&EntityInfoComponent, &Transform, &Visibility),
+        (With<Renderable>, Without<HiddenComponent>),
+    >,
+) {
+    const SHADOW: Color = Color::srgba(0.0, 0.0, 0.0, 0.35);
+
+    for (info, transform, visibility) in &query {
+        if matches!(visibility, Visibility::Hidden) {
+            continue;
+        }
+        let def = registry.def(info.type_id());
+        let lift = air_lift(&registry, def);
+        if lift == Vec3::ZERO {
+            continue;
+        }
+        let size = def.location.unwrap().size();
+        let ground = transform.translation.truncate() - Vec2::new(0.0, lift.y);
+        gizmos.circle_2d(
+            ground,
+            size.width.min(size.height) as f32 * CELL_PX * 0.3,
+            SHADOW,
+        );
     }
 }
 
@@ -528,7 +714,8 @@ pub fn draw_shots(
     registry: Res<ContentRegistry>,
     grid: Res<VisibilityGrid>,
     reveal: Res<FogReveal>,
-    targets: Query<(&EntityInfoComponent, &Transform), With<Renderable>>,
+    targets: Query<(&EntityInfoComponent, &Transform, Option<&HiddenComponent>), With<Renderable>>,
+    holders: Query<(&TransporterComponent, &Transform)>,
 ) {
     let tick = session.tick();
     let overstep = fixed.overstep_fraction();
@@ -541,12 +728,20 @@ pub fn draw_shots(
         let progress = (elapsed / flight as f32).clamp(0.0, 1.0);
 
         // Drawn from the shooter itself, so a shot from a large one leaves its middle
-        // rather than the corner cell its position names. The recorded release point
-        // is the fallback for a shooter that has since died or gone dark.
+        // rather than the corner cell its position names. A hidden shooter stands
+        // nowhere — a garrisoned archer's arrow leaves its holder, exactly as the
+        // simulation releases it — and the recorded release point is the last
+        // fallback for a shooter that has since died or gone dark.
         let from = targets
             .iter()
-            .find(|(info, _)| info.id() == shot.attacker)
-            .map(|(_, transform)| transform.translation)
+            .find(|(info, _, hidden)| info.id() == shot.attacker && hidden.is_none())
+            .map(|(_, transform, _)| transform.translation)
+            .or_else(|| {
+                holders
+                    .iter()
+                    .find(|(transporter, _)| transporter.passengers.contains(&shot.attacker))
+                    .map(|(_, transform)| transform.translation)
+            })
             .unwrap_or_else(|| world_center(shot.origin, CellSize::ONE));
         // Every shot is aimed at an entity, and the damage follows that entity
         // wherever it moves, so the shot is drawn heading there. The committed point
@@ -554,8 +749,8 @@ pub fn draw_shots(
         // weapon can be aimed at bare ground, for a shot that never had one.
         let to = targets
             .iter()
-            .find(|(info, _)| Some(info.id()) == shot.target)
-            .map(|(_, transform)| transform.translation)
+            .find(|(info, _, hidden)| Some(info.id()) == shot.target && hidden.is_none())
+            .map(|(_, transform, _)| transform.translation)
             .unwrap_or_else(|| world_center(shot.impact, CellSize::ONE));
         let at = from.lerp(to, progress);
 
@@ -896,6 +1091,8 @@ const TRAIN_WORK_COLOR: Color = Color::srgb(0.3, 0.9, 0.9);
 const RESEARCH_WORK_COLOR: Color = Color::srgb(0.35, 0.75, 0.65);
 /// The dot color for passengers riding inside a transporter.
 const PASSENGER_COLOR: Color = Color::srgb(0.95, 0.85, 0.35);
+/// The bar of a running form change.
+const MORPH_WORK_COLOR: Color = Color::srgb(0.85, 0.55, 0.25);
 /// A repairer that cannot pay for this tick's work.
 const STALLED_WORK_COLOR: Color = Color::srgb(1.0, 0.3, 0.25);
 
@@ -979,6 +1176,7 @@ pub fn draw_work_links(
             | Order::Guard { .. }
             | Order::Train
             | Order::Research { .. }
+            | Order::Morph { .. }
             | Order::Board { .. }
             | Order::Load { .. }
             | Order::Unload { .. }
@@ -1065,8 +1263,9 @@ pub fn draw_work_markers(
 
 /// Draws slim bars over entities — energy, then health, then construction
 /// progress while a site goes up, then training progress with a dot per queued
-/// unit, then research progress — for whichever of those the entity has (run in
-/// `Update`). Whatever fog or hiding keeps off screen stays bare.
+/// unit, then research progress, then a running form change's progress — for
+/// whichever of those the entity has (run in `Update`). Whatever fog or hiding
+/// keeps off screen stays bare.
 pub fn draw_status_bars(
     mut gizmos: Gizmos,
     registry: Res<ContentRegistry>,
@@ -1085,6 +1284,7 @@ pub fn draw_status_bars(
             Option<&TrainQueueComponent>,
             Option<&TrainComponent>,
             Option<&ResearchComponent>,
+            Option<&MorphComponent>,
             Option<&TransporterComponent>,
         ),
         Without<HiddenComponent>,
@@ -1102,6 +1302,7 @@ pub fn draw_status_bars(
         queue,
         train,
         research,
+        morph,
         transporter,
     ) in &query
     {
@@ -1174,6 +1375,27 @@ pub fn draw_status_bars(
                 .max(1);
             let fraction = research.progress as f32 / time as f32;
             bar(&mut gizmos, fraction, RESEARCH_WORK_COLOR, y);
+            y += 4.0;
+        }
+
+        if let Some(morph) = morph {
+            // The change's length under the transition's own terms: a constant
+            // is what it says, a stat reads the changing entity's effective
+            // value — the same reading the simulation ticks against.
+            let time = def
+                .morphs
+                .iter()
+                .find(|transition| transition.into_type() == morph.type_name)
+                .map(|transition| match transition.time() {
+                    MorphTime::Constant(ticks) => ticks,
+                    MorphTime::Stat(id) => stats
+                        .and_then(|stats| stats.effective(id))
+                        .map_or(0, |time| time.to_num::<u32>()),
+                })
+                .unwrap_or(1)
+                .max(1);
+            let fraction = morph.progress as f32 / time as f32;
+            bar(&mut gizmos, fraction, MORPH_WORK_COLOR, y);
             y += 4.0;
         }
 

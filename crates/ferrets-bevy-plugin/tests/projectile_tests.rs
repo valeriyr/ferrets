@@ -303,6 +303,7 @@ fn app() -> App {
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
                 .with_health(40)
                 .with_attack(20, 6, 6, 4, 2)
+                .with_targets(utils::GROUND)
                 .with_bonus_damage_vs([("armored", 12u32)])
                 .with_projectile(shell)
                 .with_splash(
@@ -321,6 +322,7 @@ fn app() -> App {
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
                 .with_health(40)
                 .with_attack(20, 8, 8, 30, 2)
+                .with_targets(utils::GROUND)
                 .with_projectile(lob),
         );
         registry.register(

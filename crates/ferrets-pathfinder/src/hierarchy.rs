@@ -7,8 +7,9 @@ use std::{
 };
 
 use crate::{
-    astar::{self, Blockers},
-    layer_mask::LayerMask,
+    astar,
+    mover_profile::{Blockers, MoverProfile},
+    mover_shape::MoverShape,
     nav_grid::NavGrid,
 };
 use ferrets_geometry::{
@@ -63,16 +64,29 @@ enum Side {
 /// One cluster border: the key every stored entrance hangs off.
 type BorderKey = (ClusterPos, Side);
 
-/// One cached intra-cluster cost: the mover mask's bits, the cluster, and the
-/// cell pair in ascending order (costs are symmetric).
-type IntraKey = (u32, ClusterPos, CellPos, CellPos);
+/// One cached intra-cluster cost's identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct IntraKey {
+    /// The mover shape the cost was searched for.
+    shape: MoverShape,
+    /// The cluster the search was confined to.
+    cluster: ClusterPos,
+    /// The lesser cell of the pair — costs are symmetric, so the pair is
+    /// stored in ascending order.
+    low: CellPos,
+    /// The greater cell of the pair.
+    high: CellPos,
+}
 
-/// The abstraction of one mover mask over the grid.
+/// The abstraction of one mover shape over the grid.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct LayerHierarchy {
-    /// The mover mask this abstraction serves; a cell counts as passable when
-    /// it is statically free on every layer in it.
-    mask: LayerMask,
+    /// The mover shape this abstraction serves; a cell counts as passable when
+    /// the shape's whole footprint anchored there is statically free on every
+    /// layer of its mask. Two footprint sizes on the same layers therefore need
+    /// separate abstractions — a wide mover's map genuinely has fewer ways
+    /// through it.
+    shape: MoverShape,
     /// Each border's transitions, keyed per border so one border re-derives
     /// without touching the rest. Borders without entrances hold no entry.
     transitions: BTreeMap<BorderKey, Vec<Transition>>,
@@ -84,7 +98,7 @@ struct LayerHierarchy {
     region_count: u32,
 }
 
-/// The hierarchical abstraction of a [`NavGrid`], built per mover layer mask:
+/// The hierarchical abstraction of a [`NavGrid`], built per mover shape:
 /// fixed-size square clusters, the transitions crossing their borders, and
 /// flood-filled connectivity regions over the cells.
 ///
@@ -104,7 +118,7 @@ pub struct NavHierarchy {
     width: u32,
     /// Grid height in cells.
     height: u32,
-    /// One abstraction per mover mask, in the order the masks were given.
+    /// One abstraction per mover shape, in the order the shapes were given.
     layers: Vec<LayerHierarchy>,
     /// Borders whose entrances must be re-derived at the next refresh.
     dirty_borders: BTreeSet<BorderKey>,
@@ -156,16 +170,16 @@ impl Clone for NavHierarchy {
 }
 
 impl NavHierarchy {
-    /// Builds the hierarchy for the given mover masks from the grid's current
+    /// Builds the hierarchy for the given mover shapes from the grid's current
     /// static occupancy.
     ///
     /// Panics if `cluster_size` is zero.
-    pub fn build(grid: &NavGrid, cluster_size: u32, masks: &[LayerMask]) -> Self {
+    pub fn build(grid: &NavGrid, cluster_size: u32, shapes: &[MoverShape]) -> Self {
         assert!(cluster_size > 0, "cluster size must be greater than 0");
 
-        let layers = masks
+        let layers = shapes
             .iter()
-            .map(|&mask| LayerHierarchy::build(grid, cluster_size, mask))
+            .map(|&shape| LayerHierarchy::build(grid, cluster_size, shape))
             .collect();
 
         Self {
@@ -190,6 +204,28 @@ impl NavHierarchy {
         }
         self.dirty = true;
 
+        // A changed cell also changes whether footprints *anchored before it*
+        // fit, as far back as the widest served shape reaches — so every anchor
+        // whose footprint covers the cell dirties its own borders and cluster,
+        // or a wide shape's transitions would go stale from changes landing
+        // just past a border.
+        let (reach_x, reach_y) = self.layers.iter().fold((0, 0), |(x, y), layer| {
+            (
+                x.max(layer.shape.size.width - 1),
+                y.max(layer.shape.size.height - 1),
+            )
+        });
+        for dy in 0..=reach_y {
+            for dx in 0..=reach_x {
+                if let (Some(x), Some(y)) = (cell.x.checked_sub(dx), cell.y.checked_sub(dy)) {
+                    self.mark_anchor_dirty(CellPos::new(x, y));
+                }
+            }
+        }
+    }
+
+    /// Queues the borders and cluster one anchor cell touches.
+    fn mark_anchor_dirty(&mut self, cell: CellPos) {
         let size = self.cluster_size;
         let cluster = self.cluster_of(cell);
         self.dirty_clusters.insert(cluster);
@@ -227,14 +263,14 @@ impl NavHierarchy {
 
         for layer in &mut self.layers {
             for &border in &self.dirty_borders {
-                let entrance = border_transitions(grid, layer.mask, self.cluster_size, border);
+                let entrance = border_transitions(grid, layer.shape, self.cluster_size, border);
                 if entrance.is_empty() {
                     layer.transitions.remove(&border);
                 } else {
                     layer.transitions.insert(border, entrance);
                 }
             }
-            let (regions, region_count) = flood_regions(grid, layer.mask);
+            let (regions, region_count) = flood_regions(grid, layer.shape);
             layer.regions = regions;
             layer.region_count = region_count;
         }
@@ -242,7 +278,7 @@ impl NavHierarchy {
         self.intra_costs
             .lock()
             .unwrap()
-            .retain(|(_, cluster, _, _), _| !self.dirty_clusters.contains(cluster));
+            .retain(|key, _| !self.dirty_clusters.contains(&key.cluster));
 
         self.dirty_borders.clear();
         self.dirty_clusters.clear();
@@ -274,13 +310,13 @@ impl NavHierarchy {
     /// Returns each transition touching `cluster`, paired with the side cell
     /// that lies inside it, in border order.
     ///
-    /// Panics if no hierarchy was built for the mask.
+    /// Panics if no hierarchy was built for the shape.
     pub(crate) fn transition_sides(
         &self,
-        mask: LayerMask,
+        shape: MoverShape,
         cluster: ClusterPos,
     ) -> Vec<(CellPos, Transition)> {
-        let layer = self.layer(mask);
+        let layer = self.layer(shape);
         let mut sides = Vec::new();
 
         // The cluster's own right/down borders hold its `a` sides; the left
@@ -322,86 +358,102 @@ impl NavHierarchy {
         &self,
         grid: &NavGrid,
         projection: Projection,
-        mask: LayerMask,
+        shape: MoverShape,
         cluster: ClusterPos,
         a: CellPos,
         b: CellPos,
     ) -> Option<u32> {
         let (low, high) = if a <= b { (a, b) } else { (b, a) };
-        let key = (*mask, cluster, low, high);
+        let key = IntraKey {
+            shape,
+            cluster,
+            low,
+            high,
+        };
 
         if let Some(&cost) = self.intra_costs.lock().unwrap().get(&key) {
             return cost;
         }
 
         let window = self.cluster_rect(cluster);
-        let cost = astar::bounded_cost(grid, projection, mask, Blockers::Static, window, low, high);
+        let cost = astar::bounded_cost(
+            grid,
+            projection,
+            window,
+            low,
+            MoverProfile::new(shape, Blockers::Static),
+            high,
+        );
         self.intra_costs.lock().unwrap().insert(key, cost);
         cost
     }
 
-    /// Returns every transition of the given mover mask, grouped per border,
+    /// Returns every transition of the given mover shape, grouped per border,
     /// borders in cluster order.
     ///
-    /// Panics if no hierarchy was built for the mask.
-    pub fn transitions(&self, mask: impl Into<LayerMask>) -> impl Iterator<Item = Transition> {
-        self.layer(mask.into())
-            .transitions
-            .values()
-            .flatten()
-            .copied()
+    /// Panics if no hierarchy was built for the shape.
+    pub fn transitions(&self, shape: MoverShape) -> impl Iterator<Item = Transition> {
+        self.layer(shape).transitions.values().flatten().copied()
     }
 
-    /// Returns the connectivity region of `cell` for the given mover mask, or
+    /// Returns the connectivity region of `cell` for the given mover shape, or
     /// `None` when the cell is impassable or out of bounds.
     ///
-    /// Panics if no hierarchy was built for the mask.
-    pub fn region_of(&self, mask: impl Into<LayerMask>, cell: CellPos) -> Option<u32> {
+    /// Panics if no hierarchy was built for the shape.
+    pub fn region_of(&self, cell: CellPos, shape: MoverShape) -> Option<u32> {
         if cell.x >= self.width || cell.y >= self.height {
             return None;
         }
-        let region = self.layer(mask.into()).regions[(cell.y * self.width + cell.x) as usize];
+        let region = self.layer(shape).regions[(cell.y * self.width + cell.x) as usize];
         (region != NO_REGION).then_some(region)
     }
 
-    /// Returns `true` when `a` and `b` are connected for the given mover mask:
+    /// Returns `true` when `a` and `b` are connected for the given mover shape:
     /// both passable and in the same region.
     ///
-    /// Panics if no hierarchy was built for the mask.
-    pub fn same_region(&self, mask: impl Into<LayerMask>, a: CellPos, b: CellPos) -> bool {
-        let mask = mask.into();
-        match (self.region_of(mask, a), self.region_of(mask, b)) {
+    /// Panics if no hierarchy was built for the shape.
+    pub fn same_region(&self, a: CellPos, shape: MoverShape, b: CellPos) -> bool {
+        match (self.region_of(a, shape), self.region_of(b, shape)) {
             (Some(region_a), Some(region_b)) => region_a == region_b,
             (None, _) | (_, None) => false,
         }
     }
 
-    /// Returns how many connectivity regions the given mover mask has.
+    /// Returns how many connectivity regions the given mover shape has.
     ///
-    /// Panics if no hierarchy was built for the mask.
-    pub fn region_count(&self, mask: impl Into<LayerMask>) -> u32 {
-        self.layer(mask.into()).region_count
+    /// Panics if no hierarchy was built for the shape.
+    pub fn region_count(&self, shape: MoverShape) -> u32 {
+        self.layer(shape).region_count
     }
 
-    /// Returns `true` when an abstraction was built for the given mover mask.
-    pub fn serves(&self, mask: impl Into<LayerMask>) -> bool {
-        let mask = mask.into();
-        self.layers.iter().any(|layer| layer.mask == mask)
+    /// Returns `true` when an abstraction was built for the given mover shape.
+    pub fn serves(&self, shape: MoverShape) -> bool {
+        self.layers.iter().any(|layer| layer.shape == shape)
     }
 
-    /// The abstraction serving `mask`.
-    fn layer(&self, mask: LayerMask) -> &LayerHierarchy {
+    /// Every mover shape this hierarchy serves, in the order they were given.
+    pub fn shapes(&self) -> impl Iterator<Item = MoverShape> {
+        self.layers.iter().map(|layer| layer.shape)
+    }
+
+    /// The abstraction serving `shape`.
+    fn layer(&self, shape: MoverShape) -> &LayerHierarchy {
         self.layers
             .iter()
-            .find(|layer| layer.mask == mask)
-            .unwrap_or_else(|| panic!("no hierarchy built for mask {mask}"))
+            .find(|layer| layer.shape == shape)
+            .unwrap_or_else(|| {
+                panic!(
+                    "no hierarchy built for shape {} at {}x{}",
+                    shape.mask, shape.size.width, shape.size.height
+                )
+            })
     }
 }
 
 impl LayerHierarchy {
-    /// Builds one mask's abstraction from the grid's current static
+    /// Builds one shape's abstraction from the grid's current static
     /// occupancy.
-    fn build(grid: &NavGrid, cluster_size: u32, mask: LayerMask) -> Self {
+    fn build(grid: &NavGrid, cluster_size: u32, shape: MoverShape) -> Self {
         let mut transitions = BTreeMap::new();
         let clusters_w = grid.width().div_ceil(cluster_size);
         let clusters_h = grid.height().div_ceil(cluster_size);
@@ -414,7 +466,7 @@ impl LayerHierarchy {
                     if !border_exists(grid, cluster_size, border) {
                         continue;
                     }
-                    let entrance = border_transitions(grid, mask, cluster_size, border);
+                    let entrance = border_transitions(grid, shape, cluster_size, border);
                     if !entrance.is_empty() {
                         transitions.insert(border, entrance);
                     }
@@ -422,9 +474,9 @@ impl LayerHierarchy {
             }
         }
 
-        let (regions, region_count) = flood_regions(grid, mask);
+        let (regions, region_count) = flood_regions(grid, shape);
         Self {
-            mask,
+            shape,
             transitions,
             regions,
             region_count,
@@ -446,7 +498,7 @@ fn border_exists(grid: &NavGrid, cluster_size: u32, (cluster, side): BorderKey) 
 /// middle, or one at each end when at least [`WIDE_ENTRANCE`] cells wide.
 fn border_transitions(
     grid: &NavGrid,
-    mask: LayerMask,
+    shape: MoverShape,
     cluster_size: u32,
     (cluster, side): BorderKey,
 ) -> Vec<Transition> {
@@ -477,9 +529,7 @@ fn border_transitions(
     };
 
     for pair in pairs {
-        if grid.is_statically_passable_by(mask, pair.a)
-            && grid.is_statically_passable_by(mask, pair.b)
-        {
+        if grid.fits_statically(pair.a, shape) && grid.fits_statically(pair.b, shape) {
             run.push(pair);
         } else {
             emit_entrance(&run, &mut transitions);
@@ -510,7 +560,7 @@ fn emit_entrance(run: &[Transition], transitions: &mut Vec<Transition>) {
 ///
 /// Cells are seeded in row-major order and each fill is a breadth-first walk
 /// in fixed direction order, so region numbering is deterministic.
-fn flood_regions(grid: &NavGrid, mask: LayerMask) -> (Vec<u32>, u32) {
+fn flood_regions(grid: &NavGrid, shape: MoverShape) -> (Vec<u32>, u32) {
     let width = grid.width();
     let index = |pos: CellPos| (pos.y * width + pos.x) as usize;
 
@@ -520,14 +570,16 @@ fn flood_regions(grid: &NavGrid, mask: LayerMask) -> (Vec<u32>, u32) {
     for y in 0..grid.height() {
         for x in 0..width {
             let seed = CellPos::new(x, y);
-            if regions[index(seed)] != NO_REGION || !grid.is_statically_passable_by(mask, seed) {
+            if regions[index(seed)] != NO_REGION || !grid.fits_statically(seed, shape) {
                 continue;
             }
 
             regions[index(seed)] = count;
             let mut queue = VecDeque::from([seed]);
             while let Some(pos) = queue.pop_front() {
-                for (neighbor, _) in astar::passable_neighbors(grid, mask, pos, Blockers::Static) {
+                for (neighbor, _) in
+                    astar::passable_neighbors(grid, pos, MoverProfile::new(shape, Blockers::Static))
+                {
                     if regions[index(neighbor)] == NO_REGION {
                         regions[index(neighbor)] = count;
                         queue.push_back(neighbor);

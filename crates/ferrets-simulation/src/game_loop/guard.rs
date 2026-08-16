@@ -11,7 +11,6 @@ use super::{
 use crate::{
     components::{
         guard::GuardComponent,
-        location::LocationComponent,
         order_queue::{CancelPolicy, OrderState},
     },
     entity_def,
@@ -100,18 +99,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
         return Processing::suspend(attack);
     }
 
-    let position = world
-        .entity(entity)
-        .get::<LocationComponent>()
-        .unwrap()
-        .position;
-    match chase::advance_to_entity(
-        &mut driver.last_chase,
-        world,
-        position,
-        ward,
-        GUARD_DISTANCE,
-    ) {
+    match chase::advance_to_entity(&mut driver.last_chase, world, entity, ward, GUARD_DISTANCE) {
         Destination::OutOfReach => Processing::state(OrderState::Finished),
         Destination::Walk(move_order) => {
             world.entity_mut(entity).insert(driver);

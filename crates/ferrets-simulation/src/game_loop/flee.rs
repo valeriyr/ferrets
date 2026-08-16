@@ -23,11 +23,13 @@ const FLEE_DISTANCE: u32 = 6;
 
 /// Sends fleeing-stance entities running from hits that landed last tick.
 ///
-/// The response is a flushed move directly away from the attacker — the one
-/// deliberate interruption of in-progress orders, since a harvesting worker
-/// must drop what it is doing. A fresh hit while running re-triggers the
-/// response, so a pursued entity keeps running; the stamp's tick keeps a
-/// single hit from triggering twice.
+/// The response is an idle entity's own initiative and never overrides a
+/// command: whatever the player ordered outranks self-preservation, so a
+/// transport flown into fire keeps flying where it was told and a commanded
+/// worker keeps at its job. An idle entity that is hit takes a move directly
+/// away from the attacker; a fresh hit once that run ends re-triggers the
+/// response, so a pursued idler keeps making distance. The stamp's tick
+/// keeps a single hit from triggering twice.
 pub fn tick(world: &mut World) {
     let current_tick = world.resource::<GameSession>().tick();
 
@@ -40,6 +42,13 @@ pub fn tick(world: &mut World) {
             continue;
         }
         if !entity_def::of(world, entity).can_move() {
+            continue;
+        }
+        // Commanded entities stay commanded: only an empty queue flees.
+        if entity_ref
+            .get::<OrderQueueComponent>()
+            .is_some_and(|queue| !queue.0.is_empty())
+        {
             continue;
         }
         let Some(hit) = entity_ref

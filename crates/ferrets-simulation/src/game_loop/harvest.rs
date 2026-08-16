@@ -13,7 +13,6 @@ use super::{
 use crate::{
     components::{
         build::UnderConstructionComponent,
-        location::LocationComponent,
         order_queue::{CancelPolicy, OrderState},
         owner::OwnerComponent,
         resource::{
@@ -212,11 +211,6 @@ fn advance(
             .unwrap();
         (carrier.kind.clone(), carrier.amount)
     };
-    let position = world
-        .entity(entity)
-        .get::<LocationComponent>()
-        .unwrap()
-        .position;
 
     let source = resolve_source(entity, order, harvest_component, &carrier_def, world);
 
@@ -266,7 +260,7 @@ fn advance(
         match chase::advance_to_entity(
             &mut harvest_component.last_chase,
             world,
-            position,
+            entity,
             storage,
             DELIVERY_DISTANCE,
         ) {
@@ -301,7 +295,7 @@ fn advance(
     match chase::advance_to_entity(
         &mut harvest_component.last_chase,
         world,
-        position,
+        entity,
         source_entity,
         work::reach(world, entity, EntityStatId::HARVEST_RANGE),
     ) {
@@ -310,14 +304,11 @@ fn advance(
             // another of the same kind beside it, and with none to pick wait
             // here for the way to open — the order gives up only when no
             // source of its kind is left at all.
-            let (source_position, _) = entity_def::footprint(world, source_entity);
+            let beside = entity_def::footprint_rect(world, source_entity);
             let kind = harvest_component.kind.as_str();
-            let replacement = nearest(
-                world,
-                CellPos::from(source_position),
-                Some(SOURCE_SEARCH_RADIUS),
-                |id, _| id != source_id && source_matches(world, id, &carrier_def, kind),
-            );
+            let replacement = nearest(world, beside, Some(SOURCE_SEARCH_RADIUS), |id, _| {
+                id != source_id && source_matches(world, id, &carrier_def, kind)
+            });
             harvest_component.last_chase = None;
             match replacement {
                 Some(replacement) => harvest_component.source = Some(replacement),
@@ -524,14 +515,8 @@ fn resolve_source(
         }
     }
 
-    let position = CellPos::from(
-        world
-            .entity(entity)
-            .get::<LocationComponent>()
-            .unwrap()
-            .position,
-    );
-    nearest(world, position, Some(SOURCE_SEARCH_RADIUS), |id, _| {
+    let standing = entity_def::footprint_rect(world, entity);
+    nearest(world, standing, Some(SOURCE_SEARCH_RADIUS), |id, _| {
         source_matches(world, id, carrier_def, kind)
     })
 }
@@ -591,14 +576,8 @@ fn resolve_storage(
         return Some(target);
     }
 
-    let position = CellPos::from(
-        world
-            .entity(entity)
-            .get::<LocationComponent>()
-            .unwrap()
-            .position,
-    );
-    let id = nearest(world, position, None, |_, e| qualifies(e))?;
+    let standing = entity_def::footprint_rect(world, entity);
+    let id = nearest(world, standing, None, |_, e| qualifies(e))?;
     world.resource::<EntityIndex>().alive(id)
 }
 
@@ -607,7 +586,7 @@ fn resolve_storage(
 /// [`SimulationId`], so the result is deterministic.
 fn nearest(
     world: &World,
-    from: CellPos,
+    from: CellRect,
     max_distance: Option<u32>,
     filter: impl Fn(SimulationId, Entity) -> bool,
 ) -> Option<SimulationId> {
@@ -618,14 +597,15 @@ fn nearest(
         if !filter(id, entity) {
             continue;
         }
-        let (position, size) = entity_def::footprint(world, entity);
-        let origin = CellPos::from(position);
+        let standing = entity_def::footprint_rect(world, entity);
         if let Some(max) = max_distance
-            && !projection.in_range_of_rect(from, CellRect::new(origin, size), max)
+            && !projection.in_range_for_rects(from, standing, max)
         {
             continue;
         }
-        let distance = projection.rect_distance(from, CellRect::new(origin, size));
+        // Footprint to footprint: an anchor is not the body, and a wide
+        // seeker's nearest edge may rank the candidates differently.
+        let distance = projection.distance_for_rects(from, standing);
         // Ascending id iteration: strictly-closer wins, ties keep the lower id.
         if best.is_none_or(|(best_distance, _)| distance < best_distance) {
             best = Some((distance, id));

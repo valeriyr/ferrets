@@ -91,13 +91,15 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
         && entity_def::of(world, entity).can_move()
     {
         let projection = world.resource::<Map>().projection();
+        let (chaser_position, chaser_size) = entity_def::footprint(world, entity);
         match chase::advance(
             &mut unload.last_chase,
             projection,
-            entity_def::position(world, entity),
+            chaser_position,
+            chaser_size,
             at,
             CellSize::ONE,
-            entity_def::stat_u32(world, entity, EntityStatId::UNLOAD_RANGE),
+            entity_def::effective_stat_u32(world, entity, EntityStatId::UNLOAD_RANGE),
         ) {
             // The passengers can finish the trip on foot; the hold opens here.
             Destination::OutOfReach => {}
@@ -115,7 +117,7 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
         return Processing::state(OrderState::InProcessing);
     }
 
-    let period = entity_def::stat_u32(world, entity, EntityStatId::UNLOAD_PERIOD);
+    let period = entity_def::effective_stat_u32(world, entity, EntityStatId::UNLOAD_PERIOD);
     loop {
         let Some(passenger_id) = world
             .entity(entity)

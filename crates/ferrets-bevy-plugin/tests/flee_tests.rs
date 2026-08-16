@@ -1,20 +1,25 @@
-//! Flee response: fleeing-stance entities drop their orders and run from
-//! whatever damages them.
+//! Flee response: fleeing-stance entities run from whatever damages them — on
+//! their own idle initiative only, never over a player's command.
 
 mod utils;
 
 use ferrets_geometry::cell_pos::CellPos;
+use ferrets_math::FixedU64;
 use ferrets_simulation::{
     command::PlayerCommand,
     components::{
+        health::HealthComponent,
+        order_queue::OrderQueueComponent,
         resource::ResourceSourceComponent,
         stance::{Stance, StanceComponent},
     },
+    resources::PlayerResources,
+    session::GameSession,
     spawn,
 };
 
 #[test]
-fn damaged_worker_abandons_harvest_and_runs() {
+fn commanded_worker_keeps_harvesting_under_fire() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
     let (worker, worker_id) =
@@ -25,8 +30,9 @@ fn damaged_worker_abandons_harvest_and_runs() {
         .unwrap()
         .amount = 100;
     spawn::spawn_entity(world, "depot", utils::pos(4, 10), Some(0)).unwrap();
-    // The enemy sentry auto-engages the harvesting worker.
-    let (_, _) = spawn::spawn_entity(world, "sentry", utils::pos(13, 10), Some(1)).unwrap();
+    // An enemy to be hit by, parked far outside its own acquisition range, so
+    // the only damage is the hit staged below.
+    let (_, sentry_id) = spawn::spawn_entity(world, "sentry", utils::pos(26, 10), Some(1)).unwrap();
 
     utils::select(&mut app, worker_id);
     utils::push_command(
@@ -36,14 +42,33 @@ fn damaged_worker_abandons_harvest_and_runs() {
             flush: true,
         },
     );
+    utils::run_ticks(&mut app, 20);
 
-    utils::run_ticks(&mut app, 60);
+    // One hit, stamped exactly as the flee response reads it, landing after
+    // the first delivery banked.
     let world = app.world_mut();
-    // The worker survives by running: alive, and no longer at the mine.
-    assert!(world.get_entity(worker).is_ok(), "worker fled and survived");
+    let tick = world.resource::<GameSession>().tick();
+    assert_eq!(world.resource::<PlayerResources>().amount(0, "gold"), 5);
+    let mut health = world.get_mut::<HealthComponent>(worker).unwrap();
+    health.apply_damage(FixedU64::from_num(5));
+    health.record_hit(sentry_id, tick);
+    utils::run_ticks(&mut app, 60);
+
+    // Commanded outranks scared: the order stays queued and the harvest keeps
+    // producing — a fled worker would have banked nothing more.
+    let world = app.world_mut();
     assert!(
-        !utils::within(world, worker, mine, 2),
-        "worker left the mine"
+        !world
+            .get::<OrderQueueComponent>(worker)
+            .unwrap()
+            .0
+            .is_empty(),
+        "the harvest order was dropped for the flee response"
+    );
+    assert_eq!(
+        world.resource::<PlayerResources>().amount(0, "gold"),
+        25,
+        "the deliveries stopped, so the worker fled its job"
     );
 }
 

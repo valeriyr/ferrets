@@ -1381,6 +1381,7 @@ fn harness_soldier() -> EntityTypeDef {
         .with_health(30)
         .with_dying(2, None)
         .with_attack(10, 1, 1, 4, 2)
+        .with_targets(GROUND)
 }
 
 /// A standing building — the presence the `LastStanding` rule counts. Immobile,

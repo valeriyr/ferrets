@@ -111,7 +111,7 @@ fn leave_corpse(entity: Entity, world: &mut World) {
     // Remains rest on the lattice: a continuous mover dies wherever pushing
     // left it, and the corpse takes the cell the body visually stood on. On
     // the cell model the two coincide.
-    let cell = FixedUVec2::from(body::center_cell(position));
+    let cell = FixedUVec2::from(body::anchor(position));
 
     spawn::spawn_corpse_entity(world, &corpse_type, cell);
 }

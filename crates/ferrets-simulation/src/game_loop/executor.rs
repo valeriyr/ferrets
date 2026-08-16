@@ -8,16 +8,14 @@ use bevy_ecs::{entity::Entity, world::World};
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::{FixedU64, fixed_urect::FixedURect, fixed_uvec2::FixedUVec2};
 
-use super::{board, repair, stats};
+use super::{board, morph, repair, stats};
 use crate::{
     command::{PlayerCommand, SelectMode, SkillCasterRef},
     components::{
         build::UnderConstructionComponent,
-        energy::EnergyComponent,
         entity_buffs::BuffsComponent,
         entity_info::EntityInfoComponent,
         entity_skills::SkillsComponent,
-        entity_stats::StatsComponent,
         health::HealthComponent,
         location::LocationComponent,
         order_queue::{CancelPolicy, OrderQueueComponent},
@@ -31,6 +29,7 @@ use crate::{
     control_groups::{CONTROL_GROUP_COUNT, ControlGroups},
     entity_def,
     entity_index::EntityIndex,
+    game_loop::cast_cost,
     input::InputFrames,
     order::{AttackTarget, Order},
     player_buffs::PlayerBuffs,
@@ -52,7 +51,7 @@ use ferrets_content::{
     skills::{
         EntityCastCost, EntityCastEffect, EntityCastTarget, PlayerCastEffect, SkillCaster, SkillId,
     },
-    tags,
+    tags, targeting,
 };
 
 /// Processes the frame for `current_tick` once every player the tick requires
@@ -177,6 +176,14 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
             for entity in commanded {
                 // Only a weapon that sends its shots to a cell can be aimed at one.
                 if aimed_at_ground && !aims_at_cells(world, entity) {
+                    continue;
+                }
+                // Refused rather than accepted-and-abandoned: a weapon that cannot
+                // reach the target's layers would otherwise walk into range and
+                // stand there swinging at nothing.
+                if let Some(id) = target.entity()
+                    && !reaches_target(world, entity, id)
+                {
                     continue;
                 }
                 push_order(
@@ -408,6 +415,25 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
         } => {
             use_skill(world, player, *skill, *caster, *target);
         }
+        PlayerCommand::Morph { type_name, flush } => {
+            // Refused here for what can be known at issue — a destination the
+            // entity's type declares no transition into, requirements the
+            // player does not meet, or a form that cannot seat what is aboard
+            // — so a hopeless change never takes the queue. Costs and ground
+            // are settled when the order actually starts.
+            for entity in commanded_selection(world, player) {
+                if morph::would_start(world, player, entity, type_name) {
+                    push_order(
+                        world,
+                        entity,
+                        Order::Morph {
+                            type_name: type_name.clone(),
+                        },
+                        CancelPolicy::from_bool(*flush),
+                    );
+                }
+            }
+        }
         PlayerCommand::Spawn {
             type_name,
             position,
@@ -494,9 +520,12 @@ pub(super) fn resolve_send_to_entity(
         entity_ref.get::<OwnerComponent>(),
         target_ref.get::<OwnerComponent>(),
     );
+    // Reachability is part of "can I attack this": a melee unit sent at a flier
+    // falls through to following it, which is the honest reading of the click.
     if hostile
         && entity_def::of(world, entity).can_attack()
         && target_ref.contains::<HealthComponent>()
+        && targeting::reaches(entity_def::of(world, entity), entity_def::of(world, target))
     {
         return Some(Order::Attack {
             target: AttackTarget::Entity(target_id),
@@ -837,6 +866,21 @@ fn commanded_selection_excluding(
         .collect()
 }
 
+/// Whether `attacker`'s weapon can reach the layers the entity with `target_id`
+/// is answerable on. A target that is gone reads as unreachable, so the order is
+/// refused rather than queued against nothing.
+fn reaches_target(world: &World, attacker: Entity, target_id: SimulationId) -> bool {
+    world
+        .resource::<EntityIndex>()
+        .interactable(world, target_id)
+        .is_some_and(|target| {
+            targeting::reaches(
+                entity_def::of(world, attacker),
+                entity_def::of(world, target),
+            )
+        })
+}
+
 /// Whether the entity's weapon sends its shots to a cell rather than following a
 /// target — the only kind that can be aimed at bare ground.
 fn aims_at_cells(world: &World, entity: Entity) -> bool {
@@ -1013,63 +1057,10 @@ fn use_skill_as_entity(
         }
     };
 
-    // Fold the costs into one total per pool, so a check covers every arm that
-    // draws from that pool.
-    let mut resources = Cost::new();
-    let mut energy_cost = FixedU64::ZERO;
-    let mut health_cost = FixedU64::ZERO;
-    for cost in costs {
-        match cost {
-            EntityCastCost::Resources(cost) => {
-                for (kind, amount) in cost {
-                    *resources.entry(kind.clone()).or_default() += amount;
-                }
-            }
-            EntityCastCost::Energy(amount) => energy_cost += *amount,
-            EntityCastCost::Health(amount) => health_cost += *amount,
-        }
-    }
-
-    // Every cost must be payable before any is paid, so a cast never
-    // half-charges.
-    if !world
-        .resource::<PlayerResources>()
-        .can_afford(player, &resources)
-    {
+    if !cast_cost::can_pay(world, caster, player, costs) {
         return;
     }
-    let caster_ref = world.entity(caster);
-    if energy_cost > FixedU64::ZERO
-        && caster_ref
-            .get::<EnergyComponent>()
-            .is_none_or(|energy| energy.current() < energy_cost)
-    {
-        return;
-    }
-    // Strictly more health than the cost: a cast that could not be survived is
-    // refused.
-    if health_cost > FixedU64::ZERO
-        && caster_ref
-            .get::<HealthComponent>()
-            .is_none_or(|health| health.current() <= health_cost)
-    {
-        return;
-    }
-
-    world
-        .resource_mut::<PlayerResources>()
-        .subtract(player, &resources);
-    let mut caster_mut = world.entity_mut(caster);
-    if energy_cost > FixedU64::ZERO
-        && let Some(mut energy) = caster_mut.get_mut::<EnergyComponent>()
-    {
-        energy.spend(energy_cost);
-    }
-    if health_cost > FixedU64::ZERO
-        && let Some(mut health) = caster_mut.get_mut::<HealthComponent>()
-    {
-        health.apply_damage(health_cost);
-    }
+    cast_cost::pay(world, caster, player, costs);
 
     apply_skill_effect(world, caster, target, effect);
 
@@ -1102,10 +1093,7 @@ fn apply_skill_effect(world: &mut World, caster: Entity, target: Entity, effect:
             }
         }
         EntityCastEffect::Heal(amount) => {
-            let max = world
-                .entity(target)
-                .get::<StatsComponent>()
-                .and_then(|stats| stats.effective(EntityStatId::MAX_HEALTH))
+            let max = entity_def::effective_stat(world, target, EntityStatId::MAX_HEALTH)
                 .unwrap_or(FixedU64::ZERO);
             if let Some(mut health) = world.entity_mut(target).get_mut::<HealthComponent>() {
                 health.heal(amount, max);

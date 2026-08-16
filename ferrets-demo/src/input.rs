@@ -25,7 +25,10 @@ use ferrets_simulation::{
     simulation_id::SimulationId,
 };
 
-use crate::{camera, render::CELL_PX};
+use crate::{
+    camera,
+    render::{self, CELL_PX},
+};
 
 /// Drag below this many pixels is treated as a click, not a box-select.
 const CLICK_SLOP: f32 = 4.0;
@@ -221,7 +224,12 @@ fn entity_at(
     for (info, location) in entities {
         let ox = location.position.x.to_num::<f32>();
         let oy = location.position.y.to_num::<f32>();
-        let size = registry.def(info.type_id()).location.unwrap().size();
+        let def = registry.def(info.type_id());
+        let size = def.location.unwrap().size();
+        // An airborne sprite is drawn lifted up the screen; the click meets
+        // the unit where the player sees it, so the lift comes back off the
+        // cursor before the footprint test.
+        let y = y + render::air_lift(registry, def).y / CELL_PX;
         let inside =
             x >= ox && x < ox + size.width as f32 && y >= oy && y < oy + size.height as f32;
         if inside {
@@ -347,8 +355,10 @@ pub fn selection_input(
 
 /// Right click sends the selection to the entity under the cursor, or moves it
 /// to the clicked cell. Holding Shift appends instead of replacing orders.
-/// When the selection is entirely own producers, the click re-targets their
-/// rally points instead — clicking one of the selected producers clears them.
+/// When the selection is entirely own stationary producers, the click
+/// re-targets their rally points instead — clicking one of the selected
+/// producers clears them. Anything that can move outranks rally: a mobile
+/// rally-holder answers a right click by moving.
 pub fn order_input(
     mode: Res<InputMode>,
     mouse: Res<ButtonInput<MouseButton>>,
@@ -381,15 +391,18 @@ pub fn order_input(
 
     let target = entity_at(cursor, &registry, &entities);
 
-    // Only an all-producer selection captures the click; a mixed selection
-    // keeps ordering its units around normally.
+    // Only a selection of stationary producers captures the click; a mixed
+    // selection keeps ordering its units around normally, and anything that
+    // can move is ordered around too — movement outranks rally.
     let local = session.local_player();
     let selected = selection.get(local);
     let all_producers = !selected.is_empty()
         && selected.iter().all(|&id| {
-            rally_holders
-                .iter()
-                .any(|(info, owner)| info.id() == id && owner.player() == local)
+            rally_holders.iter().any(|(info, owner)| {
+                info.id() == id
+                    && owner.player() == local
+                    && !registry.def(info.type_id()).can_move()
+            })
         });
     if all_producers {
         let target = match target {

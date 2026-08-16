@@ -69,14 +69,15 @@ fn fire(world: &mut World, holder: Entity, passenger: Entity, passenger_id: Simu
     // The holder is the one standing on the map, so it is the seeker every
     // acquisition reading runs for: range from its footprint, fog by its owner,
     // and its own fresh attacker preferred — a bunker under fire shoots back.
+    // The weapon is the passenger's, so layer reach is judged by the passenger.
     let valid = fire
         .target
-        .is_some_and(|id| acquire::qualifies(world, holder, id, weapon.range));
+        .is_some_and(|id| acquire::qualifies(world, holder, passenger, id, weapon.range));
     if !valid {
         fire.phase = 0;
         let tick = world.resource::<GameSession>().tick();
         fire.target = if acquire::due(passenger_id, tick) {
-            acquire::find_target(world, holder, weapon.range)
+            acquire::find_target(world, holder, passenger, weapon.range)
         } else {
             None
         };

@@ -3,7 +3,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use bevy_ecs::prelude::*;
-use ferrets_geometry::cell_size::CellSize;
 use ferrets_math::FixedU64;
 use ferrets_pathfinder::{layer_id::LayerId, layer_mask::LayerMask};
 
@@ -11,6 +10,7 @@ use crate::{
     entity_buffs::{EntityBuffDef, EntityBuffId},
     entity_stats::{ENTITY_BUILTIN_STATS, EntityStatId},
     entity_type_def::{EntityTypeDef, EntityTypeId},
+    morph::MorphTime,
     player_buffs::{PlayerBuffDef, PlayerBuffId},
     player_stats::{PLAYER_BUILTIN_STATS, PlayerStatId},
     projectile::{ProjectileDef, ProjectileId},
@@ -138,16 +138,21 @@ impl ContentRegistry {
     /// registry, in any registration order.
     ///
     /// Panics if any type trains a type that is not a registered trainable type,
-    /// builds a type that is not a registered constructible type, or carries a
+    /// builds a type that is not a registered constructible type, carries a
     /// requirement (on the type itself, a research, or a skill) that does not
     /// resolve to exactly one of: a registered entity type or tag, or a
-    /// registered research.
+    /// registered research, moves on a combination of layers no registered
+    /// terrain passes, or offers a morph transition whose destination is
+    /// unregistered or an odd footprint span away, whose requirements do not
+    /// resolve, or whose costs draw from a pool the type does not have.
     pub fn validate(&self) {
         for def in &self.defs {
             self.validate_trains(def);
             self.validate_builds(def);
             self.validate_carries(def);
             self.validate_requires(&format!("entity type '{}'", def.name), &def.requires);
+            self.validate_traversable(def);
+            self.validate_morphs(def);
         }
         for (name, &id) in &self.researches {
             self.validate_requires(
@@ -711,11 +716,113 @@ impl ContentRegistry {
             "entity type '{}' has no location",
             def.name
         );
-        // Movement plans one cell per mover: paths, claims, and the
-        // continuous body all assume the footprint is a single cell.
+        // A mover's footprint must be square. Clearance is one number per
+        // mover, its body is a circle inscribed in the footprint, and the crowd
+        // ladder compares footprints as interchangeable — all of which hold for
+        // a square and none of which hold for an oblong, which would additionally
+        // need a rule for whether the footprint turns with the mover.
         assert!(
-            !def.can_move() || def.location.is_some_and(|l| l.size() == CellSize::ONE),
-            "entity type '{}' moves but has a footprint larger than one cell",
+            !def.can_move()
+                || def
+                    .location
+                    .is_some_and(|l| l.size().width == l.size().height),
+            "entity type '{}' moves but has a non-square footprint",
+            def.name
+        );
+    }
+
+    /// Checks each transition a type offers: the destination is registered and
+    /// reachable across the footprint change, the requirements resolve, and the
+    /// pools the costs draw from exist.
+    ///
+    /// Runs in [`validate`](Self::validate) rather than at registration, because
+    /// transitions may be circular: two forms can each name the other, so
+    /// neither could be registered first.
+    fn validate_morphs(&self, def: &EntityTypeDef) {
+        for morph in &def.morphs {
+            let owner = format!(
+                "entity type '{}' morphing into '{}'",
+                def.name,
+                morph.into_type()
+            );
+            let other = self
+                .entity(morph.into_type())
+                .unwrap_or_else(|| panic!("{owner} names a type that is not registered"));
+            // The changed form is recentred so its middle stays put, which shifts
+            // the anchor by half the size difference per axis. Only an even
+            // difference keeps that shift in whole cells; an odd one strands the
+            // anchor between lattice points, where the cell model has no footprint.
+            if let (Some(from), Some(to)) = (def.location, other.location) {
+                let even_shift = |a: u32, b: u32| a.abs_diff(b).is_multiple_of(2);
+                assert!(
+                    even_shift(from.size().width, to.size().width)
+                        && even_shift(from.size().height, to.size().height),
+                    "{owner} crosses an odd footprint difference, which has no \
+                     whole-cell anchor to land on"
+                );
+            }
+            self.validate_requires(&owner, morph.requires());
+            // A time read from a stat the type never declares would silently
+            // mean an instant change — the same validates-but-lies class as a
+            // cost without its pool.
+            if let MorphTime::Stat(stat) = morph.time() {
+                assert!(
+                    def.base_stats.contains_key(&stat),
+                    "{owner} reads its time from a stat the type does not carry"
+                );
+            }
+            for cost in morph.costs() {
+                match cost {
+                    EntityCastCost::Resources(resources) => {
+                        for kind in resources.keys() {
+                            assert!(
+                                self.has_resource(kind),
+                                "{owner} costs unregistered resource kind '{kind}'"
+                            );
+                        }
+                    }
+                    EntityCastCost::Energy(_) => assert!(
+                        def.has_energy(),
+                        "{owner} has an energy cost but no max_energy stat"
+                    ),
+                    EntityCastCost::Health(_) => assert!(
+                        def.has_health(),
+                        "{owner} has a health cost but no health pool"
+                    ),
+                }
+            }
+        }
+    }
+
+    /// Checks that a mover could stand somewhere: some registered terrain has to
+    /// pass every layer it occupies.
+    ///
+    /// An occupation mask is conjunctive — a mover needs all of its layers free —
+    /// so a combined mask names terrain that passes *all* of them, not terrain
+    /// that passes any. A ground-and-water mover is therefore a shore unit, and
+    /// wants a shore terrain to exist; without one it could not stand anywhere on
+    /// any map, which is a content mistake rather than a situation to discover at
+    /// runtime as a unit that mysteriously never moves.
+    ///
+    /// Content that declares no terrain at all is exempt: a map without terrain
+    /// starts fully open, so every layer is passable everywhere and there is
+    /// nothing to be inconsistent with.
+    ///
+    /// Runs in [`validate`](Self::validate) rather than at registration, because
+    /// terrains and entity types may be declared in either order.
+    fn validate_traversable(&self, def: &EntityTypeDef) {
+        if !def.can_move() || self.terrains.is_empty() {
+            return;
+        }
+        let Some(occupation) = def.location.map(|location| location.occupation()) else {
+            return;
+        };
+        assert!(
+            self.terrains
+                .values()
+                .any(|&passable| passable & occupation == occupation),
+            "entity type '{}' moves on layers {occupation} that no registered terrain \
+             passes together, so it could never stand anywhere",
             def.name
         );
     }
@@ -734,6 +841,19 @@ impl ContentRegistry {
             assert!(
                 unregistered == LayerMask::EMPTY,
                 "entity type '{}' splashes onto unregistered layers {unregistered}",
+                def.name
+            );
+        }
+
+        for (mask, what) in [
+            (def.attack.map(|attack| attack.targets()), "targets"),
+            (def.targetable, "is targetable on"),
+        ] {
+            let Some(mask) = mask else { continue };
+            let unregistered = mask & !self.registered_layers();
+            assert!(
+                unregistered == LayerMask::EMPTY,
+                "entity type '{}' {what} unregistered layers {unregistered}",
                 def.name
             );
         }
@@ -875,6 +995,22 @@ impl ContentRegistry {
                     ENTITY_BUILTIN_STATS[stat.index()].name,
                 );
             }
+            // Required, never defaulted: any default is wrong in some direction
+            // — "everything" silently arms old weapons against every layer
+            // content adds later, and "own layer" silently leaves ranged
+            // weapons unable to answer fliers. The author says where the
+            // weapon aims, exactly as splash already says where it spreads.
+            assert!(
+                def.attack.is_some(),
+                "entity type '{}' has a weapon but does not declare targets",
+                def.name,
+            );
+        } else {
+            assert!(
+                def.attack.is_none(),
+                "entity type '{}' declares targets but has no weapon to aim",
+                def.name,
+            );
         }
 
         // A regeneration rate is read through the pool it refills, so one declared

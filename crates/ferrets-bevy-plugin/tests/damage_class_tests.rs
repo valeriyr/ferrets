@@ -89,6 +89,7 @@ fn app() -> App {
                 .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
                 .with_health(50)
                 .with_attack(10, 1, 1, 4, 2)
+                .with_targets(utils::GROUND)
                 .with_bonus_damage_vs([("armored", 10u32)]),
         );
         registry.register(

@@ -62,7 +62,7 @@ fn surviving_unit_does_not_save_player_whose_last_building_falls() {
 }
 
 #[test]
-fn endless_never_finishes_even_when_a_base_is_destroyed() {
+fn endless_never_finishes_even_when_base_is_destroyed() {
     let (mut app, bases) = bases_app(&[None, None]);
     app.world_mut()
         .resource_mut::<GameSession>()
@@ -167,7 +167,7 @@ fn eliminated_player_regaining_building_stays_out() {
 }
 
 #[test]
-fn allied_team_wins_when_the_other_team_is_eliminated() {
+fn allied_team_wins_when_other_team_is_eliminated() {
     // Two-on-two: players 0 and 1 on team 1, players 2 and 3 on team 2.
     let (mut app, bases) = bases_app(&[Some(1), Some(1), Some(2), Some(2)]);
     utils::run_ticks(&mut app, 1);

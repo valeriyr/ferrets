@@ -68,7 +68,7 @@ pub fn tick(world: &mut World) {
 
         match stance {
             Stance::StandGround => {
-                if let Some(target) = acquire::find_target(world, entity, range)
+                if let Some(target) = acquire::find_target(world, entity, entity, range)
                     && let Some(mut queue) =
                         world.entity_mut(entity).get_mut::<OrderQueueComponent>()
                 {

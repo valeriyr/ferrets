@@ -8,7 +8,11 @@ use ferrets_geometry::{
 };
 use ferrets_math::fixed_uvec2::FixedUVec2;
 
-use crate::{layer_mask::LayerMask, nav_grid::NavGrid};
+use crate::{
+    mover_profile::{Blockers, MoverProfile},
+    mover_shape::MoverShape,
+    nav_grid::NavGrid,
+};
 
 /// Movement directions: (dx, dy). Costs depend on [`Projection`].
 const DIRECTIONS: [(i32, i32); 8] = [
@@ -22,28 +26,12 @@ const DIRECTIONS: [(i32, i32); 8] = [
     (1, 1),
 ];
 
-/// Which blockers a navigation query honors.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Blockers {
-    /// Static occupancy and unit claims alike.
-    All,
-    /// Static occupancy only — unit claims are ignored.
-    Static,
-}
-
-impl Blockers {
-    /// Returns `true` when `pos` is passable for `mask` under this blocker
-    /// mode.
-    pub(crate) fn passable(self, grid: &NavGrid, mask: LayerMask, pos: CellPos) -> bool {
-        match self {
-            Blockers::All => grid.is_passable_by(mask, pos),
-            Blockers::Static => grid.is_statically_passable_by(mask, pos),
-        }
-    }
-}
-
-/// Finds the shortest path for a unit with `layer_mask` from `start` toward the
-/// footprint covering `goal_size` cells from `goal`.
+/// Finds the shortest path for `shape` from `start` toward the footprint
+/// covering `goal_size` cells from `goal`.
+///
+/// The path is a sequence of **anchor** cells: each is a position the shape's
+/// whole footprint fits at, so a wide mover never routes through a gap it
+/// cannot pass.
 ///
 /// `stop_distance` controls how close the path must get to the footprint — `0`
 /// requires standing on one of its cells. The distance metric depends on the
@@ -53,18 +41,19 @@ impl Blockers {
 pub fn find_path(
     grid: &NavGrid,
     projection: Projection,
-    layer_mask: impl Into<LayerMask>,
     start: FixedUVec2,
+    shape: MoverShape,
     goal: FixedUVec2,
     goal_size: CellSize,
     stop_distance: u32,
 ) -> Option<Vec<FixedUVec2>> {
-    let layer_mask = layer_mask.into();
+    let profile = MoverProfile::new(shape, Blockers::All);
 
     let start = CellPos::from(start);
     let goal = CellPos::from(goal);
 
-    if projection.in_range_of_rect(start, CellRect::new(goal, goal_size), stop_distance) {
+    let accepted = CellRect::new(goal, goal_size).accepted_by(shape.size, stop_distance);
+    if projection.in_range_of_rect(start, accepted, stop_distance) {
         return Some(vec![]);
     }
 
@@ -73,7 +62,7 @@ pub fn find_path(
     if stop_distance == 0
         && CellRect::new(goal, goal_size)
             .cells()
-            .all(|cell| grid.is_occupied_by(layer_mask, cell))
+            .all(|cell| grid.is_occupied_by(shape.mask, cell))
     {
         return None;
     }
@@ -81,31 +70,23 @@ pub fn find_path(
     let result = pathfinding::prelude::astar(
         &start,
         |&pos| {
-            passable_neighbors(grid, layer_mask, pos, Blockers::All)
+            passable_neighbors(grid, pos, profile)
                 .map(|(neighbor, step)| (neighbor, projection.step_cost(step)))
         },
-        |&pos| {
-            heuristic(
-                projection,
-                pos,
-                CellRect::new(goal, goal_size),
-                stop_distance,
-            )
-        },
-        |pos| projection.in_range_of_rect(*pos, CellRect::new(goal, goal_size), stop_distance),
+        |&pos| heuristic(projection, pos, accepted, stop_distance),
+        |pos| projection.in_range_of_rect(*pos, accepted, stop_distance),
     );
 
     result.map(|(path, _cost)| path.into_iter().skip(1).map(|p| p.into()).collect())
 }
 
-/// The passable neighbors of `pos` for `mask`, in fixed direction order, each
-/// with its step class, with the corner rule applied — the one connectivity
-/// definition every search and flood fill must share.
+/// The passable neighbors of `pos` for `profile`, in fixed direction order,
+/// each with its step class, with the corner rule applied — the one
+/// connectivity definition every search and flood fill must share.
 pub(crate) fn passable_neighbors(
     grid: &NavGrid,
-    mask: LayerMask,
     pos: CellPos,
-    blockers: Blockers,
+    profile: MoverProfile,
 ) -> impl Iterator<Item = (CellPos, Step)> {
     DIRECTIONS.iter().filter_map(move |&(dx, dy)| {
         let nx = pos.x as i32 + dx;
@@ -114,7 +95,7 @@ pub(crate) fn passable_neighbors(
             return None;
         }
         let neighbor = CellPos::new(nx as u32, ny as u32);
-        if !blockers.passable(grid, mask, neighbor) {
+        if !grid.fits_for(neighbor, profile) {
             return None;
         }
         let step = if dx != 0 && dy != 0 {
@@ -124,7 +105,7 @@ pub(crate) fn passable_neighbors(
         };
         match step {
             Step::Diagonal => {
-                if !allows_diagonal(grid, mask, pos, neighbor, blockers) {
+                if !allows_diagonal(grid, pos, profile, neighbor) {
                     return None;
                 }
             }
@@ -138,13 +119,12 @@ pub(crate) fn passable_neighbors(
 /// passable, preventing movement through the gap between two diagonal walls.
 pub(crate) fn allows_diagonal(
     grid: &NavGrid,
-    mask: LayerMask,
     from: CellPos,
+    profile: MoverProfile,
     to: CellPos,
-    blockers: Blockers,
 ) -> bool {
-    blockers.passable(grid, mask, CellPos::new(to.x, from.y))
-        && blockers.passable(grid, mask, CellPos::new(from.x, to.y))
+    grid.fits_for(CellPos::new(to.x, from.y), profile)
+        && grid.fits_for(CellPos::new(from.x, to.y), profile)
 }
 
 /// Finds the shortest path confined to the `window` rect — cells outside it
@@ -155,24 +135,20 @@ pub(crate) fn allows_diagonal(
 pub(crate) fn bounded_path(
     grid: &NavGrid,
     projection: Projection,
-    mask: LayerMask,
-    blockers: Blockers,
     window: CellRect,
     start: CellPos,
-    goal: CellPos,
-    goal_size: CellSize,
+    profile: MoverProfile,
+    goal: CellRect,
     stop_distance: u32,
     extra_cost: impl Fn(CellPos) -> u32,
 ) -> Option<Vec<CellPos>> {
     bounded_search(
         grid,
         projection,
-        mask,
-        blockers,
         window,
         start,
+        profile,
         goal,
-        goal_size,
         stop_distance,
         extra_cost,
     )
@@ -184,21 +160,18 @@ pub(crate) fn bounded_path(
 pub(crate) fn bounded_cost(
     grid: &NavGrid,
     projection: Projection,
-    mask: LayerMask,
-    blockers: Blockers,
     window: CellRect,
     from: CellPos,
+    profile: MoverProfile,
     to: CellPos,
 ) -> Option<u32> {
     bounded_search(
         grid,
         projection,
-        mask,
-        blockers,
         window,
         from,
-        to,
-        CellSize::new(1, 1),
+        profile,
+        CellRect::cell(to),
         0,
         |_| 0,
     )
@@ -210,16 +183,15 @@ pub(crate) fn bounded_cost(
 pub(crate) fn bounded_search(
     grid: &NavGrid,
     projection: Projection,
-    mask: LayerMask,
-    blockers: Blockers,
     window: CellRect,
     start: CellPos,
-    goal: CellPos,
-    goal_size: CellSize,
+    profile: MoverProfile,
+    goal: CellRect,
     stop_distance: u32,
     extra_cost: impl Fn(CellPos) -> u32,
 ) -> Option<(Vec<CellPos>, u32)> {
-    if projection.in_range_of_rect(start, CellRect::new(goal, goal_size), stop_distance) {
+    let accepted = goal.accepted_by(profile.shape.size, stop_distance);
+    if projection.in_range_of_rect(start, accepted, stop_distance) {
         return Some((vec![], 0));
     }
 
@@ -228,21 +200,14 @@ pub(crate) fn bounded_search(
     let result = pathfinding::prelude::astar(
         &start,
         |&pos| {
-            passable_neighbors(grid, mask, pos, blockers)
+            passable_neighbors(grid, pos, profile)
                 .filter(move |&(neighbor, _)| in_window(neighbor))
                 .map(|(neighbor, step)| {
                     (neighbor, projection.step_cost(step) + extra_cost(neighbor))
                 })
         },
-        |&pos| {
-            heuristic(
-                projection,
-                pos,
-                CellRect::new(goal, goal_size),
-                stop_distance,
-            )
-        },
-        |pos| projection.in_range_of_rect(*pos, CellRect::new(goal, goal_size), stop_distance),
+        |&pos| heuristic(projection, pos, accepted, stop_distance),
+        |pos| projection.in_range_of_rect(*pos, accepted, stop_distance),
     );
 
     result.map(|(path, cost)| (path.into_iter().skip(1).collect(), cost))
@@ -269,8 +234,8 @@ pub(crate) fn lane_bias(from: CellPos, toward: CellPos) -> impl Fn(CellPos) -> u
     }
 }
 
-/// A* cost estimate from `from` toward the rectangle at `goal`/`goal_size`, adjusted
-/// for `stop_distance`.
+/// A* cost estimate from `from` toward the accepted `goal` rectangle —
+/// already grown for the searcher's footprint — adjusted for `stop_distance`.
 ///
 /// Measured to the nearest cell of the rectangle, which is what the goal test
 /// accepts — estimating against a far corner instead would overshoot and could send

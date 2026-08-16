@@ -3,6 +3,7 @@
 mod utils;
 
 use ferrets_geometry::cell_pos::CellPos;
+use ferrets_geometry::cell_size::CellSize;
 use ferrets_math::{FixedI64, FixedU64};
 use ferrets_pathfinder::{layer_mask::LayerMask, nav_grid::NavGrid};
 use ferrets_physics::terrain;
@@ -19,6 +20,7 @@ fn body_fits_open_ground() {
         &grid,
         LayerMask::from(utils::GROUND),
         utils::position(3.0, 3.0),
+        CellSize::ONE,
         FixedU64::from_num(0.5),
     ));
 }
@@ -31,6 +33,7 @@ fn body_reaching_into_wall_does_not_fit() {
         &grid,
         LayerMask::from(utils::GROUND),
         utils::position(4.7, 5.0),
+        CellSize::ONE,
         FixedU64::from_num(0.5),
     ));
 }
@@ -44,6 +47,7 @@ fn body_touching_wall_boundary_fits() {
         &grid,
         LayerMask::from(utils::GROUND),
         utils::position(4.0, 5.0),
+        CellSize::ONE,
         FixedU64::from_num(0.5),
     ));
 }
@@ -65,6 +69,7 @@ fn blocked_axis_drops_and_slide_keeps_other() {
         &grid,
         LayerMask::from(utils::GROUND),
         utils::position(3.9, 4.9),
+        CellSize::ONE,
         utils::position(4.2, 5.2),
         FixedU64::from_num(0.5),
     );
@@ -83,6 +88,7 @@ fn step_into_wall_stays_put() {
         &grid,
         LayerMask::from(utils::GROUND),
         position,
+        CellSize::ONE,
         utils::position(4.3, 5.0),
         FixedU64::from_num(0.5),
     );
@@ -115,6 +121,52 @@ fn displacement_saturates_at_origin() {
             FixedI64::ZERO,
         ),
         utils::position(0.0, 1.0)
+    );
+}
+
+//
+// ─── Draining a clip ──────────────────────────────────────────────────────────
+//
+
+/// A building raised against a standing body leaves its circle clipping the
+/// static footprint; a step out of the clip must commit, or the body is
+/// frozen where it stands forever.
+#[test]
+fn clipped_body_walks_out_of_wall() {
+    let grid = walled_grid(&[(5, 5)]);
+
+    // Clipping the wall's west face; a step further west drains the clip.
+    let desired = utils::position(4.4, 5.0);
+    assert_eq!(
+        terrain::slide_toward(
+            &grid,
+            LayerMask::from(utils::GROUND),
+            utils::position(4.7, 5.0),
+            CellSize::ONE,
+            desired,
+            FixedU64::from_num(0.5),
+        ),
+        desired
+    );
+}
+
+#[test]
+fn clipped_body_cannot_clip_deeper() {
+    let grid = walled_grid(&[(5, 5), (5, 6)]);
+
+    // Clipping (5, 5) already; stepping south-east would newly overlap
+    // (5, 6), so only the along-x axis (which keeps the existing clip and
+    // adds nothing) commits.
+    assert_eq!(
+        terrain::slide_toward(
+            &grid,
+            LayerMask::from(utils::GROUND),
+            utils::position(4.7, 5.0),
+            CellSize::ONE,
+            utils::position(4.9, 5.3),
+            FixedU64::from_num(0.5),
+        ),
+        utils::position(4.9, 5.0)
     );
 }
 

@@ -3,7 +3,7 @@
 mod utils;
 
 use ferrets_geometry::cell_size::CellSize;
-use ferrets_pathfinder::nav_grid::NavGrid;
+use ferrets_pathfinder::{mover_shape::MoverShape, nav_grid::NavGrid};
 
 //
 // ─── Layers ───────────────────────────────────────────────────────────────────
@@ -221,6 +221,83 @@ fn footprint_reaching_out_of_bounds_is_blocked() {
     let grid = utils::grid(8, 8);
 
     assert!(!grid.is_footprint_passable_by(utils::GROUND, utils::nav(7, 7), CellSize::new(2, 2)));
+}
+
+//
+// ─── is_footprint_statically_passable_by ──────────────────────────────────────
+//
+
+#[test]
+fn static_footprint_query_ignores_claims() {
+    let mut grid = utils::grid(8, 8);
+    grid.set_claimed_by(utils::GROUND, utils::nav(3, 3), true);
+
+    assert!(!grid.is_footprint_passable_by(utils::GROUND, utils::nav(2, 2), CellSize::new(3, 2)));
+    assert!(grid.is_footprint_statically_passable_by(
+        utils::GROUND,
+        utils::nav(2, 2),
+        CellSize::new(3, 2)
+    ));
+}
+
+#[test]
+fn static_footprint_query_is_blocked_by_any_statically_occupied_cell() {
+    let mut grid = utils::grid(8, 8);
+    grid.set_occupied(utils::GROUND, utils::nav(4, 3), true);
+
+    assert!(!grid.is_footprint_statically_passable_by(
+        utils::GROUND,
+        utils::nav(2, 2),
+        CellSize::new(3, 2)
+    ));
+}
+
+#[test]
+fn static_footprint_query_blocks_out_of_bounds() {
+    let grid = utils::grid(8, 8);
+
+    assert!(!grid.is_footprint_statically_passable_by(
+        utils::GROUND,
+        utils::nav(7, 7),
+        CellSize::new(2, 2)
+    ));
+}
+
+//
+// ─── Shape queries ────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn fits_honors_claims_where_fits_statically_ignores_them() {
+    let mut grid = utils::grid(8, 8);
+    let shape = MoverShape::new(utils::GROUND, CellSize::new(2, 2));
+    grid.set_claimed_by(utils::GROUND, utils::nav(3, 3), true);
+
+    assert!(!grid.fits(utils::nav(2, 2), shape));
+    assert!(grid.fits_statically(utils::nav(2, 2), shape));
+}
+
+#[test]
+fn static_occupancy_refuses_shape_on_both_queries() {
+    let mut grid = utils::grid(8, 8);
+    let shape = MoverShape::new(utils::GROUND, CellSize::new(2, 2));
+    grid.set_occupied(utils::GROUND, utils::nav(3, 3), true);
+
+    assert!(!grid.fits(utils::nav(2, 2), shape));
+    assert!(!grid.fits_statically(utils::nav(2, 2), shape));
+}
+
+#[test]
+fn shape_fits_only_where_every_mask_layer_is_free() {
+    let mut grid = utils::grid(8, 8);
+    let tall = MoverShape::new(utils::GROUND | utils::AIR, CellSize::ONE);
+    grid.set_occupied(utils::AIR, utils::nav(3, 3), true);
+
+    assert!(grid.fits(utils::nav(2, 2), tall));
+    assert!(
+        !grid.fits(utils::nav(3, 3), tall),
+        "one blocked layer must refuse the whole conjunctive mask"
+    );
 }
 
 //

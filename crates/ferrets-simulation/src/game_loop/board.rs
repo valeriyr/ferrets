@@ -99,9 +99,9 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
     match chase::advance_to_entity(
         &mut board.last_chase,
         world,
-        entity_def::position(world, entity),
+        entity,
         target,
-        entity_def::stat_u32(world, target, EntityStatId::LOAD_RANGE),
+        entity_def::effective_stat_u32(world, target, EntityStatId::LOAD_RANGE),
     ) {
         Destination::OutOfReach => return Processing::state(OrderState::Finished),
         Destination::Walk(move_order) => {
@@ -146,7 +146,7 @@ pub(super) fn admit(world: &mut World, holder: Entity, passenger: Entity) {
         .insert(BoardedComponent { holder: holder_id });
 
     let tick = world.resource::<GameSession>().tick();
-    let period = entity_def::stat_u32(world, holder, EntityStatId::LOAD_PERIOD);
+    let period = entity_def::effective_stat_u32(world, holder, EntityStatId::LOAD_PERIOD);
     world
         .entity_mut(holder)
         .get_mut::<TransporterComponent>()
@@ -201,7 +201,7 @@ pub(super) fn would_board(world: &World, entity: Entity, target: Entity) -> bool
     // The capacity is a stat, so a modifier can enlarge or shrink the hold; a
     // hold shrunk below its occupancy keeps everyone aboard and admits nobody.
     occupied_slots(world, target) + cargo_size(world, entity)
-        <= entity_def::stat_u32(world, target, EntityStatId::CARGO_CAPACITY)
+        <= entity_def::effective_stat_u32(world, target, EntityStatId::CARGO_CAPACITY)
 }
 
 /// The earliest tick `holder` may take its next passenger at.

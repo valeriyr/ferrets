@@ -80,6 +80,11 @@ pub enum Order {
     Train,
     /// Work on the given research until it completes for the owning player.
     Research { research: ResearchId },
+    /// Change into `type_name`, on the terms of the transition the entity's
+    /// type declares. The destination is a name because transitions may be
+    /// circular — two forms can each name the other (see
+    /// [`components::morph::MorphComponent`](crate::components::morph::MorphComponent)).
+    Morph { type_name: String },
     /// Construct a building of `type_name` at `position`: walk to the site, place
     /// the building, and work until construction completes.
     Build {

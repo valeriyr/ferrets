@@ -152,6 +152,7 @@ pub fn run() {
                 hud::command_card_input,
                 hud::build_card_input,
                 hud::research_card_input,
+                hud::morph_card_input,
                 hud::skill_card_input,
                 hud::player_skill_card_input,
                 hud::load_card_input,
@@ -194,10 +195,14 @@ pub fn run() {
                 // must run after it — otherwise a fogged unit's orders can flash.
                 debug::draw_orders.after(render::interpolate_sprites),
                 (
+                    render::refresh_changed_sprites,
                     render::attach_sprites,
                     render::interpolate_sprites,
                     render::update_fog_overlay,
                     render::draw_ghosts,
+                    // Before the selection ring and the bars, so a flier's
+                    // shadow sits under both rather than over them.
+                    render::draw_air_shadows,
                     render::draw_selection,
                     render::draw_skill_pulses,
                     render::draw_shots,

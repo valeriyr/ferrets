@@ -14,6 +14,7 @@ use ferrets_pathfinder::{
     astar,
     hierarchy::NavHierarchy,
     hpa::{self, PlanTarget},
+    mover_shape::MoverShape,
     nav_grid::NavGrid,
 };
 
@@ -30,11 +31,13 @@ fn goal_in_range_yields_empty_route() {
         &grid,
         &hierarchy,
         PROJECTION,
-        utils::GROUND,
         utils::nav(3, 3),
-        utils::nav(4, 4),
-        CellSize::new(1, 1),
-        1,
+        utils::on_ground(),
+        PlanTarget {
+            cell: utils::nav(4, 4),
+            size: CellSize::new(1, 1),
+            stop: 1,
+        },
         hpa::PathShape::CellSteps,
     )
     .unwrap();
@@ -149,8 +152,8 @@ fn long_route_ignores_unit_claims() {
     let flat = astar::find_path(
         &grid,
         PROJECTION,
-        utils::GROUND,
         utils::world(0, 1),
+        utils::on_ground(),
         utils::world(15, 1),
         CellSize::new(1, 1),
         0,
@@ -218,8 +221,8 @@ fn detour_routes_around_claims() {
         &grid,
         &hierarchy,
         PROJECTION,
-        utils::GROUND,
         utils::nav(1, 2),
+        utils::on_ground(),
         utils::nav(8, 2),
     )
     .unwrap();
@@ -252,8 +255,8 @@ fn detour_crosses_fully_claimed_choke() {
         &grid,
         &hierarchy,
         PROJECTION,
-        utils::GROUND,
         utils::nav(1, 2),
+        utils::on_ground(),
         utils::nav(8, 2),
     )
     .unwrap();
@@ -263,6 +266,42 @@ fn detour_crosses_fully_claimed_choke() {
         cells,
         route(&[(2, 2), (3, 2), (4, 2), (5, 2), (6, 2), (7, 2), (8, 2)])
     );
+}
+
+#[test]
+fn wide_detour_pays_for_claims_under_whole_footprint() {
+    // Claims parked on row 3 alone: no route anchor ever stands on them, but
+    // a 2x2 footprint walking row 2 covers them — the penalty must read the
+    // whole anchored footprint, or the wide mover shoves straight through
+    // the park it was asked to route around.
+    let mut grid = utils::grid(16, 8);
+    for x in 5..7 {
+        grid.set_claimed_by(utils::GROUND, utils::nav(x, 3), true);
+    }
+    let wide = utils::square_on_ground(2);
+    let hierarchy = utils::build_for(&grid, 8, &[wide]);
+
+    let cells = hpa::detour(
+        &grid,
+        &hierarchy,
+        PROJECTION,
+        utils::nav(1, 2),
+        wide,
+        utils::nav(8, 2),
+    )
+    .unwrap();
+
+    assert_eq!(
+        cells,
+        route(&[(2, 2), (3, 3), (4, 4), (5, 4), (6, 4), (7, 3), (8, 2)])
+    );
+    // No step's footprint covers the parked claims.
+    assert!(cells.iter().all(|&cell| {
+        !(grid.is_claimed_by(utils::GROUND, cell)
+            || grid.is_claimed_by(utils::GROUND, CellPos::new(cell.x + 1, cell.y))
+            || grid.is_claimed_by(utils::GROUND, CellPos::new(cell.x, cell.y + 1))
+            || grid.is_claimed_by(utils::GROUND, CellPos::new(cell.x + 1, cell.y + 1)))
+    }));
 }
 
 //
@@ -280,11 +319,13 @@ fn goal_inside_walled_pond_repairs_to_shore() {
         &grid,
         &hierarchy,
         PROJECTION,
-        utils::GROUND,
         utils::nav(0, 0),
-        utils::nav(6, 4),
-        CellSize::new(1, 1),
-        0,
+        utils::on_ground(),
+        PlanTarget {
+            cell: utils::nav(6, 4),
+            size: CellSize::new(1, 1),
+            stop: 0,
+        },
         hpa::PathShape::CellSteps,
     )
     .unwrap();
@@ -363,11 +404,13 @@ fn refine_fails_when_crossing_gets_walled() {
         &grid,
         &hierarchy,
         PROJECTION,
-        utils::GROUND,
         utils::nav(0, 1),
-        utils::nav(15, 1),
-        CellSize::new(1, 1),
-        0,
+        utils::on_ground(),
+        PlanTarget {
+            cell: utils::nav(15, 1),
+            size: CellSize::new(1, 1),
+            stop: 0,
+        },
         hpa::PathShape::CellSteps,
     )
     .unwrap();
@@ -384,8 +427,8 @@ fn refine_fails_when_crossing_gets_walled() {
         &grid,
         &hierarchy,
         PROJECTION,
-        utils::GROUND,
         from,
+        utils::on_ground(),
         &mut path.corridor,
         path.target,
         hpa::PathShape::CellSteps,
@@ -423,11 +466,13 @@ fn replanning_after_refresh_avoids_new_wall() {
             &grid,
             hierarchy,
             PROJECTION,
-            utils::GROUND,
             utils::nav(0, 1),
-            utils::nav(15, 1),
-            CellSize::new(1, 1),
-            0,
+            utils::on_ground(),
+            PlanTarget {
+                cell: utils::nav(15, 1),
+                size: CellSize::new(1, 1),
+                stop: 0,
+            },
             hpa::PathShape::CellSteps,
         )
         .unwrap()
@@ -470,6 +515,213 @@ fn replanning_after_refresh_avoids_new_wall() {
 }
 
 //
+// ─── Wide movers ──────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn wide_route_threads_gap_it_fits() {
+    // A wall down x=7 with a two-cell hole at y=3..=4 — exactly the wide
+    // body's height, so the only crossing anchors are the ones whose whole
+    // footprint threads the hole.
+    let mut grid = utils::grid(16, 8);
+    for y in 0..8 {
+        if y != 3 && y != 4 {
+            grid.set_occupied(utils::GROUND, utils::nav(7, y), true);
+        }
+    }
+    let wide = utils::square_on_ground(2);
+    let hierarchy = utils::build_for(&grid, 4, &[wide]);
+
+    let cells = walk_as(
+        &grid,
+        &hierarchy,
+        wide,
+        utils::nav(0, 2),
+        utils::nav(13, 2),
+        CellSize::new(1, 1),
+        0,
+    )
+    .unwrap();
+
+    // The anchors dip to y=3 for the crossing — footprint rows 3..=4, exactly
+    // the hole — and climb back after it.
+    assert_eq!(
+        cells,
+        route(&[
+            (1, 2),
+            (2, 2),
+            (3, 2),
+            (4, 2),
+            (5, 3),
+            (6, 3),
+            (7, 3),
+            (8, 3),
+            (9, 3),
+            (10, 2),
+            (11, 2),
+            (12, 2),
+            (13, 2),
+        ])
+    );
+}
+
+#[test]
+fn wide_goal_repairs_where_only_narrow_fits() {
+    // A ring around the goal with a single-cell breach: a single-cell mover
+    // slips in, but the wide body's region ends outside — its goal repairs
+    // to the shore while the narrow one's does not.
+    let mut grid = utils::hollow_ring_grid(12, utils::nav(6, 4), 2);
+    grid.set_occupied(utils::GROUND, utils::nav(6, 2), false);
+    let narrow = utils::on_ground();
+    let wide = utils::square_on_ground(2);
+    let hierarchy = utils::build_for(&grid, 4, &[narrow, wide]);
+
+    let narrow_cells = walk(
+        &grid,
+        &hierarchy,
+        utils::nav(6, 0),
+        utils::nav(6, 4),
+        CellSize::new(1, 1),
+        0,
+    )
+    .unwrap();
+    assert_eq!(narrow_cells.last(), Some(&utils::nav(6, 4)));
+
+    let path = hpa::find_path(
+        &grid,
+        &hierarchy,
+        PROJECTION,
+        utils::nav(6, 0),
+        wide,
+        PlanTarget {
+            cell: utils::nav(6, 4),
+            size: CellSize::new(1, 1),
+            stop: 0,
+        },
+        hpa::PathShape::CellSteps,
+    )
+    .unwrap();
+
+    // Repaired: the nearest anchor in the wide body's own region, on the
+    // shore instead of through the one-cell breach. Several shore anchors
+    // tie on the footprint's edge distance; the tie breaks by cell order
+    // across every ring that can still carry the tying rank — the scan may
+    // not stop at the first ring that produced it.
+    assert_eq!(
+        path.target,
+        PlanTarget {
+            cell: utils::nav(2, 0),
+            size: CellSize::new(1, 1),
+            stop: 0,
+        }
+    );
+}
+
+#[test]
+fn ranged_goal_is_reached_by_edge_from_foreign_cluster() {
+    // A full wall down x=8 seals the goal's side of the map from the start's;
+    // the goal sits just past the wall at (9,2), stop 2. No route enters the
+    // goal's own cluster — but an anchor at x=6 puts a 2x2 footprint's edge
+    // exactly 2 from the goal, shooting over the wall. The corridor gathers
+    // acceptance entries from every cluster that can hold an accepting
+    // anchor, so the plan succeeds, the goal survives unrepaired, and the
+    // walk ends on the near side of the wall.
+    let mut grid = utils::grid(16, 8);
+    for y in 0..8 {
+        grid.set_occupied(utils::GROUND, utils::nav(8, y), true);
+    }
+    let wide = utils::square_on_ground(2);
+    let hierarchy = utils::build_for(&grid, 4, &[wide]);
+
+    let path = hpa::find_path(
+        &grid,
+        &hierarchy,
+        PROJECTION,
+        utils::nav(0, 2),
+        wide,
+        PlanTarget {
+            cell: utils::nav(9, 2),
+            size: CellSize::ONE,
+            stop: 2,
+        },
+        hpa::PathShape::CellSteps,
+    )
+    .expect("acceptance exists west of the wall");
+    assert_eq!(
+        path.target,
+        PlanTarget {
+            cell: utils::nav(9, 2),
+            size: CellSize::ONE,
+            stop: 2,
+        },
+        "an edge-reachable goal was repaired away"
+    );
+
+    let cells = walk_as(
+        &grid,
+        &hierarchy,
+        wide,
+        utils::nav(0, 2),
+        utils::nav(9, 2),
+        CellSize::ONE,
+        2,
+    )
+    .unwrap();
+    // The exact stand: anchor (6,2) puts the footprint's edge at x=7, two
+    // cells from the goal — the walk never crosses the wall.
+    assert_eq!(cells.last(), Some(&utils::nav(6, 2)));
+}
+
+#[test]
+fn refine_fails_when_crossing_no_longer_fits_wide_shape() {
+    let mut grid = utils::grid(16, 4);
+    let wide = utils::square_on_ground(2);
+    let mut hierarchy = utils::build_for(&grid, 4, &[wide]);
+
+    let mut path = hpa::find_path(
+        &grid,
+        &hierarchy,
+        PROJECTION,
+        utils::nav(0, 1),
+        wide,
+        PlanTarget {
+            cell: utils::nav(13, 1),
+            size: CellSize::new(1, 1),
+            stop: 0,
+        },
+        hpa::PathShape::CellSteps,
+    )
+    .unwrap();
+    assert!(!path.corridor.is_empty());
+
+    // Block a cell the crossing's own anchor does not stand on but its
+    // footprint covers: a single-cell mover would still pass, the wide one
+    // must not.
+    let next = *path.corridor.last().unwrap();
+    let blocked = utils::nav(next.to.x + 1, next.to.y);
+    grid.set_occupied(utils::GROUND, blocked, true);
+    assert!(grid.is_statically_passable_by(utils::GROUND, next.to));
+    hierarchy.mark_dirty(blocked);
+    hierarchy.refresh(&grid);
+
+    let from = *path.segment.last().unwrap();
+    let segment = hpa::refine(
+        &grid,
+        &hierarchy,
+        PROJECTION,
+        from,
+        wide,
+        &mut path.corridor,
+        path.target,
+        hpa::PathShape::CellSteps,
+    );
+    assert_eq!(
+        segment, None,
+        "a crossing the footprint no longer fits must force a re-plan"
+    );
+}
+
+//
 // ─── Determinism ──────────────────────────────────────────────────────────────
 //
 
@@ -483,11 +735,13 @@ fn planning_is_identical_on_cold_and_warm_caches() {
             &grid,
             hierarchy,
             PROJECTION,
-            utils::GROUND,
             utils::nav(0, 0),
-            utils::nav(31, 31),
-            CellSize::new(1, 1),
-            0,
+            utils::on_ground(),
+            PlanTarget {
+                cell: utils::nav(31, 31),
+                size: CellSize::new(1, 1),
+                stop: 0,
+            },
             hpa::PathShape::CellSteps,
         )
         .unwrap()
@@ -520,35 +774,57 @@ fn walk(
     goal_size: CellSize,
     stop_distance: u32,
 ) -> Option<Vec<CellPos>> {
-    let mut path = hpa::find_path(
+    walk_as(
         grid,
         hierarchy,
-        PROJECTION,
-        utils::GROUND,
+        utils::on_ground(),
         start,
         goal,
         goal_size,
         stop_distance,
+    )
+}
+
+fn walk_as(
+    grid: &NavGrid,
+    hierarchy: &NavHierarchy,
+    shape: MoverShape,
+    start: CellPos,
+    goal: CellPos,
+    goal_size: CellSize,
+    stop_distance: u32,
+) -> Option<Vec<CellPos>> {
+    let mut path = hpa::find_path(
+        grid,
+        hierarchy,
+        PROJECTION,
+        start,
+        shape,
+        PlanTarget {
+            cell: goal,
+            size: goal_size,
+            stop: stop_distance,
+        },
         hpa::PathShape::CellSteps,
     )?;
 
     let mut cells = path.segment.clone();
+    // Arrival is judged the way the engine judges it: the anchor against the
+    // shape's accepted goal, so a wide walk ends at its edge reach.
+    let accepted =
+        CellRect::new(path.target.cell, path.target.size).accepted_by(shape.size, path.target.stop);
     for _ in 0..1000 {
         let at = *cells.last().unwrap_or(&start);
-        if PROJECTION.in_range_of_rect(
-            at,
-            CellRect::new(path.target.cell, path.target.size),
-            path.target.stop,
-        ) {
-            validate_route(grid, start, &cells);
+        if PROJECTION.in_range_of_rect(at, accepted, path.target.stop) {
+            validate_route(grid, shape, start, &cells);
             return Some(cells);
         }
         let segment = hpa::refine(
             grid,
             hierarchy,
             PROJECTION,
-            utils::GROUND,
             at,
+            shape,
             &mut path.corridor,
             path.target,
             hpa::PathShape::CellSteps,
@@ -566,7 +842,7 @@ fn route(cells: &[(u32, u32)]) -> Vec<CellPos> {
 
 /// Asserts the route is contiguous (every step between adjacent cells) and
 /// statically passable.
-fn validate_route(grid: &NavGrid, start: CellPos, cells: &[CellPos]) {
+fn validate_route(grid: &NavGrid, shape: MoverShape, start: CellPos, cells: &[CellPos]) {
     let mut previous = start;
     for &cell in cells {
         assert!(
@@ -574,8 +850,8 @@ fn validate_route(grid: &NavGrid, start: CellPos, cells: &[CellPos]) {
             "route jumps from {previous:?} to {cell:?}"
         );
         assert!(
-            grid.is_statically_passable_by(utils::GROUND, cell),
-            "route walks through blocked {cell:?}"
+            grid.fits_statically(cell, shape),
+            "route anchors the footprint on blocked ground at {cell:?}"
         );
         previous = cell;
     }

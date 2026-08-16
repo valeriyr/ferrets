@@ -1,8 +1,9 @@
 //! Simulation entity creation, destruction, and map presence.
 
-use bevy_ecs::{entity::Entity, world::World};
+use bevy_ecs::{component::Component, entity::Entity, world::EntityWorldMut, world::World};
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
-use ferrets_math::{FixedI64, fixed_uvec2::FixedUVec2, fixed_vec2::FixedVec2};
+use ferrets_math::{FixedI64, FixedU64, fixed_uvec2::FixedUVec2, fixed_vec2::FixedVec2};
+use std::collections::BTreeMap;
 
 use crate::{
     components::{
@@ -37,8 +38,8 @@ use crate::{
     simulation_id::{SimulationId, SimulationIdGenerator},
 };
 use ferrets_content::{
-    entity_stats::EntityStatId, location::LocationDef, registry::ContentRegistry,
-    transport::PassengerFate,
+    entity_stats::EntityStatId, entity_type_def::EntityTypeId, location::LocationDef,
+    registry::ContentRegistry, transport::PassengerFate,
 };
 
 /// Look direction a freshly spawned entity starts with: south, `+y` (sim `y`
@@ -63,37 +64,13 @@ pub fn spawn_entity(
         !is_mid_crossing(position),
         "entities spawn at rest: position must lie exactly on a cell origin"
     );
-    let (
-        type_id,
-        location_def,
-        base_stats,
-        can_attack,
-        can_move,
-        has_health,
-        has_trainer,
-        has_transporter,
-        has_resource_source,
-        has_resource_carrier,
-        tags,
-        skills,
-    ) = {
+    // Only what placing the entity needs; every capability component is fitted
+    // from the type by `fit_components` below.
+    let (type_id, location_def, base_stats) = {
         let registry = world.resource::<ContentRegistry>();
         let type_id = registry.type_id(type_name)?;
         let type_def = registry.entity(type_name)?;
-        (
-            type_id,
-            type_def.location?,
-            type_def.base_stats.clone(),
-            type_def.can_attack(),
-            type_def.can_move(),
-            type_def.has_health(),
-            type_def.trainer.is_some(),
-            type_def.can_transport(),
-            type_def.resource_source.is_some(),
-            type_def.resource_carrier.is_some(),
-            type_def.tags.clone(),
-            type_def.skills.clone(),
-        )
+        (type_id, type_def.location?, type_def.base_stats.clone())
     };
 
     let location = LocationComponent::new(position, DEFAULT_FACING);
@@ -115,61 +92,22 @@ pub fn spawn_entity(
     if let Some(player) = owner {
         entity_mut.insert(OwnerComponent::new(player));
     }
-    // Seed the per-entity stat store from the type's base stats — built-in and
-    // custom alike. Buffs later fold these into `effective` (see
-    // game_loop::stats::recompute_entity_stats).
-    let mut stats = StatsComponent::default();
-    for (&stat, &value) in &base_stats {
-        stats.set_base(stat, value);
-    }
-    entity_mut.insert(stats);
+    let entity = entity_mut.id();
 
-    // Current-value pools, seeded to full from their max stats.
+    seed_stats(world, entity, &base_stats);
+    // Current-value pools, seeded to full from their max stats. A morph rescales
+    // them instead, which is why filling them is the spawn's own business.
     if let Some(&max_health) = base_stats.get(&EntityStatId::MAX_HEALTH) {
-        entity_mut.insert(HealthComponent::full(max_health));
+        world
+            .entity_mut(entity)
+            .insert(HealthComponent::full(max_health));
     }
     if let Some(&max_energy) = base_stats.get(&EntityStatId::MAX_ENERGY) {
-        entity_mut.insert(EnergyComponent::full(max_energy));
+        world
+            .entity_mut(entity)
+            .insert(EnergyComponent::full(max_energy));
     }
-
-    // Stance: armed entities default to defending themselves; unarmed but movable,
-    // damageable ones to fleeing; the rest have no initiative to configure.
-    if can_attack {
-        entity_mut.insert(StanceComponent(Stance::Defend));
-    } else if can_move && has_health {
-        entity_mut.insert(StanceComponent(Stance::Flee));
-    }
-
-    // Production and resource roles get their runtime-state components; the
-    // type-constant config stays on the definition, read via its handle.
-    if has_trainer {
-        entity_mut.insert((
-            TrainQueueComponent::default(),
-            RallyPointComponent::default(),
-        ));
-    }
-    if has_transporter {
-        entity_mut.insert(TransporterComponent::default());
-        // A holder without one yet: trainers already carry theirs, and the two
-        // roles share the rally point.
-        if !entity_mut.contains::<RallyPointComponent>() {
-            entity_mut.insert(RallyPointComponent::default());
-        }
-    }
-    if has_resource_source {
-        entity_mut.insert(ResourceSourceComponent::default());
-    }
-    if has_resource_carrier {
-        entity_mut.insert(ResourceCarrierComponent::default());
-    }
-    if !tags.is_empty() {
-        entity_mut.insert(TagsComponent::new(tags));
-    }
-    if !skills.is_empty() {
-        entity_mut.insert(SkillsComponent::new(skills));
-    }
-
-    let entity = entity_mut.id();
+    fit_components(world, entity, type_id);
 
     let class = OccupancyClass::of(world.resource::<ContentRegistry>().def(type_id));
     world
@@ -501,4 +439,113 @@ pub fn remove_dead_entity(world: &mut World, entity: Entity) {
 
     world.resource_mut::<EntityIndex>().remove_dying(id);
     world.despawn(entity);
+}
+
+/// Seeds `entity`'s stat store from a type's base stats — built-in and custom
+/// alike. Buffs later fold these into `effective` (see
+/// [`game_loop::stats::recompute_entity_stats`](crate::game_loop::stats::recompute_entity_stats)).
+///
+/// Replaces the whole store, because bases belong to the type: a type change
+/// must not leave a stat the old type carried and the new one does not.
+pub(crate) fn seed_stats(
+    world: &mut World,
+    entity: Entity,
+    base_stats: &BTreeMap<EntityStatId, FixedU64>,
+) {
+    let mut stats = StatsComponent::default();
+    for (&stat, &value) in base_stats {
+        stats.set_base(stat, value);
+    }
+    world.entity_mut(entity).insert(stats);
+}
+
+/// Fits `entity`'s components to what `type_id` requires: inserts the ones the
+/// type needs and removes the ones it no longer does.
+///
+/// **Live state on a component both types need is left alone.** A holder keeps
+/// its passengers through a type change, a trainer its queue, a carrier its
+/// load — inserting a fresh default would silently empty them, which is the
+/// quietest way this could go wrong.
+///
+/// Stance is preserved when present, because a player sets it deliberately;
+/// only an entity that has none is given its type's default.
+pub(crate) fn fit_components(world: &mut World, entity: Entity, type_id: EntityTypeId) {
+    let (can_attack, can_move, has_health, trainer, transporter, source, carrier, tags, skills) = {
+        let def = world.resource::<ContentRegistry>().def(type_id);
+        (
+            def.can_attack(),
+            def.can_move(),
+            def.has_health(),
+            def.trainer.is_some(),
+            def.can_transport(),
+            def.resource_source.is_some(),
+            def.resource_carrier.is_some(),
+            def.tags.clone(),
+            def.skills.clone(),
+        )
+    };
+    // A rally point serves the trainer and the holder alike, so it stays while
+    // either role does.
+    let wants_rally = trainer || transporter;
+    let mut entity_mut = world.entity_mut(entity);
+
+    // Armed entities default to defending themselves; unarmed but movable,
+    // damageable ones to fleeing; the rest have no initiative to configure.
+    if !entity_mut.contains::<StanceComponent>() {
+        if can_attack {
+            entity_mut.insert(StanceComponent(Stance::Defend));
+        } else if can_move && has_health {
+            entity_mut.insert(StanceComponent(Stance::Flee));
+        }
+    }
+
+    // Runtime-state components for the roles the type carries; the
+    // type-constant config stays on the definition, read via its handle.
+    //
+    // Losing a role drops its state where it stands, which is right for
+    // everything except a queue whose entries were paid for up front: a
+    // trainer that becomes something else would take its unbuilt units with
+    // it, unrefunded. The order lifecycle owns that refund — a flushed Train
+    // order gives every entry back — so whatever arrives here has already
+    // been emptied, and debug builds hold the lifecycle to it.
+    debug_assert!(
+        trainer
+            || entity_mut
+                .get::<TrainQueueComponent>()
+                .is_none_or(|queue| queue.0.is_empty()),
+        "a type change must not drop a paid production queue"
+    );
+    fit_default::<TrainQueueComponent>(&mut entity_mut, trainer);
+    fit_default::<TransporterComponent>(&mut entity_mut, transporter);
+    fit_default::<RallyPointComponent>(&mut entity_mut, wants_rally);
+    fit_default::<ResourceSourceComponent>(&mut entity_mut, source);
+    fit_default::<ResourceCarrierComponent>(&mut entity_mut, carrier);
+
+    // Tags and skills are the type's own vocabulary rather than live state, so
+    // they are replaced outright.
+    if tags.is_empty() {
+        entity_mut.remove::<TagsComponent>();
+    } else {
+        entity_mut.insert(TagsComponent::new(tags));
+    }
+    if skills.is_empty() {
+        entity_mut.remove::<SkillsComponent>();
+    } else {
+        entity_mut.insert(SkillsComponent::new(skills));
+    }
+}
+
+/// Inserts a default `C` when the type wants one and it is absent, removes it
+/// when the type does not, and leaves an existing one untouched — so whatever
+/// live state it holds survives.
+fn fit_default<C: Component + Default>(entity: &mut EntityWorldMut, wanted: bool) {
+    match (wanted, entity.contains::<C>()) {
+        (true, false) => {
+            entity.insert(C::default());
+        }
+        (false, true) => {
+            entity.remove::<C>();
+        }
+        (true, true) | (false, false) => {}
+    }
 }

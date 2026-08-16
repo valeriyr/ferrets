@@ -96,9 +96,9 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
     match chase::advance_to_entity(
         &mut load.last_chase,
         world,
-        entity_def::position(world, entity),
+        entity,
         target,
-        entity_def::stat_u32(world, entity, EntityStatId::LOAD_RANGE),
+        entity_def::effective_stat_u32(world, entity, EntityStatId::LOAD_RANGE),
     ) {
         Destination::OutOfReach => return Processing::state(OrderState::Finished),
         Destination::Walk(move_order) => {

@@ -84,7 +84,7 @@ fn client_team_request_updates_every_node() {
 }
 
 #[test]
-fn host_sets_a_slots_team_for_every_node() {
+fn host_sets_slot_team_for_every_node() {
     let (mut host, _c1, mut c2) = star(3);
     host.poll().expect("seat");
     c2.poll();

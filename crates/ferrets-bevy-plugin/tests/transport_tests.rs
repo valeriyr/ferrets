@@ -21,8 +21,8 @@ use ferrets_simulation::{
 };
 use utils::{
     APPLY, GROUND, cell_of, health, passengers_of, pos, push_command, run_ticks, run_until_aboard,
-    select, selection, send_to, set_all_cells_occupied, single_owned_of_type, spawn_owned,
-    transport_app, unload, within,
+    select, selection, send_to, set_all_cells_statically_occupied, single_owned_of_type,
+    spawn_owned, transport_app, unload, within,
 };
 
 //
@@ -459,7 +459,7 @@ fn blocked_exit_holds_passenger_and_retries() {
     send_to(&mut app, rifleman_id, wagon_id);
     run_until_aboard(&mut app, wagon, 1, 10);
 
-    set_all_cells_occupied(app.world_mut(), true);
+    set_all_cells_statically_occupied(app.world_mut(), true);
     unload(&mut app, wagon_id, None);
     run_ticks(&mut app, APPLY + 4);
 
@@ -472,8 +472,7 @@ fn blocked_exit_holds_passenger_and_retries() {
     // Free one cell beside the wagon; the held exit lands on it.
     app.world_mut()
         .resource_mut::<Map>()
-        .nav_grid_mut()
-        .set_occupied(GROUND, CellPos::new(11, 10), false);
+        .set_static_occupied(GROUND, CellPos::new(11, 10), false);
     run_ticks(&mut app, 2);
     assert!(app.world().get::<HiddenComponent>(rifleman).is_none());
     assert!(passengers_of(app.world(), wagon).is_empty());
@@ -534,7 +533,7 @@ fn ejected_passenger_without_room_dies() {
     send_to(&mut app, rifleman_id, bunker_id);
     run_until_aboard(&mut app, bunker, 1, 30);
 
-    set_all_cells_occupied(app.world_mut(), true);
+    set_all_cells_statically_occupied(app.world_mut(), true);
     spawn::destroy_entity(app.world_mut(), bunker);
 
     assert!(

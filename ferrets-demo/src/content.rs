@@ -7,16 +7,20 @@ use bevy::prelude::*;
 use ferrets_content::registry::ContentRegistry;
 use ferrets_script::{content, engine::lua::LuaEngine};
 
-/// The demo's content, as a Lua script. It declares the ground and water
-/// navigation layers (named by [`crate::map::GROUND`] and
-/// [`crate::map::WATER`]) and a terrain for each. Fractional stats are decimal
-/// strings so they parse straight to fixed-point (no `f64`).
+/// The demo's content, as a Lua script. It declares the ground, water and air
+/// navigation layers (named by [`crate::map::GROUND`], [`crate::map::WATER`]
+/// and [`crate::map::AIR`]) and a terrain for each surface. Fractional stats
+/// are decimal strings so they parse straight to fixed-point (no `f64`).
 pub const CONTENT: &str = r#"
     local GROUND = define_layer("ground")
     local WATER = define_layer("water")
+    local AIR = define_layer("air")
 
-    define_terrain("grass", GROUND)
-    define_terrain("water", WATER)
+    -- Every surface is flyable, so the air layer is open where the ground and
+    -- water layers are not: a flier crosses the lake and passes over whatever
+    -- stands on the shore, because nothing on those layers claims this one.
+    define_terrain("grass", GROUND | AIR)
+    define_terrain("water", WATER | AIR)
 
     define_race("human")
     define_race("orc")
@@ -139,10 +143,17 @@ pub const CONTENT: &str = r#"
         dying = { time = 2 },
         -- Shore bombardment: a slow ball, so shots at a moving target are wasted.
         projectile = "cannonball",
+        targets = GROUND | WATER | AIR,
         train_time = 100,
     })
+    -- The fortress is tall enough to be in the way of what flies: it holds the
+    -- water layer under it and the air layer over it at once, so fliers must go
+    -- around a keep that ships must also go around. It is the only thing on the
+    -- map that closes the air, which is what gives the air layer any shape at
+    -- all. Occupying the air also makes it a legal target for anti-air, since
+    -- targetability follows occupation unless a type says otherwise.
     define_entity("sea_fortress", {
-        location = { occupation = WATER, size = { 3, 3 }, solidity = "solid" },
+        location = { occupation = WATER | AIR, size = { 3, 3 }, solidity = "solid" },
         stats = { max_health = 1500, sight_range = 8, supply_provided = 5 },
         dying = { time = 2 },
         trainer = { "ship" },
@@ -260,7 +271,7 @@ pub const CONTENT: &str = r#"
     })
     main_hall("town_hall", "human", "peasant")
     farm("farm", "human")
-    barracks("barracks", "human", { "archer", "mortar", "medic" })
+    barracks("barracks", "human", { "archer", "mortar", "medic", "gryphon" })
 
     -- The human garrison: the living step inside and the armed among them fire
     -- their own weapons out, untouchable until the walls come down — and when
@@ -323,6 +334,8 @@ pub const CONTENT: &str = r#"
         bonus_damage_vs = { grunt = 4 },
         -- A fast arrow: visibly in flight at range 4, but rarely wasted.
         projectile = "arrow",
+        -- The human answer to everything that moves, whatever layer it moves on.
+        targets = GROUND | WATER | AIR,
         -- An energy pool (above) feeds the self-buff burst of speed and damage
         -- that reverts on expiry.
         skills = { "battle_focus" },
@@ -384,6 +397,10 @@ pub const CONTENT: &str = r#"
         -- The shell crosses one cell every five ticks, so a target that keeps moving
         -- takes the direct hit while the burst lands behind it.
         projectile = "shell",
+        -- Siege fires at the ground, so it must not take aim at what flies: the
+        -- blast below already spares fliers, and a mortar allowed to *target* one
+        -- would walk into range and drop shells that could never damage it.
+        targets = GROUND | WATER,
         splash = {
             shape = "circular",
             bands = { {1, "0.5"}, {2, "0.25"} },
@@ -397,11 +414,126 @@ pub const CONTENT: &str = r#"
         requires = { "blacksmith" },
     })
 
+    -- The human gryphon: one unit in two forms, and the demo's only thing that
+    -- changes what it *is* while it lives. Grounded it walks and blocks ground;
+    -- aloft it flies over everything. Both forms are 2x2 and carry one archer who
+    -- shoots from inside, so the beast has no weapon of its own and the passenger
+    -- is its only answer to anything.
+    --
+    -- The take-off window, as content's own stat: the engine has no built-in
+    -- notion of a morph-time stat — a transition's `time` may name any declared
+    -- stat, and this is the one the gryphon's take-off reads. A stat rather
+    -- than a plain tick count so a buff or research could quicken it.
+    define_entity_stat("morph_time")
+
+    -- Each form names the other, which is why the pair is authored as two types:
+    -- everything that differs between them — layer, speed, what reaches them — is
+    -- a type property, and the change is just an edge between the two. Only the
+    -- grounded form is trainable; the aloft one exists solely as the other end
+    -- of the change.
+    local function gryphon(name, occupation, targetable, speed, fate, morphs, trainable)
+        define_entity(name, {
+            race = "human",
+            location = { occupation = occupation, size = { 2, 2 }, solidity = "solid" },
+            targetable = targetable,
+            morphs = morphs,
+            stats = {
+                speed = speed, radius = "1", max_health = 180, sight_range = 10,
+                supply_cost = 2,
+                -- One rider, who fights from the saddle.
+                cargo_capacity = 1,
+                load_range = 1, unload_range = 1, load_period = 0, unload_period = 0,
+                -- A second to change form, during which it can do nothing else.
+                -- The window is the whole cost besides the wing-beat energy:
+                -- there is no cooldown, because the commitment is what makes
+                -- taking off a decision. A stat so a research could quicken it
+                -- — carried by the grounded form alone, since only the
+                -- take-off reads it and a buffed dead stat on the aloft form
+                -- would only mislead.
+                morph_time = trainable and 20 or nil,
+                -- The pool the take-off draws from; shared by both forms so it
+                -- carries across the change.
+                max_energy = 60, energy_regen = "0.2",
+            },
+            dying = { time = 2 },
+            transporter = {
+                carries = { "archer" },
+                boarding = "own",
+                fate = fate,
+                conduct = "fight",
+            },
+            cost = trainable and { gold = 200, wood = 60 } or nil,
+            train_time = trainable and 110 or nil,
+            selection = { priority = 10 },
+        })
+    end
+    -- Grounded, the beast stands tall enough to be shot out of the air — the
+    -- case occupation alone cannot express, since holding the air layer would
+    -- also wall the sky off. Aloft it is answerable where it lives and nowhere
+    -- else: taking off is exactly what shakes an axe, which is the whole reason
+    -- to climb.
+    --
+    -- The two edges wear different terms on purpose. Taking off checks nothing
+    -- early — the sky is rarely contested — and costs a beat of energy; landing
+    -- is free but *reserves* its ground the moment it is ordered, so the spot
+    -- underneath cannot be built over or wandered onto while the beast descends.
+    -- Both are committed: mid-change there is no changing back.
+    --
+    -- The rider's fate follows the altitude: a beast cut down on the ground
+    -- spills its archer alive beside the wreck, but one shot out of the sky
+    -- takes saddle and rider down together — which is the risk that prices
+    -- the ride.
+    gryphon("gryphon", GROUND, GROUND | AIR, "0.3", "eject", {
+        { into = "gryphon_aloft",
+          time = { stat = "morph_time" },
+          placement = "revalidate",
+          cancel = "committed",
+          cost = { energy = "20" } },
+    }, true)
+    gryphon("gryphon_aloft", AIR, AIR, "0.45", "destroy", {
+        -- A plain tick count, where the take-off reads its stat: landing pace
+        -- is nothing anyone would research.
+        { into = "gryphon",
+          time = 20,
+          placement = "reserve",
+          cancel = "committed" },
+    }, false)
+
+    -- The orc air transport: a 2x2 flier, and the demo's first mover wider than
+    -- one cell. Its footprint is what the planner has to fit, so it only routes
+    -- through two-wide gaps — and its body is the circle inscribed in that
+    -- footprint, radius one, which is the widest a 2x2 may carry.
+    define_entity("zeppelin", {
+        race = "orc",
+        location = { occupation = AIR, size = { 2, 2 }, solidity = "solid" },
+        stats = {
+            speed = "0.35", radius = "1", max_health = 150, sight_range = 10,
+            supply_cost = 2,
+            cargo_capacity = 4,
+            -- A gangplank: one body a second each way, as the pig farm's is.
+            load_range = 1, unload_range = 1,
+            load_period = 20, unload_period = 20,
+        },
+        dying = { time = 2 },
+        cost = { gold = 160, wood = 60 },
+        train_time = 90,
+        -- Carries the workforce and the army alike — and whoever is aboard
+        -- when it is shot down goes down with it, the same bargain the
+        -- gryphon's rider strikes aloft.
+        transporter = {
+            carries = { "peon", "grunt", "shaman" },
+            boarding = "own",
+            fate = "destroy",
+            conduct = "shelter",
+        },
+        selection = { priority = 10 },
+    })
+
     -- Orc: worker, base, barracks, and a melee unit.
     -- Peons work one to a job and disappear into what they raise: a site swallows its
     -- peon until the walls are up, where a repair or a stand only ties one up in the
     -- open. Nothing they do goes faster for a second pair of hands.
-    worker("peon", "orc", { "great_hall", "war_camp", "pig_farm" }, {
+    worker("peon", "orc", { "great_hall", "war_camp", "pig_farm", "watch_tower" }, {
         build = "hidden", repair = "present", wood = "present",
     })
     main_hall("great_hall", "orc", "peon")
@@ -432,7 +564,57 @@ pub const CONTENT: &str = r#"
         },
         tags = { "building" },
     })
-    barracks("war_camp", "orc", { "grunt", "shaman" }, { "frenzy_ritual" })
+    -- The orc watch tower: what it can be hit by and where it stands are
+    -- different answers, like the grounded gryphon. It is rooted on the ground
+    -- and blocks only the ground, so fliers pass over it freely — but it stands
+    -- tall enough to be shot out of the air, which `targetable` says and
+    -- `occupation` could not. Occupying the air instead would make it a wall
+    -- across the sky, which is the fortress's job, not a tower's.
+    --
+    -- The watch tower only watches: the farthest eyes on the orc side and no
+    -- weapon. The upgrade trades some of that watch for bolts — the guard
+    -- tower below sees less and is the orc answer to fliers.
+    define_entity("watch_tower", {
+        race = "orc",
+        location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
+        targetable = GROUND | AIR,
+        stats = {
+            max_health = 250,
+            sight_range = 12,
+        },
+        dying = { time = 2 },
+        cost = { gold = 120, wood = 40 },
+        build_time = 70,
+        tags = { "building" },
+        -- The demo's building upgrade: a paid, refundable change in place. The
+        -- money is committed up front and comes back in full if the upgrade is
+        -- called off — which is what makes starting one cheap to reconsider.
+        morphs = {
+            { into = "guard_tower",
+              time = 60,
+              placement = "reserve",
+              cancel = "refundable",
+              cost = { resources = { gold = 80, wood = 20 } } },
+        },
+    })
+    -- What the watch tower upgrades into: the same tower, now armed, its bolts
+    -- reaching every layer. Never built directly — the only way here is
+    -- through the change above.
+    define_entity("guard_tower", {
+        race = "orc",
+        location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
+        targetable = GROUND | AIR,
+        stats = {
+            max_health = 350,
+            damage = 14, attack_range = 7, acquire_range = 9, attack_period = 12, damage_point = 5,
+            sight_range = 10,
+        },
+        dying = { time = 2 },
+        projectile = "arrow",
+        targets = GROUND | WATER | AIR,
+        tags = { "building" },
+    })
+    barracks("war_camp", "orc", { "grunt", "shaman", "zeppelin" }, { "frenzy_ritual" })
     define_entity("grunt", {
         race = "orc",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
@@ -450,6 +632,9 @@ pub const CONTENT: &str = r#"
         },
         dying = { time = 2 },
         tags = { "biological" },
+        -- An axe reaches what stands on the ground or floats on the water and
+        -- nothing that flies.
+        targets = GROUND | WATER,
         -- Blood rite: the grunt buys the archer's frenzy with its own blood and
         -- a little gold — regeneration (above) walks the price off afterwards.
         skills = { "blood_rite" },

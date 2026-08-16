@@ -40,6 +40,7 @@ pub const NAME: &str = "demo";
 /// The demo's navigation layers, by content name.
 pub const GROUND: &str = "ground";
 pub const WATER: &str = "water";
+pub const AIR: &str = "air";
 
 /// The slot id of the boss — the environment AI holding the lake. The map's
 /// owner-tagged placements and the lobby's appended slot must agree on it.
@@ -59,7 +60,7 @@ const RIVER_AXIS: u32 = 48;
 const FORD_NEAR: (u32, u32) = (18, 20);
 const FORD_FAR: (u32, u32) = (75, 77);
 
-/// The boss fortress footprint origin (3×3, roughly centered in the lake).
+/// The boss fortress footprint anchor (3×3, roughly centered in the lake).
 const FORTRESS: (u32, u32) = (46, 46);
 /// Boss ship cells, spread around the fortress on open water.
 const SHIPS: [(u32, u32); 3] = [(44, 50), (52, 46), (50, 52)];

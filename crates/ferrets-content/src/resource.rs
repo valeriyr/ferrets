@@ -35,11 +35,13 @@ impl ResourceSourceDef {
     }
 
     /// Returns the resource kind this source yields.
+    #[inline]
     pub fn kind(&self) -> &str {
         &self.kind
     }
 
     /// Returns what happens to this source when it is emptied.
+    #[inline]
     pub fn depletion(&self) -> DepletionPolicy {
         self.depletion
     }
@@ -71,16 +73,19 @@ impl HarvestData {
     }
 
     /// Returns how much of the kind can be carried at once.
+    #[inline]
     pub fn capacity(&self) -> u32 {
         self.capacity
     }
 
     /// Returns the duration of one harvest trip in ticks.
+    #[inline]
     pub fn harvest_time(&self) -> u32 {
         self.harvest_time
     }
 
     /// Returns how the carrier attends the source during a trip.
+    #[inline]
     pub fn presence(&self) -> WorkPresence {
         self.presence
     }

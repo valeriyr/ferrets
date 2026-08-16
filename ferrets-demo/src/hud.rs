@@ -110,6 +110,14 @@ pub struct ResearchButton {
     research: ResearchId,
 }
 
+/// A command-card button that starts one of the selection's declared
+/// transitions.
+#[derive(Component)]
+pub struct MorphButton {
+    /// The type the button changes into.
+    type_name: String,
+}
+
 /// A command-card button that casts a skill on the selection.
 #[derive(Component)]
 pub struct PlayerSkillButton {
@@ -432,7 +440,7 @@ pub fn update_help(
     mut text: Query<&mut Text, With<HelpText>>,
 ) {
     let mut message = String::from(
-        "LMB select (Shift add, dbl-click all of type) | RMB move/harvest/attack | F/R/G/T/B/Q orders | X stance | 1-0 groups (Ctrl set) | V reveal | F1 debug | F2 spawn",
+        "LMB select (Shift add, dbl-click all of type) | RMB move/harvest/attack | F/R/G/T/B/Q orders | X stance | 1-0 groups (Ctrl set) | V reveal | F1 debug | F2 spawn | F3 layer",
     );
 
     let local = session.local_player();
@@ -628,12 +636,15 @@ fn card_button(label: &str, base: Color) -> impl Bundle {
     )
 }
 
-/// Rebuilds the command card whenever the primary selection changes: a train
+/// Rebuilds the command card whenever the primary selection changes — a train
 /// button per unit the selected producer can build, a build button per building
-/// the selected worker can construct, or nothing when the primary does neither.
+/// the selected worker can construct, or nothing when the primary does neither
+/// — and whenever the primary's own type is rewritten: a gryphon that takes
+/// off must swap its take-off button for the landing one on the spot.
 pub fn update_command_card(
     primary: Res<Primary>,
     registry: Res<ContentRegistry>,
+    changed: Query<&EntityInfoComponent, Changed<EntityInfoComponent>>,
     entities: Query<&EntityInfoComponent>,
     card: Query<Entity, With<CommandCard>>,
     buttons: Query<
@@ -645,11 +656,15 @@ pub fn update_command_card(
             With<SkillButton>,
             With<UnloadButton>,
             With<LoadButton>,
+            With<MorphButton>,
         )>,
     >,
     mut commands: Commands,
 ) {
-    if !primary.is_changed() {
+    let primary_type_changed = primary
+        .0
+        .is_some_and(|id| changed.iter().any(|info| info.id() == id));
+    if !primary.is_changed() && !primary_type_changed {
         return;
     }
     let Ok(card) = card.single() else {
@@ -696,6 +711,14 @@ pub fn update_command_card(
         })
         .unwrap_or_default();
     let transports = def.is_some_and(|def| def.can_transport());
+    let morphs: Vec<String> = def
+        .map(|def| {
+            def.morphs
+                .iter()
+                .map(|transition| transition.into_type().to_string())
+                .collect()
+        })
+        .unwrap_or_default();
 
     commands.entity(card).with_children(|parent| {
         for name in trains {
@@ -722,6 +745,12 @@ pub fn update_command_card(
         }
         for (id, label) in skills {
             parent.spawn((SkillButton { skill: id }, card_button(&label, SKILL_NORMAL)));
+        }
+        for name in morphs {
+            parent.spawn((
+                card_button(&pretty_name(&name), SKILL_NORMAL),
+                MorphButton { type_name: name },
+            ));
         }
         if transports {
             parent.spawn((LoadButton, card_button("Load", BUTTON_NORMAL)));
@@ -795,6 +824,29 @@ pub fn unload_card_input(
                 at: None,
                 flush: true,
             });
+        }
+    }
+}
+
+/// Changes the selection into the button's type when clicked.
+///
+/// The whole selection is commanded, not just the primary, because a mixed
+/// selection reads naturally as "everyone that can, change" — the executor
+/// drops whoever cannot.
+pub fn morph_card_input(
+    mut buttons: Query<(&Interaction, &MorphButton, &mut BackgroundColor), Changed<Interaction>>,
+    mut pending: ResMut<PendingInput>,
+) {
+    for (interaction, button, mut color) in &mut buttons {
+        match interaction {
+            Interaction::Pressed => {
+                pending.push(PlayerCommand::Morph {
+                    type_name: button.type_name.clone(),
+                    flush: true,
+                });
+            }
+            Interaction::Hovered => *color = BackgroundColor(BUTTON_HOVERED),
+            Interaction::None => *color = BackgroundColor(SKILL_NORMAL),
         }
     }
 }

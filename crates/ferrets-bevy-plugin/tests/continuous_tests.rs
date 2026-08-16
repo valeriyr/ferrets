@@ -8,9 +8,9 @@
 
 mod utils;
 
-use ferrets_geometry::{cell_pos::CellPos, projection::Projection};
+use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize, projection::Projection};
 use ferrets_math::FixedU64;
-use ferrets_physics::body::center_cell;
+use ferrets_physics::body;
 use ferrets_simulation::{
     command::PlayerCommand, components::location::LocationComponent, map::Map,
     movement_model::MovementModel,
@@ -40,14 +40,7 @@ fn continuous_walk_reaches_goal() {
     // The uncrowded walk lands exactly on the lattice: the final step hits
     // its waypoint to the bit.
     let world = app.world_mut();
-    assert_eq!(
-        world
-            .entity(soldier)
-            .get::<LocationComponent>()
-            .unwrap()
-            .position,
-        utils::pos(20, 14)
-    );
+    assert_eq!(utils::position_of(world, soldier), utils::pos(20, 14));
 }
 
 #[test]
@@ -72,15 +65,8 @@ fn overlapping_bodies_push_apart() {
     utils::run_ticks(&mut app, 300);
 
     let world = app.world_mut();
-    let position_of = |entity: bevy::prelude::Entity| {
-        world
-            .entity(entity)
-            .get::<LocationComponent>()
-            .unwrap()
-            .position
-    };
-    let a = position_of(first.0);
-    let b = position_of(second.0);
+    let a = utils::position_of(world, first.0);
+    let b = utils::position_of(world, second.0);
     // Bodies are circles on every projection, so rest separation is
     // Euclidean regardless of the map's own metric.
     let separation = a.distance(b);
@@ -106,8 +92,7 @@ fn pushing_never_commits_into_walls() {
         let world = app.world_mut();
         let mut map = world.resource_mut::<Map>();
         for y in 2..9 {
-            map.nav_grid_mut()
-                .set_occupied_by(utils::GROUND, CellPos::new(8, y), true);
+            map.set_static_occupied(utils::GROUND, CellPos::new(8, y), true);
         }
     }
 
@@ -135,15 +120,7 @@ fn pushing_never_commits_into_walls() {
         let world = app.world_mut();
         let cells: Vec<CellPos> = soldiers
             .iter()
-            .map(|(soldier, _)| {
-                center_cell(
-                    world
-                        .entity(*soldier)
-                        .get::<LocationComponent>()
-                        .unwrap()
-                        .position,
-                )
-            })
+            .map(|(soldier, _)| body::anchor(utils::position_of(world, *soldier)))
             .collect();
         assert_eq!(
             cells,
@@ -161,11 +138,7 @@ fn pushing_never_commits_into_walls() {
     // cell must be statically passable.
     for (soldier, _) in soldiers {
         let world = app.world_mut();
-        let position = world
-            .entity(soldier)
-            .get::<LocationComponent>()
-            .unwrap()
-            .position;
+        let position = utils::position_of(world, soldier);
         let half = FixedU64::from_num(0.5);
         let center = (position.x + half, position.y + half);
         let radius = half;
@@ -234,14 +207,10 @@ fn head_on_bodies_flow_past_each_other() {
     for _ in 0..100 {
         utils::run_ticks(&mut app, 1);
         let world = app.world_mut();
-        let position_of = |entity: bevy::prelude::Entity| {
-            world
-                .entity(entity)
-                .get::<LocationComponent>()
-                .unwrap()
-                .position
-        };
-        let (a, b) = (position_of(left), position_of(right));
+        let (a, b) = (
+            utils::position_of(world, left),
+            utils::position_of(world, right),
+        );
         let distance = a.distance(b);
         min_distance = min_distance.min(distance);
     }
@@ -289,13 +258,7 @@ fn crowded_group_settles_and_stops_milling() {
     let positions = |app: &mut bevy::prelude::App| -> Vec<_> {
         soldiers
             .iter()
-            .map(|(soldier, _)| {
-                app.world()
-                    .entity(*soldier)
-                    .get::<LocationComponent>()
-                    .unwrap()
-                    .position
-            })
+            .map(|(soldier, _)| utils::position_of(app.world_mut(), *soldier))
             .collect()
     };
     let settled = positions(&mut app);
@@ -318,7 +281,7 @@ fn crowded_group_settles_and_stops_milling() {
     }
     // The exact settle: a compact block around the contested point, one
     // body per cell.
-    let mut cells: Vec<CellPos> = settled.iter().map(|&body| center_cell(body)).collect();
+    let mut cells: Vec<CellPos> = settled.iter().map(|&body| body::anchor(body)).collect();
     cells.sort_unstable();
     assert_eq!(
         cells,
@@ -366,7 +329,7 @@ fn crowd_of_ten_rests_one_per_cell() {
     let mut cells: Vec<CellPos> = soldiers
         .iter()
         .map(|(soldier, _)| {
-            center_cell(
+            body::anchor(
                 world
                     .entity(*soldier)
                     .get::<LocationComponent>()
@@ -412,10 +375,8 @@ fn pushed_idle_body_claims_cell_it_settles_on() {
         let world = app.world_mut();
         let mut map = world.resource_mut::<Map>();
         for x in 1..13 {
-            map.nav_grid_mut()
-                .set_occupied_by(utils::GROUND, CellPos::new(x, 4), true);
-            map.nav_grid_mut()
-                .set_occupied_by(utils::GROUND, CellPos::new(x, 6), true);
+            map.set_static_occupied(utils::GROUND, CellPos::new(x, 4), true);
+            map.set_static_occupied(utils::GROUND, CellPos::new(x, 6), true);
         }
     }
     let (idle, _) = utils::spawn_owned(&mut app, "soldier", 6, 5, 0);
@@ -440,23 +401,11 @@ fn pushed_idle_body_claims_cell_it_settles_on() {
     // The exact end state: the walker ring-accepts beside its contested
     // goal, the idle body plowed one cell past it.
     assert_eq!(
-        center_cell(
-            world
-                .entity(idle)
-                .get::<LocationComponent>()
-                .unwrap()
-                .position
-        ),
+        body::anchor(utils::position_of(world, idle)),
         CellPos::new(12, 5)
     );
     assert_eq!(
-        center_cell(
-            world
-                .entity(walker)
-                .get::<LocationComponent>()
-                .unwrap()
-                .position
-        ),
+        body::anchor(utils::position_of(world, walker)),
         CellPos::new(11, 5)
     );
     assert!(
@@ -473,17 +422,11 @@ fn pushed_idle_body_claims_cell_it_settles_on() {
     // borders.
     let bodies: Vec<_> = [idle, walker]
         .iter()
-        .map(|&entity| {
-            world
-                .entity(entity)
-                .get::<LocationComponent>()
-                .unwrap()
-                .position
-        })
+        .map(|&entity| utils::position_of(world, entity))
         .collect();
     for x in 1..13 {
         let cell = CellPos::new(x, 5);
-        let expected = bodies.iter().any(|&body| center_cell(body) == cell);
+        let expected = bodies.iter().any(|&body| body::anchor(body) == cell);
         assert_eq!(
             world
                 .resource::<Map>()
@@ -493,6 +436,97 @@ fn pushed_idle_body_claims_cell_it_settles_on() {
             "claim on {cell:?} must be the cell under a body's center"
         );
     }
+}
+
+#[test]
+fn wide_body_claims_whole_footprint() {
+    let mut app = utils::orders_app();
+    utils::install_map(&mut app, Projection::Isometric, MovementModel::Continuous);
+    // A resting 2x2 body claims all four cells of its footprint — the claim
+    // plane is rebuilt as wide as the body moves, not one cell under its
+    // anchor.
+    let _ = utils::spawn_owned(&mut app, "wagon", 5, 5, 0);
+    utils::run_ticks(&mut app, 2);
+
+    let world = app.world_mut();
+    let grid = world.resource::<Map>().nav_grid();
+    for (x, y) in [(5, 5), (6, 5), (5, 6), (6, 6)] {
+        assert!(
+            grid.is_claimed_by(utils::GROUND, CellPos::new(x, y)),
+            "the footprint cell ({x}, {y}) is unclaimed"
+        );
+    }
+    for (x, y) in [(4, 5), (7, 5), (5, 4), (5, 7)] {
+        assert!(
+            !grid.is_claimed_by(utils::GROUND, CellPos::new(x, y)),
+            "the neighbor cell ({x}, {y}) is claimed past the footprint"
+        );
+    }
+}
+
+#[test]
+fn mixed_size_bodies_push_apart() {
+    let mut app = utils::orders_app();
+    utils::install_map(&mut app, Projection::Isometric, MovementModel::Continuous);
+    // A soldier spawned inside a resting wagon's footprint: contact runs
+    // center to center — the wagon's circle sits half its size past the
+    // anchor, deeper in than a same-anchor small body's — so the pair parts
+    // by the sum of their radii instead of missing the overlap or phantom
+    // pushing on one side.
+    let (wagon, _) = utils::spawn_owned(&mut app, "wagon", 5, 5, 0);
+    // Spawned clear — placement rightly refuses the claimed footprint — and
+    // moved into the overlap directly; the claim plane re-derives from the
+    // bodies either way.
+    let (soldier, _) = utils::spawn_owned(&mut app, "soldier", 9, 9, 0);
+    app.world_mut()
+        .entity_mut(soldier)
+        .get_mut::<LocationComponent>()
+        .unwrap()
+        .position = utils::pos(6, 6);
+
+    utils::run_ticks(&mut app, 300);
+
+    let world = app.world_mut();
+    let wagon_center = body::center(utils::position_of(world, wagon), CellSize::new(2, 2));
+    let soldier_center = body::center(utils::position_of(world, soldier), CellSize::ONE);
+    let separation = wagon_center.distance(soldier_center);
+    assert!(
+        separation >= FixedU64::from_num(1.49),
+        "centers must part by the radii sum 1.5: separation {separation}"
+    );
+    // The exact equilibrium: the pair parts along the diagonal through both
+    // centers, each carried half the overlap per pass until contact clears.
+    assert_eq!(
+        utils::position_of(world, wagon),
+        utils::position_bits(0x4_b83c_499a, 0x4_b83c_499a)
+    );
+    assert_eq!(
+        utils::position_of(world, soldier),
+        utils::position_bits(0x6_47c3_b666, 0x6_47c3_b666)
+    );
+}
+
+#[test]
+fn wide_walk_reaches_goal() {
+    let mut app = utils::orders_app();
+    utils::install_map(&mut app, Projection::Isometric, MovementModel::Continuous);
+    let (wagon, id) = utils::spawn_owned(&mut app, "wagon", 2, 2, 0);
+
+    utils::select(&mut app, id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Move {
+            target: utils::pos(20, 14),
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, 300);
+
+    // An uncrowded wide walk lands its anchor exactly on the ordered cell,
+    // like the single-cell walk does — paths are anchor sequences at every
+    // size.
+    let world = app.world_mut();
+    assert_eq!(utils::position_of(world, wagon), utils::pos(20, 14));
 }
 
 #[test]

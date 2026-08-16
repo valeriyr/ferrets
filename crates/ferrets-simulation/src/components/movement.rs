@@ -71,11 +71,20 @@ impl MoveComponent {
         self.detoured = false;
     }
 
-    /// Records a new closest distance to the pursued waypoint. Closing in is
-    /// progress, so every escalation is forgiven along with it.
+    /// Records a new closest distance to the pursued waypoint. Closing in on
+    /// a real waypoint means the way ahead is clear, so every escalation is
+    /// forgiven along with it — but closing in on a regained lattice point
+    /// proves only that the body can walk *back* to where it was walled off,
+    /// so the escalations earned there stand; forgiving them let a walled
+    /// walk launder its frustration through every regain round-trip and
+    /// grind forever.
     pub fn record_progress(&mut self, distance: FixedU64) {
         self.best_distance = distance;
-        self.forgive();
+        if self.regaining {
+            self.wait_ticks = 0;
+        } else {
+            self.forgive();
+        }
     }
 
     /// One blockage escalation: the stall clock restarts and the frustration
@@ -113,8 +122,14 @@ impl MoveComponent {
     /// Holds `lattice` as the immediate waypoint, to be regained exactly: the
     /// pop stays precise (see [`Self::regaining`]) and the escalation state
     /// stays — the body is only being put back where it was walled off.
+    ///
+    /// A body walled off tick after tick regains the same point each time;
+    /// one held waypoint is the intent, not one per attempt, so a repeat of
+    /// the waypoint already being regained is not pushed again.
     pub fn regain(&mut self, lattice: CellPos) {
-        self.path.push(lattice);
+        if !(self.regaining && self.path.last() == Some(&lattice)) {
+            self.path.push(lattice);
+        }
         self.regaining = true;
         self.best_distance = FixedU64::MAX;
     }

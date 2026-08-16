@@ -13,7 +13,7 @@ use crate::layer_id::LayerId;
 /// [`LayerId`]s with `|`, then pass it to methods that accept multi-layer queries.
 ///
 /// A single [`LayerId`] converts to a `LayerMask` via [`From`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct LayerMask(u32);
 
 impl LayerMask {

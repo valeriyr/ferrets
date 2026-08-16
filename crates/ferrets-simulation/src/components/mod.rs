@@ -18,6 +18,7 @@ pub mod guard;
 pub mod health;
 pub mod hidden;
 pub mod location;
+pub mod morph;
 pub mod movement;
 pub mod order_queue;
 pub mod owner;

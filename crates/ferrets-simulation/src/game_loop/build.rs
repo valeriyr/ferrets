@@ -142,10 +142,12 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
         // Walk-and-place phase.
         let projection = world.resource::<Map>().projection();
 
+        let (chaser_position, chaser_size) = entity_def::footprint(world, entity);
         match chase::advance(
             &mut build_component.last_chase,
             projection,
-            entity_def::position(world, entity),
+            chaser_position,
+            chaser_size,
             position,
             size,
             work::reach(world, entity, EntityStatId::BUILD_RANGE),

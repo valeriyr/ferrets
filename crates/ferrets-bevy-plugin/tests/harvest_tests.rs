@@ -235,7 +235,7 @@ fn boxed_in_cancel_defers_reveal_until_cell_frees() {
 
     // Box the worker in — every cell is occupied, so it has nowhere to reappear —
     // then cancel the harvest while it is still inside the mine.
-    utils::set_all_cells_occupied(app.world_mut(), true);
+    utils::set_all_cells_statically_occupied(app.world_mut(), true);
     utils::stop_orders(app.world_mut(), worker);
     utils::run_ticks(&mut app, 1);
 

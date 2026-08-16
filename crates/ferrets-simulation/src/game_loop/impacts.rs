@@ -28,6 +28,7 @@ use ferrets_content::{
     projectile::Aim,
     registry::ContentRegistry,
     splash::{SplashDef, SplashShape},
+    targeting,
 };
 
 /// Delivers one hit from `attacker` against `target`, released from `origin`
@@ -163,6 +164,13 @@ fn land(
             .collect(),
         None => occupants_of(world, impact),
     };
+    // A weapon still cannot reach layers it does not target, even standing on
+    // the cell the shot arrived at: a shell sent to the ground passes under
+    // whatever drifted overhead while it was in flight.
+    let direct: Vec<Entity> = direct
+        .into_iter()
+        .filter(|&victim| targeting::reaches(attacker_def, entity_def::of(world, victim)))
+        .collect();
     for &victim in &direct {
         let dealt = damage::resolve(world, attacker_def, victim, damage);
         damage::apply(world, attacker_id, victim, dealt);
@@ -218,12 +226,12 @@ fn blast_victims(
         {
             continue;
         }
-        // The blast only reaches the layers content gave it.
-        let occupation = entity_def::of(world, entity)
-            .location
-            .map(|location| location.occupation())
-            .unwrap_or(LayerMask::EMPTY);
-        if occupation & splash.layers() == LayerMask::EMPTY {
+        // The blast only reaches the layers content gave it; a type with no
+        // location stands on none of them.
+        let Some(location) = entity_def::of(world, entity).location else {
+            continue;
+        };
+        if location.occupation() & splash.layers() == LayerMask::EMPTY {
             continue;
         }
         // Without friendly fire the blast spares the attacker's own side. Neutrals
@@ -235,7 +243,14 @@ fn blast_victims(
         {
             continue;
         }
-        let Some(fraction) = band_fraction(splash, projection, origin, impact, position) else {
+        let Some(fraction) = band_fraction(
+            splash,
+            projection,
+            origin,
+            impact,
+            position,
+            location.size(),
+        ) else {
             continue;
         };
         caught.push((id, entity, fraction));
@@ -256,12 +271,18 @@ fn band_fraction(
     origin: FixedUVec2,
     impact: FixedUVec2,
     victim: FixedUVec2,
+    victim_size: CellSize,
 ) -> Option<FixedU64> {
-    let victim = CellPos::from(victim);
+    // The whole footprint is the victim, not its anchor cell: a blast
+    // overlapping any cell of a wide body catches it, in the band that cell
+    // falls in.
+    let victim = CellRect::new(CellPos::from(victim), victim_size);
     splash
         .bands()
         .find(|&(radius, _)| match splash.shape() {
-            SplashShape::Circular => projection.in_range(CellPos::from(impact), victim, radius),
+            SplashShape::Circular => {
+                projection.in_range_of_rect(CellPos::from(impact), victim, radius)
+            }
             SplashShape::Line => near_path(projection, origin, impact, victim, radius),
         })
         .map(|(_, fraction)| fraction)
@@ -273,7 +294,7 @@ fn near_path(
     projection: Projection,
     origin: FixedUVec2,
     impact: FixedUVec2,
-    victim: CellPos,
+    victim: CellRect,
     radius: u32,
 ) -> bool {
     let from = CellPos::from(origin);
@@ -284,7 +305,7 @@ fn near_path(
     let steps = projection::chebyshev(from, to);
     for step in 0..=steps {
         let sample = lerp_cell(from, to, step, steps);
-        if projection.in_range(sample, victim, radius) {
+        if projection.in_range_of_rect(sample, victim, radius) {
             return true;
         }
     }

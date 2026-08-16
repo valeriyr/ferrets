@@ -252,6 +252,114 @@ fn rect_wide_clamps_to_facing_side() {
 }
 
 //
+// ─── in_range_for_rects ───────────────────────────────────────────────────────────
+//
+// Two footprints, so a wide mover reaches as far as its nearest edge:
+//
+// . . . . . . .   y=0
+// . A A . B B .   y=1   A = a 2x2 at (1,1), B = a 2x2 at (4,1)
+// . A A . B B .   y=2
+// . . . . . . .   y=3
+//
+
+#[test]
+fn abutting_rects_are_one_apart() {
+    // Distances are cell to cell, so neighbours are one apart and only an
+    // overlap is zero — the same convention `in_range_of_rect` uses.
+    let a = CellRect::new(utils::nav(1, 1), CellSize::new(2, 2));
+    let abutting = CellRect::new(utils::nav(3, 1), CellSize::new(2, 2));
+
+    assert!(!Projection::Isometric.in_range_for_rects(a, abutting, 0));
+    assert!(Projection::Isometric.in_range_for_rects(a, abutting, 1));
+    assert!(!Projection::Orthogonal.in_range_for_rects(a, abutting, 0));
+    assert!(Projection::Orthogonal.in_range_for_rects(a, abutting, 1));
+}
+
+#[test]
+fn overlapping_rects_are_at_distance_zero() {
+    let a = CellRect::new(utils::nav(1, 1), CellSize::new(2, 2));
+    let overlapping = CellRect::new(utils::nav(2, 2), CellSize::new(2, 2));
+
+    assert!(Projection::Isometric.in_range_for_rects(a, overlapping, 0));
+    assert!(Projection::Orthogonal.in_range_for_rects(a, overlapping, 0));
+}
+
+#[test]
+fn gap_is_measured_between_facing_edges() {
+    // A covers x=1..=2 and B covers x=4..=5, so their facing cells are two
+    // apart however wide the rectangles are behind them.
+    let a = CellRect::new(utils::nav(1, 1), CellSize::new(2, 2));
+    let b = CellRect::new(utils::nav(4, 1), CellSize::new(2, 2));
+
+    assert!(!Projection::Isometric.in_range_for_rects(a, b, 1));
+    assert!(Projection::Isometric.in_range_for_rects(a, b, 2));
+    // A single-axis gap is the same count under either metric.
+    assert!(!Projection::Orthogonal.in_range_for_rects(a, b, 1));
+    assert!(Projection::Orthogonal.in_range_for_rects(a, b, 2));
+}
+
+#[test]
+fn wide_rect_reaches_further_than_its_anchor_does() {
+    // The whole point of measuring edges: a 2x2 anchored at (1,1) is adjacent to
+    // a cell at (3,1), where a single cell at the same anchor would not be.
+    let wide = CellRect::new(utils::nav(1, 1), CellSize::new(2, 2));
+    let narrow = CellRect::cell(utils::nav(1, 1));
+    let target = CellRect::cell(utils::nav(3, 1));
+
+    assert!(Projection::Isometric.in_range_for_rects(wide, target, 1));
+    assert!(!Projection::Isometric.in_range_for_rects(narrow, target, 1));
+    assert!(Projection::Orthogonal.in_range_for_rects(wide, target, 1));
+    assert!(!Projection::Orthogonal.in_range_for_rects(narrow, target, 1));
+}
+
+#[test]
+fn orthogonal_rect_gap_is_exact_on_pythagorean_triple() {
+    // Axis gaps of 3 and 4 cells: Euclidean length exactly 5, so the boundary
+    // is sharp — the same guarantee `in_range` gives for plain points.
+    let a = CellRect::new(utils::nav(1, 1), CellSize::new(2, 2));
+    let b = CellRect::new(utils::nav(5, 6), CellSize::new(2, 2));
+
+    assert!(Projection::Orthogonal.in_range_for_rects(a, b, 5));
+    assert!(!Projection::Orthogonal.in_range_for_rects(a, b, 4));
+}
+
+#[test]
+fn diagonal_gap_follows_projection() {
+    // Diagonally separated by one cell on each axis: Chebyshev calls that 1,
+    // squared-Euclidean calls it 2.
+    let a = CellRect::cell(utils::nav(1, 1));
+    let b = CellRect::cell(utils::nav(3, 3));
+
+    assert!(Projection::Isometric.in_range_for_rects(a, b, 2));
+    assert!(!Projection::Orthogonal.in_range_for_rects(a, b, 2));
+    assert!(Projection::Orthogonal.in_range_for_rects(a, b, 3));
+}
+
+#[test]
+fn grown_low_makes_anchor_range_equal_footprint_range() {
+    // The transform every ranged acceptance rests on: a footprint within
+    // range of a goal exactly when its anchor is within range of the goal
+    // grown low by size − 1 — including anchors clamped at the grid origin,
+    // and as the identity for a 1x1 footprint.
+    let goal = CellRect::new(utils::nav(4, 4), CellSize::new(2, 1));
+    for size in [CellSize::ONE, CellSize::new(2, 2), CellSize::new(3, 3)] {
+        let expanded = goal.grown_low(size);
+        for anchor in [(0, 0), (1, 4), (3, 3), (4, 6), (7, 4), (9, 9)] {
+            let anchor = utils::nav(anchor.0, anchor.1);
+            for distance in 0..4 {
+                for projection in [Projection::Isometric, Projection::Orthogonal] {
+                    assert_eq!(
+                        projection.in_range_for_rects(CellRect::new(anchor, size), goal, distance),
+                        projection.in_range_of_rect(anchor, expanded, distance),
+                        "size {size:?}, anchor {anchor:?}, distance {distance}, {projection:?}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+//
 // ─── rect_distance ────────────────────────────────────────────────────────────
 //
 // The first two tests use the same 2×2 rectangle at origin (3,3), with P the
@@ -309,6 +417,123 @@ fn rect_distance_ranks_diagonal_vs_cardinal_by_projection() {
     );
 }
 
+#[test]
+fn rect_distance_saturates_at_map_scale() {
+    // Squared ranks past the u32 ceiling all tie as "immeasurably far"
+    // instead of overflowing; the Chebyshev rank never squares, so it stays
+    // exact at the same scale.
+    let rect = CellRect::cell(utils::nav(0, 0));
+    let far = utils::nav(60000, 60000);
+
+    assert_eq!(Projection::Orthogonal.rect_distance(far, rect), u32::MAX);
+    assert_eq!(Projection::Isometric.rect_distance(far, rect), 60000);
+}
+
+//
+// ─── in_reach ─────────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn in_reach_accepts_ranged_stop_by_nearest_edge() {
+    // A 2x2 anchored at (7,5): its edge at x=8 is 2 from the goal at (10,5)
+    // — in reach at stop 2, where the anchor alone would measure 3.
+    let goal = CellRect::cell(utils::nav(10, 5));
+    let size = CellSize::new(2, 2);
+
+    for projection in [Projection::Isometric, Projection::Orthogonal] {
+        assert!(projection.in_reach(utils::nav(7, 5), size, goal, 2));
+        assert!(!projection.in_reach(utils::nav(6, 5), size, goal, 2));
+    }
+}
+
+#[test]
+fn in_reach_keeps_zero_stop_anchor_contract() {
+    // A wide footprint covering the goal cell does not count as standing on
+    // it: a zero stop asks where the anchor is.
+    let goal = CellRect::cell(utils::nav(10, 5));
+    let size = CellSize::new(2, 2);
+
+    for projection in [Projection::Isometric, Projection::Orthogonal] {
+        assert!(!projection.in_reach(utils::nav(9, 4), size, goal, 0));
+        assert!(projection.in_reach(utils::nav(10, 5), size, goal, 0));
+    }
+}
+
+//
+// ─── distance_for_rects ───────────────────────────────────────────────────────
+//
+// The same 2x2 pair as `in_range_for_rects`, ranked instead of gated:
+//
+// . . . . . . .   y=0
+// . A A . B B .   y=1   A = a 2x2 at (1,1), B = a 2x2 at (4,1)
+// . A A . B B .   y=2
+// . . . . . . .   y=3
+//
+
+#[test]
+fn distance_for_rects_is_zero_only_on_overlap() {
+    let a = CellRect::new(utils::nav(1, 1), CellSize::new(2, 2));
+    let overlapping = CellRect::new(utils::nav(2, 2), CellSize::new(2, 2));
+    let abutting = CellRect::new(utils::nav(3, 1), CellSize::new(2, 2));
+
+    for projection in [Projection::Isometric, Projection::Orthogonal] {
+        assert_eq!(projection.distance_for_rects(a, overlapping), 0);
+        assert_eq!(
+            projection.distance_for_rects(a, abutting),
+            1,
+            "abutting rects are one apart, cell to cell"
+        );
+    }
+}
+
+#[test]
+fn distance_for_rects_measures_facing_edges() {
+    // A covers x=1..=2 and B covers x=4..=5: a single-axis gap of two cells,
+    // the same count under either metric — squared Euclidean of (2,0) is 4.
+    let a = CellRect::new(utils::nav(1, 1), CellSize::new(2, 2));
+    let b = CellRect::new(utils::nav(4, 1), CellSize::new(2, 2));
+
+    assert_eq!(Projection::Isometric.distance_for_rects(a, b), 2);
+    assert_eq!(Projection::Orthogonal.distance_for_rects(a, b), 4);
+}
+
+#[test]
+fn distance_for_rects_diagonal_gap_follows_projection() {
+    // Axis gaps of two cells each: Chebyshev takes the maximum, squared
+    // Euclidean the sum of squares.
+    let a = CellRect::cell(utils::nav(1, 1));
+    let b = CellRect::cell(utils::nav(3, 3));
+
+    assert_eq!(Projection::Isometric.distance_for_rects(a, b), 2);
+    assert_eq!(Projection::Orthogonal.distance_for_rects(a, b), 8);
+}
+
+#[test]
+fn distance_for_rects_matches_rect_distance_for_single_cell() {
+    let goal = CellRect::new(utils::nav(4, 4), CellSize::new(2, 2));
+    for from in [(0, 0), (3, 3), (5, 5), (7, 1)] {
+        let from = utils::nav(from.0, from.1);
+        for projection in [Projection::Isometric, Projection::Orthogonal] {
+            assert_eq!(
+                projection.distance_for_rects(CellRect::cell(from), goal),
+                projection.rect_distance(from, goal),
+                "from {from:?}, {projection:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn distance_for_rects_saturates_at_map_scale() {
+    // Squared ranks past the u32 ceiling all tie as "immeasurably far",
+    // like `rect_distance`; the Chebyshev rank never squares.
+    let a = CellRect::cell(utils::nav(0, 0));
+    let far = CellRect::new(utils::nav(60000, 60000), CellSize::new(2, 2));
+
+    assert_eq!(Projection::Orthogonal.distance_for_rects(a, far), u32::MAX);
+    assert_eq!(Projection::Isometric.distance_for_rects(a, far), 60000);
+}
+
 //
 // ─── ring_floor ───────────────────────────────────────────────────────────────
 //
@@ -340,6 +565,13 @@ fn ring_floor_bounds_actual_ring_ranks() {
         assert_eq!(projection.ring_floor(3), cardinal);
         assert!(projection.ring_floor(3) <= diagonal);
     }
+}
+
+/// Saturated like `rect_distance`, whose ranks it bounds — a floor past the
+/// ceiling ties with them instead of wrapping below.
+#[test]
+fn orthogonal_ring_floor_saturates_at_map_scale() {
+    assert_eq!(Projection::Orthogonal.ring_floor(100_000), u32::MAX);
 }
 
 //
@@ -441,6 +673,23 @@ fn step_at_target_stays_at_target() {
             target
         );
     }
+}
+
+#[test]
+fn step_toward_decreasing_coordinates_moves_backward() {
+    // Both step_axis branches: an axis walked downward covers the same
+    // ground per tick as one walked upward.
+    for projection in [Projection::Isometric, Projection::Orthogonal] {
+        assert_eq!(
+            projection.step_toward(utils::world(5, 2), utils::world(0, 2), FixedU64::ONE),
+            utils::world(4, 2)
+        );
+    }
+    // Mixed heading: x falls while y climbs, one Chebyshev cell per tick.
+    assert_eq!(
+        Projection::Isometric.step_toward(utils::world(5, 2), utils::world(2, 5), FixedU64::ONE),
+        utils::world(4, 3)
+    );
 }
 
 #[test]

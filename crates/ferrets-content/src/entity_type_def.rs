@@ -7,11 +7,13 @@ use ferrets_math::FixedU64;
 use ferrets_pathfinder::layer_mask::LayerMask;
 
 use crate::{
+    attack::AttackDef,
     build::BuilderDef,
     costs::{self, Cost},
     dying::DyingDef,
     entity_stats::EntityStatId,
     location::{LocationDef, Solidity},
+    morph::MorphTransition,
     projectile::ProjectileId,
     repair::{RepairCost, RepairRate, RepairerDef},
     research::{ResearchId, ResearcherDef},
@@ -39,8 +41,10 @@ impl EntityTypeId {
         Self(u32::try_from(index).expect("entity type count fits in u32"))
     }
 
-    /// The registration index this handle refers to.
-    pub(crate) fn index(self) -> usize {
+    /// The registration index this handle refers to. Identical content registered
+    /// in the same order mints identical indices on every peer, which is what
+    /// makes it safe to fold into the state checksum.
+    pub fn index(self) -> usize {
         self.0 as usize
     }
 }
@@ -86,6 +90,18 @@ pub struct EntityTypeDef {
     pub projectile: Option<ProjectileId>,
     /// How a hit spreads. `None` damages only the entity that was hit.
     pub splash: Option<SplashDef>,
+    /// Non-scalar properties of this type's weapon. Required on any type with
+    /// a weapon and forbidden without one; never defaulted, so a layer added
+    /// later is never silently in anyone's reach.
+    pub attack: Option<AttackDef>,
+    /// The in-place transitions instances can start, each naming what they
+    /// become and on what terms. Empty means instances cannot morph.
+    pub morphs: Vec<MorphTransition>,
+    /// The navigation layers this type can be attacked on. `None` reads as the
+    /// layers it occupies, which is what makes a flier answerable only by
+    /// anti-air; declaring it separately is how a thing rooted on one layer is
+    /// reached from another.
+    pub targetable: Option<LayerMask>,
     /// Activated skills instances of this type can use, by registered id.
     pub skills: Vec<SkillId>,
     /// How instances behave under selection. Every type is selectable, so this is
@@ -142,6 +158,9 @@ impl EntityTypeDef {
             bonus_damage_vs: BTreeMap::new(),
             projectile: None,
             splash: None,
+            attack: None,
+            morphs: Vec::new(),
+            targetable: None,
             skills: Vec::new(),
             selection: SelectionDef::default(),
             cost: Cost::new(),
@@ -409,6 +428,38 @@ impl EntityTypeDef {
         friendly_fire: bool,
     ) -> Self {
         self.splash = Some(SplashDef::new(shape, bands, layers, friendly_fire));
+        self
+    }
+
+    /// Declares the navigation layers this type's weapon can reach (see
+    /// [`attack`](Self::attack)).
+    ///
+    /// Panics if `targets` is empty, which would leave the weapon unable to hit
+    /// anything at all.
+    pub fn with_targets(mut self, targets: impl Into<LayerMask>) -> Self {
+        self.attack = Some(AttackDef::new(targets));
+        self
+    }
+
+    /// Sets the navigation layers this type can be attacked on, overriding the
+    /// layers it occupies (see [`targetable`](Self::targetable)).
+    ///
+    /// Panics if `targetable` is empty, which would make instances invulnerable.
+    pub fn with_targetable(mut self, targetable: impl Into<LayerMask>) -> Self {
+        let targetable = targetable.into();
+        assert!(
+            targetable != LayerMask::EMPTY,
+            "entity type '{}' is targetable on no layers, so nothing could ever hit it",
+            self.name
+        );
+        self.targetable = Some(targetable);
+        self
+    }
+
+    /// Adds in-place transitions instances of this type can start (see
+    /// [`morphs`](Self::morphs)).
+    pub fn with_morphs(mut self, transitions: impl IntoIterator<Item = MorphTransition>) -> Self {
+        self.morphs.extend(transitions);
         self
     }
 

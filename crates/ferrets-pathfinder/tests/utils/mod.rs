@@ -1,10 +1,11 @@
 #![allow(dead_code)]
 
 use ferrets_geometry::cell_pos::CellPos;
+use ferrets_geometry::cell_size::CellSize;
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_pathfinder::{
     hierarchy::NavHierarchy,
-    layer_mask::LayerMask,
+    mover_shape::MoverShape,
     nav_grid::{LayerId, NavGrid},
 };
 
@@ -56,7 +57,27 @@ pub fn hollow_ring_grid(grid_size: u32, center: CellPos, radius: u32) -> NavGrid
     grid
 }
 
-/// Builds the hierarchy for the GROUND mask only.
+/// A single-cell shape on the GROUND layer — what most tests route.
+pub fn on_ground() -> MoverShape {
+    MoverShape::point(GROUND)
+}
+
+/// A single-cell shape on the AIR layer.
+pub fn in_air() -> MoverShape {
+    MoverShape::point(AIR)
+}
+
+/// A `size`-by-`size` shape on the GROUND layer, for clearance tests.
+pub fn square_on_ground(size: u32) -> MoverShape {
+    MoverShape::new(GROUND, CellSize::new(size, size))
+}
+
+/// Builds the hierarchy for a single-cell GROUND mover only.
 pub fn build_ground(grid: &NavGrid, cluster_size: u32) -> NavHierarchy {
-    NavHierarchy::build(grid, cluster_size, &[LayerMask::from(GROUND)])
+    NavHierarchy::build(grid, cluster_size, &[on_ground()])
+}
+
+/// Builds the hierarchy for the given shapes.
+pub fn build_for(grid: &NavGrid, cluster_size: u32, shapes: &[MoverShape]) -> NavHierarchy {
+    NavHierarchy::build(grid, cluster_size, shapes)
 }

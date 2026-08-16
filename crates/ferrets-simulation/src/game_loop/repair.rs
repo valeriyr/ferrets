@@ -129,10 +129,12 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
     if !repair.inside_job {
         let (target_position, target_size) = entity_def::footprint(world, target);
         let projection = world.resource::<Map>().projection();
+        let (chaser_position, chaser_size) = entity_def::footprint(world, entity);
         match chase::advance(
             &mut repair.last_chase,
             projection,
-            entity_def::position(world, entity),
+            chaser_position,
+            chaser_size,
             target_position,
             target_size,
             work::reach(world, entity, EntityStatId::REPAIR_RANGE),

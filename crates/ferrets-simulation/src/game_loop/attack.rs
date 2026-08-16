@@ -15,7 +15,6 @@ use crate::{
     components::{
         attack::AttackComponent,
         entity_stats::StatsComponent,
-        location::LocationComponent,
         order_queue::{CancelPolicy, OrderState},
     },
     entity_def,
@@ -23,7 +22,7 @@ use crate::{
     map::Map,
     order::{AttackTarget, Order},
 };
-use ferrets_content::entity_stats::EntityStatId;
+use ferrets_content::{entity_stats::EntityStatId, targeting};
 
 /// One weapon's readings for a tick of fighting.
 pub(super) struct Weapon {
@@ -117,17 +116,20 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
             let Some(target) = world.resource::<EntityIndex>().interactable(world, id) else {
                 return Processing::state(OrderState::Finished);
             };
+            // Reachability is re-judged every tick, not only at issue, because a
+            // form change moves the answer: a target that takes off mid-fight
+            // leaves this weapon's layers, and chasing it would swing forever at
+            // something no hit can land on.
+            if !targeting::reaches(entity_def::of(world, entity), entity_def::of(world, target)) {
+                return Processing::state(OrderState::Finished);
+            }
             let (at, size) = entity_def::footprint(world, target);
             (Some(target), at, size)
         }
         AttackTarget::Position(cell) => (None, cell, CellSize::ONE),
     };
 
-    let position = world
-        .entity(entity)
-        .get::<LocationComponent>()
-        .unwrap()
-        .position;
+    let (position, size) = entity_def::footprint(world, entity);
     let weapon = weapon(world, entity);
 
     if let Some(leash) = order.attack_leash() {
@@ -137,7 +139,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
         // leashed to the leash and out of range to the chase, or the one
         // extra walk breaks a stand-ground stance's never-move promise.
         if !world.resource::<Map>().projection().in_range_of_rect(
-            body::center_cell(leash.anchor),
+            body::anchor(leash.anchor),
             CellRect::new(CellPos::from(target_position), target_size),
             leash.radius,
         ) {
@@ -149,7 +151,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
         Some(target) => chase::advance_to_entity(
             &mut attack_component.last_chase,
             world,
-            position,
+            entity,
             target,
             weapon.range,
         ),
@@ -157,6 +159,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
             &mut attack_component.last_chase,
             world.resource::<Map>().projection(),
             position,
+            size,
             target_position,
             target_size,
             weapon.range,

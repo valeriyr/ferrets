@@ -165,3 +165,52 @@ fn stacked_pushes_clamp_per_axis() {
         ]
     );
 }
+
+//
+// ─── Mixed footprints ─────────────────────────────────────────────────────────
+//
+
+/// Contact geometry runs between circle centers, which sit half a footprint
+/// past each anchor: a small body tucked against a wide one's far corner
+/// overlaps it even though their anchors are far apart.
+#[test]
+fn small_body_overlapping_wide_body_far_side_is_pushed() {
+    // Wide 2x2 at anchor (5,5): center (6,6), radius 1. Small at anchor
+    // (6.5,6.5): center (7,7), radius 0.5 — center distance √2 < reach 1.5,
+    // while the anchor distance (2.12) would read as clear.
+    let pushes = contact::separations(&[utils::wide(5.0, 5.0, 2), utils::resting(6.5, 6.5)]);
+
+    // Both rest, so each takes half the overlap (1.5 − √2 ≈ 0.0858), split
+    // onto the axes by the diagonal's 1/√2 — ≈0.03033 per axis, exact in
+    // fixed-point bits. The shares are mirror images along the center line.
+    let axis_share = FixedI64::from_bits(0x7c3_b666);
+    assert_eq!(
+        pushes[1],
+        FixedVec2 {
+            x: axis_share,
+            y: axis_share,
+        },
+        "the small body must be shoved off the wide one's far corner"
+    );
+    assert_eq!(
+        pushes[0],
+        FixedVec2 {
+            x: -axis_share,
+            y: -axis_share,
+        },
+        "the wide body must take the equal opposite share"
+    );
+}
+
+/// The mirror case: a small body near a wide one's anchor corner is farther
+/// from its center than the anchors suggest, so no phantom push parts them.
+#[test]
+fn small_body_clear_of_wide_body_near_side_rests_untouched() {
+    // Wide 2x2 at anchor (5,5): center (6,6). Small at anchor (4,4): center
+    // (4.5,4.5) — center distance 2.12 ≥ reach 1.5, while the anchor distance
+    // (1.41) would read as overlapping.
+    let pushes = contact::separations(&[utils::wide(5.0, 5.0, 2), utils::resting(4.0, 4.0)]);
+
+    assert_eq!(pushes[0], FixedVec2::ZERO);
+    assert_eq!(pushes[1], FixedVec2::ZERO);
+}

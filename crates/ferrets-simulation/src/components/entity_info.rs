@@ -46,4 +46,16 @@ impl EntityInfoComponent {
     pub fn type_name(&self) -> &str {
         &self.type_name
     }
+
+    /// Rewrites which type this entity is, keeping its identity.
+    ///
+    /// The simulation id is untouched: a mode change is the same unit in another
+    /// form, so selections, control groups and orders naming it stay valid.
+    /// Everything derived from the type — stats, capabilities, occupancy — has to
+    /// be re-fitted by the caller (see
+    /// [`game_loop::morph`](crate::game_loop::morph)).
+    pub fn become_type(&mut self, type_id: EntityTypeId, type_name: impl Into<String>) {
+        self.type_id = type_id;
+        self.type_name = type_name.into();
+    }
 }

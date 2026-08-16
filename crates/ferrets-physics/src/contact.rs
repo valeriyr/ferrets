@@ -46,17 +46,20 @@ pub fn separations(bodies: &[Body]) -> Vec<FixedVec2> {
             if bodies[first].mask & bodies[second].mask == LayerMask::EMPTY {
                 continue;
             }
-            let dx = bodies[second].position.x.to_num::<FixedI64>()
-                - bodies[first].position.x.to_num::<FixedI64>();
-            let dy = bodies[second].position.y.to_num::<FixedI64>()
-                - bodies[first].position.y.to_num::<FixedI64>();
-            let distance = bodies[first]
-                .position
-                .distance(bodies[second].position)
-                .to_num::<FixedI64>();
+            // Geometry runs between the circles' centers, which sit half a
+            // footprint size past each anchor — the same point the terrain
+            // checks use. Between bodies of equal size the anchor offset and
+            // the center offset coincide, but a wide body's center is deeper in, and
+            // measuring anchors would miss real overlap on one side of it
+            // while phantom-pushing on the other.
+            let first_center = body::center(bodies[first].position, bodies[first].size);
+            let second_center = body::center(bodies[second].position, bodies[second].size);
+            let dx = second_center.x.to_num::<FixedI64>() - first_center.x.to_num::<FixedI64>();
+            let dy = second_center.y.to_num::<FixedI64>() - first_center.y.to_num::<FixedI64>();
+            let distance = first_center.distance(second_center).to_num::<FixedI64>();
             let reach = (bodies[first].radius + bodies[second].radius).to_num::<FixedI64>();
-            let share_cell = body::center_cell(bodies[first].position)
-                == body::center_cell(bodies[second].position);
+            let share_cell =
+                body::anchor(bodies[first].position) == body::anchor(bodies[second].position);
             if distance >= reach && !share_cell {
                 continue;
             }

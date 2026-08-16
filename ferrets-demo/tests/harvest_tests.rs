@@ -92,11 +92,7 @@ fn worker_harvests_wood_on_demo_map() {
     let wood = world.resource::<PlayerResources>().amount(0, "wood");
     assert_eq!(wood, 235, "wood banked by tick 300");
     assert_eq!(
-        world
-            .entity(worker)
-            .get::<LocationComponent>()
-            .unwrap()
-            .position,
+        utils::position_of(world, worker),
         FixedUVec2::new(FixedU64::from_num(9), FixedU64::from_num(15)),
         "the worker rests on the lattice beside its work"
     );

@@ -10,9 +10,10 @@
 use std::collections::BTreeMap;
 
 use crate::{
-    astar::{self, Blockers},
-    hierarchy::NavHierarchy,
-    layer_mask::LayerMask,
+    astar,
+    hierarchy::{ClusterPos, NavHierarchy},
+    mover_profile::{Blockers, MoverProfile},
+    mover_shape::MoverShape,
     nav_grid::NavGrid,
 };
 use ferrets_geometry::{
@@ -45,6 +46,14 @@ pub struct PlanTarget {
     pub stop: u32,
 }
 
+impl PlanTarget {
+    /// The goal footprint as a rect.
+    #[inline]
+    pub fn rect(&self) -> CellRect {
+        CellRect::new(self.cell, self.size)
+    }
+}
+
 /// The form a refined segment takes: one entry per cell for movement that
 /// crosses cell by cell, or only the string-pulled corners for movement
 /// that walks free positions — far waypoints keep a deflected mover pulled
@@ -68,61 +77,44 @@ pub struct HierarchicalPath {
     pub target: PlanTarget,
 }
 
-/// Plans a route from `start` toward the footprint covering `goal_size`
-/// cells from `goal`, stopping within `stop_distance` of it, using the
-/// hierarchy for the long range.
+/// Plans a route from `start` toward the requested target's footprint,
+/// stopping within its stop distance, using the hierarchy for the long
+/// range.
 ///
 /// The returned path holds the refined first segment and the remaining
 /// corridor; feed the corridor back through [`refine`] as segments are
 /// consumed. Returns `None` only when `start` sits outside every region —
 /// an unreachable goal is repaired, not failed.
 ///
-/// Panics if no hierarchy abstraction was built for the mask.
-#[allow(clippy::too_many_arguments)]
+/// Panics if no hierarchy abstraction was built for the shape.
 pub fn find_path(
     grid: &NavGrid,
     hierarchy: &NavHierarchy,
     projection: Projection,
-    mask: impl Into<LayerMask>,
     start: CellPos,
-    goal: CellPos,
-    goal_size: CellSize,
-    stop_distance: u32,
-    shape: PathShape,
+    shape: MoverShape,
+    requested: PlanTarget,
+    path_shape: PathShape,
 ) -> Option<HierarchicalPath> {
-    let mask = mask.into();
-
-    if projection.in_range_of_rect(start, CellRect::new(goal, goal_size), stop_distance) {
+    if projection.in_reach(start, shape.size, requested.rect(), requested.stop) {
         return Some(HierarchicalPath {
             segment: vec![],
             corridor: vec![],
-            target: PlanTarget {
-                cell: goal,
-                size: goal_size,
-                stop: stop_distance,
-            },
+            target: requested,
         });
     }
 
-    let (target, mut corridor) = plan_corridor(
-        grid,
-        hierarchy,
-        projection,
-        mask,
-        start,
-        goal,
-        goal_size,
-        stop_distance,
-    )?;
+    let (target, mut corridor) =
+        plan_corridor(grid, hierarchy, projection, start, shape, requested)?;
     let segment = refine(
         grid,
         hierarchy,
         projection,
-        mask,
         start,
+        shape,
         &mut corridor,
         target,
-        shape,
+        path_shape,
     )?;
 
     Some(HierarchicalPath {
@@ -137,42 +129,21 @@ pub fn find_path(
 /// into walkable segments — from any nearby start, which is what lets one
 /// fanned group order share a single corridor.
 ///
-/// Panics if no hierarchy abstraction was built for the mask.
-#[allow(clippy::too_many_arguments)]
+/// Panics if no hierarchy abstraction was built for the shape.
 pub fn plan_corridor(
     grid: &NavGrid,
     hierarchy: &NavHierarchy,
     projection: Projection,
-    mask: impl Into<LayerMask>,
     start: CellPos,
-    goal: CellPos,
-    goal_size: CellSize,
-    stop_distance: u32,
+    shape: MoverShape,
+    requested: PlanTarget,
 ) -> Option<(PlanTarget, Vec<Crossing>)> {
-    let mask = mask.into();
-
-    if projection.in_range_of_rect(start, CellRect::new(goal, goal_size), stop_distance) {
-        return Some((
-            PlanTarget {
-                cell: goal,
-                size: goal_size,
-                stop: stop_distance,
-            },
-            vec![],
-        ));
+    if projection.in_reach(start, shape.size, requested.rect(), requested.stop) {
+        return Some((requested, vec![]));
     }
 
-    let start_region = hierarchy.region_of(mask, start)?;
-    let target = repair_goal(
-        grid,
-        hierarchy,
-        projection,
-        mask,
-        start_region,
-        goal,
-        goal_size,
-        stop_distance,
-    )?;
+    let start_region = hierarchy.region_of(start, shape)?;
+    let target = repair_goal(grid, hierarchy, projection, start_region, shape, requested)?;
 
     // Adjacent clusters usually connect directly — an empty corridor lets
     // refinement path straight to the target; the abstract search covers a
@@ -182,12 +153,10 @@ pub fn plan_corridor(
         let direct = astar::bounded_path(
             grid,
             projection,
-            mask,
-            Blockers::Static,
             window,
             start,
-            target.cell,
-            target.size,
+            MoverProfile::new(shape, Blockers::Static),
+            target.rect(),
             target.stop,
             |_| 0,
         );
@@ -196,7 +165,7 @@ pub fn plan_corridor(
         }
     }
 
-    let corridor = abstract_corridor(grid, hierarchy, projection, mask, start, target)?;
+    let corridor = abstract_corridor(grid, hierarchy, projection, start, shape, target)?;
     Some((target, corridor))
 }
 
@@ -211,44 +180,38 @@ pub fn refine(
     grid: &NavGrid,
     hierarchy: &NavHierarchy,
     projection: Projection,
-    mask: impl Into<LayerMask>,
     from: CellPos,
+    shape: MoverShape,
     corridor: &mut Vec<Crossing>,
     target: PlanTarget,
-    shape: PathShape,
+    path_shape: PathShape,
 ) -> Option<Vec<CellPos>> {
-    let mask = mask.into();
-
     let segment = match corridor.pop() {
         None => {
             let window = cluster_pair_window(hierarchy, from, target.cell);
             astar::bounded_path(
                 grid,
                 projection,
-                mask,
-                Blockers::Static,
                 window,
                 from,
-                target.cell,
-                target.size,
+                MoverProfile::new(shape, Blockers::Static),
+                target.rect(),
                 target.stop,
                 astar::lane_bias(from, target.cell),
             )?
         }
         Some(crossing) => {
-            if !Blockers::Static.passable(grid, mask, crossing.to) {
+            if !grid.fits_statically(crossing.to, shape) {
                 return None;
             }
             let window = cluster_pair_window(hierarchy, from, crossing.from);
             let mut segment = astar::bounded_path(
                 grid,
                 projection,
-                mask,
-                Blockers::Static,
                 window,
                 from,
-                crossing.from,
-                CellSize::new(1, 1),
+                MoverProfile::new(shape, Blockers::Static),
+                CellRect::cell(crossing.from),
                 0,
                 astar::lane_bias(from, crossing.from),
             )?;
@@ -257,7 +220,7 @@ pub fn refine(
         }
     };
 
-    Some(smooth(grid, mask, from, segment, shape))
+    Some(smooth(grid, from, shape, segment, path_shape))
 }
 
 /// What a detour pays for stepping onto a claimed cell instead of treating
@@ -273,25 +236,28 @@ pub fn detour(
     grid: &NavGrid,
     hierarchy: &NavHierarchy,
     projection: Projection,
-    mask: impl Into<LayerMask>,
     from: CellPos,
+    shape: MoverShape,
     rejoin: CellPos,
 ) -> Option<Vec<CellPos>> {
-    let mask = mask.into();
     let window = cluster_pair_window(hierarchy, from, rejoin);
     let bias = astar::lane_bias(from, rejoin);
     astar::bounded_path(
         grid,
         projection,
-        mask,
-        Blockers::Static,
         window,
         from,
-        rejoin,
-        CellSize::new(1, 1),
+        MoverProfile::new(shape, Blockers::Static),
+        CellRect::cell(rejoin),
         0,
         move |cell| {
-            let claimed = if grid.is_claimed_by(mask, cell) {
+            // The penalty reads the whole anchored footprint, not the anchor
+            // alone: a wide mover displaces whoever stands under any of its
+            // cells.
+            let claimed = if CellRect::new(cell, shape.size)
+                .cells()
+                .any(|covered| grid.is_claimed_by(shape.mask, covered))
+            {
                 CLAIM_PENALTY
             } else {
                 0
@@ -313,36 +279,31 @@ fn cluster_pair_window(hierarchy: &NavHierarchy, a: CellPos, b: CellPos) -> Cell
         .union(hierarchy.cluster_rect(hierarchy.cluster_of(b)))
 }
 
-/// Keeps the goal when any cell accepting it connects to the start's region;
-/// otherwise rewrites it to the nearest reachable cell (an exact 1×1 target).
-#[allow(clippy::too_many_arguments)]
+/// Keeps the requested target when any cell accepting it connects to the
+/// start's region; otherwise rewrites it to the nearest reachable cell (an
+/// exact 1×1 target).
 fn repair_goal(
     grid: &NavGrid,
     hierarchy: &NavHierarchy,
     projection: Projection,
-    mask: LayerMask,
     start_region: u32,
-    goal: CellPos,
-    goal_size: CellSize,
-    stop_distance: u32,
+    shape: MoverShape,
+    requested: PlanTarget,
 ) -> Option<PlanTarget> {
     // Every cell accepting the goal lies within the footprint's rectangle
     // grown by the stop distance.
-    let min_x = goal.x.saturating_sub(stop_distance);
-    let min_y = goal.y.saturating_sub(stop_distance);
-    let max_x = (goal.x + goal_size.width + stop_distance).min(grid.width());
-    let max_y = (goal.y + goal_size.height + stop_distance).min(grid.height());
+    let accepted = requested.rect().accepted_by(shape.size, requested.stop);
+    let min_x = accepted.origin.x.saturating_sub(requested.stop);
+    let min_y = accepted.origin.y.saturating_sub(requested.stop);
+    let max_x = (accepted.origin.x + accepted.size.width + requested.stop).min(grid.width());
+    let max_y = (accepted.origin.y + accepted.size.height + requested.stop).min(grid.height());
     for y in min_y..max_y {
         for x in min_x..max_x {
             let cell = CellPos::new(x, y);
-            if projection.in_range_of_rect(cell, CellRect::new(goal, goal_size), stop_distance)
-                && hierarchy.region_of(mask, cell) == Some(start_region)
+            if projection.in_range_of_rect(cell, accepted, requested.stop)
+                && hierarchy.region_of(cell, shape) == Some(start_region)
             {
-                return Some(PlanTarget {
-                    cell: goal,
-                    size: goal_size,
-                    stop: stop_distance,
-                });
+                return Some(requested);
             }
         }
     }
@@ -352,20 +313,28 @@ fn repair_goal(
     // are Chebyshev-shaped scan structure, so the scan runs on past the
     // first hit while a later ring could still hold a closer cell — under
     // the orthogonal projection a cardinal cell of the next ring can beat a
-    // diagonal one of this ring.
+    // diagonal one of this ring, and a wide shape's footprint reaches up to
+    // its size − 1 cells back toward the goal from an anchor on the low
+    // side, so the ring floor is credited that reach. Equal-floor rings
+    // still scan, so a tie resolves by cell order across rings rather than
+    // by whichever ring was walked first.
+    let reach = shape.size.width.max(shape.size.height) - 1;
     let max_radius = grid.width().max(grid.height());
     let mut best: Option<(u32, CellPos)> = None;
     for radius in 1..=max_radius {
         if let Some((best_distance, _)) = best
-            && projection.ring_floor(radius) >= best_distance
+            && projection.ring_floor(radius.saturating_sub(reach)) > best_distance
         {
             break;
         }
-        for cell in ring_cells(grid, goal, goal_size, radius) {
-            if hierarchy.region_of(mask, cell) != Some(start_region) {
+        for cell in ring_cells(grid, requested.cell, requested.size, radius) {
+            if hierarchy.region_of(cell, shape) != Some(start_region) {
                 continue;
             }
-            let distance = projection.rect_distance(cell, CellRect::new(goal, goal_size));
+            // Ranked by the shape's own nearest-edge distance: an anchor is
+            // not the body, and for a wide shape the two distances differ.
+            let distance =
+                projection.distance_for_rects(CellRect::new(cell, shape.size), requested.rect());
             let candidate = (distance, cell);
             if best.is_none_or(|current| candidate < current) {
                 best = Some(candidate);
@@ -422,50 +391,72 @@ fn abstract_corridor(
     grid: &NavGrid,
     hierarchy: &NavHierarchy,
     projection: Projection,
-    mask: LayerMask,
     start: CellPos,
+    shape: MoverShape,
     target: PlanTarget,
 ) -> Option<Vec<Crossing>> {
-    let target_cluster = hierarchy.cluster_of(target.cell);
-
-    // Entry costs into the virtual target from every transition side of its
-    // cluster, under the target's own acceptance semantics.
-    let target_window = hierarchy.cluster_rect(target_cluster);
+    // Entry costs into the virtual target, under the target's own acceptance
+    // semantics, from every cluster that can hold an accepting anchor — not
+    // just the goal's own. A ranged goal is acceptable from a foreign cluster
+    // (a weapon reaching over a wall its cluster cannot be entered through),
+    // and a goal footprint may itself span a border. The accepted rect grown
+    // by the stop distance bounds the acceptance region under either metric,
+    // so the clusters it touches are the candidates; the searches below
+    // settle which of them truly reach acceptance.
+    let accepted = target.rect().accepted_by(shape.size, target.stop);
+    let reach_low = CellPos::new(
+        accepted.origin.x.saturating_sub(target.stop),
+        accepted.origin.y.saturating_sub(target.stop),
+    );
+    let reach_high = CellPos::new(
+        (accepted.origin.x + accepted.size.width - 1 + target.stop).min(grid.width() - 1),
+        (accepted.origin.y + accepted.size.height - 1 + target.stop).min(grid.height() - 1),
+    );
+    let (low, high) = (
+        hierarchy.cluster_of(reach_low),
+        hierarchy.cluster_of(reach_high),
+    );
+    let start_cluster = hierarchy.cluster_of(start);
     let mut target_costs: BTreeMap<CellPos, u32> = BTreeMap::new();
-    for (side, _) in hierarchy.transition_sides(mask, target_cluster) {
-        let cost = astar::bounded_search(
-            grid,
-            projection,
-            mask,
-            Blockers::Static,
-            target_window,
-            side,
-            target.cell,
-            target.size,
-            target.stop,
-            |_| 0,
-        )
-        .map(|(_, cost)| cost);
-        if let Some(cost) = cost {
-            target_costs.insert(side, cost);
+    for cluster_y in low.y..=high.y {
+        for cluster_x in low.x..=high.x {
+            let cluster = ClusterPos {
+                x: cluster_x,
+                y: cluster_y,
+            };
+            let window = hierarchy.cluster_rect(cluster);
+            for (side, _) in hierarchy.transition_sides(shape, cluster) {
+                let cost = astar::bounded_search(
+                    grid,
+                    projection,
+                    window,
+                    side,
+                    MoverProfile::new(shape, Blockers::Static),
+                    target.rect(),
+                    target.stop,
+                    |_| 0,
+                )
+                .map(|(_, cost)| cost);
+                if let Some(cost) = cost {
+                    target_costs.insert(side, cost);
+                }
+            }
+            // The start may already stand in an accepting cluster.
+            if cluster == start_cluster
+                && let Some((_, cost)) = astar::bounded_search(
+                    grid,
+                    projection,
+                    window,
+                    start,
+                    MoverProfile::new(shape, Blockers::Static),
+                    target.rect(),
+                    target.stop,
+                    |_| 0,
+                )
+            {
+                target_costs.insert(start, cost);
+            }
         }
-    }
-    // The start's own cluster may be the target's.
-    if hierarchy.cluster_of(start) == target_cluster
-        && let Some((_, cost)) = astar::bounded_search(
-            grid,
-            projection,
-            mask,
-            Blockers::Static,
-            target_window,
-            start,
-            target.cell,
-            target.size,
-            target.stop,
-            |_| 0,
-        )
-    {
-        target_costs.insert(start, cost);
     }
 
     let successors = |node: &Node| -> Vec<(Node, u32)> {
@@ -475,7 +466,7 @@ fn abstract_corridor(
         let cluster = hierarchy.cluster_of(cell);
         let mut edges = Vec::new();
 
-        for (side, transition) in hierarchy.transition_sides(mask, cluster) {
+        for (side, transition) in hierarchy.transition_sides(shape, cluster) {
             if side == cell {
                 // Cross the border: transition sides are cardinal-adjacent.
                 let other = if transition.a == cell {
@@ -485,15 +476,15 @@ fn abstract_corridor(
                 };
                 edges.push((Node::Cell(other), projection.metric(cell, other)));
             } else if let Some(cost) =
-                hierarchy.intra_cost(grid, projection, mask, cluster, cell, side)
+                hierarchy.intra_cost(grid, projection, shape, cluster, cell, side)
             {
                 edges.push((Node::Cell(side), cost));
             }
         }
 
-        if cluster == target_cluster
-            && let Some(&cost) = target_costs.get(&cell)
-        {
+        // Only sides that proved a way to acceptance are in the map, so no
+        // cluster gate is needed.
+        if let Some(&cost) = target_costs.get(&cell) {
             edges.push((Node::Target, cost));
         }
 
@@ -537,10 +528,10 @@ fn abstract_corridor(
 /// detours become straight runs, or the corners themselves.
 fn smooth(
     grid: &NavGrid,
-    mask: LayerMask,
     from: CellPos,
+    shape: MoverShape,
     segment: Vec<CellPos>,
-    shape: PathShape,
+    path_shape: PathShape,
 ) -> Vec<CellPos> {
     if segment.len() < 2 {
         return segment;
@@ -554,10 +545,10 @@ fn smooth(
         // immediate next cell is adjacent, so a step always exists.
         let mut advanced = false;
         for candidate in (next..segment.len()).rev() {
-            if let Some(line) = line_of_cells(grid, mask, anchor, segment[candidate]) {
+            if let Some(line) = line_of_cells(grid, anchor, shape, segment[candidate]) {
                 anchor = segment[candidate];
                 next = candidate + 1;
-                match shape {
+                match path_shape {
                     PathShape::CellSteps => result.extend(line),
                     PathShape::Waypoints => result.push(anchor),
                 }
@@ -578,7 +569,12 @@ fn smooth(
 
 /// The straight run of cells from `a` to `b` (excluding `a`), or `None` when
 /// a cell on the way is statically blocked or a diagonal step cuts a corner.
-fn line_of_cells(grid: &NavGrid, mask: LayerMask, a: CellPos, b: CellPos) -> Option<Vec<CellPos>> {
+fn line_of_cells(
+    grid: &NavGrid,
+    a: CellPos,
+    shape: MoverShape,
+    b: CellPos,
+) -> Option<Vec<CellPos>> {
     let blockers = Blockers::Static;
     let dx = (b.x as i64 - a.x as i64).abs();
     let dy = -((b.y as i64 - a.y as i64).abs());
@@ -600,11 +596,12 @@ fn line_of_cells(grid: &NavGrid, mask: LayerMask, a: CellPos, b: CellPos) -> Opt
             y += step_y;
         }
         let next = CellPos::new(x as u32, y as u32);
-        if !blockers.passable(grid, mask, next) {
+        let profile = MoverProfile::new(shape, blockers);
+        if !grid.fits_for(next, profile) {
             return None;
         }
         let is_diagonal = next.x != current.x && next.y != current.y;
-        if is_diagonal && !astar::allows_diagonal(grid, mask, current, next, blockers) {
+        if is_diagonal && !astar::allows_diagonal(grid, current, profile, next) {
             return None;
         }
         cells.push(next);

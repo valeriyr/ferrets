@@ -34,6 +34,10 @@ use crate::{
 pub struct DebugState {
     /// Draw the debug overlay — nav grid and order lines.
     pub grid: bool,
+    /// Which navigation layer the occupancy fill shows, by registered name.
+    /// Cycled with `F3`, because the layers hide each other: a flier's claim and
+    /// the ground under it are different planes of the same cells.
+    pub layer: String,
     /// Type spawned.
     pub spawn_type: String,
 }
@@ -42,6 +46,7 @@ impl Default for DebugState {
     fn default() -> Self {
         Self {
             grid: true,
+            layer: map::GROUND.into(),
             spawn_type: "archer".into(),
         }
     }
@@ -83,10 +88,27 @@ fn cursor_cell(
     (x >= 0.0 && y >= 0.0).then_some((x as u32, y as u32))
 }
 
-/// Toggles the debug overlay.
-pub fn toggle_debug(keys: Res<ButtonInput<KeyCode>>, mut debug: ResMut<DebugState>) {
+/// Toggles the debug overlay, and cycles which navigation layer its occupancy
+/// fill shows.
+pub fn toggle_debug(
+    keys: Res<ButtonInput<KeyCode>>,
+    registry: Res<ContentRegistry>,
+    mut debug: ResMut<DebugState>,
+) {
     if keys.just_pressed(KeyCode::F1) {
         debug.grid = !debug.grid;
+    }
+    if keys.just_pressed(KeyCode::F3) {
+        // Registered layers in name order, so the cycle is stable across runs.
+        let names: Vec<&str> = registry.layers().map(|(name, _)| name).collect();
+        if let Some(next) = names
+            .iter()
+            .position(|&name| name == debug.layer)
+            .map(|at| names[(at + 1) % names.len()])
+            .or_else(|| names.first().copied())
+        {
+            debug.layer = next.to_string();
+        }
     }
 }
 
@@ -118,6 +140,7 @@ pub fn debug_readout(
     mode: Res<InputMode>,
     map: Res<Map>,
     registry: Res<ContentRegistry>,
+    debug: Res<DebugState>,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
     entities: Query<(&EntityInfoComponent, &LocationComponent), Without<HiddenComponent>>,
@@ -153,9 +176,10 @@ pub fn debug_readout(
 
     if let Ok(mut text) = text.single_mut() {
         **text = format!(
-            "tick {} | {} | cursor {} | hover {} | LMB {} RMB {} | selected {} | {}",
+            "tick {} | {} | layer {} | cursor {} | hover {} | LMB {} RMB {} | selected {} | {}",
             session.tick(),
             model_str,
+            debug.layer,
             cell_str,
             hover_str,
             mouse.pressed(MouseButton::Left) as u8,
@@ -188,10 +212,10 @@ pub fn draw_grid(
     // don't leak their positions through the overlay.
     let local = session.local_player();
     let nav_grid = map.nav_grid();
-    if let Some(ground) = registry.layer(map::GROUND) {
+    if let Some(layer) = registry.layer(&debug.layer) {
         for y in 0..map.height() {
             for x in 0..map.width() {
-                if nav_grid.is_occupied(ground, CellPos::new(x, y))
+                if nav_grid.is_occupied(layer, CellPos::new(x, y))
                     && (reveal.0 || fog.is_visible_to(&session, local, x, y))
                 {
                     fill_cell(&mut gizmos, x, y);
@@ -250,7 +274,7 @@ pub fn draw_bodies(
         if !def.can_move() || !claims {
             continue;
         }
-        let cell = body::center_cell(location.position);
+        let cell = body::anchor(location.position);
         if !(reveal.0 || fog.is_visible_to(&session, local, cell.x, cell.y)) {
             continue;
         }
@@ -258,9 +282,15 @@ pub fn draw_bodies(
             continue;
         };
 
+        // The circle sits half a footprint past the anchor, so a wider body is
+        // drawn where it actually is rather than off its own near corner.
+        let size = def
+            .location
+            .map(|location| location.size())
+            .unwrap_or(CellSize::ONE);
         let center = Vec2::new(
-            (location.position.x.to_num::<f32>() + 0.5) * CELL_PX,
-            -(location.position.y.to_num::<f32>() + 0.5) * CELL_PX,
+            (location.position.x.to_num::<f32>() + size.width as f32 / 2.0) * CELL_PX,
+            -(location.position.y.to_num::<f32>() + size.height as f32 / 2.0) * CELL_PX,
         );
         gizmos.circle_2d(center, radius.to_num::<f32>() * CELL_PX, BODY);
 
@@ -307,14 +337,12 @@ pub fn draw_hierarchy(
         gizmos.line_2d(Vec2::new(0.0, yp), Vec2::new(w * CELL_PX, yp), CLUSTER);
     }
 
-    // Entrances of every mover mask the hierarchy serves.
+    // Entrances of every mover shape the hierarchy serves. A wide mover has its
+    // own, narrower set, so drawing all of them shows where clearance bites.
     let cell_center =
         |cell: CellPos| world_center(FixedUVec2::from(cell), CellSize::ONE).truncate();
-    for (_, layer) in registry.layers() {
-        if !hierarchy.serves(layer) {
-            continue;
-        }
-        for transition in hierarchy.transitions(layer) {
+    for shape in hierarchy.shapes() {
+        for transition in hierarchy.transitions(shape) {
             gizmos.line_2d(
                 cell_center(transition.a),
                 cell_center(transition.b),
@@ -439,7 +467,10 @@ pub fn draw_orders(
                     Some(position) => (Some(cell_center(*position)), GUARD),
                     None => continue,
                 },
-                Order::Train | Order::Research { .. } | Order::Die => continue,
+                // A form change happens where the unit stands, so it has no line.
+                Order::Train | Order::Research { .. } | Order::Morph { .. } | Order::Die => {
+                    continue;
+                }
             };
             // A vanished target leaves nothing to point at.
             let Some(end) = end else { continue };

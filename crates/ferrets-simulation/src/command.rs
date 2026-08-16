@@ -156,4 +156,7 @@ pub enum PlayerCommand {
         caster: SkillCasterRef,
         target: Option<SimulationId>,
     },
+    /// Changes every commanded entity that can into `type_name` — a
+    /// destination its own type must declare a transition into.
+    Morph { type_name: String, flush: bool },
 }

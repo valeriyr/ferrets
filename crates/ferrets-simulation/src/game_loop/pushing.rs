@@ -3,13 +3,16 @@
 //! through terrain, and re-derives the claim plane from where they settled.
 
 use bevy_ecs::{entity::Entity, world::World};
-use ferrets_geometry::cell_pos::CellPos;
+use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::{FixedI64, fixed_uvec2::FixedUVec2, fixed_vec2::FixedVec2};
 use ferrets_pathfinder::layer_mask::LayerMask;
 use ferrets_physics::{body, body::Body, contact, terrain};
 
 use crate::{
-    components::{hidden::HiddenComponent, location::LocationComponent, movement::MoveComponent},
+    components::{
+        hidden::HiddenComponent, location::LocationComponent, morph::MorphComponent,
+        movement::MoveComponent,
+    },
     entity_def,
     entity_index::EntityIndex,
     map::Map,
@@ -61,6 +64,7 @@ pub fn resolve(world: &mut World) {
         entities.push(entity);
         bodies.push(Body {
             position,
+            size: location_def.size(),
             radius: entity_def::radius(world, entity),
             mask: location_def.occupation(),
             heading,
@@ -80,6 +84,7 @@ pub fn resolve(world: &mut World) {
             world.resource::<Map>().nav_grid(),
             body.mask,
             body.position,
+            body.size,
             desired,
             body.radius,
         );
@@ -92,14 +97,13 @@ pub fn resolve(world: &mut World) {
         }
     }
 
-    // The claim plane is derived state under the continuous model: rebuilt
-    // from the settled bodies each tick, one cell per body — the cell under
-    // its center, the one the eye puts it on. Placement and spawning see
+    // The footprint under each settled body — anchored at the cell the eye
+    // puts it on, and as wide as the body moves. Placement and spawning see
     // each unit where it stands (a pushed body's claim follows it), and a
-    // walk claims a single stepping cell at a time, as under the cell
-    // model. The claim plane is a cell-resolution summary, not the
-    // collision geometry — contact and terrain stay with the circles.
-    let claims: Vec<(LayerMask, CellPos)> = entities
+    // walk claims one stepping footprint at a time, as under the cell model.
+    // The claim plane is a cell-resolution summary, not the collision
+    // geometry — contact and terrain stay with the circles.
+    let footprints: Vec<(LayerMask, CellSize, CellPos)> = entities
         .iter()
         .zip(&bodies)
         .map(|(&entity, body)| {
@@ -108,12 +112,21 @@ pub fn resolve(world: &mut World) {
                 .get::<LocationComponent>()
                 .unwrap()
                 .position;
-            (body.mask, body::center_cell(position))
+            (body.mask, body.size, body::anchor(position))
         })
         .collect();
-    let mut map = world.resource_mut::<Map>();
-    map.nav_grid_mut().clear_claims();
-    for (mask, cell) in claims {
-        map.nav_grid_mut().set_claimed_by(mask, cell, true);
-    }
+
+    // Ground reserved by in-flight form changes is claim-plane state too, so
+    // the rebuild must re-assert it or a reservation would evaporate one tick
+    // after it was made. A raw query is fine here: claims OR together, so the
+    // iteration order cannot decide anything.
+    let reservations: Vec<(LayerMask, Vec<CellPos>)> = world
+        .query::<&MorphComponent>()
+        .iter(world)
+        .filter_map(|morph| morph.reservation.as_ref())
+        .map(|reservation| (reservation.mask, reservation.cells.clone()))
+        .collect();
+    world
+        .resource_mut::<Map>()
+        .rebuild_claims(&footprints, &reservations);
 }
