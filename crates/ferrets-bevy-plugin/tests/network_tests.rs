@@ -1377,7 +1377,11 @@ fn net_app_with_slots(
 fn harness_soldier() -> EntityTypeDef {
     EntityTypeDef::new("soldier")
         .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-        .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
+        .with_movement(
+            FixedU64::from_num(0.5),
+            FixedU64::from_num(0.5),
+            FixedU64::ONE,
+        )
         .with_health(30)
         .with_dying(2, None)
         .with_attack(10, 1, 1, 4, 2)

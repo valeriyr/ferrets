@@ -47,6 +47,7 @@ fn loads_races_resources_and_entities() {
         .with_movement(
             FixedU64::from_str("0.3").unwrap(),
             FixedU64::from_str("0.5").unwrap(),
+            FixedU64::from_str("2").unwrap(),
         )
         .with_health(40)
         .with_dying(2, None)
@@ -1448,7 +1449,7 @@ const ARCHER: &str = r#"
         race = "human",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
         stats = {
-            speed = "0.3", radius = "0.5", max_health = 40,
+            speed = "0.3", radius = "0.5", weight = 2, max_health = 40,
             damage = 6, attack_range = 4, attack_period = 7, damage_point = 3,
         },
         dying = { time = 2 },

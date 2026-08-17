@@ -159,7 +159,11 @@ pub fn selection_app() -> App {
         registry.register(
             EntityTypeDef::new("soldier")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                )
                 .with_health(30)
                 .with_dying(1, None)
                 .with_attack(10, 1, 3, 2, 1)
@@ -210,14 +214,18 @@ pub fn cell_crowd_app() -> App {
         registry.register(
             EntityTypeDef::new("soldier")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                )
                 .with_health(30)
                 .with_dying(2, None),
         );
         registry.register(
             EntityTypeDef::new("wagon")
                 .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.3), FixedU64::ONE)
+                .with_movement(FixedU64::from_num(0.3), FixedU64::ONE, FixedU64::ONE)
                 .with_health(60)
                 .with_dying(2, None),
         );
@@ -242,7 +250,11 @@ pub fn morph_app(model: MovementModel) -> App {
         registry.register(
             EntityTypeDef::new("whelp")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                )
                 .with_health(30)
                 .with_dying(2, None)
                 .with_cost([("gold", 10)])
@@ -277,21 +289,29 @@ pub fn morph_app(model: MovementModel) -> App {
         registry.register(
             EntityTypeDef::new("giant")
                 .with_location(GROUND, CellSize::new(3, 3), Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.3), FixedU64::ONE)
+                .with_movement(FixedU64::from_num(0.3), FixedU64::ONE, FixedU64::ONE)
                 .with_health(60)
                 .with_dying(2, None),
         );
         registry.register(
             EntityTypeDef::new("husk")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                )
                 .with_health(10)
                 .with_dying(2, None),
         );
         registry.register(
             EntityTypeDef::new("wisp")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                )
                 .with_morphs([MorphTransition::new(
                     "whelp",
                     MorphTime::Constant(10),
@@ -323,7 +343,7 @@ pub fn morph_app(model: MovementModel) -> App {
         registry.register(
             EntityTypeDef::new("golem")
                 .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.3), FixedU64::ONE)
+                .with_movement(FixedU64::from_num(0.3), FixedU64::ONE, FixedU64::ONE)
                 .with_health(50)
                 .with_dying(2, None),
         );
@@ -621,7 +641,11 @@ pub fn combat_app() -> App {
         registry.register(
             EntityTypeDef::new("soldier")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                )
                 .with_health(50)
                 .with_dying(3, None)
                 .with_attack(10, 1, 1, 4, 2)
@@ -644,7 +668,7 @@ pub fn combat_app() -> App {
         registry.register(
             EntityTypeDef::new("ballista")
                 .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5), FixedU64::ONE)
+                .with_movement(FixedU64::from_num(0.5), FixedU64::ONE, FixedU64::ONE)
                 .with_health(80)
                 .with_dying(3, None)
                 .with_attack(10, 2, 2, 4, 2)
@@ -697,7 +721,11 @@ pub fn supply_app() -> App {
         registry.register(
             EntityTypeDef::new("settler")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                )
                 .with_health(20)
                 .with_dying(2, None)
                 .with_cost([("gold", 10)])
@@ -717,7 +745,11 @@ pub fn supply_app() -> App {
         registry.register(
             EntityTypeDef::new("pioneer")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                )
                 .with_health(20)
                 .with_dying(2, None)
                 .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
@@ -743,7 +775,11 @@ pub fn player_effects_app() -> App {
         registry.register(
             EntityTypeDef::new("runner")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                )
                 .with_health(20)
                 .with_dying(2, None),
         );
@@ -817,7 +853,11 @@ pub fn research_app() -> App {
         let soldier = |name: &str| {
             EntityTypeDef::new(name)
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                )
                 .with_health(30)
                 .with_dying(2, None)
                 .with_attack(10, 1, 1, 4, 2)
@@ -867,7 +907,11 @@ pub fn transport_app() -> App {
         registry.register(
             EntityTypeDef::new("rifleman")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                )
                 .with_health(30)
                 .with_dying(2, None)
                 .with_attack(10, 3, 5, 4, 2)
@@ -879,7 +923,11 @@ pub fn transport_app() -> App {
         registry.register(
             EntityTypeDef::new("grunt")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                )
                 .with_health(20)
                 .with_dying(2, None)
                 .with_tags(["infantry"])
@@ -888,7 +936,11 @@ pub fn transport_app() -> App {
         registry.register(
             EntityTypeDef::new("civilian")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                )
                 .with_health(20)
                 .with_dying(2, None)
                 .with_tags(["infantry"]),
@@ -896,7 +948,11 @@ pub fn transport_app() -> App {
         let carrier = |name: &str, boarding: BoardingPolicy| {
             EntityTypeDef::new(name)
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                )
                 .with_health(60)
                 .with_dying(2, None)
                 .with_stat(EntityStatId::CARGO_CAPACITY, FixedU64::from_num(4))
@@ -967,7 +1023,11 @@ pub fn corner_app() -> App {
         registry.register(
             EntityTypeDef::new("runner")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.3), FixedU64::from_num(0.5))
+                .with_movement(
+                    FixedU64::from_num(0.3),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                )
                 .with_health(20),
         );
     }
@@ -1058,7 +1118,11 @@ pub fn register_orders_content(app: &mut App) {
         registry.register(
             EntityTypeDef::new("soldier")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                )
                 .with_health(30)
                 .with_dying(2, None)
                 .with_attack(10, 1, 1, 4, 2)
@@ -1072,7 +1136,20 @@ pub fn register_orders_content(app: &mut App) {
         registry.register(
             EntityTypeDef::new("wagon")
                 .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5), FixedU64::ONE)
+                .with_movement(FixedU64::from_num(0.5), FixedU64::ONE, FixedU64::ONE)
+                .with_health(60)
+                .with_dying(2, None),
+        );
+        // A heavy continuous mover on a soldier's footprint, for contact tests
+        // that need weight told apart from size.
+        registry.register(
+            EntityTypeDef::new("ox")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(4),
+                )
                 .with_health(60)
                 .with_dying(2, None),
         );
@@ -1089,7 +1166,11 @@ pub fn register_orders_content(app: &mut App) {
         registry.register(
             EntityTypeDef::new("worker")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                )
                 .with_health(20)
                 .with_dying(2, None)
                 .with_cost([("gold", 10)])
@@ -1104,7 +1185,11 @@ pub fn register_orders_content(app: &mut App) {
         registry.register(
             EntityTypeDef::new("mason")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                )
                 .with_health(20)
                 .with_dying(2, None)
                 .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
@@ -1114,7 +1199,11 @@ pub fn register_orders_content(app: &mut App) {
         registry.register(
             EntityTypeDef::new("carpenter")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                )
                 .with_health(20)
                 .with_dying(2, None)
                 .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
@@ -1123,7 +1212,11 @@ pub fn register_orders_content(app: &mut App) {
         registry.register(
             EntityTypeDef::new("lumberjack")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                )
                 .with_health(20)
                 .with_dying(2, None)
                 .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
@@ -1134,7 +1227,11 @@ pub fn register_orders_content(app: &mut App) {
         registry.register(
             EntityTypeDef::new("prospector")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                )
                 .with_health(20)
                 .with_dying(2, None)
                 .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::from_num(3))
@@ -1145,7 +1242,11 @@ pub fn register_orders_content(app: &mut App) {
         registry.register(
             EntityTypeDef::new("logger")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                )
                 .with_health(20)
                 .with_dying(2, None)
                 .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
@@ -1174,7 +1275,11 @@ pub fn register_orders_content(app: &mut App) {
         registry.register(
             EntityTypeDef::new("forager")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                )
                 .with_health(20)
                 .with_dying(2, None)
                 .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
@@ -1201,7 +1306,11 @@ pub fn register_orders_content(app: &mut App) {
         registry.register(
             EntityTypeDef::new("ghost")
                 .with_location(GROUND, CellSize::ONE, Solidity::Passable)
-                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                )
                 .with_health(20),
         );
         // A soldier variant that notices enemies well beyond its weapon range,
@@ -1209,7 +1318,11 @@ pub fn register_orders_content(app: &mut App) {
         registry.register(
             EntityTypeDef::new("sentry")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                )
                 .with_health(30)
                 .with_dying(2, None)
                 .with_attack(10, 1, 5, 4, 2)
@@ -1222,7 +1335,11 @@ pub fn register_orders_content(app: &mut App) {
         registry.register(
             EntityTypeDef::new("archer")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                )
                 .with_health(30)
                 .with_dying(2, None)
                 .with_attack(10, 3, 5, 4, 2)

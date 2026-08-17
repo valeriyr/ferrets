@@ -18,14 +18,24 @@ pub fn heading(x: f64, y: f64) -> FixedVec2 {
     FixedVec2::new(FixedI64::from_num(x), FixedI64::from_num(y))
 }
 
-/// A half-cell-radius body at rest, filling a single cell.
+/// A half-cell-radius body at rest, filling a single cell, of the baseline
+/// weight every test body carries unless it says otherwise.
 pub fn resting(x: f64, y: f64) -> Body {
     Body {
         position: position(x, y),
         size: CellSize::ONE,
         radius: FixedU64::from_num(0.5),
+        weight: FixedU64::ONE,
         mask: LayerMask::from(GROUND),
         heading: None,
+    }
+}
+
+/// The same body, weighing `weight` against whatever it meets.
+pub fn weighing(body: Body, weight: f64) -> Body {
+    Body {
+        weight: FixedU64::from_num(weight),
+        ..body
     }
 }
 

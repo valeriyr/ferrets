@@ -288,12 +288,15 @@ impl EntityTypeDef {
         self
     }
 
-    /// Enables movement for this entity type at the given speed (grid units per tick).
+    /// Enables movement for this entity type at the given speed (grid units per tick),
+    /// with a body of `radius` that resists displacement as `weight` against what it
+    /// meets.
     ///
     /// Panics if `speed` is `0`.
-    pub fn with_movement(mut self, speed: FixedU64, radius: FixedU64) -> Self {
+    pub fn with_movement(mut self, speed: FixedU64, radius: FixedU64, weight: FixedU64) -> Self {
         self.base_stats.insert(EntityStatId::SPEED, speed);
         self.base_stats.insert(EntityStatId::RADIUS, radius);
+        self.base_stats.insert(EntityStatId::WEIGHT, weight);
         self
     }
 

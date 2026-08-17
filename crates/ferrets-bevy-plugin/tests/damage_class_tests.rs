@@ -86,7 +86,11 @@ fn app() -> App {
         registry.register(
             EntityTypeDef::new("grunt")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                )
                 .with_health(50)
                 .with_attack(10, 1, 1, 4, 2)
                 .with_targets(utils::GROUND)

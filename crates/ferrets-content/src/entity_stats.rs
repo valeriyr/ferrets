@@ -84,6 +84,16 @@ impl EntityStatId {
     /// Total transporter slots aboard one instance. Each passenger consumes
     /// its [`CARGO_SIZE`](Self::CARGO_SIZE) of them.
     pub const CARGO_CAPACITY: EntityStatId = EntityStatId(25);
+    /// How strongly an instance resists displacement where the continuous
+    /// movement model resolves contact, relative to what it meets. Every mover
+    /// defines one; equals part evenly, and a body twice as heavy as the one it
+    /// meets takes a third of the separation. Only the ratio between two weights
+    /// carries meaning, so the scale is a convention: one is what an ordinary
+    /// body weighs, and standing firm against something walking in takes several
+    /// times that, since walking counts for weight of its own. Zero is the far
+    /// end of the same scale rather than an absence — a body nothing weighs
+    /// against, which yields to everything and shoves nothing.
+    pub const WEIGHT: EntityStatId = EntityStatId(26);
 
     /// Creates an entity stat id for the given registration index.
     pub(crate) fn from_index(index: usize) -> Self {
@@ -99,7 +109,7 @@ impl EntityStatId {
 
 /// The built-in entity stats, registered first and in this order, so their
 /// assigned ids equal the [`EntityStatId`] constants above.
-pub(crate) const ENTITY_BUILTIN_STATS: [BuiltinStat<EntityStatId>; 26] = [
+pub(crate) const ENTITY_BUILTIN_STATS: [BuiltinStat<EntityStatId>; 27] = [
     // Current health settles under this ceiling, so a zero would turn any debuff
     // that reached it into an instant kill.
     stats::builtin(EntityStatId::MAX_HEALTH, "max_health", FixedU64::ONE),
@@ -156,6 +166,12 @@ pub(crate) const ENTITY_BUILTIN_STATS: [BuiltinStat<EntityStatId>; 26] = [
         "cargo_capacity",
         FixedU64::ZERO,
     ),
+    // No floor: weights are relative, so content may author a body lighter than
+    // an ordinary one and a whole-number floor would raise those rather than
+    // guard them. Nothing weighs against zero, so a body that reaches it —
+    // authored there or debuffed there — yields the whole separation to
+    // whatever it meets and shoves nothing.
+    stats::builtin(EntityStatId::WEIGHT, "weight", FixedU64::ZERO),
 ];
 
 // Floors and names are looked up by `EntityStatId::index`, so every entry must sit at

@@ -57,7 +57,7 @@ fn register_accepts_square_multi_cell_mover() {
     registry.register(
         EntityTypeDef::new("gryphon")
             .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
-            .with_movement(FixedU64::ONE, FixedU64::ONE),
+            .with_movement(FixedU64::ONE, FixedU64::ONE, FixedU64::ONE),
     );
 }
 
@@ -71,7 +71,7 @@ fn register_rejects_oblong_mover() {
     registry.register(
         EntityTypeDef::new("wagon")
             .with_location(GROUND, CellSize::new(2, 3), Solidity::Solid)
-            .with_movement(FixedU64::ONE, FixedU64::ONE),
+            .with_movement(FixedU64::ONE, FixedU64::ONE, FixedU64::ONE),
     );
 }
 
@@ -539,7 +539,7 @@ fn validate_accepts_mover_whose_layers_one_terrain_passes_together() {
     registry.register(
         EntityTypeDef::new("barge")
             .with_location(ground | water, CellSize::ONE, Solidity::Solid)
-            .with_movement(FixedU64::ONE, FixedU64::from_num(0.5)),
+            .with_movement(FixedU64::ONE, FixedU64::from_num(0.5), FixedU64::ONE),
     );
 
     registry.validate();
@@ -558,7 +558,7 @@ fn validate_rejects_mover_no_terrain_passes_together() {
     registry.register(
         EntityTypeDef::new("barge")
             .with_location(ground | water, CellSize::ONE, Solidity::Solid)
-            .with_movement(FixedU64::ONE, FixedU64::from_num(0.5)),
+            .with_movement(FixedU64::ONE, FixedU64::from_num(0.5), FixedU64::ONE),
     );
 
     registry.validate();
@@ -603,7 +603,7 @@ fn register_rejects_non_positive_speed() {
     registry.register(
         EntityTypeDef::new("worker")
             .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-            .with_movement(FixedU64::ZERO, FixedU64::from_num(0.5)),
+            .with_movement(FixedU64::ZERO, FixedU64::from_num(0.5), FixedU64::ONE),
     );
 }
 
@@ -1541,13 +1541,13 @@ fn validate_accepts_transitions_naming_each_other() {
     registry.register(
         EntityTypeDef::new("walker")
             .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
-            .with_movement(FixedU64::ONE, FixedU64::ONE)
+            .with_movement(FixedU64::ONE, FixedU64::ONE, FixedU64::ONE)
             .with_morphs([morph_into("flier")]),
     );
     registry.register(
         EntityTypeDef::new("flier")
             .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
-            .with_movement(FixedU64::ONE, FixedU64::ONE)
+            .with_movement(FixedU64::ONE, FixedU64::ONE, FixedU64::ONE)
             .with_morphs([morph_into("walker")]),
     );
 
@@ -1560,13 +1560,13 @@ fn validate_accepts_one_way_transition() {
     registry.register(
         EntityTypeDef::new("walker")
             .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-            .with_movement(FixedU64::ONE, FixedU64::from_num(0.5))
+            .with_movement(FixedU64::ONE, FixedU64::from_num(0.5), FixedU64::ONE)
             .with_morphs([morph_into("flier")]),
     );
     registry.register(
         EntityTypeDef::new("flier")
             .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-            .with_movement(FixedU64::ONE, FixedU64::from_num(0.5)),
+            .with_movement(FixedU64::ONE, FixedU64::from_num(0.5), FixedU64::ONE),
     );
 
     registry.validate();
@@ -1581,7 +1581,7 @@ fn validate_rejects_transition_into_unregistered_type() {
     registry.register(
         EntityTypeDef::new("walker")
             .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-            .with_movement(FixedU64::ONE, FixedU64::from_num(0.5))
+            .with_movement(FixedU64::ONE, FixedU64::from_num(0.5), FixedU64::ONE)
             .with_morphs([morph_into("flier")]),
     );
 
@@ -1597,13 +1597,13 @@ fn validate_rejects_transition_with_odd_footprint_difference() {
     registry.register(
         EntityTypeDef::new("walker")
             .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-            .with_movement(FixedU64::ONE, FixedU64::from_num(0.5))
+            .with_movement(FixedU64::ONE, FixedU64::from_num(0.5), FixedU64::ONE)
             .with_morphs([morph_into("giant")]),
     );
     registry.register(
         EntityTypeDef::new("giant")
             .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
-            .with_movement(FixedU64::ONE, FixedU64::ONE),
+            .with_movement(FixedU64::ONE, FixedU64::ONE, FixedU64::ONE),
     );
 
     registry.validate();
@@ -1616,13 +1616,13 @@ fn validate_accepts_transition_with_even_footprint_difference() {
     registry.register(
         EntityTypeDef::new("walker")
             .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-            .with_movement(FixedU64::ONE, FixedU64::from_num(0.5))
+            .with_movement(FixedU64::ONE, FixedU64::from_num(0.5), FixedU64::ONE)
             .with_morphs([morph_into("giant")]),
     );
     registry.register(
         EntityTypeDef::new("giant")
             .with_location(GROUND, CellSize::new(3, 3), Solidity::Solid)
-            .with_movement(FixedU64::ONE, FixedU64::ONE),
+            .with_movement(FixedU64::ONE, FixedU64::ONE, FixedU64::ONE),
     );
 
     registry.validate();
@@ -1638,7 +1638,7 @@ fn validate_rejects_transition_with_unresolved_requirement() {
     registry.register(
         EntityTypeDef::new("walker")
             .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-            .with_movement(FixedU64::ONE, FixedU64::from_num(0.5))
+            .with_movement(FixedU64::ONE, FixedU64::from_num(0.5), FixedU64::ONE)
             .with_morphs([MorphTransition::new(
                 "flier",
                 MorphTime::Constant(20),
@@ -1651,7 +1651,7 @@ fn validate_rejects_transition_with_unresolved_requirement() {
     registry.register(
         EntityTypeDef::new("flier")
             .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-            .with_movement(FixedU64::ONE, FixedU64::from_num(0.5)),
+            .with_movement(FixedU64::ONE, FixedU64::from_num(0.5), FixedU64::ONE),
     );
 
     registry.validate();
@@ -1668,7 +1668,7 @@ fn validate_rejects_transition_timed_by_undeclared_stat() {
     registry.register(
         EntityTypeDef::new("walker")
             .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-            .with_movement(FixedU64::ONE, FixedU64::from_num(0.5))
+            .with_movement(FixedU64::ONE, FixedU64::from_num(0.5), FixedU64::ONE)
             .with_morphs([MorphTransition::new(
                 "flier",
                 MorphTime::Stat(stat),
@@ -1681,7 +1681,7 @@ fn validate_rejects_transition_timed_by_undeclared_stat() {
     registry.register(
         EntityTypeDef::new("flier")
             .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-            .with_movement(FixedU64::ONE, FixedU64::from_num(0.5)),
+            .with_movement(FixedU64::ONE, FixedU64::from_num(0.5), FixedU64::ONE),
     );
 
     registry.validate();
@@ -1697,7 +1697,7 @@ fn validate_rejects_transition_with_energy_cost_but_no_energy_pool() {
     registry.register(
         EntityTypeDef::new("walker")
             .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-            .with_movement(FixedU64::ONE, FixedU64::from_num(0.5))
+            .with_movement(FixedU64::ONE, FixedU64::from_num(0.5), FixedU64::ONE)
             .with_morphs([MorphTransition::new(
                 "flier",
                 MorphTime::Constant(20),
@@ -1710,7 +1710,7 @@ fn validate_rejects_transition_with_energy_cost_but_no_energy_pool() {
     registry.register(
         EntityTypeDef::new("flier")
             .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-            .with_movement(FixedU64::ONE, FixedU64::from_num(0.5)),
+            .with_movement(FixedU64::ONE, FixedU64::from_num(0.5), FixedU64::ONE),
     );
 
     registry.validate();
@@ -1726,7 +1726,7 @@ fn validate_rejects_transition_with_unregistered_resource_cost() {
     registry.register(
         EntityTypeDef::new("walker")
             .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-            .with_movement(FixedU64::ONE, FixedU64::from_num(0.5))
+            .with_movement(FixedU64::ONE, FixedU64::from_num(0.5), FixedU64::ONE)
             .with_morphs([MorphTransition::new(
                 "flier",
                 MorphTime::Constant(20),
@@ -1739,7 +1739,7 @@ fn validate_rejects_transition_with_unregistered_resource_cost() {
     registry.register(
         EntityTypeDef::new("flier")
             .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-            .with_movement(FixedU64::ONE, FixedU64::from_num(0.5)),
+            .with_movement(FixedU64::ONE, FixedU64::from_num(0.5), FixedU64::ONE),
     );
 
     registry.validate();
@@ -1752,7 +1752,7 @@ fn validate_accepts_transition_with_payable_costs() {
     registry.register(
         EntityTypeDef::new("walker")
             .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-            .with_movement(FixedU64::ONE, FixedU64::from_num(0.5))
+            .with_movement(FixedU64::ONE, FixedU64::from_num(0.5), FixedU64::ONE)
             .with_energy(100, FixedU64::from_num(0.1))
             .with_morphs([MorphTransition::new(
                 "flier",
@@ -1769,7 +1769,7 @@ fn validate_accepts_transition_with_payable_costs() {
     registry.register(
         EntityTypeDef::new("flier")
             .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-            .with_movement(FixedU64::ONE, FixedU64::from_num(0.5)),
+            .with_movement(FixedU64::ONE, FixedU64::from_num(0.5), FixedU64::ONE),
     );
 
     registry.validate();

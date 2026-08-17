@@ -768,7 +768,11 @@ fn app() -> App {
         registry.register(
             EntityTypeDef::new("soldier")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                )
                 .with_health(20)
                 .with_train_time(20),
         );
@@ -778,7 +782,11 @@ fn app() -> App {
         registry.register(
             EntityTypeDef::new("casualty")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                )
                 .with_health(100)
                 .with_train_time(20)
                 .with_tags(["flesh"]),
@@ -786,7 +794,11 @@ fn app() -> App {
         registry.register(
             EntityTypeDef::new("orderly")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                )
                 .with_health(30)
                 .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
                 .with_stat(EntityStatId::REPAIR_RANGE, FixedU64::ONE)
@@ -830,7 +842,11 @@ fn app() -> App {
         registry.register(
             EntityTypeDef::new("medic")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                )
                 .with_health(30)
                 .with_energy(50, FixedU64::ZERO)
                 .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
@@ -904,7 +920,11 @@ fn repairer(
 ) -> EntityTypeDef {
     let def = EntityTypeDef::new(name)
         .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-        .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
+        .with_movement(
+            FixedU64::from_num(0.5),
+            FixedU64::from_num(0.5),
+            FixedU64::ONE,
+        )
         .with_health(20)
         .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
         .with_stat(EntityStatId::REPAIR_RANGE, FixedU64::ONE);

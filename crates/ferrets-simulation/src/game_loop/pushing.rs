@@ -66,6 +66,7 @@ pub fn resolve(world: &mut World) {
             position,
             size: location_def.size(),
             radius: entity_def::radius(world, entity),
+            weight: entity_def::weight(world, entity),
             mask: location_def.occupation(),
             heading,
         });

@@ -157,7 +157,11 @@ fn fog_app(slots: Vec<PlayerSlot>) -> App {
         registry.register(
             EntityTypeDef::new("scout")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                )
                 .with_health(20)
                 .with_dying(1, None)
                 .with_sight_range(6),
@@ -165,7 +169,11 @@ fn fog_app(slots: Vec<PlayerSlot>) -> App {
         registry.register(
             EntityTypeDef::new("sniper")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                )
                 .with_health(30)
                 .with_dying(1, None)
                 .with_attack(10, 8, 8, 2, 1)

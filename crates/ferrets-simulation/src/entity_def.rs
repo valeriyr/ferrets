@@ -62,6 +62,20 @@ pub fn radius(world: &World, entity: Entity) -> FixedU64 {
         .expect("movers define a radius stat")
 }
 
+/// How strongly a mover resists displacement, from its weight stat.
+///
+/// Panics if `entity` is not a simulation entity, or carries no weight stat
+/// — a continuous-model map built from map data validates that every mover
+/// defines one, and only the continuous model reads it. A map assembled
+/// directly from a grid answers for its own content.
+pub fn weight(world: &World, entity: Entity) -> FixedU64 {
+    world
+        .entity(entity)
+        .get::<StatsComponent>()
+        .and_then(|stats| stats.effective(EntityStatId::WEIGHT))
+        .expect("movers define a weight stat")
+}
+
 /// The current effective value of one of `entity`'s stats, or `None` when it
 /// carries no such stat.
 pub fn effective_stat(world: &World, entity: Entity, stat: EntityStatId) -> Option<FixedU64> {

@@ -1,5 +1,7 @@
 //! Pairwise contact resolution: how touching bodies push each other apart.
 
+use std::cmp::Ordering;
+
 use ferrets_math::{FixedI64, fixed_vec2::FixedVec2};
 use ferrets_pathfinder::layer_mask::LayerMask;
 
@@ -17,12 +19,31 @@ fn cell_share_creep() -> FixedI64 {
     FixedI64::from_num(0.1)
 }
 
+/// How much harder a body pressing into a contact is to displace than the same
+/// body at rest — the momentum a walker carries into whatever it meets. A body
+/// needs more than this much of a weight advantage to hold its ground against
+/// one walking into it.
+///
+/// Nothing bounds that advantage, deliberately. Past the threshold the contest
+/// inverts and the walker becomes the one carried off, which is what lets a
+/// heavy body read as a rock in the road rather than a weight that stops
+/// meaning anything the moment it clears three times its neighbours. Capping
+/// the pressing share at half would also split the rule in two, since bodies
+/// meeting head-on or settled in a pile already contest on weight alone with no
+/// ceiling. A walker is not left stalled nose-first against a heavy body
+/// either: the sideways share rides on the radial one, so the heavier the thing
+/// met, the harder the walker is turned aside rather than merely held.
+fn press_stiffening() -> FixedI64 {
+    FixedI64::from_num(3)
+}
+
 /// One pass of pairwise separation: the displacement each body takes from
 /// every contact it is in, clamped per axis to [`max_push`].
 ///
-/// Overlapping bodies shove each other apart along their offset — half the
-/// overlap each between equals, the whole of it to a body pressed by a
-/// walker it is not pressing back. A contact that needs to pass (see [`needs_swerve`]) also
+/// Overlapping bodies shove each other apart along their offset, each carrying
+/// the share of the overlap the other's resistance earns it — half each between
+/// equals, less to the heavier of unequals, and less again to a body pressing
+/// into the contact. A contact that needs to pass (see [`needs_swerve`]) also
 /// gets a clockwise sideways share — the traffic rule that keeps exactly
 /// aligned meetings moving: lattice walking aligns positions bit for bit, so
 /// dead-straight head-on contacts are the common case, and a purely radial
@@ -71,21 +92,55 @@ pub fn separations(bodies: &[Body]) -> Vec<FixedVec2> {
                 // Cell-sharing without body overlap: a steady creep apart.
                 cell_share_creep() * FixedI64::from_num(2)
             };
-            // Pressure yields to intent: a body pressed by a walker it is not
-            // itself pressing takes three quarters of the separation, so the
-            // walker mostly keeps its line and the contest ends instead of
-            // trading equal shoves forever — the churn that pinned workers at
+            // Contact is a contest of resistance: each body takes the share of
+            // the separation the other's resistance earns it, so equals part
+            // evenly and a heavier body yields less than what it meets.
+            // Pressing into a contact resists as three times the same body at
+            // rest — the momentum a walker carries — so against a resting equal
+            // a walker mostly keeps its line and the contest ends instead of
+            // trading equal shoves forever, the churn that pinned workers at
             // crowded drop-offs. Not the whole of it: a walker that loses
             // nothing to contact rams arriving crowds into piles packed too
-            // tight for the rest-creep to relax back to one body per cell.
-            // Mutual presses and settled piles split evenly, as before.
+            // tight for the rest-creep to relax back to one body per cell. The
+            // stiffening cancels wherever both bodies are in the same state, so
+            // mutual presses and settled piles are pure weight contests.
             let presses_second = presses_toward(&bodies[first], dx, dy);
             let presses_first = presses_toward(&bodies[second], -dx, -dy);
-            let quarter = total / FixedI64::from_num(4);
-            let (first_share, second_share) = match (presses_second, presses_first) {
-                (true, false) => (quarter, total - quarter),
-                (false, true) => (total - quarter, quarter),
-                _ => (total / FixedI64::from_num(2), total / FixedI64::from_num(2)),
+            let first_stiffness = stiffness(&bodies[first], presses_second);
+            let second_stiffness = stiffness(&bodies[second], presses_first);
+            // The stiffer body's share is the measured one and the yielding body
+            // takes what is left, so the pair parts by the whole separation and
+            // the rounding lands on the side already giving the most ground.
+            // Equals have no stiffer side to measure from and halve it instead.
+            //
+            // The two cases have to round differently, however tempting one rule
+            // for both looks: measuring both shares everywhere, or taking one as
+            // the remainder everywhere, moves a settled crowd by a single bit a
+            // pass, and that is enough to leave it circling a small orbit
+            // forever instead of coming to rest. Reading the comparison rather
+            // than the pair position also keeps the split the same whichever
+            // order the bodies are walked in.
+            //
+            // Only the unequal cases divide, and only they can: one side
+            // outweighing the other puts the greater above nothing and the two
+            // together above nothing with it. Equal resistances are the sole way
+            // the contest comes to nothing at all — both bodies weightless — and
+            // that case never reaches a division.
+            let (first_share, second_share) = match first_stiffness.cmp(&second_stiffness) {
+                Ordering::Equal => {
+                    let half = total / FixedI64::from_num(2);
+                    (half, half)
+                }
+                Ordering::Greater => {
+                    let contested = first_stiffness.saturating_add(second_stiffness);
+                    let first_share = total * second_stiffness / contested;
+                    (first_share, total - first_share)
+                }
+                Ordering::Less => {
+                    let contested = first_stiffness.saturating_add(second_stiffness);
+                    let second_share = total * first_stiffness / contested;
+                    (total - second_share, second_share)
+                }
             };
             let swerve = needs_swerve(&bodies[first], &bodies[second], dx, dy);
             let lateral = |share: FixedI64| {
@@ -141,6 +196,22 @@ fn needs_swerve(first: &Body, second: &Body, dx: FixedI64, dy: FixedI64) -> bool
         (Some(_), None) => toward_second,
         (None, Some(_)) => toward_first,
         (Some(_), Some(_)) => toward_second && toward_first,
+    }
+}
+
+/// How strongly `body` resists this contact: what it weighs, stiffened while it
+/// presses into the contact.
+fn stiffness(body: &Body, presses: bool) -> FixedI64 {
+    // Saturating, because nothing bounds an authored weight and this runs in
+    // lockstep: wrapping arithmetic would turn an absurd one negative, which
+    // both inverts the contest and breaks the one thing the split relies on —
+    // that resistance is never below nothing. Saturating also keeps a debug
+    // peer, which would otherwise panic, in step with a release one.
+    let weight = body.weight.saturating_to_num::<FixedI64>();
+    if presses {
+        weight.saturating_mul(press_stiffening())
+    } else {
+        weight
     }
 }
 

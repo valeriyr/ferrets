@@ -142,7 +142,7 @@ fn standing(name: &str, occupation: impl Into<LayerMask>) -> EntityTypeDef {
 
 /// A mover on `occupation`, carrying no weapon.
 fn walker(name: &str, occupation: LayerId) -> EntityTypeDef {
-    standing(name, occupation).with_movement(FixedU64::ONE, FixedU64::from_num(0.5))
+    standing(name, occupation).with_movement(FixedU64::ONE, FixedU64::from_num(0.5), FixedU64::ONE)
 }
 
 /// A mover on `occupation` that carries a weapon.

@@ -56,6 +56,7 @@ fn redundant_copy_of_recorded_frame_is_no_op() {
 }
 
 #[test]
+#[cfg_attr(not(debug_assertions), ignore = "guards a debug assertion")]
 #[should_panic(expected = "conflicting input for player 0: input is immutable once recorded")]
 fn differing_repeat_for_recorded_frame_panics() {
     let mut frames = InputFrames::new(2);

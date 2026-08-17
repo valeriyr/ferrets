@@ -133,7 +133,7 @@ pub const CONTENT: &str = r#"
     define_entity("ship", {
         location = { occupation = WATER, size = 1, solidity = "solid" },
         stats = {
-            speed = "0.25", radius = "0.5", max_health = 80,
+            speed = "0.25", radius = "0.5", weight = 6, max_health = 80,
             damage = 12, attack_range = 5, acquire_range = 8, attack_period = 10, damage_point = 4,
             -- Sees past its acquire range so its circular vision covers the square it
             -- can auto-engage.
@@ -178,7 +178,9 @@ pub const CONTENT: &str = r#"
             race = race,
             location = { occupation = GROUND, size = 1, solidity = "solid" },
             stats = {
-                speed = "0.3", radius = "0.5", max_health = 30, sight_range = 4,
+                -- The baseline weight everything else is authored against: a
+                -- worker is what a crowd is made of, and what gives way in one.
+                speed = "0.3", radius = "0.5", weight = 1, max_health = 30, sight_range = 4,
                 -- Mends at the rate it builds, and bills a quarter of the price for
                 -- a full restore, so repairing is cheaper than rebuilding. It works
                 -- from the next cell over.
@@ -316,7 +318,7 @@ pub const CONTENT: &str = r#"
         race = "human",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
         stats = {
-            speed = "0.3", radius = "0.5", max_health = 40,
+            speed = "0.3", radius = "0.5", weight = 1, max_health = 40,
             damage = 6, attack_range = 4, acquire_range = 7, attack_period = 7, damage_point = 3,
             -- 0.1/tick is 2 energy a second, so a 30-cost cast is earned over ~15s
             -- rather than handed back instantly: energy gates the skills, not the
@@ -352,7 +354,7 @@ pub const CONTENT: &str = r#"
         race = "human",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
         stats = {
-            speed = "0.3", radius = "0.5", max_health = 45, sight_range = 9,
+            speed = "0.3", radius = "0.5", weight = 1, max_health = 45, sight_range = 9,
             -- Half a point of energy per point of health (see the repairer cost
             -- below) means a full 200-point pool restores 400 health across a squad.
             max_energy = 200, energy_regen = "0.2",
@@ -385,7 +387,9 @@ pub const CONTENT: &str = r#"
         race = "human",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
         stats = {
-            speed = "0.2", radius = "0.5", max_health = 35,
+            -- Tube, carriage and crew: heavier than the infantry it walks with,
+            -- though nothing like the grunt that can shoulder it aside.
+            speed = "0.2", radius = "0.5", weight = 3, max_health = 35,
             damage = 14, attack_range = 7, acquire_range = 9, attack_period = 20, damage_point = 8,
             sight_range = 11,
             supply_cost = 1,
@@ -438,7 +442,7 @@ pub const CONTENT: &str = r#"
             targetable = targetable,
             morphs = morphs,
             stats = {
-                speed = speed, radius = "1", max_health = 180, sight_range = 10,
+                speed = speed, radius = "1", weight = 4, max_health = 180, sight_range = 10,
                 supply_cost = 2,
                 -- One rider, who fights from the saddle.
                 cargo_capacity = 1,
@@ -507,7 +511,9 @@ pub const CONTENT: &str = r#"
         race = "orc",
         location = { occupation = AIR, size = { 2, 2 }, solidity = "solid" },
         stats = {
-            speed = "0.35", radius = "1", max_health = 150, sight_range = 10,
+            -- A gas envelope the size of a building: the heaviest thing that
+            -- flies, so a gryphon meeting one aloft is the one that gives way.
+            speed = "0.35", radius = "1", weight = 8, max_health = 150, sight_range = 10,
             supply_cost = 2,
             cargo_capacity = 4,
             -- A gangplank: one body a second each way, as the pig farm's is.
@@ -619,7 +625,10 @@ pub const CONTENT: &str = r#"
         race = "orc",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
         stats = {
-            speed = "0.3", radius = "0.5", max_health = 60,
+            -- Heavy melee in body as well as armor: four times a worker's
+            -- weight on the same one-cell footprint, so a peon walking into a
+            -- standing grunt is the one that gives way and slides around it.
+            speed = "0.3", radius = "0.5", weight = 4, max_health = 60,
             damage = 10, attack_range = 1, acquire_range = 5, attack_period = 6, damage_point = 3,
             -- Heavy melee: flat armor blunts each incoming hit.
             armor = 3,
@@ -649,7 +658,7 @@ pub const CONTENT: &str = r#"
         race = "orc",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
         stats = {
-            speed = "0.3", radius = "0.5", max_health = 35,
+            speed = "0.3", radius = "0.5", weight = 1, max_health = 35,
             max_energy = 80, energy_regen = "0.2",
             sight_range = 8,
             supply_cost = 1,

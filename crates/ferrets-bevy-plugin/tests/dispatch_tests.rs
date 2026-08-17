@@ -175,7 +175,11 @@ fn repair_dispatch_app() -> App {
         registry.register(
             EntityTypeDef::new("handyman")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                )
                 .with_health(20)
                 .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
                 .with_resource_carrier([("gold", HarvestData::new(5, 2, WorkPresence::Present))])

@@ -1,6 +1,6 @@
 //! Scratch replay-forensics harness, run by hand against a recorded game:
 //! rebuilds the skirmish from the replay header, replays it headless, and
-//! reports movers that sat still with orders queued.
+//! reports movers that sat still while still under way.
 //!
 //! Run with: `FREP=replays/<stamp>.frep cargo test -p ferrets-demo --test
 //! forensics_tests -- --ignored --nocapture`
@@ -17,8 +17,8 @@ use ferrets_replay::{header::RecordedGame, replay::Replay};
 use ferrets_script::{content, engine::lua::LuaEngine};
 use ferrets_simulation::{
     components::{
-        entity_info::EntityInfoComponent, location::LocationComponent,
-        order_queue::OrderQueueComponent,
+        entity_info::EntityInfoComponent, hidden::HiddenComponent, location::LocationComponent,
+        movement::MoveComponent, order_queue::OrderQueueComponent,
     },
     entity_index::EntityIndex,
     map::Map,
@@ -33,6 +33,10 @@ struct Sample {
     position: FixedUVec2,
     queued: usize,
     front: Option<String>,
+    /// Whether the entity was under way — carrying the movement state a walk
+    /// runs on. An order that stands still by design, building or working a
+    /// seam, drops it, which is what tells the two apart.
+    under_way: bool,
 }
 
 #[test]
@@ -107,14 +111,12 @@ fn replay_forensics() {
             let position = entity_ref
                 .get::<LocationComponent>()
                 .map(|location| location.position);
-            let hidden = entity_ref
-                .get::<ferrets_simulation::components::hidden::HiddenComponent>()
-                .is_some();
+            let hidden = entity_ref.get::<HiddenComponent>().is_some();
             let front = entity_ref
                 .get::<OrderQueueComponent>()
                 .and_then(|queue| queue.0.front().map(|entry| format!("{:?}", entry.order)));
             let movement = entity_ref
-                .get::<ferrets_simulation::components::movement::MoveComponent>()
+                .get::<MoveComponent>()
                 .map(|movement| {
                     format!(
                         "path {:?} corridor {} plan {:?} frustration {} wait {} best {} regaining {} avoid {} detoured {}",
@@ -158,6 +160,7 @@ fn replay_forensics() {
                     position: location.position,
                     queued,
                     front,
+                    under_way: entity_ref.get::<MoveComponent>().is_some(),
                 });
         }
     }
@@ -191,19 +194,23 @@ fn replay_forensics() {
         }
     }
 
-    // Stuck: >= 40 consecutive sampled ticks with orders queued and < 0.05 net
-    // movement from the window's start.
+    // Stuck: >= 40 consecutive sampled ticks under way and < 0.05 net movement
+    // from the window's start. Being under way is what makes it a fault rather
+    // than a job: a builder raising a site and a worker at a seam both stand
+    // still for far longer than this with an order in hand, and neither is
+    // stuck.
     let threshold = FixedU64::from_num(0.05);
     for (id, (name, track)) in &tracks {
         let mut start = 0;
         while start < track.len() {
-            if track[start].queued == 0 {
+            if track[start].queued == 0 || !track[start].under_way {
                 start += 1;
                 continue;
             }
             let mut end = start;
             while end + 1 < track.len()
                 && track[end + 1].queued > 0
+                && track[end + 1].under_way
                 && track[start].position.distance(track[end + 1].position) < threshold
             {
                 end += 1;

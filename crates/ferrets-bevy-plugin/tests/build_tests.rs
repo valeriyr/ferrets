@@ -624,7 +624,11 @@ fn surveyor_app() -> App {
         registry.register(
             EntityTypeDef::new("surveyor")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                )
                 .with_health(20)
                 .with_stat(EntityStatId::BUILD_RANGE, FixedU64::from_num(3))
                 .with_builder(["depot"], WorkPresence::Present),

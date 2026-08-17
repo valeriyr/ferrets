@@ -240,6 +240,7 @@ fn change_waits_for_production_it_would_cancel() {
 }
 
 #[test]
+#[cfg_attr(not(debug_assertions), ignore = "guards a debug assertion")]
 #[should_panic(expected = "a type change must not drop a paid production queue")]
 fn change_dropping_paid_queue_panics() {
     // The illegal state the lifecycle prevents, staged directly: entries in

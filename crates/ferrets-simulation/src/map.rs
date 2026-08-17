@@ -125,6 +125,18 @@ impl Map {
                          continuous movement model cannot route",
                         def.name
                     );
+                    // Contact splits a penetration in proportion to what the two
+                    // bodies weigh, so every mover states what it weighs against
+                    // what it meets. Only stating it is required, not stating
+                    // anything in particular: nothing weighs against zero, which
+                    // is how content spells a body that yields to everything and
+                    // shoves nothing.
+                    assert!(
+                        def.base_stats.contains_key(&EntityStatId::WEIGHT),
+                        "entity type '{}' moves but defines no weight, \
+                         which the continuous movement model requires",
+                        def.name
+                    );
                 }
             }
         }

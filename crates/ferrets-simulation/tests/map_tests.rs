@@ -198,7 +198,11 @@ fn continuous_map_rejects_radius_beyond_footprint() {
     registry.register(
         EntityTypeDef::new("runner")
             .with_location(ground, CellSize::ONE, Solidity::Solid)
-            .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.75)),
+            .with_movement(
+                FixedU64::from_num(0.5),
+                FixedU64::from_num(0.75),
+                FixedU64::ONE,
+            ),
     );
 
     let mut data = MapData::new("pond", Projection::Isometric, 4, 4);
@@ -214,11 +218,72 @@ fn continuous_map_accepts_radius_at_half_footprint() {
     registry.register(
         EntityTypeDef::new("runner")
             .with_location(ground, CellSize::ONE, Solidity::Solid)
-            .with_movement(FixedU64::from_num(0.5), FixedU64::from_num(0.5)),
+            .with_movement(
+                FixedU64::from_num(0.5),
+                FixedU64::from_num(0.5),
+                FixedU64::ONE,
+            ),
     );
 
     let mut data = MapData::new("pond", Projection::Isometric, 4, 4);
     data.set_movement_model(MovementModel::Continuous);
+
+    Map::from_data(&data, &registry);
+}
+
+#[test]
+#[should_panic(expected = "entity type 'runner' moves but defines no weight")]
+fn continuous_map_rejects_mover_without_weight() {
+    let mut registry = lake_registry();
+    let ground = registry.layer("ground").unwrap();
+    // Stated stat by stat, as scripted content states them — the movement
+    // builder cannot express a mover missing one of the three.
+    registry.register(
+        EntityTypeDef::new("runner")
+            .with_location(ground, CellSize::ONE, Solidity::Solid)
+            .with_stat(EntityStatId::SPEED, FixedU64::from_num(0.5))
+            .with_stat(EntityStatId::RADIUS, FixedU64::from_num(0.5)),
+    );
+
+    let mut data = MapData::new("pond", Projection::Isometric, 4, 4);
+    data.set_movement_model(MovementModel::Continuous);
+
+    Map::from_data(&data, &registry);
+}
+
+/// Nothing weighs against zero, so a weightless mover is a body that yields to
+/// everything and shoves nothing — an authored choice, not a missing one.
+#[test]
+fn continuous_map_accepts_weightless_mover() {
+    let mut registry = lake_registry();
+    let ground = registry.layer("ground").unwrap();
+    registry.register(
+        EntityTypeDef::new("runner")
+            .with_location(ground, CellSize::ONE, Solidity::Solid)
+            .with_movement(
+                FixedU64::from_num(0.5),
+                FixedU64::from_num(0.5),
+                FixedU64::ZERO,
+            ),
+    );
+
+    let mut data = MapData::new("pond", Projection::Isometric, 4, 4);
+    data.set_movement_model(MovementModel::Continuous);
+
+    Map::from_data(&data, &registry);
+}
+
+#[test]
+fn cell_map_accepts_mover_without_weight() {
+    let mut registry = lake_registry();
+    let ground = registry.layer("ground").unwrap();
+    registry.register(
+        EntityTypeDef::new("runner")
+            .with_location(ground, CellSize::ONE, Solidity::Solid)
+            .with_stat(EntityStatId::SPEED, FixedU64::from_num(0.5)),
+    );
+
+    let data = MapData::new("pond", Projection::Isometric, 4, 4);
 
     Map::from_data(&data, &registry);
 }
@@ -341,6 +406,7 @@ fn taken_claim_reports_only_cells_that_were_held() {
 }
 
 #[test]
+#[cfg_attr(not(debug_assertions), ignore = "guards a debug assertion")]
 #[should_panic(
     expected = "a settled claimant's footprint must be fully claimed under the cell model"
 )]
@@ -354,6 +420,7 @@ fn taking_partially_claimed_rect_panics_under_cell_model() {
 }
 
 #[test]
+#[cfg_attr(not(debug_assertions), ignore = "guards a debug assertion")]
 #[should_panic(expected = "restoring a taken claim must find its cells free")]
 fn restoring_over_standing_claim_panics() {
     let mut map = wall_test_map();
@@ -369,6 +436,7 @@ fn restoring_over_standing_claim_panics() {
 //
 
 #[test]
+#[cfg_attr(not(debug_assertions), ignore = "guards a debug assertion")]
 #[should_panic(expected = "releasing a reservation must find its cells claimed")]
 fn releasing_unclaimed_cells_panics() {
     let mut map = wall_test_map();
@@ -449,6 +517,7 @@ fn static_write_lands_under_mover_claim() {
 }
 
 #[test]
+#[cfg_attr(not(debug_assertions), ignore = "guards a debug assertion")]
 #[should_panic(
     expected = "a static write must flip the cell: blocking needs it free, freeing needs it blocked"
 )]

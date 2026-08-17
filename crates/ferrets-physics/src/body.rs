@@ -17,6 +17,9 @@ pub struct Body {
     pub size: CellSize,
     /// The circle's radius, in cells.
     pub radius: FixedU64,
+    /// How strongly the body resists displacement, relative to what it meets.
+    /// Only the ratio between two bodies' weights matters, never the scale.
+    pub weight: FixedU64,
     /// The layers the body occupies; bodies with disjoint masks pass
     /// through each other — including an empty mask, which touches nothing
     /// at all.

@@ -506,6 +506,35 @@ fn mixed_size_bodies_push_apart() {
     );
 }
 
+/// Weight is authored apart from size: an ox fills the one cell a soldier
+/// does and weighs four times as much, so the contact between them carries
+/// the soldier the greater part of the way.
+#[test]
+fn heavier_body_is_carried_less_than_lighter_of_same_size() {
+    let mut app = utils::orders_app();
+    utils::install_map(&mut app, Projection::Isometric, MovementModel::Continuous);
+    let (ox, _) = utils::spawn_owned(&mut app, "ox", 5, 5, 0);
+    // Spawned clear — placement rightly refuses the claimed cell — then set
+    // half a cell into the ox, half the radii sum of the two bodies.
+    let (soldier, _) = utils::spawn_owned(&mut app, "soldier", 9, 9, 0);
+    app.world_mut()
+        .entity_mut(soldier)
+        .get_mut::<LocationComponent>()
+        .unwrap()
+        .position = utils::position_bits(0x5_8000_0000, 0x5_0000_0000);
+
+    utils::run_ticks(&mut app, 300);
+
+    let world = app.world_mut();
+    let ox_gave = FixedU64::from_num(5) - utils::position_of(world, ox).x;
+    let soldier_gave = utils::position_of(world, soldier).x - FixedU64::from_num(5.5);
+    assert!(
+        soldier_gave > ox_gave * FixedU64::from_num(3),
+        "the soldier must give far more ground than the ox it met: \
+         soldier {soldier_gave}, ox {ox_gave}"
+    );
+}
+
 #[test]
 fn wide_walk_reaches_goal() {
     let mut app = utils::orders_app();
