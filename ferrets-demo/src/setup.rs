@@ -4,11 +4,13 @@
 //! spawning needs `&mut World`.
 
 use bevy::prelude::*;
-use ferrets_bevy_plugin::instantiate_map;
+use ferrets_bevy_plugin::{ReplayPlayback, instantiate_map};
 use ferrets_content::player_stats::PlayerStatId;
+use ferrets_geometry::projection::Projection;
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_simulation::{
     map::Map,
+    movement_model::MovementModel,
     player_stats::PlayerStats,
     resources::PlayerResources,
     session::{GameSession, player_slot::PlayerId},
@@ -19,6 +21,24 @@ use crate::{map, settings::Settings};
 
 fn cell(x: u32, y: u32) -> FixedUVec2 {
     FixedUVec2::new(FixedU64::from_num(x), FixedU64::from_num(y))
+}
+
+/// The rules to build the scene's map under, in order of authority: a replay
+/// states the ones its recorded game was played with, a live game takes the
+/// menu's settings, and a headless harness with neither keeps whatever map it
+/// installed itself.
+fn map_rules(world: &World) -> (MovementModel, Projection) {
+    if let Some(playback) = world.get_resource::<ReplayPlayback>() {
+        let header = playback.header();
+        return (header.movement_model, header.projection);
+    }
+    world.get_resource::<Settings>().map_or_else(
+        || {
+            let map = world.resource::<Map>();
+            (map.movement_model(), map.projection())
+        },
+        |settings| (settings.movement_model, settings.view.projection()),
+    )
 }
 
 /// Spawns the starting scene from the chosen map and the session's slots
@@ -43,15 +63,7 @@ pub fn spawn_demo_scene(world: &mut World) {
     let name = world.resource::<GameSession>().map().to_string();
     let mut map =
         map::by_name(&name).unwrap_or_else(|| panic!("the session names an unknown map '{name}'"));
-    // The menu's settings shape the game; a headless harness without them
-    // keeps whatever map it installed itself.
-    let (model, projection) = world.get_resource::<Settings>().map_or_else(
-        || {
-            let map = world.resource::<Map>();
-            (map.movement_model(), map.projection())
-        },
-        |settings| (settings.movement_model, settings.view.projection()),
-    );
+    let (model, projection) = map_rules(world);
     map.set_movement_model(model);
     map.set_projection(projection);
     instantiate_map(world, &map);

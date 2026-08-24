@@ -8,6 +8,7 @@ repository.workspace = true
 description = "Replay recording and deterministic playback."
 
 [dependencies]
+ferrets-geometry.workspace = true
 ferrets-simulation.workspace = true
 
 bcs.workspace = true

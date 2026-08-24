@@ -50,18 +50,25 @@ impl InputFrame {
         self.slots[player as usize].is_some()
     }
 
-    /// Records `commands` for `player`, the first time wins. A repeat for an
-    /// already-recorded slot must be byte-identical (a redundant copy); a
-    /// *differing* one is a determinism bug, so it is asserted in debug builds and
-    /// ignored in release (keeping the committed input immutable).
-    fn record(&mut self, player: PlayerId, commands: Vec<PlayerCommand>) {
+    /// Records `commands` for `player`, the first time wins, returning whether
+    /// this was that first time. A repeat for an already-recorded slot must be
+    /// byte-identical (a redundant copy); a *differing* one is a determinism bug,
+    /// so it is asserted in debug builds and ignored in release (keeping the
+    /// committed input immutable).
+    fn record(&mut self, player: PlayerId, commands: Vec<PlayerCommand>) -> bool {
         let slot = &mut self.slots[player as usize];
         match slot {
-            Some(existing) => debug_assert!(
-                *existing == commands,
-                "conflicting input for player {player}: input is immutable once recorded",
-            ),
-            None => *slot = Some(commands),
+            Some(existing) => {
+                debug_assert!(
+                    *existing == commands,
+                    "conflicting input for player {player}: input is immutable once recorded",
+                );
+                false
+            }
+            None => {
+                *slot = Some(commands);
+                true
+            }
         }
     }
 }
@@ -132,13 +139,14 @@ impl InputFrames {
     }
 
     /// Records a player's frame for its tick — the single way input enters the
-    /// queue. Idempotent: re-recording the same `(player, tick)` is a no-op, so
-    /// redundant copies (the resend window, relay hops) are safe; for an idle
-    /// player pass [`PlayerFrame::idle`]. A *differing* repeat is a determinism
-    /// bug — asserted in debug builds, ignored in release.
-    pub fn push_frame(&mut self, frame: PlayerFrame) {
+    /// queue — returning whether the frame was new. Idempotent: re-recording the
+    /// same `(player, tick)` is a no-op, so redundant copies (the resend window,
+    /// relay hops) are safe and answer `false`; for an idle player pass
+    /// [`PlayerFrame::idle`]. A *differing* repeat is a determinism bug —
+    /// asserted in debug builds, ignored in release.
+    pub fn push_frame(&mut self, frame: PlayerFrame) -> bool {
         self.get_or_insert(frame.tick)
-            .record(frame.player, frame.commands);
+            .record(frame.player, frame.commands)
     }
 
     /// Returns a mutable reference to the frame for `tick`, creating it if necessary.

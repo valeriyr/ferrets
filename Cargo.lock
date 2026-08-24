@@ -2437,6 +2437,7 @@ name = "ferrets-replay"
 version = "0.1.0"
 dependencies = [
  "bcs",
+ "ferrets-geometry",
  "ferrets-simulation",
  "serde",
  "thiserror 2.0.20",
@@ -2466,6 +2467,7 @@ dependencies = [
  "ferrets-pathfinder",
  "ferrets-physics",
  "serde",
+ "thiserror 2.0.20",
  "xxhash-rust",
 ]
 

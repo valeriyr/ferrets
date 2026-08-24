@@ -18,10 +18,7 @@ use ferrets_simulation::{
 /// and slots, so the skips are identical everywhere.
 pub fn instantiate_map(world: &mut World, data: &MapData) {
     let map = Map::from_data(data, world.resource::<ContentRegistry>());
-    let (width, height) = (map.width(), map.height());
-    world.insert_resource(map);
-    let player_count = world.resource::<GameSession>().slots().len();
-    world.insert_resource(VisibilityGrid::new(player_count, width, height));
+    install_per_game(world, map);
 
     for placement in data.placements() {
         if let Some(owner) = placement.owner {
@@ -56,4 +53,14 @@ pub fn instantiate_map(world: &mut World, data: &MapData) {
             source.amount = amount;
         }
     }
+}
+
+/// Installs `map` together with a visibility grid sized to it. The pair is
+/// always replaced as one: fog is per-cell over exactly this map's grid, so a
+/// grid sized to any other map would be wrong the moment it was read.
+pub(crate) fn install_per_game(world: &mut World, map: Map) {
+    let (width, height) = (map.width(), map.height());
+    world.insert_resource(map);
+    let player_count = world.resource::<GameSession>().slots().len();
+    world.insert_resource(VisibilityGrid::new(player_count, width, height));
 }

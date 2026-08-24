@@ -8,22 +8,16 @@
 use std::{collections::BTreeMap, fs::File, io::BufReader};
 
 use bevy::prelude::*;
-use ferrets_bevy_plugin::{ReplayPlugin, SimulationPlugin, install_replay_playback};
-use ferrets_content::registry::ContentRegistry;
-use ferrets_demo::setup;
-use ferrets_geometry::projection::Projection;
+use ferrets_demo::playback;
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
-use ferrets_replay::{header::RecordedGame, replay::Replay};
-use ferrets_script::{content, engine::lua::LuaEngine};
+use ferrets_replay::replay::Replay;
 use ferrets_simulation::{
     components::{
         entity_info::EntityInfoComponent, hidden::HiddenComponent, location::LocationComponent,
         movement::MoveComponent, order_queue::OrderQueueComponent,
     },
     entity_index::EntityIndex,
-    map::Map,
-    movement_model::MovementModel,
-    session::{GameSession, ai_hosting::AiHosting, authority::Authority, drop_policy::DropPolicy},
+    session::GameSession,
     simulation_id::SimulationId,
 };
 
@@ -45,45 +39,10 @@ fn replay_forensics() {
     let path = std::env::var("FREP").expect("set FREP to a .frep path");
     let replay = Replay::read(BufReader::new(File::open(&path).expect("replay opens")))
         .expect("replay reads");
-    let RecordedGame::Skirmish(skirmish) = replay.header().game.clone() else {
-        panic!("this harness rebuilds skirmish recordings only");
-    };
-    let last = replay.last_tick().unwrap_or(0);
-    println!("replay {path}: map '{}', {} ticks", skirmish.map, last);
-
-    let mut data = ferrets_demo::map::by_name(&skirmish.map).expect("the replay's map is known");
-    // The header does not record settings (a known deferred item), so the
-    // demo defaults are assumed; a recording made under other settings
-    // rebuilds wrong and shows up as the checksum mismatch printed below,
-    // not as a simulation bug.
-    data.set_movement_model(MovementModel::Continuous);
-    data.set_projection(Projection::Isometric);
-    let registry = content::load(&LuaEngine, ferrets_demo::content::CONTENT).expect("demo content");
-    let game_map = Map::from_data(&data, &registry);
-
-    let viewer = skirmish
-        .slots
-        .iter()
-        .find(|slot| slot.player_type().is_some())
-        .map_or(0, |slot| slot.id());
-    let mut app = App::new();
-    app.add_plugins(SimulationPlugin::new(
-        GameSession::configured(
-            viewer,
-            skirmish.slots.clone(),
-            skirmish.map.clone(),
-            Authority::Host {
-                ai_hosting: AiHosting::Replicated,
-            },
-            DropPolicy::Automatic,
-            skirmish.finish_policy,
-        ),
-        game_map,
-    ));
-    app.add_plugins(ReplayPlugin);
-    *app.world_mut().resource_mut::<ContentRegistry>() = registry;
-    install_replay_playback(app.world_mut(), replay);
-    setup::spawn_demo_scene(app.world_mut());
+    let mut rebuilt = playback::rebuild(replay).expect("the replay's game rebuilds");
+    let last = rebuilt.last_tick.expect("the recording holds ticks");
+    let app = &mut rebuilt.app;
+    println!("replay {path}: {last} ticks");
 
     // FOCUS=<simulation id> dumps that entity's full movement state per tick;
     // FOCUS_FROM/FOCUS_TO bound the dump's tick range.
@@ -99,8 +58,7 @@ fn replay_forensics() {
 
     let mut tracks: BTreeMap<SimulationId, (String, Vec<Sample>)> = BTreeMap::new();
     for _ in 0..last + 10 {
-        app.world_mut().run_schedule(FixedUpdate);
-        app.world_mut().run_schedule(FixedLast);
+        ferrets_bevy_plugin::run_tick(app.world_mut());
         let world = app.world_mut();
         let tick = world.resource::<GameSession>().tick();
         if let Some(focus) = focus

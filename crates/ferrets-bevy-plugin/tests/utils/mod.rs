@@ -1,7 +1,11 @@
 #![allow(dead_code)]
 
+use std::time::Duration;
+
 use bevy::{ecs::entity::EntityNotSpawnedError, prelude::*};
-use ferrets_bevy_plugin::{PendingInput, SimulationPlugin};
+use ferrets_bevy_plugin::{
+    NetworkPlugin, NominalTimestep, PendingInput, SimulationPlugin, TickPacing, replay,
+};
 use ferrets_content::{
     costs,
     entity_buffs::{EntityBuffDef, EntityBuffId},
@@ -24,9 +28,20 @@ use ferrets_geometry::{
     cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize, projection::Projection,
 };
 use ferrets_math::{FixedI64, FixedU64, fixed_uvec2::FixedUVec2};
+use ferrets_network::{
+    role::Role,
+    roster::Roster,
+    session::NetSession,
+    transport::{NetworkTransport, loopback::LoopbackTransport},
+};
 use ferrets_pathfinder::{
     mover_shape::MoverShape,
     nav_grid::{LayerId, NavGrid},
+};
+use ferrets_replay::{
+    buffer::SharedBuffer,
+    header::{RecordedGame, ReplayHeader},
+    recorder::Recorder,
 };
 use ferrets_simulation::{
     command::{PlayerCommand, SelectMode},
@@ -59,6 +74,7 @@ use ferrets_simulation::{
         player_type::PlayerType,
     },
     simulation_id::SimulationId,
+    skirmish::Skirmish,
     spawn,
 };
 
@@ -104,6 +120,56 @@ pub fn make_app(slots: Vec<PlayerSlot>) -> App {
     ));
     app.insert_resource(registry);
     app
+}
+
+/// `count` occupied human slots with contiguous ids and no team.
+pub fn human_slots(count: u8) -> Vec<PlayerSlot> {
+    (0..count)
+        .map(|id| PlayerSlot::occupied(id, PlayerType::Human, None, None))
+        .collect()
+}
+
+/// The tick the session has reached.
+pub fn tick(app: &App) -> u32 {
+    app.world().resource::<GameSession>().tick()
+}
+
+/// The nominal cadence the cadence suites install, standing in for the demo's
+/// own 20 Hz.
+pub const NOMINAL_HZ: f64 = 20.0;
+/// The same cadence as a tick length, in the milliseconds the pacing counts in.
+pub const NOMINAL_MILLIS: FixedU64 = FixedU64::lit("50");
+
+/// Makes `app` measure `exec_millis` per tick against the nominal cadence — the
+/// cost its throttle reacts to, and what it then reports to its peers.
+pub fn set_tick_cost(app: &mut App, exec_millis: FixedU64) {
+    app.world_mut().resource_mut::<NominalTimestep>().0 =
+        Some(Duration::from_millis(NOMINAL_MILLIS.to_num()));
+    app.world_mut().resource_mut::<TickPacing>().exec_millis = exec_millis;
+}
+
+/// Starts recording `app` into a fresh in-memory buffer, handed back so the
+/// recording can be read once its ticks have run.
+pub fn record_into(app: &mut App, header: &ReplayHeader) -> SharedBuffer {
+    let buffer = SharedBuffer::default();
+    let recorder = Recorder::new(buffer.clone(), header).expect("start recording");
+    replay::recorder::install_per_game(app.world_mut(), recorder);
+    buffer
+}
+
+/// A replay header for a skirmish on the harness map — its name and its rules
+/// (see [`make_app`]), so a recording made in a test rebuilds into the same map
+/// it was played on.
+pub fn skirmish_header(slots: Vec<PlayerSlot>, finish_policy: FinishPolicy) -> ReplayHeader {
+    ReplayHeader::new(
+        RecordedGame::Skirmish(Skirmish {
+            slots,
+            map: "test".to_string(),
+            finish_policy,
+        }),
+        MovementModel::Cell,
+        Projection::Isometric,
+    )
 }
 
 pub fn pos(x: u32, y: u32) -> FixedUVec2 {
@@ -1354,4 +1420,114 @@ pub fn register_orders_content(app: &mut App) {
 /// exactly ever after: any drift is a lockstep desync.
 pub fn position_bits(x: u64, y: u64) -> FixedUVec2 {
     FixedUVec2::new(FixedU64::from_bits(x), FixedU64::from_bits(y))
+}
+
+/// Builds a networked app of `players` Human slots, whose local slot matches the
+/// transport's peer. `players` is the roster a lobby would have agreed (slots
+/// `0..players`), passed in rather than inferred from connectivity.
+pub fn net_app(transport: LoopbackTransport, players: usize) -> App {
+    net_app_with_roster(transport, Roster::new((0..players as u64).collect()))
+}
+
+/// Like [`net_app`], with an explicit roster (e.g. a slot whose peer will
+/// never speak).
+pub fn net_app_with_roster(transport: LoopbackTransport, roster: Roster) -> App {
+    net_app_configured(
+        transport,
+        roster,
+        Authority::Host {
+            ai_hosting: AiHosting::Replicated,
+        },
+    )
+}
+
+/// Like [`net_app_with_roster`], with an explicit decision authority.
+pub fn net_app_configured(
+    transport: LoopbackTransport,
+    roster: Roster,
+    authority: Authority,
+) -> App {
+    let slots = (0..roster.len())
+        .map(|i| PlayerSlot::occupied(i as u8, PlayerType::Human, None, None))
+        .collect();
+    net_app_with_slots(transport, roster, authority, slots)
+}
+
+/// Like [`net_app_configured`], with explicit session slots (e.g. allied ones).
+pub fn net_app_with_slots(
+    transport: LoopbackTransport,
+    roster: Roster,
+    authority: Authority,
+    slots: Vec<PlayerSlot>,
+) -> App {
+    let local = roster
+        .player_of(transport.local_peer())
+        .expect("local peer is in the roster");
+    // Peer 0 is the host node, as the lobby would assign.
+    let net = NetSession::over_shared(Box::new(transport), Role::Peer, roster);
+    assert_eq!(net.gameplay_ref().local_player(), local);
+
+    let mut nav_grid = NavGrid::new(32, 32);
+    nav_grid.add_layer(GROUND);
+    let session = GameSession::configured(
+        local,
+        slots,
+        "test",
+        authority,
+        DropPolicy::Automatic,
+        FinishPolicy::Endless,
+    );
+
+    let mut app = App::new();
+    app.add_plugins(SimulationPlugin::new(
+        session,
+        Map::new(
+            "test",
+            Projection::Isometric,
+            MovementModel::Cell,
+            nav_grid,
+            vec![],
+        ),
+    ));
+    app.add_plugins(NetworkPlugin);
+    // Supplies idle frames for AI slots with no installed runtime, as in a
+    // real game; a no-op for the all-human rosters.
+    app.add_plugins(ferrets_bevy_plugin::ai::AiPlugin);
+    ferrets_bevy_plugin::install_network_session(app.world_mut(), net);
+
+    {
+        let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
+        assert_eq!(registry.register_layer(GROUND_LAYER), GROUND);
+        registry.register(harness_soldier());
+        registry.register(harness_base());
+        registry.validate();
+    }
+    app.world_mut().resource_mut::<GameSession>().start();
+    app
+}
+
+/// The one mobile entity type the harness games use. Armed, so a game can
+/// destroy a building through the command pipeline; nothing attacks unordered.
+pub fn harness_soldier() -> EntityTypeDef {
+    EntityTypeDef::new("soldier")
+        .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+        .with_movement(
+            FixedU64::from_num(0.5),
+            FixedU64::from_num(0.5),
+            FixedU64::ONE,
+        )
+        .with_health(30)
+        .with_dying(2, None)
+        .with_attack(10, 1, 1, 4, 2)
+        .with_targets(GROUND)
+}
+
+/// A standing building — the presence the `LastStanding` rule counts. Immobile,
+/// destructible, no combat of its own.
+pub fn harness_base() -> EntityTypeDef {
+    EntityTypeDef::new("base")
+        .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+        .with_health(30)
+        .with_dying(2, None)
+        .with_tags(["building"])
 }

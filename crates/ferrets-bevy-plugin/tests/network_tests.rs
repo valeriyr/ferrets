@@ -4,52 +4,35 @@
 mod utils;
 
 use bevy::prelude::*;
-use ferrets_bevy_plugin::{
-    DropConfig, NetworkPlugin, NetworkSession, ReplayPlugin, SimulationPlugin,
-    install_network_session,
-};
-use ferrets_content::{
-    entity_type_def::EntityTypeDef, location::Solidity, registry::ContentRegistry,
-};
-use ferrets_geometry::{cell_size::CellSize, projection::Projection};
+use ferrets_bevy_plugin::{DropConfig, FrameMargins, NetworkSession, PeerCapacities, ReplayPlugin};
+use ferrets_content::registry::ContentRegistry;
 use ferrets_math::FixedU64;
 use ferrets_network::{
     message::control::{ControlMessage, InGameMessage},
-    role::Role,
     roster::Roster,
-    session::NetSession,
-    transport::{NetworkTransport, loopback::LoopbackTransport},
+    transport::loopback::LoopbackTransport,
 };
-use ferrets_pathfinder::nav_grid::NavGrid;
-use ferrets_replay::{
-    buffer::SharedBuffer,
-    header::{RecordedGame, ReplayHeader},
-    recorder::Recorder,
-    replay::Replay,
-};
+use ferrets_replay::replay::Replay;
 use ferrets_simulation::{
-    checksum::state_checksum,
+    checksum,
     command::PlayerCommand,
-    input::{InputFrames, PlayerFrame},
-    map::Map,
-    movement_model::MovementModel,
+    input::{InputFrames, PlayerFrame, SYNC_LATENCY},
     session::{
         GameResult, GameSession, Winner, ai_hosting::AiHosting, authority::Authority,
-        drop_policy::DropPolicy, finish_policy::FinishPolicy, player_slot::PlayerSlot,
-        player_type::PlayerType,
+        drop_policy::DropPolicy, finish_policy::FinishPolicy, game_speed::GameSpeed,
+        player_slot::PlayerSlot, player_type::PlayerType,
     },
     simulation_id::SimulationId,
-    skirmish::Skirmish,
     spawn,
 };
 
-use utils::{GROUND, GROUND_LAYER};
+use utils::{GROUND, GROUND_LAYER, NOMINAL_MILLIS};
 
 #[test]
 fn spawn_command_on_one_peer_executes_on_both() {
     let (a, b) = LoopbackTransport::pair();
-    let mut host = net_app(a, 2);
-    let mut peer = net_app(b, 2);
+    let mut host = utils::net_app(a, 2);
+    let mut peer = utils::net_app(b, 2);
 
     // No fabricated AI frames here — frames must genuinely cross the transport.
     utils::push_command(
@@ -74,8 +57,8 @@ fn spawn_command_on_one_peer_executes_on_both() {
 #[test]
 fn both_advance_in_lockstep_when_idle() {
     let (a, b) = LoopbackTransport::pair();
-    let mut host = net_app(a, 2);
-    let mut peer = net_app(b, 2);
+    let mut host = utils::net_app(a, 2);
+    let mut peer = utils::net_app(b, 2);
 
     step_both(&mut host, &mut peer, 10);
 
@@ -88,8 +71,8 @@ fn both_advance_in_lockstep_when_idle() {
 #[test]
 fn matched_peers_stay_in_sync_across_checksum_intervals() {
     let (a, b) = LoopbackTransport::pair();
-    let mut host = net_app(a, 2);
-    let mut peer = net_app(b, 2);
+    let mut host = utils::net_app(a, 2);
+    let mut peer = utils::net_app(b, 2);
 
     // Spawn on the host via the command pipeline, then run well past several
     // checksum intervals (interval = 8).
@@ -106,8 +89,8 @@ fn matched_peers_stay_in_sync_across_checksum_intervals() {
     assert_eq!(host.world().resource::<GameSession>().result(), None);
     assert_eq!(peer.world().resource::<GameSession>().result(), None);
     assert_eq!(
-        state_checksum(host.world()),
-        state_checksum(peer.world()),
+        checksum::state_checksum(host.world()),
+        checksum::state_checksum(peer.world()),
         "matched peers must hash identically",
     );
 }
@@ -116,7 +99,7 @@ fn matched_peers_stay_in_sync_across_checksum_intervals() {
 fn three_peers_stay_in_lockstep_over_full_mesh() {
     let mut apps: Vec<App> = LoopbackTransport::mesh(3)
         .into_iter()
-        .map(|t| net_app(t, 3))
+        .map(|t| utils::net_app(t, 3))
         .collect();
 
     // Every peer issues its own spawn, so all three players contribute frames
@@ -137,7 +120,7 @@ fn three_peers_stay_in_lockstep_over_full_mesh() {
 
     let checksums: Vec<u64> = apps
         .iter_mut()
-        .map(|app| state_checksum(app.world()))
+        .map(|app| checksum::state_checksum(app.world()))
         .collect();
     assert!(
         checksums.windows(2).all(|w| w[0] == w[1]),
@@ -156,7 +139,7 @@ fn frame_reaches_peer_with_no_direct_link_via_relay() {
     // full {0,1,2} a lobby would assign.
     let mut apps: Vec<App> = LoopbackTransport::partial_mesh(3, [(0, 1), (1, 2)])
         .into_iter()
-        .map(|t| net_app(t, 3))
+        .map(|t| utils::net_app(t, 3))
         .collect();
 
     // Peer 0 issues a spawn; it must cross 0 → 1 → 2 to execute on peer 2.
@@ -175,16 +158,16 @@ fn frame_reaches_peer_with_no_direct_link_via_relay() {
     for app in &mut apps {
         assert_eq!(utils::count_of_type(app.world_mut(), "soldier"), 1);
     }
-    let checksum = state_checksum(apps[0].world());
-    assert_eq!(checksum, state_checksum(apps[1].world()));
-    assert_eq!(checksum, state_checksum(apps[2].world()));
+    let checksum = checksum::state_checksum(apps[0].world());
+    assert_eq!(checksum, checksum::state_checksum(apps[1].world()));
+    assert_eq!(checksum, checksum::state_checksum(apps[2].world()));
 }
 
 #[test]
 fn pause_takes_effect_at_same_tick_on_every_peer() {
     let (a, b) = LoopbackTransport::pair();
-    let mut host = net_app(a, 2); // peer 0
-    let mut peer = net_app(b, 2); // peer 1 (peer 0 already coordinates control)
+    let mut host = utils::net_app(a, 2); // peer 0
+    let mut peer = utils::net_app(b, 2); // peer 1 (peer 0 already coordinates control)
 
     // Reach lockstep, then the client requests a pause.
     step_both(&mut host, &mut peer, 6);
@@ -197,14 +180,17 @@ fn pause_takes_effect_at_same_tick_on_every_peer() {
     // Both freeze at the same tick, well before the step budget runs out.
     step_both(&mut host, &mut peer, 20);
     assert!(is_paused(&host) && is_paused(&peer), "both paused");
-    let frozen = tick(&host);
-    assert_eq!(frozen, tick(&peer), "frozen at the same tick");
+    let frozen = utils::tick(&host);
+    assert_eq!(frozen, utils::tick(&peer), "frozen at the same tick");
 
     // The frozen tick does not advance, and the peers stay bit-identical.
     step_both(&mut host, &mut peer, 10);
-    assert_eq!(tick(&host), frozen);
-    assert_eq!(tick(&peer), frozen);
-    assert_eq!(state_checksum(host.world()), state_checksum(peer.world()));
+    assert_eq!(utils::tick(&host), frozen);
+    assert_eq!(utils::tick(&peer), frozen);
+    assert_eq!(
+        checksum::state_checksum(host.world()),
+        checksum::state_checksum(peer.world())
+    );
 
     // Resume: both leave the pause together and advance again.
     send_control(
@@ -213,15 +199,466 @@ fn pause_takes_effect_at_same_tick_on_every_peer() {
     );
     step_both(&mut host, &mut peer, 10);
     assert!(!is_paused(&host) && !is_paused(&peer), "both resumed");
-    assert_eq!(tick(&host), tick(&peer));
-    assert!(tick(&host) > frozen, "advanced past the pause");
+    assert_eq!(utils::tick(&host), utils::tick(&peer));
+    assert!(utils::tick(&host) > frozen, "advanced past the pause");
+}
+
+#[test]
+fn speed_takes_effect_at_same_tick_on_every_peer() {
+    let (a, b) = LoopbackTransport::pair();
+    let mut host = utils::net_app(a, 2); // peer 0
+    let mut peer = utils::net_app(b, 2); // peer 1 (peer 0 already coordinates control)
+
+    // Reach lockstep, then the client asks to run at double speed.
+    step_both(&mut host, &mut peer, 6);
+    assert_eq!(speed(&host), GameSpeed::NORMAL);
+    assert_eq!(speed(&peer), GameSpeed::NORMAL);
+    send_control(
+        &mut peer,
+        ControlMessage::InGame(InGameMessage::SpeedRequest {
+            speed: double_speed(),
+        }),
+    );
+
+    // Both adopt it, and both were on the same tick when they did: the speed a
+    // node runs at is a function of the tick it is on, so a tick they share must
+    // carry the same speed.
+    step_both(&mut host, &mut peer, 20);
+    assert_eq!(speed(&host), double_speed(), "host at double speed");
+    assert_eq!(speed(&peer), double_speed(), "peer at double speed");
+    assert_eq!(utils::tick(&host), utils::tick(&peer), "still in lockstep");
+    assert_eq!(
+        checksum::state_checksum(host.world()),
+        checksum::state_checksum(peer.world())
+    );
+
+    // Back to normal the same way.
+    send_control(
+        &mut peer,
+        ControlMessage::InGame(InGameMessage::SpeedRequest {
+            speed: GameSpeed::NORMAL,
+        }),
+    );
+    step_both(&mut host, &mut peer, 20);
+    assert_eq!(speed(&host), GameSpeed::NORMAL);
+    assert_eq!(speed(&peer), GameSpeed::NORMAL);
+}
+
+#[test]
+fn pause_and_speed_proposed_for_same_tick_both_apply() {
+    // The two changes are scheduled from the same tick, so they land on the same
+    // effective tick. Each is kept in its own store; sharing one keyed by tick
+    // would let whichever arrived first be evicted by the other.
+    let (a, b) = LoopbackTransport::pair();
+    let mut host = utils::net_app(a, 2);
+    let mut peer = utils::net_app(b, 2);
+    step_both(&mut host, &mut peer, 6);
+
+    send_control(
+        &mut peer,
+        ControlMessage::InGame(InGameMessage::SpeedRequest {
+            speed: double_speed(),
+        }),
+    );
+    send_control(
+        &mut peer,
+        ControlMessage::InGame(InGameMessage::PauseRequest { paused: true }),
+    );
+
+    step_both(&mut host, &mut peer, 20);
+    assert!(is_paused(&host) && is_paused(&peer), "both paused");
+    assert_eq!(speed(&host), double_speed(), "host kept the speed change");
+    assert_eq!(speed(&peer), double_speed(), "peer kept the speed change");
+}
+
+#[test]
+fn speed_change_requested_while_paused_applies_on_resume() {
+    // A speed is inert while the tick is frozen, and one stamped at the frozen
+    // tick would race a concurrent resume — a node that moved first would
+    // discard it as stale, leaving the speeds divergent for good. So the change
+    // pends past the pause and applies once the resumed loop reaches its tick,
+    // on every node alike.
+    let (a, b) = LoopbackTransport::pair();
+    let mut host = utils::net_app(a, 2);
+    let mut peer = utils::net_app(b, 2);
+    step_both(&mut host, &mut peer, 6);
+    send_control(
+        &mut peer,
+        ControlMessage::InGame(InGameMessage::PauseRequest { paused: true }),
+    );
+    step_both(&mut host, &mut peer, 20);
+    assert!(is_paused(&host) && is_paused(&peer));
+
+    send_control(
+        &mut peer,
+        ControlMessage::InGame(InGameMessage::SpeedRequest {
+            speed: double_speed(),
+        }),
+    );
+    step_both(&mut host, &mut peer, 20);
+    assert_eq!(speed(&host), GameSpeed::NORMAL, "inert while frozen");
+    assert_eq!(speed(&peer), GameSpeed::NORMAL);
+
+    send_control(
+        &mut peer,
+        ControlMessage::InGame(InGameMessage::PauseRequest { paused: false }),
+    );
+    step_both(&mut host, &mut peer, 20);
+    assert!(!is_paused(&host) && !is_paused(&peer), "both resumed");
+    assert_eq!(speed(&host), double_speed(), "and the speed followed");
+    assert_eq!(speed(&peer), double_speed());
+}
+
+#[test]
+fn frame_for_player_without_slot_is_ignored() {
+    // A frame naming a player no slot seats is corrupt, not input — recording it
+    // would index past the per-player stores and panic the receiver.
+    let (a, b) = LoopbackTransport::pair();
+    let mut host = utils::net_app(a, 2);
+    let mut peer = utils::net_app(b, 2);
+    step_both(&mut host, &mut peer, 6);
+    assert_eq!(utils::tick(&host), 6, "six steps, six ticks");
+
+    // A tick still ahead of both nodes, so the frame would be recorded rather
+    // than dismissed as late.
+    peer.world_mut()
+        .get_non_send_resource_mut::<NetworkSession>()
+        .expect("network session")
+        .0
+        .broadcast_frames(vec![PlayerFrame::idle(200, 8)])
+        .expect("broadcast");
+
+    step_both(&mut host, &mut peer, 10);
+
+    for (name, app) in [("host", &host), ("peer", &peer)] {
+        let session = app.world().resource::<GameSession>();
+        assert_eq!(session.result(), None, "{name} played on");
+        assert!(!session.is_blocked(), "{name} never blocked");
+        assert_eq!(utils::tick(app), 16, "{name} reached the sixteenth tick");
+    }
+    assert_eq!(
+        checksum::state_checksum(host.world()),
+        checksum::state_checksum(peer.world()),
+        "and the two stayed bit-identical",
+    );
+}
+
+#[test]
+fn drop_at_for_player_without_slot_is_ignored() {
+    // A drop naming a player no slot seats is a corrupt message, not a drop —
+    // applying it would index past the session's slots and panic the receiver.
+    let (a, b) = LoopbackTransport::pair();
+    let mut host = utils::net_app(a, 2);
+    let mut peer = utils::net_app(b, 2);
+    step_both(&mut host, &mut peer, 6);
+
+    let ahead = utils::tick(&host) + 5;
+    send_control(
+        &mut host,
+        ControlMessage::InGame(InGameMessage::DropAt {
+            player: 200,
+            tick: ahead,
+        }),
+    );
+
+    step_both(&mut host, &mut peer, 10);
+    let session = peer.world().resource::<GameSession>();
+    assert_eq!(session.result(), None, "the corrupt drop changed nothing");
+    assert_eq!(session.dropped_players().count(), 0, "nobody was dropped");
+    assert_eq!(
+        utils::tick(&host),
+        utils::tick(&peer),
+        "the peers are still in lockstep",
+    );
+    // Past the drop's named tick, so the ignoring is proven where the drop would
+    // have applied.
+    assert_eq!(
+        utils::tick(&host),
+        16,
+        "the host reached the sixteenth tick"
+    );
+    assert_eq!(utils::tick(&peer), 16, "and so did the peer");
+}
+
+#[test]
+fn any_player_can_resume_pause_under_peer_authority() {
+    // Pause and resume are both stamped at the frozen tick, so they land on the
+    // same key in the pending store. The resume must be taken whoever sends it —
+    // ranking it against the pause by player id would leave the session frozen
+    // for everyone the collision rule puts after the pauser.
+    let (a, b) = LoopbackTransport::pair();
+    let roster = Roster::new((0..2).collect());
+    let mut host = utils::net_app_configured(a, roster.clone(), Authority::Peers);
+    let mut peer = utils::net_app_configured(b, roster, Authority::Peers);
+    step_both(&mut host, &mut peer, 4);
+
+    // Player 0 pauses — the lower id, so its proposal wins any comparison.
+    host.world_mut()
+        .resource_mut::<ferrets_bevy_plugin::PauseIntent>()
+        .0 = Some(true);
+    step_both(&mut host, &mut peer, 12);
+    assert!(is_paused(&host) && is_paused(&peer), "both paused");
+    // Requested at tick 4 and stamped CONTROL_DELAY ahead, so both freeze at 8.
+    assert_eq!(utils::tick(&host), 8, "the host froze at the agreed tick");
+    assert_eq!(utils::tick(&peer), 8, "and the peer at the same one");
+
+    // Player 1 — the higher id — resumes.
+    peer.world_mut()
+        .resource_mut::<ferrets_bevy_plugin::PauseIntent>()
+        .0 = Some(false);
+    step_both(&mut host, &mut peer, 12);
+
+    assert!(!is_paused(&host) && !is_paused(&peer), "both resumed");
+    // The resume commits a step apart on the two nodes — the bounded skew
+    // lockstep permits — so they sit one tick apart afterwards.
+    assert_eq!(utils::tick(&host), 19, "the host played on");
+    assert_eq!(utils::tick(&peer), 20, "the peer a tick further");
+    // State comparisons need a shared tick.
+    align_ticks(&mut host, &mut peer);
+    assert_eq!(
+        checksum::state_checksum(host.world()),
+        checksum::state_checksum(peer.world()),
+        "and they stayed bit-identical across the pause",
+    );
+}
+
+#[test]
+fn duplicate_pause_at_on_frozen_tick_is_not_re_learned() {
+    // A mesh floods what it learns, so a duplicate of an applied change keeps
+    // arriving. While paused the tick is frozen, so the entry that was applied
+    // is still the current one: it must be recognised as already applied, not
+    // re-learned and re-forwarded on every step for the whole pause.
+    let (a, b) = LoopbackTransport::pair();
+    let roster = Roster::new((0..2).collect());
+    let mut host = utils::net_app_configured(a, roster.clone(), Authority::Peers);
+    let mut peer = utils::net_app_configured(b, roster, Authority::Peers);
+    step_both(&mut host, &mut peer, 4);
+
+    peer.world_mut()
+        .resource_mut::<ferrets_bevy_plugin::PauseIntent>()
+        .0 = Some(true);
+    step_both(&mut host, &mut peer, 12);
+    assert!(is_paused(&host) && is_paused(&peer), "both paused");
+    let frozen = utils::tick(&host);
+
+    // Re-deliver the very change the receiver already applied at the frozen
+    // tick — a flooded duplicate. It must change nothing and, crucially, must
+    // not be forwarded onward again.
+    send_control(
+        &mut peer,
+        ControlMessage::InGame(InGameMessage::PauseAt {
+            proposer: 1,
+            tick: frozen,
+            paused: true,
+        }),
+    );
+    step_both(&mut host, &mut peer, 10);
+
+    assert!(is_paused(&host), "still paused");
+    assert_eq!(utils::tick(&host), frozen, "and still frozen");
+}
+
+#[test]
+fn pause_request_reaching_only_client_is_ignored() {
+    // Only the deciding node acts on a bare request. A client that both queued
+    // it and re-sent it from the non-host arm would amplify a forged request
+    // into a flood between peers; here the request reaches client 1 alone (it
+    // has no link to client 2's would-be audience), so nothing may come of it.
+    let mut apps: Vec<App> = LoopbackTransport::partial_mesh(3, [(0, 1), (1, 2)])
+        .into_iter()
+        .map(|t| utils::net_app(t, 3))
+        .collect();
+    step_all(&mut apps, 6);
+
+    // Client 2 forges a request; its only link is to client 1, never the host.
+    send_control(
+        &mut apps[2],
+        ControlMessage::InGame(InGameMessage::PauseRequest { paused: true }),
+    );
+    step_all(&mut apps, 20);
+
+    for (i, app) in apps.iter().enumerate() {
+        assert!(
+            !is_paused(app),
+            "node {i} paused on a request only a client saw",
+        );
+    }
+}
+
+#[test]
+fn speed_at_from_client_is_refused_under_host_authority() {
+    // Under host authority only the host node announces changes; a forged
+    // authoritative message from a client must not steer the host's cadence
+    // away from everybody else's.
+    let (a, b) = LoopbackTransport::pair();
+    let mut host = utils::net_app(a, 2);
+    let mut peer = utils::net_app(b, 2);
+    step_both(&mut host, &mut peer, 6);
+
+    let ahead = utils::tick(&peer) + 10;
+    send_control(
+        &mut peer,
+        ControlMessage::InGame(InGameMessage::SpeedAt {
+            proposer: 1,
+            tick: ahead,
+            speed: double_speed(),
+        }),
+    );
+
+    step_both(&mut host, &mut peer, 20);
+    assert_eq!(
+        speed(&host),
+        GameSpeed::NORMAL,
+        "the forgery changed nothing"
+    );
+    assert_eq!(speed(&peer), GameSpeed::NORMAL);
+}
+
+#[test]
+fn frames_from_keeping_up_peer_arrive_ahead_of_tick_that_needs_them() {
+    // A peer in lockstep sends each frame SYNC_LATENCY ticks ahead of the tick
+    // that will execute it, so its frames land with room to spare.
+    let (a, b) = LoopbackTransport::pair();
+    let mut host = utils::net_app(a, 2);
+    let mut peer = utils::net_app(b, 2);
+
+    step_both(&mut host, &mut peer, 12);
+
+    // `step_both` advances the two apps in strict alternation, so whichever
+    // steps first each round learns its peer's frame a tick later than the peer
+    // learns its own: the full lead on one side, a tick less on the other. Both
+    // are keeping up — what matters is that the margin stays above zero, since a
+    // margin of zero is a frame that arrived only just in time.
+    assert_eq!(
+        host.world().resource::<FrameMargins>().of(1),
+        Some(FixedU64::ONE)
+    );
+    assert_eq!(
+        peer.world().resource::<FrameMargins>().of(0),
+        Some(FixedU64::from_num(SYNC_LATENCY)),
+    );
+    assert_eq!(
+        host.world().resource::<FrameMargins>().of(0),
+        None,
+        "a node's own frames never arrive over the net",
+    );
+    let tick = utils::tick(&host);
+    assert_eq!(
+        host.world().resource::<FrameMargins>().tightest(tick),
+        Some(FixedU64::ONE)
+    );
+}
+
+#[test]
+fn margin_of_peer_that_stopped_sending_is_forgotten() {
+    // Whatever margin a departed peer left behind, it is no longer a statement
+    // about keeping up — holding the cadence down on it for the rest of the match
+    // would be a bug.
+    let (a, b) = LoopbackTransport::pair();
+    let mut host = utils::net_app(a, 2);
+    let mut peer = utils::net_app(b, 2);
+    step_both(&mut host, &mut peer, 12);
+    let heard = utils::tick(&host);
+    assert_eq!(
+        host.world().resource::<FrameMargins>().tightest(heard),
+        Some(FixedU64::ONE)
+    );
+
+    assert_eq!(
+        host.world()
+            .resource::<FrameMargins>()
+            .tightest(heard + 100),
+        None,
+        "a margin nobody refreshed stops constraining the cadence",
+    );
+    assert_eq!(
+        host.world().resource::<FrameMargins>().of(1),
+        Some(FixedU64::ONE),
+        "the last value is still readable, it just no longer counts",
+    );
+}
+
+#[test]
+fn capacity_reports_reach_peers_and_fold_to_slowest() {
+    // Each node publishes what it can hold and folds what it hears; the fold is
+    // a minimum, so the slowest peer sets the ceiling for everybody.
+    let (a, b) = LoopbackTransport::pair();
+    let mut host = utils::net_app(a, 2);
+    let mut peer = utils::net_app(b, 2);
+    utils::set_tick_cost(&mut host, CHEAP_TICK);
+    utils::set_tick_cost(&mut peer, EXPENSIVE_TICK);
+
+    step_both(&mut host, &mut peer, 45);
+
+    let tick = utils::tick(&host);
+    assert_eq!(
+        host.world().resource::<PeerCapacities>().tightest(tick),
+        Some(capacity_of(EXPENSIVE_TICK)),
+        "the host heard the struggling peer",
+    );
+    assert_eq!(
+        peer.world().resource::<PeerCapacities>().tightest(tick),
+        Some(capacity_of(EXPENSIVE_TICK)),
+        "and the peer heard the host's report, which folds the peer's own struggle back in",
+    );
+    assert!(
+        capacity_of(EXPENSIVE_TICK) < capacity_of(CHEAP_TICK),
+        "the expensive tick is the one that constrains",
+    );
+}
+
+#[test]
+fn capacity_minimum_crosses_star_through_host_fold() {
+    // Star control links: clients 1 and 2 reach only the host, so client 1's
+    // report on its own can never reach client 2. The host folding what it heard
+    // into its own report is what carries the group's minimum across.
+    let mut apps: Vec<App> = LoopbackTransport::partial_mesh(3, [(0, 1), (0, 2)])
+        .into_iter()
+        .map(|t| utils::net_app(t, 3))
+        .collect();
+    utils::set_tick_cost(&mut apps[0], CHEAP_TICK);
+    utils::set_tick_cost(&mut apps[1], EXPENSIVE_TICK);
+    utils::set_tick_cost(&mut apps[2], CHEAP_TICK);
+
+    step_all(&mut apps, 45);
+
+    let tick = utils::tick(&apps[2]);
+    assert_eq!(
+        apps[2].world().resource::<PeerCapacities>().tightest(tick),
+        Some(capacity_of(EXPENSIVE_TICK)),
+        "client 2 hears the struggling client only through the host's fold",
+    );
+}
+
+#[test]
+fn stale_capacity_report_stops_constraining() {
+    // A peer that goes quiet must not hold the game down forever, so its last
+    // report ages out.
+    let (a, b) = LoopbackTransport::pair();
+    let mut host = utils::net_app(a, 2);
+    let mut peer = utils::net_app(b, 2);
+    utils::set_tick_cost(&mut peer, EXPENSIVE_TICK);
+    step_both(&mut host, &mut peer, 25);
+    let heard = utils::tick(&host);
+    assert_eq!(
+        host.world().resource::<PeerCapacities>().tightest(heard),
+        Some(capacity_of(EXPENSIVE_TICK)),
+    );
+
+    // Read the same store far enough in the future and the report is forgotten.
+    assert_eq!(
+        host.world()
+            .resource::<PeerCapacities>()
+            .tightest(heard + 1000),
+        None,
+    );
 }
 
 #[test]
 fn gone_peer_is_dropped_and_rest_continue_in_lockstep() {
     let mut apps: Vec<App> = LoopbackTransport::mesh(3)
         .into_iter()
-        .map(|t| net_app(t, 3))
+        .map(|t| utils::net_app(t, 3))
         .collect();
     for app in &mut apps {
         app.world_mut()
@@ -252,8 +689,8 @@ fn gone_peer_is_dropped_and_rest_continue_in_lockstep() {
         apps[1].world().resource::<GameSession>().tick(),
     );
     assert_eq!(
-        state_checksum(apps[0].world()),
-        state_checksum(apps[1].world()),
+        checksum::state_checksum(apps[0].world()),
+        checksum::state_checksum(apps[1].world()),
         "the two survivors must stay bit-identical after the drop",
     );
 }
@@ -261,8 +698,8 @@ fn gone_peer_is_dropped_and_rest_continue_in_lockstep() {
 #[test]
 fn two_peer_disconnect_aborts_remaining_peer() {
     let (a, b) = LoopbackTransport::pair();
-    let mut host = net_app(a, 2);
-    let mut peer = net_app(b, 2);
+    let mut host = utils::net_app(a, 2);
+    let mut peer = utils::net_app(b, 2);
     host.world_mut()
         .insert_resource(DropConfig { timeout_steps: 3 });
 
@@ -294,8 +731,8 @@ fn host_with_local_ai_drops_lone_silent_client() {
     let authority = Authority::Host {
         ai_hosting: AiHosting::Replicated,
     };
-    let mut host = net_app_with_slots(a, roster.clone(), authority, slots.clone());
-    let mut peer = net_app_with_slots(b, roster, authority, slots);
+    let mut host = utils::net_app_with_slots(a, roster.clone(), authority, slots.clone());
+    let mut peer = utils::net_app_with_slots(b, roster, authority, slots);
     host.world_mut()
         .insert_resource(DropConfig { timeout_steps: 3 });
 
@@ -314,7 +751,7 @@ fn host_with_local_ai_drops_lone_silent_client() {
 fn briefly_silent_peer_is_not_dropped() {
     let mut apps: Vec<App> = LoopbackTransport::mesh(3)
         .into_iter()
-        .map(|t| net_app(t, 3))
+        .map(|t| utils::net_app(t, 3))
         .collect();
     for app in &mut apps {
         app.world_mut()
@@ -332,8 +769,8 @@ fn briefly_silent_peer_is_not_dropped() {
         assert_eq!(app.world().resource::<GameSession>().result(), None);
     }
     assert_eq!(
-        state_checksum(apps[0].world()),
-        state_checksum(apps[2].world()),
+        checksum::state_checksum(apps[0].world()),
+        checksum::state_checksum(apps[2].world()),
         "a recovered peer stays in lockstep with the rest",
     );
 }
@@ -341,8 +778,8 @@ fn briefly_silent_peer_is_not_dropped() {
 #[test]
 fn diverging_one_peer_trips_desync() {
     let (a, b) = LoopbackTransport::pair();
-    let mut host = net_app(a, 2);
-    let mut peer = net_app(b, 2);
+    let mut host = utils::net_app(a, 2);
+    let mut peer = utils::net_app(b, 2);
 
     step_both(&mut host, &mut peer, 5);
 
@@ -368,7 +805,8 @@ fn drop_stops_requiring_dropped_players_frames() {
     use bevy::ecs::system::RunSystemOnce;
 
     let (a, _b) = LoopbackTransport::pair();
-    let mut app = net_app_with_roster(a, Roster::from_slots(vec![Some(0), Some(1), Some(99)]));
+    let mut app =
+        utils::net_app_with_roster(a, Roster::from_slots(vec![Some(0), Some(1), Some(99)]));
     let world = app.world_mut();
     // Player 1 delivered a real frame for tick 3 and died before tick 2's,
     // while players 0 and 2 stayed current; the session sits blocked at 2 with
@@ -412,8 +850,8 @@ fn survivors_converge_on_same_drop_tick_for_silent_player() {
     // same next tick, drop the silent player there, and keep playing in step.
     let (a, b) = LoopbackTransport::pair();
     let roster = Roster::from_slots(vec![Some(0), Some(1), Some(99)]);
-    let mut host = net_app_with_roster(a, roster.clone());
-    let mut peer = net_app_with_roster(b, roster);
+    let mut host = utils::net_app_with_roster(a, roster.clone());
+    let mut peer = utils::net_app_with_roster(b, roster);
     host.world_mut().resource_mut::<DropConfig>().timeout_steps = 10;
     peer.world_mut().resource_mut::<DropConfig>().timeout_steps = 10;
     host.world_mut()
@@ -440,8 +878,8 @@ fn survivors_converge_on_same_drop_tick_for_silent_player() {
     assert_eq!(host_tick, peer_tick);
     assert!(host_tick > 3, "the survivors kept playing past the drop");
     assert_eq!(
-        state_checksum(host.world_mut()),
-        state_checksum(peer.world_mut()),
+        checksum::state_checksum(host.world_mut()),
+        checksum::state_checksum(peer.world_mut()),
     );
 }
 
@@ -453,11 +891,11 @@ fn drop_for_already_executed_tick_ends_game_as_desync() {
     // silently applying the contradictory drop.
     let mut apps: Vec<App> = LoopbackTransport::mesh(3)
         .into_iter()
-        .map(|t| net_app(t, 3))
+        .map(|t| utils::net_app(t, 3))
         .collect();
 
     step_all(&mut apps, 6);
-    let already_run = tick(&apps[1]) - 2;
+    let already_run = utils::tick(&apps[1]) - 2;
 
     // The host (peer 0) is the only node a DropAt is trusted from.
     send_control(
@@ -489,8 +927,8 @@ fn peer_authority_drops_silent_player_by_consensus() {
     // control mesh and the drop commits only on unanimity.
     let (a, b) = LoopbackTransport::pair();
     let roster = Roster::from_slots(vec![Some(0), Some(1), Some(99)]);
-    let mut host = net_app_configured(a, roster.clone(), Authority::Peers);
-    let mut peer = net_app_configured(b, roster, Authority::Peers);
+    let mut host = utils::net_app_configured(a, roster.clone(), Authority::Peers);
+    let mut peer = utils::net_app_configured(b, roster, Authority::Peers);
     host.world_mut().resource_mut::<DropConfig>().timeout_steps = 10;
     peer.world_mut().resource_mut::<DropConfig>().timeout_steps = 10;
 
@@ -502,8 +940,8 @@ fn peer_authority_drops_silent_player_by_consensus() {
     let tick = host.world().resource::<GameSession>().tick();
     assert!(tick > 3, "the survivors kept playing past the drop");
     assert_eq!(
-        state_checksum(host.world_mut()),
-        state_checksum(peer.world_mut()),
+        checksum::state_checksum(host.world_mut()),
+        checksum::state_checksum(peer.world_mut()),
     );
 }
 
@@ -520,8 +958,8 @@ fn peer_consensus_drops_silent_player_despite_environment_slot() {
         PlayerSlot::occupied(2, PlayerType::Human, None, None),
         PlayerSlot::environment(3),
     ];
-    let mut host = net_app_with_slots(a, roster.clone(), Authority::Peers, slots.clone());
-    let mut peer = net_app_with_slots(b, roster, Authority::Peers, slots);
+    let mut host = utils::net_app_with_slots(a, roster.clone(), Authority::Peers, slots.clone());
+    let mut peer = utils::net_app_with_slots(b, roster, Authority::Peers, slots);
     host.world_mut().resource_mut::<DropConfig>().timeout_steps = 10;
     peer.world_mut().resource_mut::<DropConfig>().timeout_steps = 10;
 
@@ -535,8 +973,8 @@ fn peer_consensus_drops_silent_player_despite_environment_slot() {
     );
     align_ticks(&mut host, &mut peer);
     assert_eq!(
-        state_checksum(host.world_mut()),
-        state_checksum(peer.world_mut()),
+        checksum::state_checksum(host.world_mut()),
+        checksum::state_checksum(peer.world_mut()),
     );
 }
 
@@ -548,7 +986,7 @@ fn consensus_votes_cross_broken_control_link_via_flooding() {
     let roster = Roster::from_slots(vec![Some(0), Some(1), Some(2), Some(99)]);
     let mut apps: Vec<App> = LoopbackTransport::partial_mesh(3, [(0, 1), (1, 2)])
         .into_iter()
-        .map(|t| net_app_configured(t, roster.clone(), Authority::Peers))
+        .map(|t| utils::net_app_configured(t, roster.clone(), Authority::Peers))
         .collect();
     for app in &mut apps {
         app.world_mut().resource_mut::<DropConfig>().timeout_steps = 5;
@@ -563,8 +1001,8 @@ fn consensus_votes_cross_broken_control_link_via_flooding() {
     let (left, right) = apps.split_at_mut(1);
     align_ticks(&mut left[0], &mut right[0]);
     assert_eq!(
-        state_checksum(left[0].world_mut()),
-        state_checksum(right[0].world_mut()),
+        checksum::state_checksum(left[0].world_mut()),
+        checksum::state_checksum(right[0].world_mut()),
     );
 }
 
@@ -574,8 +1012,8 @@ fn losing_control_link_to_host_aborts_client() {
     // no longer be steered: no DropAt or PauseAt will ever arrive, however
     // healthy the gameplay traffic looks.
     let (a, b) = LoopbackTransport::pair();
-    let mut host = net_app(a, 2);
-    let mut peer = net_app(b, 2);
+    let mut host = utils::net_app(a, 2);
+    let mut peer = utils::net_app(b, 2);
     peer.world_mut()
         .resource_mut::<ferrets_bevy_plugin::ControlLinks>()
         .lost
@@ -594,8 +1032,8 @@ fn losing_control_link_to_host_aborts_client() {
 fn losing_every_control_link_aborts_decentralized_node() {
     let (a, b) = LoopbackTransport::pair();
     let roster = Roster::from_slots(vec![Some(0), Some(1)]);
-    let mut host = net_app_configured(a, roster.clone(), Authority::Peers);
-    let mut peer = net_app_configured(b, roster, Authority::Peers);
+    let mut host = utils::net_app_configured(a, roster.clone(), Authority::Peers);
+    let mut peer = utils::net_app_configured(b, roster, Authority::Peers);
     host.world_mut()
         .resource_mut::<ferrets_bevy_plugin::ControlLinks>()
         .lost
@@ -616,8 +1054,8 @@ fn losing_control_link_to_eliminated_player_does_not_abort() {
     // partition and the survivor plays on.
     let (a, b) = LoopbackTransport::pair();
     let roster = Roster::from_slots(vec![Some(0), Some(1)]);
-    let mut host = net_app_configured(a, roster.clone(), Authority::Peers);
-    let mut peer = net_app_configured(b, roster, Authority::Peers);
+    let mut host = utils::net_app_configured(a, roster.clone(), Authority::Peers);
+    let mut peer = utils::net_app_configured(b, roster, Authority::Peers);
     host.world_mut()
         .resource_mut::<GameSession>()
         .eliminate_player(1, 1);
@@ -639,7 +1077,7 @@ fn host_death_aborts_survivors_under_host_authority() {
     // game nobody can steer.
     let mut apps: Vec<App> = LoopbackTransport::mesh(3)
         .into_iter()
-        .map(|t| net_app(t, 3))
+        .map(|t| utils::net_app(t, 3))
         .collect();
     for app in &mut apps {
         app.world_mut().resource_mut::<DropConfig>().timeout_steps = 3;
@@ -671,7 +1109,9 @@ fn host_death_is_survived_under_peer_authority() {
     let mut apps: Vec<App> = LoopbackTransport::mesh(3)
         .into_iter()
         .zip([Authority::Peers; 3])
-        .map(|(t, authority)| net_app_configured(t, Roster::new((0..3).collect()), authority))
+        .map(|(t, authority)| {
+            utils::net_app_configured(t, Roster::new((0..3).collect()), authority)
+        })
         .collect();
     for app in &mut apps {
         app.world_mut().resource_mut::<DropConfig>().timeout_steps = 3;
@@ -688,8 +1128,8 @@ fn host_death_is_survived_under_peer_authority() {
     let (left, right) = apps.split_at_mut(2);
     align_ticks(&mut left[1], &mut right[0]);
     assert_eq!(
-        state_checksum(left[1].world_mut()),
-        state_checksum(right[0].world_mut()),
+        checksum::state_checksum(left[1].world_mut()),
+        checksum::state_checksum(right[0].world_mut()),
     );
 }
 
@@ -700,8 +1140,8 @@ fn manual_policy_holds_drop_until_game_approves() {
     // some day) approves the player.
     let (a, b) = LoopbackTransport::pair();
     let roster = Roster::from_slots(vec![Some(0), Some(1), Some(99)]);
-    let mut host = net_app_with_roster(a, roster.clone());
-    let mut peer = net_app_with_roster(b, roster);
+    let mut host = utils::net_app_with_roster(a, roster.clone());
+    let mut peer = utils::net_app_with_roster(b, roster);
     for app in [&mut host, &mut peer] {
         app.world_mut().resource_mut::<DropConfig>().timeout_steps = 5;
         app.world_mut()
@@ -738,8 +1178,8 @@ fn manual_policy_holds_drop_until_game_approves() {
 #[test]
 fn peer_authority_pause_freezes_and_resumes_both_at_same_tick() {
     let (a, b) = LoopbackTransport::pair();
-    let mut host = net_app_configured(a, Roster::new((0..2).collect()), Authority::Peers);
-    let mut peer = net_app_configured(b, Roster::new((0..2).collect()), Authority::Peers);
+    let mut host = utils::net_app_configured(a, Roster::new((0..2).collect()), Authority::Peers);
+    let mut peer = utils::net_app_configured(b, Roster::new((0..2).collect()), Authority::Peers);
     step_both(&mut host, &mut peer, 4);
 
     // The NON-host proposes the pause: there is no authority to ask.
@@ -766,8 +1206,8 @@ fn peer_authority_pause_freezes_and_resumes_both_at_same_tick() {
     assert!(host.world().resource::<GameSession>().tick() > frozen);
     align_ticks(&mut host, &mut peer);
     assert_eq!(
-        state_checksum(host.world_mut()),
-        state_checksum(peer.world_mut()),
+        checksum::state_checksum(host.world_mut()),
+        checksum::state_checksum(peer.world_mut()),
     );
 }
 
@@ -778,15 +1218,15 @@ fn stale_pause_proposal_does_not_resurrect_after_its_tick_passed() {
     // discarded. It must be ignored, not re-applied.
     let (a, b) = LoopbackTransport::pair();
     let roster = Roster::new((0..2).collect());
-    let mut host = net_app_configured(a, roster.clone(), Authority::Peers);
-    let mut peer = net_app_configured(b, roster, Authority::Peers);
+    let mut host = utils::net_app_configured(a, roster.clone(), Authority::Peers);
+    let mut peer = utils::net_app_configured(b, roster, Authority::Peers);
     step_both(&mut host, &mut peer, 4);
 
     peer.world_mut()
         .resource_mut::<ferrets_bevy_plugin::PauseIntent>()
         .0 = Some(true);
     step_both(&mut host, &mut peer, 12);
-    let frozen = tick(&host);
+    let frozen = utils::tick(&host);
     assert!(host.world().resource::<GameSession>().is_paused());
 
     peer.world_mut()
@@ -820,20 +1260,16 @@ fn game_with_mid_game_drop_records_and_replays_identically() {
     // recorded checksum, so either mistake fails the assertions below.
     let (a, b) = LoopbackTransport::pair();
     let roster = Roster::from_slots(vec![Some(0), Some(1), Some(99)]);
-    let mut host = net_app_with_roster(a, roster.clone());
-    let mut peer = net_app_with_roster(b, roster);
+    let mut host = utils::net_app_with_roster(a, roster.clone());
+    let mut peer = utils::net_app_with_roster(b, roster);
     host.add_plugins(ReplayPlugin);
     host.world_mut().resource_mut::<DropConfig>().timeout_steps = 10;
     peer.world_mut().resource_mut::<DropConfig>().timeout_steps = 10;
 
-    let buffer = SharedBuffer::default();
-    let header = ReplayHeader::new(RecordedGame::Skirmish(Skirmish {
-        slots: three_human_slots(),
-        map: "test".to_string(),
-        finish_policy: FinishPolicy::Endless,
-    }));
-    let recorder = Recorder::new(buffer.clone(), &header).expect("start recording");
-    ferrets_bevy_plugin::install_replay_recorder(host.world_mut(), recorder);
+    let buffer = utils::record_into(
+        &mut host,
+        &utils::skirmish_header(utils::human_slots(3), FinishPolicy::Endless),
+    );
 
     host.world_mut()
         .resource_mut::<InputFrames>()
@@ -857,14 +1293,14 @@ fn game_with_mid_game_drop_records_and_replays_identically() {
     assert_eq!(utils::count_of_type(host.world_mut(), "soldier"), 1);
 
     let replay = Replay::read(buffer.bytes().as_slice()).expect("read replay");
-    let mut playback = utils::make_app(three_human_slots());
+    let mut playback = utils::make_app(utils::human_slots(3));
     playback.add_plugins(ReplayPlugin);
     {
         let mut registry = playback.world_mut().resource_mut::<ContentRegistry>();
-        registry.register(harness_soldier());
+        registry.register(utils::harness_soldier());
         registry.validate();
     }
-    ferrets_bevy_plugin::install_replay_playback(playback.world_mut(), replay);
+    ferrets_bevy_plugin::replay::playback::install_per_game(playback.world_mut(), replay);
     playback.world_mut().resource_mut::<GameSession>().start();
 
     for _ in 0..70 {
@@ -904,8 +1340,8 @@ fn drop_decided_victory_replays_to_same_result() {
     let authority = Authority::Host {
         ai_hosting: AiHosting::Replicated,
     };
-    let mut host = net_app_with_slots(a, roster.clone(), authority, teamed_human_slots());
-    let mut peer = net_app_with_slots(b, roster, authority, teamed_human_slots());
+    let mut host = utils::net_app_with_slots(a, roster.clone(), authority, teamed_human_slots());
+    let mut peer = utils::net_app_with_slots(b, roster, authority, teamed_human_slots());
     host.add_plugins(ReplayPlugin);
     // Starting units, like a game's setup would place them — spawned identically
     // on every node (not recorded as input, so playback re-creates them the same
@@ -918,14 +1354,10 @@ fn drop_decided_victory_replays_to_same_result() {
         app.world_mut().resource_mut::<DropConfig>().timeout_steps = 5;
     }
 
-    let buffer = SharedBuffer::default();
-    let header = ReplayHeader::new(RecordedGame::Skirmish(Skirmish {
-        slots: teamed_human_slots(),
-        map: "test".to_string(),
-        finish_policy: FinishPolicy::LastStanding,
-    }));
-    let recorder = Recorder::new(buffer.clone(), &header).expect("start recording");
-    ferrets_bevy_plugin::install_replay_recorder(host.world_mut(), recorder);
+    let buffer = utils::record_into(
+        &mut host,
+        &utils::skirmish_header(teamed_human_slots(), FinishPolicy::LastStanding),
+    );
 
     // The phantom sends nothing, so the host blocks, waits out the grace window,
     // and drops it — ending the game as a win for the allied team.
@@ -954,12 +1386,12 @@ fn drop_decided_victory_replays_to_same_result() {
         .set_finish_policy(FinishPolicy::LastStanding);
     {
         let mut registry = playback.world_mut().resource_mut::<ContentRegistry>();
-        registry.register(harness_soldier());
-        registry.register(harness_base());
+        registry.register(utils::harness_soldier());
+        registry.register(utils::harness_base());
         registry.validate();
     }
     spawn_starting_units(&mut playback);
-    ferrets_bevy_plugin::install_replay_playback(playback.world_mut(), replay);
+    ferrets_bevy_plugin::replay::playback::install_per_game(playback.world_mut(), replay);
     playback.world_mut().resource_mut::<GameSession>().start();
 
     for _ in 0..70 {
@@ -1001,8 +1433,8 @@ fn lone_winner_victory_past_drop_replays_to_same_result() {
     // player.
     let (a, b) = LoopbackTransport::pair();
     let roster = Roster::from_slots(vec![Some(0), Some(1), Some(99)]);
-    let mut host = net_app_with_roster(a, roster.clone());
-    let mut peer = net_app_with_roster(b, roster);
+    let mut host = utils::net_app_with_roster(a, roster.clone());
+    let mut peer = utils::net_app_with_roster(b, roster);
     host.add_plugins(ReplayPlugin);
     let mut ids = Vec::new();
     for app in [&mut host, &mut peer] {
@@ -1014,14 +1446,10 @@ fn lone_winner_victory_past_drop_replays_to_same_result() {
     }
     let (attacker, target) = ids[0];
 
-    let buffer = SharedBuffer::default();
-    let header = ReplayHeader::new(RecordedGame::Skirmish(Skirmish {
-        slots: three_human_slots(),
-        map: "test".to_string(),
-        finish_policy: FinishPolicy::LastStanding,
-    }));
-    let recorder = Recorder::new(buffer.clone(), &header).expect("start recording");
-    ferrets_bevy_plugin::install_replay_recorder(host.world_mut(), recorder);
+    let buffer = utils::record_into(
+        &mut host,
+        &utils::skirmish_header(utils::human_slots(3), FinishPolicy::LastStanding),
+    );
 
     // Player 0 sends its soldier onto player 1's base while the phantom stays
     // silent: the short grace lands the drop first, the kill ends the game.
@@ -1051,7 +1479,7 @@ fn lone_winner_victory_past_drop_replays_to_same_result() {
     );
 
     let replay = Replay::read(buffer.bytes().as_slice()).expect("read replay");
-    let mut playback = utils::make_app(three_human_slots());
+    let mut playback = utils::make_app(utils::human_slots(3));
     playback.add_plugins(ReplayPlugin);
     playback
         .world_mut()
@@ -1059,12 +1487,12 @@ fn lone_winner_victory_past_drop_replays_to_same_result() {
         .set_finish_policy(FinishPolicy::LastStanding);
     {
         let mut registry = playback.world_mut().resource_mut::<ContentRegistry>();
-        registry.register(harness_soldier());
-        registry.register(harness_base());
+        registry.register(utils::harness_soldier());
+        registry.register(utils::harness_base());
         registry.validate();
     }
     spawn_lone_winner_lineup(&mut playback);
-    ferrets_bevy_plugin::install_replay_playback(playback.world_mut(), replay);
+    ferrets_bevy_plugin::replay::playback::install_per_game(playback.world_mut(), replay);
     playback.world_mut().resource_mut::<GameSession>().start();
 
     for _ in 0..90 {
@@ -1105,14 +1533,10 @@ fn non_drop_victory_replays_to_same_result() {
     // must reach the same Victory.
     let mut record_app = combat_victory_app();
     record_app.add_plugins(ReplayPlugin);
-    let buffer = SharedBuffer::default();
-    let header = ReplayHeader::new(RecordedGame::Skirmish(Skirmish {
-        slots: two_human_slots(),
-        map: "test".to_string(),
-        finish_policy: FinishPolicy::LastStanding,
-    }));
-    let recorder = Recorder::new(buffer.clone(), &header).expect("start recording");
-    ferrets_bevy_plugin::install_replay_recorder(record_app.world_mut(), recorder);
+    let buffer = utils::record_into(
+        &mut record_app,
+        &utils::skirmish_header(utils::human_slots(2), FinishPolicy::LastStanding),
+    );
 
     let (attacker, enemy) = spawn_combatants(&mut record_app);
     utils::select(&mut record_app, attacker);
@@ -1135,7 +1559,7 @@ fn non_drop_victory_replays_to_same_result() {
     let mut playback = combat_victory_app();
     playback.add_plugins(ReplayPlugin);
     spawn_combatants(&mut playback);
-    ferrets_bevy_plugin::install_replay_playback(playback.world_mut(), replay);
+    ferrets_bevy_plugin::replay::playback::install_per_game(playback.world_mut(), replay);
 
     for _ in 0..90 {
         if playback
@@ -1176,7 +1600,7 @@ fn eliminated_player_node_freezing_does_not_stall_survivors() {
     // and nobody dropped.
     let mut apps: Vec<App> = LoopbackTransport::mesh(3)
         .into_iter()
-        .map(|t| net_app(t, 3))
+        .map(|t| utils::net_app(t, 3))
         .collect();
     let mut ids = Vec::new();
     for app in &mut apps {
@@ -1210,14 +1634,14 @@ fn eliminated_player_node_freezing_does_not_stall_survivors() {
         assert!(!session.is_player_dropped(2));
     }
     assert!(
-        tick(&apps[0]) > tick(&apps[2]) + 30,
+        utils::tick(&apps[0]) > utils::tick(&apps[2]) + 30,
         "the survivors kept ticking after node 2 froze",
     );
     let (left, right) = apps.split_at_mut(1);
     align_ticks(&mut left[0], &mut right[0]);
     assert_eq!(
-        state_checksum(left[0].world()),
-        state_checksum(right[0].world()),
+        checksum::state_checksum(left[0].world()),
+        checksum::state_checksum(right[0].world()),
         "the two survivors must stay bit-identical past the elimination",
     );
 }
@@ -1231,14 +1655,10 @@ fn game_with_mid_game_elimination_records_and_replays_identically() {
     // the missing frames. Checksum verification catches any divergence.
     let mut record_app = ffa_elimination_app();
     record_app.add_plugins(ReplayPlugin);
-    let buffer = SharedBuffer::default();
-    let header = ReplayHeader::new(RecordedGame::Skirmish(Skirmish {
-        slots: three_human_slots(),
-        map: "test".to_string(),
-        finish_policy: FinishPolicy::LastStanding,
-    }));
-    let recorder = Recorder::new(buffer.clone(), &header).expect("start recording");
-    ferrets_bevy_plugin::install_replay_recorder(record_app.world_mut(), recorder);
+    let buffer = utils::record_into(
+        &mut record_app,
+        &utils::skirmish_header(utils::human_slots(3), FinishPolicy::LastStanding),
+    );
 
     let (attacker, target) = spawn_ffa_combatants(&mut record_app);
     utils::select(&mut record_app, attacker);
@@ -1260,7 +1680,7 @@ fn game_with_mid_game_elimination_records_and_replays_identically() {
     let mut playback = ffa_elimination_app();
     playback.add_plugins(ReplayPlugin);
     spawn_ffa_combatants(&mut playback);
-    ferrets_bevy_plugin::install_replay_playback(playback.world_mut(), replay);
+    ferrets_bevy_plugin::replay::playback::install_per_game(playback.world_mut(), replay);
 
     for _ in 0..80 {
         if playback
@@ -1291,119 +1711,6 @@ fn game_with_mid_game_elimination_records_and_replays_identically() {
 //
 // ─── Helpers ────────────────────────────────────────────────────────────────────
 //
-
-/// Builds a networked app of `players` Human slots, whose local slot matches the
-/// transport's peer. `players` is the roster a lobby would have agreed (slots
-/// `0..players`), passed in rather than inferred from connectivity.
-fn net_app(transport: LoopbackTransport, players: usize) -> App {
-    net_app_with_roster(transport, Roster::new((0..players as u64).collect()))
-}
-
-/// Like [`net_app`], with an explicit roster (e.g. a slot whose peer will
-/// never speak).
-fn net_app_with_roster(transport: LoopbackTransport, roster: Roster) -> App {
-    net_app_configured(
-        transport,
-        roster,
-        Authority::Host {
-            ai_hosting: AiHosting::Replicated,
-        },
-    )
-}
-
-/// Like [`net_app_with_roster`], with an explicit decision authority.
-fn net_app_configured(transport: LoopbackTransport, roster: Roster, authority: Authority) -> App {
-    let slots = (0..roster.len())
-        .map(|i| PlayerSlot::occupied(i as u8, PlayerType::Human, None, None))
-        .collect();
-    net_app_with_slots(transport, roster, authority, slots)
-}
-
-/// Like [`net_app_configured`], with explicit session slots (e.g. allied ones).
-fn net_app_with_slots(
-    transport: LoopbackTransport,
-    roster: Roster,
-    authority: Authority,
-    slots: Vec<PlayerSlot>,
-) -> App {
-    let local = roster
-        .player_of(transport.local_peer())
-        .expect("local peer is in the roster");
-    // Peer 0 is the host node, as the lobby would assign.
-    let net = NetSession::over_shared(Box::new(transport), Role::Peer, roster);
-    assert_eq!(net.gameplay_ref().local_player(), local);
-
-    let mut nav_grid = NavGrid::new(32, 32);
-    nav_grid.add_layer(GROUND);
-    let session = GameSession::configured(
-        local,
-        slots,
-        "test",
-        authority,
-        DropPolicy::Automatic,
-        FinishPolicy::Endless,
-    );
-
-    let mut app = App::new();
-    app.add_plugins(SimulationPlugin::new(
-        session,
-        Map::new(
-            "test",
-            Projection::Isometric,
-            MovementModel::Cell,
-            nav_grid,
-            vec![],
-        ),
-    ));
-    app.add_plugins(NetworkPlugin);
-    // Supplies idle frames for AI slots with no installed runtime, as in a
-    // real game; a no-op for the all-human rosters.
-    app.add_plugins(ferrets_bevy_plugin::ai::AiPlugin);
-    install_network_session(app.world_mut(), net);
-
-    {
-        let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
-        assert_eq!(registry.register_layer(GROUND_LAYER), GROUND);
-        registry.register(harness_soldier());
-        registry.register(harness_base());
-        registry.validate();
-    }
-    app.world_mut().resource_mut::<GameSession>().start();
-    app
-}
-
-/// The one mobile entity type the harness games use. Armed, so a game can
-/// destroy a building through the command pipeline; nothing attacks unordered.
-fn harness_soldier() -> EntityTypeDef {
-    EntityTypeDef::new("soldier")
-        .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-        .with_movement(
-            FixedU64::from_num(0.5),
-            FixedU64::from_num(0.5),
-            FixedU64::ONE,
-        )
-        .with_health(30)
-        .with_dying(2, None)
-        .with_attack(10, 1, 1, 4, 2)
-        .with_targets(GROUND)
-}
-
-/// A standing building — the presence the `LastStanding` rule counts. Immobile,
-/// destructible, no combat of its own.
-fn harness_base() -> EntityTypeDef {
-    EntityTypeDef::new("base")
-        .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-        .with_health(30)
-        .with_dying(2, None)
-        .with_tags(["building"])
-}
-
-/// Three occupied human slots — the harness roster as session slots.
-fn three_human_slots() -> Vec<PlayerSlot> {
-    (0..3)
-        .map(|i| PlayerSlot::occupied(i, PlayerType::Human, None, None))
-        .collect()
-}
 
 /// Three occupied human slots with players 0 and 1 allied against the teamless
 /// slot 2 — so excluding slot 2 leaves a single side standing.
@@ -1462,8 +1769,25 @@ fn is_paused(app: &App) -> bool {
     app.world().resource::<GameSession>().is_paused()
 }
 
-fn tick(app: &App) -> u32 {
-    app.world().resource::<GameSession>().tick()
+/// Two tick costs either side of what the nominal cadence affords.
+const CHEAP_TICK: FixedU64 = FixedU64::lit("1");
+const EXPENSIVE_TICK: FixedU64 = FixedU64::lit("65");
+
+/// The capacity a node measuring `exec_millis` per tick reports.
+fn capacity_of(exec_millis: FixedU64) -> GameSpeed {
+    GameSpeed::new(ferrets_bevy_plugin::sustainable_factor(
+        exec_millis,
+        NOMINAL_MILLIS,
+    ))
+}
+
+fn speed(app: &App) -> GameSpeed {
+    app.world().resource::<GameSession>().speed()
+}
+
+/// Twice the nominal cadence — a speed distinguishable from `NORMAL`.
+fn double_speed() -> GameSpeed {
+    GameSpeed::new(FixedU64::from_num(2))
 }
 
 /// Pumps a chosen subset of apps (by index) one fixed tick each, for `ticks`
@@ -1486,21 +1810,15 @@ fn spawn_starting_units(app: &mut App) {
     spawn::spawn_entity(world, "base", utils::pos(20, 20), Some(2)).expect("phantom base");
 }
 
-fn two_human_slots() -> Vec<PlayerSlot> {
-    (0..2)
-        .map(|i| PlayerSlot::occupied(i, PlayerType::Human, None, None))
-        .collect()
-}
-
 /// A fresh two-player app with a combat-capable soldier, `LastStanding`, and the
 /// session started — the setup a last-standing win is recorded and replayed on.
 fn combat_victory_app() -> App {
-    let mut app = utils::make_app(two_human_slots());
+    let mut app = utils::make_app(utils::human_slots(2));
     {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
         assert_eq!(registry.register_layer(GROUND_LAYER), GROUND);
-        registry.register(harness_soldier());
-        registry.register(harness_base());
+        registry.register(utils::harness_soldier());
+        registry.register(utils::harness_base());
         registry.validate();
     }
     let mut session = app.world_mut().resource_mut::<GameSession>();
@@ -1513,12 +1831,12 @@ fn combat_victory_app() -> App {
 /// `LastStanding`, and the session started — the setup a mid-game elimination
 /// is recorded and replayed on.
 fn ffa_elimination_app() -> App {
-    let mut app = utils::make_app(three_human_slots());
+    let mut app = utils::make_app(utils::human_slots(3));
     {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
         assert_eq!(registry.register_layer(GROUND_LAYER), GROUND);
-        registry.register(harness_soldier());
-        registry.register(harness_base());
+        registry.register(utils::harness_soldier());
+        registry.register(utils::harness_base());
         registry.validate();
     }
     let mut session = app.world_mut().resource_mut::<GameSession>();

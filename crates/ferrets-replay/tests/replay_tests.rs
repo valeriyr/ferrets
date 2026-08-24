@@ -1,6 +1,7 @@
 //! Writing a replay to a stream and reading it back: round-trips, end-of-stream
 //! handling, and the format and version guards.
 
+use ferrets_geometry::projection::Projection;
 use ferrets_replay::{
     buffer::SharedBuffer,
     error::ReplayError,
@@ -11,6 +12,7 @@ use ferrets_replay::{
 };
 use ferrets_simulation::{
     command::PlayerCommand,
+    movement_model::MovementModel,
     session::{
         finish_policy::FinishPolicy,
         player_slot::{PlayerId, PlayerSlot},
@@ -46,7 +48,11 @@ fn round_trips_scenario_header() {
     let buffer = SharedBuffer::default();
     // A scenario game is recorded by name alone; the name is what playback
     // rebuilds the whole game from, so it must survive verbatim.
-    let header = ReplayHeader::new(RecordedGame::Scenario("build_army".to_string()));
+    let header = ReplayHeader::new(
+        RecordedGame::Scenario("build_army".to_string()),
+        MovementModel::Continuous,
+        Projection::Isometric,
+    );
     {
         let mut recorder = Recorder::new(buffer.clone(), &header).expect("start recording");
         recorder.record(&record(0, &[], None)).expect("record 0");
@@ -151,11 +157,15 @@ fn header() -> ReplayHeader {
         PlayerSlot::occupied(0, PlayerType::Human, Some("human"), None),
         PlayerSlot::occupied(1, PlayerType::Ai, Some("orc"), None),
     ];
-    ReplayHeader::new(RecordedGame::Skirmish(Skirmish {
-        slots,
-        map: "demo".to_string(),
-        finish_policy: FinishPolicy::LastStanding,
-    }))
+    ReplayHeader::new(
+        RecordedGame::Skirmish(Skirmish {
+            slots,
+            map: "demo".to_string(),
+            finish_policy: FinishPolicy::LastStanding,
+        }),
+        MovementModel::Continuous,
+        Projection::Isometric,
+    )
 }
 
 /// A tick record with the given per-player inputs and optional checksum, and no

@@ -4,6 +4,7 @@ pub mod ai_hosting;
 pub mod authority;
 pub mod drop_policy;
 pub mod finish_policy;
+pub mod game_speed;
 pub mod player_slot;
 pub mod player_type;
 
@@ -12,6 +13,7 @@ use crate::session::{
     authority::Authority,
     drop_policy::DropPolicy,
     finish_policy::FinishPolicy,
+    game_speed::GameSpeed,
     player_slot::{Participation, PlayerId, PlayerSlot, TeamId},
     player_type::PlayerType,
 };
@@ -102,6 +104,9 @@ pub struct GameSession {
     /// tick. Orthogonal to [`SessionState`]; receiving and buffering peer traffic
     /// continues so the game can resume.
     paused: bool,
+    /// How fast the tick loop runs in wall-clock terms, as a factor on the
+    /// game's nominal cadence.
+    speed: GameSpeed,
 }
 
 impl GameSession {
@@ -222,6 +227,13 @@ impl GameSession {
         self.state == SessionState::Blocked
     }
 
+    /// Returns `true` while the tick loop is actually advancing: running, and not
+    /// paused. A paused session is still [`running`](Self::is_running) — it holds
+    /// its state and its peer traffic, it just does not move.
+    pub fn is_advancing(&self) -> bool {
+        self.is_running() && !self.is_paused()
+    }
+
     /// Returns `true` when the session is running or blocked.
     ///
     /// Use this to gate systems that must still run while blocked (e.g. network input collection).
@@ -241,6 +253,17 @@ impl GameSession {
     /// Returns `true` while the session is paused.
     pub fn is_paused(&self) -> bool {
         self.paused
+    }
+
+    /// Sets how fast the tick loop runs. The requested speed is a ceiling: a
+    /// game that cannot compute or receive its ticks that fast runs slower.
+    pub fn set_speed(&mut self, speed: GameSpeed) {
+        self.speed = speed;
+    }
+
+    /// How fast the tick loop is asked to run.
+    pub fn speed(&self) -> GameSpeed {
+        self.speed
     }
 
     /// Returns how AI player input is computed.
@@ -548,6 +571,7 @@ impl GameSession {
             finish_policy,
             result: None,
             paused: false,
+            speed: GameSpeed::NORMAL,
         }
     }
 }

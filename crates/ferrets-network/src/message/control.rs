@@ -9,6 +9,7 @@ use std::net::SocketAddr;
 use ferrets_simulation::session::{
     drop_policy::DropPolicy,
     finish_policy::FinishPolicy,
+    game_speed::GameSpeed,
     player_slot::{PlayerId, TeamId},
 };
 use serde::{Deserialize, Serialize};
@@ -142,6 +143,34 @@ pub enum InGameMessage {
         tick: u32,
         paused: bool,
     },
+    /// Under host authority, any node → host: a request to run at `speed`. The
+    /// host turns it into an authoritative [`SpeedAt`](Self::SpeedAt).
+    ///
+    /// The engine accepts any positive factor and judges none of them: which
+    /// speeds a game offers, and which of them it is willing to impose on other
+    /// players, is the game's own rule, stated by the frontend that draws the
+    /// ladder. So a client that ignores its own rule can request any speed —
+    /// forged input like any other, and milder than the alternatives a peer in
+    /// relayed lockstep already has.
+    SpeedRequest { speed: GameSpeed },
+    /// Run at `speed` from `tick` on, on every node — a wall-clock change only,
+    /// tick-aligned so every node changes pace together. Under host authority
+    /// only the host emits it; under peer authority any node may propose, and
+    /// proposals colliding on the same tick resolve by lowest
+    /// `(proposer, speed)` everywhere.
+    SpeedAt {
+        proposer: PlayerId,
+        tick: u32,
+        speed: GameSpeed,
+    },
+    /// Any node → its control links, re-sent on an interval: the fastest speed
+    /// the sender can actually sustain, derived from what a tick costs it. Soft
+    /// state, not a decision — the latest value from each peer stands until
+    /// replaced or aged out, and every node folds the minimum itself. The host
+    /// node folds what it has heard into its own report, which is how the
+    /// minimum crosses control links shaped as a star. Slowing down needs no
+    /// agreement, so this never goes through the authority.
+    CapacityReport { capacity: GameSpeed },
 }
 
 /// A message on the control channel, before or during the game.

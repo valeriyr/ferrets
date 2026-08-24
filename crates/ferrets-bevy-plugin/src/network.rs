@@ -12,8 +12,10 @@
 use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 
 use bevy::prelude::*;
+use ferrets_math::FixedU64;
 use ferrets_network::{
     message::control::{ControlMessage, InGameMessage},
+    peer::PeerId,
     session::NetSession,
 };
 use ferrets_simulation::{
@@ -21,18 +23,42 @@ use ferrets_simulation::{
     input::{InputFrames, SYNC_LATENCY},
     session::{
         GameResult, GameSession, authority::Authority, drop_policy::DropPolicy,
-        player_slot::PlayerId,
+        game_speed::GameSpeed, player_slot::PlayerId,
     },
 };
 
-use crate::{SimulationSet, session_is_active, session_is_not_paused, session_is_running, systems};
+use crate::{
+    FixedUpdateSet,
+    intents::{pause::PauseIntent, speed::SpeedIntent},
+    session_is_active, session_is_advancing, session_is_not_paused,
+    tick::{self, NominalTimestep, ThrottleConfig, TickPacing},
+};
 
-/// How far ahead of the host's tick a pause takes effect. Must exceed the
-/// inter-node tick spread (bounded by `SYNC_LATENCY`) so no node has already
-/// passed that tick when the authoritative `PauseAt` is sent — then every node
-/// reaches it and freezes there. A resume needs no delay: all nodes are already
-/// frozen at the same tick, so it applies immediately.
-const PAUSE_DELAY: u32 = SYNC_LATENCY * 2;
+/// How far ahead of the deciding node's tick a session-level change takes
+/// effect. Must exceed the inter-node tick spread (bounded by `SYNC_LATENCY`) so
+/// no node has already passed that tick when the authoritative message is sent —
+/// then every node reaches it and applies the change there. While the session is
+/// paused no delay is possible: the tick is frozen, so a tick ahead of it never
+/// arrives, and a change applies at the current one instead.
+const CONTROL_DELAY: u32 = SYNC_LATENCY * 2;
+
+/// Ticks between capacity reports, and the age at which a peer's last report is
+/// forgotten. Reporting is paced in ticks rather than wall time so it needs no
+/// clock; the game is not advancing anyway while nothing is being reported.
+const CAPACITY_INTERVAL: u32 = 20;
+/// The least a node will claim it can sustain. A [`GameSpeed`] cannot be zero, and
+/// a node that cannot sustain even this is past accommodating — the drop rule's
+/// business rather than the cadence's. The upper end needs no constant here: the
+/// measurement is already capped at [`tick::MAX_FACTOR`].
+const MIN_CAPACITY: FixedU64 = FixedU64::lit("0.001");
+const CAPACITY_STALE_AFTER: u32 = CAPACITY_INTERVAL * 5;
+
+/// Weight of a new sample when folding it into a player's running margin.
+const MARGIN_SMOOTHING: FixedU64 = FixedU64::lit("0.2");
+/// How long a player's last margin stands. A player keeping up refreshes it every
+/// tick, so this only decides how quickly one that stopped sending — dropped,
+/// eliminated, or gone — stops holding the cadence down.
+const MARGIN_STALE_AFTER: u32 = CAPACITY_INTERVAL;
 
 /// The reconnection grace window before a stall becomes a drop, in blocked
 /// `FixedUpdate` steps (not wall-clock, so it is testable and only gates *when*
@@ -115,49 +141,255 @@ pub struct NetworkSession(pub NetSession);
 #[derive(Resource)]
 pub struct NetworkActive;
 
-/// A pause/resume scheduled to take effect at an agreed tick, identical on every
-/// node so the change is deterministic. Applied (and discarded) by
-/// [`net_control`] when each change's tick arrives; the control links are
-/// reliable, so a proposal is sent exactly once.
-#[derive(Resource, Default)]
-pub struct PendingPause(BTreeMap<u32, (PlayerId, bool)>);
+/// One scheduled change: who proposed it, what it is, and whether it has already
+/// been handed out.
+///
+/// A claimed change is kept until its tick is *behind* the session, not
+/// discarded when handed out: while the tick is frozen — which is exactly what a
+/// pause does — a discarded entry would be re-learned from every flooded
+/// duplicate and handed out again on every step.
+#[derive(Clone, Copy)]
+struct Scheduled<T> {
+    proposer: PlayerId,
+    value: T,
+    claimed: bool,
+}
 
-impl PendingPause {
-    /// Merges a proposal, returning whether it changed what is pending.
-    /// Proposals for the same tick resolve identically on every node whatever
-    /// their arrival order: the smallest `(player, paused)` wins.
-    fn propose(&mut self, tick: u32, player: PlayerId, paused: bool) -> bool {
-        match self.0.entry(tick) {
-            Entry::Vacant(entry) => {
-                entry.insert((player, paused));
-                true
-            }
-            Entry::Occupied(mut entry) => {
-                if (player, paused) < *entry.get() {
-                    entry.insert((player, paused));
-                    true
-                } else {
-                    false
-                }
-            }
+impl<T> Scheduled<T> {
+    /// A change nobody has claimed yet — the only way one is born, so the flag
+    /// is never a caller's to set.
+    fn unclaimed(proposer: PlayerId, value: T) -> Self {
+        Self {
+            proposer,
+            value,
+            claimed: false,
         }
     }
 }
 
-/// The local player's pending pause/resume request (`Some(paused)`), set by the
-/// frontend on a pause key. Under host authority [`net_control`] turns it into
-/// an authoritative [`PauseAt`](InGameMessage::PauseAt) on the host or forwards
-/// it to the host on a client; under peer authority it becomes this node's own
-/// tick-stamped proposal on the control mesh. (A local game pauses its
-/// session directly and ignores this.)
+/// One node's proposal for a session-level change: who proposed it, the tick it
+/// takes effect on, and what it is.
+#[derive(Clone, Copy)]
+struct Proposal<T> {
+    proposer: PlayerId,
+    effective: u32,
+    value: T,
+}
+
+/// Session-level changes scheduled to take effect at an agreed tick, identical
+/// on every node so each change is deterministic. Applied (and discarded) by
+/// [`net_control`] when a change's tick arrives; the control links are
+/// reliable, so a proposal is sent exactly once.
+///
+/// One store per kind of change: two kinds proposed for the same tick must both
+/// survive, and a single store keyed by tick alone would let one evict the other.
+struct PendingChange<T>(BTreeMap<u32, Scheduled<T>>);
+
+impl<T> Default for PendingChange<T> {
+    fn default() -> Self {
+        Self(BTreeMap::new())
+    }
+}
+
+impl<T: Copy + Ord> PendingChange<T> {
+    /// Merges a proposal, returning whether it changed what is pending.
+    /// Proposals for the same tick resolve identically on every node whatever
+    /// their arrival order: the smallest `(player, value)` wins — and a winner
+    /// arriving after the tick was already claimed is offered again, so every
+    /// node converges on the same one.
+    fn propose(&mut self, tick: u32, player: PlayerId, value: T) -> bool {
+        match self.0.entry(tick) {
+            Entry::Vacant(entry) => {
+                entry.insert(Scheduled::unclaimed(player, value));
+                true
+            }
+            Entry::Occupied(mut entry) => {
+                let held = *entry.get();
+                let same = (player, value) == (held.proposer, held.value);
+                let accept = if held.claimed {
+                    // The tick's change was already handed out, and the entry is
+                    // kept so a flooded duplicate is recognised — but only an
+                    // *identical* message is that duplicate. A different one is a
+                    // new decision landing on the same tick, which happens
+                    // whenever the tick is frozen: a pause and the resume that
+                    // lifts it are both stamped at the frozen tick, and refusing
+                    // the second would leave the session unresumable by anyone
+                    // the collision rule ranks after the pauser.
+                    !same
+                } else {
+                    // Genuinely concurrent proposals for a tick not yet reached:
+                    // the smallest wins, identically on every node.
+                    (player, value) < (held.proposer, held.value)
+                };
+                if accept {
+                    entry.insert(Scheduled::unclaimed(player, value));
+                }
+                accept
+            }
+        }
+    }
+
+    /// Hands out the newest change whose tick has arrived, **once** — a later
+    /// call gets nothing for it, so a flooded duplicate arriving while the tick
+    /// is frozen is recognised rather than handed out again. Each kind of change
+    /// is a plain overwrite, so when a node crosses several effective ticks at
+    /// once only the last decision stands.
+    ///
+    /// Whether the change is then applied is the caller's business; what this
+    /// store guarantees is that it is offered exactly once.
+    ///
+    /// Advancing to `tick` also forgets the changes now behind the session.
+    fn claim_due(&mut self, tick: u32) -> Option<T> {
+        let due = self
+            .0
+            .range_mut(..=tick)
+            .next_back()
+            .filter(|(_, scheduled)| !scheduled.claimed)
+            .map(|(_, scheduled)| {
+                scheduled.claimed = true;
+                scheduled.value
+            });
+        // Forgotten only after the due change is claimed: a tick the session
+        // crossed in one jump (a seek) must still be handed out first.
+        self.0.retain(|&effective, _| effective >= tick);
+        due
+    }
+}
+
+/// The scheduled pauses and resumes.
 #[derive(Resource, Default)]
-pub struct PauseIntent(pub Option<bool>);
+pub struct PendingPause(PendingChange<bool>);
+
+/// The scheduled speed changes.
+#[derive(Resource, Default)]
+pub struct PendingSpeed(PendingChange<GameSpeed>);
+
+/// How far ahead of the tick that needs them each player's frames are arriving,
+/// smoothed, in ticks.
+///
+/// Steady transit latency lowers the lead without threatening the loop; the
+/// warning sign is the margin decaying toward zero — frames arriving barely
+/// before they are needed — which the blocked-streak only reports once the
+/// stall has arrived (the boundary is
+/// [`MARGIN_HEADROOM`](tick::MARGIN_HEADROOM)). Measured where frames land, so
+/// it says how late they are *here* — under a host or a relayed mesh a frame
+/// may have travelled through another peer, and this cannot tell the two apart.
+#[derive(Resource, Default)]
+pub struct FrameMargins(BTreeMap<PlayerId, (u32, FixedU64)>);
+
+impl FrameMargins {
+    /// Folds a frame's lead into the running margin for its player, as of `tick`.
+    fn record(&mut self, player: PlayerId, tick: u32, lead: FixedU64) {
+        match self.0.entry(player) {
+            Entry::Vacant(entry) => {
+                entry.insert((tick, lead));
+            }
+            Entry::Occupied(mut entry) => {
+                let (_, running) = *entry.get();
+                entry.insert((tick, tick::smooth(running, lead, MARGIN_SMOOTHING)));
+            }
+        }
+    }
+
+    /// The margin of the player, among those heard from recently, whose frames
+    /// are arriving with the least room to spare — or `None` when nobody has been
+    /// heard from. A player that stopped sending is left out: whatever its last
+    /// margin was, it is no longer a statement about keeping up, and holding the
+    /// game at that margin for the rest of the match would be a bug.
+    pub fn tightest(&self, now: u32) -> Option<FixedU64> {
+        self.0
+            .values()
+            .filter(|(at, _)| now.saturating_sub(*at) <= MARGIN_STALE_AFTER)
+            .map(|(_, margin)| *margin)
+            .min()
+    }
+
+    /// The margin last recorded for `player`, however long ago.
+    pub fn of(&self, player: PlayerId) -> Option<FixedU64> {
+        self.0.get(&player).map(|(_, margin)| *margin)
+    }
+}
+
+/// The latest capacity each peer reported, with the tick it arrived on.
+///
+/// Soft state: a peer that recovers simply reports a higher value, so the fold
+/// rises again on its own — which a one-shot decision could never do. A report
+/// older than [`CAPACITY_STALE_AFTER`] is ignored, so a peer that stops talking
+/// stops constraining the others.
+#[derive(Resource, Default)]
+pub struct PeerCapacities {
+    /// What each peer last said it can sustain, with the tick it said it on.
+    heard: BTreeMap<PlayerId, (u32, GameSpeed)>,
+    /// The tick this node last published its own capacity at — the other half of
+    /// the same conversation. Needed because `net_control` runs on every step:
+    /// while the tick is frozen by a pause or a stalled peer, the reporting
+    /// interval stays satisfied, and without this the node would republish on
+    /// every one of those steps.
+    sent_at: Option<u32>,
+}
+
+impl PeerCapacities {
+    /// Records what `player` reported it can sustain, as of `tick`, replacing
+    /// whatever it last said.
+    pub fn record(&mut self, player: PlayerId, tick: u32, capacity: GameSpeed) {
+        self.heard.insert(player, (tick, capacity));
+    }
+
+    /// Whether this node should publish its capacity at `tick`, claiming the
+    /// slot so it publishes once per tick value rather than once per step spent
+    /// there.
+    pub fn claim_report_slot(&mut self, tick: u32) -> bool {
+        if self.sent_at == Some(tick) {
+            return false;
+        }
+        self.sent_at = Some(tick);
+        true
+    }
+
+    /// The slowest speed any peer heard from recently can sustain — the ceiling
+    /// the group as a whole can hold — or `None` when nobody has reported.
+    pub fn tightest(&self, now: u32) -> Option<GameSpeed> {
+        self.heard
+            .values()
+            .filter(|(at, _)| now.saturating_sub(*at) <= CAPACITY_STALE_AFTER)
+            .map(|(_, capacity)| *capacity)
+            .min()
+    }
+}
+
+/// (Re)installs the control plane's per-game state, called from
+/// [`install_game_resources`](crate::install_game_resources) so no entry path
+/// can forget it. Stale votes or a peer still recorded as lost would otherwise
+/// decide something in this game on the last one's evidence — and a lost host
+/// id, in particular, aborts a session on sight. The margins and capacities are
+/// stamped with the tick they arrived on, and ticks restart at zero, so a
+/// survivor would never age out on its own.
+pub(crate) fn install_per_game(world: &mut World) {
+    world.insert_resource(ControlLinks::default());
+    world.insert_resource(DesyncTracker::default());
+    world.insert_resource(BlockedStreak::default());
+    world.insert_resource(Stall::default());
+    world.insert_resource(StallVotes::default());
+    world.insert_resource(DropIntent::default());
+    world.insert_resource(PendingPause::default());
+    world.insert_resource(PendingSpeed::default());
+    world.insert_resource(FrameMargins::default());
+    world.insert_resource(PeerCapacities::default());
+}
 
 /// Installs the networked session: the `NonSend` session plus its `Send` marker.
 /// Call at game start (the lobby does this) so the net systems begin running.
 pub fn install_network_session(world: &mut World, session: NetSession) {
     world.insert_non_send_resource(NetworkSession(session));
     world.insert_resource(NetworkActive);
+}
+
+/// Removes the networked session when leaving a game, called from
+/// [`teardown_game_resources`](crate::teardown_game_resources): a session left
+/// installed would keep receiving into the menu and the next game.
+pub(crate) fn remove_per_game(world: &mut World) {
+    world.remove_non_send_resource::<NetworkSession>();
+    world.remove_resource::<NetworkActive>();
 }
 
 /// Per-tick state hashes — local, and from each peer — for desync detection.
@@ -213,15 +445,11 @@ pub struct NetworkPlugin;
 
 impl Plugin for NetworkPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<DesyncTracker>();
+        // The per-game roster comes from the one function that owns it, so the
+        // plugin cannot drift from what `install_game_resources` resets. Only
+        // the game's own choice is created here and never overwritten later.
         app.init_resource::<DropConfig>();
-        app.init_resource::<BlockedStreak>();
-        app.init_resource::<PendingPause>();
-        app.init_resource::<PauseIntent>();
-        app.init_resource::<Stall>();
-        app.init_resource::<DropIntent>();
-        app.init_resource::<StallVotes>();
-        app.init_resource::<ControlLinks>();
+        install_per_game(app.world_mut());
         // Order within the active tick: receive remote frames, then resolve
         // drops, record the local frame (flush_input), broadcast the window,
         // then checksum — all before command_executor consumes the input.
@@ -231,53 +459,38 @@ impl Plugin for NetworkPlugin {
         app.add_systems(
             FixedUpdate,
             net_receive
-                .in_set(SimulationSet)
-                .before(systems::flush_input)
+                .in_set(FixedUpdateSet::Receive)
                 .run_if(session_is_active.and(resource_exists::<NetworkActive>)),
         );
         app.add_systems(
             FixedUpdate,
             net_control
-                .in_set(SimulationSet)
+                .in_set(FixedUpdateSet::Receive)
                 .after(net_receive)
-                .before(systems::flush_input)
                 .run_if(session_is_active.and(resource_exists::<NetworkActive>)),
         );
         app.add_systems(
             FixedUpdate,
-            detect_drops
-                .in_set(SimulationSet)
-                .after(net_control)
-                .before(systems::command_executor)
-                .run_if(
-                    session_is_active
-                        .and(resource_exists::<NetworkActive>)
-                        .and(session_is_not_paused),
-                ),
+            detect_drops.in_set(FixedUpdateSet::Decide).run_if(
+                session_is_active
+                    .and(resource_exists::<NetworkActive>)
+                    .and(session_is_not_paused),
+            ),
         );
         app.add_systems(
             FixedUpdate,
-            net_broadcast
-                .in_set(SimulationSet)
-                .after(systems::flush_input)
-                .before(systems::command_executor)
-                .run_if(
-                    session_is_active
-                        .and(resource_exists::<NetworkActive>)
-                        .and(session_is_not_paused),
-                ),
+            net_broadcast.in_set(FixedUpdateSet::Broadcast).run_if(
+                session_is_active
+                    .and(resource_exists::<NetworkActive>)
+                    .and(session_is_not_paused),
+            ),
         );
         app.add_systems(
             FixedUpdate,
             net_checksum
-                .in_set(SimulationSet)
+                .in_set(FixedUpdateSet::Broadcast)
                 .after(net_broadcast)
-                .before(systems::command_executor)
-                .run_if(
-                    session_is_running
-                        .and(resource_exists::<NetworkActive>)
-                        .and(session_is_not_paused),
-                ),
+                .run_if(session_is_advancing.and(resource_exists::<NetworkActive>)),
         );
     }
 }
@@ -303,12 +516,23 @@ pub fn net_control(
     mut streak: ResMut<BlockedStreak>,
     mut votes: ResMut<StallVotes>,
     mut links: ResMut<ControlLinks>,
-    mut intent: ResMut<PauseIntent>,
+    mut pause_intent: ResMut<PauseIntent>,
+    mut speeds: ResMut<PendingSpeed>,
+    mut speed_intent: ResMut<SpeedIntent>,
+    mut capacities: ResMut<PeerCapacities>,
+    pacing: Res<TickPacing>,
+    nominal: Res<NominalTimestep>,
+    throttle_config: Res<ThrottleConfig>,
 ) {
     let host = net.0.is_host_node();
     let authority = session.authority();
     let tick = session.tick();
     let local = session.local_player();
+    // Whether this node is the one that turns a bare request into an
+    // authoritative change: the host's own node under host authority, and
+    // nobody under peer authority, where every node proposes for itself and no
+    // request is ever sent.
+    let decides = matches!(authority, Authority::Host { .. }) && host;
 
     // Drain the control links. Each message is judged against the peer that
     // actually sent it: a `PauseAt` schedules; a `DropAt` from the host node is
@@ -320,58 +544,88 @@ pub fn net_control(
     // node something new is forwarded once, so control commands cross a broken
     // link through the peers that still have one (duplicates change nothing and
     // are not re-forwarded, which ends the flood).
-    let mut requests: Vec<bool> = intent.0.take().into_iter().collect();
+    let mut pause_requests: Vec<bool> = pause_intent.0.take().into_iter().collect();
+    let mut speed_requests: Vec<GameSpeed> = speed_intent.0.take().into_iter().collect();
     let received = net.0.drain_control();
     // Record downed links before reading the messages, so a peer lost this same
     // drain is already known when its relayed vote is judged below.
     links.lost.extend(received.lost.iter().copied());
     for (from, message) in received.messages {
         if let ControlMessage::InGame(message) = message {
-            match message {
-                InGameMessage::PauseRequest { paused } => requests.push(paused),
-                InGameMessage::PauseAt {
+            match &message {
+                // Only the node that decides acts on a bare request, and only the
+                // host's own node decides. Without that gate every receiver
+                // would queue the request *and* re-send it from `route_request`'s
+                // non-host arm, so a forged request injected into a control mesh
+                // would bounce between peers instead of being ignored.
+                InGameMessage::PauseRequest { paused } => {
+                    if decides {
+                        pause_requests.push(*paused);
+                    }
+                }
+                &InGameMessage::PauseAt {
                     proposer,
                     tick: effective,
                     paused,
-                } => {
-                    // An echo of this node's own proposal teaches nobody
-                    // anything (the original already went to every link), and
-                    // a proposal for a tick already passed is a stale copy of
-                    // an applied-and-discarded change — re-learning either
-                    // would resurrect it in the apply loop. Legitimate traffic
-                    // always targets the present or future: the effective tick
-                    // leads the proposer by more than the lockstep skew.
-                    if proposer == local || effective < tick {
-                        continue;
-                    }
-                    let news = pending.propose(effective, proposer, paused);
-                    if news {
-                        match authority {
-                            // A mesh has no relay of its own, so each node passes
-                            // on what it just learned; under host authority the
-                            // host's own broadcast already reached everybody.
-                            Authority::Peers => forward(
-                                &mut net,
-                                InGameMessage::PauseAt {
-                                    proposer,
-                                    tick: effective,
-                                    paused,
-                                },
-                            ),
-                            Authority::Host { .. } => {}
-                        }
+                } => receive_change(
+                    &mut net,
+                    &mut pending.0,
+                    &session,
+                    from,
+                    Proposal {
+                        proposer,
+                        effective,
+                        value: paused,
+                    },
+                    message,
+                ),
+                // Same gate as a pause request: only the deciding node promotes
+                // one. Which speeds are worth offering is the frontend's own
+                // rule, stated by the ladder it draws.
+                InGameMessage::SpeedRequest { speed } => {
+                    if decides {
+                        speed_requests.push(*speed);
                     }
                 }
-                InGameMessage::DropAt { player, tick: at } => {
+                InGameMessage::CapacityReport { capacity } => {
+                    // Attributed to the peer that sent it, not to a field it
+                    // could have filled in for somebody else. A node that does
+                    // not take part in sharing ignores what it is told, just as
+                    // it says nothing itself.
+                    if let Some(player) = net.0.player_of(from)
+                        && throttle_config.share_capacity
+                    {
+                        capacities.record(player, tick, *capacity);
+                    }
+                }
+                &InGameMessage::SpeedAt {
+                    proposer,
+                    tick: effective,
+                    speed,
+                } => receive_change(
+                    &mut net,
+                    &mut speeds.0,
+                    &session,
+                    from,
+                    Proposal {
+                        proposer,
+                        effective,
+                        value: speed,
+                    },
+                    message,
+                ),
+                &InGameMessage::DropAt { player, tick: at } => {
                     // The authoritative drop, valid only under host authority
                     // and only from the host's own node. A client cannot drop a
                     // player by sending this, and under peer authority drops
                     // never travel this way — they commit by `StallVote`
-                    // consensus in `detect_drops`. A player with a drop already
+                    // consensus in `detect_drops`. A player no slot seats is a
+                    // corrupt message, not a drop. A player with a drop already
                     // decided — even one for a tick still ahead — is never
                     // re-dropped.
                     if !matches!(authority, Authority::Host { .. })
                         || !net.0.is_host_peer(from)
+                        || session.slot(player).is_none()
                         || session.drop_tick(player).is_some()
                     {
                         continue;
@@ -396,6 +650,7 @@ pub fn net_control(
                     tick,
                     missing,
                 } => {
+                    let (voter, tick) = (*voter, *tick);
                     if voter == local {
                         continue;
                     }
@@ -411,19 +666,12 @@ pub fn net_control(
                     if relayed && heard_directly {
                         continue;
                     }
-                    let news = votes.0.get(&voter) != Some(&(tick, missing.clone()));
-                    if news {
-                        votes.0.insert(voter, (tick, missing.clone()));
+                    let observation = (tick, missing.clone());
+                    if votes.0.get(&voter) != Some(&observation) {
+                        votes.0.insert(voter, observation);
                         match authority {
                             // Same relay split as a pause proposal.
-                            Authority::Peers => forward(
-                                &mut net,
-                                InGameMessage::StallVote {
-                                    voter,
-                                    tick,
-                                    missing,
-                                },
-                            ),
+                            Authority::Peers => forward(&mut net, message),
                             Authority::Host { .. } => {}
                         }
                     }
@@ -462,53 +710,107 @@ pub fn net_control(
         return;
     }
 
-    for paused in requests {
+    for paused in pause_requests {
         // Pausing takes effect a margin ahead so every node freezes at the same
         // tick; resuming applies at the current (already frozen) tick.
         let effective = if session.is_paused() {
             tick
         } else {
-            tick + PAUSE_DELAY
+            tick + CONTROL_DELAY
         };
-        let proposal = match authority {
-            Authority::Host { .. } if host => InGameMessage::PauseAt {
+        route_request(
+            &mut net,
+            &mut pending.0,
+            &session,
+            Proposal {
+                proposer: local,
+                effective,
+                value: paused,
+            },
+            InGameMessage::PauseAt {
                 proposer: local,
                 tick: effective,
                 paused,
             },
-            Authority::Host { .. } => {
-                // A client asks the host to decide; it applies on the resulting
-                // PauseAt.
-                InGameMessage::PauseRequest { paused }
-            }
-            // No host to ask: any node proposes directly, and colliding
-            // proposals resolve identically everywhere in `propose`.
-            Authority::Peers => InGameMessage::PauseAt {
+            InGameMessage::PauseRequest { paused },
+        );
+    }
+
+    for speed in speed_requests {
+        // A speed change is wall-clock only, so the margin buys alignment, not
+        // correctness: every node changes pace at the same tick, so nobody is
+        // briefly running a different cadence than the tick it is on. Unlike a
+        // pause it is never stamped at a frozen tick — a change due at the tick
+        // a concurrent resume unfreezes races that resume, and a node that moved
+        // first would discard it as stale, leaving the speeds divergent for
+        // good. A speed is inert while the tick is frozen anyway, so it loses
+        // nothing by pending until the resumed loop reaches its tick.
+        let effective = tick + CONTROL_DELAY;
+        route_request(
+            &mut net,
+            &mut speeds.0,
+            &session,
+            Proposal {
+                proposer: local,
+                effective,
+                value: speed,
+            },
+            InGameMessage::SpeedAt {
                 proposer: local,
                 tick: effective,
-                paused,
+                speed,
             },
+            InGameMessage::SpeedRequest { speed },
+        );
+    }
+
+    // Tell the peers what this node can hold, on its interval. Soft state, so it
+    // is re-sent rather than acknowledged, and a peer folds whatever it last
+    // heard.
+    // Once per interval, and once per tick: this system runs on every step, and a
+    // tick frozen by a pause or a stalled peer would otherwise report on every
+    // one of them.
+    if let Some(nominal) = nominal.0
+        && throttle_config.share_capacity
+        && tick.is_multiple_of(CAPACITY_INTERVAL)
+        && capacities.claim_report_slot(tick)
+    {
+        let sustainable = tick::sustainable_factor(pacing.exec_millis, tick::millis(nominal));
+        let own = GameSpeed::new(sustainable.max(MIN_CAPACITY));
+        // The host node reports the minimum of its own capacity and what it has
+        // heard. Where the control links form a star, a client's report reaches
+        // only the host, and this fold is what carries it on to the rest; a
+        // report cannot be relayed verbatim, since it is attributed to its
+        // sender. Everyone still recovers on its own: the fold reads each
+        // player's *latest* report, and reports come from raw tick cost, so a
+        // node that catches back up raises the minimum within an interval.
+        let capacity = if host {
+            capacities
+                .tightest(tick)
+                .map_or(own, |heard| own.min(heard))
+        } else {
+            own
         };
-        if let InGameMessage::PauseAt { tick, paused, .. } = proposal {
-            let _ = pending.propose(tick, local, paused);
-        }
-        if let Err(error) = net.0.send_control(&ControlMessage::InGame(proposal)) {
-            eprintln!("failed to send pause control: {error}");
+        if let Err(error) =
+            net.0
+                .send_control(&ControlMessage::InGame(InGameMessage::CapacityReport {
+                    capacity,
+                }))
+        {
+            eprintln!("failed to send capacity report: {error}");
         }
     }
 
-    // Apply every change whose tick has arrived, in tick order, then discard
-    // it — the control links are reliable, so nothing needs a resend tail.
-    let mut applied = false;
-    for (_, &(_, paused)) in pending.0.range(..=tick) {
+    // Apply what each store has due, then discard it — the control links are
+    // reliable, so nothing needs a resend tail.
+    if let Some(paused) = pending.0.claim_due(tick) {
         session.set_paused(paused);
-        applied = true;
-    }
-    if applied {
         // Clear any blocked-streak accrued across the pause boundary so a resume
         // does not immediately trip a drop.
         streak.reset();
-        pending.0.retain(|&effective, _| effective > tick);
+    }
+    if let Some(speed) = speeds.0.claim_due(tick) {
+        session.set_speed(speed);
     }
 }
 
@@ -531,10 +833,28 @@ pub fn net_receive(
     mut net: NonSendMut<NetworkSession>,
     mut frames: ResMut<InputFrames>,
     mut tracker: ResMut<DesyncTracker>,
+    mut margins: ResMut<FrameMargins>,
+    session: Res<GameSession>,
 ) {
+    let now = session.tick();
     let received = net.0.drain_received();
     for frame in received.frames {
-        frames.push_frame(frame);
+        let (player, tick) = (frame.player, frame.tick);
+        // A frame naming a player no slot seats is a corrupt message, not input:
+        // recording it would index past the session's per-player stores and panic
+        // the receiver. The same guard the authoritative drop gets.
+        if session.slot(player).is_none() {
+            continue;
+        }
+        // How much room the frame arrived with, counted only the first time it
+        // shows up — recording it says whether that is now. Every node
+        // rebroadcasts a whole window of frames each tick (see `net_broadcast`),
+        // and a copy of something already held says nothing about whether its
+        // sender is keeping up. The tick guard is for a frame that arrives after
+        // its own tick executed, which only a dropped player's can.
+        if frames.push_frame(frame) && tick >= now {
+            margins.record(player, now, FixedU64::from_num(tick - now));
+        }
     }
     for checksum in received.checksums {
         tracker
@@ -817,6 +1137,98 @@ fn steers_local_players(session: &GameSession, net: &NetworkSession, is_host: bo
                 && session.sources_locally(slot, is_host)
                 && awaits_frames(session, slot.id())
         })
+}
+
+/// Merges one received tick-aligned proposal into its pending store: refuses a
+/// sender the authority does not let decide, drops echoes and stale ticks, and
+/// floods news — `message`, the proposal exactly as it arrived — onward on a
+/// mesh.
+///
+/// Under host authority only the host node may announce a change — the guard
+/// [`DropAt`](InGameMessage::DropAt) already has. A change any client could
+/// inject would be applied here and forwarded nowhere, steering this node away
+/// from every other.
+///
+/// An echo of this node's own proposal teaches nobody anything (the original
+/// already went to every link), and a proposal for a tick already passed is a
+/// stale copy of an applied-and-discarded change — re-learning either would
+/// resurrect it in the apply loop. Legitimate traffic always targets the
+/// present or future: the effective tick leads the proposer by more than the
+/// lockstep skew.
+fn receive_change<T: Copy + Ord>(
+    net: &mut NetworkSession,
+    pending: &mut PendingChange<T>,
+    session: &GameSession,
+    from: PeerId,
+    proposal: Proposal<T>,
+    message: InGameMessage,
+) {
+    let Proposal {
+        proposer,
+        effective,
+        value,
+    } = proposal;
+    let authority = session.authority();
+    if matches!(authority, Authority::Host { .. }) && !net.0.is_host_peer(from) {
+        return;
+    }
+    if proposer == session.local_player() {
+        return;
+    }
+    // A proposal for a tick already passed is a stale copy of a change that was
+    // applied and is now dead; re-learning it would resurrect it. Converging a
+    // genuinely late change instead would need each proposer's changes to carry
+    // a sequence number, so a receiver could tell "newer than what I hold" from
+    // "a duplicate of what I already applied" — which a tick alone cannot say.
+    if effective < session.tick() {
+        return;
+    }
+    if pending.propose(effective, proposer, value) {
+        match authority {
+            // A mesh has no relay of its own, so each node passes on what it
+            // just learned; under host authority the host's own broadcast
+            // already reached everybody.
+            Authority::Peers => forward(net, message),
+            Authority::Host { .. } => {}
+        }
+    }
+}
+
+/// Routes one locally-requested tick-aligned change. The deciding node — the
+/// host under host authority, every node under peer authority — merges the
+/// change into its own pending store and announces the authoritative `at`
+/// message, so it applies at `effective` here and everywhere alike; colliding
+/// proposals resolve identically on every node in `propose`. A client under
+/// host authority sends the bare `request` instead and applies on the
+/// authoritative answer.
+fn route_request<T: Copy + Ord>(
+    net: &mut NetworkSession,
+    pending: &mut PendingChange<T>,
+    session: &GameSession,
+    proposal: Proposal<T>,
+    at: InGameMessage,
+    request: InGameMessage,
+) {
+    let deciding = match session.authority() {
+        Authority::Host { .. } => net.0.is_host_node(),
+        Authority::Peers => true,
+    };
+    let sent = if deciding {
+        if !pending.propose(proposal.effective, proposal.proposer, proposal.value) {
+            // Nothing changed here: either the tick already holds this very
+            // change, or this proposal lost to one pending for the same tick.
+            // Announcing it anyway would hand the peers a value this node is not
+            // itself using — and a peer whose entry is already claimed accepts a
+            // differing change, so it would act on it.
+            return;
+        }
+        at
+    } else {
+        request
+    };
+    if let Err(error) = net.0.send_control(&ControlMessage::InGame(sent.clone())) {
+        eprintln!("failed to send control {sent:?}: {error}");
+    }
 }
 
 #[cfg(test)]

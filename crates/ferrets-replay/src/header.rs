@@ -1,7 +1,8 @@
 //! The replay header: everything needed to set up a game before its recorded
 //! input is replayed.
 
-use ferrets_simulation::skirmish::Skirmish;
+use ferrets_geometry::projection::Projection;
+use ferrets_simulation::{movement_model::MovementModel, skirmish::Skirmish};
 use serde::{Deserialize, Serialize};
 
 /// The replay file format this build writes and reads. Bumped whenever the
@@ -17,6 +18,10 @@ pub struct ReplayHeader {
     pub engine_version: String,
     /// The game the recording is of.
     pub game: RecordedGame,
+    /// How bodies occupied space in the recorded game.
+    pub movement_model: MovementModel,
+    /// The distance metric the recorded game was played under.
+    pub projection: Projection,
 }
 
 /// How the recorded game was defined.
@@ -38,11 +43,18 @@ impl ReplayHeader {
     ///
     /// A replay is the same for every participant, and a viewer is a spectator.
     /// Which slot to follow is the viewer's choice.
-    pub fn new(game: RecordedGame) -> Self {
+    ///
+    /// The movement model and the projection are recorded because they shape the
+    /// simulation without being derivable from the game's name: a recording
+    /// rebuilt under the other model or metric is a different game, and shows up
+    /// as a checksum mismatch rather than a load failure.
+    pub fn new(game: RecordedGame, movement_model: MovementModel, projection: Projection) -> Self {
         Self {
             format_version: FORMAT_VERSION,
             engine_version: ferrets_simulation::VERSION.to_string(),
             game,
+            movement_model,
+            projection,
         }
     }
 }

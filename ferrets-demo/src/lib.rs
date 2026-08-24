@@ -6,7 +6,7 @@
 
 use bevy::prelude::*;
 use ferrets_bevy_plugin::{
-    NetworkPlugin, ReplayPlayback, ReplayPlugin, SimulationPlugin, ai::AiPlugin,
+    NetworkPlugin, NominalTimestep, ReplayPlayback, ReplayPlugin, SimulationPlugin, ai::AiPlugin,
 };
 use ferrets_simulation::session::GameSession;
 
@@ -17,10 +17,11 @@ mod camera;
 pub mod content;
 mod debug;
 mod hud;
-mod input;
+pub mod input;
 pub mod lobby;
 pub mod map;
 mod menu;
+pub mod playback;
 mod render;
 mod replay;
 pub mod scenario;
@@ -28,7 +29,7 @@ pub mod settings;
 pub mod setup;
 pub mod skirmish;
 mod states;
-mod time;
+pub mod time;
 mod view;
 
 /// Builds the demo app and runs it until the window closes.
@@ -37,6 +38,13 @@ pub fn run() {
     // local player) and starts it when the game begins.
     let session = GameSession::pending();
 
+    // The demo's cadence, stated once: the engine's notion of the nominal
+    // timestep is read off the very clock being installed — explicitly rather
+    // than left to the engine's first-read latch, so it never depends on what
+    // order startup ran in.
+    let fixed_clock = Time::<Fixed>::from_hz(time::NOMINAL_TICK_HZ);
+    let nominal = NominalTimestep(Some(fixed_clock.timestep()));
+
     let mut app = App::new();
     app.add_plugins(DefaultPlugins)
         .add_plugins(SimulationPlugin::new(session, map::build()))
@@ -44,13 +52,13 @@ pub fn run() {
         .add_plugins(ReplayPlugin)
         .add_plugins(AiPlugin)
         .init_state::<GameState>()
-        .insert_resource(Time::<Fixed>::from_hz(20.0))
+        .insert_resource(fixed_clock)
+        .insert_resource(nominal)
         // The void outside the playable field; the field itself is drawn as
         // terrain tiles.
         .insert_resource(ClearColor(Color::srgb(0.09, 0.09, 0.11)))
         .init_resource::<settings::Settings>()
         .init_resource::<view::WorldView>()
-        .init_resource::<time::TickTimer>()
         .init_resource::<input::DragStart>()
         .init_resource::<input::InputMode>()
         .init_resource::<input::Primary>()
@@ -118,16 +126,8 @@ pub fn run() {
         // Tick-synced time: bracket each fixed step to measure and scale it, and
         // snapshot positions before the simulation advances (for interpolation).
         .add_systems(
-            FixedFirst,
-            time::mark_tick_start.run_if(in_state(GameState::InGame)),
-        )
-        .add_systems(
             FixedPreUpdate,
             render::record_prev.run_if(in_state(GameState::InGame)),
-        )
-        .add_systems(
-            FixedLast,
-            time::scale_time_to_ticks.run_if(in_state(GameState::InGame)),
         )
         // Command-producing input only when a live player is at the controls; during
         // replay playback the recorded frames are the sole input, so stray clicks
@@ -141,7 +141,6 @@ pub fn run() {
             Update,
             (
                 input::track_primary,
-                input::pause_input,
                 input::selection_input,
                 input::order_input,
                 input::stance_input,
@@ -220,6 +219,20 @@ pub fn run() {
         .add_systems(
             Update,
             (debug::draw_hierarchy, debug::draw_bodies).run_if(in_state(GameState::InGame)),
+        )
+        // Pause, speed, single-step and seek steer how the game is watched rather
+        // than what happens in it — none of them issues a command — so they stay
+        // live during playback, unlike the command-producing input above.
+        .add_systems(
+            Update,
+            (
+                input::pause_input,
+                input::speed_input,
+                input::step_input,
+                input::seek_input,
+            )
+                .chain()
+                .run_if(in_state(GameState::InGame)),
         );
 
     app.run();

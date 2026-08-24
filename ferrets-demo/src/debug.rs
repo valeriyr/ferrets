@@ -1,7 +1,7 @@
 //! Debug overlay: a live input/sim readout, gizmos, and sandbox spawn.
 
 use bevy::{prelude::*, window::PrimaryWindow};
-use ferrets_bevy_plugin::PendingInput;
+use ferrets_bevy_plugin::{PendingInput, TickPacing};
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 
@@ -136,6 +136,8 @@ pub fn spawn_debug(
 pub fn debug_readout(
     mouse: Res<ButtonInput<MouseButton>>,
     session: Res<GameSession>,
+    fixed: Res<Time<Fixed>>,
+    pacing: Res<TickPacing>,
     selection: Res<Selection>,
     mode: Res<InputMode>,
     map: Res<Map>,
@@ -174,9 +176,17 @@ pub fn debug_readout(
         MovementModel::Continuous => "continuous",
     };
 
+    // The cadence the game is asking for, and the one it is actually holding: a
+    // throttled game is slower than its chosen speed, and this is where that
+    // shows.
+    // The timestep already carries the throttle, so it *is* the cadence being
+    // held; what was asked for is that cadence divided back out.
+    let held_hz = 1.0 / fixed.timestep().as_secs_f32();
+    let wanted_hz = held_hz / pacing.throttle.to_num::<f32>();
+
     if let Ok(mut text) = text.single_mut() {
         **text = format!(
-            "tick {} | {} | layer {} | cursor {} | hover {} | LMB {} RMB {} | selected {} | {}",
+            "tick {} | {held_hz:.1}/{wanted_hz:.0} Hz | {} | layer {} | cursor {} | hover {} | LMB {} RMB {} | selected {} | {}",
             session.tick(),
             model_str,
             debug.layer,

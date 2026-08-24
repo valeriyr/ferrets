@@ -47,8 +47,8 @@ use ferrets_simulation::{
 };
 
 use crate::{
-    SimulationSet, network::NetworkSession, replay, session_is_active, session_is_not_paused,
-    systems,
+    FixedUpdateSet, ReplayPlayback, network::NetworkSession, session_is_active,
+    session_is_not_paused,
 };
 
 /// Ticks a think is offset per player id, spreading the work so co-hosted
@@ -123,24 +123,22 @@ impl Plugin for AiPlugin {
         app.add_systems(
             FixedUpdate,
             supply_unmanned_input
-                .in_set(SimulationSet)
-                .before(systems::flush_input)
+                .in_set(FixedUpdateSet::Sources)
                 .run_if(
                     session_is_active
                         .and(session_is_not_paused)
-                        .and(not(resource_exists::<replay::ReplayPlayback>)),
+                        .and(not(resource_exists::<ReplayPlayback>)),
                 ),
         );
         app.add_systems(
             FixedUpdate,
             supply_ai_input
-                .in_set(SimulationSet)
+                .in_set(FixedUpdateSet::Sources)
                 .after(supply_unmanned_input)
-                .before(systems::flush_input)
                 .run_if(
                     session_is_active
                         .and(session_is_not_paused)
-                        .and(not(resource_exists::<replay::ReplayPlayback>))
+                        .and(not(resource_exists::<ReplayPlayback>))
                         .and(resource_exists::<AiActive>),
                 ),
         );

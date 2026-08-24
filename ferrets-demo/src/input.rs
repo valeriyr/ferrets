@@ -3,7 +3,7 @@
 //! `PendingInput`, so it flows through the deterministic command pipeline.
 
 use bevy::{prelude::*, window::PrimaryWindow};
-use ferrets_bevy_plugin::{NetworkActive, PauseIntent, PendingInput};
+use ferrets_bevy_plugin::{NetworkActive, PauseIntent, PendingInput, SpeedIntent, tick};
 use ferrets_content::{registry::ContentRegistry, skills::SkillId};
 use ferrets_geometry::cell_pos::CellPos;
 use ferrets_math::{FixedU64, fixed_urect::FixedURect, fixed_uvec2::FixedUVec2};
@@ -28,6 +28,7 @@ use ferrets_simulation::{
 use crate::{
     camera,
     render::{self, CELL_PX},
+    time::SpeedStep,
 };
 
 /// Drag below this many pixels is treated as a click, not a box-select.
@@ -42,24 +43,89 @@ const DOUBLE_CLICK_SECS: f32 = 0.35;
 #[derive(Resource, Default)]
 pub struct LastClick(Option<(f32, SimulationId)>);
 
-/// Toggles pause on the `P` key. In a network game this records the local intent,
-/// which the host turns into a tick-aligned pause every node applies together (a
-/// client forwards it to the host); a local game pauses its session immediately.
+/// Toggles pause on the `P` key by recording the local intent; the engine
+/// applies it — immediately off the network, or as a tick-aligned change every
+/// node applies together through the session's authority on it. The demo never
+/// touches the session itself, so it cannot pick the wrong mechanism.
+///
+/// Steering a replay counts as watching, not commanding, so this stays live
+/// during playback — pausing a recording is how a moment gets inspected.
 pub fn pause_input(
     keys: Res<ButtonInput<KeyCode>>,
-    networked: Option<Res<NetworkActive>>,
+    session: Res<GameSession>,
     mut intent: ResMut<PauseIntent>,
-    mut session: ResMut<GameSession>,
 ) {
     if !keys.just_pressed(KeyCode::KeyP) {
         return;
     }
-    let want_paused = !session.is_paused();
-    if networked.is_some() {
-        intent.0 = Some(want_paused);
-    } else {
-        session.set_paused(want_paused);
+    intent.0 = Some(!session.is_paused());
+}
+
+/// Steps the game speed on the `-` and `=` keys (numpad too) by recording the
+/// local intent; the engine applies it — immediately off the network, or as a
+/// tick-aligned change every node applies together through the session's
+/// authority on it. Fast-forward steps are refused while networked — nobody
+/// else in the match agreed to be rushed.
+///
+/// The rung the keys step from is read off the session, the one owner of the
+/// game's speed: a peer's change lands there without this node pressing
+/// anything, and a networked request shows only once the authority applies it.
+pub fn speed_input(
+    keys: Res<ButtonInput<KeyCode>>,
+    networked: Option<Res<NetworkActive>>,
+    session: Res<GameSession>,
+    mut intent: ResMut<SpeedIntent>,
+) {
+    let up = keys.just_pressed(KeyCode::Equal) || keys.just_pressed(KeyCode::NumpadAdd);
+    let down = keys.just_pressed(KeyCode::Minus) || keys.just_pressed(KeyCode::NumpadSubtract);
+    let current = SpeedStep::of(session.speed());
+    let wanted = match (up, down) {
+        (true, false) => current.faster(),
+        (false, true) => current.slower(),
+        (true, true) | (false, false) => return,
+    };
+    // Fast-forward is refused while networked — nobody else agreed to be rushed —
+    // but only as a step *into* it. Stepping down from a fast-forward rung (one a
+    // peer put the session on) must stay possible, or the game cannot be slowed
+    // back to a playable pace.
+    let rushing = wanted.fast_forward() && !current.fast_forward();
+    if wanted == current || (rushing && networked.is_some()) {
+        return;
     }
+    intent.0 = Some(wanted.speed());
+}
+
+/// Requests a single-tick step on the `.` key, for walking a paused moment
+/// through tick by tick. Applied by the engine ahead of the next frame, which
+/// also refuses it where it must not run — a networked session, a finished
+/// replay.
+pub fn step_input(keys: Res<ButtonInput<KeyCode>>, mut commands: Commands) {
+    if !keys.just_pressed(KeyCode::Period) {
+        return;
+    }
+    commands.insert_resource(tick::Step);
+}
+
+/// Fast-forwards ten seconds on the `]` key — a minute with shift — through a
+/// replay's recording or ahead in a local game. Applied by the engine ahead of
+/// the next frame, which also refuses it where it must not run — a networked
+/// session, a finished replay. A press while a seek is already running
+/// retargets it from wherever it has reached, extending the fast-forward.
+pub fn seek_input(
+    keys: Res<ButtonInput<KeyCode>>,
+    session: Res<GameSession>,
+    mut commands: Commands,
+) {
+    if !keys.just_pressed(KeyCode::BracketRight) {
+        return;
+    }
+    let seconds = if keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight) {
+        60
+    } else {
+        10
+    };
+    let ticks = seconds * crate::time::NOMINAL_TICK_HZ as u32;
+    commands.insert_resource(tick::Seek(session.tick() + ticks));
 }
 
 /// What the next left-click does.

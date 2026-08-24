@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use bevy::prelude::*;
-use ferrets_bevy_plugin::{PendingInput, SimulationPlugin, instantiate_scenario};
+use ferrets_bevy_plugin::{PendingInput, SimulationPlugin};
 use ferrets_content::registry::ContentRegistry;
 use ferrets_demo::{content::CONTENT, scenario};
 use ferrets_geometry::projection::Projection;
@@ -48,8 +48,10 @@ pub fn scenario_app(model: MovementModel) -> App {
     {
         let world = app.world_mut();
         *world.resource_mut::<ContentRegistry>() = registry;
-        instantiate_scenario(world, &mission);
-        world.resource_mut::<GameSession>().start();
+        // The demo's own scenario spawner, so a test plays the scene a player
+        // would (its map, its stockpile, its player stats).
+        world.insert_resource(scenario::CurrentScenario(mission));
+        scenario::spawn_scenario_scene(world);
     }
     app
 }

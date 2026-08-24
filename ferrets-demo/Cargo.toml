@@ -11,6 +11,10 @@ description = "ferrets demo game."
 name = "demo"
 path = "src/main.rs"
 
+[[bin]]
+name = "replay"
+path = "src/bin/replay.rs"
+
 [dependencies]
 bevy = { workspace = true, features = ["2d", "ui", "default_font"] }
 rfd = "0.17"

@@ -1,11 +1,13 @@
 //! The game session: lifecycle and participants.
 
+use ferrets_math::FixedU64;
 use ferrets_simulation::session::{
     GameResult, GameSession, Winner,
     ai_hosting::AiHosting,
     authority::Authority,
     drop_policy::DropPolicy,
     finish_policy::FinishPolicy,
+    game_speed::GameSpeed,
     player_slot::{Participation, PlayerSlot},
     player_type::PlayerType,
 };
@@ -87,6 +89,7 @@ fn configured_session_starts_pending() {
     assert!(!session.is_active());
     assert!(!session.is_running());
     assert!(!session.is_blocked());
+    assert!(!session.is_advancing());
 
     assert_eq!(session.result(), None);
 
@@ -100,6 +103,7 @@ fn start_runs_session() {
     assert!(session.is_active());
     assert!(session.is_running());
     assert!(!session.is_blocked());
+    assert!(session.is_advancing());
 }
 
 #[test]
@@ -110,11 +114,13 @@ fn set_blocked_toggles_between_running_and_blocked() {
     assert!(session.is_active());
     assert!(!session.is_running());
     assert!(session.is_blocked());
+    assert!(!session.is_advancing());
 
     session.set_blocked(false);
     assert!(session.is_active());
     assert!(session.is_running());
     assert!(!session.is_blocked());
+    assert!(session.is_advancing());
 }
 
 #[test]
@@ -126,6 +132,7 @@ fn set_blocked_does_nothing_before_start() {
     assert!(!session.is_active());
     assert!(!session.is_running());
     assert!(!session.is_blocked());
+    assert!(!session.is_advancing());
 }
 
 #[test]
@@ -138,6 +145,7 @@ fn set_blocked_does_nothing_after_finish() {
     assert!(!session.is_active());
     assert!(!session.is_running());
     assert!(!session.is_blocked());
+    assert!(!session.is_advancing());
 }
 
 #[test]
@@ -167,6 +175,7 @@ fn finish_records_result_and_deactivates() {
     assert!(!session.is_active());
     assert!(!session.is_running());
     assert!(!session.is_blocked());
+    assert!(!session.is_advancing());
 }
 
 #[test]
@@ -349,6 +358,40 @@ fn is_winner_covers_whole_team_or_lone_player() {
     // A lone-player victory: only that player.
     assert!(session.is_winner(2, Winner::Player(2)));
     assert!(!session.is_winner(0, Winner::Player(2)));
+}
+
+#[test]
+fn paused_session_is_running_but_not_advancing() {
+    // The distinction the tick loop's advancing systems gate on, and the one
+    // neither state answer can give on its own: a pause stops the loop without
+    // changing what the session is.
+    let mut session = session(2);
+    session.set_paused(true);
+
+    assert!(session.is_running(), "still running");
+    assert!(session.is_active(), "still active");
+    assert!(!session.is_advancing(), "but not advancing");
+
+    session.set_paused(false);
+    assert!(session.is_advancing());
+}
+
+//
+// ─── Speed ────────────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn fresh_session_runs_at_normal_speed() {
+    assert_eq!(session(2).speed(), GameSpeed::NORMAL);
+}
+
+#[test]
+fn set_speed_is_kept() {
+    let mut session = session(2);
+    let quarter = GameSpeed::new(FixedU64::from_num(0.25));
+    session.set_speed(quarter);
+    assert_eq!(session.speed(), quarter);
+    assert_eq!(session.speed().factor(), FixedU64::from_num(0.25));
 }
 
 //

@@ -9,14 +9,9 @@ use std::collections::BTreeMap;
 use bevy::prelude::*;
 use ferrets_bevy_plugin::{
     ai::{AiPlugin, AiRuntimes, game_view, install_ai_runtimes},
-    install_replay_playback, spawn,
+    spawn,
 };
-use ferrets_replay::{
-    buffer::SharedBuffer,
-    header::{RecordedGame, ReplayHeader},
-    recorder::Recorder,
-    replay::Replay,
-};
+use ferrets_replay::{buffer::SharedBuffer, recorder::Recorder, replay::Replay};
 use ferrets_script::{
     ai::{AiVision, view::content::ContentView},
     engine::{ScriptEngine, lua::LuaEngine},
@@ -33,7 +28,6 @@ use ferrets_simulation::{
         player_slot::{PlayerId, PlayerSlot},
         player_type::PlayerType,
     },
-    skirmish::Skirmish,
 };
 
 //
@@ -150,7 +144,7 @@ fn replay_playback_gates_ai_sources_off() {
     ]);
     app.add_plugins(AiPlugin);
     install_ai(&mut app, &[(1, COUNTER)]);
-    install_replay_playback(app.world_mut(), empty_replay());
+    ferrets_bevy_plugin::replay::playback::install_per_game(app.world_mut(), empty_replay());
     app.world_mut().resource_mut::<GameSession>().start();
 
     utils::run_steps(&mut app, 1);
@@ -325,15 +319,14 @@ fn run_ai_session() -> Vec<u64> {
 /// A replay with a matching header and no recorded ticks.
 fn empty_replay() -> Replay {
     let buffer = SharedBuffer::default();
-    let header = ReplayHeader::new(RecordedGame::Skirmish(Skirmish {
-        slots: vec![
+    let header = utils::skirmish_header(
+        vec![
             PlayerSlot::occupied(0, PlayerType::Human, None, None),
             PlayerSlot::occupied(1, PlayerType::Ai, Some("human"), None),
             PlayerSlot::free(2),
         ],
-        map: "test".to_string(),
-        finish_policy: FinishPolicy::Endless,
-    }));
+        FinishPolicy::Endless,
+    );
     drop(Recorder::new(buffer.clone(), &header).expect("start recording"));
     Replay::read(buffer.bytes().as_slice()).expect("read replay")
 }

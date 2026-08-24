@@ -10,6 +10,7 @@ description = "Deterministic RTS game simulation."
 [dependencies]
 bevy_ecs.workspace = true
 serde.workspace = true
+thiserror.workspace = true
 xxhash-rust = { version = "0.8", features = ["xxh64"] }
 
 ferrets-content.workspace = true

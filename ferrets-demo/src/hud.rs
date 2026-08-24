@@ -36,6 +36,7 @@ use ferrets_simulation::{
 use crate::{
     input::{InputMode, Primary, TargetedOrder},
     states::{GameState, InGameUi},
+    time::SpeedStep,
 };
 
 const BUTTON_NORMAL: Color = Color::srgb(0.20, 0.20, 0.24);
@@ -225,6 +226,9 @@ pub fn setup_hud(mut commands: Commands, registry: Res<ContentRegistry>) {
             position_type: PositionType::Absolute,
             bottom: Val::Px(8.0),
             left: Val::Px(10.0),
+            // Ends clear of the Leave button in the bottom-right, so the line
+            // wraps instead of running underneath it on a narrow window.
+            right: Val::Px(120.0),
             ..default()
         },
     ));
@@ -373,20 +377,31 @@ pub fn leave_button(
 }
 
 /// Shows replay-playback status: nothing during a live game, an "ended" note once
-/// playback freezes, or a divergence warning if a recorded checksum failed.
+/// playback freezes, or a divergence warning if a recorded checksum failed. A
+/// paused or rescaled game says so too, whichever it is.
 pub fn update_replay_note(
     playback: Option<Res<ReplayPlayback>>,
+    session: Res<GameSession>,
     mut text: Query<&mut Text, With<ReplayNote>>,
 ) {
+    // The speed named is the session's own, so a change a peer made — which never
+    // touched this node's keys — reads the same as one made here.
+    let speed = SpeedStep::of(session.speed());
     let message = match playback {
         Some(playback) if playback.mismatch().is_some() => {
             format!("Replay diverged at tick {}", playback.mismatch().unwrap())
         }
         Some(playback) if playback.is_done() => String::from("Replay ended"),
+        _ if session.is_paused() => String::from("Paused"),
+        _ if speed != SpeedStep::Normal => format!("Speed {}", speed.label()),
         _ => String::new(),
     };
 
-    if let Ok(mut text) = text.single_mut() {
+    // Written only on change: the paused and rescaled notes stand for minutes at
+    // a time, and rewriting the text re-shapes it every frame.
+    if let Ok(mut text) = text.single_mut()
+        && **text != message
+    {
         **text = message;
     }
 }
@@ -440,7 +455,7 @@ pub fn update_help(
     mut text: Query<&mut Text, With<HelpText>>,
 ) {
     let mut message = String::from(
-        "LMB select (Shift add, dbl-click all of type) | RMB move/harvest/attack | F/R/G/T/B/Q orders | X stance | 1-0 groups (Ctrl set) | V reveal | F1 debug | F2 spawn | F3 layer",
+        "LMB select (Shift add, dbl-click all of type) | RMB move/harvest/attack | F/R/G/T/B/Q orders | X stance | 1-0 groups (Ctrl set)\nV reveal | P pause | -/= speed | . step | ] seek | F1 debug | F2 spawn | F3 layer",
     );
 
     let local = session.local_player();

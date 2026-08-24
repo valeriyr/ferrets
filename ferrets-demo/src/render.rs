@@ -627,8 +627,11 @@ pub fn draw_selection(
     }
 }
 
-/// How long a cast pulse stays on screen, in seconds.
-const PULSE_SECS: f32 = 0.45;
+/// How long a cast pulse stays on screen, in ticks — 0.45 s at the nominal
+/// cadence. Counted in ticks because it marks something the simulation did: at
+/// any game speed, and under any throttle, the ring covers the same stretch of
+/// the game rather than the same stretch of wall time.
+const PULSE_TICKS: u32 = 9;
 
 /// Ring pulses marking skills that have just been cast.
 #[derive(Resource, Default)]
@@ -637,8 +640,8 @@ pub struct SkillPulses {
     /// order. A skill leaving that set started its cooldown, which only a
     /// successful cast does — so rejected casts never draw a pulse.
     was_ready: HashMap<SimulationId, Vec<bool>>,
-    /// Live pulses: the caster and the seconds of life left.
-    active: Vec<(SimulationId, f32)>,
+    /// Live pulses: the caster and the tick its cast was spotted on.
+    active: Vec<(SimulationId, u32)>,
 }
 
 /// Draws an expanding ring on a unit for a moment after one of its skills is cast
@@ -651,7 +654,8 @@ pub struct SkillPulses {
 /// mark the caster.
 pub fn draw_skill_pulses(
     mut gizmos: Gizmos,
-    time: Res<Time>,
+    session: Res<GameSession>,
+    fixed: Res<Time<Fixed>>,
     mut pulses: ResMut<SkillPulses>,
     casters: Query<(&EntityInfoComponent, &SkillsComponent)>,
     rendered: Query<
@@ -670,26 +674,27 @@ pub fn draw_skill_pulses(
                 .zip(&ready)
                 .any(|(before, now)| *before && !*now)
         {
-            pulses.active.push((info.id(), PULSE_SECS));
+            pulses.active.push((info.id(), session.tick()));
         }
         pulses.was_ready.insert(info.id(), ready);
     }
     pulses.was_ready.retain(|id, _| seen.contains(id));
 
-    let delta = time.delta_secs();
-    for (_, remaining) in &mut pulses.active {
-        *remaining -= delta;
-    }
-    pulses.active.retain(|(_, remaining)| *remaining > 0.0);
+    // Ticks elapsed, with the fixed step's overstep folded in so the ring grows
+    // smoothly between ticks rather than in steps.
+    let now = session.tick() as f32 + fixed.overstep_fraction();
+    pulses
+        .active
+        .retain(|&(_, started)| now - started as f32 <= PULSE_TICKS as f32);
 
-    for &(caster, remaining) in &pulses.active {
+    for &(caster, started) in &pulses.active {
         let Some((_, transform, _)) = rendered.iter().find(|(info, _, visibility)| {
             info.id() == caster && !matches!(visibility, Visibility::Hidden)
         }) else {
             continue;
         };
         // Expand and fade over the pulse's life.
-        let progress = 1.0 - remaining / PULSE_SECS;
+        let progress = ((now - started as f32) / PULSE_TICKS as f32).clamp(0.0, 1.0);
         let radius = CELL_PX * (0.35 + 0.55 * progress);
         gizmos.circle_2d(
             transform.translation.truncate(),

@@ -1,5 +1,5 @@
-//! The committed-input store: first-write-wins recording and readiness
-//! relative to the players a tick requires.
+//! The committed-input store: first-write-wins recording, what a recording
+//! answers about itself, and readiness relative to the players a tick requires.
 
 use ferrets_simulation::{
     command::PlayerCommand,
@@ -39,6 +39,28 @@ fn frames_from_players_not_required_are_ignored() {
     let ready = frames.ready_commands(2, &[0]).expect("tick ready");
 
     assert_eq!(ready, vec![(0, [PlayerCommand::Stop].as_slice())]);
+}
+
+#[test]
+fn recording_frame_answers_whether_it_was_new() {
+    // Recording says whether the frame was the first for its player and tick, so
+    // a caller measuring arrivals need not ask the store twice — every node
+    // resends a window of frames each tick, and a copy is not an arrival.
+    let mut frames = InputFrames::new(2);
+
+    assert!(frames.push_frame(stop_frame(0, 2)), "the first copy is new");
+    assert!(
+        !frames.push_frame(stop_frame(0, 2)),
+        "an identical resend is not",
+    );
+    assert!(
+        frames.push_frame(stop_frame(1, 2)),
+        "another player's frame for the same tick is new",
+    );
+    assert!(
+        frames.push_frame(stop_frame(0, 3)),
+        "and so is the same player's for another tick",
+    );
 }
 
 #[test]

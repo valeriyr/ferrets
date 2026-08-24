@@ -1,55 +1,117 @@
-//! Couples render time to the simulation's real tick cadence.
+//! The cadence the game plays at: the tick rate it installs, and the speeds a
+//! player may choose between.
 //!
-//! All on-screen motion is interpolated against the fixed-tick clock, so it can
-//! never outrun the simulation. On top of that, this measures how long each
-//! fixed step actually takes to execute and scales virtual time so that if a
-//! tick can't be computed within its budget, the whole game slows to match
-//! (slow-motion) instead of the renderer racing ahead — the applied speed is
-//! `target_tick_time / actual_tick_time`, realized with Bevy's `Time<Virtual>`.
+//! Only the *choice* lives here. Holding to it is the engine's business — it
+//! scales this cadence by the chosen speed and throttles it when a tick, or a
+//! peer, cannot keep up (see `ferrets_bevy_plugin::tick`).
 
-use std::time::Instant;
+use ferrets_math::FixedU64;
+use ferrets_simulation::session::game_speed::GameSpeed;
 
-use bevy::prelude::*;
-
-/// Target wall-time budget for one tick (the fixed timestep is 20 Hz).
-const TARGET_TICK_SECS: f32 = 1.0 / 20.0;
-/// Lowest virtual-time speed; clamps slow-motion so the game never fully stalls.
-const MIN_SPEED: f32 = 0.1;
-
-/// Measures fixed-step execution time and the resulting virtual-time speed.
-#[derive(Resource)]
-pub struct TickTimer {
-    start: Option<Instant>,
-    /// Smoothed wall time one tick takes to execute, in seconds.
-    pub exec_secs: f32,
-    /// The virtual-time speed currently applied (1.0 = real time).
-    pub speed: f32,
+/// The cadence one tick is computed at when nothing scales it: 20 ticks per
+/// second. The engine never states a rate of its own — it scales this one by the
+/// session's speed.
+pub const NOMINAL_TICK_HZ: f64 = 20.0;
+/// A speed the game offers. The engine takes any positive factor; these are the
+/// steps a player may pick from, and the top two are fast-forward — offered only
+/// where nobody is competing (a replay, or a game off the network).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SpeedStep {
+    Slowest,
+    Slow,
+    #[default]
+    Normal,
+    Fast,
+    Faster,
+    Fastest,
 }
 
-impl Default for TickTimer {
-    fn default() -> Self {
-        Self {
-            start: None,
-            exec_secs: TARGET_TICK_SECS,
-            speed: 1.0,
+impl SpeedStep {
+    /// Every rung, slowest first.
+    pub const LADDER: [Self; 6] = [
+        SpeedStep::Slowest,
+        SpeedStep::Slow,
+        SpeedStep::Normal,
+        SpeedStep::Fast,
+        SpeedStep::Faster,
+        SpeedStep::Fastest,
+    ];
+
+    /// The factor this step scales the nominal cadence by. Every step lands on a
+    /// whole number of ticks per second against [`NOMINAL_TICK_HZ`].
+    pub fn factor(self) -> FixedU64 {
+        let (numerator, denominator) = match self {
+            SpeedStep::Slowest => (1, 4),
+            SpeedStep::Slow => (1, 2),
+            SpeedStep::Normal => (1, 1),
+            SpeedStep::Fast => (2, 1),
+            SpeedStep::Faster => (4, 1),
+            SpeedStep::Fastest => (8, 1),
+        };
+        FixedU64::from_num(numerator) / FixedU64::from_num(denominator)
+    }
+
+    /// The session speed this step asks for.
+    pub fn speed(self) -> GameSpeed {
+        GameSpeed::new(self.factor())
+    }
+
+    /// Whether this step is a fast-forward one, past the pace a game is meant to
+    /// be played at.
+    pub fn fast_forward(self) -> bool {
+        match self {
+            SpeedStep::Faster | SpeedStep::Fastest => true,
+            SpeedStep::Slowest | SpeedStep::Slow | SpeedStep::Normal | SpeedStep::Fast => false,
         }
     }
-}
 
-/// Records the start of a fixed step (run in `FixedFirst`).
-pub fn mark_tick_start(mut timer: ResMut<TickTimer>) {
-    timer.start = Some(Instant::now());
-}
-
-/// Measures the step's execution time and scales virtual time (run in
-/// `FixedLast`). Slows the game when a tick costs more than its budget; never
-/// speeds it past real time.
-pub fn scale_time_to_ticks(mut timer: ResMut<TickTimer>, mut virtual_time: ResMut<Time<Virtual>>) {
-    if let Some(start) = timer.start.take() {
-        let exec = start.elapsed().as_secs_f32();
-        timer.exec_secs = timer.exec_secs * 0.85 + exec * 0.15;
+    /// The next step up, or this one at the top of the ladder.
+    pub fn faster(self) -> Self {
+        match self {
+            SpeedStep::Slowest => SpeedStep::Slow,
+            SpeedStep::Slow => SpeedStep::Normal,
+            SpeedStep::Normal => SpeedStep::Fast,
+            SpeedStep::Fast => SpeedStep::Faster,
+            SpeedStep::Faster | SpeedStep::Fastest => SpeedStep::Fastest,
+        }
     }
 
-    timer.speed = (TARGET_TICK_SECS / timer.exec_secs.max(1e-6)).clamp(MIN_SPEED, 1.0);
-    virtual_time.set_relative_speed(timer.speed);
+    /// The next step down, or this one at the bottom of the ladder.
+    pub fn slower(self) -> Self {
+        match self {
+            SpeedStep::Slowest | SpeedStep::Slow => SpeedStep::Slowest,
+            SpeedStep::Normal => SpeedStep::Slow,
+            SpeedStep::Fast => SpeedStep::Normal,
+            SpeedStep::Faster => SpeedStep::Fast,
+            SpeedStep::Fastest => SpeedStep::Faster,
+        }
+    }
+
+    /// How this step reads on screen.
+    pub fn label(self) -> &'static str {
+        match self {
+            SpeedStep::Slowest => "0.25x",
+            SpeedStep::Slow => "0.5x",
+            SpeedStep::Normal => "1x",
+            SpeedStep::Fast => "2x",
+            SpeedStep::Faster => "4x",
+            SpeedStep::Fastest => "8x",
+        }
+    }
+
+    /// The rung `speed` sits on.
+    ///
+    /// The session is the one owner of the game's speed — in a network game a
+    /// peer's change lands there without this node pressing anything — so the
+    /// rung is derived from it wherever the keys step or the readout names it,
+    /// never remembered on the side where it could drift. Every speed the
+    /// session can hold came from this ladder (a rung the local player picked,
+    /// or one a peer picked), so the lookup always finds its step; the fallback
+    /// is for a factor no honest node can produce.
+    pub fn of(speed: GameSpeed) -> Self {
+        Self::LADDER
+            .into_iter()
+            .find(|step| step.speed() == speed)
+            .unwrap_or(SpeedStep::Normal)
+    }
 }
