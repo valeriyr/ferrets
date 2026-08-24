@@ -262,30 +262,48 @@ fn step_request_on_networked_session_is_discarded() {
 
 #[test]
 fn seek_giving_up_mid_flight_restores_pause_state() {
-    // A seek in flight holds the session paused between its frames. If it
-    // becomes ineligible before reaching its target, it must put back the pause
-    // state it began under — leaving a game the player was watching at speed
-    // frozen by machinery that gave up is worse than not seeking at all.
-    let (replay, recorded) = recorded_game(40);
-    let mut app = playback_app(replay);
-    // A target past the recording, so the seek cannot finish in one budget and
-    // hands itself on with the session paused.
-    app.world_mut().insert_resource(Seek(recorded + 5));
-    ferrets_bevy_plugin::apply_seek(app.world_mut());
+    // A seek in flight holds the session paused between its frames, whichever
+    // state it found. If it becomes ineligible before reaching its target it must
+    // put back the state it began under — both ways round, which is also what
+    // says the state is remembered rather than assumed: a game the player was
+    // watching at speed must not be left frozen by machinery that gave up, and
+    // one they had paused must not be handed back running.
+    for (paused_before, case) in [(false, "a running game"), (true, "a paused game")] {
+        // A live local game, which advances for as long as it is asked to, and a
+        // target no single frame budget could reach on any machine — so the seek
+        // is certainly still in flight, whatever a tick costs here.
+        let mut app = base_app();
+        app.world_mut()
+            .resource_mut::<GameSession>()
+            .set_paused(paused_before);
+        app.world_mut().insert_resource(Seek(u32::MAX));
+        ferrets_bevy_plugin::apply_seek(app.world_mut());
+        assert!(
+            app.world().contains_resource::<Seek>(),
+            "{case}: the seek carried over to another frame",
+        );
+        assert!(
+            app.world().resource::<GameSession>().is_paused(),
+            "{case}: held paused between them",
+        );
 
-    // Now the recording runs out, which is one of the reasons a seek is refused.
-    ferrets_bevy_plugin::run_playback(app.world_mut());
-    app.world_mut()
-        .resource_mut::<GameSession>()
-        .set_paused(false);
-    app.world_mut().insert_resource(Seek(recorded + 500));
+        // Now the session cannot advance, which is one of the reasons a seek is
+        // refused.
+        app.world_mut()
+            .resource_mut::<GameSession>()
+            .set_blocked(true);
+        ferrets_bevy_plugin::apply_seek(app.world_mut());
 
-    ferrets_bevy_plugin::apply_seek(app.world_mut());
-
-    assert!(
-        !app.world().contains_resource::<Seek>(),
-        "the refused seek is consumed",
-    );
+        assert!(
+            !app.world().contains_resource::<Seek>(),
+            "{case}: the refused seek is consumed",
+        );
+        assert_eq!(
+            app.world().resource::<GameSession>().is_paused(),
+            paused_before,
+            "{case}: the pause state the seek began under is back",
+        );
+    }
 }
 
 #[test]
