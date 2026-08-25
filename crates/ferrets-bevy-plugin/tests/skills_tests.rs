@@ -265,7 +265,7 @@ fn app() -> App {
         "frenzy",
         EntityStatId::DAMAGE,
         ModifierOp::PercentAdd,
-        1.0,
+        "1",
         Some(20),
     );
     {

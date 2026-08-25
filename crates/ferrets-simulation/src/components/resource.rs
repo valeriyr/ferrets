@@ -55,8 +55,8 @@ pub struct HarvestComponent {
     /// reassigned; an order that can name no kind has nothing to harvest and
     /// never starts.
     pub kind: String,
-    /// Ticks left standing in place before the walk to a source the carrier
-    /// could not reach is retried.
+    /// Ticks left standing in place before a walk the carrier could not finish
+    /// — to a source or to a storage — is retried.
     pub wait: u32,
     /// Set once at least one trip has completed for this order; a storage-targeted
     /// order delivers the current load first, then keeps harvesting.

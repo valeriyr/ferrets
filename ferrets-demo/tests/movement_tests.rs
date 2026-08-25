@@ -1,6 +1,7 @@
-//! Group movement on the real scenario map and content under the continuous
-//! model: a packed group ordered to one point must finish its walks and come
-//! to rest, not mill around the destination forever.
+//! Movement on the real maps and content, where the geometry that trips a walk
+//! up actually exists: a packed group ordered to one point must finish its walks
+//! and come to rest rather than mill around the destination, and a body rounding
+//! a water corner must keep walking rather than creep at it.
 
 mod utils;
 
@@ -204,6 +205,56 @@ fn harvest_of_unreachable_tree_switches_to_reachable_neighbor() {
     assert!(
         ring_left < 8 * 400,
         "the worker chops a reachable neighbor of the same kind"
+    );
+}
+
+#[test]
+fn walk_rounds_water_corner_without_creeping_at_it() {
+    // North out of the river ford (the river is x=48, open only at y=18..20):
+    // the body has to round the water corner at (48,17) to reach (49,13).
+    //
+    // Aiming diagonally past that corner puts the wall across the way rather
+    // than beside it, so the surviving axis carries only the aim's sideways
+    // share — which shrinks as the aim rotates, leaving the body creeping for
+    // several ticks before it stalls and is put right. Re-aiming round the
+    // corner instead keeps it walking at speed.
+    //
+    // Simulation behaviour does not belong in the demo, and this is here on
+    // sufferance: the press needs the waypoints smoothing produces over *this*
+    // geometry, and a bare wall with a gap in the plugin harness is walked
+    // without ever creeping, whatever the gap's width or the body's speed. It
+    // moves to the plugin once the demo's content is shared with it.
+    let mut app = utils::demo_map_app(MovementModel::Continuous);
+    let (walker, _) = spawn::spawn_entity(
+        app.world_mut(),
+        "peasant",
+        FixedUVec2::new(FixedU64::from_num(48), FixedU64::from_num(19)),
+        Some(0),
+    )
+    .expect("peasant spawns");
+
+    app.world_mut()
+        .entity_mut(walker)
+        .get_mut::<OrderQueueComponent>()
+        .unwrap()
+        .push(
+            Order::Move {
+                target: FixedUVec2::new(FixedU64::from_num(49), FixedU64::from_num(13)),
+                size: CellSize::ONE,
+                range: 0,
+            },
+            None,
+        );
+
+    // Six cells at a peasant's pace with room for the one turn: 21 ticks with
+    // the corner rounded, 25 while creeping at it.
+    utils::run_ticks(&mut app, 22);
+
+    let arrived = utils::position_of(app.world_mut(), walker);
+    assert_eq!(
+        utils::cell_of(arrived),
+        (49, 13),
+        "the walk was still at {arrived:?}, creeping at the corner"
     );
 }
 

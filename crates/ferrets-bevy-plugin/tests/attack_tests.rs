@@ -292,7 +292,7 @@ fn shortened_attack_cycle_still_lands_hits() {
         "hasty",
         EntityStatId::ATTACK_PERIOD,
         ModifierOp::FlatAdd,
-        -3.0,
+        "-3",
         None,
     );
     game_loop::stats::apply_entity_buff(app.world_mut(), attacker, hasty);

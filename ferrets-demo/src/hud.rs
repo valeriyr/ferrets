@@ -511,7 +511,15 @@ pub fn update_selection(
             .map(
                 |(info, health, stats, carrier, source, stance, energy, buffs)| {
                     let def = registry.def(info.type_id());
-                    let mut parts = vec![pretty_name(info.type_name())];
+                    // The simulation id rides along with the name: it is the
+                    // handle a replay, a log line, or a forensics run names the
+                    // same entity by, so a report can point at one unit rather
+                    // than describe it.
+                    let mut parts = vec![format!(
+                        "{} #{}",
+                        pretty_name(info.type_name()),
+                        info.id().0
+                    )];
                     // The effective ceiling, so a modifier that moves max health shows in
                     // the denominator instead of leaving the reading out of step with it.
                     let max_health = stats

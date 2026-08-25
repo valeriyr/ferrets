@@ -5,7 +5,8 @@ use ferrets_bevy_plugin::{PendingInput, SimulationPlugin};
 use ferrets_content::registry::ContentRegistry;
 use ferrets_demo::{content::CONTENT, minimap, render, scenario, view};
 use ferrets_geometry::projection::Projection;
-use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
+
+use ferrets_math::{FixedI64, FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_script::{content, engine::lua::LuaEngine};
 use ferrets_simulation::{
     command::{PlayerCommand, SelectMode},
@@ -155,19 +156,44 @@ pub fn position_of(world: &mut World, entity: Entity) -> FixedUVec2 {
     world.get::<LocationComponent>(entity).unwrap().position
 }
 
+/// A position written as decimals rather than floats, so the position is the one
+/// the digits name.
+pub fn part_way(x: &str, y: &str) -> FixedUVec2 {
+    FixedUVec2::new(cells(x), cells(y))
+}
+
+/// A length in cells, written as decimal digits rather than a float.
+pub fn cells(text: &str) -> FixedU64 {
+    FixedU64::from_str(text).unwrap_or_else(|_| panic!("'{text}' is a length in cells"))
+}
+
+/// The same, where the value can point backwards.
+pub fn signed_cells(text: &str) -> FixedI64 {
+    FixedI64::from_str(text).unwrap_or_else(|_| panic!("'{text}' is an offset in cells"))
+}
+
 /// A position pinned to the bit — captured from a probe run and asserted
 /// exactly ever after: any drift is a lockstep desync.
 pub fn position_bits(x: u64, y: u64) -> FixedUVec2 {
     FixedUVec2::new(FixedU64::from_bits(x), FixedU64::from_bits(y))
 }
 
-/// A headless demo-map game carrying the resources the minimap reads, so its
-/// systems can be driven directly without a window or a renderer.
-pub fn minimap_app() -> App {
+/// A headless demo-map game carrying the resources the view layer reads, so the
+/// drawing and minimap systems can be driven directly without a window or a
+/// renderer.
+pub fn view_app() -> App {
     let mut app = demo_map_app(MovementModel::Continuous);
     let world = app.world_mut();
     world.insert_resource(Assets::<Image>::default());
+    // The stores the sprite attachment draws from and the clocks the drawing
+    // reads — the frame's own for turning, the fixed step's for interpolating —
+    // which the headless app has no renderer to install.
+    world.insert_resource(Assets::<Mesh>::default());
+    world.insert_resource(Assets::<ColorMaterial>::default());
+    world.init_resource::<Time>();
+    world.init_resource::<Time<Fixed>>();
     world.init_resource::<render::FogReveal>();
+    world.init_resource::<render::Smoothing>();
     world.init_resource::<render::Ghosts>();
     app
 }

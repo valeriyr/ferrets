@@ -3,6 +3,7 @@
 use bevy_ecs::{entity::Entity, world::World};
 use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
+use ferrets_physics::body;
 
 use crate::{
     components::{
@@ -114,12 +115,26 @@ pub fn footprint(world: &World, entity: Entity) -> (FixedUVec2, CellSize) {
 }
 
 /// The footprint `entity` stands on as a rect of whole cells, anchored at
-/// its floored position — the value every rect-to-rect measure takes.
+/// its floored position — what a reach measure takes for the thing being
+/// measured against.
 ///
 /// Panics if `entity` is not a simulation entity, or its type declares no location.
 pub fn footprint_rect(world: &World, entity: Entity) -> CellRect {
     let (position, size) = footprint(world, entity);
     CellRect::new(CellPos::from(position), size)
+}
+
+/// The cells `entity` stands on, per [`body::standing_rect`] — what a reach
+/// measure takes for the one doing the reaching.
+///
+/// Reach is judged from this to the other side's [`footprint_rect`], never the
+/// other way about: the reacher gets the benefit of every cell it stands on,
+/// while what it reaches for stays the one footprint a walk can plan toward.
+///
+/// Panics if `entity` is not a simulation entity, or its type declares no location.
+pub fn standing_rect(world: &World, entity: Entity) -> CellRect {
+    let (position, size) = footprint(world, entity);
+    body::standing_rect(position, size)
 }
 
 /// The center of the footprint `entity` stands on, in world units with

@@ -133,13 +133,13 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
     let weapon = weapon(world, entity);
 
     if let Some(leash) = order.attack_leash() {
-        // Footprint-based like every range check, and judged exactly like
-        // the chase below (standing cell for the anchor's own body, floored
-        // anchor for the target) — a mid-cell target must not read as
-        // leashed to the leash and out of range to the chase, or the one
-        // extra walk breaks a stand-ground stance's never-move promise.
-        if !world.resource::<Map>().projection().in_range_of_rect(
-            body::anchor(leash.anchor),
+        // Footprint-based like every range check, and judged exactly like the
+        // chase below — the cells the body stood on when it was leashed reach
+        // for the target's own footprint — because a mid-cell target must not
+        // read as leashed to the leash and out of range to the chase, or the
+        // one extra walk breaks a stand-ground stance's never-move promise.
+        if !world.resource::<Map>().projection().in_range_for_rects(
+            body::standing_rect(leash.anchor, size),
             CellRect::new(CellPos::from(target_position), target_size),
             leash.radius,
         ) {

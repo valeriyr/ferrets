@@ -27,7 +27,8 @@ use ferrets_content::{
 use ferrets_geometry::{
     cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize, projection::Projection,
 };
-use ferrets_math::{FixedI64, FixedU64, fixed_uvec2::FixedUVec2};
+
+use ferrets_math::{FixedI64, FixedU64, fixed_uvec2::FixedUVec2, fixed_vec2::FixedVec2};
 use ferrets_network::{
     role::Role,
     roster::Roster,
@@ -172,8 +173,37 @@ pub fn skirmish_header(slots: Vec<PlayerSlot>, finish_policy: FinishPolicy) -> R
     )
 }
 
+/// A value written as decimal digits rather than a float, so the number the
+/// digits name is the one under test.
+pub fn fixed(text: &str) -> FixedU64 {
+    FixedU64::from_str(text).unwrap_or_else(|_| panic!("'{text}' is a value"))
+}
+
+/// The same, where the value can point downwards.
+pub fn signed_fixed(text: &str) -> FixedI64 {
+    FixedI64::from_str(text).unwrap_or_else(|_| panic!("'{text}' is a signed value"))
+}
+
 pub fn pos(x: u32, y: u32) -> FixedUVec2 {
     FixedUVec2::new(FixedU64::from_num(x), FixedU64::from_num(y))
+}
+
+/// A position part way across its cells, which only a continuous-model body can
+/// hold (see [`continuous_orders_app`]). Written as decimals rather than floats,
+/// so the position is the one the digits name.
+pub fn part_way(x: &str, y: &str) -> FixedUVec2 {
+    let coordinate =
+        |text: &str| FixedU64::from_str(text).unwrap_or_else(|_| panic!("'{text}' is a position"));
+    FixedUVec2::new(coordinate(x), coordinate(y))
+}
+
+/// The offset from one position to another, which unsigned positions cannot
+/// hold themselves.
+pub fn offset(from: FixedUVec2, to: FixedUVec2) -> FixedVec2 {
+    FixedVec2::new(
+        to.x.to_num::<FixedI64>() - from.x.to_num::<FixedI64>(),
+        to.y.to_num::<FixedI64>() - from.y.to_num::<FixedI64>(),
+    )
 }
 
 /// Spawns one entity of `type_name` at `(x, y)` owned by `player`, panicking when
@@ -624,11 +654,11 @@ pub fn current_health(app: &App, entity: Entity) -> FixedU64 {
 }
 
 /// Removes `amount` health points directly, standing in for damage taken.
-pub fn wound(app: &mut App, entity: Entity, amount: f64) {
+pub fn wound(app: &mut App, entity: Entity, amount: &str) {
     app.world_mut()
         .get_mut::<HealthComponent>(entity)
         .unwrap()
-        .apply_damage(FixedU64::from_num(amount));
+        .apply_damage(fixed(amount));
 }
 
 /// Selects `attacker` for the local player and orders it to attack `target`,
@@ -652,7 +682,7 @@ pub fn register_entity_buff(
     name: &str,
     stat: EntityStatId,
     op: ModifierOp,
-    magnitude: f64,
+    magnitude: &str,
     duration: Option<u32>,
 ) -> EntityBuffId {
     app.world_mut()
@@ -663,7 +693,7 @@ pub fn register_entity_buff(
                 modifiers: vec![EntityModifier {
                     stat,
                     op,
-                    magnitude: FixedI64::from_num(magnitude),
+                    magnitude: signed_fixed(magnitude),
                 }],
                 duration,
                 stack_rule: StackRule::Refresh,
@@ -690,6 +720,36 @@ pub fn install_map(app: &mut App, projection: Projection, model: MovementModel) 
         "test",
         projection,
         model,
+        grid,
+        vec![],
+        &[MoverShape::point(GROUND)],
+    ));
+}
+
+/// Side of [`install_chokepoint_map`]'s map. Several clusters across, so a walk
+/// over it is planned as a corridor of real crossings; a map only a cluster or
+/// two wide comes back as one flat segment however it is walled.
+pub const CHOKEPOINT_SIZE: u32 = 96;
+
+/// The rows left open in [`install_chokepoint_map`]'s wall.
+pub const CHOKEPOINT_GAP: std::ops::RangeInclusive<u32> = 8..=9;
+
+/// Swaps the harness map for a cell-model one split by a wall with a single gap,
+/// so crossing it can only be planned as a corridor through that gap. An open
+/// field is planned as one flat segment and never changes legs, which is the
+/// whole thing a corridor test needs to exercise. Call before any spawns.
+pub fn install_chokepoint_map(app: &mut App) {
+    let mut grid = NavGrid::new(CHOKEPOINT_SIZE, CHOKEPOINT_SIZE);
+    grid.add_layer(GROUND);
+    for y in 0..CHOKEPOINT_SIZE {
+        if !CHOKEPOINT_GAP.contains(&y) {
+            grid.set_occupied(GROUND, CellPos::new(CHOKEPOINT_SIZE / 2, y), true);
+        }
+    }
+    app.world_mut().insert_resource(Map::with_hierarchy_shapes(
+        "test",
+        Projection::Isometric,
+        MovementModel::Cell,
         grid,
         vec![],
         &[MoverShape::point(GROUND)],
@@ -756,6 +816,20 @@ pub fn orders_app() -> App {
         PlayerSlot::occupied(0, PlayerType::Human, None, None),
         PlayerSlot::occupied(1, PlayerType::Human, None, None),
     ]);
+    register_orders_content(&mut app);
+    app.world_mut().resource_mut::<GameSession>().start();
+    app
+}
+
+/// [`orders_app`] on a continuous-model map, where a body's position is any
+/// point rather than a lattice one — what an off-lattice reach reads as is only
+/// a question under this model.
+pub fn continuous_orders_app() -> App {
+    let mut app = make_app(vec![
+        PlayerSlot::occupied(0, PlayerType::Human, None, None),
+        PlayerSlot::occupied(1, PlayerType::Human, None, None),
+    ]);
+    install_map(&mut app, Projection::Isometric, MovementModel::Continuous);
     register_orders_content(&mut app);
     app.world_mut().resource_mut::<GameSession>().start();
     app

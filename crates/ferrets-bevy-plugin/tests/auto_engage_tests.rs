@@ -82,6 +82,59 @@ fn set_stance_applies_to_owned_selection_only() {
 // ─── Idle engagement ────────────────────────────────────────────────────────
 //
 
+/// A body part way across its cells reaches from every cell it stands on, and a
+/// unit holding its ground engages what that reach covers.
+///
+/// Both halves of the reach ride on this: picking the target out at all, and the
+/// leash that keeps the unit standing there. Judged by one of the two cells such
+/// a body lies across, the enemy is out of range on whichever axis that cell
+/// rounds away — so nothing is acquired, or the leashed order gives up on its
+/// first tick.
+#[test]
+fn ground_held_part_way_across_cells_engages_what_it_stands_within_reach_of() {
+    let mut app = utils::continuous_orders_app();
+    let (sentry, sentry_id) = utils::spawn_owned(&mut app, "sentry", 12, 8, 0);
+
+    // Walked to the spot rather than placed on it: a point move lands on the
+    // ordered position to the bit, and only a walk leaves a body off the lattice
+    // with its claims in order.
+    let corner = utils::part_way("12.6", "10.6");
+    utils::select(&mut app, sentry_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Move {
+            target: corner,
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, 20);
+    assert_eq!(utils::position_of(app.world_mut(), sentry), corner);
+
+    // Holding its ground, so nothing it manages can be a chase: the reach is
+    // all it has.
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SetStance {
+            stance: Stance::StandGround,
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY);
+
+    // Cell (11, 12) is a cell away from the cells the sentry stands on — and two
+    // from the cell its position floors into and from the cell its center rounds
+    // to, taken one at a time. An immobile target, because anything that walks
+    // takes itself out of the reach under test the moment it is hit.
+    let (enemy, _) = utils::spawn_owned(&mut app, "boulder", 11, 12, 1);
+    utils::run_ticks(&mut app, 60);
+
+    utils::assert_despawned(app.world_mut(), enemy);
+    assert_eq!(
+        utils::position_of(app.world_mut(), sentry),
+        corner,
+        "and it held the ground it fought from"
+    );
+}
+
 #[test]
 fn defend_unit_destroys_enemy_in_acquire_range_and_returns_home() {
     let mut app = utils::orders_app();

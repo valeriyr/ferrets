@@ -21,7 +21,7 @@ fn buff_modifies_effective_stat_then_reverts_on_expiry() {
         "frenzy",
         EntityStatId::DAMAGE,
         ModifierOp::PercentAdd,
-        1.0,
+        "1",
         Some(3),
     );
 

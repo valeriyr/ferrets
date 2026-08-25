@@ -25,7 +25,7 @@ use ferrets_simulation::{
 fn health_regenerates_toward_max_and_holds_there() {
     let mut app = app();
     let (troll, _) = utils::spawn_owned(&mut app, "troll", 5, 5, 0);
-    utils::wound(&mut app, troll, 10.0);
+    utils::wound(&mut app, troll, "10");
 
     // A fractional rate accumulates across ticks rather than truncating away.
     utils::run_ticks(&mut app, 4);
@@ -47,7 +47,7 @@ fn health_regenerates_toward_max_and_holds_there() {
 fn entity_without_regeneration_stays_wounded() {
     let mut app = app();
     let (dummy, _) = utils::spawn_owned(&mut app, "dummy", 8, 8, 0);
-    utils::wound(&mut app, dummy, 5.0);
+    utils::wound(&mut app, dummy, "5");
 
     utils::run_ticks(&mut app, 20);
     assert_eq!(
@@ -71,7 +71,7 @@ fn health_settles_under_lowered_ceiling() {
         "frailty",
         EntityStatId::MAX_HEALTH,
         ModifierOp::FlatAdd,
-        -25.0,
+        "-25",
         None,
     );
     game_loop::stats::apply_entity_buff(app.world_mut(), troll, frailty);
@@ -95,7 +95,7 @@ fn lowered_ceiling_does_not_kill() {
         "withering",
         EntityStatId::MAX_HEALTH,
         ModifierOp::PercentAdd,
-        -1.0,
+        "-1",
         None,
     );
     game_loop::stats::apply_entity_buff(app.world_mut(), troll, withering);
@@ -116,7 +116,7 @@ fn lowered_ceiling_does_not_kill() {
 fn dying_entity_does_not_regenerate() {
     let mut app = app();
     let (troll, _) = utils::spawn_owned(&mut app, "troll", 5, 5, 0);
-    utils::wound(&mut app, troll, 10.0);
+    utils::wound(&mut app, troll, "10");
     spawn::destroy_entity(app.world_mut(), troll);
 
     utils::run_ticks(&mut app, 2);
@@ -131,7 +131,7 @@ fn dying_entity_does_not_regenerate() {
 fn entity_under_construction_does_not_regenerate() {
     let mut app = app();
     let (troll, _) = utils::spawn_owned(&mut app, "troll", 5, 5, 0);
-    utils::wound(&mut app, troll, 10.0);
+    utils::wound(&mut app, troll, "10");
     app.world_mut()
         .entity_mut(troll)
         .insert(UnderConstructionComponent::default());

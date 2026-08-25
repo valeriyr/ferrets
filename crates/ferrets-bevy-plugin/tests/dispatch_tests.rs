@@ -95,7 +95,7 @@ fn send_to_entity_resolves_repair_for_damaged_friendly() {
     let mut app = repair_dispatch_app();
     let (warehouse, warehouse_id) = utils::spawn_owned(&mut app, "warehouse", 10, 10, 0);
     let (_, handyman_id) = utils::spawn_owned(&mut app, "handyman", 9, 10, 0);
-    utils::wound(&mut app, warehouse, 20.0);
+    utils::wound(&mut app, warehouse, "20");
 
     utils::select(&mut app, handyman_id);
     utils::push_command(
@@ -121,7 +121,7 @@ fn loaded_carrier_sent_to_damaged_storage_still_delivers() {
     let mut app = repair_dispatch_app();
     let (warehouse, warehouse_id) = utils::spawn_owned(&mut app, "warehouse", 10, 10, 0);
     let (handyman, handyman_id) = utils::spawn_owned(&mut app, "handyman", 9, 10, 0);
-    utils::wound(&mut app, warehouse, 20.0);
+    utils::wound(&mut app, warehouse, "20");
     // A full load, as if the handyman had just walked out of a mine.
     {
         let mut carrier = app

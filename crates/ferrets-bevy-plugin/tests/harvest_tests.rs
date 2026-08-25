@@ -386,6 +386,124 @@ fn carrier_that_works_alone_waits_for_source_another_holds() {
 }
 
 //
+// ─── Reach from a body part way across its cells ───────────────────────────────
+//
+
+/// A carrier diagonally past a storage's corner is standing beside it and hands
+/// its load over from there. Judging such a body by one of the two cells it lies
+/// across reads it as out of range on whichever axis that cell rounds away, so
+/// it would owe a step it is already done with.
+#[test]
+fn carrier_part_way_across_cells_delivers_from_corner_it_stands_on() {
+    let mut app = utils::continuous_orders_app();
+    let (worker, worker_id) = utils::spawn_owned(&mut app, "worker", 12, 8, 0);
+    let (_, depot_id) = utils::spawn_owned(&mut app, "depot", 10, 12, 0);
+
+    // Walked to the spot rather than placed on it: a point move lands on the
+    // ordered position to the bit, and only a walk leaves a body off the
+    // lattice with its claims in order.
+    let corner = utils::part_way("12.6", "10.6");
+    utils::select(&mut app, worker_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Move {
+            target: corner,
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, 20);
+    assert_eq!(utils::position_of(app.world_mut(), worker), corner);
+    load_with_gold(&mut app, worker);
+
+    utils::select(&mut app, worker_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SendToEntity {
+            target: depot_id,
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY + 3);
+
+    assert_eq!(utils::gold(app.world()), 5, "the load went into the depot");
+    assert_eq!(
+        utils::position_of(app.world_mut(), worker),
+        corner,
+        "already in reach, so nothing was walked"
+    );
+}
+
+//
+// ─── Unreachable storage ──────────────────────────────────────────────────────
+//
+
+/// A load that cannot be walked anywhere is not a load the carrier stops
+/// carrying: the trip waits for the way to open, as a blocked source does.
+#[test]
+fn carrier_waits_in_place_when_way_to_storage_is_shut() {
+    let mut app = utils::orders_app();
+    let (worker, worker_id) = utils::spawn_owned(&mut app, "worker", 5, 5, 0);
+    let (_, depot_id) = utils::spawn_owned(&mut app, "depot", 20, 20, 0);
+    wall_in(&mut app, 20, 20, 2);
+    load_with_gold(&mut app, worker);
+
+    utils::select(&mut app, worker_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SendToEntity {
+            target: depot_id,
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, 300);
+
+    assert_eq!(utils::gold(app.world()), 0, "the box still stands");
+    assert!(
+        !utils::order_queue_is_empty(app.world_mut(), worker),
+        "the only storage around is merely blocked, so the trip waits it out"
+    );
+    assert_eq!(
+        app.world()
+            .get::<ResourceCarrierComponent>(worker)
+            .unwrap()
+            .amount,
+        5,
+        "and the load is still in hand"
+    );
+}
+
+#[test]
+fn waiting_carrier_delivers_when_way_to_storage_opens() {
+    let mut app = utils::orders_app();
+    let (worker, worker_id) = utils::spawn_owned(&mut app, "worker", 5, 5, 0);
+    let (_, depot_id) = utils::spawn_owned(&mut app, "depot", 20, 20, 0);
+    let walls = wall_in(&mut app, 20, 20, 2);
+    load_with_gold(&mut app, worker);
+
+    utils::select(&mut app, worker_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SendToEntity {
+            target: depot_id,
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, 100);
+    assert_eq!(utils::gold(app.world()), 0, "the box still stands");
+
+    for boulder in walls {
+        spawn::destroy_entity(app.world_mut(), boulder);
+    }
+    utils::run_ticks(&mut app, 300);
+
+    assert_eq!(
+        utils::gold(app.world()),
+        5,
+        "the way opened and the waiting load went in"
+    );
+}
+
+//
 // ─── Unreachable sources and kind lock ────────────────────────────────────────
 //
 
@@ -403,7 +521,7 @@ fn carrier_switches_to_nearby_source_when_ordered_one_unreachable() {
         .get_mut::<ResourceSourceComponent>(walled)
         .unwrap()
         .amount = 10;
-    ring_with_boulders(&mut app, 20, 20);
+    wall_in(&mut app, 20, 20, 1);
     let (open, _) = spawn::spawn_entity(app.world_mut(), "mine", utils::pos(16, 20), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(open)
@@ -447,7 +565,7 @@ fn carrier_waits_in_place_when_unreachable_source_is_only_one_around() {
         .get_mut::<ResourceSourceComponent>(walled)
         .unwrap()
         .amount = 10;
-    ring_with_boulders(&mut app, 20, 20);
+    wall_in(&mut app, 20, 20, 1);
 
     utils::select(&mut app, worker_id);
     utils::push_command(
@@ -478,7 +596,7 @@ fn waiting_carrier_resumes_when_way_to_source_opens() {
         .get_mut::<ResourceSourceComponent>(walled)
         .unwrap()
         .amount = 5;
-    let ring = ring_with_boulders(&mut app, 20, 20);
+    let ring = wall_in(&mut app, 20, 20, 1);
 
     utils::select(&mut app, worker_id);
     utils::push_command(
@@ -595,22 +713,35 @@ fn order_locked_to_wood_does_not_switch_to_gold() {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 //
 
-/// Surrounds the cell at (`x`, `y`) with eight boulders, sealing whatever
-/// stands there off from every walkable neighbor. Returns the ring.
-fn ring_with_boulders(app: &mut App, x: u32, y: u32) -> Vec<Entity> {
-    let mut ring = Vec::new();
-    for dx in -1i32..=1 {
-        for dy in -1i32..=1 {
-            if dx == 0 && dy == 0 {
+/// Fills `carrier`'s hands with a full load of gold, so the next thing its trip
+/// does is look for somewhere to put it.
+fn load_with_gold(app: &mut App, carrier: Entity) {
+    let mut component = app
+        .world_mut()
+        .get_mut::<ResourceCarrierComponent>(carrier)
+        .unwrap();
+    component.kind = Some("gold".to_string());
+    component.amount = 5;
+}
+
+/// Walls the `size`-by-`size` footprint at `(x, y)` in on every side with
+/// boulders, so nothing outside can reach it. Returns them, for a test that
+/// opens the way again.
+fn wall_in(app: &mut App, x: u32, y: u32, size: u32) -> Vec<Entity> {
+    let mut walls = Vec::new();
+    let span = 0..size as i32;
+    for dx in -1..=size as i32 {
+        for dy in -1..=size as i32 {
+            if span.contains(&dx) && span.contains(&dy) {
                 continue;
             }
             let (bx, by) = ((x as i32 + dx) as u32, (y as i32 + dy) as u32);
             let (boulder, _) =
                 spawn::spawn_entity(app.world_mut(), "boulder", utils::pos(bx, by), None).unwrap();
-            ring.push(boulder);
+            walls.push(boulder);
         }
     }
-    ring
+    walls
 }
 
 /// Selects both carriers and sends the pair to one target, as a player crowding a

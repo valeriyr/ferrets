@@ -45,9 +45,9 @@ const DELIVERY_DISTANCE: u32 = 1;
 /// cannot be reached, in grid cells.
 const SOURCE_SEARCH_RADIUS: u32 = 12;
 
-/// How long a carrier stands before retrying the walk to a source it could not
-/// reach, in ticks.
-const BLOCKED_SOURCE_RETRY_PERIOD: u32 = 8;
+/// How long a carrier stands before retrying a walk it could not finish, to a
+/// source or to a storage, in ticks.
+const BLOCKED_WALK_RETRY_PERIOD: u32 = 8;
 
 /// Called once when a Harvest order becomes the front `New` entry.
 ///
@@ -135,7 +135,8 @@ pub fn cancel_processing(
 /// - **Deliver** when carrying a full load of the order's kind, when the order
 ///   targeted a storage and the initial load has not been dropped off yet, or
 ///   when no source is left. Walks to the nearest accepting storage of the
-///   owner and adds the load to the player's stockpile. A load of some other
+///   owner and adds the load to the player's stockpile, waiting in place and
+///   walking again when the way there is shut. A load of some other
 ///   kind is never delivered: it is wasted at the first transfer instead — a
 ///   wood-laden worker sent to gold walks straight to the gold and the wood
 ///   is gone the moment the gold is in hand.
@@ -149,8 +150,8 @@ pub fn cancel_processing(
 /// touches — and never drifts to another. A source the carrier cannot reach is
 /// swapped for a nearby one of the same kind, or waited out in place when it is
 /// the only one around. The loop ends when no source of the order's kind is
-/// left and nothing is carried, or the carried load cannot be delivered
-/// anywhere.
+/// left and nothing is carried, or there is nowhere at all to deliver the
+/// carried load to.
 pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
     let Some(mut harvest_component) = world.entity_mut(entity).take::<HarvestComponent>() else {
         return Processing::state(OrderState::Finished);
@@ -264,7 +265,17 @@ fn advance(
             storage,
             DELIVERY_DISTANCE,
         ) {
-            Destination::OutOfReach => return Processing::state(OrderState::Finished),
+            Destination::OutOfReach => {
+                // The way to the storage is shut, not the trip over: stand
+                // here and walk it again, as a blocked source is waited out
+                // below. Ending the order instead would leave the carrier
+                // holding a load it will never put down, and nothing puts a
+                // carrier back to work — the crowd it could not push through
+                // clears on its own, and standing costs only the wait.
+                harvest_component.last_chase = None;
+                harvest_component.wait = BLOCKED_WALK_RETRY_PERIOD;
+                return Processing::state(OrderState::InProcessing);
+            }
             Destination::Walk(move_order) => return Processing::suspend(move_order),
             Destination::Arrived => {}
         }
@@ -312,7 +323,7 @@ fn advance(
             harvest_component.last_chase = None;
             match replacement {
                 Some(replacement) => harvest_component.source = Some(replacement),
-                None => harvest_component.wait = BLOCKED_SOURCE_RETRY_PERIOD,
+                None => harvest_component.wait = BLOCKED_WALK_RETRY_PERIOD,
             }
             return Processing::state(OrderState::InProcessing);
         }
@@ -515,7 +526,7 @@ fn resolve_source(
         }
     }
 
-    let standing = entity_def::footprint_rect(world, entity);
+    let standing = entity_def::standing_rect(world, entity);
     nearest(world, standing, Some(SOURCE_SEARCH_RADIUS), |id, _| {
         source_matches(world, id, carrier_def, kind)
     })
@@ -576,14 +587,15 @@ fn resolve_storage(
         return Some(target);
     }
 
-    let standing = entity_def::footprint_rect(world, entity);
+    let standing = entity_def::standing_rect(world, entity);
     let id = nearest(world, standing, None, |_, e| qualifies(e))?;
     world.resource::<EntityIndex>().alive(id)
 }
 
 /// Finds the alive entity matching `filter` nearest to `from`, measured to the
-/// entity's footprint with the map's projection metric. Ties break on the lower
-/// [`SimulationId`], so the result is deterministic.
+/// entity's footprint with the map's projection metric — so `from` is the
+/// searcher's [`entity_def::standing_rect`], the side that does the reaching.
+/// Ties break on the lower [`SimulationId`], so the result is deterministic.
 fn nearest(
     world: &World,
     from: CellRect,
@@ -597,15 +609,15 @@ fn nearest(
         if !filter(id, entity) {
             continue;
         }
-        let standing = entity_def::footprint_rect(world, entity);
+        let reached = entity_def::footprint_rect(world, entity);
         if let Some(max) = max_distance
-            && !projection.in_range_for_rects(from, standing, max)
+            && !projection.in_range_for_rects(from, reached, max)
         {
             continue;
         }
         // Footprint to footprint: an anchor is not the body, and a wide
         // seeker's nearest edge may rank the candidates differently.
-        let distance = projection.distance_for_rects(from, standing);
+        let distance = projection.distance_for_rects(from, reached);
         // Ascending id iteration: strictly-closer wins, ties keep the lower id.
         if best.is_none_or(|(best_distance, _)| distance < best_distance) {
             best = Some((distance, id));

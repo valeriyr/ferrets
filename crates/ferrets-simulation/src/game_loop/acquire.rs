@@ -1,7 +1,7 @@
 //! Deterministic hostile-target acquisition shared by auto-engaging behaviors.
 
 use bevy_ecs::{entity::Entity, world::World};
-use ferrets_geometry::cell_pos::CellPos;
+use ferrets_geometry::cell_rect::CellRect;
 
 use crate::{
     components::{
@@ -39,8 +39,8 @@ pub fn due(id: SimulationId, tick: u32) -> bool {
 ///
 /// A qualifying [`fresh_attacker`] wins; otherwise the nearest hostile,
 /// damageable, interactable entity is chosen — nearest by
-/// [`Projection::rect_distance`], the same footprint measure the range gate uses —
-/// with distance ties resolved to the lower [`SimulationId`], fully
+/// [`Projection::distance_for_rects`], the same footprint measure the range gate
+/// uses — with distance ties resolved to the lower [`SimulationId`], fully
 /// deterministic.
 pub fn find_target(
     world: &World,
@@ -54,7 +54,7 @@ pub fn find_target(
         return Some(attacker);
     }
 
-    let from = CellPos::from(entity_def::position(world, seeker));
+    let from = entity_def::standing_rect(world, seeker);
     let mut best: Option<(u32, SimulationId)> = None;
     for (id, _) in world.resource::<EntityIndex>().alive_entries() {
         if !qualifies(world, seeker, gunner, id, range) {
@@ -126,9 +126,12 @@ pub(super) fn qualifies(
 
     // Both footprints, not a point against a rect: a wide seeker reaches as far
     // as its nearest edge, so it does not have to walk a cell deeper than a
-    // narrow one to count as in range of the same thing.
+    // narrow one to count as in range of the same thing. Reaching from every
+    // cell the seeker stands on and measuring to the target's own footprint is
+    // the chase's measure exactly — a seeker must not pick out a target its
+    // chase then declines to reach, nor pass over one it could already hit.
     world.resource::<Map>().projection().in_range_for_rects(
-        entity_def::footprint_rect(world, seeker),
+        entity_def::standing_rect(world, seeker),
         entity_def::footprint_rect(world, target),
         range,
     )
@@ -146,11 +149,13 @@ pub(super) fn fresh_attacker(world: &World, entity: Entity) -> Option<Simulation
         .map(|hit| hit.attacker)
 }
 
-/// Distance from `from` to the footprint of the alive entity with the given id.
-fn footprint_distance(world: &World, from: CellPos, id: SimulationId) -> u32 {
+/// Distance from `from` to the footprint of the alive entity with the given id,
+/// on the scale the range gate measures in — so the nearest of the targets that
+/// qualify is the nearest by the same reckoning that let them qualify.
+fn footprint_distance(world: &World, from: CellRect, id: SimulationId) -> u32 {
     let entity = world.resource::<EntityIndex>().alive(id).unwrap();
     world
         .resource::<Map>()
         .projection()
-        .rect_distance(from, entity_def::footprint_rect(world, entity))
+        .distance_for_rects(from, entity_def::footprint_rect(world, entity))
 }

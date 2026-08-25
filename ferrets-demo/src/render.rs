@@ -58,9 +58,26 @@ const SHOT_COLOR: Color = Color::srgb(1.0, 0.82, 0.4);
 /// Screen pixels per grid cell.
 pub const CELL_PX: f32 = 32.0;
 
+/// How fast a sprite turns to face where it is walking, in radians a second —
+/// three half-turns, so a right angle takes about a sixth of one.
+///
+/// A look is written the instant the simulation changes it, and at a tick every
+/// fiftieth of a second a body squeezing past a corner earns two or three
+/// perfectly good turns in a row. Snapping to each of them reads as a shudder,
+/// which is a fault of the drawing rather than of the walk: turning at a rate is
+/// what every unit that has ever rounded a corner does.
+pub const TURN_RATE: f32 = std::f32::consts::PI * 3.0;
+
 /// The interpolated render position from the previous tick.
 #[derive(Component)]
 pub struct PrevPos(Vec3);
+
+impl PrevPos {
+    /// The point interpolation starts from this frame.
+    pub fn anchor(&self) -> Vec3 {
+        self.0
+    }
+}
 
 /// Marks an entity that already has its render components attached.
 #[derive(Component)]
@@ -121,6 +138,29 @@ pub struct FogReveal(pub bool);
 pub fn toggle_fog_reveal(keys: Res<ButtonInput<KeyCode>>, mut reveal: ResMut<FogReveal>) {
     if keys.just_pressed(KeyCode::KeyV) {
         reveal.0 = !reveal.0;
+    }
+}
+
+/// Whether the drawing smooths what the simulation hands it — the walk between
+/// two ticks' positions, and the turn toward a new look (see [`TURN_RATE`]).
+///
+/// Cleared, every sprite sits exactly where its tick put it and looks exactly
+/// where the tick says: twenty jumps a second, which is no way to play but the
+/// only way to see what the simulation actually did. Presentation only, like
+/// [`FogReveal`] — the sprites move differently, nothing else does.
+#[derive(Resource)]
+pub struct Smoothing(pub bool);
+
+impl Default for Smoothing {
+    fn default() -> Self {
+        Self(true)
+    }
+}
+
+/// Toggles the smoothing (see [`Smoothing`]) on the `I` key.
+pub fn toggle_smoothing(keys: Res<ButtonInput<KeyCode>>, mut smoothing: ResMut<Smoothing>) {
+    if keys.just_pressed(KeyCode::KeyI) {
+        smoothing.0 = !smoothing.0;
     }
 }
 
@@ -445,11 +485,13 @@ pub fn attach_sprites(
                 entity.insert(Sprite::from_color(color, px));
             }
         }
-        entity.insert((
-            Transform::from_translation(center),
-            PrevPos(center),
-            Renderable,
-        ));
+        // Drawn already facing its look, or a spawn — and a form that swaps its
+        // silhouette — would turn from wherever the identity rotation points.
+        let mut transform = Transform::from_translation(center);
+        if let Some(rotation) = facing_rotation(location.facing) {
+            transform.rotation = rotation;
+        }
+        entity.insert((transform, PrevPos(center), Renderable));
     }
 }
 
@@ -495,6 +537,17 @@ fn facing_rotation(facing: FixedVec2) -> Option<Quat> {
     Some(Quat::from_rotation_z(dir.y.atan2(dir.x) - FRAC_PI_2))
 }
 
+/// `drawn` turned toward `target` by at most `most` radians, the short way
+/// round; `target` itself once it is within reach (see [`TURN_RATE`]).
+pub fn turn_toward(drawn: Quat, target: Quat, most: f32) -> Quat {
+    let apart = drawn.angle_between(target);
+    if apart <= most {
+        target
+    } else {
+        drawn.slerp(target, most / apart)
+    }
+}
+
 /// Snapshots each sprite's current sim position as the interpolation start, run
 /// before the simulation advances (`FixedPreUpdate`).
 pub fn record_prev(
@@ -502,16 +555,61 @@ pub fn record_prev(
     mut query: Query<(&EntityInfoComponent, &LocationComponent, &mut PrevPos)>,
 ) {
     for (info, location, mut prev) in &mut query {
-        let def = registry.def(info.type_id());
-        let size = def.location.unwrap().size();
-        prev.0 = world_center(location.position, size) + air_lift(&registry, def);
+        prev.0 = draw_anchor(&registry, registry.def(info.type_id()), location.position);
+    }
+}
+
+/// Where a drawn entity's sprite sits for a position: its footprint's centre,
+/// lifted if it flies. Only entities the sprite attachment accepted carry a
+/// [`PrevPos`], and it takes none without a footprint.
+fn draw_anchor(registry: &ContentRegistry, def: &EntityTypeDef, position: FixedUVec2) -> Vec3 {
+    world_center(position, def.location.unwrap().size()) + air_lift(registry, def)
+}
+
+/// Snaps a reappearing entity's drawing — where it interpolates from, and the
+/// look it is drawn at — to how it reappeared.
+///
+/// Coming back onto the map is a discontinuity, not motion: the entity is set
+/// down at a cell chosen for it, facing whatever it faces now, and easing into
+/// either slides or swings it into place instead. A distance rule cannot tell
+/// the two apart — stepping out of a mine puts a worker beside the cell it went
+/// in by, well under any threshold a real step has to clear — so the reveal
+/// itself is the signal.
+pub fn snap_revealed(
+    registry: Res<ContentRegistry>,
+    mut revealed: RemovedComponents<HiddenComponent>,
+    mut query: Query<(
+        &EntityInfoComponent,
+        &LocationComponent,
+        &mut PrevPos,
+        &mut Transform,
+        Option<&Directional>,
+    )>,
+) {
+    for entity in revealed.read() {
+        let Ok((info, location, mut prev, mut transform, directional)) = query.get_mut(entity)
+        else {
+            continue;
+        };
+        prev.0 = draw_anchor(&registry, registry.def(info.type_id()), location.position);
+        if directional.is_some()
+            && let Some(rotation) = facing_rotation(location.facing)
+        {
+            transform.rotation = rotation;
+        }
     }
 }
 
 /// Interpolates each sprite between its previous and current sim position by the
-/// fixed-step overstep, and hides off-map entities (run in `Update`).
+/// fixed-step overstep, turns it toward its look at [`TURN_RATE`], and hides
+/// off-map entities (run in `Update`).
+///
+/// Both the walk and the turn are what [`Smoothing`] switches off, leaving each
+/// sprite on the tick's own position and look.
 pub fn interpolate_sprites(
     fixed: Res<Time<Fixed>>,
+    time: Res<Time>,
+    smoothing: Res<Smoothing>,
     session: Res<GameSession>,
     registry: Res<ContentRegistry>,
     fog: Res<VisibilityGrid>,
@@ -527,7 +625,13 @@ pub fn interpolate_sprites(
         Option<&Directional>,
     )>,
 ) {
-    let alpha = fixed.overstep_fraction().clamp(0.0, 1.0);
+    // Unsmoothed, the sprite is drawn on the tick's own position rather than
+    // part way from the last one — which is what `alpha` at rest means.
+    let alpha = if smoothing.0 {
+        fixed.overstep_fraction().clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
     let local = session.local_player();
     for (info, location, prev, mut transform, mut visibility, hidden, owner, directional) in
         &mut query
@@ -544,7 +648,12 @@ pub fn interpolate_sprites(
         if directional.is_some()
             && let Some(rotation) = facing_rotation(location.facing)
         {
-            transform.rotation = rotation;
+            let allowance = if smoothing.0 {
+                TURN_RATE * time.delta_secs()
+            } else {
+                f32::INFINITY
+            };
+            transform.rotation = turn_toward(transform.rotation, rotation, allowance);
         }
         // Own and allied entities always draw; an enemy or neutral one is hidden
         // while its cell is not in the local team's vision (fog of war). Building
@@ -886,7 +995,15 @@ pub fn draw_rally(
     }
 }
 
-/// Draws a short line from each unit's center in its facing direction (Update).
+/// Draws a short line from each unit's center along the way its sprite is drawn
+/// looking (Update).
+///
+/// The drawn look rather than the simulation's own: the sprite eases toward a
+/// new look (see [`TURN_RATE`]) and a line taken straight from the simulation
+/// would snap ahead of it every tick — which, on a placeholder shape, is the
+/// direction cue the eye actually follows. Unsmoothed the two are the same
+/// thing, so the line still reports the tick exactly when that is what is
+/// wanted.
 pub fn draw_facing(
     mut gizmos: Gizmos,
     registry: Res<ContentRegistry>,
@@ -905,14 +1022,23 @@ pub fn draw_facing(
         if matches!(visibility, Visibility::Hidden) {
             continue;
         }
-        let Some(dir) = facing_dir(location.facing) else {
+        // A unit that has never looked anywhere has no line to draw; the shape
+        // itself points `+Y` at rest, which is no direction of its own.
+        if facing_dir(location.facing).is_none() {
             continue;
-        };
+        }
         let size = registry.def(info.type_id()).location.unwrap().size();
         let length = size.width.min(size.height) as f32 * CELL_PX * 0.6;
         let center = transform.translation.truncate();
-        gizmos.line_2d(center, center + dir * length, Color::srgb(1.0, 1.0, 0.4));
+        let drawn = facing_line(&transform.rotation);
+        gizmos.line_2d(center, center + drawn * length, Color::srgb(1.0, 1.0, 0.4));
     }
+}
+
+/// Which way a shape drawn at `rotation` points, a shape pointing `+Y` at rest —
+/// the direction its facing line traces.
+pub fn facing_line(rotation: &Quat) -> Vec2 {
+    (*rotation * Vec3::Y).truncate()
 }
 
 /// The tile color for a terrain, by content name.

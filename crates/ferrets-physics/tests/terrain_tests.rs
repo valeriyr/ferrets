@@ -19,7 +19,7 @@ fn body_fits_open_ground() {
     assert!(terrain::body_fits(
         &grid,
         LayerMask::from(utils::GROUND),
-        utils::position(3.0, 3.0),
+        utils::position("3", "3"),
         CellSize::ONE,
         FixedU64::from_num(0.5),
     ));
@@ -32,7 +32,7 @@ fn body_reaching_into_wall_does_not_fit() {
     assert!(!terrain::body_fits(
         &grid,
         LayerMask::from(utils::GROUND),
-        utils::position(4.7, 5.0),
+        utils::position("4.7", "5"),
         CellSize::ONE,
         FixedU64::from_num(0.5),
     ));
@@ -46,7 +46,7 @@ fn body_touching_wall_boundary_fits() {
     assert!(terrain::body_fits(
         &grid,
         LayerMask::from(utils::GROUND),
-        utils::position(4.0, 5.0),
+        utils::position("4", "5"),
         CellSize::ONE,
         FixedU64::from_num(0.5),
     ));
@@ -68,13 +68,13 @@ fn blocked_axis_drops_and_slide_keeps_other() {
     let committed = terrain::slide_toward(
         &grid,
         LayerMask::from(utils::GROUND),
-        utils::position(3.9, 4.9),
+        utils::position("3.9", "4.9"),
         CellSize::ONE,
-        utils::position(4.2, 5.2),
+        utils::position("4.2", "5.2"),
         FixedU64::from_num(0.5),
     );
 
-    assert_eq!(committed, utils::position(3.9, 5.2));
+    assert_eq!(committed, utils::position("3.9", "5.2"));
 }
 
 /// A step wanted straight into a wall commits nothing — the caller reads no
@@ -82,14 +82,14 @@ fn blocked_axis_drops_and_slide_keeps_other() {
 #[test]
 fn step_into_wall_stays_put() {
     let grid = walled_grid(&[(5, 4), (5, 5), (5, 6)]);
-    let position = utils::position(4.0, 5.0);
+    let position = utils::position("4", "5");
 
     let committed = terrain::slide_toward(
         &grid,
         LayerMask::from(utils::GROUND),
         position,
         CellSize::ONE,
-        utils::position(4.3, 5.0),
+        utils::position("4.3", "5"),
         FixedU64::from_num(0.5),
     );
 
@@ -104,11 +104,11 @@ fn step_into_wall_stays_put() {
 fn displacement_applies_signed_pushes() {
     assert_eq!(
         terrain::displaced(
-            utils::position(2.0, 2.0),
+            utils::position("2", "2"),
             FixedI64::from_num(0.5),
             FixedI64::from_num(-0.25),
         ),
-        utils::position(2.5, 1.75)
+        utils::position("2.5", "1.75")
     );
 }
 
@@ -116,11 +116,11 @@ fn displacement_applies_signed_pushes() {
 fn displacement_saturates_at_origin() {
     assert_eq!(
         terrain::displaced(
-            utils::position(1.0, 1.0),
+            utils::position("1", "1"),
             FixedI64::from_num(-2),
             FixedI64::ZERO,
         ),
-        utils::position(0.0, 1.0)
+        utils::position("0", "1")
     );
 }
 
@@ -136,12 +136,12 @@ fn clipped_body_walks_out_of_wall() {
     let grid = walled_grid(&[(5, 5)]);
 
     // Clipping the wall's west face; a step further west drains the clip.
-    let desired = utils::position(4.4, 5.0);
+    let desired = utils::position("4.4", "5");
     assert_eq!(
         terrain::slide_toward(
             &grid,
             LayerMask::from(utils::GROUND),
-            utils::position(4.7, 5.0),
+            utils::position("4.7", "5"),
             CellSize::ONE,
             desired,
             FixedU64::from_num(0.5),
@@ -161,12 +161,12 @@ fn clipped_body_cannot_clip_deeper() {
         terrain::slide_toward(
             &grid,
             LayerMask::from(utils::GROUND),
-            utils::position(4.7, 5.0),
+            utils::position("4.7", "5"),
             CellSize::ONE,
-            utils::position(4.9, 5.3),
+            utils::position("4.9", "5.3"),
             FixedU64::from_num(0.5),
         ),
-        utils::position(4.9, 5.0)
+        utils::position("4.9", "5")
     );
 }
 

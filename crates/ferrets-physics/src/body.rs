@@ -1,6 +1,6 @@
 //! A moving thing's physical presence: a circle over the cell grid.
 
-use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
+use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2, fixed_vec2::FixedVec2};
 use ferrets_pathfinder::layer_mask::LayerMask;
 
@@ -51,6 +51,23 @@ pub fn center(position: FixedUVec2, size: CellSize) -> FixedUVec2 {
 pub fn anchor(position: FixedUVec2) -> CellPos {
     let half = FixedU64::from_num(0.5);
     CellPos::from(FixedUVec2::new(position.x + half, position.y + half))
+}
+
+/// The whole cells a body of `size` at `position` stands on for a reach
+/// measure: the hull of the footprint its position floors into and the one its
+/// [`anchor`] rounds to.
+///
+/// Both, because a body lying across a cell boundary is standing on the cells
+/// either side of it and neither quantization alone says so. A body a little
+/// past a footprint's corner floors one cell short on one axis while rounding
+/// one cell long on the other, so each single cell reads it as out of reach of
+/// what it is plainly standing beside — and the hull, whose gap on an axis is
+/// the nearer of the two, does not. A body resting on a lattice point floors and
+/// rounds to the same cell, so this is exactly its footprint; one part way
+/// across a boundary — a continuous mover anywhere, a cell mover mid-crossing —
+/// stands on both.
+pub fn standing_rect(position: FixedUVec2, size: CellSize) -> CellRect {
+    CellRect::new(anchor(position), size).union(CellRect::new(CellPos::from(position), size))
 }
 
 /// The cells a body of `size` anchored at `position` physically overlaps, in

@@ -10,21 +10,32 @@ pub const GROUND: LayerId = LayerId::new(1);
 /// A layer disjoint from [`GROUND`], for bodies that pass each other.
 pub const AIR: LayerId = LayerId::new(2);
 
-pub fn position(x: f64, y: f64) -> FixedUVec2 {
-    FixedUVec2::new(FixedU64::from_num(x), FixedU64::from_num(y))
+/// A cell coordinate written as decimal digits. Fixed-point throughout: the
+/// value is the one the digits name, with no float in the way of it.
+pub fn cells(text: &str) -> FixedU64 {
+    FixedU64::from_str(text).unwrap_or_else(|_| panic!("'{text}' is a length in cells"))
 }
 
-pub fn heading(x: f64, y: f64) -> FixedVec2 {
-    FixedVec2::new(FixedI64::from_num(x), FixedI64::from_num(y))
+/// The same, where the value can point backwards.
+pub fn signed_cells(text: &str) -> FixedI64 {
+    FixedI64::from_str(text).unwrap_or_else(|_| panic!("'{text}' is an offset in cells"))
+}
+
+pub fn position(x: &str, y: &str) -> FixedUVec2 {
+    FixedUVec2::new(cells(x), cells(y))
+}
+
+pub fn heading(x: &str, y: &str) -> FixedVec2 {
+    FixedVec2::new(signed_cells(x), signed_cells(y))
 }
 
 /// A half-cell-radius body at rest, filling a single cell, of the baseline
 /// weight every test body carries unless it says otherwise.
-pub fn resting(x: f64, y: f64) -> Body {
+pub fn resting(x: &str, y: &str) -> Body {
     Body {
         position: position(x, y),
         size: CellSize::ONE,
-        radius: FixedU64::from_num(0.5),
+        radius: cells("0.5"),
         weight: FixedU64::ONE,
         mask: LayerMask::from(GROUND),
         heading: None,
@@ -32,15 +43,15 @@ pub fn resting(x: f64, y: f64) -> Body {
 }
 
 /// The same body, weighing `weight` against whatever it meets.
-pub fn weighing(body: Body, weight: f64) -> Body {
+pub fn weighing(body: Body, weight: &str) -> Body {
     Body {
-        weight: FixedU64::from_num(weight),
+        weight: cells(weight),
         ..body
     }
 }
 
 /// A body filling a `size`-by-`size` footprint, its circle inscribed in it.
-pub fn wide(x: f64, y: f64, size: u32) -> Body {
+pub fn wide(x: &str, y: &str, size: u32) -> Body {
     Body {
         size: CellSize::new(size, size),
         radius: FixedU64::from_num(size) / 2,
@@ -49,7 +60,7 @@ pub fn wide(x: f64, y: f64, size: u32) -> Body {
 }
 
 /// A half-cell-radius body walking toward the given heading.
-pub fn walking(x: f64, y: f64, toward_x: f64, toward_y: f64) -> Body {
+pub fn walking(x: &str, y: &str, toward_x: &str, toward_y: &str) -> Body {
     Body {
         heading: Some(heading(toward_x, toward_y)),
         ..resting(x, y)
@@ -57,7 +68,7 @@ pub fn walking(x: f64, y: f64, toward_x: f64, toward_y: f64) -> Body {
 }
 
 /// A half-cell-radius body at rest on the [`AIR`] layer.
-pub fn flying(x: f64, y: f64) -> Body {
+pub fn flying(x: &str, y: &str) -> Body {
     Body {
         mask: LayerMask::from(AIR),
         ..resting(x, y)
@@ -66,6 +77,6 @@ pub fn flying(x: f64, y: f64) -> Body {
 
 /// Every push is deterministic fixed-point math, so the expectations are
 /// exact values, not signs — a changed magnitude is a changed contract.
-pub fn push(x: f64, y: f64) -> FixedVec2 {
-    FixedVec2::new(FixedI64::from_num(x), FixedI64::from_num(y))
+pub fn push(x: &str, y: &str) -> FixedVec2 {
+    FixedVec2::new(signed_cells(x), signed_cells(y))
 }

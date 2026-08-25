@@ -97,7 +97,7 @@ fn debuff_sealing_hold_turns_boarder_away() {
         "sealed_hold",
         EntityStatId::CARGO_CAPACITY,
         ModifierOp::FlatAdd,
-        -10.0,
+        "-10",
         None,
     );
     game_loop::stats::apply_entity_buff(app.world_mut(), wagon, sealed);

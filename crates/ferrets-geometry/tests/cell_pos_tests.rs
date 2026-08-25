@@ -4,7 +4,7 @@
 mod utils;
 
 use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
-use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
+use ferrets_math::fixed_uvec2::FixedUVec2;
 
 //
 // ─── Default ──────────────────────────────────────────────────────────────────
@@ -44,8 +44,10 @@ fn from_world_whole_numbers() {
 
 #[test]
 fn from_world_floors_fractional() {
-    let p = FixedUVec2::new(FixedU64::from_num(1.7_f32), FixedU64::from_num(2.3_f32));
-    assert_eq!(CellPos::from(p), utils::nav(1, 2));
+    assert_eq!(
+        CellPos::from(utils::part_way("1.7", "2.3")),
+        utils::nav(1, 2)
+    );
 }
 
 //

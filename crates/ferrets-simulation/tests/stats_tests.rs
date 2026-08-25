@@ -15,7 +15,7 @@ use ferrets_simulation::components::entity_stats::StatsComponent;
 
 #[test]
 fn effective_equals_base_with_no_modifiers() {
-    let mut store = store(EntityStatId::DAMAGE, 10.0);
+    let mut store = store(EntityStatId::DAMAGE, "10");
     store.recompute(&[]);
     assert_eq!(
         store.effective(EntityStatId::DAMAGE),
@@ -26,10 +26,10 @@ fn effective_equals_base_with_no_modifiers() {
 #[test]
 fn flat_and_percent_fold_as_base_plus_flat_times_percent() {
     // (10 + 5) * (1 + 0.5) = 22.5
-    let mut store = store(EntityStatId::DAMAGE, 10.0);
+    let mut store = store(EntityStatId::DAMAGE, "10");
     store.recompute(&[
-        flat(EntityStatId::DAMAGE, 5.0),
-        percent(EntityStatId::DAMAGE, 0.5),
+        flat(EntityStatId::DAMAGE, "5"),
+        percent(EntityStatId::DAMAGE, "0.5"),
     ]);
     assert_eq!(
         store.effective(EntityStatId::DAMAGE),
@@ -40,17 +40,17 @@ fn flat_and_percent_fold_as_base_plus_flat_times_percent() {
 #[test]
 fn modifier_order_does_not_change_result() {
     let modifiers = [
-        flat(EntityStatId::DAMAGE, 5.0),
-        percent(EntityStatId::DAMAGE, 0.5),
-        flat(EntityStatId::DAMAGE, 3.0),
-        percent(EntityStatId::DAMAGE, -0.2),
+        flat(EntityStatId::DAMAGE, "5"),
+        percent(EntityStatId::DAMAGE, "0.5"),
+        flat(EntityStatId::DAMAGE, "3"),
+        percent(EntityStatId::DAMAGE, "-0.2"),
     ];
-    let mut forward = store(EntityStatId::DAMAGE, 10.0);
+    let mut forward = store(EntityStatId::DAMAGE, "10");
     forward.recompute(&modifiers);
 
     let mut reversed_modifiers = modifiers;
     reversed_modifiers.reverse();
-    let mut reversed = store(EntityStatId::DAMAGE, 10.0);
+    let mut reversed = store(EntityStatId::DAMAGE, "10");
     reversed.recompute(&reversed_modifiers);
 
     assert_eq!(
@@ -63,8 +63,8 @@ fn modifier_order_does_not_change_result() {
 fn negative_percent_is_debuff() {
     // 10 * (1 - 0.5) = 5 (an exactly-representable fraction; non-dyadic percents
     // like 0.4 fold deterministically but carry fixed-point residue).
-    let mut store = store(EntityStatId::SPEED, 10.0);
-    store.recompute(&[percent(EntityStatId::SPEED, -0.5)]);
+    let mut store = store(EntityStatId::SPEED, "10");
+    store.recompute(&[percent(EntityStatId::SPEED, "-0.5")]);
     assert_eq!(
         store.effective(EntityStatId::SPEED),
         Some(FixedU64::from_num(5))
@@ -75,15 +75,15 @@ fn negative_percent_is_debuff() {
 fn effective_clamps_at_zero() {
     // (10 - 20) clamps up to 0 rather than going negative. Read on an unfloored
     // stat, so the clamp is what the result shows.
-    let mut store = store(EntityStatId::DAMAGE, 10.0);
-    store.recompute(&[flat(EntityStatId::DAMAGE, -20.0)]);
+    let mut store = store(EntityStatId::DAMAGE, "10");
+    store.recompute(&[flat(EntityStatId::DAMAGE, "-20")]);
     assert_eq!(store.effective(EntityStatId::DAMAGE), Some(FixedU64::ZERO));
 }
 
 #[test]
 fn modifiers_for_absent_stats_are_ignored() {
-    let mut store = store(EntityStatId::DAMAGE, 10.0);
-    store.recompute(&[flat(EntityStatId::ARMOR, 5.0)]);
+    let mut store = store(EntityStatId::DAMAGE, "10");
+    store.recompute(&[flat(EntityStatId::ARMOR, "5")]);
     assert_eq!(
         store.effective(EntityStatId::DAMAGE),
         Some(FixedU64::from_num(10))
@@ -99,8 +99,8 @@ fn modifiers_for_absent_stats_are_ignored() {
 fn floored_stat_holds_at_its_floor() {
     // The attack cycle counts whole ticks and the hit lands on a phase inside it,
     // so a debuff deep enough to zero the period still leaves one tick.
-    let mut store = store(EntityStatId::ATTACK_PERIOD, 6.0);
-    store.recompute(&[flat(EntityStatId::ATTACK_PERIOD, -10.0)]);
+    let mut store = store(EntityStatId::ATTACK_PERIOD, "6");
+    store.recompute(&[flat(EntityStatId::ATTACK_PERIOD, "-10")]);
     assert_eq!(
         store.effective(EntityStatId::ATTACK_PERIOD),
         Some(FixedU64::ONE)
@@ -111,8 +111,8 @@ fn floored_stat_holds_at_its_floor() {
 fn pool_ceiling_holds_at_its_floor() {
     // Current health settles under max_health, so a debuff deep enough to zero the
     // ceiling would be an instant kill; the floor leaves a point to stand on.
-    let mut store = store(EntityStatId::MAX_HEALTH, 40.0);
-    store.recompute(&[percent(EntityStatId::MAX_HEALTH, -1.0)]);
+    let mut store = store(EntityStatId::MAX_HEALTH, "40");
+    store.recompute(&[percent(EntityStatId::MAX_HEALTH, "-1")]);
     assert_eq!(
         store.effective(EntityStatId::MAX_HEALTH),
         Some(FixedU64::ONE)
@@ -123,14 +123,14 @@ fn pool_ceiling_holds_at_its_floor() {
 fn fractional_stat_is_not_raised_to_whole_number() {
     // Speed is fractional grid units per tick and authored below 1, so it carries
     // no floor — folding must leave it exactly where the modifiers put it.
-    let mut store = store(EntityStatId::SPEED, 0.3);
+    let mut store = store(EntityStatId::SPEED, "0.3");
     store.recompute(&[]);
     assert_eq!(
         store.effective(EntityStatId::SPEED),
         Some(FixedU64::from_num(0.3))
     );
 
-    store.recompute(&[percent(EntityStatId::SPEED, 1.0)]);
+    store.recompute(&[percent(EntityStatId::SPEED, "1")]);
     assert_eq!(
         store.effective(EntityStatId::SPEED),
         Some(FixedU64::from_num(0.6))
@@ -140,8 +140,8 @@ fn fractional_stat_is_not_raised_to_whole_number() {
 #[test]
 fn unfloored_stat_folds_to_zero() {
     // Armor is meaningful at zero — it simply means no mitigation.
-    let mut store = store(EntityStatId::ARMOR, 5.0);
-    store.recompute(&[flat(EntityStatId::ARMOR, -10.0)]);
+    let mut store = store(EntityStatId::ARMOR, "5");
+    store.recompute(&[flat(EntityStatId::ARMOR, "-10")]);
     assert_eq!(store.effective(EntityStatId::ARMOR), Some(FixedU64::ZERO));
 }
 
@@ -156,8 +156,8 @@ fn working_reaches_hold_at_their_floor() {
         EntityStatId::REPAIR_RANGE,
         EntityStatId::HARVEST_RANGE,
     ] {
-        let mut store = store(reach, 3.0);
-        store.recompute(&[flat(reach, -10.0)]);
+        let mut store = store(reach, "3");
+        store.recompute(&[flat(reach, "-10")]);
         assert_eq!(
             store.effective(reach),
             Some(FixedU64::ONE),
@@ -168,7 +168,7 @@ fn working_reaches_hold_at_their_floor() {
 
 #[test]
 fn harvest_range_folds_like_any_other_reach() {
-    let mut store = store(EntityStatId::HARVEST_RANGE, 2.0);
+    let mut store = store(EntityStatId::HARVEST_RANGE, "2");
 
     store.recompute(&[]);
     assert_eq!(
@@ -179,7 +179,7 @@ fn harvest_range_folds_like_any_other_reach() {
 
     // Whole cells, so a fractional result is what the reader truncates, not what
     // the store rounds — `effective_as_u32` is what range checks actually consume.
-    store.recompute(&[percent(EntityStatId::HARVEST_RANGE, 0.75)]);
+    store.recompute(&[percent(EntityStatId::HARVEST_RANGE, "0.75")]);
     assert_eq!(
         store.effective(EntityStatId::HARVEST_RANGE),
         Some(FixedU64::from_num(3.5))
@@ -226,8 +226,8 @@ fn custom_stat_folds_to_zero() {
     // The engine has no semantics for a content-declared stat, so it never
     // imposes a floor on one.
     let morale = ContentRegistry::default().register_entity_stat("morale");
-    let mut store = store(morale, 5.0);
-    store.recompute(&[flat(morale, -10.0)]);
+    let mut store = store(morale, "5");
+    store.recompute(&[flat(morale, "-10")]);
     assert_eq!(store.effective(morale), Some(FixedU64::ZERO));
 }
 
@@ -235,24 +235,35 @@ fn custom_stat_folds_to_zero() {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 //
 
-fn flat(stat: EntityStatId, magnitude: f64) -> EntityModifier {
+fn flat(stat: EntityStatId, magnitude: &str) -> EntityModifier {
     EntityModifier {
         stat,
         op: ModifierOp::FlatAdd,
-        magnitude: FixedI64::from_num(magnitude),
+        magnitude: signed_value(magnitude),
     }
 }
 
-fn percent(stat: EntityStatId, magnitude: f64) -> EntityModifier {
+fn percent(stat: EntityStatId, magnitude: &str) -> EntityModifier {
     EntityModifier {
         stat,
         op: ModifierOp::PercentAdd,
-        magnitude: FixedI64::from_num(magnitude),
+        magnitude: signed_value(magnitude),
     }
 }
 
-fn store(stat: EntityStatId, base: f64) -> StatsComponent {
+/// A value written as decimal digits rather than a float, so the number the
+/// digits name is the one the store holds.
+fn value(text: &str) -> FixedU64 {
+    FixedU64::from_str(text).unwrap_or_else(|_| panic!("'{text}' is a stat value"))
+}
+
+/// The same, where the value can move a stat down as well as up.
+fn signed_value(text: &str) -> FixedI64 {
+    FixedI64::from_str(text).unwrap_or_else(|_| panic!("'{text}' is a modifier magnitude"))
+}
+
+fn store(stat: EntityStatId, base: &str) -> StatsComponent {
     let mut store = StatsComponent::default();
-    store.set_base(stat, FixedU64::from_num(base));
+    store.set_base(stat, value(base));
     store
 }

@@ -32,6 +32,11 @@ pub struct MoveComponent {
     pub frustration: u32,
     /// The cell the entity departed from when the current crossing started.
     pub moving_from: CellPos,
+    /// The walk is being wound down and ends as soon as the step in progress
+    /// lands, rather than asking for more of its route. Without it an emptied
+    /// path is indistinguishable from a spent corridor leg, and a walk told to
+    /// stop simply plans the rest of its journey again.
+    pub winding_down: bool,
     /// Ticks remaining to wait for a blocked cell to clear before recalculating the path.
     pub wait_ticks: u32,
     /// The closest straight-line distance to the pursued waypoint the walk
@@ -61,6 +66,7 @@ impl MoveComponent {
         }
         self.corridor.clear();
         self.plan = None;
+        self.winding_down = true;
     }
 
     /// Forgives every blockage escalation: the stall clock, the frustration
@@ -73,14 +79,19 @@ impl MoveComponent {
 
     /// Records a new closest distance to the pursued waypoint. Closing in on
     /// a real waypoint means the way ahead is clear, so every escalation is
-    /// forgiven along with it — but closing in on a regained lattice point
-    /// proves only that the body can walk *back* to where it was walled off,
-    /// so the escalations earned there stand; forgiving them let a walled
-    /// walk launder its frustration through every regain round-trip and
-    /// grind forever.
+    /// forgiven along with it — but a record set while regaining or detouring
+    /// is no such proof, and forgiving there lets a walk launder its
+    /// frustration and grind forever.
+    ///
+    /// Regaining proves only that the body can walk *back* to where it was
+    /// walled off. Detouring is the same laundering by another route: the
+    /// splice resets the record to the maximum, so the very next tick beats it
+    /// whatever the body did, and the escalation just earned is wiped before it
+    /// can count toward the give-up budget. Escape is proven by reaching a
+    /// waypoint, which [`Self::consume_waypoint`] forgives.
     pub fn record_progress(&mut self, distance: FixedU64) {
         self.best_distance = distance;
-        if self.regaining {
+        if self.regaining || self.detoured {
             self.wait_ticks = 0;
         } else {
             self.forgive();
@@ -117,6 +128,10 @@ impl MoveComponent {
         self.path.pop();
         self.path.extend(cells.into_iter().rev());
         self.best_distance = FixedU64::MAX;
+        // The point being regained is what the pop just discarded; the detour's
+        // cells are ordinary waypoints, and holding them to an exact hit would
+        // strand a body the pushing pass keeps nudging off them.
+        self.regaining = false;
     }
 
     /// Holds `lattice` as the immediate waypoint, to be regained exactly: the
@@ -172,6 +187,7 @@ impl MoveComponent {
             detoured: false,
             frustration: 0,
             moving_from: from,
+            winding_down: false,
             wait_ticks: 0,
             best_distance: FixedU64::MAX,
             regaining: false,

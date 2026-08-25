@@ -1,6 +1,8 @@
 //! Scratch replay-forensics harness, run by hand against a recorded game:
 //! rebuilds the skirmish from the replay header, replays it headless, and
-//! reports movers that sat still while still under way.
+//! reports movers that sat still while still under way, sprites that faced
+//! somewhere other than the step they took, and walks whose step swung from one
+//! tick to the next.
 //!
 //! Run with: `FREP=replays/<stamp>.frep cargo test -p ferrets-demo --test
 //! forensics_tests -- --ignored --nocapture`
@@ -9,15 +11,16 @@ use std::{collections::BTreeMap, fs::File, io::BufReader};
 
 use bevy::prelude::*;
 use ferrets_demo::playback;
-use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
+use ferrets_math::{FixedI64, FixedU64, fixed_uvec2::FixedUVec2, fixed_vec2::FixedVec2};
 use ferrets_replay::replay::Replay;
 use ferrets_simulation::{
     components::{
         entity_info::EntityInfoComponent, hidden::HiddenComponent, location::LocationComponent,
-        movement::MoveComponent, order_queue::OrderQueueComponent,
+        movement::MoveComponent, order_queue::OrderQueueComponent, owner::OwnerComponent,
+        resource::ResourceCarrierComponent,
     },
     entity_index::EntityIndex,
-    session::GameSession,
+    session::{GameSession, player_slot::PlayerId},
     simulation_id::SimulationId,
 };
 
@@ -31,6 +34,12 @@ struct Sample {
     /// runs on. An order that stands still by design, building or working a
     /// seam, drops it, which is what tells the two apart.
     under_way: bool,
+    /// The slot the entity answers to, so a report can be read per player.
+    owner: Option<PlayerId>,
+    /// The look direction written this tick, to hold against the step actually
+    /// taken: a sprite points along this, so the two parting company is a unit
+    /// facing one way and walking another.
+    facing: FixedVec2,
 }
 
 #[test]
@@ -69,6 +78,15 @@ fn replay_forensics() {
             let position = entity_ref
                 .get::<LocationComponent>()
                 .map(|location| location.position);
+            let facing = entity_ref
+                .get::<LocationComponent>()
+                .map(|location| location.facing);
+            let carried = entity_ref
+                .get::<ResourceCarrierComponent>()
+                .map(|carrier| format!("{:?} x{}", carrier.kind, carrier.amount));
+            let form = entity_ref
+                .get::<EntityInfoComponent>()
+                .map(|info| info.type_name().to_string());
             let hidden = entity_ref.get::<HiddenComponent>().is_some();
             let front = entity_ref
                 .get::<OrderQueueComponent>()
@@ -89,7 +107,12 @@ fn replay_forensics() {
                         movement.detoured,
                     )
                 });
-            println!("t{tick} pos {position:?} hidden {hidden} front {front:?} move {movement:?}");
+            let owner = entity_ref
+                .get::<OwnerComponent>()
+                .map(|owner| owner.player());
+            println!(
+                "t{tick} owner {owner:?} form {form:?} pos {position:?} facing {facing:?} carried {carried:?} hidden {hidden} front {front:?} move {movement:?}"
+            );
         }
         let entries = world.resource::<EntityIndex>().alive_entries();
         for (id, entity) in entries {
@@ -119,6 +142,10 @@ fn replay_forensics() {
                     queued,
                     front,
                     under_way: entity_ref.get::<MoveComponent>().is_some(),
+                    owner: entity_ref
+                        .get::<OwnerComponent>()
+                        .map(|owner| owner.player()),
+                    facing: location.facing,
                 });
         }
     }
@@ -138,7 +165,8 @@ fn replay_forensics() {
             if !name.contains(&wanted) {
                 continue;
             }
-            println!("track {name} {id:?}:");
+            let owner = track.first().and_then(|sample| sample.owner);
+            println!("track {name} {id:?} owner {owner:?}:");
             for sample in track.iter().step_by(10) {
                 println!(
                     "  t{} ({}, {}) queued {} front {:?}",
@@ -149,6 +177,68 @@ fn replay_forensics() {
                     sample.front.as_deref().unwrap_or("none"),
                 );
             }
+        }
+    }
+
+    // Facing flick: the look the sprite is drawn at disagrees with the step the
+    // body took, so the unit walks one way while pointing another.
+    for (id, (name, track)) in &tracks {
+        let mut runs: Vec<(u32, u32)> = Vec::new();
+        for pair in track.windows(2) {
+            let (before, after) = (&pair[0], &pair[1]);
+            if after.tick != before.tick + 1 || !after.under_way {
+                continue;
+            }
+            let Some(stepped) = drawn_direction(offset(before.position, after.position)) else {
+                continue;
+            };
+            let Some(looked) = drawn_direction(after.facing) else {
+                continue;
+            };
+            if stepped == looked {
+                continue;
+            }
+            match runs.last_mut() {
+                Some(run) if run.1 + 1 == after.tick => run.1 = after.tick,
+                _ => runs.push((after.tick, after.tick)),
+            }
+        }
+        for (from, to) in runs {
+            println!("FLICK {name} {id:?}: ticks {from}..{to}, looked off the step taken");
+        }
+    }
+
+    // Wobble: the step itself swinging from one tick to the next, whatever the
+    // facing does with it. A walk that alternates between two directions reads
+    // as a unit jinking on the spot — and since a unit looks along its step,
+    // its sprite swings with it.
+    for (id, (name, track)) in &tracks {
+        let mut runs: Vec<(u32, u32)> = Vec::new();
+        for window in track.windows(3) {
+            let [before, between, after] = window else {
+                continue;
+            };
+            if after.tick != before.tick + 2 || !after.under_way {
+                continue;
+            }
+            let Some(was) = drawn_direction(offset(before.position, between.position)) else {
+                continue;
+            };
+            let Some(now) = drawn_direction(offset(between.position, after.position)) else {
+                continue;
+            };
+            // Neighboring directions are the gentle turn any walk makes; two
+            // apart is a swing of a right angle or more.
+            if turns_apart(was, now) < 2 {
+                continue;
+            }
+            match runs.last_mut() {
+                Some(run) if run.1 + 1 >= after.tick => run.1 = after.tick,
+                _ => runs.push((after.tick, after.tick)),
+            }
+        }
+        for (from, to) in runs {
+            println!("WOBBLE {name} {id:?}: ticks {from}..{to}, the step swung a right angle");
         }
     }
 
@@ -186,4 +276,54 @@ fn replay_forensics() {
             start = end + 1;
         }
     }
+}
+
+/// The offset from one sampled position to the next, which unsigned positions
+/// cannot hold themselves.
+fn offset(from: FixedUVec2, to: FixedUVec2) -> FixedVec2 {
+    FixedVec2::new(
+        to.x.to_num::<FixedI64>() - from.x.to_num::<FixedI64>(),
+        to.y.to_num::<FixedI64>() - from.y.to_num::<FixedI64>(),
+    )
+}
+
+/// The shortest step whose direction the eye can read, in cells. Below it the
+/// body is being nudged by its neighbours rather than walking, and which way it
+/// looks while that happens says nothing.
+const READABLE_STEP: FixedI64 = FixedI64::lit("0.05");
+
+/// Where `direction` points as the renderer draws it — one of the eight sprite
+/// directions, numbered anticlockwise from east — or `None` when it is too
+/// short to point anywhere.
+///
+/// The eight are what a viewer can tell apart, so they are also the resolution
+/// worth reporting: an angle in degrees would need floating point to compute,
+/// and would rank differences the screen cannot show.
+fn drawn_direction(direction: FixedVec2) -> Option<u8> {
+    let (x, y) = (direction.x, direction.y);
+    if x.abs() < READABLE_STEP && y.abs() < READABLE_STEP {
+        return None;
+    }
+    // A direction is diagonal when neither axis dominates the other, which for
+    // eight equal sectors is the tangent of the sector's own half-angle.
+    let flat = FixedI64::lit("0.4142135");
+    let (across, along) = (x.abs(), y.abs());
+    let diagonal = across > along * flat && along > across * flat;
+    Some(match (x >= FixedI64::ZERO, y >= FixedI64::ZERO, diagonal) {
+        (true, _, false) if across >= along => 0,
+        (true, true, true) => 1,
+        (_, true, false) => 2,
+        (false, true, true) => 3,
+        (false, _, false) => 4,
+        (false, false, true) => 5,
+        (_, false, false) => 6,
+        (true, false, true) => 7,
+    })
+}
+
+/// How many sprite directions apart two looks are, the short way round the
+/// eight.
+fn turns_apart(one: u8, other: u8) -> u8 {
+    let apart = one.abs_diff(other);
+    apart.min(8 - apart)
 }

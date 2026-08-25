@@ -37,7 +37,7 @@ fn unit_modifier_reaches_every_owned_unit() {
 
     app.world_mut()
         .resource_mut::<PlayerStats>()
-        .add_entity_modifier(0, speed_percent(1.0));
+        .add_entity_modifier(0, speed_percent("1"));
     utils::run_ticks(&mut app, 1);
 
     assert_eq!(utils::effective_speed(&app, first), base + base);
@@ -58,7 +58,7 @@ fn unit_modifier_reaches_unit_spawned_after_it() {
 
     app.world_mut()
         .resource_mut::<PlayerStats>()
-        .add_entity_modifier(0, speed_percent(1.0));
+        .add_entity_modifier(0, speed_percent("1"));
     utils::run_ticks(&mut app, 1);
     assert_eq!(utils::effective_speed(&app, veteran), base + base);
 
@@ -79,7 +79,7 @@ fn buff_and_unit_modifier_fold_together() {
         .register_entity_buff(
             "haste",
             EntityBuffDef {
-                modifiers: vec![speed_percent(1.0)],
+                modifiers: vec![speed_percent("1")],
                 duration: Some(5),
                 stack_rule: StackRule::Refresh,
             },
@@ -87,7 +87,7 @@ fn buff_and_unit_modifier_fold_together() {
     game_loop::stats::apply_entity_buff(app.world_mut(), runner, haste);
     app.world_mut()
         .resource_mut::<PlayerStats>()
-        .add_entity_modifier(0, speed_flat(0.5));
+        .add_entity_modifier(0, speed_flat("0.5"));
     utils::run_ticks(&mut app, 1);
 
     // (0.5 base + 0.5 flat) * (1 + 1.0 percent) = 2.
@@ -125,7 +125,7 @@ fn player_buff_mixes_both_arms() {
                     op: ModifierOp::FlatAdd,
                     magnitude: FixedI64::from_num(5),
                 }],
-                entity_modifiers: vec![speed_percent(1.0)],
+                entity_modifiers: vec![speed_percent("1")],
                 duration: Some(5),
                 stack_rule: StackRule::Refresh,
             },
@@ -237,7 +237,7 @@ fn unknown_player_skill_id_is_ignored() {
         "boost",
         PlayerBuffDef {
             player_modifiers: Vec::new(),
-            entity_modifiers: vec![speed_percent(1.0)],
+            entity_modifiers: vec![speed_percent("1")],
             duration: Some(10),
             stack_rule: StackRule::Refresh,
         },
@@ -274,19 +274,19 @@ fn max_supply(app: &App) -> Option<FixedU64> {
         .effective(0, PlayerStatId::MAX_SUPPLY)
 }
 
-fn speed_flat(magnitude: f64) -> EntityModifier {
+fn speed_flat(magnitude: &str) -> EntityModifier {
     EntityModifier {
         stat: EntityStatId::SPEED,
         op: ModifierOp::FlatAdd,
-        magnitude: FixedI64::from_num(magnitude),
+        magnitude: utils::signed_fixed(magnitude),
     }
 }
 
-fn speed_percent(magnitude: f64) -> EntityModifier {
+fn speed_percent(magnitude: &str) -> EntityModifier {
     EntityModifier {
         stat: EntityStatId::SPEED,
         op: ModifierOp::PercentAdd,
-        magnitude: FixedI64::from_num(magnitude),
+        magnitude: utils::signed_fixed(magnitude),
     }
 }
 

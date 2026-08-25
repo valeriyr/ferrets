@@ -344,7 +344,7 @@ fn composition_reads_terrain_per_cell() {
     // Revealed, the picture is the map: the central lake and the grass around
     // it must not come out the same color, or the terrain layer is not being
     // read per cell.
-    let mut app = utils::minimap_app();
+    let mut app = utils::view_app();
     app.world_mut().resource_mut::<FogReveal>().0 = true;
     utils::compose_minimap(&mut app);
 
@@ -355,7 +355,7 @@ fn composition_reads_terrain_per_cell() {
 fn composition_hides_ground_never_seen() {
     // Nothing is placed, so nothing has ever been seen: every cell reads as the
     // same void, lake and grass alike.
-    let mut app = utils::minimap_app();
+    let mut app = utils::view_app();
     utils::compose_minimap(&mut app);
 
     assert_eq!(painted(&app, 48, 48), painted(&app, 5, 5));
@@ -363,7 +363,7 @@ fn composition_hides_ground_never_seen() {
 
 #[test]
 fn composition_covers_whole_map() {
-    let mut app = utils::minimap_app();
+    let mut app = utils::view_app();
     utils::compose_minimap(&mut app);
 
     let canvas = app.world().resource::<minimap::Minimap>().canvas();
@@ -377,7 +377,7 @@ fn composition_covers_whole_map() {
 
 #[test]
 fn flat_look_leaves_widget_square() {
-    let mut app = utils::minimap_app();
+    let mut app = utils::view_app();
     utils::compose_minimap(&mut app);
     utils::point_minimap(&mut app, false);
 
@@ -391,7 +391,7 @@ fn diamond_look_turns_widget_before_flattening_it() {
     // isometric signature the world itself draws. Flattening before turning
     // would give a different shape entirely, which is why the turn and the
     // flattening sit on separate nodes.
-    let mut app = utils::minimap_app();
+    let mut app = utils::view_app();
     utils::compose_minimap(&mut app);
     utils::point_minimap(&mut app, true);
 
@@ -415,7 +415,7 @@ fn diamond_look_widens_and_flattens_widget() {
     // of the flat width and half its height, keeping the map's area rather than
     // trading it away. The frame shifts inward by the overhang so the wider
     // shape still clears the window edge.
-    let mut app = utils::minimap_app();
+    let mut app = utils::view_app();
     utils::compose_minimap(&mut app);
     utils::point_minimap(&mut app, true);
 

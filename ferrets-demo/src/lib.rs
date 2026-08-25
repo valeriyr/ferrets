@@ -67,6 +67,7 @@ pub fn run() {
         .init_resource::<input::LastRecall>()
         .init_resource::<render::Ghosts>()
         .init_resource::<render::FogReveal>()
+        .init_resource::<render::Smoothing>()
         .init_resource::<minimap::Looking>()
         .init_resource::<render::SkillPulses>()
         .init_resource::<debug::DebugState>()
@@ -178,7 +179,9 @@ pub fn run() {
             Update,
             (
                 camera::pan_zoom,
-                render::toggle_fog_reveal,
+                // Grouped: the presentation-only view toggles, and one element
+                // of a system tuple that is at its limit.
+                (render::toggle_fog_reveal, render::toggle_smoothing),
                 hud::update_resources,
                 hud::update_supply,
                 hud::update_help,
@@ -203,6 +206,9 @@ pub fn run() {
                 (
                     render::refresh_changed_sprites,
                     render::attach_sprites,
+                    // Before the interpolation it corrects, so a reappearance
+                    // never draws a frame of the slide it would otherwise make.
+                    render::snap_revealed,
                     render::interpolate_sprites,
                     render::update_fog_overlay,
                     render::draw_ghosts,

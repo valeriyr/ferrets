@@ -30,6 +30,21 @@ const MAX_ACCEPTANCE_GROWTH: u32 = 4;
 /// Blockage escalations a walk may burn before giving up where it stands.
 const GIVE_UP_ESCALATIONS: u32 = 8;
 
+/// How near an intermediate waypoint counts as reaching it: half a body, so a
+/// mover the pushing pass keeps nudging is not held to an exact hit it may never
+/// land, and the next waypoint pulls from far ahead anyway.
+const WAYPOINT_POP_SLACK: FixedU64 = FixedU64::lit("0.5");
+
+/// The share of a tick's walk below which a slid step counts as a crawl rather
+/// than progress. An exact binary fraction, so scaling a speed by it is exact.
+const CRAWL_SHARE: FixedU64 = FixedU64::lit("0.125");
+
+/// The share of a tick's walk a step must keep for its direction to be the
+/// body's heading. Larger than [`CRAWL_SHARE`]: a crawl is still real travel and
+/// the stall clock has to judge it, while a look wants only the steps the eye
+/// can follow.
+const HEADING_SHARE: FixedU64 = FixedU64::lit("0.25");
+
 /// One shared plan's identity. The mover's shape is part of it because each
 /// shape has its own abstraction: a corridor planned for one clearance means
 /// nothing to another, and their independently-minted region numbers are not
@@ -292,6 +307,12 @@ fn process_continuous(entity: Entity, order: &Order, world: &mut World) -> Order
     let point_order = range == 0 && size == CellSize::ONE;
 
     if move_component.path.is_empty() {
+        // Wound down: the step it was told to finish has landed, so the walk is
+        // over. Asking for the next segment here would replan the whole journey
+        // the cancel just discarded.
+        if move_component.winding_down {
+            return OrderState::Finished;
+        }
         if point_order && current_cell == CellPos::from(target) {
             // Already standing on the goal cell — a plan would be empty;
             // walk the last sub-cell stretch to the spot directly.
@@ -335,21 +356,72 @@ fn process_continuous(entity: Entity, order: &Order, world: &mut World) -> Order
     };
     let desired = projection.step_toward(position, waypoint, speed);
     let radius = entity_def::radius(world, entity);
-    let new_pos = terrain::slide_toward(
-        world.resource::<Map>().nav_grid(),
-        shape.mask,
-        position,
-        shape.size,
-        desired,
-        radius,
-    );
+    let slide = |aim: FixedUVec2, world: &World| {
+        terrain::slide_toward(
+            world.resource::<Map>().nav_grid(),
+            shape.mask,
+            position,
+            shape.size,
+            aim,
+            radius,
+        )
+    };
+    let mut new_pos = slide(desired, world);
+    // Aiming into a wall rather than along it: the slide keeps the step's
+    // dominant axis where it can, so losing that one and keeping the minor one
+    // means the wall is across the way, not beside it.
+    let aimed_into_wall = if desired.x.abs_diff(position.x) >= desired.y.abs_diff(position.y) {
+        desired.x != position.x && new_pos.x == position.x
+    } else {
+        desired.y != position.y && new_pos.y == position.y
+    };
+    // Walked along rather than grazed: what is left of a step aimed past a wall
+    // is the minor axis's share of it — a fraction of the walk — so the tick is
+    // better spent on the way that is open, which is also what clears the block.
+    //
+    // Decided afresh every tick on purpose: a body held to one axis until it
+    // lines up walks itself into the corner, where both axes are shut and the
+    // walk stops dead for a tick. Feeling its way round costs a couple of turns
+    // and keeps moving.
+    let walking_along_wall = aimed_into_wall && {
+        // A tick's walk along one axis, stopping at the waypoint's own
+        // coordinate so the walk cannot overshoot what it is walking to. Spelled
+        // out rather than taken from [`Projection::step_toward`]: the slide takes
+        // a destination, so the aim has to carry the speed limit itself, and one
+        // axis at full rate is exactly `speed` — which the projection's own
+        // scaling would only round its way back to.
+        let along = |from: FixedU64, toward: FixedU64| {
+            if toward >= from {
+                from.saturating_add(speed).min(toward)
+            } else {
+                from.saturating_sub(speed).max(toward)
+            }
+        };
+        // The axis that did not move is the shut one, whichever was dominant, so
+        // the other is the way that is open. Neither moving names the wrong one
+        // and costs nothing: the aim comes out as the body's own position, which
+        // the slide cannot better.
+        let aim = if new_pos.x == position.x {
+            FixedUVec2::new(position.x, along(position.y, waypoint.y))
+        } else {
+            FixedUVec2::new(along(position.x, waypoint.x), position.y)
+        };
+        let alongside = slide(aim, world);
+        // A step newly walled gives way only to a better one, so a wall that
+        // costs the body nothing is not walked along at all.
+        let further = position.distance(alongside) > position.distance(new_pos);
+        if further {
+            new_pos = alongside;
+        }
+        further
+    };
+    let travelled = position.distance(new_pos);
     // A slide that dropped an axis and kept next to nothing of the step is a
     // body pressed diagonally into a footprint corner: the free axis converges
     // on the corner's tangent line without ever clearing it, and the crumbs it
     // yields keep reading as progress, so the stall clock never fires either.
     // Pressed and crawling is walled, just slower about it.
-    let pressed_crawl =
-        new_pos != desired && position.distance(new_pos) < speed / FixedU64::from_num(8);
+    let pressed_crawl = new_pos != desired && travelled < speed * CRAWL_SHARE;
     if (new_pos == position || pressed_crawl) && desired != position {
         // Walled off: a push pressed the body against a footprint, and from
         // this off-lattice spot the straight line to the waypoint clips the
@@ -393,13 +465,20 @@ fn process_continuous(entity: Entity, order: &Order, world: &mut World) -> Order
     {
         let mut entity_mut = world.entity_mut(entity);
         let mut location = entity_mut.get_mut::<LocationComponent>().unwrap();
+        // The step taken, not the one aimed for: a slide along terrain keeps
+        // only what the way allows of the aim, and a body that walks along a
+        // bank while looking into it is a body looking where it is not going.
         let facing = FixedVec2::new(
-            waypoint.x.to_num::<FixedI64>() - position.x.to_num::<FixedI64>(),
-            waypoint.y.to_num::<FixedI64>() - position.y.to_num::<FixedI64>(),
+            new_pos.x.to_num::<FixedI64>() - position.x.to_num::<FixedI64>(),
+            new_pos.y.to_num::<FixedI64>() - position.y.to_num::<FixedI64>(),
         );
-        // Standing exactly on the waypoint gives no direction; keep the
-        // previous facing rather than zeroing it.
-        if facing != FixedVec2::ZERO {
+        // Only a step worth seeing is a heading. A crumb — a lattice point
+        // being regained, a scrape past a corner — moves the body a pixel or
+        // two along some axis it does not mean to travel, and looking down it
+        // spins the body for one tick over a movement nobody can see. Keeping
+        // the previous look is right for a step that landed nowhere too, which
+        // would otherwise zero the direction outright.
+        if travelled >= speed * HEADING_SHARE {
             location.facing = facing;
         }
         location.position = new_pos;
@@ -411,15 +490,53 @@ fn process_continuous(entity: Entity, order: &Order, world: &mut World) -> Order
     if point_order && new_pos == target {
         return OrderState::Finished;
     }
-    // Intermediate waypoints pop within half a body of slack — pushes make
-    // exact hits rare, and the next waypoint pulls from far ahead anyway.
-    // The final one pops only on the exact spot, so arrival stays precise —
-    // and so does a regained lattice point, whose whole purpose is standing
-    // exactly on it.
+    // A wall the slide could not be walked along: the way round the corner may
+    // still be a clear line somewhere else, which only a search finds. Nothing
+    // has gone wrong yet, so this only re-aims.
+    if aimed_into_wall
+        && !walking_along_wall
+        && !move_component.detoured
+        && new_pos != position
+        && let Some(&pursued) = move_component.path.last()
+    {
+        let cells = {
+            let map = world.resource::<Map>();
+            hpa::detour(
+                map.nav_grid(),
+                map.hierarchy(),
+                projection,
+                current_cell,
+                shape,
+                pursued,
+            )
+        };
+        // A fruitless search must not be retried every tick: `splice_detour`
+        // is what normally marks the blockage's one detour spent, so a search
+        // that found nothing marks it here instead. The next escalation clears
+        // the mark and tries again.
+        let Some(cells) = cells.filter(|cells| !cells.is_empty()) else {
+            move_component.detoured = true;
+            world.entity_mut(entity).insert(move_component);
+            return OrderState::InProcessing;
+        };
+        move_component.splice_detour(cells);
+        // The splice replaced the pursued waypoint, so the arrival test below
+        // has nothing left to say about it — comparing against the stale one
+        // would consume the detour's own first cell, the very step that rounds
+        // the corner. This tick's step is already committed; the walk resumes
+        // against the detour next tick.
+        world.entity_mut(entity).insert(move_component);
+        return OrderState::InProcessing;
+    }
+
+    // Intermediate waypoints pop within half a body of slack (see
+    // [`WAYPOINT_POP_SLACK`]). The final one pops only on the exact spot, so
+    // arrival stays precise — and so does a regained lattice point, whose whole
+    // purpose is standing exactly on it.
     let reached = if final_waypoint || move_component.regaining {
         new_pos == waypoint
     } else {
-        new_pos.distance(waypoint) <= FixedU64::from_num(0.5)
+        new_pos.distance(waypoint) <= WAYPOINT_POP_SLACK
     };
     if reached {
         move_component.consume_waypoint();
@@ -432,10 +549,14 @@ fn process_continuous(entity: Entity, order: &Order, world: &mut World) -> Order
 ///
 /// Each tick:
 /// 1. If mid-crossing (position is not on a cell origin), continue moving toward
-///    `path.last()`. Pop the waypoint on arrival; return `Finished` if path is empty.
+///    `path.last()`, popping the waypoint on arrival.
 /// 2. Otherwise finish if the goal is within the order's stop distance, or
 ///    calculate a path if needed, claim the next cell in the nav grid, and begin
 ///    the crossing.
+///
+/// An emptied `path` is a spent corridor leg, not an arrival — only the goal
+/// check in step 2 ends the order, so a walk planned as a corridor asks for its
+/// next leg instead of stopping at the first crossing.
 ///
 /// A crossing's cells are claimed when the entity **starts** crossing into
 /// them, not on arrival. `path.last()` is the active crossing target; it is popped
@@ -479,7 +600,22 @@ fn process_cell(entity: Entity, order: &Order, world: &mut World) -> OrderState 
 
         if new_pos == target_pos {
             move_component.path.pop();
-            if move_component.path.is_empty() {
+            // An emptied path is a spent corridor leg, not necessarily an
+            // arrival: a corridor is refined one leg at a time, so the goal
+            // decides. Judging it here rather than leaving it to the next
+            // tick's at-rest check keeps a walk that really has arrived
+            // finishing on the tick it lands.
+            if move_component.path.is_empty()
+                && cell_walk_done(
+                    &move_component,
+                    projection,
+                    CellPos::from(new_pos),
+                    shape,
+                    target,
+                    size,
+                    range,
+                )
+            {
                 return OrderState::Finished;
             }
         }
@@ -491,16 +627,20 @@ fn process_cell(entity: Entity, order: &Order, world: &mut World) -> OrderState 
     // grows the acceptance of point moves so a crowded destination settles
     // into a ring; ranged walks keep their exact contract — a chase that
     // finished short would break its parent order's range semantics.
-    let effective_range = acceptance(range, move_component.frustration);
-    // Expansion keyed on the order's range, distance on the effective
-    // acceptance — see the cell model's arrival check for why they differ.
-    if projection.in_range_of_rect(
+    if cell_arrived(
+        projection,
         CellPos::from(position),
-        CellRect::new(CellPos::from(target), size).accepted_by(shape.size, range),
-        effective_range,
+        shape,
+        target,
+        size,
+        range,
+        move_component.frustration,
     ) {
         return OrderState::Finished;
     }
+    // The crowd ladder measures against the same acceptance the arrival check
+    // just used.
+    let effective_range = acceptance(range, move_component.frustration);
 
     // Continue the plan — or make one — when the current segment runs out.
     if move_component.path.is_empty() {
@@ -573,7 +713,18 @@ fn process_cell(entity: Entity, order: &Order, world: &mut World) -> OrderState 
 
     if new_pos == next_pos {
         move_component.path.pop();
-        if move_component.path.is_empty() {
+        // As above: the spent leg ends the walk only once the goal is met.
+        if move_component.path.is_empty()
+            && cell_walk_done(
+                &move_component,
+                projection,
+                CellPos::from(new_pos),
+                shape,
+                target,
+                size,
+                range,
+            )
+        {
             return OrderState::Finished;
         }
     }
@@ -764,6 +915,51 @@ fn acceptance(range: u32, frustration: u32) -> u32 {
     }
 }
 
+/// Whether a cell-model walk whose step has just landed ends here: either the
+/// goal is satisfied, or the walk is winding down and this was the step it was
+/// told to finish.
+fn cell_walk_done(
+    move_component: &MoveComponent,
+    projection: Projection,
+    cell: CellPos,
+    shape: MoverShape,
+    target: FixedUVec2,
+    size: CellSize,
+    range: u32,
+) -> bool {
+    move_component.winding_down
+        || cell_arrived(
+            projection,
+            cell,
+            shape,
+            target,
+            size,
+            range,
+            move_component.frustration,
+        )
+}
+
+/// Whether a cell-model walk's goal is satisfied from `cell`.
+///
+/// The expansion is keyed on the order's own range while the distance uses the
+/// effective acceptance; the two differ on purpose, for the reasons the arrival
+/// check under the continuous model spells out.
+fn cell_arrived(
+    projection: Projection,
+    cell: CellPos,
+    shape: MoverShape,
+    target: FixedUVec2,
+    size: CellSize,
+    range: u32,
+    frustration: u32,
+) -> bool {
+    projection.in_range_of_rect(
+        cell,
+        CellRect::new(CellPos::from(target), size).accepted_by(shape.size, range),
+        acceptance(range, frustration),
+    )
+}
+
 /// Works down the crowd ladder when the next cell of a crossing is held:
 /// swap with a head-on counterpart, arrive beside a settled ally, skip a
 /// waypoint an idle ally sits on, ask an idle ally to step aside, wait
@@ -819,9 +1015,13 @@ fn resolve_blocked_crossing(
                 position,
                 speed,
                 projection,
+                shape,
                 current_cell,
                 next_cell,
                 blocker,
+                target,
+                size,
+                range,
             );
         }
 
@@ -946,9 +1146,13 @@ fn swap_crossings(
     position: FixedUVec2,
     speed: FixedU64,
     projection: Projection,
+    shape: MoverShape,
     current_cell: CellPos,
     next_cell: CellPos,
     blocker: Entity,
+    target: FixedUVec2,
+    size: CellSize,
+    range: u32,
 ) -> OrderState {
     let next_pos = FixedUVec2::from(next_cell);
     let current_pos = FixedUVec2::from(current_cell);
@@ -989,7 +1193,17 @@ fn swap_crossings(
     }
     if new_pos == next_pos {
         move_component.path.pop();
-        if move_component.path.is_empty() {
+        if move_component.path.is_empty()
+            && cell_walk_done(
+                &move_component,
+                projection,
+                CellPos::from(position),
+                shape,
+                target,
+                size,
+                range,
+            )
+        {
             return OrderState::Finished;
         }
     }

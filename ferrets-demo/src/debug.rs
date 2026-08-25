@@ -25,7 +25,7 @@ use ferrets_simulation::{
 use crate::{
     input::InputMode,
     map,
-    render::{CELL_PX, FogReveal, world_center},
+    render::{CELL_PX, FogReveal, Smoothing, world_center},
     states::InGameUi,
 };
 
@@ -51,6 +51,10 @@ impl Default for DebugState {
         }
     }
 }
+
+/// How many selected entities the readout names outright before it falls back to
+/// counting them.
+const NAMED_SELECTION: usize = 6;
 
 #[derive(Component)]
 pub struct DebugText;
@@ -143,6 +147,7 @@ pub fn debug_readout(
     map: Res<Map>,
     registry: Res<ContentRegistry>,
     debug: Res<DebugState>,
+    smoothing: Res<Smoothing>,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
     entities: Query<(&EntityInfoComponent, &LocationComponent), Without<HiddenComponent>>,
@@ -161,10 +166,23 @@ pub fn debug_readout(
                 cx >= ox && cx < ox + size.width && cy >= oy && cy < oy + size.height
             })
         })
-        .map(|(info, _)| info.type_name().to_string());
+        .map(|(info, _)| format!("{} #{}", info.type_name(), info.id().0));
     let hover_str = hover.as_deref().unwrap_or("-");
 
-    let selected = selection.get(session.local_player()).len();
+    // Named by simulation id rather than counted: a report about one unit of a
+    // crowd has to be able to say which, and the cursor reaches what the
+    // selection cannot — an enemy's, a neutral's, a seam's. Past a handful the
+    // ids stop being readable and stop fitting, so the count is what the line
+    // carries and hovering names the one that matters.
+    let selection_str = match selection.get(session.local_player()) {
+        [] => "-".to_string(),
+        ids if ids.len() <= NAMED_SELECTION => ids
+            .iter()
+            .map(|id| format!("#{}", id.0))
+            .collect::<Vec<_>>()
+            .join(" "),
+        ids => format!("{} units", ids.len()),
+    };
     let mode_str = match &*mode {
         InputMode::Normal => "normal",
         InputMode::PlacingBuild(_) => "placing",
@@ -186,15 +204,16 @@ pub fn debug_readout(
 
     if let Ok(mut text) = text.single_mut() {
         **text = format!(
-            "tick {} | {held_hz:.1}/{wanted_hz:.0} Hz | {} | layer {} | cursor {} | hover {} | LMB {} RMB {} | selected {} | {}",
+            "tick {} | {held_hz:.1}/{wanted_hz:.0} Hz | {} | {} | layer {} | cursor {} | hover {} | LMB {} RMB {} | selected {} | {}",
             session.tick(),
             model_str,
+            if smoothing.0 { "smoothed" } else { "per tick" },
             debug.layer,
             cell_str,
             hover_str,
             mouse.pressed(MouseButton::Left) as u8,
             mouse.pressed(MouseButton::Right) as u8,
-            selected,
+            selection_str,
             mode_str,
         );
     }

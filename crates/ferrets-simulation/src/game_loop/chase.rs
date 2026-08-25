@@ -40,26 +40,20 @@ pub fn advance(
     destination_size: CellSize,
     range: u32,
 ) -> Destination {
-    // The chaser judges itself by the cell under its body's center — the
-    // cell it visually stands on and claims. A continuous body pressed
-    // against its destination rests with a fractional anchor whose floor
-    // is one cell short, and floor-judging it would re-walk that phantom
-    // step forever. The anchor's own floor also counts: a body nudged off
-    // its arrival spot by a working neighbor straddles the boundary with
-    // its center a hair past it, still standing at the work for any eye —
-    // and re-walking that hair loses the spot-contest forever. The
-    // destination stays anchor-floored: that is the cell the walk below
-    // plans toward and accepts by, so both verdicts name the same spot.
+    // The chaser reaches from every cell it stands on, and the destination
+    // stays anchor-floored: that is the cell the walk below plans toward and
+    // accepts by, so arrival and the walk name the same spot. Judging the
+    // chaser by one cell of the two it lies across leaves a body a little past
+    // a destination corner reading as out of range on one axis or the other
+    // however it is quantized, and a working neighbor's nudge decides which —
+    // so the walk arrives, the nudge lands, this says out of range, and the
+    // round counts as no progress until the whole order gives up.
     //
     // Both sides are footprints: a wide chaser reaches as far as its nearest
     // edge, which is also how acquisition measures — the two must agree, or a
     // wide unit would acquire a target it then walks straight past.
     let goal = CellRect::new(CellPos::from(destination), destination_size);
-    let standing = CellRect::new(body::anchor(from), from_size);
-    let floored = CellRect::new(CellPos::from(from), from_size);
-    if projection.in_range_for_rects(standing, goal, range)
-        || projection.in_range_for_rects(floored, goal, range)
-    {
+    if projection.in_range_for_rects(body::standing_rect(from, from_size), goal, range) {
         *last_chase = None;
         return Destination::Arrived;
     }
