@@ -25,7 +25,7 @@ use ferrets_simulation::{
 
 use crate::{
     map, playback,
-    render::SkillPulses,
+    render::{Ghosts, SkillPulses},
     scenario::CurrentScenario,
     skirmish::CurrentSkirmish,
     states::{GameState, InGameUi},
@@ -187,6 +187,10 @@ pub fn teardown_session(world: &mut World) {
     // ticks restart at zero — a survivor would draw a phantom ring on whatever
     // entity inherits its id.
     world.insert_resource(SkillPulses::default());
+    // Remembered enemy buildings are this client's memory of one game; the
+    // next game's minimap would otherwise paint them before the world view
+    // pruned them.
+    world.insert_resource(Ghosts::default());
 
     world.remove_resource::<CurrentScenario>();
     world.remove_resource::<CurrentSkirmish>();

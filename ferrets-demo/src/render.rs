@@ -94,12 +94,22 @@ enum GhostShape {
 struct GhostSprite {
     origin: (u32, u32),
     center: Vec2,
+    /// The footprint remembered under the outline, for consumers that draw the
+    /// remembered building as cells rather than as a shape.
+    size: CellSize,
     shape: GhostShape,
 }
 
 /// Last-seen enemy buildings, keyed by [`SimulationId`] (see [`GhostSprite`]).
 #[derive(Resource, Default)]
 pub struct Ghosts(HashMap<SimulationId, GhostSprite>);
+
+impl Ghosts {
+    /// Where each remembered building stood and how much ground it covered.
+    pub(crate) fn remembered(&self) -> impl Iterator<Item = ((u32, u32), CellSize)> {
+        self.0.values().map(|ghost| (ghost.origin, ghost.size))
+    }
+}
 
 /// When set, the local view reveals the whole map — the fog overlay clears and
 /// fogged entities draw — for inspecting the game. A presentation-only toggle;
@@ -147,7 +157,7 @@ pub(crate) fn air_lift(registry: &ContentRegistry, def: &EntityTypeDef) -> Vec3 
     }
 }
 
-fn color_for(
+pub(crate) fn color_for(
     owner: Option<&OwnerComponent>,
     source: Option<&ResourceSourceDef>,
     session: &GameSession,
@@ -906,7 +916,7 @@ pub fn draw_facing(
 }
 
 /// The tile color for a terrain, by content name.
-fn terrain_color(terrain: &str) -> Color {
+pub(crate) fn terrain_color(terrain: &str) -> Color {
     match terrain {
         "grass" => Color::srgb(0.20, 0.34, 0.17),
         "water" => Color::srgb(0.15, 0.35, 0.6),
@@ -923,12 +933,8 @@ pub fn spawn_terrain_tiles(
     session: Res<GameSession>,
     scenario: Option<Res<CurrentScenario>>,
 ) {
-    let map = match &scenario {
-        Some(scenario) => scenario.0.map.clone(),
-        None => match map::by_name(session.map()) {
-            Some(map) => map,
-            None => return,
-        },
+    let Some(map) = map::opened(&session, scenario.as_deref()) else {
+        return;
     };
 
     for (i, &terrain) in map.terrain_cells().iter().enumerate() {
@@ -1027,6 +1033,7 @@ pub fn draw_ghosts(
                 GhostSprite {
                     origin: (x, y),
                     center: world_center(location.position, size).truncate(),
+                    size,
                     shape: ghost_shape(info.type_name(), size),
                 },
             );

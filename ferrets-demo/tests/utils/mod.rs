@@ -1,14 +1,15 @@
 #![allow(dead_code)]
 
-use bevy::prelude::*;
+use bevy::{ecs::system::RunSystemOnce, prelude::*};
 use ferrets_bevy_plugin::{PendingInput, SimulationPlugin};
 use ferrets_content::registry::ContentRegistry;
-use ferrets_demo::{content::CONTENT, scenario};
+use ferrets_demo::{content::CONTENT, minimap, render, scenario, view};
 use ferrets_geometry::projection::Projection;
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_script::{content, engine::lua::LuaEngine};
 use ferrets_simulation::{
     command::{PlayerCommand, SelectMode},
+    components::location::LocationComponent,
     input::{InputFrames, PlayerFrame},
     map::Map,
     movement_model::MovementModel,
@@ -150,15 +151,43 @@ pub fn select(
 }
 
 /// The entity's continuous position — sub-cell precise.
-pub fn position_of(world: &mut bevy::prelude::World, entity: bevy::prelude::Entity) -> FixedUVec2 {
-    world
-        .get::<ferrets_simulation::components::location::LocationComponent>(entity)
-        .unwrap()
-        .position
+pub fn position_of(world: &mut World, entity: Entity) -> FixedUVec2 {
+    world.get::<LocationComponent>(entity).unwrap().position
 }
 
 /// A position pinned to the bit — captured from a probe run and asserted
 /// exactly ever after: any drift is a lockstep desync.
 pub fn position_bits(x: u64, y: u64) -> FixedUVec2 {
     FixedUVec2::new(FixedU64::from_bits(x), FixedU64::from_bits(y))
+}
+
+/// A headless demo-map game carrying the resources the minimap reads, so its
+/// systems can be driven directly without a window or a renderer.
+pub fn minimap_app() -> App {
+    let mut app = demo_map_app(MovementModel::Continuous);
+    let world = app.world_mut();
+    world.insert_resource(Assets::<Image>::default());
+    world.init_resource::<render::FogReveal>();
+    world.init_resource::<render::Ghosts>();
+    app
+}
+
+/// Builds the minimap and composes it once, as entering a game and drawing a
+/// frame would.
+pub fn compose_minimap(app: &mut App) {
+    let world = app.world_mut();
+    world
+        .run_system_once(minimap::spawn_minimap)
+        .expect("minimap spawns");
+    world
+        .run_system_once(minimap::refresh_minimap)
+        .expect("minimap composes");
+}
+
+/// Points the minimap widget at a look, as switching the view setting would.
+pub fn point_minimap(app: &mut App, diamond: bool) {
+    app.world_mut().insert_resource(view::WorldView { diamond });
+    app.world_mut()
+        .run_system_once(minimap::follow_view)
+        .expect("minimap follows the view");
 }

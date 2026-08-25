@@ -21,8 +21,9 @@ pub mod input;
 pub mod lobby;
 pub mod map;
 mod menu;
+pub mod minimap;
 pub mod playback;
-mod render;
+pub mod render;
 mod replay;
 pub mod scenario;
 pub mod settings;
@@ -30,7 +31,7 @@ pub mod setup;
 pub mod skirmish;
 mod states;
 pub mod time;
-mod view;
+pub mod view;
 
 /// Builds the demo app and runs it until the window closes.
 pub fn run() {
@@ -66,6 +67,7 @@ pub fn run() {
         .init_resource::<input::LastRecall>()
         .init_resource::<render::Ghosts>()
         .init_resource::<render::FogReveal>()
+        .init_resource::<minimap::Looking>()
         .init_resource::<render::SkillPulses>()
         .init_resource::<debug::DebugState>()
         // Camera and content exist for every screen; the game scene is set up on
@@ -117,12 +119,16 @@ pub fn run() {
                 setup::spawn_demo_scene.run_if(not(resource_exists::<scenario::CurrentScenario>)),
                 scenario::spawn_scenario_scene.run_if(resource_exists::<scenario::CurrentScenario>),
                 render::spawn_terrain_tiles,
+                minimap::spawn_minimap,
                 camera::frame_local_player,
                 replay::start_recording,
             )
                 .chain(),
         )
-        .add_systems(OnExit(GameState::InGame), replay::teardown_session)
+        .add_systems(
+            OnExit(GameState::InGame),
+            (replay::teardown_session, minimap::teardown_minimap),
+        )
         // Tick-synced time: bracket each fixed step to measure and scale it, and
         // snapshot positions before the simulation advances (for interpolation).
         .add_systems(
@@ -157,6 +163,7 @@ pub fn run() {
                 hud::load_card_input,
                 hud::unload_card_input,
                 hud::group_roster_input,
+                minimap::order_input,
                 input::order_mode_input,
                 input::targeting_input,
                 input::placement_input,
@@ -219,6 +226,21 @@ pub fn run() {
         .add_systems(
             Update,
             (debug::draw_hierarchy, debug::draw_bodies).run_if(in_state(GameState::InGame)),
+        )
+        // Its own group because the viewing tuple above is at Bevy's size limit.
+        // Looking around the minimap steers the view rather than the game, so
+        // both systems run for playback too.
+        .add_systems(
+            Update,
+            (
+                minimap::follow_view,
+                minimap::look_input,
+                // The picture reads the remembered-buildings store that
+                // `draw_ghosts` prunes and fills, so it composes after that
+                // rather than in whichever order Bevy picks.
+                minimap::refresh_minimap.after(render::draw_ghosts),
+            )
+                .run_if(in_state(GameState::InGame)),
         )
         // Pause, speed, single-step and seek steer how the game is watched rather
         // than what happens in it — none of them issues a command — so they stay

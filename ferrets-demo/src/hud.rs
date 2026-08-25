@@ -455,7 +455,7 @@ pub fn update_help(
     mut text: Query<&mut Text, With<HelpText>>,
 ) {
     let mut message = String::from(
-        "LMB select (Shift add, dbl-click all of type) | RMB move/harvest/attack | F/R/G/T/B/Q orders | X stance | 1-0 groups (Ctrl set)\nV reveal | P pause | -/= speed | . step | ] seek | F1 debug | F2 spawn | F3 layer",
+        "LMB select (Shift add, dbl-click all of type) | RMB move/harvest/attack | F/R/G/T/B/Q orders | X stance | 1-0 groups (Ctrl set)\nMinimap: LMB look (drag pans), RMB order | V reveal | P pause | -/= speed | . step | ] seek | F1 debug | F2 spawn | F3 layer",
     );
 
     let local = session.local_player();

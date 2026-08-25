@@ -29,10 +29,10 @@ use ferrets_script::engine::lua::LuaEngine;
 use ferrets_simulation::{
     map::Map,
     map_data::{MapData, Placement},
-    session::player_slot::PlayerId,
+    session::{GameSession, player_slot::PlayerId},
 };
 
-use crate::content;
+use crate::{content, scenario::CurrentScenario};
 
 /// The demo map's name — the session and replays reference it by this.
 pub const NAME: &str = "demo";
@@ -125,6 +125,15 @@ fn in_river(x: u32, y: u32) -> bool {
 /// spawner and replay playback resolve the name here.
 pub fn by_name(name: &str) -> Option<MapData> {
     (name == NAME).then(data)
+}
+
+/// The map the running game opened on: a loaded scenario carries its own, and
+/// any other game names one this game knows.
+pub fn opened(session: &GameSession, scenario: Option<&CurrentScenario>) -> Option<MapData> {
+    match scenario {
+        Some(scenario) => Some(scenario.0.map.clone()),
+        None => by_name(session.map()),
+    }
 }
 
 /// The demo map as data: the grass field with its central lake, the corner

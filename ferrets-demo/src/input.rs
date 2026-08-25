@@ -259,18 +259,30 @@ fn visible_rect(
     camera: &Camera,
     camera_transform: &GlobalTransform,
 ) -> FixedURect {
+    covering_rect(&viewport_corners(window, camera, camera_transform))
+}
+
+/// The world points under the four corners of the viewport, clockwise from its
+/// top-left. Under a turned camera these are four distinct points that do not
+/// form an axis-aligned rectangle, so consumers that care about the shape of
+/// the visible region must keep all four.
+pub fn viewport_corners(
+    window: &Window,
+    camera: &Camera,
+    camera_transform: &GlobalTransform,
+) -> [Vec2; 4] {
     let size = Vec2::new(window.width(), window.height());
     let corner = |v| {
         camera
             .viewport_to_world_2d(camera_transform, v)
             .unwrap_or(Vec2::ZERO)
     };
-    covering_rect(&[
+    [
         corner(Vec2::ZERO),
         corner(Vec2::new(size.x, 0.0)),
         corner(size),
         corner(Vec2::new(0.0, size.y)),
-    ])
+    ]
 }
 
 /// The selectable entity whose sprite covers the world position, preferring
@@ -454,9 +466,37 @@ pub fn order_input(
     };
 
     let flush = !(keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight));
-
     let target = entity_at(cursor, &registry, &entities);
+    issue_orders_at(
+        cursor,
+        target,
+        flush,
+        &session,
+        &selection,
+        &registry,
+        &rally_holders,
+        &mut pending,
+    );
+}
 
+/// Issues the orders a right click on `world` asks for: re-targeting rally
+/// points when the selection is entirely own stationary producers, sending the
+/// selection to `target` when the click named one, and moving it to the point
+/// otherwise.
+///
+/// Shared by the cursor and the minimap, so a click means the same thing
+/// wherever it lands. A caller with no way to aim at an entity passes no
+/// `target` and always gets the positional reading.
+pub fn issue_orders_at(
+    world: Vec2,
+    target: Option<SimulationId>,
+    flush: bool,
+    session: &GameSession,
+    selection: &Selection,
+    registry: &ContentRegistry,
+    rally_holders: &Query<(&EntityInfoComponent, &OwnerComponent), With<RallyPointComponent>>,
+    pending: &mut PendingInput,
+) {
     // Only a selection of stationary producers captures the click; a mixed
     // selection keeps ordering its units around normally, and anything that
     // can move is ordered around too — movement outranks rally.
@@ -474,7 +514,7 @@ pub fn order_input(
         let target = match target {
             Some(id) if selected.contains(&id) => None,
             Some(id) => Some(RallyTarget::Entity(id)),
-            None => Some(RallyTarget::Position(world_to_pos(cursor))),
+            None => Some(RallyTarget::Position(world_to_pos(world))),
         };
         for &producer in selected {
             pending.push(PlayerCommand::SetRallyPoint {
@@ -488,7 +528,7 @@ pub fn order_input(
     match target {
         Some(target) => pending.push(PlayerCommand::SendToEntity { target, flush }),
         None => pending.push(PlayerCommand::Move {
-            target: world_to_pos(cursor),
+            target: world_to_pos(world),
             flush,
         }),
     }
