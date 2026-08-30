@@ -1,13 +1,16 @@
 //! Move order implementation.
 //! Called by [`super::orders`] as part of the shared order lifecycle.
 
-use ferrets_geometry::{
-    cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize, projection::Projection,
-};
 use std::collections::BTreeMap;
 
 use bevy_ecs::{entity::Entity, resource::Resource, world::World};
-use ferrets_math::{FixedI64, FixedU64, fixed_uvec2::FixedUVec2, fixed_vec2::FixedVec2};
+use ferrets_content::{entity_stats::EntityStatId, location::Solidity};
+use ferrets_geometry::{
+    cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize, projection::Projection,
+};
+use ferrets_math::{
+    FixedI64, FixedU64, facing::Facing, fixed_uvec2::FixedUVec2, fixed_vec2::FixedVec2,
+};
 use ferrets_pathfinder::{
     astar,
     hierarchy::ClusterPos,
@@ -16,6 +19,23 @@ use ferrets_pathfinder::{
     mover_shape::MoverShape,
 };
 use ferrets_physics::{body, terrain};
+
+use super::turn;
+use crate::{
+    components::{
+        hidden::HiddenComponent,
+        location::LocationComponent,
+        movement::MoveComponent,
+        order_queue::{CancelPolicy, OrderQueueComponent, OrderState},
+        owner::OwnerComponent,
+    },
+    entity_def,
+    entity_index::EntityIndex,
+    map::Map,
+    movement_model::MovementModel,
+    order::Order,
+    session::GameSession,
+};
 
 /// Ticks to wait for a blocked cell to clear before recalculating the path.
 const BLOCKED_WAIT_TICKS: u32 = 5;
@@ -86,23 +106,6 @@ impl MovePlanShare {
         &mut self.plans
     }
 }
-
-use crate::{
-    components::{
-        hidden::HiddenComponent,
-        location::LocationComponent,
-        movement::MoveComponent,
-        order_queue::{CancelPolicy, OrderQueueComponent, OrderState},
-        owner::OwnerComponent,
-    },
-    entity_def,
-    entity_index::EntityIndex,
-    map::Map,
-    movement_model::MovementModel,
-    order::Order,
-    session::GameSession,
-};
-use ferrets_content::{entity_stats::EntityStatId, location::Solidity};
 
 /// Called once when a Move order becomes the front `New` entry.
 ///
@@ -462,27 +465,41 @@ fn process_continuous(entity: Entity, order: &Order, world: &mut World) -> Order
         world.entity_mut(entity).insert(move_component);
         return OrderState::InProcessing;
     }
-    {
-        let mut entity_mut = world.entity_mut(entity);
-        let mut location = entity_mut.get_mut::<LocationComponent>().unwrap();
-        // The step taken, not the one aimed for: a slide along terrain keeps
-        // only what the way allows of the aim, and a body that walks along a
-        // bank while looking into it is a body looking where it is not going.
-        let facing = FixedVec2::new(
+    // The step taken, not the one aimed for: a slide along terrain keeps only
+    // what the way allows of the aim, and a body that walks along a bank while
+    // looking into it is a body looking where it is not going.
+    //
+    // Only a step worth seeing is a heading. A crumb — a lattice point being
+    // regained, a scrape past a corner — moves the body a pixel or two along
+    // some axis it does not mean to travel, and turning down it spins the body
+    // over a movement nobody can see. Keeping the previous look is right for a
+    // step that landed nowhere too, which has no direction to offer at all.
+    if travelled >= speed * HEADING_SHARE
+        && let Some(wanted) = Facing::of(FixedVec2::new(
             new_pos.x.to_num::<FixedI64>() - position.x.to_num::<FixedI64>(),
             new_pos.y.to_num::<FixedI64>() - position.y.to_num::<FixedI64>(),
-        );
-        // Only a step worth seeing is a heading. A crumb — a lattice point
-        // being regained, a scrape past a corner — moves the body a pixel or
-        // two along some axis it does not mean to travel, and looking down it
-        // spins the body for one tick over a movement nobody can see. Keeping
-        // the previous look is right for a step that landed nowhere too, which
-        // would otherwise zero the direction outright.
-        if travelled >= speed * HEADING_SHARE {
-            location.facing = facing;
+        ))
+    {
+        // Decided on the step the body would really take rather than the one it
+        // aimed for, so a walk along a bank is judged by the bank: gating on the
+        // aim would stand the body up to face a wall, walk it along, and stand it
+        // up again every tick it ran beside one.
+        move_component.pivoting = turn::pivoting(world, entity, wanted, move_component.pivoting);
+        if move_component.pivoting {
+            turn::toward(world, entity, wanted, turn::Rate::Standing);
+            // The tick went on coming round, so it is not a tick of getting
+            // nowhere — see `MoveComponent::excuse`.
+            move_component.excuse();
+            world.entity_mut(entity).insert(move_component);
+            return OrderState::InProcessing;
         }
-        location.position = new_pos;
+        turn::toward(world, entity, wanted, turn::Rate::Walking);
     }
+    world
+        .entity_mut(entity)
+        .get_mut::<LocationComponent>()
+        .unwrap()
+        .position = new_pos;
     // Touching the ordered spot completes a point order on the spot, within
     // the same tick: waiting for the next tick's arrival check would let
     // the pushing pass shove the body off first, and a contested point
@@ -687,6 +704,23 @@ fn process_cell(entity: Entity, order: &Order, world: &mut World) -> OrderState 
     }
     move_component.forgive();
 
+    let heading = Facing::of(FixedVec2::new(
+        FixedUVec2::from(next_cell).x.to_num::<FixedI64>() - position.x.to_num::<FixedI64>(),
+        FixedUVec2::from(next_cell).y.to_num::<FixedI64>() - position.y.to_num::<FixedI64>(),
+    ));
+    // A body that must plant its feet to come round does so before it stakes a
+    // claim on the cell it is crossing into: a claim is the crossing, and one
+    // held while the body is still turning would reserve ground it has not set
+    // off for.
+    if let Some(wanted) = heading {
+        move_component.pivoting = turn::pivoting(world, entity, wanted, move_component.pivoting);
+        if move_component.pivoting {
+            turn::toward(world, entity, wanted, turn::Rate::Standing);
+            world.entity_mut(entity).insert(move_component);
+            return OrderState::InProcessing;
+        }
+    }
+
     // Claim the footprint entered and release the one left behind, before any
     // position change. Claims live on the grid's unit plane, invisible to the
     // hierarchy. Passable entities never claim cells.
@@ -700,16 +734,16 @@ fn process_cell(entity: Entity, order: &Order, world: &mut World) -> OrderState 
     move_component.moving_from = current_cell;
 
     let next_pos = FixedUVec2::from(next_cell);
-    let dx = next_pos.x.to_num::<FixedI64>() - position.x.to_num::<FixedI64>();
-    let dy = next_pos.y.to_num::<FixedI64>() - position.y.to_num::<FixedI64>();
     let new_pos = projection.step_toward(position, next_pos, speed);
 
-    {
-        let mut entity_mut = world.entity_mut(entity);
-        let mut location_component = entity_mut.get_mut::<LocationComponent>().unwrap();
-        location_component.facing = FixedVec2::new(dx, dy);
-        location_component.position = new_pos;
+    if let Some(wanted) = heading {
+        turn::toward(world, entity, wanted, turn::Rate::Walking);
     }
+    world
+        .entity_mut(entity)
+        .get_mut::<LocationComponent>()
+        .unwrap()
+        .position = new_pos;
 
     if new_pos == next_pos {
         move_component.path.pop();
@@ -1171,26 +1205,33 @@ fn swap_crossings(
             counter_move.path.pop();
         }
         let mut blocker_location = blocker_mut.get_mut::<LocationComponent>().unwrap();
-        blocker_location.facing = FixedVec2::new(
-            current_pos.x.to_num::<FixedI64>() - next_pos.x.to_num::<FixedI64>(),
-            current_pos.y.to_num::<FixedI64>() - next_pos.y.to_num::<FixedI64>(),
-        );
         blocker_location.position = blocker_new;
+    }
+    // Both halves of a swap are crossings, so both come round as they walk.
+    // Neither holds still first: the two have already agreed to trade places,
+    // and a body standing to turn would leave the other walking into it.
+    if let Some(wanted) = Facing::of(FixedVec2::new(
+        current_pos.x.to_num::<FixedI64>() - next_pos.x.to_num::<FixedI64>(),
+        current_pos.y.to_num::<FixedI64>() - next_pos.y.to_num::<FixedI64>(),
+    )) {
+        turn::toward(world, blocker, wanted, turn::Rate::Walking);
     }
 
     // This entity's own crossing, without the usual claim juggling.
     move_component.moving_from = current_cell;
     move_component.forgive();
     let new_pos = projection.step_toward(position, next_pos, speed);
-    {
-        let mut entity_mut = world.entity_mut(entity);
-        let mut location = entity_mut.get_mut::<LocationComponent>().unwrap();
-        location.facing = FixedVec2::new(
-            next_pos.x.to_num::<FixedI64>() - position.x.to_num::<FixedI64>(),
-            next_pos.y.to_num::<FixedI64>() - position.y.to_num::<FixedI64>(),
-        );
-        location.position = new_pos;
+    if let Some(wanted) = Facing::of(FixedVec2::new(
+        next_pos.x.to_num::<FixedI64>() - position.x.to_num::<FixedI64>(),
+        next_pos.y.to_num::<FixedI64>() - position.y.to_num::<FixedI64>(),
+    )) {
+        turn::toward(world, entity, wanted, turn::Rate::Walking);
     }
+    world
+        .entity_mut(entity)
+        .get_mut::<LocationComponent>()
+        .unwrap()
+        .position = new_pos;
     if new_pos == next_pos {
         move_component.path.pop();
         if move_component.path.is_empty()

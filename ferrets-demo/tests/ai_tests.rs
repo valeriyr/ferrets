@@ -98,6 +98,10 @@ fn ai_builds_economy_and_army() {
     assert!(count_owned(world, 1, "mortar") >= 1);
     assert!(count_owned(world, 2, "grunt") >= 1);
     assert!(count_owned(world, 2, "shaman") >= 1);
+    // The orc siege line: the works that requires the camp, and the pair of
+    // wagons it trains — the demo's turreted mover.
+    assert_eq!(count_owned(world, 2, "siege_works"), 1);
+    assert_eq!(count_owned(world, 2, "war_wagon"), 2);
     for (player, research) in [(1, "iron_weapons"), (2, "frenzy_ritual")] {
         let id = world
             .resource::<ContentRegistry>()

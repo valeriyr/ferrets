@@ -1,9 +1,14 @@
 //! Simulation entity creation, destruction, and map presence.
 
-use bevy_ecs::{component::Component, entity::Entity, world::EntityWorldMut, world::World};
-use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
-use ferrets_math::{FixedI64, FixedU64, fixed_uvec2::FixedUVec2, fixed_vec2::FixedVec2};
 use std::collections::BTreeMap;
+
+use bevy_ecs::{component::Component, entity::Entity, world::EntityWorldMut, world::World};
+use ferrets_content::{
+    entity_stats::EntityStatId, entity_type_def::EntityTypeId, location::LocationDef,
+    registry::ContentRegistry, transport::PassengerFate,
+};
+use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
+use ferrets_math::{FixedU64, facing::Facing, fixed_uvec2::FixedUVec2};
 
 use crate::{
     components::{
@@ -25,6 +30,7 @@ use crate::{
         tags::TagsComponent,
         train::TrainQueueComponent,
         transport::{BoardedComponent, GarrisonFireComponent, TransporterComponent},
+        turret::{TurretState, TurretsComponent},
     },
     control_groups::ControlGroups,
     entity_def,
@@ -37,14 +43,9 @@ use crate::{
     session::player_slot::PlayerId,
     simulation_id::{SimulationId, SimulationIdGenerator},
 };
-use ferrets_content::{
-    entity_stats::EntityStatId, entity_type_def::EntityTypeId, location::LocationDef,
-    registry::ContentRegistry, transport::PassengerFate,
-};
-
-/// Look direction a freshly spawned entity starts with: south, `+y` (sim `y`
-/// points down), the conventional resting facing toward the viewer.
-const DEFAULT_FACING: FixedVec2 = FixedVec2::new(FixedI64::ZERO, FixedI64::ONE);
+/// Look direction a freshly spawned entity starts with: south, the conventional
+/// resting facing toward the viewer.
+pub(crate) const DEFAULT_FACING: Facing = Facing::SOUTH;
 
 /// Spawns an entity of the given type at `position`, owned by `owner`
 /// (`None` spawns a neutral entity).
@@ -470,10 +471,22 @@ pub(crate) fn seed_stats(
 /// Stance is preserved when present, because a player sets it deliberately;
 /// only an entity that has none is given its type's default.
 pub(crate) fn fit_components(world: &mut World, entity: Entity, type_id: EntityTypeId) {
-    let (can_attack, can_move, has_health, trainer, transporter, source, carrier, tags, skills) = {
+    let (
+        can_attack,
+        mounted_turrets,
+        can_move,
+        has_health,
+        trainer,
+        transporter,
+        source,
+        carrier,
+        tags,
+        skills,
+    ) = {
         let def = world.resource::<ContentRegistry>().def(type_id);
         (
             def.can_attack(),
+            def.turrets.len(),
             def.can_move(),
             def.has_health(),
             def.trainer.is_some(),
@@ -520,6 +533,26 @@ pub(crate) fn fit_components(world: &mut World, entity: Entity, type_id: EntityT
     fit_default::<RallyPointComponent>(&mut entity_mut, wants_rally);
     fit_default::<ResourceSourceComponent>(&mut entity_mut, source);
     fit_default::<ResourceCarrierComponent>(&mut entity_mut, carrier);
+
+    // A turret remembers where it is trained, which no other component can hold
+    // for it: a fight's state is gone the moment the fight ends, and the body of a
+    // keep never turns. Mounted looking the way its body does, and left where it
+    // was last trained through any change that keeps the mount — a form with more
+    // guns than the last one trains the new ones forward, and one with fewer drops
+    // the guns it no longer has.
+    if mounted_turrets == 0 {
+        entity_mut.remove::<TurretsComponent>();
+    } else {
+        let facing = entity_mut
+            .get::<LocationComponent>()
+            .expect("a placed entity has a location")
+            .facing;
+        let mut turrets = entity_mut.take::<TurretsComponent>().unwrap_or_default();
+        turrets
+            .0
+            .resize(mounted_turrets, TurretState::mounted(facing));
+        entity_mut.insert(turrets);
+    }
 
     // Tags and skills are the type's own vocabulary rather than live state, so
     // they are replaced outright.

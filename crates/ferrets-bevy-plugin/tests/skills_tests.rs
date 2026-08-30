@@ -2,6 +2,7 @@
 
 use bevy::prelude::*;
 use ferrets_content::{
+    attack::{AttackDef, Delivery, Weapon},
     costs::{self, Cost},
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
@@ -310,8 +311,14 @@ fn app() -> App {
             EntityTypeDef::new("mage")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
                 .with_health(50)
-                .with_attack(10, 1, 1, 4, 2)
-                .with_targets(utils::GROUND)
+                .with_attack(
+                    AttackDef::new(Weapon::new(utils::GROUND, Delivery::Instant, None)),
+                    10,
+                    1,
+                    1,
+                    4,
+                    2,
+                )
                 .with_energy(100, FixedU64::from_num(1))
                 .with_skills([battle_focus, rally, sacrifice, last_rite, war_secret]),
         );

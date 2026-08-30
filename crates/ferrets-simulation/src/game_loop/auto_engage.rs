@@ -1,4 +1,9 @@
 //! Idle defense: stance-driven target acquisition for entities with no orders.
+//!
+//! What is engaged here is the weapon a body points itself, by giving it an order
+//! to fight with. The guns a body carries take their own quarrels in
+//! [`super::turret`] whether it is idle or not, so a body that points no weapon of
+//! its own is left alone here entirely.
 
 use bevy_ecs::world::World;
 
@@ -56,7 +61,12 @@ pub fn tick(world: &mut World) {
         {
             continue;
         }
-        if !entity_def::of(world, entity).can_attack() {
+        // What is engaged here is the weapon a body points itself: an unarmed body
+        // has nothing to engage with, and one that fights only from turrets has
+        // nothing an order would work — an order binds every gun it carries to one
+        // target, and guns that pick their own are the whole reason to carry
+        // several. Those hunt for themselves in [`super::turret`].
+        if entity_def::of(world, entity).attack.is_none() {
             continue;
         }
 
@@ -68,7 +78,15 @@ pub fn tick(world: &mut World) {
 
         match stance {
             Stance::StandGround => {
-                if let Some(target) = acquire::find_target(world, entity, entity, range)
+                if let Some(target) =
+                    // What its own weapon reaches: this order is that weapon's
+                    // fight, and its turrets pick their own quarrels.
+                    acquire::find_target(
+                        world,
+                        entity,
+                        entity_def::body_weapon_targets(world, entity),
+                        range,
+                    )
                     && let Some(mut queue) =
                         world.entity_mut(entity).get_mut::<OrderQueueComponent>()
                 {
@@ -85,9 +103,20 @@ pub fn tick(world: &mut World) {
                 }
             }
             Stance::Defend => {
-                if let Some(attack) = attack_move::engagement(world, entity)
-                    && let Some(mut queue) =
-                        world.entity_mut(entity).get_mut::<OrderQueueComponent>()
+                // Its own weapon's fight, so its own weapon's notice: the wider
+                // reach a turret names is that turret's own business.
+                let notice = world
+                    .entity(entity)
+                    .get::<StatsComponent>()
+                    .and_then(|stats| stats.effective_as_u32(EntityStatId::ACQUIRE_RANGE))
+                    .expect("attackers have an acquisition range stat");
+                if let Some(attack) = attack_move::engagement(
+                    world,
+                    entity,
+                    entity_def::body_weapon_targets(world, entity),
+                    notice,
+                ) && let Some(mut queue) =
+                    world.entity_mut(entity).get_mut::<OrderQueueComponent>()
                 {
                     queue.push(attack, None);
                     queue.push(Order::AttackMove { target: anchor }, None);

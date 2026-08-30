@@ -4,6 +4,7 @@
 //! [`engine`] picks the binding the suite runs against.
 
 use ferrets_content::{
+    attack::{AttackDef, Delivery, Weapon},
     costs,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
@@ -15,12 +16,13 @@ use ferrets_content::{
     skills::{
         EntityCastCost, EntityCastEffect, EntityCastTarget, PlayerCastEffect, SkillCaster, SkillDef,
     },
-    splash::SplashShape,
+    splash::{SplashDef, SplashShape},
     stats::{EntityModifier, ModifierOp, PlayerModifier},
     transport::{BoardingPolicy, PassengerConduct, PassengerFate},
+    turret::{TurretDef, TurretMount, TurretStats, WeaponConduct},
     work::WorkPresence,
 };
-use ferrets_geometry::cell_size::CellSize;
+use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::{FixedI64, FixedU64};
 use ferrets_pathfinder::nav_grid::LayerId;
 use ferrets_script::{
@@ -48,11 +50,19 @@ fn loads_races_resources_and_entities() {
             FixedU64::from_str("0.3").unwrap(),
             FixedU64::from_str("0.5").unwrap(),
             FixedU64::from_str("2").unwrap(),
+            FixedU64::from_num(30),
+            FixedU64::from_num(30),
         )
         .with_health(40)
         .with_dying(2, None)
-        .with_attack(6, 4, 4, 7, 3)
-        .with_targets(LayerId::new(1))
+        .with_attack(
+            AttackDef::new(Weapon::new(LayerId::new(1), Delivery::Instant, None)),
+            6,
+            4,
+            4,
+            7,
+            3,
+        )
         .with_cost([("gold", 80)])
         .with_train_time(60);
 
@@ -70,7 +80,7 @@ fn declared_acquire_range_overrides_weapon_range_default() {
                 max_health = 20,
                 damage = 2, attack_range = 3, acquire_range = 7, attack_period = 4, damage_point = 2,
             },
-            targets = GROUND,
+            attack = { targets = GROUND },
         })
     "#;
     let registry = content::load(&engine(), source).expect("load content");
@@ -78,8 +88,14 @@ fn declared_acquire_range_overrides_weapon_range_default() {
     let expected = EntityTypeDef::new("scout")
         .with_location(LayerId::new(1), CellSize::ONE, Solidity::Solid)
         .with_health(20)
-        .with_attack(2, 3, 7, 4, 2)
-        .with_targets(LayerId::new(1));
+        .with_attack(
+            AttackDef::new(Weapon::new(LayerId::new(1), Delivery::Instant, None)),
+            2,
+            3,
+            7,
+            4,
+            2,
+        );
 
     assert_eq!(registry.entity("scout"), Some(&expected));
 }
@@ -139,6 +155,9 @@ fn parses_armor_bonus_damage_vs_and_energy() {
     let source = r#"
         local GROUND = define_layer("ground")
 
+        define_tag("armored")
+        define_tag("dragon")
+
         define_entity("knight", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
             stats = {
@@ -147,7 +166,7 @@ fn parses_armor_bonus_damage_vs_and_energy() {
                 armor = 4, max_energy = 50, energy_regen = "0.5",
             },
             bonus_damage_vs = { armored = 8, dragon = 15 },
-            targets = GROUND,
+            attack = { targets = GROUND },
         })
     "#;
     let registry = content::load(&engine(), source).expect("load content");
@@ -155,9 +174,15 @@ fn parses_armor_bonus_damage_vs_and_energy() {
     let expected = EntityTypeDef::new("knight")
         .with_location(LayerId::new(1), CellSize::ONE, Solidity::Solid)
         .with_health(100)
-        .with_attack(12, 1, 1, 4, 2)
         .with_armor(4)
-        .with_targets(LayerId::new(1))
+        .with_attack(
+            AttackDef::new(Weapon::new(LayerId::new(1), Delivery::Instant, None)),
+            12,
+            1,
+            1,
+            4,
+            2,
+        )
         .with_bonus_damage_vs([("armored", 8u32), ("dragon", 15u32)])
         .with_energy(50, FixedU64::from_str("0.5").unwrap());
 
@@ -220,14 +245,14 @@ fn parses_transporter() {
 
         define_entity("footman", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            stats = { max_health = 60, speed = "0.3", radius = "0.5", cargo_size = 1 },
+            stats = { max_health = 60, speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", cargo_size = 1 },
             tags = { "infantry" },
         })
 
         define_entity("wagon", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
             stats = {
-                max_health = 150, speed = "0.25", radius = "0.5", cargo_capacity = 6,
+                max_health = 150, speed = "0.25", turn_rate = 30, pivot_rate = 30, radius = "0.5", cargo_capacity = 6,
                 load_range = 2, unload_range = 3, load_period = 4, unload_period = 8,
             },
             transporter = {
@@ -774,14 +799,16 @@ fn parses_projectile_and_splash() {
                 max_health = 30,
                 damage = 12, attack_range = 6, attack_period = 10, damage_point = 4,
             },
-            projectile = "shell",
-            splash = {
-                shape = "circular",
-                bands = { {1, "0.5"}, {2, "0.25"} },
-                layers = GROUND,
-                friendly_fire = true,
+            attack = {
+                targets = GROUND,
+                projectile = "shell",
+                splash = {
+                    shape = "circular",
+                    bands = { {1, "0.5"}, {2, "0.25"} },
+                    layers = GROUND,
+                    friendly_fire = true,
+                },
             },
-            targets = GROUND,
         })
     "#;
     let registry = content::load(&engine(), source).expect("load content");
@@ -789,17 +816,25 @@ fn parses_projectile_and_splash() {
     let expected = EntityTypeDef::new("mortar")
         .with_location(LayerId::new(1), CellSize::ONE, Solidity::Solid)
         .with_health(30)
-        .with_attack(12, 6, 6, 10, 4)
-        .with_targets(LayerId::new(1))
-        .with_projectile(registry.projectile("shell").expect("shell is registered"))
-        .with_splash(
-            SplashShape::Circular,
-            vec![
-                (1, FixedU64::from_str("0.5").unwrap()),
-                (2, FixedU64::from_str("0.25").unwrap()),
-            ],
-            LayerId::new(1),
-            true,
+        .with_attack(
+            AttackDef::new(Weapon::new(
+                LayerId::new(1),
+                Delivery::Projectile(registry.projectile("shell").expect("shell is registered")),
+                Some(SplashDef::new(
+                    SplashShape::Circular,
+                    vec![
+                        (1, FixedU64::from_str("0.5").unwrap()),
+                        (2, FixedU64::from_str("0.25").unwrap()),
+                    ],
+                    LayerId::new(1),
+                    true,
+                )),
+            )),
+            12,
+            6,
+            6,
+            10,
+            4,
         );
 
     assert_eq!(registry.entity("mortar"), Some(&expected));
@@ -835,6 +870,28 @@ fn splash_rejects_missing_fields() {
             "the error must name the missing '{missing}' field, got: {error}"
         );
     }
+}
+
+#[test]
+fn weapon_without_targets_is_rejected() {
+    // The layers a weapon reaches are the one thing it cannot leave out: a weapon
+    // that reaches nothing could never fire, so the rest says nothing without it.
+    let source = r#"
+        local GROUND = define_layer("ground")
+
+        define_entity("mortar", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = { damage = 12, attack_range = 6, attack_period = 10, damage_point = 4 },
+            attack = {},
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("a weapon reaching nothing must be rejected");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("field 'targets'")),
+        "the error must name the missing 'targets' field, got: {error}"
+    );
 }
 
 #[test]
@@ -1449,11 +1506,11 @@ const ARCHER: &str = r#"
         race = "human",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
         stats = {
-            speed = "0.3", radius = "0.5", weight = 2, max_health = 40,
+            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 2, max_health = 40,
             damage = 6, attack_range = 4, attack_period = 7, damage_point = 3,
         },
         dying = { time = 2 },
-        targets = GROUND,
+        attack = { targets = GROUND },
         cost = { gold = 80 },
         train_time = 60,
     })
@@ -1471,7 +1528,7 @@ const BASE: &str = r#"
     define_entity("peasant", {
         race = "human",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
-        stats = { speed = "0.3", radius = "0.5", max_health = 30, build_range = 1, harvest_range = 1 },
+        stats = { speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", max_health = 30, build_range = 1, harvest_range = 1 },
         dying = { time = 2 },
         cost = { gold = 50 },
         train_time = 40,
@@ -1508,7 +1565,7 @@ fn attacker_with(block: &str) -> String {
         define_entity("mortar", {{
             location = {{ occupation = GROUND, size = 1, solidity = "solid" }},
             stats = {{ damage = 12, attack_range = 6, attack_period = 10, damage_point = 4 }},
-            {block}
+            attack = {{ targets = GROUND, {block} }},
         }})
         "#
     )
@@ -1524,7 +1581,7 @@ fn morph_transitions_round_trip() {
 
         define_entity("walker", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            stats = { speed = 1, radius = "0.5", max_energy = 50, morph_time = 20 },
+            stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5", max_energy = 50, morph_time = 20 },
             morphs = {
                 { into = "flier",
                   time = { stat = "morph_time" },
@@ -1541,7 +1598,7 @@ fn morph_transitions_round_trip() {
         })
         define_entity("flier", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            stats = { speed = 1, radius = "0.5" },
+            stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5" },
         })
         define_entity("statue", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
@@ -1585,7 +1642,7 @@ fn unknown_morph_placement_errors() {
         local GROUND = define_layer("ground")
         define_entity("walker", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            stats = { speed = 1, radius = "0.5" },
+            stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5" },
             morphs = {
                 { into = "flier", time = 20, placement = "hover", cancel = "committed" },
             },
@@ -1606,7 +1663,7 @@ fn unknown_morph_cancel_errors() {
         local GROUND = define_layer("ground")
         define_entity("walker", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            stats = { speed = 1, radius = "0.5" },
+            stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5" },
             morphs = {
                 { into = "flier", time = 20, placement = "reserve", cancel = "maybe" },
             },
@@ -1627,7 +1684,7 @@ fn morph_time_of_wrong_shape_errors() {
         local GROUND = define_layer("ground")
         define_entity("walker", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            stats = { speed = 1, radius = "0.5" },
+            stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5" },
             morphs = {
                 { into = "flier", time = "fast", placement = "reserve", cancel = "committed" },
             },
@@ -1648,7 +1705,7 @@ fn unknown_morph_time_stat_errors() {
         local GROUND = define_layer("ground")
         define_entity("walker", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            stats = { speed = 1, radius = "0.5" },
+            stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5" },
             morphs = {
                 { into = "flier", time = { stat = "bogus" }, placement = "reserve", cancel = "committed" },
             },
@@ -1659,6 +1716,138 @@ fn unknown_morph_time_stat_errors() {
     };
     assert!(
         matches!(&error, ScriptError::ContentError(m) if m.contains("morph time stat 'bogus' is not defined")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn parses_turret_and_its_mount() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+
+        define_turret("cannon", {
+            targets = GROUND,
+            conduct = "on_the_move",
+        })
+
+        define_entity("wagon", {
+            location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
+            stats = {
+                max_health = 40, speed = "0.3", radius = "1", weight = "2",
+                turn_rate = 30, pivot_rate = 30, aim_rate = 30,
+                damage = 6, attack_range = 4, acquire_range = 6, attack_period = 7, damage_point = 3,
+            },
+            turrets = { { turret = "cannon", at = { 0, 0 }, size = { 2, 2 } } },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("load content");
+
+    let cannon = registry.turret("cannon").expect("turret defined");
+    assert_eq!(
+        registry.turret_def(cannon),
+        &TurretDef::new(
+            Weapon::new(LayerId::new(1), Delivery::Instant, None),
+            TurretStats::default(),
+            WeaponConduct::OnTheMove,
+        )
+    );
+
+    let expected = EntityTypeDef::new("wagon")
+        .with_location(LayerId::new(1), CellSize::new(2, 2), Solidity::Solid)
+        .with_movement(
+            FixedU64::from_str("0.3").unwrap(),
+            FixedU64::from_str("1").unwrap(),
+            FixedU64::from_str("2").unwrap(),
+            FixedU64::from_num(30),
+            FixedU64::from_num(30),
+        )
+        .with_stat(EntityStatId::AIM_RATE, FixedU64::from_num(30))
+        .with_health(40)
+        .with_stat(EntityStatId::DAMAGE, FixedU64::from_num(6))
+        .with_stat(EntityStatId::ATTACK_RANGE, FixedU64::from_num(4))
+        .with_stat(EntityStatId::ACQUIRE_RANGE, FixedU64::from_num(6))
+        .with_stat(EntityStatId::ATTACK_PERIOD, FixedU64::from_num(7))
+        .with_stat(EntityStatId::DAMAGE_POINT, FixedU64::from_num(3))
+        .with_turrets([TurretMount::new(
+            cannon,
+            CellPos::new(0, 0),
+            CellSize::new(2, 2),
+        )]);
+
+    assert_eq!(registry.entity("wagon"), Some(&expected));
+}
+
+#[test]
+fn parses_turret_reading_its_own_stats() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_entity_stat("flak_damage")
+
+        define_turret("flak", {
+            targets = GROUND,
+            stats = { damage = "flak_damage" },
+        })
+
+        define_entity("keep", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = {
+                max_health = 100, flak_damage = 3,
+                damage = 6, attack_range = 4, acquire_range = 6, attack_period = 7, damage_point = 3,
+            },
+            turrets = { { turret = "flak" } },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("load content");
+
+    let flak = registry.turret("flak").expect("turret defined");
+    let reads = registry.turret_def(flak).stats();
+    assert_eq!(
+        reads.damage,
+        registry.entity_stat("flak_damage").expect("stat defined"),
+        "the gun reads the stat it named"
+    );
+    assert_eq!(
+        reads.range,
+        EntityStatId::ATTACK_RANGE,
+        "and the standard one for everything it did not"
+    );
+}
+
+#[test]
+fn rejects_unknown_weapon_conduct() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+
+        define_turret("gun", { targets = GROUND, conduct = "whenever" })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject an unknown weapon conduct");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("unknown weapon conduct 'whenever'")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn rejects_mount_of_undefined_turret() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+
+        define_entity("wagon", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = {
+                max_health = 40,
+                damage = 6, attack_range = 4, acquire_range = 6, attack_period = 7, damage_point = 3,
+            },
+            turrets = { { turret = "gun" } },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject a mount naming a turret nothing defined");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("turret 'gun' is not defined")),
         "unexpected error: {error:?}"
     );
 }

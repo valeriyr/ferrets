@@ -8,7 +8,7 @@ use ferrets_content::{
     registry::ContentRegistry, work::WorkPresence,
 };
 use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
-use ferrets_math::{FixedI64, FixedU64};
+use ferrets_math::{FixedU64, facing::Facing};
 use ferrets_simulation::{
     command::PlayerCommand,
     components::{
@@ -416,14 +416,11 @@ fn builder_faces_site_rather_than_corner_its_position_names() {
     assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
 
     let facing = app.world().get::<LocationComponent>(mason).unwrap().facing;
-    assert!(
-        facing.x < FixedI64::ZERO,
-        "it faces west toward the depot, got {facing:?}"
-    );
     assert_eq!(
-        facing.y,
-        FixedI64::ZERO,
-        "and squarely so: aiming at the position would tilt it north, got {facing:?}"
+        facing,
+        Facing::WEST,
+        "it faces squarely west toward the depot: aiming at the position would \
+         tilt it north"
     );
 }
 
@@ -628,6 +625,8 @@ fn surveyor_app() -> App {
                     FixedU64::from_num(0.5),
                     FixedU64::from_num(0.5),
                     FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
                 )
                 .with_health(20)
                 .with_stat(EntityStatId::BUILD_RANGE, FixedU64::from_num(3))

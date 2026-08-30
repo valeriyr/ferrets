@@ -48,7 +48,7 @@ crates/
 ├── ferrets-bevy-plugin  Bevy integration for the ferrets simulation
 ├── ferrets-content      Content vocabulary and registry for the game engine
 ├── ferrets-geometry     Cell-grid geometry and the projection distance metrics
-├── ferrets-math         Fixed-point math primitives for deterministic simulation
+├── ferrets-math         Fixed-point scalars, vectors, rectangles and angles
 ├── ferrets-network      Lockstep P2P networking for deterministic multiplayer
 ├── ferrets-pathfinder   Deterministic RTS pathfinding
 ├── ferrets-physics      Contact resolution for continuous-model unit bodies

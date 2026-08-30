@@ -13,6 +13,7 @@ use crate::{
     components::transport::{GarrisonFireComponent, TransporterComponent},
     entity_def,
     entity_index::EntityIndex,
+    impacts::FiredFrom,
     session::GameSession,
     simulation_id::SimulationId,
 };
@@ -48,7 +49,11 @@ pub fn process_garrison_attacks(world: &mut World) {
             let Some(passenger) = world.resource::<EntityIndex>().alive(passenger_id) else {
                 continue;
             };
-            if !entity_def::of(world, passenger).can_attack() {
+            // What fires from inside is the weapon a passenger points itself: a
+            // turret is mounted on a body that is standing somewhere, and a
+            // passenger stands nowhere. One that carries nothing else sits the
+            // ride out.
+            if entity_def::of(world, passenger).attack.is_none() {
                 continue;
             }
             fire(world, holder, passenger, passenger_id);
@@ -59,7 +64,10 @@ pub fn process_garrison_attacks(world: &mut World) {
 /// One tick of one garrisoned attacker's fight: hold a valid target or look for
 /// one, and advance the swing while it has one.
 fn fire(world: &mut World, holder: Entity, passenger: Entity, passenger_id: SimulationId) {
-    let weapon = attack::weapon(world, passenger);
+    // Its own numbers and its own layers — the holder only lends it a place to
+    // stand.
+    let stats = attack::body_weapon_stats(world, passenger);
+    let targets = entity_def::body_weapon_targets(world, passenger);
 
     let mut fire = world
         .entity_mut(passenger)
@@ -72,12 +80,12 @@ fn fire(world: &mut World, holder: Entity, passenger: Entity, passenger_id: Simu
     // The weapon is the passenger's, so layer reach is judged by the passenger.
     let valid = fire
         .target
-        .is_some_and(|id| acquire::qualifies(world, holder, passenger, id, weapon.range));
+        .is_some_and(|id| acquire::qualifies(world, holder, targets, id, stats.range));
     if !valid {
         fire.phase = 0;
         let tick = world.resource::<GameSession>().tick();
         fire.target = if acquire::due(passenger_id, tick) {
-            acquire::find_target(world, holder, passenger, weapon.range)
+            acquire::find_target(world, holder, targets, stats.range)
         } else {
             None
         };
@@ -93,14 +101,15 @@ fn fire(world: &mut World, holder: Entity, passenger: Entity, passenger_id: Simu
         .alive(target_id)
         .expect("a qualifying target is alive");
     let (target_position, _) = entity_def::footprint(world, target);
-    let origin = entity_def::position(world, holder);
+    let origin = entity_def::footprint_center(world, holder);
     attack::swing(
         world,
         passenger,
+        FiredFrom::Body,
         origin,
         Some(target),
         target_position,
-        &weapon,
+        &stats,
         &mut fire.phase,
     );
 

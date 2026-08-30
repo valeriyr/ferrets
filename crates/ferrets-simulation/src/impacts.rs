@@ -4,7 +4,40 @@ use bevy_ecs::prelude::*;
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 
 use crate::simulation_id::SimulationId;
-use ferrets_content::{entity_type_def::EntityTypeId, projectile::ProjectileId};
+use ferrets_content::{
+    attack::{AttackDef, Weapon},
+    entity_type_def::{EntityTypeDef, EntityTypeId},
+    projectile::ProjectileId,
+    registry::ContentRegistry,
+    turret::TurretId,
+};
+
+/// Which of an attacker's weapons a hit came from.
+///
+/// Carried rather than looked up, because a body may point one weapon and mount
+/// several turrets, and because a shot in the air outlives the form that fired
+/// it: a keep that morphs mid-flight does not re-aim what has already left.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FiredFrom {
+    /// The weapon the body points itself.
+    Body,
+    /// One of the turrets it carries.
+    Turret(TurretId),
+}
+
+impl FiredFrom {
+    /// The weapon this names on `def`.
+    pub fn weapon<'a>(
+        self,
+        registry: &'a ContentRegistry,
+        def: &'a EntityTypeDef,
+    ) -> Option<&'a Weapon> {
+        match self {
+            FiredFrom::Body => def.attack.as_ref().map(AttackDef::weapon),
+            FiredFrom::Turret(turret) => Some(registry.turret_def(turret).weapon()),
+        }
+    }
+}
 
 /// One shot in flight.
 ///
@@ -17,6 +50,9 @@ pub struct PendingImpact {
     pub attacker: SimulationId,
     /// The firing type, for the damage bonuses that outlive the attacker.
     pub attacker_type: EntityTypeId,
+    /// Which of that type's weapons fired it — a shot in the air is not re-aimed
+    /// by a form change behind it.
+    pub fired_from: FiredFrom,
     /// Which projectile kind is in the air, so a renderer can tell an arrow from a
     /// cannonball.
     pub projectile: ProjectileId,

@@ -492,6 +492,8 @@ fn base_app() -> App {
                     FixedU64::from_num(0.5),
                     FixedU64::from_num(0.5),
                     FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
                 )
                 .with_health(30),
         );

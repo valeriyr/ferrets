@@ -26,4 +26,5 @@ pub mod tags;
 pub mod targeting;
 pub mod train;
 pub mod transport;
+pub mod turret;
 pub mod work;

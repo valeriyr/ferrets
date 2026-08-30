@@ -644,3 +644,45 @@ fn blast_spares_hidden_passenger_at_stale_position() {
         "a passenger is beyond any blast's reach"
     );
 }
+
+#[test]
+fn turret_only_passenger_sits_ride_out() {
+    // What fires from inside a holder is the weapon a passenger points itself: a
+    // turret is mounted on a body standing somewhere, and a passenger stands
+    // nowhere. One carrying nothing else rides quietly rather than firing — or,
+    // before this rule, reading numbers a turret need not declare.
+    let mut app = utils::transport_app();
+    let world = app.world_mut();
+    let (bunker, bunker_id) =
+        spawn::spawn_entity(world, "bunker", utils::pos(10, 10), Some(0)).unwrap();
+    let (rider, rider_id) =
+        spawn::spawn_entity(world, "gun_rider", utils::pos(9, 10), Some(0)).unwrap();
+    // In the gun's reach from the bunker AND from the rider's own boarding cell,
+    // so a shot wrongly fired from either place would land.
+    let (foe, _) = spawn::spawn_entity(world, "civilian", utils::pos(12, 10), Some(2)).unwrap();
+
+    utils::select(&mut app, rider_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Board {
+            target: bunker_id,
+            flush: true,
+        },
+    );
+    utils::run_until_aboard(&mut app, bunker, 1, 40);
+    utils::run_ticks(&mut app, 20);
+
+    assert!(
+        utils::passengers_of(app.world(), bunker).contains(&rider_id),
+        "the rider is aboard"
+    );
+    assert!(
+        app.world().get::<HiddenComponent>(rider).is_some(),
+        "and stowed"
+    );
+    assert_eq!(
+        utils::health(&app, foe),
+        20,
+        "its gun stayed silent: a turret has no place to stand from inside"
+    );
+}

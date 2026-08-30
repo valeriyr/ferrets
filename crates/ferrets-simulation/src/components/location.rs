@@ -1,7 +1,7 @@
 //! World position and facing for simulation entities.
 
 use bevy_ecs::prelude::*;
-use ferrets_math::{fixed_uvec2::FixedUVec2, fixed_vec2::FixedVec2};
+use ferrets_math::{facing::Facing, fixed_uvec2::FixedUVec2};
 
 /// World position and facing of an entity in fixed-point grid units.
 ///
@@ -19,15 +19,15 @@ pub struct LocationComponent {
     /// mover's position is any in-bounds point; entities that cannot move
     /// keep to cell origins in both models.
     pub position: FixedUVec2,
-    /// The last look direction. The renderer normalizes it to the nearest sprite
-    /// direction (8-way, 16-way, etc.).
-    pub facing: FixedVec2,
+    /// Which way the body itself points. A weapon that bears independently of the
+    /// body keeps its own.
+    pub facing: Facing,
 }
 
 impl LocationComponent {
     /// Creates a new `LocationComponent` with the given data.
     #[inline]
-    pub fn new(position: FixedUVec2, facing: FixedVec2) -> Self {
+    pub fn new(position: FixedUVec2, facing: Facing) -> Self {
         Self { position, facing }
     }
 }

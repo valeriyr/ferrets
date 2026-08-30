@@ -15,7 +15,7 @@ use ferrets_content::{
     repair::{RepairCost, RepairRate},
     work::WorkPresence,
 };
-use ferrets_math::{FixedI64, FixedU64};
+use ferrets_math::{FixedU64, facing::Facing};
 use ferrets_simulation::{
     command::PlayerCommand,
     components::{
@@ -729,14 +729,11 @@ fn mender_faces_patient_rather_than_corner_its_position_names() {
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
     let facing = app.world().get::<LocationComponent>(worker).unwrap().facing;
-    assert!(
-        facing.x < FixedI64::ZERO,
-        "it faces west toward the depot, got {facing:?}"
-    );
     assert_eq!(
-        facing.y,
-        FixedI64::ZERO,
-        "and squarely so: aiming at the position would tilt it north, got {facing:?}"
+        facing,
+        Facing::WEST,
+        "it faces squarely west toward the depot: aiming at the position would \
+         tilt it north"
     );
 }
 
@@ -772,6 +769,8 @@ fn app() -> App {
                     FixedU64::from_num(0.5),
                     FixedU64::from_num(0.5),
                     FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
                 )
                 .with_health(20)
                 .with_train_time(20),
@@ -786,6 +785,8 @@ fn app() -> App {
                     FixedU64::from_num(0.5),
                     FixedU64::from_num(0.5),
                     FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
                 )
                 .with_health(100)
                 .with_train_time(20)
@@ -798,6 +799,8 @@ fn app() -> App {
                     FixedU64::from_num(0.5),
                     FixedU64::from_num(0.5),
                     FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
                 )
                 .with_health(30)
                 .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
@@ -846,6 +849,8 @@ fn app() -> App {
                     FixedU64::from_num(0.5),
                     FixedU64::from_num(0.5),
                     FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
                 )
                 .with_health(30)
                 .with_energy(50, FixedU64::ZERO)
@@ -924,6 +929,8 @@ fn repairer(
             FixedU64::from_num(0.5),
             FixedU64::from_num(0.5),
             FixedU64::ONE,
+            FixedU64::from_num(360),
+            FixedU64::from_num(360),
         )
         .with_health(20)
         .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)

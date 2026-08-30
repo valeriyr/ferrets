@@ -9,7 +9,7 @@ use ferrets_content::{
     registry::ContentRegistry,
 };
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize, projection::Projection};
-use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2, fixed_vec2::FixedVec2};
+use ferrets_math::{FixedU64, facing::Facing, fixed_uvec2::FixedUVec2};
 use ferrets_pathfinder::{
     mover_shape::MoverShape,
     nav_grid::{LayerId, NavGrid},
@@ -50,7 +50,7 @@ fn placed_footprint_reaches_hierarchy_after_refresh() {
     // A 3×2 wall splits an 8×2 map once placed, refreshed, and only then.
     let mut map = wall_test_map();
     let wall = LocationDef::new(GROUND_LAYER, CellSize::new(3, 2), Solidity::Solid);
-    let location = LocationComponent::new(world_pos(3, 0), FixedVec2::default());
+    let location = LocationComponent::new(world_pos(3, 0), Facing::SOUTH);
 
     map.place_entity(&location, &wall, OccupancyClass::Static);
     assert!(
@@ -84,7 +84,7 @@ fn footprint_step_only_writes_cells_that_change_hands() {
     // touched — which is what lets one-claimant-per-cell hold through a crossing.
     let mut map = wall_test_map();
     let unit = LocationDef::new(GROUND_LAYER, CellSize::new(2, 2), Solidity::Solid);
-    let location = LocationComponent::new(world_pos(2, 0), FixedVec2::default());
+    let location = LocationComponent::new(world_pos(2, 0), Facing::SOUTH);
     map.place_entity(&location, &unit, OccupancyClass::Claim);
 
     map.step_claim(
@@ -121,7 +121,7 @@ fn footprint_step_is_blocked_by_what_lies_ahead_only() {
     let mut map = wall_test_map();
     let unit = LocationDef::new(GROUND_LAYER, CellSize::new(2, 2), Solidity::Solid);
     let size = CellSize::new(2, 2);
-    let location = LocationComponent::new(world_pos(2, 0), FixedVec2::default());
+    let location = LocationComponent::new(world_pos(2, 0), Facing::SOUTH);
     map.place_entity(&location, &unit, OccupancyClass::Claim);
 
     // Its own claim must not read as a blockage, or a wide mover could never
@@ -136,7 +136,7 @@ fn footprint_step_is_blocked_by_what_lies_ahead_only() {
     // A wall on the leading column does block it.
     let wall = LocationDef::new(GROUND_LAYER, CellSize::new(1, 2), Solidity::Solid);
     map.place_entity(
-        &LocationComponent::new(world_pos(4, 0), FixedVec2::default()),
+        &LocationComponent::new(world_pos(4, 0), Facing::SOUTH),
         &wall,
         OccupancyClass::Static,
     );
@@ -152,7 +152,7 @@ fn footprint_step_is_blocked_by_what_lies_ahead_only() {
 fn claimed_footprint_never_reaches_hierarchy() {
     let mut map = wall_test_map();
     let unit = LocationDef::new(GROUND_LAYER, CellSize::new(3, 2), Solidity::Solid);
-    let location = LocationComponent::new(world_pos(3, 0), FixedVec2::default());
+    let location = LocationComponent::new(world_pos(3, 0), Facing::SOUTH);
 
     map.place_entity(&location, &unit, OccupancyClass::Claim);
     map.refresh_hierarchy();
@@ -179,7 +179,9 @@ fn continuous_map_rejects_mover_without_radius() {
     registry.register(
         EntityTypeDef::new("runner")
             .with_location(ground, CellSize::ONE, Solidity::Solid)
-            .with_stat(EntityStatId::SPEED, FixedU64::from_num(0.5)),
+            .with_stat(EntityStatId::SPEED, FixedU64::from_num(0.5))
+            .with_stat(EntityStatId::TURN_RATE, FixedU64::from_num(360))
+            .with_stat(EntityStatId::PIVOT_RATE, FixedU64::from_num(360)),
     );
 
     let mut data = MapData::new("pond", Projection::Isometric, 4, 4);
@@ -202,6 +204,8 @@ fn continuous_map_rejects_radius_beyond_footprint() {
                 FixedU64::from_num(0.5),
                 FixedU64::from_num(0.75),
                 FixedU64::ONE,
+                FixedU64::from_num(360),
+                FixedU64::from_num(360),
             ),
     );
 
@@ -222,6 +226,8 @@ fn continuous_map_accepts_radius_at_half_footprint() {
                 FixedU64::from_num(0.5),
                 FixedU64::from_num(0.5),
                 FixedU64::ONE,
+                FixedU64::from_num(360),
+                FixedU64::from_num(360),
             ),
     );
 
@@ -242,6 +248,8 @@ fn continuous_map_rejects_mover_without_weight() {
         EntityTypeDef::new("runner")
             .with_location(ground, CellSize::ONE, Solidity::Solid)
             .with_stat(EntityStatId::SPEED, FixedU64::from_num(0.5))
+            .with_stat(EntityStatId::TURN_RATE, FixedU64::from_num(360))
+            .with_stat(EntityStatId::PIVOT_RATE, FixedU64::from_num(360))
             .with_stat(EntityStatId::RADIUS, FixedU64::from_num(0.5)),
     );
 
@@ -264,6 +272,8 @@ fn continuous_map_accepts_weightless_mover() {
                 FixedU64::from_num(0.5),
                 FixedU64::from_num(0.5),
                 FixedU64::ZERO,
+                FixedU64::from_num(360),
+                FixedU64::from_num(360),
             ),
     );
 
@@ -280,7 +290,9 @@ fn cell_map_accepts_mover_without_weight() {
     registry.register(
         EntityTypeDef::new("runner")
             .with_location(ground, CellSize::ONE, Solidity::Solid)
-            .with_stat(EntityStatId::SPEED, FixedU64::from_num(0.5)),
+            .with_stat(EntityStatId::SPEED, FixedU64::from_num(0.5))
+            .with_stat(EntityStatId::TURN_RATE, FixedU64::from_num(360))
+            .with_stat(EntityStatId::PIVOT_RATE, FixedU64::from_num(360)),
     );
 
     let data = MapData::new("pond", Projection::Isometric, 4, 4);
@@ -295,7 +307,9 @@ fn cell_map_accepts_mover_without_radius() {
     registry.register(
         EntityTypeDef::new("runner")
             .with_location(ground, CellSize::ONE, Solidity::Solid)
-            .with_stat(EntityStatId::SPEED, FixedU64::from_num(0.5)),
+            .with_stat(EntityStatId::SPEED, FixedU64::from_num(0.5))
+            .with_stat(EntityStatId::TURN_RATE, FixedU64::from_num(360))
+            .with_stat(EntityStatId::PIVOT_RATE, FixedU64::from_num(360)),
     );
 
     let data = MapData::new("pond", Projection::Isometric, 4, 4);
@@ -373,7 +387,7 @@ fn unregistered_terrain_panics() {
 fn taken_claim_frees_its_cells_and_restores_exactly() {
     let mut map = wall_test_map();
     let unit = LocationDef::new(GROUND_LAYER, CellSize::new(2, 2), Solidity::Solid);
-    let location = LocationComponent::new(world_pos(2, 0), FixedVec2::default());
+    let location = LocationComponent::new(world_pos(2, 0), Facing::SOUTH);
     map.place_entity(&location, &unit, OccupancyClass::Claim);
 
     let held = map.take_claim(GROUND_LAYER.into(), CellPos::new(2, 0), CellSize::new(2, 2));
@@ -397,7 +411,7 @@ fn taken_claim_reports_only_cells_that_were_held() {
     // restoring cannot mint claims out of thin air.
     let mut map = continuous_test_map();
     let unit = LocationDef::new(GROUND_LAYER, CellSize::new(1, 2), Solidity::Solid);
-    let location = LocationComponent::new(world_pos(2, 0), FixedVec2::default());
+    let location = LocationComponent::new(world_pos(2, 0), Facing::SOUTH);
     map.place_entity(&location, &unit, OccupancyClass::Claim);
 
     let held = map.take_claim(GROUND_LAYER.into(), CellPos::new(2, 0), CellSize::new(2, 2));
@@ -413,7 +427,7 @@ fn taken_claim_reports_only_cells_that_were_held() {
 fn taking_partially_claimed_rect_panics_under_cell_model() {
     let mut map = wall_test_map();
     let unit = LocationDef::new(GROUND_LAYER, CellSize::new(1, 2), Solidity::Solid);
-    let location = LocationComponent::new(world_pos(2, 0), FixedVec2::default());
+    let location = LocationComponent::new(world_pos(2, 0), Facing::SOUTH);
     map.place_entity(&location, &unit, OccupancyClass::Claim);
 
     map.take_claim(GROUND_LAYER.into(), CellPos::new(2, 0), CellSize::new(2, 2));
@@ -425,7 +439,7 @@ fn taking_partially_claimed_rect_panics_under_cell_model() {
 fn restoring_over_standing_claim_panics() {
     let mut map = wall_test_map();
     let unit = LocationDef::new(GROUND_LAYER, CellSize::ONE, Solidity::Solid);
-    let location = LocationComponent::new(world_pos(2, 0), FixedVec2::default());
+    let location = LocationComponent::new(world_pos(2, 0), Facing::SOUTH);
     map.place_entity(&location, &unit, OccupancyClass::Claim);
 
     map.restore_claim(GROUND_LAYER.into(), &[CellPos::new(2, 0)]);
@@ -452,7 +466,7 @@ fn rebuilt_claims_stamp_footprints_and_reassert_reservations() {
     let mut map = continuous_test_map();
     // A claim from the previous tick vanishes with the wipe.
     let unit = LocationDef::new(GROUND_LAYER, CellSize::ONE, Solidity::Solid);
-    let location = LocationComponent::new(world_pos(0, 0), FixedVec2::default());
+    let location = LocationComponent::new(world_pos(0, 0), Facing::SOUTH);
     map.place_entity(&location, &unit, OccupancyClass::Claim);
 
     map.rebuild_claims(
@@ -508,7 +522,7 @@ fn static_write_lands_under_mover_claim() {
     // a legal first write, not a double-block.
     let mut map = wall_test_map();
     let unit = LocationDef::new(GROUND_LAYER, CellSize::ONE, Solidity::Solid);
-    let location = LocationComponent::new(world_pos(3, 1), FixedVec2::default());
+    let location = LocationComponent::new(world_pos(3, 1), Facing::SOUTH);
     map.place_entity(&location, &unit, OccupancyClass::Claim);
 
     let cell = CellPos::new(3, 1);

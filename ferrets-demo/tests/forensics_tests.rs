@@ -11,7 +11,12 @@ use std::{collections::BTreeMap, fs::File, io::BufReader};
 
 use bevy::prelude::*;
 use ferrets_demo::playback;
-use ferrets_math::{FixedI64, FixedU64, fixed_uvec2::FixedUVec2, fixed_vec2::FixedVec2};
+use ferrets_math::{
+    FixedI64, FixedU64,
+    facing::{self, Facing},
+    fixed_uvec2::FixedUVec2,
+    fixed_vec2::FixedVec2,
+};
 use ferrets_replay::replay::Replay;
 use ferrets_simulation::{
     components::{
@@ -39,7 +44,7 @@ struct Sample {
     /// The look direction written this tick, to hold against the step actually
     /// taken: a sprite points along this, so the two parting company is a unit
     /// facing one way and walking another.
-    facing: FixedVec2,
+    facing: Facing,
 }
 
 #[test]
@@ -189,13 +194,10 @@ fn replay_forensics() {
             if after.tick != before.tick + 1 || !after.under_way {
                 continue;
             }
-            let Some(stepped) = drawn_direction(offset(before.position, after.position)) else {
+            let Some(stepped) = stepped_sector(offset(before.position, after.position)) else {
                 continue;
             };
-            let Some(looked) = drawn_direction(after.facing) else {
-                continue;
-            };
-            if stepped == looked {
+            if stepped == sector(after.facing) {
                 continue;
             }
             match runs.last_mut() {
@@ -221,10 +223,10 @@ fn replay_forensics() {
             if after.tick != before.tick + 2 || !after.under_way {
                 continue;
             }
-            let Some(was) = drawn_direction(offset(before.position, between.position)) else {
+            let Some(was) = stepped_sector(offset(before.position, between.position)) else {
                 continue;
             };
-            let Some(now) = drawn_direction(offset(between.position, after.position)) else {
+            let Some(now) = stepped_sector(offset(between.position, after.position)) else {
                 continue;
             };
             // Neighboring directions are the gentle turn any walk makes; two
@@ -292,33 +294,25 @@ fn offset(from: FixedUVec2, to: FixedUVec2) -> FixedVec2 {
 /// looks while that happens says nothing.
 const READABLE_STEP: FixedI64 = FixedI64::lit("0.05");
 
-/// Where `direction` points as the renderer draws it — one of the eight sprite
-/// directions, numbered anticlockwise from east — or `None` when it is too
-/// short to point anywhere.
+/// Which of the eight sprite directions a bearing falls in, numbered clockwise
+/// from north.
 ///
 /// The eight are what a viewer can tell apart, so they are also the resolution
-/// worth reporting: an angle in degrees would need floating point to compute,
-/// and would rank differences the screen cannot show.
-fn drawn_direction(direction: FixedVec2) -> Option<u8> {
-    let (x, y) = (direction.x, direction.y);
-    if x.abs() < READABLE_STEP && y.abs() < READABLE_STEP {
+/// worth reporting: finer than that would rank differences the screen cannot
+/// show.
+fn sector(facing: Facing) -> u8 {
+    let eighth = facing::PER_TURN / 8;
+    ((facing.to_bits() as u32 + eighth / 2) % facing::PER_TURN / eighth) as u8
+}
+
+/// The sector a step was taken along, or `None` when the step is too short to
+/// point anywhere — below that the body is being nudged by its neighbours rather
+/// than walking, and which way it goes while that happens says nothing.
+fn stepped_sector(direction: FixedVec2) -> Option<u8> {
+    if direction.x.abs() < READABLE_STEP && direction.y.abs() < READABLE_STEP {
         return None;
     }
-    // A direction is diagonal when neither axis dominates the other, which for
-    // eight equal sectors is the tangent of the sector's own half-angle.
-    let flat = FixedI64::lit("0.4142135");
-    let (across, along) = (x.abs(), y.abs());
-    let diagonal = across > along * flat && along > across * flat;
-    Some(match (x >= FixedI64::ZERO, y >= FixedI64::ZERO, diagonal) {
-        (true, _, false) if across >= along => 0,
-        (true, true, true) => 1,
-        (_, true, false) => 2,
-        (false, true, true) => 3,
-        (false, _, false) => 4,
-        (false, false, true) => 5,
-        (_, false, false) => 6,
-        (true, false, true) => 7,
-    })
+    Facing::of(direction).map(sector)
 }
 
 /// How many sprite directions apart two looks are, the short way round the

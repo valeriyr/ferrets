@@ -133,7 +133,7 @@ pub const CONTENT: &str = r#"
     define_entity("ship", {
         location = { occupation = WATER, size = 1, solidity = "solid" },
         stats = {
-            speed = "0.25", radius = "0.5", weight = 6, max_health = 80,
+            speed = "0.25", turn_rate = 6, pivot_rate = 9, radius = "0.5", weight = 6, max_health = 80,
             damage = 12, attack_range = 5, acquire_range = 8, attack_period = 10, damage_point = 4,
             -- Sees past its acquire range so its circular vision covers the square it
             -- can auto-engage.
@@ -142,8 +142,7 @@ pub const CONTENT: &str = r#"
         },
         dying = { time = 2 },
         -- Shore bombardment: a slow ball, so shots at a moving target are wasted.
-        projectile = "cannonball",
-        targets = GROUND | WATER | AIR,
+        attack = { targets = GROUND | WATER | AIR, projectile = "cannonball" },
         train_time = 100,
     })
     -- The fortress is tall enough to be in the way of what flies: it holds the
@@ -152,10 +151,43 @@ pub const CONTENT: &str = r#"
     -- map that closes the air, which is what gives the air layer any shape at
     -- all. Occupying the air also makes it a legal target for anti-air, since
     -- targetability follows occupation unless a type says otherwise.
+    -- Four guns, one at each corner, which is what a building has instead of
+    -- turning: the keep stands square to the map wherever it was put and only the
+    -- guns come about — at sixty degrees a second, so bringing one onto something
+    -- behind it takes three seconds, and the corner already facing a
+    -- threat is the one that answers it. Their reach clears the lake it sits in
+    -- (nine cells of water from the middle) and a couple of cells of shore beyond,
+    -- so approaching the boss by land is answered rather than merely watched; it
+    -- sees further still, since a gun that acquires what it cannot see is a gun
+    -- waiting for a target to walk into it. Each fires through sixty degrees,
+    -- thirty either side of where it points, so a raid on one side is worked by
+    -- the two guns that bear and ignored by the two that do not. The shell is slow
+    -- and aimed at a place rather than a body, so one laboriously-aimed round is a
+    -- round a moving target can walk out from under.
+    define_turret("keep_gun", {
+        targets = GROUND | WATER | AIR,
+        projectile = "shell",
+    })
     define_entity("sea_fortress", {
-        location = { occupation = WATER | AIR, size = { 3, 3 }, solidity = "solid" },
-        stats = { max_health = 1500, sight_range = 8, supply_provided = 5 },
+        location = { occupation = WATER | AIR, size = { 5, 5 }, solidity = "solid" },
+        stats = {
+            max_health = 1500, sight_range = 16, supply_provided = 5,
+            damage = 10, attack_range = 12, acquire_range = 14, attack_period = 30,
+            damage_point = 12, aim_rate = 3, attack_arc = 60,
+        },
         dying = { time = 2 },
+        -- One gun at each corner, all reading the same numbers: four times the
+        -- fire of the old single mount, so each round is a quarter of what that
+        -- one carried. They spread their own targets, which is what four guns on
+        -- one keep are for — a raid of four is answered four times over rather
+        -- than one of them shot at four times.
+        turrets = {
+            { turret = "keep_gun", at = { 0, 0 }, size = { 2, 2 } },
+            { turret = "keep_gun", at = { 3, 0 }, size = { 2, 2 } },
+            { turret = "keep_gun", at = { 0, 3 }, size = { 2, 2 } },
+            { turret = "keep_gun", at = { 3, 3 }, size = { 2, 2 } },
+        },
+        turret_fire = "spread",
         trainer = { "ship" },
         tags = { "building" },
     })
@@ -180,7 +212,7 @@ pub const CONTENT: &str = r#"
             stats = {
                 -- The baseline weight everything else is authored against: a
                 -- worker is what a crowd is made of, and what gives way in one.
-                speed = "0.3", radius = "0.5", weight = 1, max_health = 30, sight_range = 4,
+                speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1, max_health = 30, sight_range = 4,
                 -- Mends at the rate it builds, and bills a quarter of the price for
                 -- a full restore, so repairing is cheaper than rebuilding. It works
                 -- from the next cell over.
@@ -318,7 +350,7 @@ pub const CONTENT: &str = r#"
         race = "human",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
         stats = {
-            speed = "0.3", radius = "0.5", weight = 1, max_health = 40,
+            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1, max_health = 40,
             damage = 6, attack_range = 4, acquire_range = 7, attack_period = 7, damage_point = 3,
             -- 0.1/tick is 2 energy a second, so a 30-cost cast is earned over ~15s
             -- rather than handed back instantly: energy gates the skills, not the
@@ -334,10 +366,12 @@ pub const CONTENT: &str = r#"
         tags = { "biological" },
         -- Anti-armor arrows: extra damage against the (armored) grunt.
         bonus_damage_vs = { grunt = 4 },
-        -- A fast arrow: visibly in flight at range 4, but rarely wasted.
-        projectile = "arrow",
-        -- The human answer to everything that moves, whatever layer it moves on.
-        targets = GROUND | WATER | AIR,
+        attack = {
+            -- The human answer to everything that moves, whatever layer it moves on.
+            targets = GROUND | WATER | AIR,
+            -- A fast arrow: visibly in flight at range 4, but rarely wasted.
+            projectile = "arrow",
+        },
         -- An energy pool (above) feeds the self-buff burst of speed and damage
         -- that reverts on expiry.
         skills = { "battle_focus" },
@@ -354,7 +388,7 @@ pub const CONTENT: &str = r#"
         race = "human",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
         stats = {
-            speed = "0.3", radius = "0.5", weight = 1, max_health = 45, sight_range = 9,
+            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1, max_health = 45, sight_range = 9,
             -- Half a point of energy per point of health (see the repairer cost
             -- below) means a full 200-point pool restores 400 health across a squad.
             max_energy = 200, energy_regen = "0.2",
@@ -389,7 +423,7 @@ pub const CONTENT: &str = r#"
         stats = {
             -- Tube, carriage and crew: heavier than the infantry it walks with,
             -- though nothing like the grunt that can shoulder it aside.
-            speed = "0.2", radius = "0.5", weight = 3, max_health = 35,
+            speed = "0.2", turn_rate = 6, pivot_rate = 12, pivot_angle = 90, radius = "0.5", weight = 3, max_health = 35,
             damage = 14, attack_range = 7, acquire_range = 9, attack_period = 20, damage_point = 8,
             sight_range = 11,
             supply_cost = 1,
@@ -398,18 +432,20 @@ pub const CONTENT: &str = r#"
         },
         dying = { time = 2 },
         tags = { "biological" },
-        -- The shell crosses one cell every five ticks, so a target that keeps moving
-        -- takes the direct hit while the burst lands behind it.
-        projectile = "shell",
-        -- Siege fires at the ground, so it must not take aim at what flies: the
-        -- blast below already spares fliers, and a mortar allowed to *target* one
-        -- would walk into range and drop shells that could never damage it.
-        targets = GROUND | WATER,
-        splash = {
-            shape = "circular",
-            bands = { {1, "0.5"}, {2, "0.25"} },
-            layers = GROUND,
-            friendly_fire = true,
+        attack = {
+            -- Siege fires at the ground, so it must not take aim at what flies: the
+            -- blast below already spares fliers, and a mortar allowed to *target*
+            -- one would walk into range and drop shells that could never damage it.
+            targets = GROUND | WATER,
+            -- The shell crosses one cell every five ticks, so a target that keeps
+            -- moving takes the direct hit while the burst lands behind it.
+            projectile = "shell",
+            splash = {
+                shape = "circular",
+                bands = { {1, "0.5"}, {2, "0.25"} },
+                layers = GROUND,
+                friendly_fire = true,
+            },
         },
         cost = { gold = 120, wood = 40 },
         train_time = 90,
@@ -442,7 +478,8 @@ pub const CONTENT: &str = r#"
             targetable = targetable,
             morphs = morphs,
             stats = {
-                speed = speed, radius = "1", weight = 4, max_health = 180, sight_range = 10,
+                speed = speed, turn_rate = 18, pivot_rate = 24, pivot_angle = 90,
+                radius = "1", weight = 4, max_health = 180, sight_range = 10,
                 supply_cost = 2,
                 -- One rider, who fights from the saddle.
                 cargo_capacity = 1,
@@ -513,7 +550,7 @@ pub const CONTENT: &str = r#"
         stats = {
             -- A gas envelope the size of a building: the heaviest thing that
             -- flies, so a gryphon meeting one aloft is the one that gives way.
-            speed = "0.35", radius = "1", weight = 8, max_health = 150, sight_range = 10,
+            speed = "0.35", turn_rate = 6, pivot_rate = 9, pivot_angle = 90, radius = "1", weight = 8, max_health = 150, sight_range = 10,
             supply_cost = 2,
             cargo_capacity = 4,
             -- A gangplank: one body a second each way, as the pig farm's is.
@@ -539,7 +576,7 @@ pub const CONTENT: &str = r#"
     -- Peons work one to a job and disappear into what they raise: a site swallows its
     -- peon until the walls are up, where a repair or a stand only ties one up in the
     -- open. Nothing they do goes faster for a second pair of hands.
-    worker("peon", "orc", { "great_hall", "war_camp", "pig_farm", "watch_tower" }, {
+    worker("peon", "orc", { "great_hall", "war_camp", "pig_farm", "watch_tower", "siege_works" }, {
         build = "hidden", repair = "present", wood = "present",
     })
     main_hall("great_hall", "orc", "peon")
@@ -616,11 +653,84 @@ pub const CONTENT: &str = r#"
             sight_range = 10,
         },
         dying = { time = 2 },
-        projectile = "arrow",
-        targets = GROUND | WATER | AIR,
+        attack = { targets = GROUND | WATER | AIR, projectile = "arrow" },
         tags = { "building" },
     })
     barracks("war_camp", "orc", { "grunt", "shaman", "zeppelin" }, { "frenzy_ritual" })
+
+    -- The orc siege works: the one building that exists to train a single unit,
+    -- and gated behind the war camp, so the wagon is a second-thought answer to a
+    -- dug-in enemy rather than an opening move. Not a barracks: it trains no
+    -- infantry and hosts no research, and its own walls are thinner than one.
+    define_entity("siege_works", {
+        race = "orc",
+        location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
+        stats = { max_health = 400, sight_range = 5 },
+        dying = { time = 2 },
+        cost = { gold = 180, wood = 120 },
+        build_time = 130,
+        repair_ratio = "0.5",
+        trainer = { "war_wagon" },
+        tags = { "building" },
+        requires = { "war_camp" },
+    })
+
+    define_turret("siege_cannon", {
+        targets = GROUND | WATER,
+        projectile = "cannonball",
+        conduct = "on_the_move",
+    })
+
+    -- The orc war wagon: the demo's turreted mover, and the only unit whose gun
+    -- and hull point different ways. It shoots from a mounted cannon rather than
+    -- by turning to face what it shoots, so it can hold a heading while its gun
+    -- comes round — which is what carrying a turret buys, and what its own
+    -- `aim_rate` paces. The hull is ponderous by comparison: it comes about more
+    -- slowly than the gun and plants its wheels for anything past a right
+    -- angle (`pivot_angle`), so a wagon told to reverse stands still for half a
+    -- second before it rolls, while the gun it carries is already round.
+    --
+    -- A flat gun: it answers what stands on the ground or floats, and nothing
+    -- that flies — the guard tower and the zeppelin are the orc answer to air.
+    -- The arc is narrow, so a target it is not yet bearing on is a target it
+    -- holds its fire at, and a wagon caught square is a wagon that cannot answer
+    -- for a moment.
+    define_entity("war_wagon", {
+        race = "orc",
+        -- Two cells on a side, like the gryphon: the widest body a two-wide gap
+        -- lets through, and a footprint that has to round a corner rather than
+        -- slip past it.
+        location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
+        stats = {
+            -- Slow, and heavy enough that a grunt walking into one gives way.
+            -- Its body is the circle inscribed in that footprint, radius one.
+            speed = "0.2", turn_rate = 9, pivot_rate = 18, pivot_angle = 90,
+            radius = "1", weight = 6, max_health = 90,
+            -- One heavy shot on a long cycle: it out-ranges a grunt several times
+            -- over and loses to anything that closes while it is reloading.
+            damage = 24, attack_range = 6, acquire_range = 8, attack_period = 24,
+            damage_point = 10,
+            -- The gun comes round a third faster than the rolling hull — half a
+            -- turn in fifteen ticks against the hull's twenty — through a
+            -- forty-five degree arc.
+            aim_rate = 12, attack_arc = 45,
+            armor = 2,
+            sight_range = 9,
+            supply_cost = 2,
+        },
+        dying = { time = 2 },
+        -- The one gun in the demo that does not stop to shoot: it bears on its
+        -- own, so the hull can keep to its orders while the cannon works whatever
+        -- the wagon rolls past. Mounted amidships, which is where its shells
+        -- leave from.
+        turrets = {
+            { turret = "siege_cannon", at = { 0, 0 }, size = { 2, 2 } },
+        },
+        cost = { gold = 160, wood = 60 },
+        train_time = 110,
+        -- Siege leads a mixed selection, like the mortar it answers.
+        selection = { priority = 10 },
+    })
     define_entity("grunt", {
         race = "orc",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
@@ -628,7 +738,7 @@ pub const CONTENT: &str = r#"
             -- Heavy melee in body as well as armor: four times a worker's
             -- weight on the same one-cell footprint, so a peon walking into a
             -- standing grunt is the one that gives way and slides around it.
-            speed = "0.3", radius = "0.5", weight = 4, max_health = 60,
+            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 4, max_health = 60,
             damage = 10, attack_range = 1, acquire_range = 5, attack_period = 6, damage_point = 3,
             -- Heavy melee: flat armor blunts each incoming hit.
             armor = 3,
@@ -643,7 +753,7 @@ pub const CONTENT: &str = r#"
         tags = { "biological" },
         -- An axe reaches what stands on the ground or floats on the water and
         -- nothing that flies.
-        targets = GROUND | WATER,
+        attack = { targets = GROUND | WATER },
         -- Blood rite: the grunt buys the archer's frenzy with its own blood and
         -- a little gold — regeneration (above) walks the price off afterwards.
         skills = { "blood_rite" },
@@ -658,7 +768,7 @@ pub const CONTENT: &str = r#"
         race = "orc",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
         stats = {
-            speed = "0.3", radius = "0.5", weight = 1, max_health = 35,
+            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1, max_health = 35,
             max_energy = 80, energy_regen = "0.2",
             sight_range = 8,
             supply_cost = 1,

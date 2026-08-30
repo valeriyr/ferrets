@@ -136,10 +136,14 @@ pub fn watch(entity: Entity, order: &Order, front: &Order, world: &mut World) ->
 fn engagement(world: &World, entity: Entity, ward: Entity) -> Option<Order> {
     // Answer the ward's attacker first — that is what a guard exists for. The
     // hint is only a candidate, still subject to range and hostility.
+    // A guard walks on its ward's behalf, so it stops for anything it carries a
+    // weapon for, as far off as any of it notices.
+    let reach = entity_def::weapon_targets(world, entity);
+    let notice = entity_def::notice_range(world, entity);
     if let Some(attacker) = acquire::fresh_attacker(world, ward)
-        && let Some(attack) = attack_move::engagement_on(world, entity, attacker)
+        && let Some(attack) = attack_move::engagement_on(world, entity, reach, notice, attacker)
     {
         return Some(attack);
     }
-    attack_move::engagement(world, entity)
+    attack_move::engagement(world, entity, reach, notice)
 }

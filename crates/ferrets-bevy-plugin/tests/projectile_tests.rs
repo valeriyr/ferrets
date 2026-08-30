@@ -3,11 +3,12 @@
 
 use bevy::prelude::*;
 use ferrets_content::{
+    attack::{AttackDef, Delivery, Weapon},
     entity_type_def::EntityTypeDef,
     location::Solidity,
     projectile::{Aim, ProjectileDef},
     registry::ContentRegistry,
-    splash::SplashShape,
+    splash::{SplashDef, SplashShape},
 };
 use ferrets_geometry::cell_size::CellSize;
 use ferrets_math::FixedU64;
@@ -302,15 +303,23 @@ fn app() -> App {
             EntityTypeDef::new("gunner")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
                 .with_health(40)
-                .with_attack(20, 6, 6, 4, 2)
-                .with_targets(utils::GROUND)
                 .with_bonus_damage_vs([("armored", 12u32)])
-                .with_projectile(shell)
-                .with_splash(
-                    SplashShape::Circular,
-                    vec![(1, FixedU64::from_num(0.5)), (2, FixedU64::from_num(0.25))],
-                    utils::GROUND,
-                    false,
+                .with_attack(
+                    AttackDef::new(Weapon::new(
+                        utils::GROUND,
+                        Delivery::Projectile(shell),
+                        Some(SplashDef::new(
+                            SplashShape::Circular,
+                            vec![(1, FixedU64::from_num(0.5)), (2, FixedU64::from_num(0.25))],
+                            utils::GROUND,
+                            false,
+                        )),
+                    )),
+                    20,
+                    6,
+                    6,
+                    4,
+                    2,
                 ),
         );
         let lob = registry.register_projectile(
@@ -321,9 +330,14 @@ fn app() -> App {
             EntityTypeDef::new("sieger")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
                 .with_health(40)
-                .with_attack(20, 8, 8, 30, 2)
-                .with_targets(utils::GROUND)
-                .with_projectile(lob),
+                .with_attack(
+                    AttackDef::new(Weapon::new(utils::GROUND, Delivery::Projectile(lob), None)),
+                    20,
+                    8,
+                    8,
+                    30,
+                    2,
+                ),
         );
         registry.register(
             EntityTypeDef::new("runner")
@@ -332,6 +346,8 @@ fn app() -> App {
                     FixedU64::from_num(0.5),
                     FixedU64::from_num(0.5),
                     FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
                 )
                 .with_health(60),
         );

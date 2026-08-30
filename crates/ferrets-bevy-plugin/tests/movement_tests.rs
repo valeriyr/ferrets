@@ -8,7 +8,7 @@ mod utils;
 
 use bevy::prelude::*;
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize, projection::Projection};
-use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2, fixed_vec2::FixedVec2};
+use ferrets_math::{FixedU64, facing::Facing, fixed_uvec2::FixedUVec2};
 use ferrets_simulation::{
     command::PlayerCommand,
     components::{location::LocationComponent, order_queue::OrderQueueComponent},
@@ -58,7 +58,7 @@ fn body_rounding_footprint_corner_looks_where_it_steps() {
     // heading, so the runner's own speed sets it.
     let crumb = utils::effective_speed(&app, runner) * FixedU64::from_num(0.25);
     let mut before = utils::position_of(app.world_mut(), runner);
-    let mut looked = facing_of(&app, runner);
+    let mut looked = utils::facing_of(app.world(), runner);
     let mut crumbs = 0;
     for tick in 0..300 {
         if utils::order_queue_is_empty(app.world_mut(), runner) {
@@ -69,7 +69,7 @@ fn body_rounding_footprint_corner_looks_where_it_steps() {
         let step = utils::offset(before, after);
         let travelled = before.distance(after);
         before = after;
-        let facing = facing_of(&app, runner);
+        let facing = utils::facing_of(app.world(), runner);
         if travelled < crumb {
             crumbs += 1;
             assert_eq!(
@@ -79,8 +79,13 @@ fn body_rounding_footprint_corner_looks_where_it_steps() {
             continue;
         }
         // The whole rule, exactly: the look a step is worth seeing for *is* that
-        // step.
-        assert_eq!(facing, step, "tick {tick}: stepped one way, looked another");
+        // step. The runner turns a whole circle a tick, so the look it wants is
+        // the look it reaches — a slower body would be part way round instead.
+        assert_eq!(
+            facing,
+            Facing::of(step).expect("a step worth seeing has a bearing"),
+            "tick {tick}: stepped one way, looked another"
+        );
         looked = facing;
     }
     assert_eq!(
@@ -346,6 +351,127 @@ fn stop_ends_cell_walk_after_its_current_step() {
 }
 
 //
+// ─── Coming round ───────────────────────────────────────────────────────────
+//
+
+/// A body that declares a pivot angle lines up before it walks: ordered back the
+/// way it is looking, it spends ticks turning where it stands and sets off only
+/// once its look is within a lean of the way it is going.
+#[test]
+fn ponderous_body_comes_round_before_it_walks() {
+    let mut app = utils::turning_app();
+    let (mover, _) = utils::spawn_owned(&mut app, "ponderous", 10, 10, 0);
+    // A fresh body looks south, so due north is the longest turn there is: half a
+    // circle at a degree a tick, less the lean it is released at, is a hundred and
+    // fifty-eight ticks of standing still.
+    walk_to_spot(&mut app, mover, utils::pos(10, 4));
+    let start = utils::position_of(app.world_mut(), mover);
+
+    utils::run_ticks(&mut app, 157);
+    assert_eq!(
+        utils::position_of(app.world_mut(), mover),
+        start,
+        "it must come round before it walks"
+    );
+    let looked = utils::facing_of(app.world(), mover);
+    assert_ne!(looked, Facing::SOUTH, "and it must be coming round");
+    assert_ne!(looked, Facing::NORTH, "without arriving early");
+
+    utils::run_ticks(&mut app, 2);
+    assert_ne!(
+        utils::position_of(app.world_mut(), mover),
+        start,
+        "then the walk starts"
+    );
+}
+
+/// A body with no pivot angle never holds still for a turn: it sets off on the
+/// tick it was told to, and its look catches up as it goes. This is what keeps
+/// infantry answering a click immediately.
+#[test]
+fn nimble_body_walks_while_its_look_catches_up() {
+    let mut app = utils::turning_app();
+    let (mover, _) = utils::spawn_owned(&mut app, "nimble", 10, 10, 0);
+    walk_to_spot(&mut app, mover, utils::pos(10, 4));
+    let start = utils::position_of(app.world_mut(), mover);
+
+    utils::run_ticks(&mut app, 1);
+
+    assert_ne!(
+        utils::position_of(app.world_mut(), mover),
+        start,
+        "it must walk at once"
+    );
+    let looked = utils::facing_of(app.world(), mover);
+    assert_ne!(looked, Facing::NORTH, "with its look still catching up");
+    assert_ne!(looked, Facing::SOUTH, "but catching up");
+}
+
+/// The ticks a body spends coming round are not ticks of getting nowhere. Counted
+/// against the stall clock they would read as a walk being crowded off its way:
+/// the walk would escalate, grow its acceptance, and finish short of the spot it
+/// was sent to.
+#[test]
+fn ticks_spent_coming_round_do_not_escalate_walk() {
+    let mut app = utils::turning_app();
+    let (mover, _) = utils::spawn_owned(&mut app, "ponderous", 10, 10, 0);
+    // A hundred and fifty-eight ticks of turning, against a stall clock that
+    // escalates every fifteen and gives the walk up after eight escalations.
+    let spot = utils::pos(10, 4);
+    walk_to_spot(&mut app, mover, spot);
+
+    utils::run_ticks(&mut app, 400);
+
+    assert!(
+        app.world()
+            .entity(mover)
+            .get::<OrderQueueComponent>()
+            .is_some_and(|queue| queue.0.is_empty()),
+        "the walk must end"
+    );
+    assert_eq!(
+        utils::position_of(app.world_mut(), mover),
+        spot,
+        "and by arriving: a walk that counted its turn as going nowhere gives up \
+         where it stands instead"
+    );
+}
+
+/// The cell model holds its crossing the same way: a body that must come round
+/// first does not stake a claim on the cell it is crossing into, because the claim
+/// *is* the crossing — one held while the body is still turning would reserve
+/// ground it has not set off for.
+#[test]
+fn cell_walk_comes_round_before_it_claims() {
+    let mut app = utils::turning_cell_app();
+    let (mover, _) = utils::spawn_owned(&mut app, "ponderous", 10, 10, 0);
+    let start = utils::position_of(app.world_mut(), mover);
+    walk_to_spot(&mut app, mover, utils::pos(10, 4));
+
+    utils::run_ticks(&mut app, 157);
+
+    assert_eq!(
+        utils::position_of(app.world_mut(), mover),
+        start,
+        "the crossing must wait for the turn"
+    );
+    assert!(
+        !app.world()
+            .resource::<Map>()
+            .nav_grid()
+            .is_occupied_by(utils::GROUND, CellPos::new(10, 9)),
+        "and the cell it will cross into must be unclaimed until it sets off"
+    );
+
+    utils::run_ticks(&mut app, 2);
+    assert_ne!(
+        utils::position_of(app.world_mut(), mover),
+        start,
+        "then it crosses"
+    );
+}
+
+//
 // ─── Helpers ────────────────────────────────────────────────────────────────────
 //
 
@@ -380,13 +506,4 @@ fn walk_to_spot(app: &mut App, entity: Entity, target: FixedUVec2) {
             },
             None,
         );
-}
-
-/// The look the renderer draws `entity` at.
-fn facing_of(app: &App, entity: Entity) -> FixedVec2 {
-    app.world()
-        .entity(entity)
-        .get::<LocationComponent>()
-        .unwrap()
-        .facing
 }

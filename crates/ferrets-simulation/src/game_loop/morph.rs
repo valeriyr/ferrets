@@ -405,7 +405,7 @@ fn reoccupy(
         .entity(entity)
         .get::<LocationComponent>()
         .map(|location| location.facing)
-        .unwrap_or_default();
+        .unwrap_or(spawn::DEFAULT_FACING);
     let standing = LocationComponent::new(position, facing);
     let placed = LocationComponent::new(anchor, facing);
 
@@ -570,7 +570,7 @@ fn reserve(world: &mut World, entity: Entity, type_name: &str) -> Option<MorphCo
         .entity(entity)
         .get::<LocationComponent>()
         .map(|location| location.facing)
-        .unwrap_or_default();
+        .unwrap_or(spawn::DEFAULT_FACING);
     let anchor = recentred(position, from, to);
     let standing = LocationComponent::new(position, facing);
     let placed = LocationComponent::new(anchor, facing);

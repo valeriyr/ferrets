@@ -3,7 +3,10 @@
 
 use bevy::prelude::*;
 use ferrets_content::{
-    entity_type_def::EntityTypeDef, location::Solidity, registry::ContentRegistry,
+    attack::{AttackDef, Delivery, Weapon},
+    entity_type_def::EntityTypeDef,
+    location::Solidity,
+    registry::ContentRegistry,
 };
 use ferrets_geometry::cell_size::CellSize;
 use ferrets_math::FixedU64;
@@ -90,10 +93,18 @@ fn app() -> App {
                     FixedU64::from_num(0.5),
                     FixedU64::from_num(0.5),
                     FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
                 )
                 .with_health(50)
-                .with_attack(10, 1, 1, 4, 2)
-                .with_targets(utils::GROUND)
+                .with_attack(
+                    AttackDef::new(Weapon::new(utils::GROUND, Delivery::Instant, None)),
+                    10,
+                    1,
+                    1,
+                    4,
+                    2,
+                )
                 .with_bonus_damage_vs([("armored", 10u32)]),
         );
         registry.register(

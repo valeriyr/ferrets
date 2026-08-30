@@ -8,12 +8,12 @@ use bevy_ecs::{entity::Entity, world::World};
 use ferrets_geometry::{
     cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize, projection::Projection,
 };
-use ferrets_math::{FixedI64, fixed_uvec2::FixedUVec2, fixed_vec2::FixedVec2};
+use ferrets_math::{FixedI64, facing::Facing, fixed_uvec2::FixedUVec2, fixed_vec2::FixedVec2};
 use ferrets_physics::body;
 
+use super::turn;
 use crate::{
     components::chase::{ChaseRound, ChaseState},
-    components::location::LocationComponent,
     entity_def,
     map::Map,
     order::Order,
@@ -90,19 +90,15 @@ pub fn advance(
 /// the stretch in front of it. The nearest point is both, and it is the same
 /// measure every range check already uses.
 ///
-/// A no-op while the unit's middle is inside the footprint, so the previous facing
-/// is kept rather than zeroed. Orders call this once in range so a unit faces what
+/// A no-op while the unit's middle is inside the footprint, so the previous look
+/// is kept rather than lost. Orders call this once in range so a unit faces what
 /// it acts on.
+///
+/// Standing, so the body comes round at the rate it turns on the spot. A weapon
+/// that bears on its own is aimed instead of faced — see [`super::turret`].
 pub fn face(world: &mut World, entity: Entity, target: FixedUVec2, target_size: CellSize) {
-    let middle = center_of(entity_def::footprint(world, entity));
-
-    let facing = nearest_point_on(target, target_size, middle) - middle;
-    if facing != FixedVec2::ZERO {
-        world
-            .entity_mut(entity)
-            .get_mut::<LocationComponent>()
-            .expect("a chasing entity has a location")
-            .facing = facing;
+    if let Some(wanted) = bearing_to(world, entity, target, target_size) {
+        turn::toward(world, entity, wanted, turn::Rate::Standing);
     }
 }
 
@@ -110,6 +106,19 @@ pub fn face(world: &mut World, entity: Entity, target: FixedUVec2, target_size: 
 pub fn face_entity(world: &mut World, entity: Entity, target: Entity) {
     let (target_position, target_size) = entity_def::footprint(world, target);
     face(world, entity, target_position, target_size);
+}
+
+/// The bearing from `entity`'s own middle to the nearest part of the footprint at
+/// `target`/`target_size`, or `None` while its middle is inside that footprint —
+/// where there is no direction to point.
+pub fn bearing_to(
+    world: &World,
+    entity: Entity,
+    target: FixedUVec2,
+    target_size: CellSize,
+) -> Option<Facing> {
+    let middle = center_of(entity_def::footprint(world, entity));
+    Facing::of(nearest_point_on(target, target_size, middle) - middle)
 }
 
 /// The point of the footprint at `origin`/`size` closest to `from`, clamping each

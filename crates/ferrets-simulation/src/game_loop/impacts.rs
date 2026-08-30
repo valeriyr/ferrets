@@ -18,12 +18,13 @@ use crate::{
     },
     entity_def,
     entity_index::EntityIndex,
-    impacts::{PendingImpact, PendingImpacts},
+    impacts::{FiredFrom, PendingImpact, PendingImpacts},
     map::Map,
     session::GameSession,
     simulation_id::SimulationId,
 };
 use ferrets_content::{
+    attack::{Delivery, Weapon},
     entity_type_def::EntityTypeDef,
     projectile::Aim,
     registry::ContentRegistry,
@@ -31,17 +32,21 @@ use ferrets_content::{
     targeting,
 };
 
-/// Delivers one hit from `attacker` against `target`, released from `origin`
-/// — the attacker's own position, or its holder's for a weapon fired from
-/// inside something else, whose bearer stands nowhere.
+/// Delivers one hit from `attacker`'s `fired_from` weapon against `target`,
+/// released from `origin` — where that weapon sits: the middle of the body for the
+/// weapon it points itself, the middle of a turret's mount for a turret, and the
+/// middle of the holder for a weapon fired from inside something else, whose
+/// bearer stands nowhere.
 ///
 /// A type with a projectile releases a shot that lands after its flight time; one
 /// without applies the damage now. A target-following shot damages `target` wherever
 /// it has moved to and centres its blast there; a cell-aimed one commits to the cell
 /// `target` occupied at release, so a target that keeps moving escapes it.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn deliver(
     world: &mut World,
     attacker: Entity,
+    fired_from: FiredFrom,
     origin: FixedUVec2,
     target: Option<Entity>,
     aimed_at: FixedUVec2,
@@ -57,13 +62,28 @@ pub(super) fn deliver(
     let target_id = target.and_then(|target| target_id(world, target));
     let impact = aimed_at;
 
-    let projectile = entity_def::of(world, attacker).projectile;
-    match projectile {
-        None => {
+    let delivery = fired_from
+        .weapon(
+            world.resource::<ContentRegistry>(),
+            entity_def::of(world, attacker),
+        )
+        .map(Weapon::delivery)
+        .expect("a delivering entity has the weapon it fired");
+    match delivery {
+        Delivery::Instant => {
             let def = entity_def::of(world, attacker).clone();
-            land(world, &def, attacker_id, target_id, impact, origin, damage);
+            land(
+                world,
+                &def,
+                fired_from,
+                attacker_id,
+                target_id,
+                impact,
+                origin,
+                damage,
+            );
         }
-        Some(projectile) => {
+        Delivery::Projectile(projectile) => {
             let (speed, aim) = {
                 let def = world
                     .resource::<ContentRegistry>()
@@ -90,6 +110,7 @@ pub(super) fn deliver(
             let shot = PendingImpact {
                 attacker: attacker_id,
                 attacker_type,
+                fired_from,
                 projectile,
                 // A cell-aimed shot has nobody to follow once it is in the air.
                 target: match aim {
@@ -130,6 +151,7 @@ pub fn process_impacts(world: &mut World) {
         land(
             world,
             &def,
+            shot.fired_from,
             shot.attacker,
             shot.target,
             impact,
@@ -144,9 +166,11 @@ pub fn process_impacts(world: &mut World) {
 /// The firing type arrives already resolved because the two callers find it
 /// differently: a same-tick hit reads it off the attacker, while a landing shot
 /// reads it from the registry — the attacker may be dead by then.
+#[allow(clippy::too_many_arguments)]
 fn land(
     world: &mut World,
     attacker_def: &EntityTypeDef,
+    fired_from: FiredFrom,
     attacker_id: SimulationId,
     target_id: Option<SimulationId>,
     impact: FixedUVec2,
@@ -167,16 +191,22 @@ fn land(
     // A weapon still cannot reach layers it does not target, even standing on
     // the cell the shot arrived at: a shell sent to the ground passes under
     // whatever drifted overhead while it was in flight.
+    let weapon = fired_from
+        .weapon(world.resource::<ContentRegistry>(), attacker_def)
+        .cloned();
+    let targets = weapon
+        .as_ref()
+        .map_or(LayerMask::EMPTY, |weapon| weapon.targets());
     let direct: Vec<Entity> = direct
         .into_iter()
-        .filter(|&victim| targeting::reaches(attacker_def, entity_def::of(world, victim)))
+        .filter(|&victim| targeting::reaches(targets, entity_def::of(world, victim)))
         .collect();
     for &victim in &direct {
         let dealt = damage::resolve(world, attacker_def, victim, damage);
         damage::apply(world, attacker_id, victim, dealt);
     }
 
-    let Some(splash) = attacker_def.splash.as_ref() else {
+    let Some(splash) = weapon.as_ref().and_then(Weapon::splash) else {
         return;
     };
     let victims = blast_victims(world, splash, attacker_id, &direct, impact, origin);

@@ -240,9 +240,9 @@ const COMMON_AI: &str = r#"
         budget.wood = budget.wood - wood
     end
 
-    -- Earmarks the pending structure's price the same way, so training does
-    -- not race the builder to the stockpile.
-    local function reserve_build(budget, wanted)
+    -- Earmarks a wanted type's price the same way, so what is cheap does not
+    -- race what is dear to the stockpile — nil reserves nothing.
+    local function reserve(budget, wanted)
         if wanted ~= nil then
             budget.gold = budget.gold - cost_of(wanted, "gold")
             budget.wood = budget.wood - cost_of(wanted, "wood")
@@ -253,7 +253,7 @@ const COMMON_AI: &str = r#"
     -- the nearest enemy in sight — or, with fog hiding every enemy, toward the
     -- far side of the map to scout one out — and escorts (healers) walk along.
     -- Returns whether anything marched.
-    local function attack_wave(commands, view, fighters, escorts, hall)
+    local function attack_wave(commands, view, fighters, walkers, hall)
         if #fighters < ARMY_ATTACK_AT then return false end
         local scout_x, scout_y
         if hall ~= nil then
@@ -280,7 +280,10 @@ const COMMON_AI: &str = r#"
         for _, f in ipairs(fighters) do
             if f.idle and not f.hidden then send(f, "attack_move") end
         end
-        for _, e in ipairs(escorts) do
+        -- Walkers are sent, not set on anything: a healer has nothing to attack
+        -- with, and a gun that shoots while it rolls works what it passes on the
+        -- way without being told to stop for it.
+        for _, e in ipairs(walkers) do
             if e.idle and not e.hidden then send(e, "move") end
         end
         return marched
@@ -336,7 +339,7 @@ const HUMAN_AI: &str = r#"
             -- The upgrade and the pending structure hold their price back from
             -- the army before any unit is queued.
             buy_research(commands, budget, view, "iron_weapons", smithies)
-            reserve_build(budget, wanted)
+            reserve(budget, wanted)
 
             -- Army mix: a medic per four archers, a pair of mortars once the
             -- forge stands (they require it), archers otherwise.
@@ -412,14 +415,18 @@ const ORC_AI: &str = r#"
             local workers = group(groups, "peon")
             local camps = group(groups, "war_camp")
             local farms = group(groups, "pig_farm")
+            local works = group(groups, "siege_works")
             local grunts = group(groups, "grunt")
             local shamans = group(groups, "shaman")
+            local wagons = group(groups, "war_wagon")
             local hall = halls[1]
 
             keep_workers(commands, budget, hall, halls, workers, "peon")
 
             -- The war camp, a first pig farm right after it — the frenzy
-            -- ritual waits on one — then a farm whenever headroom runs dry.
+            -- ritual waits on one — then a farm whenever headroom runs dry, and
+            -- once production is fed, the siege works the wagons come from (it
+            -- requires the camp, so that part of the order is the content's).
             local wanted = nil
             if #camps == 0 then
                 wanted = "war_camp"
@@ -427,16 +434,34 @@ const ORC_AI: &str = r#"
                 wanted = "pig_farm"
             elseif budget.supply < 2 then
                 wanted = "pig_farm"
+            elseif #works == 0 then
+                wanted = "siege_works"
             end
             local builder_id =
                 build_next(commands, state, view, workers, hall, wanted, budget)
-            local need_wood = wanted ~= nil and budget.wood < cost_of(wanted, "wood")
+            local need_wood = (wanted ~= nil and budget.wood < cost_of(wanted, "wood"))
+                or (#works > 0 and budget.wood < cost_of("war_wagon", "wood"))
             assign_harvesters(commands, view, workers, need_wood, builder_id)
 
             -- The ritual and the pending structure hold their price back from
             -- the army before any unit is queued.
             buy_research(commands, budget, view, "frenzy_ritual", camps)
-            reserve_build(budget, wanted)
+            reserve(budget, wanted)
+
+            -- A pair of wagons from the siege works, and their price held back
+            -- from the camp: a wagon costs several grunts, and grunts queued
+            -- against it would drink the stockpile every think it fell short.
+            local wagon = nil
+            if any_standing(works) and #wagons + count_queued(works, "war_wagon") < 2 then
+                wagon = "war_wagon"
+            end
+            for _, w in ipairs(works) do
+                if wagon ~= nil and train_from(commands, budget, w, wagon) then
+                    wagon = nil
+                    break
+                end
+            end
+            reserve(budget, wagon)
 
             -- Army mix: grunts, and a shaman per four once the ritual is in
             -- (shamans require it).
@@ -513,7 +538,13 @@ const ORC_AI: &str = r#"
                 end
             end
 
-            if attack_wave(commands, view, grunts, shamans, hall) then
+            -- The shamans and the wagons walk with the wave: a wagon told to
+            -- attack-move would stop at reach and fight like anything else, and
+            -- the whole point of its mounted cannon is that it need not.
+            local walkers = {}
+            for _, e in ipairs(shamans) do walkers[#walkers + 1] = e end
+            for _, e in ipairs(wagons) do walkers[#walkers + 1] = e end
+            if attack_wave(commands, view, grunts, walkers, hall) then
                 -- War drums speed the wave out; refused while cooling or broke.
                 commands[#commands + 1] =
                     { kind = "use_skill", skill = "war_drums", caster = "player" }

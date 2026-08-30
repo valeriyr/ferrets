@@ -7,20 +7,18 @@
 //! smooth and stays locked to the simulation cadence (it can never outrun it).
 //! Unit shapes rotate to point in their facing direction.
 
-use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
-use std::{
-    collections::{HashMap, HashSet},
-    f32::consts::FRAC_PI_2,
-};
+use std::collections::{HashMap, HashSet};
 
 use bevy::prelude::*;
-
-use crate::{map, scenario::CurrentScenario, states::InGameUi};
-use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2, fixed_vec2::FixedVec2};
-
 use ferrets_content::{
     entity_stats::EntityStatId, entity_type_def::EntityTypeDef, morph::MorphTime,
-    registry::ContentRegistry, resource::ResourceSourceDef, tags,
+    registry::ContentRegistry, resource::ResourceSourceDef, tags, turret::TurretMount,
+};
+use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
+use ferrets_math::{
+    FixedU64,
+    facing::{self, Facing},
+    fixed_uvec2::FixedUVec2,
 };
 use ferrets_simulation::{
     components::{
@@ -42,6 +40,7 @@ use ferrets_simulation::{
         tags::TagsComponent,
         train::{TrainComponent, TrainQueueComponent},
         transport::TransporterComponent,
+        turret::TurretsComponent,
     },
     impacts::PendingImpacts,
     order::Order,
@@ -51,22 +50,25 @@ use ferrets_simulation::{
     visibility::{CellVisibility, VisibilityGrid},
 };
 
+use crate::{map, scenario::CurrentScenario, states::InGameUi};
+
 /// The one colour every projectile in flight is drawn in, so shape alone tells the
 /// kinds apart.
 const SHOT_COLOR: Color = Color::srgb(1.0, 0.82, 0.4);
 
+/// The colour a body's own look is traced in.
+pub const LOOK_COLOR: Color = Color::srgb(1.0, 1.0, 0.4);
+
+/// The colour a gun's bearing is traced in.
+///
+/// A different hue from [`LOOK_COLOR`] because the two answer different questions:
+/// one is where the body points, the other where the weapon is trained, and on a
+/// building only the second ever moves. Warm rather than cool — the keep that
+/// carries four of them sits in water, which a cool line would sink into.
+pub const BEARING_COLOR: Color = Color::srgb(1.0, 0.45, 0.25);
+
 /// Screen pixels per grid cell.
 pub const CELL_PX: f32 = 32.0;
-
-/// How fast a sprite turns to face where it is walking, in radians a second —
-/// three half-turns, so a right angle takes about a sixth of one.
-///
-/// A look is written the instant the simulation changes it, and at a tick every
-/// fiftieth of a second a body squeezing past a corner earns two or three
-/// perfectly good turns in a row. Snapping to each of them reads as a shudder,
-/// which is a fault of the drawing rather than of the walk: turning at a rate is
-/// what every unit that has ever rounded a corner does.
-pub const TURN_RATE: f32 = std::f32::consts::PI * 3.0;
 
 /// The interpolated render position from the previous tick.
 #[derive(Component)]
@@ -79,12 +81,66 @@ impl PrevPos {
     }
 }
 
+/// The look an entity held at the previous tick, the bearing interpolation
+/// starts from this frame.
+#[derive(Component)]
+pub struct PrevFacing(Facing);
+
+impl PrevFacing {
+    /// The bearing interpolation starts from this frame.
+    pub fn anchor(&self) -> Facing {
+        self.0
+    }
+}
+
+/// The look an entity is drawn at this frame: part way from the previous tick's
+/// bearing to this one's.
+///
+/// Its own value rather than the sprite's rotation, because the two are not the
+/// same question: everything with a facing has a drawn look, while only a
+/// [`Directional`] entity turns its body to show it — a building stands square
+/// however it is looking.
+#[derive(Component)]
+pub struct DrawnFacing(Facing);
+
+impl DrawnFacing {
+    /// The bearing the sprite is drawn looking along.
+    pub fn bearing(&self) -> Facing {
+        self.0
+    }
+}
+
+/// Where each turret was trained at the previous tick, the bearings their own
+/// interpolations start from.
+#[derive(Component)]
+pub struct PrevBearings(Vec<Facing>);
+
+/// Where each turret is drawn trained this frame.
+///
+/// A second look, beside the body's, rather than a choice between the two: a gun
+/// that comes round while its hull drives somewhere else is two directions at
+/// once, and one interpolated value could only show one of them — which for a
+/// turreted mover would spin the hull with the gun.
+///
+/// Carried only where there are guns that bear on their own, so its presence is
+/// the question already answered, and one entry per gun in mounted order.
+#[derive(Component)]
+pub struct DrawnBearings(Vec<Facing>);
+
+impl DrawnBearings {
+    /// The bearings the guns are drawn trained along, in mounted order.
+    pub fn bearings(&self) -> &[Facing] {
+        &self.0
+    }
+}
+
 /// Marks an entity that already has its render components attached.
 #[derive(Component)]
 pub struct Renderable;
 
-/// Marks a renderable whose shape rotates to point in its facing direction
-/// (mobile units; buildings and resources stay axis-aligned).
+/// Marks a renderable whose body sprite is drawn along its look rather than square
+/// to the map — carried by anything that can walk, since a body's look is where it
+/// is going. Buildings and resources stay axis-aligned, gun and all.
 #[derive(Component)]
 pub struct Directional;
 
@@ -142,7 +198,7 @@ pub fn toggle_fog_reveal(keys: Res<ButtonInput<KeyCode>>, mut reveal: ResMut<Fog
 }
 
 /// Whether the drawing smooths what the simulation hands it — the walk between
-/// two ticks' positions, and the turn toward a new look (see [`TURN_RATE`]).
+/// two ticks' positions, and the turn between their two looks.
 ///
 /// Cleared, every sprite sits exactly where its tick put it and looks exactly
 /// where the tick says: twenty jumps a second, which is no way to play but the
@@ -166,9 +222,19 @@ pub fn toggle_smoothing(keys: Res<ButtonInput<KeyCode>>, mut smoothing: ResMut<S
 
 /// World-space center of a footprint, in pixels (Bevy y points up, sim y down).
 pub(crate) fn world_center(position: FixedUVec2, size: CellSize) -> Vec3 {
-    let cx = position.x.to_num::<f32>() + size.width as f32 / 2.0;
-    let cy = position.y.to_num::<f32>() + size.height as f32 / 2.0;
-    Vec3::new(cx * CELL_PX, -cy * CELL_PX, 1.0)
+    world_point(FixedUVec2::new(
+        position.x + FixedU64::from_num(size.width) / 2,
+        position.y + FixedU64::from_num(size.height) / 2,
+    ))
+}
+
+/// Where a simulation point is drawn.
+pub(crate) fn world_point(position: FixedUVec2) -> Vec3 {
+    Vec3::new(
+        position.x.to_num::<f32>() * CELL_PX,
+        -position.y.to_num::<f32>() * CELL_PX,
+        1.0,
+    )
 }
 
 /// How far up the screen an airborne sprite is drawn from the cell it is over,
@@ -237,7 +303,8 @@ enum Shape {
     Ship,
     /// Barracks — a hexagon, distinct from the main hall.
     Hexagon,
-    /// The sea fortress — an octagon with an inner keep.
+    /// The sea fortress — an octagonal wall. What sits on it is drawn from the
+    /// guns it mounts, not from the shape.
     Fortress,
     /// Support units — a disc bearing a lighter cross.
     Cross,
@@ -250,6 +317,12 @@ enum Shape {
     /// The zeppelin — an envelope longer than it is wide, with a gondola
     /// slung amidships and a tail fin across the stern.
     Zeppelin,
+    /// The war wagon — a hull between two wheel bars. The wheels are what make
+    /// its heading readable on a body whose gun does not share it; the gun itself
+    /// is drawn from its mount, like every other.
+    WarWagon,
+    /// The siege works — an octagon, distinct from the camp's hexagon.
+    Octagon,
     /// The watch tower — a square base bearing a lighter lookout platform.
     WatchTower,
     /// The guard tower — the watch tower's armed upgrade: the lookout gains
@@ -273,6 +346,8 @@ fn shape_for(type_name: &str) -> Shape {
         "gryphon" => Shape::Gryphon { aloft: false },
         "gryphon_aloft" => Shape::Gryphon { aloft: true },
         "zeppelin" => Shape::Zeppelin,
+        "war_wagon" => Shape::WarWagon,
+        "siege_works" => Shape::Octagon,
         "watch_tower" => Shape::WatchTower,
         "guard_tower" => Shape::GuardTower,
         _ => Shape::Square,
@@ -281,8 +356,9 @@ fn shape_for(type_name: &str) -> Shape {
 
 /// Attaches a placeholder shape to any simulation entity that lacks one.
 ///
-/// The shape comes from [`shape_for`]. Units (the non-square shapes) also get a
-/// [`Directional`] marker so they rotate to face their look direction.
+/// The shape comes from [`shape_for`]. Anything that can walk also gets a
+/// [`Directional`] marker, so its body is drawn along its look, and anything with a
+/// gun of its own gets that gun's own drawn bearing beside it.
 pub fn attach_sprites(
     mut commands: Commands,
     session: Res<GameSession>,
@@ -295,11 +371,12 @@ pub fn attach_sprites(
             &EntityInfoComponent,
             &LocationComponent,
             Option<&OwnerComponent>,
+            Option<&TurretsComponent>,
         ),
         Without<Renderable>,
     >,
 ) {
-    for (entity, info, location, owner) in &query {
+    for (entity, info, location, owner, turret) in &query {
         let def = registry.def(info.type_id());
         let size = def.location.unwrap().size();
         let center = world_center(location.position, size) + air_lift(&registry, def);
@@ -307,33 +384,30 @@ pub fn attach_sprites(
         let radius = size.width.min(size.height) as f32 * CELL_PX * 0.45;
 
         let mut entity = commands.entity(entity);
-        match shape_for(info.type_name()) {
+        let shape = shape_for(info.type_name());
+        match shape {
             Shape::Triangle => {
                 entity.insert((
                     Mesh2d(meshes.add(RegularPolygon::new(radius, 3))),
                     MeshMaterial2d(materials.add(color)),
-                    Directional,
                 ));
             }
             Shape::Diamond => {
                 entity.insert((
                     Mesh2d(meshes.add(RegularPolygon::new(radius, 4))),
                     MeshMaterial2d(materials.add(color)),
-                    Directional,
                 ));
             }
             Shape::Pentagon => {
                 entity.insert((
                     Mesh2d(meshes.add(RegularPolygon::new(radius, 5))),
                     MeshMaterial2d(materials.add(color)),
-                    Directional,
                 ));
             }
             Shape::Circle => {
                 entity.insert((
                     Mesh2d(meshes.add(Circle::new(radius))),
                     MeshMaterial2d(materials.add(color)),
-                    Directional,
                 ));
             }
             Shape::Ship => {
@@ -367,20 +441,11 @@ pub fn attach_sprites(
                 ));
             }
             Shape::Fortress => {
-                // An octagonal wall with a lighter inner keep.
-                let keep = meshes.add(RegularPolygon::new(radius * 0.45, 8));
-                let keep_color = materials.add(color.lighter(0.12));
+                // An octagonal wall. What sits on it is drawn from its mounts.
                 entity.insert((
                     Mesh2d(meshes.add(RegularPolygon::new(radius, 8))),
                     MeshMaterial2d(materials.add(color)),
                 ));
-                entity.with_children(|parent| {
-                    parent.spawn((
-                        Mesh2d(keep),
-                        MeshMaterial2d(keep_color),
-                        Transform::from_translation(Vec3::new(0.0, 0.0, 0.1)),
-                    ));
-                });
             }
             Shape::Cross => {
                 // A disc with a lighter cross laid over it, so a medic reads as
@@ -390,7 +455,6 @@ pub fn attach_sprites(
                 entity.insert((
                     Mesh2d(meshes.add(Circle::new(radius))),
                     MeshMaterial2d(materials.add(color)),
-                    Directional,
                 ));
                 entity.with_children(|parent| {
                     parent.spawn((
@@ -413,7 +477,6 @@ pub fn attach_sprites(
                 entity.insert((
                     Mesh2d(meshes.add(RegularPolygon::new(radius * 0.95, 3))),
                     MeshMaterial2d(materials.add(color)),
-                    Directional,
                 ));
                 entity.with_children(|parent| {
                     parent.spawn((
@@ -435,7 +498,6 @@ pub fn attach_sprites(
                 entity.insert((
                     Mesh2d(meshes.add(Ellipse::new(radius * 0.6, radius * 1.05))),
                     MeshMaterial2d(materials.add(color)),
-                    Directional,
                 ));
                 entity.with_children(|parent| {
                     parent.spawn((
@@ -447,6 +509,28 @@ pub fn attach_sprites(
                         Transform::from_translation(Vec3::new(0.0, -radius * 0.95, 0.1)),
                     ));
                 });
+            }
+            Shape::WarWagon => {
+                // A hull longer than it is wide, with wheels down each flank —
+                // what makes the heading readable on a body whose gun does not
+                // share it. The gun itself is drawn from its mount.
+                let hull = Vec2::new(radius * 1.05, radius * 1.45);
+                let wheel = Vec2::new(radius * 0.26, radius * 1.55);
+                entity.insert(Sprite::from_color(color, hull));
+                entity.with_children(|parent| {
+                    for flank in [-1.0, 1.0] {
+                        parent.spawn((
+                            Sprite::from_color(color.darker(0.3), wheel),
+                            Transform::from_translation(Vec3::new(flank * radius * 0.62, 0.0, 0.1)),
+                        ));
+                    }
+                });
+            }
+            Shape::Octagon => {
+                entity.insert((
+                    Mesh2d(meshes.add(RegularPolygon::new(radius, 8))),
+                    MeshMaterial2d(materials.add(color)),
+                ));
             }
             Shape::WatchTower => {
                 // A square base bearing a lighter round lookout — the height
@@ -485,13 +569,49 @@ pub fn attach_sprites(
                 entity.insert(Sprite::from_color(color, px));
             }
         }
+        // Every gun the body carries, drawn where it is mounted: a disc, lighter
+        // than the body, round because a shape with a front of its own would be
+        // turned by the hull it rides on rather than by where it is trained. Where
+        // it points is the bearing line (see `draw_facing`).
+        for mount in &def.turrets {
+            let gun = meshes.add(Circle::new(
+                mount.size().width.min(mount.size().height) as f32 * CELL_PX * 0.3,
+            ));
+            let gun_color = materials.add(color.lighter(0.25));
+            let at = mount_offset(def, mount);
+            entity.with_children(|parent| {
+                parent.spawn((
+                    Mesh2d(gun),
+                    MeshMaterial2d(gun_color),
+                    Transform::from_translation(at.extend(0.2)),
+                ));
+            });
+        }
+
+        // A body that can walk is drawn facing where it walks; one that cannot is
+        // drawn square to the map, however its look moves — a tower aiming turns
+        // its facing without turning its walls.
+        //
         // Drawn already facing its look, or a spawn — and a form that swaps its
         // silhouette — would turn from wherever the identity rotation points.
         let mut transform = Transform::from_translation(center);
-        if let Some(rotation) = facing_rotation(location.facing) {
-            transform.rotation = rotation;
+        if def.can_move() {
+            transform.rotation = facing_rotation(location.facing);
+            entity.insert(Directional);
         }
-        entity.insert((transform, PrevPos(center), Renderable));
+        entity.insert((
+            transform,
+            PrevPos(center),
+            PrevFacing(location.facing),
+            DrawnFacing(location.facing),
+            Renderable,
+        ));
+        // A gun that bears on its own is drawn along its own look, from the
+        // bearing it is mounted at.
+        if let Some(TurretsComponent(turrets)) = turret {
+            let bearings: Vec<Facing> = turrets.iter().map(|turret| turret.bearing).collect();
+            entity.insert((PrevBearings(bearings.clone()), DrawnBearings(bearings)));
+        }
     }
 }
 
@@ -513,6 +633,10 @@ pub fn refresh_changed_sprites(
                 Renderable,
                 Directional,
                 PrevPos,
+                PrevFacing,
+                DrawnFacing,
+                PrevBearings,
+                DrawnBearings,
                 Mesh2d,
                 MeshMaterial2d<ColorMaterial>,
                 Sprite,
@@ -521,41 +645,54 @@ pub fn refresh_changed_sprites(
     }
 }
 
-/// The facing direction as a normalized world-space vector, or `None` when there
-/// is no facing yet. Sim y points down; Bevy y points up.
-fn facing_dir(facing: FixedVec2) -> Option<Vec2> {
-    if facing == FixedVec2::ZERO {
-        return None;
-    }
-    Vec2::new(facing.x.to_num::<f32>(), -facing.y.to_num::<f32>()).try_normalize()
+/// A bearing as a Z rotation for a shape that points `+Y` at rest.
+///
+/// A bearing runs clockwise from north and a Bevy rotation runs anticlockwise, so
+/// one is the other negated.
+pub fn facing_rotation(facing: Facing) -> Quat {
+    Quat::from_rotation_z(-radians(facing))
 }
 
-/// Converts a sim facing direction into a Z rotation for a shape that points
-/// `+Y` at rest, or `None` when there is no facing yet (so rotation is left as is).
-fn facing_rotation(facing: FixedVec2) -> Option<Quat> {
-    let dir = facing_dir(facing)?;
-    Some(Quat::from_rotation_z(dir.y.atan2(dir.x) - FRAC_PI_2))
+/// Which way a shape drawn at `facing` points — the direction its facing line
+/// traces.
+pub fn facing_line(facing: Facing) -> Vec2 {
+    let bearing = radians(facing);
+    Vec2::new(bearing.sin(), bearing.cos())
 }
 
-/// `drawn` turned toward `target` by at most `most` radians, the short way
-/// round; `target` itself once it is within reach (see [`TURN_RATE`]).
-pub fn turn_toward(drawn: Quat, target: Quat, most: f32) -> Quat {
-    let apart = drawn.angle_between(target);
-    if apart <= most {
-        target
-    } else {
-        drawn.slerp(target, most / apart)
-    }
+/// A bearing in radians clockwise from north.
+fn radians(facing: Facing) -> f32 {
+    facing.to_bits() as f32 / facing::PER_TURN as f32 * std::f32::consts::TAU
+}
+
+/// The look drawn `alpha` of the way from `prev` to `curr`, the short way round.
+///
+/// The simulation's own two bearings and nothing else: a look that changes by no
+/// more than the body's turn rate each tick is already smooth, so the drawing has
+/// only to fill in between the ticks — the same job it does for position.
+fn between(prev: Facing, curr: Facing, alpha: f32) -> Facing {
+    let step = (prev.difference(curr) as f32 * alpha) as i32;
+    Facing::from_bits(prev.to_bits().wrapping_add(step as i16 as u16))
 }
 
 /// Snapshots each sprite's current sim position as the interpolation start, run
 /// before the simulation advances (`FixedPreUpdate`).
 pub fn record_prev(
     registry: Res<ContentRegistry>,
-    mut query: Query<(&EntityInfoComponent, &LocationComponent, &mut PrevPos)>,
+    mut query: Query<(
+        &EntityInfoComponent,
+        &LocationComponent,
+        &mut PrevPos,
+        &mut PrevFacing,
+        Option<(&TurretsComponent, &mut PrevBearings)>,
+    )>,
 ) {
-    for (info, location, mut prev) in &mut query {
+    for (info, location, mut prev, mut looked, turrets) in &mut query {
         prev.0 = draw_anchor(&registry, registry.def(info.type_id()), location.position);
+        looked.0 = location.facing;
+        if let Some((TurretsComponent(turrets), mut previous)) = turrets {
+            previous.0 = turrets.iter().map(|turret| turret.bearing).collect();
+        }
     }
 }
 
@@ -582,20 +719,37 @@ pub fn snap_revealed(
         &EntityInfoComponent,
         &LocationComponent,
         &mut PrevPos,
+        &mut PrevFacing,
+        &mut DrawnFacing,
         &mut Transform,
         Option<&Directional>,
+        Option<(&TurretsComponent, &mut PrevBearings, &mut DrawnBearings)>,
     )>,
 ) {
     for entity in revealed.read() {
-        let Ok((info, location, mut prev, mut transform, directional)) = query.get_mut(entity)
+        let Ok((
+            info,
+            location,
+            mut prev,
+            mut looked,
+            mut drawn,
+            mut transform,
+            directional,
+            turret,
+        )) = query.get_mut(entity)
         else {
             continue;
         };
         prev.0 = draw_anchor(&registry, registry.def(info.type_id()), location.position);
-        if directional.is_some()
-            && let Some(rotation) = facing_rotation(location.facing)
-        {
-            transform.rotation = rotation;
+        looked.0 = location.facing;
+        drawn.0 = looked.0;
+        if directional.is_some() {
+            transform.rotation = facing_rotation(drawn.0);
+        }
+        // A gun is set down trained where it was set down too.
+        if let Some((TurretsComponent(turrets), mut previous, mut shown)) = turret {
+            previous.0 = turrets.iter().map(|turret| turret.bearing).collect();
+            shown.0 = previous.0.clone();
         }
     }
 }
@@ -608,7 +762,6 @@ pub fn snap_revealed(
 /// sprite on the tick's own position and look.
 pub fn interpolate_sprites(
     fixed: Res<Time<Fixed>>,
-    time: Res<Time>,
     smoothing: Res<Smoothing>,
     session: Res<GameSession>,
     registry: Res<ContentRegistry>,
@@ -618,11 +771,14 @@ pub fn interpolate_sprites(
         &EntityInfoComponent,
         &LocationComponent,
         &PrevPos,
+        &PrevFacing,
+        &mut DrawnFacing,
         &mut Transform,
         &mut Visibility,
         Option<&HiddenComponent>,
         Option<&OwnerComponent>,
         Option<&Directional>,
+        Option<(&TurretsComponent, &PrevBearings, &mut DrawnBearings)>,
     )>,
 ) {
     // Unsmoothed, the sprite is drawn on the tick's own position rather than
@@ -633,8 +789,19 @@ pub fn interpolate_sprites(
         1.0
     };
     let local = session.local_player();
-    for (info, location, prev, mut transform, mut visibility, hidden, owner, directional) in
-        &mut query
+    for (
+        info,
+        location,
+        prev,
+        looked,
+        mut drawn,
+        mut transform,
+        mut visibility,
+        hidden,
+        owner,
+        directional,
+        turret,
+    ) in &mut query
     {
         let def = registry.def(info.type_id());
         let size = def.location.unwrap().size();
@@ -645,15 +812,19 @@ pub fn interpolate_sprites(
         } else {
             prev.0.lerp(curr, alpha)
         };
-        if directional.is_some()
-            && let Some(rotation) = facing_rotation(location.facing)
-        {
-            let allowance = if smoothing.0 {
-                TURN_RATE * time.delta_secs()
-            } else {
-                f32::INFINITY
-            };
-            transform.rotation = turn_toward(transform.rotation, rotation, allowance);
+        drawn.0 = between(looked.0, location.facing, alpha);
+        if directional.is_some() {
+            transform.rotation = facing_rotation(drawn.0);
+        }
+        // The gun's own look, filled in between its own two ticks: a hull driving
+        // one way while its gun comes round another is two directions at once, and
+        // each is interpolated from where it was.
+        if let Some((TurretsComponent(turrets), previous, mut shown)) = turret {
+            shown.0 = turrets
+                .iter()
+                .zip(previous.0.iter())
+                .map(|(turret, &was)| between(was, turret.bearing, alpha))
+                .collect();
         }
         // Own and allied entities always draw; an enemy or neutral one is hidden
         // while its cell is not in the local team's vision (fog of war). Building
@@ -839,7 +1010,6 @@ pub fn draw_shots(
     grid: Res<VisibilityGrid>,
     reveal: Res<FogReveal>,
     targets: Query<(&EntityInfoComponent, &Transform, Option<&HiddenComponent>), With<Renderable>>,
-    holders: Query<(&TransporterComponent, &Transform)>,
 ) {
     let tick = session.tick();
     let overstep = fixed.overstep_fraction();
@@ -851,22 +1021,11 @@ pub fn draw_shots(
         let elapsed = tick.saturating_sub(shot.emitted_on_tick) as f32 + overstep;
         let progress = (elapsed / flight as f32).clamp(0.0, 1.0);
 
-        // Drawn from the shooter itself, so a shot from a large one leaves its middle
-        // rather than the corner cell its position names. A hidden shooter stands
-        // nowhere — a garrisoned archer's arrow leaves its holder, exactly as the
-        // simulation releases it — and the recorded release point is the last
-        // fallback for a shooter that has since died or gone dark.
-        let from = targets
-            .iter()
-            .find(|(info, _, hidden)| info.id() == shot.attacker && hidden.is_none())
-            .map(|(_, transform, _)| transform.translation)
-            .or_else(|| {
-                holders
-                    .iter()
-                    .find(|(transporter, _)| transporter.passengers.contains(&shot.attacker))
-                    .map(|(_, transform)| transform.translation)
-            })
-            .unwrap_or_else(|| world_center(shot.origin, CellSize::ONE));
+        // Drawn from where the simulation released it, which is where the weapon
+        // that fired it sits: the middle of a body for its own weapon, the corner a
+        // turret is mounted on for that gun's, and the holder for a garrisoned
+        // archer whose own bearer stands nowhere.
+        let from = world_point(shot.origin);
         // Every shot is aimed at an entity, and the damage follows that entity
         // wherever it moves, so the shot is drawn heading there. The committed point
         // is the fallback for a target that is gone or out of sight — and, once a
@@ -995,50 +1154,77 @@ pub fn draw_rally(
     }
 }
 
-/// Draws a short line from each unit's center along the way its sprite is drawn
-/// looking (Update).
+/// Draws a short line from each entity's center along the look it is drawn at
+/// (Update): where a body points, or where a gun is trained, each in its own
+/// colour ([`LOOK_COLOR`], [`BEARING_COLOR`]).
 ///
-/// The drawn look rather than the simulation's own: the sprite eases toward a
-/// new look (see [`TURN_RATE`]) and a line taken straight from the simulation
-/// would snap ahead of it every tick — which, on a placeholder shape, is the
-/// direction cue the eye actually follows. Unsmoothed the two are the same
-/// thing, so the line still reports the tick exactly when that is what is
-/// wanted.
+/// The drawn look rather than the simulation's own: between two ticks the sprite
+/// is part way from one bearing to the next, and a line taken straight from the
+/// simulation would run ahead of the shape it is meant to belong to — which, on a
+/// placeholder shape, is the direction cue the eye actually follows. Unsmoothed
+/// the two are the same thing, so the line still reports the tick exactly when
+/// that is what is wanted.
 pub fn draw_facing(
     mut gizmos: Gizmos,
     registry: Res<ContentRegistry>,
     query: Query<
         (
             &EntityInfoComponent,
-            &LocationComponent,
+            &DrawnFacing,
             &Transform,
             &Visibility,
+            Option<&Directional>,
+            Option<&DrawnBearings>,
         ),
-        (With<Directional>, Without<HiddenComponent>),
+        Without<HiddenComponent>,
     >,
 ) {
-    for (info, location, transform, visibility) in &query {
+    for (info, drawn, transform, visibility, directional, guns) in &query {
         // Don't trace a unit hidden by fog (interpolate_sprites set its visibility).
         if matches!(visibility, Visibility::Hidden) {
             continue;
         }
-        // A unit that has never looked anywhere has no line to draw; the shape
-        // itself points `+Y` at rest, which is no direction of its own.
-        if facing_dir(location.facing).is_none() {
-            continue;
-        }
-        let size = registry.def(info.type_id()).location.unwrap().size();
+        let def = registry.def(info.type_id());
+        let size = def.location.unwrap().size();
         let length = size.width.min(size.height) as f32 * CELL_PX * 0.6;
         let center = transform.translation.truncate();
-        let drawn = facing_line(&transform.rotation);
-        gizmos.line_2d(center, center + drawn * length, Color::srgb(1.0, 1.0, 0.4));
+        // A body that turns traces where it goes, from its own middle.
+        if directional.is_some() {
+            let line = facing_line(drawn.bearing());
+            gizmos.line_2d(center, center + line * length, LOOK_COLOR);
+        }
+        // Each gun traces where it is trained, from where it sits: a hull driving
+        // one way with its guns round another shows every one of them, and a keep
+        // with a gun at each corner shows four lines from four corners.
+        //
+        // Scaled to the gun rather than to the body that carries it, so four short
+        // lines read as four guns instead of as one shape with spines.
+        let Some(guns) = guns else { continue };
+        for (mount, &bearing) in def.turrets.iter().zip(guns.bearings()) {
+            let at = center + mounted_at(transform, def, mount);
+            let reach = mount.size().width.min(mount.size().height) as f32 * CELL_PX * 0.45;
+            gizmos.line_2d(at, at + facing_line(bearing) * reach, BEARING_COLOR);
+        }
     }
 }
 
-/// Which way a shape drawn at `rotation` points, a shape pointing `+Y` at rest —
-/// the direction its facing line traces.
-pub fn facing_line(rotation: &Quat) -> Vec2 {
-    (*rotation * Vec3::Y).truncate()
+/// Where a mounted gun sits on the drawn body, as an offset from its middle.
+fn mount_offset(def: &EntityTypeDef, mount: &TurretMount) -> Vec2 {
+    let footprint = def.location.unwrap().size();
+    let middle = |at: u32, span: u32, whole: u32| {
+        (at as f32 + span as f32 / 2.0 - whole as f32 / 2.0) * CELL_PX
+    };
+    Vec2::new(
+        middle(mount.origin().x, mount.size().width, footprint.width),
+        -middle(mount.origin().y, mount.size().height, footprint.height),
+    )
+}
+
+/// The same offset taken through the body's own rotation, so a gun on a hull that
+/// turns rides round with it.
+fn mounted_at(transform: &Transform, def: &EntityTypeDef, mount: &TurretMount) -> Vec2 {
+    let offset = mount_offset(def, mount).extend(0.0);
+    (transform.rotation * offset).truncate()
 }
 
 /// The tile color for a terrain, by content name.
@@ -1207,7 +1393,7 @@ fn ghost_shape(type_name: &str, size: CellSize) -> GhostShape {
             sides: 6,
             circumradius,
         },
-        Shape::Fortress => GhostShape::Polygon {
+        Shape::Fortress | Shape::Octagon => GhostShape::Polygon {
             sides: 8,
             circumradius,
         },

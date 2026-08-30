@@ -37,6 +37,12 @@ pub struct MoveComponent {
     /// path is indistinguishable from a spent corridor leg, and a walk told to
     /// stop simply plans the rest of its journey again.
     pub winding_down: bool,
+    /// The body is standing still to come round toward the way it is going, and
+    /// keeps standing until its look is near enough to walk on. Latched because
+    /// the angle that starts the hold is wider than the one that ends it: without
+    /// it, a body between the two could not tell a turn it is part way through
+    /// from a look it is merely carrying.
+    pub pivoting: bool,
     /// Ticks remaining to wait for a blocked cell to clear before recalculating the path.
     pub wait_ticks: u32,
     /// The closest straight-line distance to the pursued waypoint the walk
@@ -96,6 +102,15 @@ impl MoveComponent {
         } else {
             self.forgive();
         }
+    }
+
+    /// Excuses one tick of not closing in. A tick spent coming round is not a
+    /// tick spent going nowhere, but the distance record cannot tell them apart:
+    /// only the walk itself knows it turned instead. Narrow on purpose — it can
+    /// cancel no more than the tick that just passed, so nothing launders its way
+    /// out of the stall clock by turning.
+    pub fn excuse(&mut self) {
+        self.wait_ticks = self.wait_ticks.saturating_sub(1);
     }
 
     /// One blockage escalation: the stall clock restarts and the frustration
@@ -188,6 +203,7 @@ impl MoveComponent {
             frustration: 0,
             moving_from: from,
             winding_down: false,
+            pivoting: false,
             wait_ticks: 0,
             best_distance: FixedU64::MAX,
             regaining: false,

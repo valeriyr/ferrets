@@ -15,12 +15,13 @@
 //! version or platform endianness.
 
 use bevy_ecs::world::World;
-use ferrets_math::{FixedI64, FixedU64, fixed_uvec2::FixedUVec2, fixed_vec2::FixedVec2};
+use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use xxhash_rust::xxh64::Xxh64;
 
 use crate::{
     components::{
         entity_info::EntityInfoComponent, health::HealthComponent, location::LocationComponent,
+        turret::TurretsComponent,
     },
     entity_index::EntityIndex,
     resources::PlayerResources,
@@ -38,6 +39,8 @@ const CHECKSUM_SEED: u64 = 0;
 /// is stable across Rust versions and platform endianness.
 struct Checksum(Xxh64);
 
+/// Every write is a fixed width and little-endian, so the digest depends on the
+/// state alone — never on the machine hashing it.
 impl Checksum {
     fn new() -> Self {
         Self(Xxh64::new(CHECKSUM_SEED))
@@ -45,6 +48,10 @@ impl Checksum {
 
     fn write_u8(&mut self, value: u8) {
         self.0.update(&[value]);
+    }
+
+    fn write_u16(&mut self, value: u16) {
+        self.0.update(&value.to_le_bytes());
     }
 
     fn write_u32(&mut self, value: u32) {
@@ -55,35 +62,23 @@ impl Checksum {
         self.0.update(&value.to_le_bytes());
     }
 
-    fn write_i64(&mut self, value: i64) {
-        self.0.update(&value.to_le_bytes());
-    }
-
-    fn write_usize(&mut self, value: usize) {
-        self.0.update(&value.to_le_bytes());
-    }
-
     fn write_fixed_uvec2(&mut self, value: FixedUVec2) {
         self.write_fixed_u64(value.x);
         self.write_fixed_u64(value.y);
-    }
-
-    fn write_fixed_vec2(&mut self, value: FixedVec2) {
-        self.write_fixed_i64(value.x);
-        self.write_fixed_i64(value.y);
     }
 
     fn write_fixed_u64(&mut self, value: FixedU64) {
         self.write_u64(value.to_bits());
     }
 
-    fn write_fixed_i64(&mut self, value: FixedI64) {
-        self.write_i64(value.to_bits());
-    }
-
     /// Length-prefixed so `"go" + "ld"` can't collide with `"gold"`.
+    ///
+    /// The prefix is widened to a fixed eight bytes rather than written as the
+    /// `usize` it is: a `usize` is four bytes on a thirty-two-bit peer and eight on
+    /// a sixty-four-bit one, and a digest that depends on a peer's pointer width is
+    /// a false desync waiting for the first player on another build.
     fn write_str(&mut self, value: &str) {
-        self.write_usize(value.len());
+        self.write_u64(value.len() as u64);
         self.0.update(value.as_bytes());
     }
 
@@ -113,14 +108,25 @@ pub fn state_checksum(world: &World) -> u64 {
         let entity = world.entity(entity);
 
         if let Some(info) = entity.get::<EntityInfoComponent>() {
-            hasher.write_u32(info.type_id().index() as u32);
+            // Widened rather than narrowed: a `usize` fits a `u64` on every
+            // platform, so nothing here leans on how wide the handle happens to be.
+            hasher.write_u64(info.type_id().index() as u64);
         }
         if let Some(location) = entity.get::<LocationComponent>() {
             hasher.write_fixed_uvec2(location.position);
-            hasher.write_fixed_vec2(location.facing);
+            hasher.write_u16(location.facing.to_bits());
         }
         if let Some(health) = entity.get::<HealthComponent>() {
             hasher.write_fixed_u64(health.current());
+        }
+        // A gun's own bearing decides what it may fire at through its arc, and a
+        // weapon that fights while its body walks decides it every tick without
+        // the body's look moving at all — so a peer whose gun came round the other
+        // way is a peer about to shoot something else.
+        if let Some(TurretsComponent(turrets)) = entity.get::<TurretsComponent>() {
+            for turret in turrets {
+                hasher.write_u16(turret.bearing.to_bits());
+            }
         }
     }
 

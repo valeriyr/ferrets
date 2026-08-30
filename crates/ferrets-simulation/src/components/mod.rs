@@ -32,3 +32,4 @@ pub mod stance;
 pub mod tags;
 pub mod train;
 pub mod transport;
+pub mod turret;

@@ -12,7 +12,6 @@ use super::{
 use crate::{
     components::{
         attack_move::AttackMoveComponent,
-        entity_stats::StatsComponent,
         location::LocationComponent,
         order_queue::{CancelPolicy, OrderState},
     },
@@ -22,7 +21,7 @@ use crate::{
     session::GameSession,
     simulation_id::SimulationId,
 };
-use ferrets_content::entity_stats::EntityStatId;
+use ferrets_pathfinder::layer_mask::LayerMask;
 
 /// Called once when an AttackMove order becomes the front `New` entry.
 ///
@@ -77,7 +76,12 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
         return Processing::state(OrderState::Finished);
     };
 
-    if let Some(attack) = engagement(world, entity) {
+    if let Some(attack) = engagement(
+        world,
+        entity,
+        entity_def::weapon_targets(world, entity),
+        entity_def::notice_range(world, entity),
+    ) {
         world.entity_mut(entity).insert(driver);
         return Processing::suspend(attack);
     }
@@ -113,31 +117,46 @@ pub fn watch(entity: Entity, _order: &Order, front: &Order, world: &mut World) -
     if !acquire::due(id, tick) {
         return None;
     }
-    engagement(world, entity)
+    // Walking on to fight is the whole body's business, so it stops for anything
+    // any of its weapons can answer, as far off as any of them notices.
+    engagement(
+        world,
+        entity,
+        entity_def::weapon_targets(world, entity),
+        entity_def::notice_range(world, entity),
+    )
 }
 
-/// A leashed attack on the best target in acquisition range, if the entity is
-/// armed and one exists. The leash anchors where the entity stands now.
-pub(super) fn engagement(world: &World, entity: Entity) -> Option<Order> {
-    let acquire_range = world
-        .entity(entity)
-        .get::<StatsComponent>()
-        .and_then(|stats| stats.effective_as_u32(EntityStatId::ACQUIRE_RANGE))?;
-    let target = acquire::find_target(world, entity, entity, acquire_range)?;
-    Some(leashed_attack(world, entity, target, acquire_range))
+/// A leashed attack on the best target within `notice` cells that `targets`
+/// reaches, if one exists. The leash anchors where the entity stands now.
+///
+/// What reach to look with, and how far, are the caller's: a walk that stops to
+/// fight stops for anything the body carries as far as any of it notices, while a
+/// stance engaging on its own initiative is giving its own weapon a fight and
+/// leaves the turrets to theirs.
+pub(super) fn engagement(
+    world: &World,
+    entity: Entity,
+    targets: LayerMask,
+    notice: u32,
+) -> Option<Order> {
+    let target = acquire::find_target(world, entity, targets, notice)?;
+    Some(leashed_attack(world, entity, target, notice))
 }
 
 /// Like [`engagement`], but on a specific candidate — `None` when the
 /// candidate does not qualify for the entity's acquisition scan.
-pub(super) fn engagement_on(world: &World, entity: Entity, target: SimulationId) -> Option<Order> {
-    let acquire_range = world
-        .entity(entity)
-        .get::<StatsComponent>()
-        .and_then(|stats| stats.effective_as_u32(EntityStatId::ACQUIRE_RANGE))?;
-    if !acquire::qualifies(world, entity, entity, target, acquire_range) {
+pub(super) fn engagement_on(
+    world: &World,
+    entity: Entity,
+    targets: LayerMask,
+    notice: u32,
+    target: SimulationId,
+) -> Option<Order> {
+    if !acquire::qualifies(world, entity, targets, target, notice) {
         return None;
     }
-    Some(leashed_attack(world, entity, target, acquire_range))
+    Some(leashed_attack(world, entity, target, notice))
 }
 
 fn leashed_attack(world: &World, entity: Entity, target: SimulationId, radius: u32) -> Order {

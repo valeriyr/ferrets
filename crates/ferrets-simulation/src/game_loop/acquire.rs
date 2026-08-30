@@ -17,6 +17,7 @@ use crate::{
     visibility::VisibilityGrid,
 };
 use ferrets_content::targeting;
+use ferrets_pathfinder::layer_mask::LayerMask;
 
 /// Ticks between acquisition scans for one entity. Scans are staggered by
 /// entity id (see [`due`]) so the load spreads across ticks.
@@ -31,11 +32,12 @@ pub fn due(id: SimulationId, tick: u32) -> bool {
     tick.wrapping_add(id.0).is_multiple_of(ACQUIRE_PERIOD)
 }
 
-/// Finds the target `seeker` should engage within `range` grid cells, if any.
+/// Finds the target `seeker` should engage within `range` grid cells, if any,
+/// nearest to the seeker itself.
 ///
-/// The `gunner` is whose weapon judges layer reach — the seeker itself
+/// `targets` is what the firing weapon reaches — the seeker's own weapons
 /// everywhere except a garrison, where the passenger's weapon fires from the
-/// holder's footprint.
+/// holder's footprint, and a turret, which reaches what its own gun does.
 ///
 /// A qualifying [`fresh_attacker`] wins; otherwise the nearest hostile,
 /// damageable, interactable entity is chosen — nearest by
@@ -45,40 +47,78 @@ pub fn due(id: SimulationId, tick: u32) -> bool {
 pub fn find_target(
     world: &World,
     seeker: Entity,
-    gunner: Entity,
+    targets: LayerMask,
     range: u32,
 ) -> Option<SimulationId> {
-    if let Some(attacker) = fresh_attacker(world, seeker)
-        && qualifies(world, seeker, gunner, attacker, range)
+    find_target_apart_from(
+        world,
+        seeker,
+        entity_def::standing_rect(world, seeker),
+        targets,
+        range,
+        &[],
+        None,
+    )
+}
+
+/// Finds a target as [`find_target`] does, but measured from `from` rather than
+/// from the seeker, and weighing how many times each candidate already appears in
+/// `apart_from`: what nothing is on wins over what something is, and among equals
+/// the nearest to `from`, then the lower id.
+///
+/// This is how the guns on one body divide their fire, and why they measure from
+/// where each of them sits rather than from the body: each is offered what its
+/// siblings have taken so far this tick, so the gun facing a new attacker is the
+/// one that comes round on it, while a lone attacker is still answered by every
+/// gun there is — being taken already only ever loses a tie.
+///
+/// `held` is the qualifying target the seeker already works, if any. Its one
+/// effect is standing down the fresh-attacker preference: that preference is a
+/// call to arms for a gun with nothing to do, and following it while fighting
+/// would drag the swing after whoever hit last, resetting it at every scan. The
+/// ranking itself needs no such guard — it is a total order over standing facts,
+/// so a rescan that finds nothing strictly better finds what is already held.
+pub fn find_target_apart_from(
+    world: &World,
+    seeker: Entity,
+    from: CellRect,
+    targets: LayerMask,
+    range: u32,
+    apart_from: &[SimulationId],
+    held: Option<SimulationId>,
+) -> Option<SimulationId> {
+    let taken = |id: SimulationId| apart_from.iter().filter(|&&other| other == id).count();
+
+    // A fresh attacker is answered first, while nothing on this body is on it.
+    if held.is_none()
+        && let Some(attacker) = fresh_attacker(world, seeker)
+        && taken(attacker) == 0
+        && qualifies(world, seeker, targets, attacker, range)
     {
         return Some(attacker);
     }
 
-    let from = entity_def::standing_rect(world, seeker);
-    let mut best: Option<(u32, SimulationId)> = None;
+    let mut best: Option<(usize, u32, SimulationId)> = None;
     for (id, _) in world.resource::<EntityIndex>().alive_entries() {
-        if !qualifies(world, seeker, gunner, id, range) {
+        if !qualifies(world, seeker, targets, id, range) {
             continue;
         }
-        let distance = footprint_distance(world, from, id);
-        if best.is_none_or(|(best_distance, best_id)| {
-            distance < best_distance || (distance == best_distance && id < best_id)
-        }) {
-            best = Some((distance, id));
+        let rank = (taken(id), footprint_distance(world, from, id), id);
+        if best.is_none_or(|best| rank < best) {
+            best = Some(rank);
         }
     }
-    best.map(|(_, id)| id)
+    best.map(|(_, _, id)| id)
 }
 
 /// Whether `target_id` is something `seeker` may auto-engage within `range`:
 /// interactable, hostile, damageable, and with its footprint in range. Layer
-/// reach is judged by the `gunner`'s weapon — the seeker itself everywhere
-/// except a garrison, where the passenger's weapon fires from the holder's
-/// footprint.
+/// reach is judged against `targets`, which is what the weapon that would fire
+/// reaches — its bearer stands wherever the seeker does.
 pub(super) fn qualifies(
     world: &World,
     seeker: Entity,
-    gunner: Entity,
+    targets: LayerMask,
     target_id: SimulationId,
     range: u32,
 ) -> bool {
@@ -106,7 +146,7 @@ pub(super) fn qualifies(
 
     // A weapon that cannot reach the target's layers never acquires it, so a
     // melee unit ignores what flies over it instead of following it forever.
-    if !targeting::reaches(entity_def::of(world, gunner), entity_def::of(world, target)) {
+    if !targeting::reaches(targets, entity_def::of(world, target)) {
         return false;
     }
 

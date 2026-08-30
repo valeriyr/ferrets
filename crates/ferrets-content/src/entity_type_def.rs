@@ -7,14 +7,13 @@ use ferrets_math::FixedU64;
 use ferrets_pathfinder::layer_mask::LayerMask;
 
 use crate::{
-    attack::AttackDef,
+    attack::{AttackDef, Delivery, Weapon},
     build::BuilderDef,
     costs::{self, Cost},
     dying::DyingDef,
     entity_stats::EntityStatId,
     location::{LocationDef, Solidity},
     morph::MorphTransition,
-    projectile::ProjectileId,
     repair::{RepairCost, RepairRate, RepairerDef},
     research::{ResearchId, ResearcherDef},
     resource::{
@@ -22,9 +21,10 @@ use crate::{
     },
     selection::SelectionDef,
     skills::SkillId,
-    splash::{SplashDef, SplashShape},
+    splash::SplashDef,
     train::TrainerDef,
     transport::{BoardingPolicy, PassengerConduct, PassengerFate, TransporterDef},
+    turret::{TurretFire, TurretMount},
     work::WorkPresence,
 };
 
@@ -85,15 +85,14 @@ pub struct EntityTypeDef {
     /// whose type name equals the key — the "damage class" side of combat. Added
     /// before the target's armor is subtracted.
     pub bonus_damage_vs: BTreeMap<String, u32>,
-    /// How a hit is delivered. `None` lands the damage in the same tick the attack
-    /// cycle reaches its damage point.
-    pub projectile: Option<ProjectileId>,
-    /// How a hit spreads. `None` damages only the entity that was hit.
-    pub splash: Option<SplashDef>,
-    /// Non-scalar properties of this type's weapon. Required on any type with
-    /// a weapon and forbidden without one; never defaulted, so a layer added
-    /// later is never silently in anyone's reach.
+    /// The weapon the body itself points, if it has one. It turns to shoot and so
+    /// stops to; never defaulted, so a layer added later is never silently in
+    /// anyone's reach.
     pub attack: Option<AttackDef>,
+    /// The turrets it carries, and where each sits on it.
+    pub turrets: Vec<TurretMount>,
+    /// How those turrets divide the targets they find for themselves.
+    pub turret_fire: TurretFire,
     /// The in-place transitions instances can start, each naming what they
     /// become and on what terms. Empty means instances cannot morph.
     pub morphs: Vec<MorphTransition>,
@@ -156,9 +155,9 @@ impl EntityTypeDef {
             location: None,
             dying: None,
             bonus_damage_vs: BTreeMap::new(),
-            projectile: None,
-            splash: None,
             attack: None,
+            turrets: Vec::new(),
+            turret_fire: TurretFire::default(),
             morphs: Vec::new(),
             targetable: None,
             skills: Vec::new(),
@@ -203,9 +202,10 @@ impl EntityTypeDef {
             .sum()
     }
 
-    /// Whether instances can attack: they carry the [`EntityStatId::DAMAGE`] stat.
+    /// Whether instances can attack: the body points a weapon, or they carry a
+    /// turret that does.
     pub fn can_attack(&self) -> bool {
-        self.base_stats.contains_key(&EntityStatId::DAMAGE)
+        self.attack.is_some() || !self.turrets.is_empty()
     }
 
     /// Whether instances can move: they carry the [`EntityStatId::SPEED`] stat.
@@ -288,15 +288,25 @@ impl EntityTypeDef {
         self
     }
 
-    /// Enables movement for this entity type at the given speed (grid units per tick),
-    /// with a body of `radius` that resists displacement as `weight` against what it
-    /// meets.
+    /// Enables movement for this entity type at the given speed (grid units per
+    /// tick), with a body of `radius` that resists displacement as `weight`
+    /// against what it meets, whose look comes round at `turn_rate` while walking
+    /// and at `pivot_rate` while standing (both degrees a tick).
     ///
     /// Panics if `speed` is `0`.
-    pub fn with_movement(mut self, speed: FixedU64, radius: FixedU64, weight: FixedU64) -> Self {
+    pub fn with_movement(
+        mut self,
+        speed: FixedU64,
+        radius: FixedU64,
+        weight: FixedU64,
+        turn_rate: FixedU64,
+        pivot_rate: FixedU64,
+    ) -> Self {
         self.base_stats.insert(EntityStatId::SPEED, speed);
         self.base_stats.insert(EntityStatId::RADIUS, radius);
         self.base_stats.insert(EntityStatId::WEIGHT, weight);
+        self.base_stats.insert(EntityStatId::TURN_RATE, turn_rate);
+        self.base_stats.insert(EntityStatId::PIVOT_RATE, pivot_rate);
         self
     }
 
@@ -309,33 +319,68 @@ impl EntityTypeDef {
         self
     }
 
-    /// Enables attacking for this entity type. One hit removes `damage` health
-    /// points from a target within `range` grid cells; the full attack cycle is
-    /// `attack_period` ticks and the hit lands `damage_point` ticks into it.
-    /// `acquire_range` is the distance at which instances notice and engage
-    /// enemies on their own initiative.
+    /// Arms this type with the weapon `attack`, which removes `damage` health
+    /// points from a target within `range` cells on a cycle of `attack_period`
+    /// ticks whose hit lands `damage_point` ticks in, engaging on its own
+    /// initiative within `acquire_range`.
+    ///
+    /// The weapon and its numbers are no use apart, and registration refuses a
+    /// type carrying one without the other, so one call carries both. A caller
+    /// that sets the numbers itself — scripted content folds every scalar through
+    /// [`with_stat`](Self::with_stat) — states the weapon with
+    /// [`with_attack_def`](Self::with_attack_def) instead.
     pub fn with_attack(
-        mut self,
+        self,
+        attack: AttackDef,
         damage: u32,
         range: u32,
         acquire_range: u32,
         attack_period: u32,
         damage_point: u32,
     ) -> Self {
-        self.base_stats
-            .insert(EntityStatId::DAMAGE, FixedU64::from_num(damage));
-        self.base_stats
-            .insert(EntityStatId::ATTACK_RANGE, FixedU64::from_num(range));
-        self.base_stats.insert(
-            EntityStatId::ACQUIRE_RANGE,
-            FixedU64::from_num(acquire_range),
-        );
-        self.base_stats.insert(
-            EntityStatId::ATTACK_PERIOD,
-            FixedU64::from_num(attack_period),
-        );
-        self.base_stats
-            .insert(EntityStatId::DAMAGE_POINT, FixedU64::from_num(damage_point));
+        let mut def = self
+            .with_stat(EntityStatId::DAMAGE, FixedU64::from_num(damage))
+            .with_stat(EntityStatId::ATTACK_RANGE, FixedU64::from_num(range))
+            .with_stat(
+                EntityStatId::ACQUIRE_RANGE,
+                FixedU64::from_num(acquire_range),
+            )
+            .with_stat(
+                EntityStatId::ATTACK_PERIOD,
+                FixedU64::from_num(attack_period),
+            )
+            .with_stat(EntityStatId::DAMAGE_POINT, FixedU64::from_num(damage_point));
+        def.attack = Some(attack);
+        def
+    }
+
+    /// States the weapon the body itself points and nothing else: it reaches
+    /// `targets`, its hit travels as `delivery` says and spreads over `splash`.
+    /// The numbers it fights by are stats, set separately.
+    ///
+    /// Panics if `targets` is empty, which would leave the weapon unable to hit
+    /// anything at all.
+    pub fn with_attack_def(
+        mut self,
+        targets: impl Into<LayerMask>,
+        delivery: Delivery,
+        splash: Option<SplashDef>,
+    ) -> Self {
+        self.attack = Some(AttackDef::new(Weapon::new(targets, delivery, splash)));
+        self
+    }
+
+    /// Mounts `turrets` on this type, each naming a gun and the patch of the
+    /// footprint it sits on.
+    pub fn with_turrets(mut self, turrets: impl IntoIterator<Item = TurretMount>) -> Self {
+        self.turrets = turrets.into_iter().collect();
+        self
+    }
+
+    /// Sets how this type's turrets divide the targets they find for themselves
+    /// (see [`TurretFire`]).
+    pub fn with_turret_fire(mut self, turret_fire: TurretFire) -> Self {
+        self.turret_fire = turret_fire;
         self
     }
 
@@ -404,43 +449,6 @@ impl EntityTypeDef {
             assert!(!key.is_empty(), "bonus_damage_vs keys must not be empty");
             self.bonus_damage_vs.insert(key, amount);
         }
-        self
-    }
-
-    /// Delivers this type's hits as the registered projectile kind, instead of
-    /// landing them at the damage point.
-    ///
-    /// The projectile must be registered before this type — see
-    /// [`ContentRegistry::register`](crate::registry::ContentRegistry::register).
-    pub fn with_projectile(mut self, projectile: ProjectileId) -> Self {
-        self.projectile = Some(projectile);
-        self
-    }
-
-    /// Spreads this type's hits over an area: `bands` are `(radius, fraction)`
-    /// pairs in increasing radius order, `layers` the navigation layers the blast
-    /// reaches, and `friendly_fire` whether it also catches own and allied entities.
-    ///
-    /// Panics if `bands` is empty, its radii are not strictly increasing, or
-    /// `layers` is empty.
-    pub fn with_splash(
-        mut self,
-        shape: SplashShape,
-        bands: Vec<(u32, FixedU64)>,
-        layers: impl Into<LayerMask>,
-        friendly_fire: bool,
-    ) -> Self {
-        self.splash = Some(SplashDef::new(shape, bands, layers, friendly_fire));
-        self
-    }
-
-    /// Declares the navigation layers this type's weapon can reach (see
-    /// [`attack`](Self::attack)).
-    ///
-    /// Panics if `targets` is empty, which would leave the weapon unable to hit
-    /// anything at all.
-    pub fn with_targets(mut self, targets: impl Into<LayerMask>) -> Self {
-        self.attack = Some(AttackDef::new(targets));
         self
     }
 

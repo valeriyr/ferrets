@@ -179,6 +179,8 @@ fn repair_dispatch_app() -> App {
                     FixedU64::from_num(0.5),
                     FixedU64::from_num(0.5),
                     FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
                 )
                 .with_health(20)
                 .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)

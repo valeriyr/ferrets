@@ -26,15 +26,12 @@ pub fn targetable(def: &EntityTypeDef) -> LayerMask {
     })
 }
 
-/// Whether `attacker`'s weapon can reach `victim`.
+/// Whether a weapon reaching `targets` can hit `victim`.
 ///
-/// An attacker that names no layers reaches nothing. That only arises for a
-/// type with no weapon — the registry requires every armed type to declare
-/// its targets — and an unarmed type never gets past the capability checks
+/// A weapon that names no layers reaches nothing. That only arises for a type
+/// with no weapon at all — the registry requires every armed type to declare what
+/// its weapons reach — and an unarmed type never gets past the capability checks
 /// that guard every attack path, so the arm is a fail-closed residue.
-pub fn reaches(attacker: &EntityTypeDef, victim: &EntityTypeDef) -> bool {
-    match attacker.attack {
-        None => false,
-        Some(attack) => attack.targets() & targetable(victim) != LayerMask::EMPTY,
-    }
+pub fn reaches(targets: LayerMask, victim: &EntityTypeDef) -> bool {
+    targets & targetable(victim) != LayerMask::EMPTY
 }

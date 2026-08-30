@@ -2,10 +2,14 @@
 //! to any state change, and stable across builds (locked to a known xxHash64).
 
 use bevy_ecs::world::World;
-use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2, fixed_vec2::FixedVec2};
+use ferrets_math::{FixedU64, facing::Facing, fixed_uvec2::FixedUVec2};
 use ferrets_simulation::{
     checksum::state_checksum,
-    components::{health::HealthComponent, location::LocationComponent},
+    components::{
+        health::HealthComponent,
+        location::LocationComponent,
+        turret::{TurretState, TurretsComponent},
+    },
     entity_index::EntityIndex,
     resources::PlayerResources,
     simulation_id::SimulationId,
@@ -41,6 +45,29 @@ fn moving_entity_changes_checksum() {
 }
 
 #[test]
+fn turning_entity_changes_checksum() {
+    // The look is part of the state the checksum samples, so a body that has come
+    // round is a different state — which is what catches a peer whose unit turned
+    // the other way.
+    let mut turned = world(100, 30, 5);
+    face(&mut turned, Facing::NORTH);
+
+    assert_ne!(state_checksum(&world(100, 30, 5)), state_checksum(&turned));
+}
+
+#[test]
+fn aiming_gun_changes_checksum() {
+    // The bearing is state of its own: a body standing exactly where its peer's
+    // stands, with a gun round the other way, is about to shoot something else.
+    let mut aimed = world(100, 30, 5);
+    mount_gun(&mut aimed, Facing::NORTH);
+    let mut turned = world(100, 30, 5);
+    mount_gun(&mut turned, Facing::EAST);
+
+    assert_ne!(state_checksum(&aimed), state_checksum(&turned));
+}
+
+#[test]
 fn changing_health_changes_checksum() {
     assert_ne!(
         state_checksum(&world(100, 30, 5)),
@@ -66,7 +93,7 @@ fn world(gold: u32, hp: u32, x: u32) -> World {
     let mut world = World::new();
     let entity = world
         .spawn((
-            LocationComponent::new(uvec2(x, 5), FixedVec2::ZERO),
+            LocationComponent::new(uvec2(x, 5), Facing::SOUTH),
             HealthComponent::full(FixedU64::from_num(hp)),
         ))
         .id();
@@ -77,6 +104,25 @@ fn world(gold: u32, hp: u32, x: u32) -> World {
     resources.add(0, "gold", gold);
     world.insert_resource(resources);
     world
+}
+
+/// Fits the world's one entity with a gun trained on `bearing`.
+fn mount_gun(world: &mut World, bearing: Facing) {
+    let entity = world
+        .resource::<EntityIndex>()
+        .alive(SimulationId(1))
+        .expect("the world's entity");
+    world
+        .entity_mut(entity)
+        .insert(TurretsComponent(vec![TurretState::mounted(bearing)]));
+}
+
+/// Points the world's one entity a different way.
+fn face(world: &mut World, facing: Facing) {
+    let mut query = world.query::<&mut LocationComponent>();
+    for mut location in query.iter_mut(world) {
+        location.facing = facing;
+    }
 }
 
 fn uvec2(x: u32, y: u32) -> FixedUVec2 {

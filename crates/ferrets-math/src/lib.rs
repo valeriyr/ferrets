@@ -1,5 +1,7 @@
-//! Fixed-point math primitives for deterministic RTS simulation.
+//! Numeric primitives for deterministic RTS simulation: fixed-point scalars, the
+//! vectors and rectangles built from them, and the angles they point along.
 
+pub mod facing;
 pub mod fixed_rect;
 pub mod fixed_urect;
 pub mod fixed_uvec2;

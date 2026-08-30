@@ -5,7 +5,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Fixed-point math primitives for deterministic RTS simulation."
+description = "Deterministic RTS numeric primitives: fixed-point scalars, vectors, rectangles, and angles."
 
 [dependencies]
 fixed = { version = "1.31", features = ["serde"] }

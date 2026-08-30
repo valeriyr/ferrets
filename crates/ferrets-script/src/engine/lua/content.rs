@@ -1,10 +1,11 @@
 //! The content-DSL binding: `define_*` host functions and the table readers
 //! that map an entity table onto the [`EntityTypeDef`] builder.
 
-use ferrets_geometry::cell_size::CellSize;
+use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use std::{cell::RefCell, rc::Rc};
 
 use ferrets_content::{
+    attack::{Delivery, Weapon},
     costs::Cost,
     entity_buffs::EntityBuffDef,
     entity_stats::EntityStatId,
@@ -19,8 +20,10 @@ use ferrets_content::{
     skills::{
         EntityCastCost, EntityCastEffect, EntityCastTarget, PlayerCastEffect, SkillCaster, SkillDef,
     },
+    splash::SplashDef,
     stack_rule::StackRule,
     stats::{EntityModifier, ModifierOp, PlayerModifier},
+    turret::{TurretDef, TurretMount, TurretStats, WeaponConduct},
 };
 use ferrets_math::{FixedI64, FixedU64};
 use ferrets_pathfinder::layer_mask::LayerMask;
@@ -139,6 +142,16 @@ pub(super) fn register(lua: &Lua, registry: &Rc<RefCell<ContentRegistry>>) -> ml
         })?,
     )?;
 
+    let turrets = Rc::clone(registry);
+    globals.set(
+        "define_turret",
+        lua.create_function(move |_, (name, table): (String, Table)| {
+            let turret = parse_turret(&table, &turrets.borrow()).map_err(mlua::Error::external)?;
+            turrets.borrow_mut().register_turret(name, turret);
+            Ok(())
+        })?,
+    )?;
+
     let skills = Rc::clone(registry);
     globals.set(
         "define_skill",
@@ -199,13 +212,6 @@ fn build_entity(
     if let Some(stats) = optional::<Table>(table, "stats")? {
         for (stat, value) in parse_stats(&stats, registry)? {
             def = def.with_stat(stat, value);
-        }
-        // A weapon may omit its acquisition range; the attack range is the default.
-        if def.can_attack()
-            && def.base_stat(EntityStatId::ACQUIRE_RANGE).is_none()
-            && let Some(range) = def.base_stat(EntityStatId::ATTACK_RANGE)
-        {
-            def = def.with_stat(EntityStatId::ACQUIRE_RANGE, range);
         }
     }
     if let Some(dying) = optional::<Table>(table, "dying")? {
@@ -296,22 +302,27 @@ fn build_entity(
     if let Some(bonuses) = optional::<Table>(table, "bonus_damage_vs")? {
         def = def.with_bonus_damage_vs(pairs::<u32>(&bonuses, "bonus_damage_vs")?);
     }
-    if let Some(projectile) = optional::<String>(table, "projectile")? {
-        let id = registry.projectile(&projectile).ok_or_else(|| {
-            ScriptError::ContentError(format!("projectile '{projectile}' is not defined"))
-        })?;
-        def = def.with_projectile(id);
+    // One block, because a weapon is one thing the body either points or does
+    // not: what it reaches, how its hit travels, what it spreads over. The layers
+    // it reaches are required inside it — a weapon that reaches nothing could
+    // never fire, and stating the rest without them says nothing.
+    if let Some(attack) = optional::<Table>(table, "attack")? {
+        let (targets, delivery, splash) = parse_weapon(&attack, registry)?;
+        def = def.with_attack_def(targets, delivery, splash);
     }
-    if let Some(splash) = optional::<Table>(table, "splash")? {
-        let shape = required::<String>(&splash, "shape")?;
-        let shape = content::splash_shape(&shape)?;
-        let bands = splash_bands(&splash)?;
-        let layers = required::<u32>(&splash, "layers")?;
-        let friendly_fire = required_flag(&splash, "friendly_fire")?;
-        def = def.with_splash(shape, bands, LayerMask::from(layers), friendly_fire);
+    if let Some(turrets) = optional::<Vec<Table>>(table, "turrets")? {
+        def = def.with_turrets(parse_turret_mounts(turrets, registry)?);
     }
-    if let Some(targets) = optional::<u32>(table, "targets")? {
-        def = def.with_targets(LayerMask::from(targets));
+    if let Some(fire) = optional::<String>(table, "turret_fire")? {
+        def = def.with_turret_fire(content::turret_fire(&fire)?);
+    }
+    // A weapon may omit its acquisition range; the attack range is the default.
+    // Read after the weapons, since whether there is one to arm is what decides it.
+    if def.can_attack()
+        && def.base_stat(EntityStatId::ACQUIRE_RANGE).is_none()
+        && let Some(range) = def.base_stat(EntityStatId::ATTACK_RANGE)
+    {
+        def = def.with_stat(EntityStatId::ACQUIRE_RANGE, range);
     }
     if let Some(targetable) = optional::<u32>(table, "targetable")? {
         def = def.with_targetable(LayerMask::from(targetable));
@@ -393,6 +404,111 @@ fn parse_projectile(table: &Table) -> crate::Result<ProjectileDef> {
         content::fixed(&speed)?,
         content::attack_aim(&aim)?,
     ))
+}
+
+/// Reads the weapon a block states: what it reaches, how its hit travels, and
+/// what that hit spreads over. Shared by the body's own weapon and every turret's.
+fn parse_weapon(
+    table: &Table,
+    registry: &ContentRegistry,
+) -> crate::Result<(LayerMask, Delivery, Option<SplashDef>)> {
+    let targets = required::<u32>(table, "targets")?;
+    let delivery = match optional::<String>(table, "projectile")? {
+        None => Delivery::Instant,
+        Some(projectile) => {
+            let id = registry.projectile(&projectile).ok_or_else(|| {
+                ScriptError::ContentError(format!("projectile '{projectile}' is not defined"))
+            })?;
+            Delivery::Projectile(id)
+        }
+    };
+    let splash = match optional::<Table>(table, "splash")? {
+        None => None,
+        Some(splash) => {
+            let shape = required::<String>(&splash, "shape")?;
+            let shape = content::splash_shape(&shape)?;
+            let bands = splash_bands(&splash)?;
+            let layers = required::<u32>(&splash, "layers")?;
+            let friendly_fire = required_flag(&splash, "friendly_fire")?;
+            Some(SplashDef::new(
+                shape,
+                bands,
+                LayerMask::from(layers),
+                friendly_fire,
+            ))
+        }
+    };
+    Ok((LayerMask::from(targets), delivery, splash))
+}
+
+/// Reads one turret: the weapon it fires, which of the mounting type's stats each
+/// of its numbers reads, and whether it works a target while the body walks.
+fn parse_turret(table: &Table, registry: &ContentRegistry) -> crate::Result<TurretDef> {
+    let (targets, delivery, splash) = parse_weapon(table, registry)?;
+    let conduct = match optional::<String>(table, "conduct")? {
+        None => WeaponConduct::Halts,
+        Some(conduct) => content::weapon_conduct(&conduct)?,
+    };
+    let mut stats = TurretStats::default();
+    if let Some(named) = optional::<Table>(table, "stats")? {
+        for (field, slot) in [
+            ("damage", &mut stats.damage),
+            ("range", &mut stats.range),
+            ("acquire_range", &mut stats.acquire_range),
+            ("period", &mut stats.period),
+            ("damage_point", &mut stats.damage_point),
+            ("aim_rate", &mut stats.aim_rate),
+            ("arc", &mut stats.arc),
+        ] {
+            let Some(name) = optional::<String>(&named, field)? else {
+                continue;
+            };
+            *slot = registry.entity_stat(&name).ok_or_else(|| {
+                ScriptError::ContentError(format!("stat '{name}' is not defined"))
+            })?;
+        }
+    }
+    Ok(TurretDef::new(
+        Weapon::new(targets, delivery, splash),
+        stats,
+        conduct,
+    ))
+}
+
+/// Reads a type's turret mounts: which gun each is, and the patch of the
+/// footprint it sits on — `at` from the footprint's own origin, `size` in cells.
+fn parse_turret_mounts(
+    mounts: Vec<Table>,
+    registry: &ContentRegistry,
+) -> crate::Result<Vec<TurretMount>> {
+    let mut out = Vec::with_capacity(mounts.len());
+    for mount in mounts {
+        let name = required::<String>(&mount, "turret")?;
+        let turret = registry
+            .turret(&name)
+            .ok_or_else(|| ScriptError::ContentError(format!("turret '{name}' is not defined")))?;
+        let at = optional::<Table>(&mount, "at")?;
+        let origin = match at {
+            None => CellPos::new(0, 0),
+            Some(at) => CellPos::new(
+                at.get::<u32>(1)
+                    .map_err(|error| field_error("turret mount x", error))?,
+                at.get::<u32>(2)
+                    .map_err(|error| field_error("turret mount y", error))?,
+            ),
+        };
+        let size = match optional::<Table>(&mount, "size")? {
+            None => CellSize::ONE,
+            Some(size) => CellSize::new(
+                size.get::<u32>(1)
+                    .map_err(|error| field_error("turret mount width", error))?,
+                size.get::<u32>(2)
+                    .map_err(|error| field_error("turret mount height", error))?,
+            ),
+        };
+        out.push(TurretMount::new(turret, origin, size));
+    }
+    Ok(out)
 }
 
 /// Reads a splash `bands` list: an array of `{ radius, fraction }` pairs, innermost

@@ -7,6 +7,7 @@ use ferrets_content::{
     resource::DepletionPolicy,
     splash::SplashShape,
     transport::{BoardingPolicy, PassengerConduct, PassengerFate},
+    turret::{TurretFire, WeaponConduct},
     work::WorkPresence,
 };
 use ferrets_math::FixedU64;
@@ -62,6 +63,28 @@ pub(crate) fn splash_shape(value: &str) -> crate::Result<SplashShape> {
         "line" => Ok(SplashShape::Line),
         other => Err(ScriptError::ContentError(format!(
             "unknown splash shape '{other}'"
+        ))),
+    }
+}
+
+/// Maps a turret-fire name to its enum.
+pub(crate) fn turret_fire(value: &str) -> crate::Result<TurretFire> {
+    match value {
+        "focus" => Ok(TurretFire::Focus),
+        "spread" => Ok(TurretFire::Spread),
+        other => Err(ScriptError::ContentError(format!(
+            "unknown turret fire '{other}'"
+        ))),
+    }
+}
+
+/// Maps a weapon-conduct name to its enum.
+pub(crate) fn weapon_conduct(value: &str) -> crate::Result<WeaponConduct> {
+    match value {
+        "halts" => Ok(WeaponConduct::Halts),
+        "on_the_move" => Ok(WeaponConduct::OnTheMove),
+        other => Err(ScriptError::ContentError(format!(
+            "unknown weapon conduct '{other}'"
         ))),
     }
 }

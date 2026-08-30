@@ -283,15 +283,16 @@ fn only_melee_and_siege_exclude_air() {
     let air = registry.layer(map::AIR).expect("air layer is registered");
 
     // Every weapon declares its layers; what stays deliberate per type is what
-    // it leaves out. Only the axe and the shell cannot answer what flies.
+    // it leaves out. Only the axe, the shell and the wagon's flat gun cannot
+    // answer what flies.
     let grounded: Vec<&str> = registry
         .entities()
         .filter(|def| def.can_attack())
-        .filter(|def| def.attack.is_some_and(|attack| attack.targets() & air == 0))
+        .filter(|def| registry.targets_of(def) & air == 0)
         .map(|def| def.name.as_str())
         .collect();
 
-    assert_eq!(grounded, ["grunt", "mortar"]);
+    assert_eq!(grounded, ["grunt", "mortar", "war_wagon"]);
 }
 
 #[test]
@@ -306,7 +307,7 @@ fn narrowed_weapons_still_reach_lake_boss() {
         for victim in ["ship", "sea_fortress"] {
             let victim = registry.entity(victim).expect("victim is registered");
             assert!(
-                targeting::reaches(attacker, victim),
+                targeting::reaches(registry.targets_of(attacker), victim),
                 "'{}' can no longer reach '{}', so the lake boss is unfightable",
                 attacker.name,
                 victim.name
@@ -321,11 +322,17 @@ fn melee_cannot_reach_flier_but_ranged_can() {
     let flier = registry.entity("gryphon_aloft").expect("flier");
 
     assert!(
-        !targeting::reaches(registry.entity("grunt").expect("grunt"), flier),
+        !targeting::reaches(
+            registry.targets_of(registry.entity("grunt").expect("grunt")),
+            flier
+        ),
         "melee reaches the air, so taking off would never shake a pursuer"
     );
     assert!(
-        !targeting::reaches(registry.entity("mortar").expect("mortar"), flier),
+        !targeting::reaches(
+            registry.targets_of(registry.entity("mortar").expect("mortar")),
+            flier
+        ),
         "siege reaches the air, so it would shell a flier its blast cannot touch"
     );
     // The shaman is deliberately absent: it carries skills, not a weapon, so
@@ -335,7 +342,7 @@ fn melee_cannot_reach_flier_but_ranged_can() {
     for answer in ["archer", "ship", "guard_tower"] {
         let answer = registry.entity(answer).expect("anti-air is registered");
         assert!(
-            targeting::reaches(answer, flier),
+            targeting::reaches(registry.targets_of(answer), flier),
             "'{}' cannot reach a flier, so nothing on that side answers one",
             answer.name
         );

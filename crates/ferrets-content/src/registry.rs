@@ -7,17 +7,19 @@ use ferrets_math::FixedU64;
 use ferrets_pathfinder::{layer_id::LayerId, layer_mask::LayerMask};
 
 use crate::{
+    attack::{AttackDef, Delivery, Weapon},
     entity_buffs::{EntityBuffDef, EntityBuffId},
     entity_stats::{ENTITY_BUILTIN_STATS, EntityStatId},
     entity_type_def::{EntityTypeDef, EntityTypeId},
     morph::MorphTime,
     player_buffs::{PlayerBuffDef, PlayerBuffId},
     player_stats::{PLAYER_BUILTIN_STATS, PlayerStatId},
-    projectile::{ProjectileDef, ProjectileId},
+    projectile::{Aim, ProjectileDef, ProjectileId},
     repair::RepairCost,
     research::{ResearchDef, ResearchId},
     skills::{EntityCastCost, EntityCastEffect, PlayerCastEffect, SkillCaster, SkillDef, SkillId},
     tags,
+    turret::{TurretDef, TurretId, WeaponConduct},
 };
 
 /// Stores every [`EntityTypeDef`], indexed by [`EntityTypeId`] and looked up by
@@ -48,6 +50,8 @@ pub struct ContentRegistry {
     research_defs: Vec<ResearchDef>,
     projectiles: BTreeMap<String, ProjectileId>,
     projectile_defs: Vec<ProjectileDef>,
+    turrets: BTreeMap<String, TurretId>,
+    turret_defs: Vec<TurretDef>,
 }
 
 impl Default for ContentRegistry {
@@ -79,6 +83,8 @@ impl Default for ContentRegistry {
             research_defs: Vec::new(),
             projectiles: BTreeMap::new(),
             projectile_defs: Vec::new(),
+            turrets: BTreeMap::new(),
+            turret_defs: Vec::new(),
         }
     }
 }
@@ -141,16 +147,19 @@ impl ContentRegistry {
     /// builds a type that is not a registered constructible type, carries a
     /// requirement (on the type itself, a research, or a skill) that does not
     /// resolve to exactly one of: a registered entity type or tag, or a
-    /// registered research, moves on a combination of layers no registered
-    /// terrain passes, or offers a morph transition whose destination is
-    /// unregistered or an odd footprint span away, whose requirements do not
-    /// resolve, or whose costs draw from a pool the type does not have.
+    /// registered research, deals bonus damage to a name that is neither a
+    /// registered entity type nor a registered tag, moves on a combination of
+    /// layers no registered terrain passes, or offers a morph transition whose
+    /// destination is unregistered or an odd footprint span away, whose
+    /// requirements do not resolve, or whose costs draw from a pool the type does
+    /// not have.
     pub fn validate(&self) {
         for def in &self.defs {
             self.validate_trains(def);
             self.validate_builds(def);
             self.validate_carries(def);
             self.validate_requires(&format!("entity type '{}'", def.name), &def.requires);
+            self.validate_bonus_damage_vs(def);
             self.validate_traversable(def);
             self.validate_morphs(def);
         }
@@ -490,6 +499,82 @@ impl ContentRegistry {
         &self.projectile_defs[id.index()]
     }
 
+    /// Registers a turret definition by name and returns its assigned
+    /// [`TurretId`]. Ids are assigned in registration order, so identical content
+    /// registered in the same order resolves to identical ids everywhere.
+    /// Re-registering a name keeps the first definition and returns its existing id.
+    ///
+    /// Panics if `name` is empty.
+    pub fn register_turret(&mut self, name: impl Into<String>, turret: TurretDef) -> TurretId {
+        let name = name.into();
+        assert!(!name.is_empty(), "turret name must not be empty");
+
+        if let Some(&id) = self.turrets.get(&name) {
+            return id;
+        }
+
+        let id = TurretId::new(self.turret_defs.len());
+        self.turrets.insert(name, id);
+        self.turret_defs.push(turret);
+        id
+    }
+
+    /// Returns the name the given entity stat is registered under, or `None` if
+    /// the handle did not come from this registry.
+    pub fn entity_stat_name(&self, id: EntityStatId) -> Option<&str> {
+        self.entity_stats
+            .iter()
+            .find(|&(_, &stat)| stat == id)
+            .map(|(name, _)| name.as_str())
+    }
+
+    /// Returns the [`TurretId`] for the given name, or `None` if not registered.
+    pub fn turret(&self, name: &str) -> Option<TurretId> {
+        self.turrets.get(name).copied()
+    }
+
+    /// Returns the name the given turret is registered under, or `None` if the
+    /// handle did not come from this registry.
+    pub fn turret_name(&self, id: TurretId) -> Option<&str> {
+        self.turrets
+            .iter()
+            .find(|&(_, &turret)| turret == id)
+            .map(|(name, _)| name.as_str())
+    }
+
+    /// Returns the turret definition for the given handle.
+    pub fn turret_def(&self, id: TurretId) -> &TurretDef {
+        &self.turret_defs[id.index()]
+    }
+
+    /// Every weapon `def` carries: the body's own, then each turret's in mounted
+    /// order.
+    pub fn weapons_of<'a>(&'a self, def: &'a EntityTypeDef) -> impl Iterator<Item = &'a Weapon> {
+        def.attack.iter().map(AttackDef::weapon).chain(
+            def.turrets
+                .iter()
+                .map(|mount| self.turret_def(mount.turret()).weapon()),
+        )
+    }
+
+    /// Every layer the weapons `def` carries can reach between them — the body's
+    /// own and every turret's.
+    pub fn targets_of(&self, def: &EntityTypeDef) -> LayerMask {
+        self.weapons_of(def)
+            .fold(LayerMask::EMPTY, |reach, weapon| reach | weapon.targets())
+    }
+
+    /// Whether `weapon`'s shots are sent to a place rather than after a body —
+    /// the only kind of weapon that can be aimed at bare ground.
+    pub fn weapon_aims_at_cells(&self, weapon: &Weapon) -> bool {
+        match weapon.delivery() {
+            Delivery::Projectile(projectile) => {
+                self.projectile_def(projectile).aim() == Aim::Position
+            }
+            Delivery::Instant => false,
+        }
+    }
+
     /// Registers a skill definition by name and returns its assigned
     /// [`SkillId`]. Ids are assigned in registration order, so identical
     /// content registered in the same order resolves to identical ids
@@ -827,26 +912,26 @@ impl ContentRegistry {
         );
     }
 
-    /// Checks that a type's delivery configuration is usable: only an attacker can
-    /// deliver a hit at all, and a blast must reach registered layers.
+    /// Checks that a type's delivery configuration is usable: a blast must reach
+    /// registered layers.
+    ///
+    /// That only an attacker delivers anything at all needs no check: the
+    /// delivery and the blast are parts of the weapon, so a type without one
+    /// cannot state either.
     fn validate_delivery(&self, def: &EntityTypeDef) {
-        assert!(
-            def.can_attack() || (def.projectile.is_none() && def.splash.is_none()),
-            "entity type '{}' configures a projectile or splash but carries no damage stat",
-            def.name
-        );
-
-        if let Some(splash) = &def.splash {
-            let unregistered = splash.layers() & !self.registered_layers();
-            assert!(
-                unregistered == LayerMask::EMPTY,
-                "entity type '{}' splashes onto unregistered layers {unregistered}",
-                def.name
-            );
+        for weapon in self.weapons_of(def) {
+            if let Some(splash) = weapon.splash() {
+                let unregistered = splash.layers() & !self.registered_layers();
+                assert!(
+                    unregistered == LayerMask::EMPTY,
+                    "entity type '{}' splashes onto unregistered layers {unregistered}",
+                    def.name
+                );
+            }
         }
 
         for (mask, what) in [
-            (def.attack.map(|attack| attack.targets()), "targets"),
+            ((def.can_attack()).then(|| self.targets_of(def)), "targets"),
             (def.targetable, "is targetable on"),
         ] {
             let Some(mask) = mask else { continue };
@@ -934,6 +1019,27 @@ impl ContentRegistry {
         }
     }
 
+    /// Checks that every bonus a type names can ever be matched: a key stands for
+    /// a registered entity type or a registered tag, since a hit is judged against
+    /// its victim's type name and its tags and nothing else.
+    ///
+    /// A name meaning both is fine — the bonus applies once either way — which is
+    /// why this is looser than [`validate_requires`](Self::validate_requires),
+    /// where naming two things leaves the requirement genuinely unclear.
+    ///
+    /// Runs in [`validate`](Self::validate) rather than at registration, because a
+    /// bonus may name a type registered after the attacker that fears it.
+    fn validate_bonus_damage_vs(&self, def: &EntityTypeDef) {
+        for name in def.bonus_damage_vs.keys() {
+            assert!(
+                self.defs_by_name.contains_key(name) || self.tags.contains(name),
+                "entity type '{}' deals bonus damage to '{name}', which is not a \
+                 registered entity type or tag, so the bonus could never apply",
+                def.name
+            );
+        }
+    }
+
     /// Checks the engine's built-in stats: a declared pool or speed is positive (a
     /// zero would be meaningless); a stat the engine reads as a whole number is at
     /// least its floor; an attacker — one carrying the [`EntityStatId::DAMAGE`] stat —
@@ -981,8 +1087,100 @@ impl ContentRegistry {
             }
         }
 
-        if def.can_attack() {
+        // A limit nothing reads is a limit its author believes in. Each of these is
+        // read by exactly one rule, so declaring it without the thing that rule
+        // governs is an author expecting behaviour that can never happen — a gun
+        // they think slews, a body they think lines up first.
+        let bears_on_its_own = !def.turrets.is_empty();
+        for (stat, governs, missing) in [
+            (EntityStatId::DAMAGE, def.can_attack(), "has no weapon"),
+            (EntityStatId::TURN_RATE, def.can_move(), "cannot move"),
+            (EntityStatId::PIVOT_ANGLE, def.can_move(), "cannot move"),
+            (EntityStatId::ATTACK_ARC, def.can_attack(), "has no weapon"),
+            (
+                EntityStatId::AIM_RATE,
+                bears_on_its_own,
+                "carries no turret",
+            ),
+        ] {
+            assert!(
+                governs || def.base_stat(stat).is_none(),
+                "entity type '{}' declares {} but {missing}",
+                def.name,
+                ENTITY_BUILTIN_STATS[stat.index()].name,
+            );
+        }
+
+        // A gun sits on the body that carries it, so it has to fit on it — and the
+        // stats it reads have to be there to read.
+        assert!(
+            def.turrets.is_empty() || def.location.is_some(),
+            "entity type '{}' mounts turrets but has no footprint to mount them on",
+            def.name,
+        );
+        for mount in &def.turrets {
+            let turret = self.turret_def(mount.turret());
+            let footprint = def
+                .location
+                .expect("a type mounting turrets has a footprint")
+                .size();
+            let fits = mount.origin().x + mount.size().width <= footprint.width
+                && mount.origin().y + mount.size().height <= footprint.height;
+            assert!(
+                fits,
+                "entity type '{}' mounts a turret outside its own footprint",
+                def.name,
+            );
+            // A turret that shoots while the body goes about its orders needs a
+            // body that goes somewhere: on anything else the conduct is a
+            // behaviour its author expects and nothing can honour.
+            if matches!(turret.conduct(), WeaponConduct::OnTheMove) {
+                assert!(
+                    def.can_move(),
+                    "entity type '{}' carries a turret that fires on the move but cannot move",
+                    def.name,
+                );
+            }
+            for (stat, what) in [
+                (turret.stats().damage, "damage"),
+                (turret.stats().range, "range"),
+                (turret.stats().acquire_range, "acquisition range"),
+                (turret.stats().period, "cycle"),
+                (turret.stats().damage_point, "damage point"),
+            ] {
+                assert!(
+                    def.base_stat(stat).is_some(),
+                    "entity type '{}' carries a turret whose {what} reads {}, which it does not declare",
+                    def.name,
+                    self.entity_stat_name(stat)
+                        .unwrap_or("a stat it never named"),
+                );
+            }
+        }
+
+        if def.can_move() {
+            // Both rates are read every tick a body walks — one while it is
+            // moving, one while it is standing — and omitting either would leave
+            // the movement rules to guess separately at what the body can do.
+            for stat in [EntityStatId::TURN_RATE, EntityStatId::PIVOT_RATE] {
+                assert!(
+                    def.base_stat(stat).is_some(),
+                    "entity type '{}' carries the speed stat but is missing {}",
+                    def.name,
+                    ENTITY_BUILTIN_STATS[stat.index()].name,
+                );
+            }
+        }
+
+        // A body's own weapon fights by the standard numbers, so a type that
+        // points one declares them all. What a turret reads is checked against
+        // the stats that turret names, beside the mount that carries it.
+        //
+        // What a weapon reaches is required and never defaulted, which the type
+        // system now says for us: a weapon cannot be stated without its targets.
+        if def.attack.is_some() {
             for stat in [
+                EntityStatId::DAMAGE,
                 EntityStatId::ATTACK_RANGE,
                 EntityStatId::ACQUIRE_RANGE,
                 EntityStatId::ATTACK_PERIOD,
@@ -990,27 +1188,11 @@ impl ContentRegistry {
             ] {
                 assert!(
                     def.base_stat(stat).is_some(),
-                    "entity type '{}' carries the damage stat but is missing {}",
+                    "entity type '{}' points a weapon but is missing {}",
                     def.name,
                     ENTITY_BUILTIN_STATS[stat.index()].name,
                 );
             }
-            // Required, never defaulted: any default is wrong in some direction
-            // — "everything" silently arms old weapons against every layer
-            // content adds later, and "own layer" silently leaves ranged
-            // weapons unable to answer fliers. The author says where the
-            // weapon aims, exactly as splash already says where it spreads.
-            assert!(
-                def.attack.is_some(),
-                "entity type '{}' has a weapon but does not declare targets",
-                def.name,
-            );
-        } else {
-            assert!(
-                def.attack.is_none(),
-                "entity type '{}' declares targets but has no weapon to aim",
-                def.name,
-            );
         }
 
         // A regeneration rate is read through the pool it refills, so one declared

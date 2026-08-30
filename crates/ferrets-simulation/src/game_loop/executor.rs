@@ -45,7 +45,6 @@ use crate::{
 use ferrets_content::{
     costs::Cost,
     entity_stats::EntityStatId,
-    projectile::Aim,
     registry::ContentRegistry,
     research::ResearchId,
     skills::{
@@ -525,7 +524,12 @@ pub(super) fn resolve_send_to_entity(
     if hostile
         && entity_def::of(world, entity).can_attack()
         && target_ref.contains::<HealthComponent>()
-        && targeting::reaches(entity_def::of(world, entity), entity_def::of(world, target))
+        && targeting::reaches(
+            world
+                .resource::<ContentRegistry>()
+                .targets_of(entity_def::of(world, entity)),
+            entity_def::of(world, target),
+        )
     {
         return Some(Order::Attack {
             target: AttackTarget::Entity(target_id),
@@ -875,24 +879,21 @@ fn reaches_target(world: &World, attacker: Entity, target_id: SimulationId) -> b
         .interactable(world, target_id)
         .is_some_and(|target| {
             targeting::reaches(
-                entity_def::of(world, attacker),
+                world
+                    .resource::<ContentRegistry>()
+                    .targets_of(entity_def::of(world, attacker)),
                 entity_def::of(world, target),
             )
         })
 }
 
-/// Whether the entity's weapon sends its shots to a cell rather than following a
-/// target — the only kind that can be aimed at bare ground.
+/// Whether any weapon the entity carries sends its shots to a cell rather than
+/// following a target — the only kind that can be aimed at bare ground.
 fn aims_at_cells(world: &World, entity: Entity) -> bool {
-    entity_def::of(world, entity)
-        .projectile
-        .is_some_and(|projectile| {
-            world
-                .resource::<ContentRegistry>()
-                .projectile_def(projectile)
-                .aim()
-                == Aim::Position
-        })
+    let registry = world.resource::<ContentRegistry>();
+    registry
+        .weapons_of(entity_def::of(world, entity))
+        .any(|weapon| registry.weapon_aims_at_cells(weapon))
 }
 
 /// Resolves `id` if it is interactable and owned by `player`.

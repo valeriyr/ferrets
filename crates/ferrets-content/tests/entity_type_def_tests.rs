@@ -1,6 +1,8 @@
 //! Content validation: every invalid [`EntityTypeDef`] must panic at
 //! construction, not misbehave at runtime.
 
+mod utils;
+
 use ferrets_content::{
     dying::DyingDef,
     entity_stats::EntityStatId,
@@ -11,7 +13,8 @@ use ferrets_content::{
 };
 use ferrets_geometry::cell_size::CellSize;
 use ferrets_math::FixedU64;
-use ferrets_pathfinder::{layer_mask::LayerMask, nav_grid::LayerId};
+use ferrets_pathfinder::layer_mask::LayerMask;
+use utils::GROUND;
 
 //
 // ─── Happy path ───────────────────────────────────────────────────────────────
@@ -19,16 +22,17 @@ use ferrets_pathfinder::{layer_mask::LayerMask, nav_grid::LayerId};
 
 #[test]
 fn fully_loaded_definition_is_valid() {
-    let def = EntityTypeDef::new("factotum")
-        .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+    let def = utils::standing("factotum", GROUND)
         .with_movement(
             FixedU64::from_num(0.5),
             FixedU64::from_num(0.5),
             FixedU64::ONE,
+            FixedU64::from_num(360),
+            FixedU64::from_num(360),
         )
         .with_health(50)
         .with_dying(3, None)
-        .with_attack(10, 1, 1, 4, 2)
+        .with_attack(utils::weapon(GROUND), 10, 1, 1, 4, 2)
         .with_cost([("gold", 30), ("wood", 10)])
         .with_train_time(4)
         .with_build_time(6)
@@ -216,8 +220,6 @@ fn empty_bonus_key_panics() {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 //
 
-const GROUND: LayerId = LayerId::new(1);
-
 fn footman() -> EntityTypeDef {
-    EntityTypeDef::new("footman").with_location(GROUND, CellSize::ONE, Solidity::Solid)
+    utils::standing("footman", GROUND)
 }

@@ -94,6 +94,28 @@ impl EntityStatId {
     /// end of the same scale rather than an absence — a body nothing weighs
     /// against, which yields to everything and shoves nothing.
     pub const WEIGHT: EntityStatId = EntityStatId(26);
+    /// How far a walking body's look comes round toward the way it is walking, in
+    /// degrees a tick. Every mover defines one. Zero locks the look where it is;
+    /// an omitted rate is no limit at all, and the look snaps.
+    pub const TURN_RATE: EntityStatId = EntityStatId(27);
+    /// How far a body standing still comes round, in degrees a tick. Every mover
+    /// defines one, and ordinarily at least its
+    /// [`TURN_RATE`](Self::TURN_RATE): planting the feet is how a body turns
+    /// faster than it can while walking.
+    pub const PIVOT_RATE: EntityStatId = EntityStatId(28);
+    /// How far off its way a body may be looking before it plants its feet and
+    /// comes round rather than walking on, in degrees. Zero holds it until it
+    /// looks exactly where it is going; an omitted angle never holds it at all,
+    /// so it walks while the look catches up.
+    pub const PIVOT_ANGLE: EntityStatId = EntityStatId(29);
+    /// How far a weapon's own bearing comes round toward what it aims at, in
+    /// degrees a tick. Only a weapon mounted to bear independently reads it;
+    /// omitted, the bearing snaps.
+    pub const AIM_RATE: EntityStatId = EntityStatId(30);
+    /// The span a weapon fires through without coming round first, in degrees,
+    /// centred on where it points — ninety shoots forty-five either side. Zero
+    /// fires only along the bearing itself; omitted, the span is the whole circle.
+    pub const ATTACK_ARC: EntityStatId = EntityStatId(31);
 
     /// Creates an entity stat id for the given registration index.
     pub(crate) fn from_index(index: usize) -> Self {
@@ -109,7 +131,7 @@ impl EntityStatId {
 
 /// The built-in entity stats, registered first and in this order, so their
 /// assigned ids equal the [`EntityStatId`] constants above.
-pub(crate) const ENTITY_BUILTIN_STATS: [BuiltinStat<EntityStatId>; 27] = [
+pub(crate) const ENTITY_BUILTIN_STATS: [BuiltinStat<EntityStatId>; 32] = [
     // Current health settles under this ceiling, so a zero would turn any debuff
     // that reached it into an instant kill.
     stats::builtin(EntityStatId::MAX_HEALTH, "max_health", FixedU64::ONE),
@@ -172,6 +194,17 @@ pub(crate) const ENTITY_BUILTIN_STATS: [BuiltinStat<EntityStatId>; 27] = [
     // authored there or debuffed there — yields the whole separation to
     // whatever it meets and shoves nothing.
     stats::builtin(EntityStatId::WEIGHT, "weight", FixedU64::ZERO),
+    // No floor on any of the turning stats: they are fractional degrees a tick,
+    // so a whole-number floor would raise an authored half-degree rather than
+    // guard it, and zero is the tight end of each scale rather than an absence —
+    // a look that never comes round, a body that walks only dead ahead, a weapon
+    // that fires only along its bearing. What "none" means is said by omitting
+    // the stat, which is no limit rather than the tightest one.
+    stats::builtin(EntityStatId::TURN_RATE, "turn_rate", FixedU64::ZERO),
+    stats::builtin(EntityStatId::PIVOT_RATE, "pivot_rate", FixedU64::ZERO),
+    stats::builtin(EntityStatId::PIVOT_ANGLE, "pivot_angle", FixedU64::ZERO),
+    stats::builtin(EntityStatId::AIM_RATE, "aim_rate", FixedU64::ZERO),
+    stats::builtin(EntityStatId::ATTACK_ARC, "attack_arc", FixedU64::ZERO),
 ];
 
 // Floors and names are looked up by `EntityStatId::index`, so every entry must sit at

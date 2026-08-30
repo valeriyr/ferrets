@@ -10,6 +10,7 @@ use ferrets_simulation::{
     command::PlayerCommand,
     components::{
         health::HealthComponent,
+        order_queue::OrderQueueComponent,
         stance::{Stance, StanceComponent},
     },
     session::GameSession,
@@ -91,7 +92,7 @@ fn set_stance_applies_to_owned_selection_only() {
 /// rounds away — so nothing is acquired, or the leashed order gives up on its
 /// first tick.
 #[test]
-fn ground_held_part_way_across_cells_engages_what_it_stands_within_reach_of() {
+fn ground_held_part_way_across_cells_engages_what_its_reach_covers() {
     let mut app = utils::continuous_orders_app();
     let (sentry, sentry_id) = utils::spawn_owned(&mut app, "sentry", 12, 8, 0);
 
@@ -324,6 +325,26 @@ fn stale_attacker_is_not_preferred_over_nearer_target() {
         world.get::<HealthComponent>(attacker).unwrap().current(),
         30,
         "the stale attacker was untouched"
+    );
+}
+
+#[test]
+fn body_engages_only_what_its_own_weapon_reaches() {
+    // A post whose weapon answers the ground and whose gun answers the air, with
+    // nothing but a flier in front of it: the body has no fight to take, so it
+    // takes none — its gun answers for itself (see the turret tests).
+    let mut app = utils::combat_app();
+    let world = app.world_mut();
+    let (post, _) = spawn::spawn_entity(world, "flak_post", utils::pos(5, 5), Some(0)).unwrap();
+    spawn::spawn_entity(world, "kite", utils::pos(5, 3), Some(1)).unwrap();
+
+    utils::run_ticks(&mut app, 16);
+
+    assert!(
+        app.world()
+            .get::<OrderQueueComponent>(post)
+            .is_none_or(|queue| queue.front().is_none()),
+        "the body took up a fight its own weapon cannot land a hit in"
     );
 }
 

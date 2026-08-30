@@ -176,7 +176,8 @@ fn flier_routes_around_tall_building() {
     .expect("the fortress stands");
 
     let start = (44, 47);
-    let goal = (50, 47);
+    // Clear of the keep's own five cells, which start at its corner.
+    let goal = (53, 47);
     let (flier, _) = spawn::spawn_entity(
         app.world_mut(),
         "gryphon_aloft",

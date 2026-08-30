@@ -7,6 +7,7 @@ use ferrets_bevy_plugin::{
     NetworkPlugin, NominalTimestep, PendingInput, SimulationPlugin, TickPacing, replay,
 };
 use ferrets_content::{
+    attack::{AttackDef, Delivery, Weapon},
     costs,
     entity_buffs::{EntityBuffDef, EntityBuffId},
     entity_stats::EntityStatId,
@@ -14,21 +15,25 @@ use ferrets_content::{
     location::Solidity,
     morph::{MorphCancel, MorphPlacement, MorphTime, MorphTransition},
     player_buffs::PlayerBuffDef,
+    projectile::{Aim, ProjectileDef},
     registry::ContentRegistry,
     research::{ResearchDef, ResearchId},
     resource::{DepletionPolicy, HarvestData},
     skills::{EntityCastCost, PlayerCastEffect, SkillCaster, SkillDef},
-    splash::SplashShape,
+    splash::{SplashDef, SplashShape},
     stack_rule::StackRule,
     stats::{EntityModifier, ModifierOp},
     transport::{BoardingPolicy, PassengerConduct, PassengerFate},
+    turret::{TurretDef, TurretFire, TurretMount, TurretStats, WeaponConduct},
     work::WorkPresence,
 };
 use ferrets_geometry::{
     cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize, projection::Projection,
 };
 
-use ferrets_math::{FixedI64, FixedU64, fixed_uvec2::FixedUVec2, fixed_vec2::FixedVec2};
+use ferrets_math::{
+    FixedI64, FixedU64, facing::Facing, fixed_uvec2::FixedUVec2, fixed_vec2::FixedVec2,
+};
 use ferrets_network::{
     role::Role,
     roster::Roster,
@@ -36,6 +41,7 @@ use ferrets_network::{
     transport::{NetworkTransport, loopback::LoopbackTransport},
 };
 use ferrets_pathfinder::{
+    layer_mask::LayerMask,
     mover_shape::MoverShape,
     nav_grid::{LayerId, NavGrid},
 };
@@ -57,6 +63,7 @@ use ferrets_simulation::{
         pending_reveal::PendingRevealComponent,
         train::TrainQueueComponent,
         transport::TransporterComponent,
+        turret::TurretsComponent,
     },
     entity_def,
     input::{InputFrames, PlayerFrame},
@@ -83,6 +90,17 @@ use ferrets_simulation::{
 pub const GROUND_LAYER: &str = "ground";
 /// The id [`GROUND_LAYER`] resolves to — it is the first registered layer.
 pub const GROUND: LayerId = LayerId::new(1);
+/// The layer fliers occupy, registered by [`combat_app`] alone: only the tests
+/// about which weapon may answer what need a second one.
+pub const AIR_LAYER: &str = "air";
+/// The id [`AIR_LAYER`] resolves to where it is registered.
+pub const AIR: LayerId = LayerId::new(2);
+
+/// A body weapon reaching `targets` that lands its hit where it stands — the
+/// plainest one there is, for fixtures about anything but the weapon.
+pub fn weapon(targets: impl Into<LayerMask>) -> AttackDef {
+    AttackDef::new(Weapon::new(targets, Delivery::Instant, None))
+}
 
 /// Creates an app with the simulation plugin on a 32×32 single-layer map,
 /// with player slot `0` as the local player.
@@ -259,11 +277,12 @@ pub fn selection_app() -> App {
                     FixedU64::from_num(0.5),
                     FixedU64::from_num(0.5),
                     FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
                 )
                 .with_health(30)
                 .with_dying(1, None)
-                .with_attack(10, 1, 3, 2, 1)
-                .with_targets(GROUND)
+                .with_attack(weapon(GROUND), 10, 1, 3, 2, 1)
                 .with_sight_range(5),
         );
         registry.register(
@@ -314,6 +333,8 @@ pub fn cell_crowd_app() -> App {
                     FixedU64::from_num(0.5),
                     FixedU64::from_num(0.5),
                     FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
                 )
                 .with_health(30)
                 .with_dying(2, None),
@@ -321,7 +342,13 @@ pub fn cell_crowd_app() -> App {
         registry.register(
             EntityTypeDef::new("wagon")
                 .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.3), FixedU64::ONE, FixedU64::ONE)
+                .with_movement(
+                    FixedU64::from_num(0.3),
+                    FixedU64::ONE,
+                    FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
+                )
                 .with_health(60)
                 .with_dying(2, None),
         );
@@ -350,6 +377,8 @@ pub fn morph_app(model: MovementModel) -> App {
                     FixedU64::from_num(0.5),
                     FixedU64::from_num(0.5),
                     FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
                 )
                 .with_health(30)
                 .with_dying(2, None)
@@ -385,7 +414,13 @@ pub fn morph_app(model: MovementModel) -> App {
         registry.register(
             EntityTypeDef::new("giant")
                 .with_location(GROUND, CellSize::new(3, 3), Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.3), FixedU64::ONE, FixedU64::ONE)
+                .with_movement(
+                    FixedU64::from_num(0.3),
+                    FixedU64::ONE,
+                    FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
+                )
                 .with_health(60)
                 .with_dying(2, None),
         );
@@ -396,6 +431,8 @@ pub fn morph_app(model: MovementModel) -> App {
                     FixedU64::from_num(0.5),
                     FixedU64::from_num(0.5),
                     FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
                 )
                 .with_health(10)
                 .with_dying(2, None),
@@ -407,6 +444,8 @@ pub fn morph_app(model: MovementModel) -> App {
                     FixedU64::from_num(0.5),
                     FixedU64::from_num(0.5),
                     FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
                 )
                 .with_morphs([MorphTransition::new(
                     "whelp",
@@ -439,7 +478,13 @@ pub fn morph_app(model: MovementModel) -> App {
         registry.register(
             EntityTypeDef::new("golem")
                 .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.3), FixedU64::ONE, FixedU64::ONE)
+                .with_movement(
+                    FixedU64::from_num(0.3),
+                    FixedU64::ONE,
+                    FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
+                )
                 .with_health(50)
                 .with_dying(2, None),
         );
@@ -515,14 +560,29 @@ pub fn assert_despawned(world: &mut World, entity: Entity) {
 }
 
 /// The cell the entity currently stands on.
-pub fn cell_of(world: &mut World, entity: Entity) -> CellPos {
+pub fn cell_of(world: &World, entity: Entity) -> CellPos {
     CellPos::from(position_of(world, entity))
 }
 
 /// The entity's continuous position — sub-cell precise, where [`cell_of`]
 /// floors it to a cell.
-pub fn position_of(world: &mut World, entity: Entity) -> FixedUVec2 {
+pub fn position_of(world: &World, entity: Entity) -> FixedUVec2 {
     world.get::<LocationComponent>(entity).unwrap().position
+}
+
+/// Which way the entity's body points. A gun the body carries keeps a bearing of
+/// its own, which this is not.
+pub fn facing_of(world: &World, entity: Entity) -> Facing {
+    world.get::<LocationComponent>(entity).unwrap().facing
+}
+
+/// Where the entity's first mounted gun is trained.
+pub fn bearing_of(world: &World, entity: Entity) -> Facing {
+    world
+        .get::<TurretsComponent>(entity)
+        .expect("a turreted entity carries the bearings its guns are trained at")
+        .0[0]
+        .bearing
 }
 
 /// Marks or clears every cell of the map's ground layer, used to box a worker in.
@@ -757,10 +817,13 @@ pub fn install_chokepoint_map(app: &mut App) {
 }
 
 /// App with the combat content roster — an attacking soldier (50 hp, 3-tick
-/// dying phase) and an immobile dummy that leaves decaying bones — one human
-/// player, session started.
+/// dying phase) and an immobile dummy that leaves decaying bones — two human
+/// players so a target can be owned and hostile, session started.
 pub fn combat_app() -> App {
-    let mut app = make_app(vec![PlayerSlot::occupied(0, PlayerType::Human, None, None)]);
+    let mut app = make_app(vec![
+        PlayerSlot::occupied(0, PlayerType::Human, None, None),
+        PlayerSlot::occupied(1, PlayerType::Human, None, None),
+    ]);
 
     {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
@@ -771,11 +834,396 @@ pub fn combat_app() -> App {
                     FixedU64::from_num(0.5),
                     FixedU64::from_num(0.5),
                     FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
                 )
                 .with_health(50)
                 .with_dying(3, None)
-                .with_attack(10, 1, 1, 4, 2)
-                .with_targets(GROUND),
+                .with_attack(weapon(GROUND), 10, 1, 1, 4, 2),
+        );
+        // A gun on a turret: it never moves and never turns, and what comes round
+        // is the weapon, slowly, through a narrow arc. It notices further than it
+        // shoots, so it starts coming round while a target is still closing.
+        // The bastion declares no sight of its own — acquisition reads the fog
+        // grid, so a test that wants it hunting unordered must give it eyes first.
+        let keep_gun = registry.register_turret(
+            "keep_gun",
+            TurretDef::new(
+                Weapon::new(GROUND, Delivery::Instant, None),
+                TurretStats::default(),
+                WeaponConduct::Halts,
+            ),
+        );
+        registry.register(
+            EntityTypeDef::new("bastion")
+                .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
+                .with_health(200)
+                .with_stat(EntityStatId::AIM_RATE, FixedU64::from_num(3))
+                .with_stat(EntityStatId::ATTACK_ARC, FixedU64::from_num(60))
+                .with_stat(EntityStatId::DAMAGE, FixedU64::from_num(30))
+                .with_stat(EntityStatId::ATTACK_RANGE, FixedU64::from_num(8))
+                .with_stat(EntityStatId::ACQUIRE_RANGE, FixedU64::from_num(12))
+                .with_stat(EntityStatId::ATTACK_PERIOD, FixedU64::from_num(4))
+                .with_stat(EntityStatId::DAMAGE_POINT, FixedU64::from_num(1))
+                .with_turrets([TurretMount::new(
+                    keep_gun,
+                    CellPos::new(0, 0),
+                    CellSize::new(2, 2),
+                )]),
+        );
+        // A gun on wheels: it walks like a unit and aims like a turret, which is
+        // the one combination where a hull's heading and a gun's bearing must not
+        // be the same value.
+        let wagon_gun = registry.register_turret(
+            "wagon_gun",
+            TurretDef::new(
+                Weapon::new(GROUND, Delivery::Instant, None),
+                TurretStats::default(),
+                WeaponConduct::Halts,
+            ),
+        );
+        registry.register(
+            EntityTypeDef::new("gun_wagon")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
+                )
+                .with_health(40)
+                .with_sight_range(10)
+                .with_stat(EntityStatId::AIM_RATE, FixedU64::from_num(30))
+                .with_stat(EntityStatId::DAMAGE, FixedU64::from_num(10))
+                .with_stat(EntityStatId::ATTACK_RANGE, FixedU64::from_num(4))
+                .with_stat(EntityStatId::ACQUIRE_RANGE, FixedU64::from_num(8))
+                .with_stat(EntityStatId::ATTACK_PERIOD, FixedU64::from_num(6))
+                .with_stat(EntityStatId::DAMAGE_POINT, FixedU64::from_num(3))
+                .with_turrets([TurretMount::new(
+                    wagon_gun,
+                    CellPos::new(0, 0),
+                    CellSize::ONE,
+                )]),
+        );
+        // The same gun on wheels, authored to fight while the wheels are under
+        // orders: this is the one gun in the fixtures that does not stop to
+        // shoot, so it is what firing on the move is read against.
+        let rolling_gun = registry.register_turret(
+            "rolling_gun_mount",
+            TurretDef::new(
+                Weapon::new(GROUND, Delivery::Instant, None),
+                TurretStats::default(),
+                WeaponConduct::OnTheMove,
+            ),
+        );
+        registry.register(
+            EntityTypeDef::new("rolling_gun")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
+                )
+                .with_health(40)
+                // Sight wider than the range it engages at, so what it engages is
+                // something it can see — acquisition reads the fog grid.
+                .with_sight_range(10)
+                .with_stat(EntityStatId::AIM_RATE, FixedU64::from_num(30))
+                .with_stat(EntityStatId::ATTACK_ARC, FixedU64::from_num(60))
+                .with_stat(EntityStatId::DAMAGE, FixedU64::from_num(10))
+                .with_stat(EntityStatId::ATTACK_RANGE, FixedU64::from_num(4))
+                .with_stat(EntityStatId::ACQUIRE_RANGE, FixedU64::from_num(8))
+                .with_stat(EntityStatId::ATTACK_PERIOD, FixedU64::from_num(6))
+                .with_stat(EntityStatId::DAMAGE_POINT, FixedU64::from_num(3))
+                .with_turrets([TurretMount::new(
+                    rolling_gun,
+                    CellPos::new(0, 0),
+                    CellSize::ONE,
+                )]),
+        );
+        // The same again, throwing a shell at where it aims rather than at what it
+        // aims at — the one kind of weapon that can be pointed at bare ground, and
+        // so the one that can be told to shoot a place while a gun is fighting on
+        // the move.
+        let lob = registry.register_projectile(
+            "lob",
+            ProjectileDef::new(FixedU64::from_num(2), Aim::Position),
+        );
+        let rolling_lob = registry.register_turret(
+            "rolling_lob",
+            TurretDef::new(
+                Weapon::new(
+                    GROUND,
+                    Delivery::Projectile(lob),
+                    Some(SplashDef::new(
+                        SplashShape::Circular,
+                        vec![(1, FixedU64::ONE)],
+                        GROUND,
+                        true,
+                    )),
+                ),
+                TurretStats::default(),
+                WeaponConduct::OnTheMove,
+            ),
+        );
+        registry.register(
+            EntityTypeDef::new("rolling_mortar")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
+                )
+                .with_health(40)
+                .with_sight_range(10)
+                .with_stat(EntityStatId::AIM_RATE, FixedU64::from_num(360))
+                .with_stat(EntityStatId::DAMAGE, FixedU64::from_num(10))
+                .with_stat(EntityStatId::ATTACK_RANGE, FixedU64::from_num(6))
+                .with_stat(EntityStatId::ACQUIRE_RANGE, FixedU64::from_num(8))
+                .with_stat(EntityStatId::ATTACK_PERIOD, FixedU64::from_num(6))
+                .with_stat(EntityStatId::DAMAGE_POINT, FixedU64::from_num(3))
+                .with_turrets([TurretMount::new(
+                    rolling_lob,
+                    CellPos::new(0, 0),
+                    CellSize::ONE,
+                )]),
+        );
+        // A keep with a gun at each corner, all reading the same numbers: what
+        // several guns on one body do about several attackers is the question
+        // they exist to answer. Its guns come round at once, so a test about
+        // targets is not also a test about turning.
+        let keeps: Vec<(&str, TurretFire)> = vec![
+            ("spreading_keep", TurretFire::Spread),
+            ("focused_keep", TurretFire::Focus),
+        ];
+        for (name, fire) in keeps {
+            registry.register(
+                EntityTypeDef::new(name)
+                    .with_location(GROUND, CellSize::new(5, 5), Solidity::Solid)
+                    .with_health(300)
+                    .with_sight_range(14)
+                    .with_stat(EntityStatId::AIM_RATE, FixedU64::from_num(360))
+                    .with_stat(EntityStatId::DAMAGE, FixedU64::from_num(10))
+                    .with_stat(EntityStatId::ATTACK_RANGE, FixedU64::from_num(8))
+                    .with_stat(EntityStatId::ACQUIRE_RANGE, FixedU64::from_num(10))
+                    .with_stat(EntityStatId::ATTACK_PERIOD, FixedU64::from_num(6))
+                    .with_stat(EntityStatId::DAMAGE_POINT, FixedU64::from_num(3))
+                    .with_turrets([
+                        TurretMount::new(keep_gun, CellPos::new(0, 0), CellSize::new(2, 2)),
+                        TurretMount::new(keep_gun, CellPos::new(3, 0), CellSize::new(2, 2)),
+                        TurretMount::new(keep_gun, CellPos::new(0, 3), CellSize::new(2, 2)),
+                        TurretMount::new(keep_gun, CellPos::new(3, 3), CellSize::new(2, 2)),
+                    ])
+                    .with_turret_fire(fire),
+            );
+        }
+        assert_eq!(registry.register_layer(AIR_LAYER), AIR);
+        // A gun that answers only what flies, for the body that carries one
+        // alongside a weapon of its own.
+        let flak = registry.register_turret(
+            "flak",
+            TurretDef::new(
+                Weapon::new(AIR, Delivery::Instant, None),
+                TurretStats::default(),
+                WeaponConduct::Halts,
+            ),
+        );
+        // Bodies that point a weapon and carry a gun as well — the fixtures where
+        // both kinds fight at once. The gunship's gun answers the same ground its
+        // own weapon does; the flak post's answers only the air its weapon cannot.
+        for (name, gun) in [("gunship", keep_gun), ("flak_post", flak)] {
+            registry.register(
+                EntityTypeDef::new(name)
+                    .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                    .with_health(60)
+                    .with_sight_range(10)
+                    .with_stat(EntityStatId::AIM_RATE, FixedU64::from_num(360))
+                    .with_attack(weapon(GROUND), 10, 4, 8, 6, 3)
+                    .with_turrets([TurretMount::new(gun, CellPos::new(0, 0), CellSize::ONE)]),
+            );
+        }
+        // Something that flies, answerable only on the air layer.
+        registry.register(
+            EntityTypeDef::new("kite")
+                .with_location(GROUND, CellSize::ONE, Solidity::Passable)
+                .with_targetable(AIR)
+                .with_health(30)
+                .with_dying(3, None),
+        );
+        // A keep with one gun on its far corner, throwing something slow enough to
+        // watch: where a shot leaves from is only visible while it is in the air.
+        let corner_gun = registry.register_turret(
+            "corner_gun",
+            TurretDef::new(
+                Weapon::new(GROUND, Delivery::Projectile(lob), None),
+                TurretStats::default(),
+                WeaponConduct::Halts,
+            ),
+        );
+        registry.register(
+            EntityTypeDef::new("shell_keep")
+                .with_location(GROUND, CellSize::new(5, 5), Solidity::Solid)
+                .with_health(300)
+                .with_sight_range(14)
+                .with_stat(EntityStatId::AIM_RATE, FixedU64::from_num(360))
+                .with_stat(EntityStatId::DAMAGE, FixedU64::from_num(10))
+                .with_stat(EntityStatId::ATTACK_RANGE, FixedU64::from_num(8))
+                .with_stat(EntityStatId::ACQUIRE_RANGE, FixedU64::from_num(10))
+                .with_stat(EntityStatId::ATTACK_PERIOD, FixedU64::from_num(6))
+                .with_stat(EntityStatId::DAMAGE_POINT, FixedU64::from_num(3))
+                .with_turrets([TurretMount::new(
+                    corner_gun,
+                    CellPos::new(3, 3),
+                    CellSize::new(2, 2),
+                )]),
+        );
+        // A body pointing a short spear beside a far-reaching gun: the gun reads
+        // a range stat of its own, four times the spear's, so an order arriving
+        // at the body's longest reach has not put its own weapon in range.
+        let gun_range = registry.register_entity_stat("gun_range");
+        let long_gun = registry.register_turret(
+            "long_gun",
+            TurretDef::new(
+                Weapon::new(GROUND, Delivery::Instant, None),
+                TurretStats {
+                    range: gun_range,
+                    ..TurretStats::default()
+                },
+                WeaponConduct::Halts,
+            ),
+        );
+        registry.register(
+            EntityTypeDef::new("longarm")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_health(60)
+                .with_sight_range(12)
+                .with_attack(weapon(GROUND), 10, 2, 8, 6, 3)
+                .with_stat(gun_range, FixedU64::from_num(8))
+                .with_turrets([TurretMount::new(
+                    long_gun,
+                    CellPos::new(0, 0),
+                    CellSize::ONE,
+                )]),
+        );
+        // A body throwing at bodies beside a gun throwing at places, and the
+        // mirror of it: an ordered bare cell binds only the weapon whose shots
+        // are sent to one.
+        registry.register(
+            EntityTypeDef::new("bombardier")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_health(60)
+                .with_sight_range(12)
+                .with_attack(weapon(GROUND), 10, 4, 8, 6, 3)
+                .with_turrets([TurretMount::new(
+                    corner_gun,
+                    CellPos::new(0, 0),
+                    CellSize::ONE,
+                )]),
+        );
+        registry.register(
+            EntityTypeDef::new("battery")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_health(60)
+                .with_sight_range(12)
+                .with_attack(
+                    AttackDef::new(Weapon::new(GROUND, Delivery::Projectile(lob), None)),
+                    10,
+                    4,
+                    8,
+                    6,
+                    3,
+                )
+                .with_turrets([TurretMount::new(
+                    keep_gun,
+                    CellPos::new(0, 0),
+                    CellSize::ONE,
+                )]),
+        );
+        // A mover fighting only from a gun that names its own acquisition stat,
+        // so the type legally declares no acquire_range: what an attack-move
+        // stops for has to be asked of every weapon rather than of the body.
+        let prowl_notice = registry.register_entity_stat("prowl_notice");
+        let prowl_gun = registry.register_turret(
+            "prowl_gun",
+            TurretDef::new(
+                Weapon::new(GROUND, Delivery::Instant, None),
+                TurretStats {
+                    acquire_range: prowl_notice,
+                    ..TurretStats::default()
+                },
+                WeaponConduct::Halts,
+            ),
+        );
+        registry.register(
+            EntityTypeDef::new("prowler")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
+                )
+                .with_health(40)
+                .with_sight_range(10)
+                .with_stat(EntityStatId::DAMAGE, FixedU64::from_num(10))
+                .with_stat(EntityStatId::ATTACK_RANGE, FixedU64::from_num(4))
+                .with_stat(prowl_notice, FixedU64::from_num(6))
+                .with_stat(EntityStatId::ATTACK_PERIOD, FixedU64::from_num(6))
+                .with_stat(EntityStatId::DAMAGE_POINT, FixedU64::from_num(3))
+                .with_turrets([TurretMount::new(
+                    prowl_gun,
+                    CellPos::new(0, 0),
+                    CellSize::ONE,
+                )]),
+        );
+        // A short spear under a long anti-air gun, on wheels: what an ordered
+        // attack closes to has to be asked of the weapon that can serve the
+        // target, or the long gun's reach would park the body out of the spear's.
+        let anti_air_range = registry.register_entity_stat("anti_air_range");
+        let anti_air_gun = registry.register_turret(
+            "anti_air_gun",
+            TurretDef::new(
+                Weapon::new(AIR, Delivery::Instant, None),
+                TurretStats {
+                    range: anti_air_range,
+                    ..TurretStats::default()
+                },
+                WeaponConduct::Halts,
+            ),
+        );
+        registry.register(
+            EntityTypeDef::new("escort")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
+                )
+                .with_health(40)
+                .with_sight_range(12)
+                .with_attack(weapon(GROUND), 10, 2, 8, 6, 3)
+                .with_stat(anti_air_range, FixedU64::from_num(10))
+                .with_turrets([TurretMount::new(
+                    anti_air_gun,
+                    CellPos::new(0, 0),
+                    CellSize::ONE,
+                )]),
+        );
+        // Something to shoot at that outlasts the shooting: four guns on one keep
+        // kill a dummy before a test can look at what they were working.
+        registry.register(
+            EntityTypeDef::new("hulk")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_health(500)
+                .with_dying(3, None),
         );
         // Registered before `dummy`, which leaves it as a corpse.
         registry.register(
@@ -794,11 +1242,16 @@ pub fn combat_app() -> App {
         registry.register(
             EntityTypeDef::new("ballista")
                 .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5), FixedU64::ONE, FixedU64::ONE)
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                    FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
+                )
                 .with_health(80)
                 .with_dying(3, None)
-                .with_attack(10, 2, 2, 4, 2)
-                .with_targets(GROUND),
+                .with_attack(weapon(GROUND), 10, 2, 2, 4, 2),
         );
     }
     app.world_mut().resource::<ContentRegistry>().validate();
@@ -865,6 +1318,8 @@ pub fn supply_app() -> App {
                     FixedU64::from_num(0.5),
                     FixedU64::from_num(0.5),
                     FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
                 )
                 .with_health(20)
                 .with_dying(2, None)
@@ -889,6 +1344,8 @@ pub fn supply_app() -> App {
                     FixedU64::from_num(0.5),
                     FixedU64::from_num(0.5),
                     FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
                 )
                 .with_health(20)
                 .with_dying(2, None)
@@ -919,6 +1376,8 @@ pub fn player_effects_app() -> App {
                     FixedU64::from_num(0.5),
                     FixedU64::from_num(0.5),
                     FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
                 )
                 .with_health(20)
                 .with_dying(2, None),
@@ -997,11 +1456,12 @@ pub fn research_app() -> App {
                     FixedU64::from_num(0.5),
                     FixedU64::from_num(0.5),
                     FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
                 )
                 .with_health(30)
                 .with_dying(2, None)
-                .with_attack(10, 1, 1, 4, 2)
-                .with_targets(GROUND)
+                .with_attack(weapon(GROUND), 10, 1, 1, 4, 2)
                 .with_cost([("gold", 10)])
                 .with_train_time(5)
         };
@@ -1051,11 +1511,12 @@ pub fn transport_app() -> App {
                     FixedU64::from_num(0.5),
                     FixedU64::from_num(0.5),
                     FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
                 )
                 .with_health(30)
                 .with_dying(2, None)
-                .with_attack(10, 3, 5, 4, 2)
-                .with_targets(GROUND)
+                .with_attack(weapon(GROUND), 10, 3, 5, 4, 2)
                 .with_sight_range(8)
                 .with_tags(["infantry"])
                 .with_stat(EntityStatId::CARGO_SIZE, FixedU64::ONE),
@@ -1067,6 +1528,8 @@ pub fn transport_app() -> App {
                     FixedU64::from_num(0.5),
                     FixedU64::from_num(0.5),
                     FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
                 )
                 .with_health(20)
                 .with_dying(2, None)
@@ -1080,6 +1543,8 @@ pub fn transport_app() -> App {
                     FixedU64::from_num(0.5),
                     FixedU64::from_num(0.5),
                     FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
                 )
                 .with_health(20)
                 .with_dying(2, None)
@@ -1092,6 +1557,8 @@ pub fn transport_app() -> App {
                     FixedU64::from_num(0.5),
                     FixedU64::from_num(0.5),
                     FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
                 )
                 .with_health(60)
                 .with_dying(2, None)
@@ -1109,6 +1576,49 @@ pub fn transport_app() -> App {
         };
         registry.register(carrier("wagon", BoardingPolicy::Own));
         registry.register(carrier("ferry", BoardingPolicy::Allies));
+        // A rider whose only weapon is a turret, for the rule that a passenger
+        // fights with what it points itself: a turret is mounted on a body that
+        // stands somewhere, and a passenger stands nowhere.
+        // Its gun reads a stat of its own, the way content declares one for a
+        // second weapon: a body weapon's numbers are not there to be read.
+        let rider_damage = registry.register_entity_stat("rider_damage");
+        let rider_gun = registry.register_turret(
+            "rider_gun",
+            TurretDef::new(
+                Weapon::new(GROUND, Delivery::Instant, None),
+                TurretStats {
+                    damage: rider_damage,
+                    ..TurretStats::default()
+                },
+                WeaponConduct::Halts,
+            ),
+        );
+        registry.register(
+            EntityTypeDef::new("gun_rider")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
+                )
+                .with_health(30)
+                .with_dying(2, None)
+                .with_sight_range(8)
+                .with_stat(EntityStatId::AIM_RATE, FixedU64::from_num(360))
+                .with_stat(rider_damage, FixedU64::from_num(10))
+                .with_stat(EntityStatId::ATTACK_RANGE, FixedU64::from_num(3))
+                .with_stat(EntityStatId::ACQUIRE_RANGE, FixedU64::from_num(5))
+                .with_stat(EntityStatId::ATTACK_PERIOD, FixedU64::from_num(4))
+                .with_stat(EntityStatId::DAMAGE_POINT, FixedU64::from_num(2))
+                .with_stat(EntityStatId::CARGO_SIZE, FixedU64::ONE)
+                .with_turrets([TurretMount::new(
+                    rider_gun,
+                    CellPos::new(0, 0),
+                    CellSize::ONE,
+                )]),
+        );
         registry.register(
             EntityTypeDef::new("bunker")
                 .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
@@ -1121,7 +1631,7 @@ pub fn transport_app() -> App {
                 .with_stat(EntityStatId::LOAD_PERIOD, FixedU64::ZERO)
                 .with_stat(EntityStatId::UNLOAD_PERIOD, FixedU64::ZERO)
                 .with_transporter(
-                    ["rifleman"],
+                    ["rifleman", "gun_rider"],
                     BoardingPolicy::Own,
                     PassengerFate::Eject,
                     PassengerConduct::Fight,
@@ -1132,14 +1642,23 @@ pub fn transport_app() -> App {
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
                 .with_health(40)
                 .with_dying(2, None)
-                .with_attack(20, 6, 6, 4, 2)
-                .with_targets(GROUND)
                 .with_sight_range(10)
-                .with_splash(
-                    SplashShape::Circular,
-                    vec![(2, FixedU64::from_num(0.5))],
-                    GROUND,
-                    true,
+                .with_attack(
+                    AttackDef::new(Weapon::new(
+                        GROUND,
+                        Delivery::Instant,
+                        Some(SplashDef::new(
+                            SplashShape::Circular,
+                            vec![(2, FixedU64::from_num(0.5))],
+                            GROUND,
+                            true,
+                        )),
+                    )),
+                    20,
+                    6,
+                    6,
+                    4,
+                    2,
                 ),
         );
     }
@@ -1167,12 +1686,64 @@ pub fn corner_app() -> App {
                     FixedU64::from_num(0.3),
                     FixedU64::from_num(0.5),
                     FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
                 )
                 .with_health(20),
         );
     }
     app.world_mut().resource::<ContentRegistry>().validate();
     app.world_mut().resource_mut::<GameSession>().start();
+    app
+}
+
+/// App on the continuous model with two movers that differ only in whether they
+/// line up before walking: `nimble` comes round as it goes, while `ponderous`
+/// declares a pivot angle and so plants its feet for anything past a right angle.
+/// Both come round slowly enough to watch, and the ponderous one slowly enough
+/// that a turn outlasts the stall clock several times over. One human player,
+/// session started.
+pub fn turning_app() -> App {
+    let mut app = make_app(vec![PlayerSlot::occupied(0, PlayerType::Human, None, None)]);
+    install_map(&mut app, Projection::Isometric, MovementModel::Continuous);
+    {
+        let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
+        registry.register(
+            EntityTypeDef::new("nimble")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_movement(
+                    FixedU64::from_num(0.25),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                    FixedU64::from_num(9),
+                    FixedU64::from_num(18),
+                )
+                .with_health(20),
+        );
+        registry.register(
+            EntityTypeDef::new("ponderous")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_movement(
+                    FixedU64::from_num(0.25),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                    FixedU64::from_num(9),
+                    FixedU64::ONE,
+                )
+                .with_stat(EntityStatId::PIVOT_ANGLE, FixedU64::from_num(90))
+                .with_health(20),
+        );
+    }
+    app.world_mut().resource::<ContentRegistry>().validate();
+    app.world_mut().resource_mut::<GameSession>().start();
+    app
+}
+
+/// [`turning_app`]'s movers on the cell model, where a crossing is a claim rather
+/// than a free walk.
+pub fn turning_cell_app() -> App {
+    let mut app = turning_app();
+    install_map(&mut app, Projection::Isometric, MovementModel::Cell);
     app
 }
 
@@ -1262,11 +1833,12 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(0.5),
                     FixedU64::from_num(0.5),
                     FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
                 )
                 .with_health(30)
                 .with_dying(2, None)
-                .with_attack(10, 1, 1, 4, 2)
-                .with_targets(GROUND)
+                .with_attack(weapon(GROUND), 10, 1, 1, 4, 2)
                 .with_cost([("gold", 30)])
                 .with_train_time(4),
         );
@@ -1276,7 +1848,13 @@ pub fn register_orders_content(app: &mut App) {
         registry.register(
             EntityTypeDef::new("wagon")
                 .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
-                .with_movement(FixedU64::from_num(0.5), FixedU64::ONE, FixedU64::ONE)
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                    FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
+                )
                 .with_health(60)
                 .with_dying(2, None),
         );
@@ -1289,6 +1867,8 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(0.5),
                     FixedU64::from_num(0.5),
                     FixedU64::from_num(4),
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
                 )
                 .with_health(60)
                 .with_dying(2, None),
@@ -1310,6 +1890,8 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(0.5),
                     FixedU64::from_num(0.5),
                     FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
                 )
                 .with_health(20)
                 .with_dying(2, None)
@@ -1329,6 +1911,8 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(0.5),
                     FixedU64::from_num(0.5),
                     FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
                 )
                 .with_health(20)
                 .with_dying(2, None)
@@ -1343,6 +1927,8 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(0.5),
                     FixedU64::from_num(0.5),
                     FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
                 )
                 .with_health(20)
                 .with_dying(2, None)
@@ -1356,6 +1942,8 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(0.5),
                     FixedU64::from_num(0.5),
                     FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
                 )
                 .with_health(20)
                 .with_dying(2, None)
@@ -1371,6 +1959,8 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(0.5),
                     FixedU64::from_num(0.5),
                     FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
                 )
                 .with_health(20)
                 .with_dying(2, None)
@@ -1386,6 +1976,8 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(0.5),
                     FixedU64::from_num(0.5),
                     FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
                 )
                 .with_health(20)
                 .with_dying(2, None)
@@ -1419,6 +2011,8 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(0.5),
                     FixedU64::from_num(0.5),
                     FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
                 )
                 .with_health(20)
                 .with_dying(2, None)
@@ -1450,6 +2044,8 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(0.5),
                     FixedU64::from_num(0.5),
                     FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
                 )
                 .with_health(20),
         );
@@ -1462,11 +2058,12 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(0.5),
                     FixedU64::from_num(0.5),
                     FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
                 )
                 .with_health(30)
                 .with_dying(2, None)
-                .with_attack(10, 1, 5, 4, 2)
-                .with_targets(GROUND)
+                .with_attack(weapon(GROUND), 10, 1, 5, 4, 2)
                 // Sees farther than it auto-engages, so its circular vision
                 // covers everything within acquisition range.
                 .with_sight_range(8),
@@ -1479,11 +2076,12 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(0.5),
                     FixedU64::from_num(0.5),
                     FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
                 )
                 .with_health(30)
                 .with_dying(2, None)
-                .with_attack(10, 3, 5, 4, 2)
-                .with_targets(GROUND)
+                .with_attack(weapon(GROUND), 10, 3, 5, 4, 2)
                 .with_sight_range(8),
         );
     }
@@ -1589,11 +2187,12 @@ pub fn harness_soldier() -> EntityTypeDef {
             FixedU64::from_num(0.5),
             FixedU64::from_num(0.5),
             FixedU64::ONE,
+            FixedU64::from_num(360),
+            FixedU64::from_num(360),
         )
         .with_health(30)
         .with_dying(2, None)
-        .with_attack(10, 1, 1, 4, 2)
-        .with_targets(GROUND)
+        .with_attack(weapon(GROUND), 10, 1, 1, 4, 2)
 }
 
 /// A standing building — the presence the `LastStanding` rule counts. Immobile,
