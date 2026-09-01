@@ -30,16 +30,21 @@ use ferrets_simulation::{
     session::{
         GameSession,
         ai_hosting::AiHosting,
+        defeat_conduct::DefeatConduct,
         drop_policy::DropPolicy,
+        elimination_scope::EliminationScope,
         finish_policy::FinishPolicy,
+        local_role::LocalRole,
         player_slot::{self, PlayerId, PlayerSlot, TeamId},
         player_type::PlayerType,
     },
     skirmish::Skirmish,
 };
 
+use ferrets_content::registry::ContentRegistry;
+
 use crate::{
-    map,
+    ai, map,
     skirmish::CurrentSkirmish,
     states::{GameState, LobbyMode},
 };
@@ -136,6 +141,9 @@ pub struct SlotView {
     pub team: Option<TeamId>,
 }
 
+/// How many watchers the demo's host admits.
+const OBSERVER_LIMIT: u8 = 2;
+
 /// The team a slot cycles to after `team`: no team → 1 → 2 → … → `seats` →
 /// no team. Enough distinct teams for every slot to pick its own.
 fn next_team(team: Option<TeamId>, seats: usize) -> Option<TeamId> {
@@ -164,9 +172,15 @@ pub struct LobbyConfig {
     /// map picker would write this.
     pub map: String,
     pub slots: Vec<SlotView>,
+    /// How many humans watch the game (network modes mirror the host's
+    /// count; a local game has at most its one human watching).
+    pub observers: usize,
+    /// How many watchers the host admits (mirrored like the rest).
+    pub observer_limit: u8,
     pub mode: SessionMode,
-    /// Which slot the local human controls (local games).
-    pub local_slot: PlayerId,
+    /// The seat the local human sits in (network modes mirror it from the
+    /// lobby link; a local game claims it through the rows).
+    pub local_seat: LocalRole,
     /// The host address a client dials: `ip` or `ip:port` (the port defaults
     /// to [`TCP_PORT`] when omitted).
     pub host_addr: String,
@@ -180,6 +194,12 @@ pub struct LobbyConfig {
     pub udp_port: String,
     /// The field keyboard input currently edits.
     pub focused: LobbyField,
+    /// Whose buildings keep a player in the game — the host's (or the local
+    /// game's) choice, mirrored by clients with the rest of the finish rule.
+    pub elimination: EliminationScope,
+    /// What THIS node does when its player is defeated: a per-node
+    /// presentation choice, never synchronized.
+    pub conduct: DefeatConduct,
     /// A line of status/help shown under the title.
     pub status: String,
 }
@@ -189,7 +209,7 @@ impl LobbyConfig {
         // One configurable row per player seat the chosen map declares.
         let map = map::NAME.to_string();
         let seats = map_data(&map).player_seats().count();
-        let slots = (0..seats)
+        let slots: Vec<SlotView> = (0..seats)
             .map(|i| SlotView {
                 kind: match (mode, i) {
                     (LobbyMode::Local, 0) | (LobbyMode::Host, 0) => SlotKind::Human,
@@ -201,13 +221,16 @@ impl LobbyConfig {
                 team: None,
             })
             .collect();
+
         Self {
             map,
             slots,
+            observers: 0,
+            observer_limit: OBSERVER_LIMIT,
             mode: SessionMode::HostStar {
                 ai_hosting: AiHosting::Host,
             },
-            local_slot: 0,
+            local_seat: LocalRole::Player(0),
             host_addr: "127.0.0.1".to_string(),
             tcp_port: String::new(),
             udp_port: String::new(),
@@ -215,6 +238,8 @@ impl LobbyConfig {
                 LobbyMode::Host => LobbyField::TcpPort,
                 _ => LobbyField::Addr,
             },
+            elimination: EliminationScope::Side,
+            conduct: DefeatConduct::Spectate,
             status: String::new(),
         }
     }
@@ -259,6 +284,13 @@ pub enum LobbyButton {
     Claim(u8),
     Mode,
     AiHosting,
+    /// Toggles the elimination scope (host and local games).
+    Elimination,
+    /// Toggles this node's own defeat conduct (every mode; never synced).
+    Conduct,
+    /// Moves this node between a player seat and an observer seat (network
+    /// modes; a local game claims seats directly).
+    Observe,
     Focus(LobbyField),
     Back,
     Start,
@@ -274,6 +306,12 @@ pub struct ModeText;
 pub struct AiHostingText;
 
 #[derive(Component)]
+pub struct EliminationText;
+
+#[derive(Component)]
+pub struct ConductText;
+
+#[derive(Component)]
 pub struct AddrText;
 
 #[derive(Component)]
@@ -284,6 +322,9 @@ pub struct UdpPortText;
 
 #[derive(Component)]
 pub struct SlotText(u8);
+
+#[derive(Component)]
+pub struct ObserverText;
 
 //
 // ─── Setup / teardown ──────────────────────────────────────────────────────────
@@ -326,16 +367,21 @@ pub fn exit_lobby(mut commands: Commands, roots: Query<Entity, With<LobbyRoot>>)
 }
 
 fn open_host(mode: SessionMode, tcp_port: u16, seats: usize) -> ferrets_network::Result<LobbyHost> {
-    // The demo's game decisions beyond the lobby-editable mode: drops resolve
-    // on the timeout (no wait dialog yet) and a match ends by elimination.
-    bootstrap::open_lobby(
+    // The demo's game decisions beyond the lobby-editable choices: drops
+    // resolve on the timeout (no wait dialog yet) and a match ends by
+    // elimination, side-scoped until the host toggles it.
+    let mut host = bootstrap::open_lobby(
         ("0.0.0.0", tcp_port),
         mode,
         DropPolicy::Automatic,
-        FinishPolicy::LastStanding,
+        FinishPolicy::LastStanding {
+            elimination: EliminationScope::Side,
+        },
         seats,
         Race::Human.id(),
-    )
+    )?;
+    host.set_observer_limit(OBSERVER_LIMIT)?;
+    Ok(host)
 }
 
 //
@@ -357,7 +403,14 @@ pub fn poll_lobby_link(
             // Process joins/requests (re-broadcasting on change), then always
             // mirror the authoritative state so the host's own edits show too.
             let _ = host.poll();
-            mirror(&mut config, host.slots(), host.mode());
+            let state = host.state().clone();
+            mirror(&mut config, &state);
+            // The host's own seat moves when it toggles itself to a watcher.
+            config.local_seat = mirrored_seat(
+                host.local_player(),
+                host.local_observes(),
+                config.local_seat,
+            );
         }
         LobbyLink::Client(client) => match client.poll() {
             PollOutcome::Waiting { changed } => {
@@ -365,12 +418,15 @@ pub fn poll_lobby_link(
                     && let Some(state) = client.state()
                     && !state.slots.is_empty()
                 {
-                    mirror(&mut config, &state.slots, state.mode);
+                    let state = state.clone();
+                    mirror(&mut config, &state);
                     config.status = "connected".to_string();
                 }
-                if let Some(slot) = client.local_player() {
-                    config.local_slot = slot;
-                }
+                config.local_seat = mirrored_seat(
+                    client.local_player(),
+                    client.local_observes(),
+                    config.local_seat,
+                );
                 if client.started().is_some() {
                     config.status = "starting...".to_string();
                     commands.insert_resource(StartRequested);
@@ -387,12 +443,19 @@ pub fn poll_lobby_link(
     }
 }
 
-fn mirror(
-    config: &mut LobbyConfig,
-    slots: &[ferrets_network::message::control::SlotInfo],
-    mode: SessionMode,
-) {
-    config.slots = slots
+/// The seat the lobby link reports for this node: its player slot, the
+/// watching place — or, momentarily unseated mid-move, the last known seat.
+fn mirrored_seat(player: Option<PlayerId>, observes: bool, current: LocalRole) -> LocalRole {
+    match (player, observes) {
+        (Some(slot), _) => LocalRole::Player(slot),
+        (None, true) => LocalRole::Observer,
+        (None, false) => current,
+    }
+}
+
+fn mirror(config: &mut LobbyConfig, state: &ferrets_network::message::control::LobbyState) {
+    config.slots = state
+        .slots
         .iter()
         .map(|info| SlotView {
             kind: match info.occupant {
@@ -405,7 +468,15 @@ fn mirror(
             team: info.team,
         })
         .collect();
-    config.mode = mode;
+    config.observers = state.observers.len();
+    config.observer_limit = state.observer_limit;
+    config.mode = state.mode;
+    let finish_policy = state.finish_policy;
+    match finish_policy {
+        FinishPolicy::LastStanding { elimination } => config.elimination = elimination,
+        // The demo lobby never chooses these; leave the toggle where it was.
+        FinishPolicy::Endless | FinishPolicy::Scripted => {}
+    }
 }
 
 //
@@ -525,11 +596,21 @@ pub fn lobby_buttons(
             LobbyButton::Team(slot) => cycle_team(&mode, link.as_deref_mut(), &mut config, *slot),
             LobbyButton::Claim(slot) => {
                 if *mode == LobbyMode::Local {
-                    claim_local(&mut config, *slot);
+                    claim_local(&mut config, LocalRole::Player(*slot));
                 }
             }
             LobbyButton::Mode => toggle_mode(link.as_deref_mut(), &mut config),
             LobbyButton::AiHosting => toggle_ai_hosting(link.as_deref_mut(), &mut config),
+            LobbyButton::Elimination => {
+                toggle_elimination(&mode, link.as_deref_mut(), &mut config);
+            }
+            LobbyButton::Conduct => {
+                config.conduct = match config.conduct {
+                    DefeatConduct::Conclude => DefeatConduct::Spectate,
+                    DefeatConduct::Spectate => DefeatConduct::Conclude,
+                };
+            }
+            LobbyButton::Observe => toggle_observe(&mode, link.as_deref_mut(), &mut config),
             LobbyButton::Focus(field) => config.focused = *field,
             LobbyButton::Back => next.set(GameState::Menu),
             LobbyButton::Start => {
@@ -545,7 +626,7 @@ fn cycle_kind(mode: &LobbyMode, link: Option<&mut LobbyLink>, config: &mut Lobby
     match mode {
         // The local human's slot is fixed; the others toggle AI ↔ Closed.
         LobbyMode::Local => {
-            if slot == config.local_slot {
+            if config.local_seat == LocalRole::Player(slot) {
                 return;
             }
             let kind = &mut config.slots[slot as usize].kind;
@@ -605,12 +686,82 @@ fn cycle_team(mode: &LobbyMode, link: Option<&mut LobbyLink>, config: &mut Lobby
     }
 }
 
-fn claim_local(config: &mut LobbyConfig, slot: u8) {
-    let previous = config.local_slot;
-    // The slot you leave becomes an AI opponent (the default for a non-local slot).
-    config.slots[previous as usize].kind = SlotKind::Ai;
-    config.slots[slot as usize].kind = SlotKind::Human;
-    config.local_slot = slot;
+fn claim_local(config: &mut LobbyConfig, seat: LocalRole) {
+    if config.local_seat == seat {
+        return;
+    }
+    // The player slot you leave becomes an AI opponent (the default for a
+    // non-local slot); leaving the watching place just empties it.
+    match config.local_seat {
+        LocalRole::Player(previous) => config.slots[previous as usize].kind = SlotKind::Ai,
+        LocalRole::Observer => config.observers = 0,
+    }
+    match seat {
+        LocalRole::Player(slot) => config.slots[slot as usize].kind = SlotKind::Human,
+        LocalRole::Observer => config.observers = 1,
+    }
+    config.local_seat = seat;
+}
+
+/// Flips whose buildings keep a player in the game. The host's choice travels
+/// with the finish rule it broadcasts; a local game applies it directly; a
+/// client only mirrors it.
+fn toggle_elimination(mode: &LobbyMode, link: Option<&mut LobbyLink>, config: &mut LobbyConfig) {
+    let next = match config.elimination {
+        EliminationScope::Player => EliminationScope::Side,
+        EliminationScope::Side => EliminationScope::Player,
+    };
+    match (mode, link) {
+        (LobbyMode::Host, Some(LobbyLink::Host(host))) => {
+            config.elimination = next;
+            let _ = host.set_finish_policy(FinishPolicy::LastStanding { elimination: next });
+        }
+        (LobbyMode::Local, _) => config.elimination = next,
+        _ => {}
+    }
+}
+
+/// Moves this node between its player seat and an open observer seat. The
+/// host moves its own seat directly; a client asks the host; a local game
+/// claims seats through the rows instead.
+fn toggle_observe(mode: &LobbyMode, link: Option<&mut LobbyLink>, config: &mut LobbyConfig) {
+    let observing = config.local_seat == LocalRole::Observer;
+    match (mode, link) {
+        (LobbyMode::Host, Some(LobbyLink::Host(host))) => {
+            let peer = host.local_peer();
+            let _ = if observing {
+                host.play(peer)
+            } else {
+                host.observe(peer)
+            };
+        }
+        (LobbyMode::Client, Some(LobbyLink::Client(client))) => {
+            let _ = if observing {
+                client.request_play()
+            } else {
+                client.request_observe()
+            };
+        }
+        // A local game moves its one human directly: back to a player slot,
+        // or out to watching. An open seat is taken first — overwriting an
+        // AI (and only then a closed seat) is the last resort, so the
+        // arranged lineup survives the round trip.
+        (LobbyMode::Local, _) => {
+            if observing {
+                let position_of =
+                    |kind: SlotKind| config.slots.iter().position(|view| view.kind == kind);
+                let target = position_of(SlotKind::Open)
+                    .or_else(|| position_of(SlotKind::Ai))
+                    .or_else(|| position_of(SlotKind::Closed));
+                if let Some(slot) = target {
+                    claim_local(config, LocalRole::Player(slot as u8));
+                }
+            } else {
+                claim_local(config, LocalRole::Observer);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn toggle_mode(link: Option<&mut LobbyLink>, config: &mut LobbyConfig) {
@@ -894,6 +1045,45 @@ pub fn setup_lobby(mut commands: Commands, mode: Res<LobbyMode>, config: Res<Lob
             });
         }
 
+        // The finish rule's scope: the host (or the local game) decides,
+        // clients see the mirrored choice.
+        parent.spawn(row_node()).with_children(|row| {
+            label(row, "Eliminated with:");
+            if !is_client {
+                spawn_button(row, "Toggle", LobbyButton::Elimination);
+            }
+            row.spawn((
+                EliminationText,
+                Text::new(String::new()),
+                text_font(),
+                TextColor(Color::srgb(0.9, 0.9, 0.95)),
+            ));
+        });
+        // This node's own defeat conduct: never synced, so every mode gets
+        // the toggle.
+        parent.spawn(row_node()).with_children(|row| {
+            label(row, "On defeat (you):");
+            spawn_button(row, "Toggle", LobbyButton::Conduct);
+            row.spawn((
+                ConductText,
+                Text::new(String::new()),
+                text_font(),
+                TextColor(Color::srgb(0.9, 0.9, 0.95)),
+            ));
+        });
+        // Moving between playing and watching: networked nodes ask the host,
+        // a local game moves its one human directly.
+        parent.spawn(row_node()).with_children(|row| {
+            label(row, "Your seat:");
+            spawn_button(row, "Spectate / Play", LobbyButton::Observe);
+            row.spawn((
+                ObserverText,
+                Text::new(String::new()),
+                text_font(),
+                TextColor(Color::srgb(0.8, 0.85, 0.9)),
+            ));
+        });
+
         for slot in 0..config.slots.len() as u8 {
             parent.spawn(row_node()).with_children(|row| {
                 row.spawn((
@@ -1024,8 +1214,26 @@ pub fn update_lobby_view(
     mut slots: Query<
         (&SlotText, &mut Text),
         (
+            Without<ObserverText>,
             Without<ModeText>,
             Without<AiHostingText>,
+            Without<EliminationText>,
+            Without<ConductText>,
+            Without<StatusText>,
+            Without<AddrText>,
+            Without<TcpPortText>,
+            Without<UdpPortText>,
+        ),
+    >,
+    mut observer_line: Query<
+        &mut Text,
+        (
+            With<ObserverText>,
+            Without<SlotText>,
+            Without<ModeText>,
+            Without<AiHostingText>,
+            Without<EliminationText>,
+            Without<ConductText>,
             Without<StatusText>,
             Without<AddrText>,
             Without<TcpPortText>,
@@ -1037,6 +1245,8 @@ pub fn update_lobby_view(
         (
             With<ModeText>,
             Without<AiHostingText>,
+            Without<EliminationText>,
+            Without<ConductText>,
             Without<StatusText>,
             Without<AddrText>,
             Without<TcpPortText>,
@@ -1047,6 +1257,29 @@ pub fn update_lobby_view(
         &mut Text,
         (
             With<AiHostingText>,
+            Without<EliminationText>,
+            Without<ConductText>,
+            Without<StatusText>,
+            Without<AddrText>,
+            Without<TcpPortText>,
+            Without<UdpPortText>,
+        ),
+    >,
+    mut elimination: Query<
+        &mut Text,
+        (
+            With<EliminationText>,
+            Without<ConductText>,
+            Without<StatusText>,
+            Without<AddrText>,
+            Without<TcpPortText>,
+            Without<UdpPortText>,
+        ),
+    >,
+    mut conduct: Query<
+        &mut Text,
+        (
+            With<ConductText>,
             Without<StatusText>,
             Without<AddrText>,
             Without<TcpPortText>,
@@ -1070,16 +1303,16 @@ pub fn update_lobby_view(
     // A client may only edit its own slot, so hide every other Race/Team button.
     for (button, mut node) in &mut buttons {
         if let LobbyButton::Race(slot) | LobbyButton::Team(slot) = button {
-            let show = *mode != LobbyMode::Client || *slot == config.local_slot;
+            let show = *mode != LobbyMode::Client || config.local_seat == LocalRole::Player(*slot);
             node.display = if show { Display::Flex } else { Display::None };
         }
     }
 
     for (slot, mut text) in &mut slots {
         let view = config.slots[slot.0 as usize];
-        // `local_slot` is this node's own slot in every mode (host = 0, client =
-        // its assigned slot, local = the claimed slot).
-        let you = if slot.0 == config.local_slot {
+        // `local_seat` is this node's own seat in every mode (host and client
+        // = the assigned one, local = the claimed one).
+        let you = if config.local_seat == LocalRole::Player(slot.0) {
             " (you)"
         } else {
             ""
@@ -1092,6 +1325,29 @@ pub fn update_lobby_view(
             team_label(view.team),
         ));
     }
+    if let Ok(mut text) = observer_line.single_mut() {
+        let you = if config.local_seat == LocalRole::Observer {
+            " (you)"
+        } else {
+            ""
+        };
+        *text = Text::new(match *mode {
+            // A local game has one human; the count is the toggle's echo.
+            LobbyMode::Local => format!(
+                "{}{you}",
+                if config.local_seat == LocalRole::Observer {
+                    "Watching"
+                } else {
+                    "Playing"
+                }
+            ),
+            // Networked: how many watch, out of how many the host admits.
+            LobbyMode::Host | LobbyMode::Client => format!(
+                "Observers: {}/{}{you}",
+                config.observers, config.observer_limit,
+            ),
+        });
+    }
     if let Ok(mut text) = mode_text.single_mut() {
         *text = Text::new(match config.mode {
             SessionMode::HostStar { .. } => "Host-star",
@@ -1103,6 +1359,18 @@ pub fn update_lobby_view(
         *text = Text::new(match config.mode.ai_hosting() {
             AiHosting::Host => "Host",
             AiHosting::Replicated => "All peers",
+        });
+    }
+    if let Ok(mut text) = elimination.single_mut() {
+        *text = Text::new(match config.elimination {
+            EliminationScope::Player => "Own buildings gone",
+            EliminationScope::Side => "Whole side's buildings gone",
+        });
+    }
+    if let Ok(mut text) = conduct.single_mut() {
+        *text = Text::new(match config.conduct {
+            DefeatConduct::Conclude => "Game over",
+            DefeatConduct::Spectate => "Keep watching",
         });
     }
     if let Ok(mut text) = status.single_mut() {
@@ -1158,8 +1426,15 @@ pub fn start_game(world: &mut World) {
 
     // The lobby's decisions land on the stored definition: who sits in its
     // player seats, and — for a network game — the finish rule it broadcast.
-    let mut skirmish = vacant_skirmish(world.resource::<LobbyConfig>());
-    for slot in player_slots(world.resource::<LobbyConfig>()) {
+    let mut skirmish = vacant_skirmish(
+        world.resource::<LobbyConfig>(),
+        world.resource::<ContentRegistry>(),
+    );
+    let seated = player_slots(
+        world.resource::<LobbyConfig>(),
+        world.resource::<ContentRegistry>(),
+    );
+    for slot in seated {
         // Composed from the map's seats in id order, so a slot's id is its index.
         let seat = slot.id() as usize;
         assert_eq!(
@@ -1170,11 +1445,14 @@ pub fn start_game(world: &mut World) {
         skirmish.slots[seat] = slot;
     }
 
-    let (local_player, authority, drop_policy, net) = match mode {
+    // The role the local human enters the game with — a watcher brings no
+    // local player at all.
+    let local_seat = world.resource::<LobbyConfig>().local_seat;
+    let (local_seat, authority, drop_policy, net) = match mode {
         LobbyMode::Local => {
             let config = world.resource::<LobbyConfig>();
             (
-                config.local_slot,
+                local_seat,
                 config.mode.authority(),
                 DropPolicy::Automatic,
                 None,
@@ -1199,7 +1477,7 @@ pub fn start_game(world: &mut World) {
             let (authority, drop_policy) = (state.mode.authority(), state.drop_policy);
             skirmish.finish_policy = state.finish_policy;
             match NetSession::start_host(host, udp_port, &skirmish.slots) {
-                Ok(net) => (0, authority, drop_policy, Some(net)),
+                Ok(net) => (local_seat, authority, drop_policy, Some(net)),
                 Err(error) => {
                     eprintln!("failed to start host: {error}");
                     return;
@@ -1211,14 +1489,13 @@ pub fn start_game(world: &mut World) {
             else {
                 return;
             };
-            let local = client.local_player().unwrap_or(0);
             let Some(state) = client.state() else {
                 return;
             };
             let (authority, drop_policy) = (state.mode.authority(), state.drop_policy);
             skirmish.finish_policy = state.finish_policy;
             match NetSession::start_client(client, &skirmish.slots) {
-                Ok(net) => (local, authority, drop_policy, Some(net)),
+                Ok(net) => (local_seat, authority, drop_policy, Some(net)),
                 Err(error) => {
                     eprintln!("failed to start client: {error}");
                     return;
@@ -1230,13 +1507,19 @@ pub fn start_game(world: &mut World) {
     {
         let mut session = world.resource_mut::<GameSession>();
         session.configure(
-            local_player,
+            local_seat,
             skirmish.slots.clone(),
             skirmish.map.as_str(),
             authority,
             drop_policy,
             skirmish.finish_policy,
         );
+        // This node's own choice, applied outside the shared configuration —
+        // peers may legitimately differ.
+        let conduct = world.resource::<LobbyConfig>().conduct;
+        world
+            .resource_mut::<GameSession>()
+            .set_defeat_conduct(conduct);
     }
     world.insert_resource(CurrentSkirmish(skirmish));
     install_game_resources(world);
@@ -1252,16 +1535,20 @@ pub fn start_game(world: &mut World) {
 
 /// The vacant skirmish for the lobby's chosen map: one slot per map seat —
 /// player seats free, environment seats seated — and the default finish rule.
-fn vacant_skirmish(config: &LobbyConfig) -> Skirmish {
+fn vacant_skirmish(config: &LobbyConfig, registry: &ContentRegistry) -> Skirmish {
     Skirmish {
-        slots: player_slot::vacant_slots(&map_data(&config.map)),
+        slots: player_slot::vacant_slots(&map_data(&config.map), ai::environment_vision(registry)),
         map: config.map.clone(),
-        finish_policy: FinishPolicy::LastStanding,
+        finish_policy: FinishPolicy::LastStanding {
+            elimination: config.elimination,
+        },
     }
 }
 
 /// The session slots the lobby's rows configure; the skirmish seats them.
-fn player_slots(config: &LobbyConfig) -> Vec<PlayerSlot> {
+/// Watching seats configure no slot at all — their humans enter the game as
+/// observers, outside its roster.
+fn player_slots(config: &LobbyConfig, registry: &ContentRegistry) -> Vec<PlayerSlot> {
     config
         .slots
         .iter()
@@ -1272,9 +1559,16 @@ fn player_slots(config: &LobbyConfig) -> Vec<PlayerSlot> {
                 SlotKind::Human => {
                     PlayerSlot::occupied(id, PlayerType::Human, Some(view.race.id()), view.team)
                 }
-                SlotKind::Ai => {
-                    PlayerSlot::occupied(id, PlayerType::Ai, Some(view.race.id()), view.team)
-                }
+                SlotKind::Ai => PlayerSlot::occupied(
+                    id,
+                    PlayerType::Ai {
+                        // The seat carries the brain's declared vision: it is
+                        // what the executor resolves the AI's commands by.
+                        vision: ai::race_vision(view.race.id(), registry),
+                    },
+                    Some(view.race.id()),
+                    view.team,
+                ),
                 SlotKind::Open | SlotKind::Closed => PlayerSlot::free(id),
             }
         })

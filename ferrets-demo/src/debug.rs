@@ -25,7 +25,7 @@ use ferrets_simulation::{
 use crate::{
     input::InputMode,
     map,
-    render::{CELL_PX, FogReveal, Smoothing, world_center},
+    render::{self, CELL_PX, FogReveal, Smoothing, world_center},
     states::InGameUi,
 };
 
@@ -174,7 +174,10 @@ pub fn debug_readout(
     // selection cannot — an enemy's, a neutral's, a seam's. Past a handful the
     // ids stop being readable and stop fitting, so the count is what the line
     // carries and hovering names the one that matters.
-    let selection_str = match selection.get(session.local_player()) {
+    let selected = session
+        .local_player()
+        .map_or(&[][..], |local| selection.get(local));
+    let selection_str = match selected {
         [] => "-".to_string(),
         ids if ids.len() <= NAMED_SELECTION => ids
             .iter()
@@ -228,6 +231,7 @@ pub fn draw_grid(
     debug: Res<DebugState>,
     session: Res<GameSession>,
     fog: Res<VisibilityGrid>,
+    watch: Res<render::ObserverPerspective>,
     reveal: Res<FogReveal>,
 ) {
     if !debug.grid {
@@ -237,15 +241,14 @@ pub fn draw_grid(
     let line = Color::srgba(0.0, 0.0, 0.0, 0.15);
 
     // Fill occupied cells so the nav grid's occupancy is visible at a glance —
-    // but only where the local team can see, so fogged entities' footprints
-    // don't leak their positions through the overlay.
-    let local = session.local_player();
+    // but only where this node can see, so fogged entities' footprints don't
+    // leak their positions through the overlay.
     let nav_grid = map.nav_grid();
     if let Some(layer) = registry.layer(&debug.layer) {
         for y in 0..map.height() {
             for x in 0..map.width() {
                 if nav_grid.is_occupied(layer, CellPos::new(x, y))
-                    && (reveal.0 || fog.is_visible_to(&session, local, x, y))
+                    && (reveal.0 || render::sees(&session, &watch, &fog, x, y))
                 {
                     fill_cell(&mut gizmos, x, y);
                 }
@@ -276,6 +279,7 @@ pub fn draw_bodies(
     map: Res<Map>,
     session: Res<GameSession>,
     fog: Res<VisibilityGrid>,
+    watch: Res<render::ObserverPerspective>,
     reveal: Res<FogReveal>,
     registry: Res<ContentRegistry>,
     movers: Query<
@@ -294,7 +298,6 @@ pub fn draw_bodies(
         MovementModel::Continuous => {}
     }
 
-    let local = session.local_player();
     for (info, location, stats) in &movers {
         let def = registry.def(info.type_id());
         let claims = def
@@ -304,7 +307,7 @@ pub fn draw_bodies(
             continue;
         }
         let cell = body::anchor(location.position);
-        if !(reveal.0 || fog.is_visible_to(&session, local, cell.x, cell.y)) {
+        if !(reveal.0 || render::sees(&session, &watch, &fog, cell.x, cell.y)) {
             continue;
         }
         let Some(radius) = stats.effective(EntityStatId::RADIUS) else {
@@ -383,9 +386,11 @@ pub fn draw_hierarchy(
 
     // Each selected unit's plan: the refined segment cell by cell, then the
     // corridor crossings still ahead.
-    let local = session.local_player();
+    let selected = session
+        .local_player()
+        .map_or(&[][..], |local| selection.get(local));
     for (info, location, movement) in &units {
-        if !selection.get(local).contains(&info.id()) {
+        if !selected.contains(&info.id()) {
             continue;
         }
         let size = registry.def(info.type_id()).location.unwrap().size();

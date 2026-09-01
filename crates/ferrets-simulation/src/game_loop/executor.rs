@@ -38,9 +38,14 @@ use crate::{
     requirements,
     resources::PlayerResources,
     selection::Selection,
-    session::{GameSession, player_slot::PlayerId},
+    session::{
+        GameSession,
+        ai_vision::AiVision,
+        player_slot::{PlayerId, PlayerSlot},
+    },
     simulation_id::SimulationId,
     spawn, supply,
+    visibility::VisibilityGrid,
 };
 use ferrets_content::{
     costs::Cost,
@@ -85,11 +90,7 @@ pub fn tick(world: &mut World, current_tick: u32) -> bool {
 fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
     match command {
         PlayerCommand::SelectById { id, mode } => {
-            if world
-                .resource::<EntityIndex>()
-                .interactable(world, *id)
-                .is_some()
-            {
+            if interactable_entity(world, player, *id).is_some() {
                 apply_selection(world, player, vec![*id], *mode);
             }
         }
@@ -132,12 +133,7 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
                 .get(player, group)
                 .to_vec()
                 .into_iter()
-                .filter(|&id| {
-                    world
-                        .resource::<EntityIndex>()
-                        .interactable(world, id)
-                        .is_some()
-                })
+                .filter(|&id| interactable_entity(world, player, id).is_some())
                 .collect();
             // Recalling an empty (or fully-wiped) group is a no-op: it must not
             // clear the current selection.
@@ -167,6 +163,13 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
             // a game-rules concern, not the command executor's.
             //
             // A named target is never ordered to attack itself; a cell excludes nobody.
+            // A named target must be in sight to be named at all — fog
+            // refuses the order the way it hides the sprite.
+            if let Some(id) = target.entity()
+                && interactable_entity(world, player, id).is_none()
+            {
+                return;
+            }
             let commanded = match target.entity() {
                 Some(id) => commanded_selection_excluding(world, player, id),
                 None => commanded_selection(world, player),
@@ -217,7 +220,7 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
             }
         }
         PlayerCommand::Guard { target, flush } => {
-            let Some(ward) = world.resource::<EntityIndex>().interactable(world, *target) else {
+            let Some(ward) = interactable_entity(world, player, *target) else {
                 return;
             };
             // Guarding is for own, allied, and neutral wards — a hostile ward
@@ -246,11 +249,7 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
             }
         }
         PlayerCommand::SendToEntity { target, flush } => {
-            if world
-                .resource::<EntityIndex>()
-                .interactable(world, *target)
-                .is_none()
-            {
+            if interactable_entity(world, player, *target).is_none() {
                 return;
             }
             for entity in commanded_selection_excluding(world, player, *target) {
@@ -276,10 +275,7 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
             // the send-to-entity rule; it may be gone again by the time a unit
             // spawns, which spawn-time resolution handles.
             if let Some(RallyTarget::Entity(id)) = target
-                && world
-                    .resource::<EntityIndex>()
-                    .interactable(world, *id)
-                    .is_none()
+                && interactable_entity(world, player, *id).is_none()
             {
                 return;
             }
@@ -321,6 +317,9 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
             );
         }
         PlayerCommand::Repair { target, flush } => {
+            if interactable_entity(world, player, *target).is_none() {
+                return;
+            }
             // Entities that cannot mend this target drop the order in `prepare`, so
             // a mixed selection simply sends the ones that can.
             for entity in commanded_selection(world, player) {
@@ -333,11 +332,8 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
             }
         }
         PlayerCommand::Follow { target, flush } => {
-            if world
-                .resource::<EntityIndex>()
-                .interactable(world, *target)
-                .is_none()
-            {
+            // Following what the fog hides would be a tracking beacon.
+            if interactable_entity(world, player, *target).is_none() {
                 return;
             }
             for entity in commanded_selection_excluding(world, player, *target) {
@@ -352,11 +348,7 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
         PlayerCommand::Board { target, flush } => {
             // Entities the target will not take aboard drop the order in
             // `prepare`, so a mixed selection simply sends the ones that fit.
-            if world
-                .resource::<EntityIndex>()
-                .interactable(world, *target)
-                .is_none()
-            {
+            if interactable_entity(world, player, *target).is_none() {
                 return;
             }
             for entity in commanded_selection_excluding(world, player, *target) {
@@ -376,6 +368,9 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
             let Some(entity) = find_owned_interactable(world, player, *transport) else {
                 return;
             };
+            if interactable_entity(world, player, *target).is_none() {
+                return;
+            }
             push_order(
                 world,
                 entity,
@@ -762,7 +757,7 @@ fn resolve_box_selection(world: &World, player: PlayerId, rect: &FixedURect) -> 
         .alive_entries()
         .into_iter()
         .filter(|&(id, entity)| {
-            index.interactable(world, id).is_some()
+            interactable_entity(world, player, id).is_some()
                 && world.entity(entity).contains::<LocationComponent>()
                 && rect.contains(entity_def::footprint_center(world, entity))
                 && !world
@@ -825,6 +820,40 @@ fn resolve_type_selection(
         })
         .map(|(id, _)| id)
         .collect()
+}
+
+/// Resolves `id` to an entity `player` may name in a command: interactable —
+/// alive and not hidden away inside something
+/// ([`EntityIndex::interactable`]) — and, for a human player, standing in
+/// its sight: the fog that hides a sprite must hide its stats and refuse
+/// orders against it too. No ownership shortcut: own and allied entities
+/// pass through the same grid (a unit's sight covers the cell it stands on,
+/// and team vision is merged), so the grid stays the one truth.
+///
+/// A scripted player is gated by the vision its seat declares: a fog-limited
+/// brain lives under the same rule as a human, an omniscient one legitimately
+/// names what fog hides. The seat is session state, so every node (and a
+/// replay) resolves its commands identically.
+fn interactable_entity(world: &World, player: PlayerId, id: SimulationId) -> Option<Entity> {
+    let entity = world.resource::<EntityIndex>().interactable(world, id)?;
+    let session = world.resource::<GameSession>();
+    let sight_gated = match session.slot(player).and_then(PlayerSlot::ai_vision) {
+        None | Some(AiVision::Filtered) => true,
+        Some(AiVision::Omniscient) => false,
+    };
+    if !sight_gated {
+        return Some(entity);
+    }
+    let location = world.entity(entity).get::<LocationComponent>()?;
+    world
+        .resource::<VisibilityGrid>()
+        .is_visible_to(
+            session,
+            player,
+            location.position.x.to_num::<u32>(),
+            location.position.y.to_num::<u32>(),
+        )
+        .then_some(entity)
 }
 
 /// Combines `candidates` into `player`'s selection according to `mode`.
@@ -932,6 +961,13 @@ fn use_skill(
     else {
         return;
     };
+    // A named target must be in sight to be named at all — fog refuses the
+    // cast the way it hides the sprite.
+    if let Some(target) = target_id
+        && interactable_entity(world, player, target).is_none()
+    {
+        return;
+    }
     // Requirements answer to the issuing player whoever casts: an entity's
     // skill unlocks with its owner's research, and locks again with it.
     if !requirements::met(world, player, &def.requires) {

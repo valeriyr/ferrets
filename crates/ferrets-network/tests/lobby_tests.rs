@@ -17,7 +17,7 @@ use ferrets_network::{
 use ferrets_simulation::session::ai_hosting::AiHosting;
 
 //
-// ─── Seating and live sync ──────────────────────────────────────────────────
+// ─── Seating and live sync ───────────────────────────────────────────────────
 //
 
 #[test]
@@ -211,23 +211,156 @@ fn host_can_close_open_slot() {
 }
 
 //
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// ─── Watchers ────────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn watcher_is_admitted_on_request_under_limit() {
+    let (mut host, mut c1, mut c2) = star(3);
+    host.poll().expect("seat");
+    host.set_observer_limit(1).expect("open watching");
+    c1.poll();
+    c2.poll();
+
+    c1.request_observe().expect("request observe");
+    host.poll().expect("host admits");
+    c1.poll();
+    c2.poll();
+
+    // Client 1 left its player slot — now open — to watch, and every node
+    // mirrors the move: a watcher holds no player slot at all.
+    assert_eq!(host.slots()[1].occupant, Occupant::Open);
+    assert_eq!(host.observers(), &[1]);
+    assert_eq!(c1.local_player(), None);
+    assert!(c1.local_observes());
+    assert_eq!(c2.observers(), &[1]);
+
+    c1.request_play().expect("request play");
+    host.poll().expect("host seats");
+    c1.poll();
+
+    assert_eq!(host.slots()[1].occupant, human(1));
+    assert!(host.observers().is_empty());
+    assert_eq!(c1.local_player(), Some(1));
+    assert!(!c1.local_observes());
+}
+
+#[test]
+fn observe_request_beyond_limit_changes_nothing() {
+    // The default limit is zero — watching is off until the host opens it —
+    // and a full quota refuses the next request the same way.
+    let (mut host, mut c1, mut c2) = star(3);
+    host.poll().expect("seat");
+    c1.poll();
+
+    c1.request_observe().expect("request observe");
+    let changed = host.poll().expect("host handles request");
+    assert!(!changed);
+    assert_eq!(host.slots()[1].occupant, human(1));
+
+    host.set_observer_limit(1).expect("open one");
+    c1.poll();
+    c2.poll();
+    c1.request_observe().expect("request observe");
+    host.poll().expect("host admits");
+    c2.request_observe().expect("request observe over quota");
+    let changed = host.poll().expect("host refuses");
+
+    assert!(!changed);
+    assert_eq!(host.observers(), &[1]);
+    assert_eq!(host.slots()[2].occupant, human(2));
+}
+
+#[test]
+fn play_request_without_open_slot_changes_nothing() {
+    // Two player slots, both taken once the watcher left one — an AI moved in
+    // behind it, so there is nothing to come back to.
+    let (mut host, mut c1, _c2) = star(3);
+    host.poll().expect("seat");
+    host.set_observer_limit(1).expect("open watching");
+    c1.poll();
+    c1.request_observe().expect("request observe");
+    host.poll().expect("host admits");
+    host.set_occupant(1, Occupant::Ai)
+        .expect("ai takes the slot");
+    host.set_occupant(3, Occupant::Closed)
+        .expect("close the spare");
+
+    c1.request_play().expect("request play");
+    let changed = host.poll().expect("host refuses");
+
+    assert!(!changed);
+    assert_eq!(host.observers(), &[1]);
+}
+
+#[test]
+fn host_moves_itself_to_watching_and_back() {
+    let (mut host, _c1, _c2) = star(3);
+    host.poll().expect("seat");
+    host.set_observer_limit(1).expect("open watching");
+    assert_eq!(host.local_player(), Some(0));
+
+    let peer = host.local_peer();
+    host.observe(peer).expect("host observes");
+    assert_eq!(host.local_player(), None);
+    assert!(host.local_observes());
+    assert_eq!(host.slots()[0].occupant, Occupant::Open);
+
+    host.play(peer).expect("host plays");
+    assert_eq!(host.local_player(), Some(0));
+    assert!(!host.local_observes());
+}
+
+#[test]
+fn latecomer_to_full_game_is_admitted_as_watcher() {
+    // Two player slots, filled by the host and client 1 — client 2 is
+    // admitted among the watchers, needing no pre-opened seat.
+    let (mut host, _c1, _c2) = star_with(2, |host| {
+        host.set_observer_limit(1).expect("open watching");
+    });
+    host.poll().expect("seat");
+
+    assert_eq!(host.slots()[0].occupant, human(0));
+    assert_eq!(host.slots()[1].occupant, human(1));
+    assert_eq!(host.observers(), &[2]);
+}
+
+#[test]
+fn latecomer_beyond_observer_limit_stays_unseated() {
+    let (mut host, _c1, _c2) = star_with(2, |_| {});
+    host.poll().expect("seat");
+
+    assert_eq!(host.slots()[1].occupant, human(1));
+    assert!(host.observers().is_empty());
+}
+
+//
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 //
 
 /// Builds a host with `capacity` slots and two clients linked only to the host.
 fn star(capacity: usize) -> (LobbyHost, LobbyClient, LobbyClient) {
+    star_with(capacity, |_| {})
+}
+
+/// Like [`star`], applying `prepare` to the host before the clients connect.
+fn star_with(
+    capacity: usize,
+    prepare: impl FnOnce(&mut LobbyHost),
+) -> (LobbyHost, LobbyClient, LobbyClient) {
     let mut endpoints = LoopbackTransport::partial_mesh(3, [(0, 1), (0, 2)]).into_iter();
     let ep0 = endpoints.next().expect("host endpoint");
     let ep1 = endpoints.next().expect("client 1 endpoint");
     let ep2 = endpoints.next().expect("client 2 endpoint");
 
-    let host = utils::lobby_host(
+    let mut host = utils::lobby_host(
         ep0,
         SessionMode::HostStar {
             ai_hosting: AiHosting::Replicated,
         },
         capacity,
     );
+    prepare(&mut host);
     (host, utils::lobby_client(ep1), utils::lobby_client(ep2))
 }
 

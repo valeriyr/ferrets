@@ -25,9 +25,11 @@ use ferrets_simulation::{
     session::{
         GameSession,
         ai_hosting::AiHosting,
+        ai_vision::AiVision,
         authority::Authority,
         drop_policy::DropPolicy,
         finish_policy::FinishPolicy,
+        local_role::LocalRole,
         player_slot::{PlayerId, PlayerSlot},
         player_type::PlayerType,
     },
@@ -51,14 +53,28 @@ fn ai_builds_economy_and_army() {
         // An idle human, so the allied AIs have something to march on — the
         // wave crossing the map is the traversal this test also verifies.
         PlayerSlot::occupied(0, PlayerType::Human, Some("human"), None),
-        PlayerSlot::occupied(1, PlayerType::Ai, Some("human"), Some(1)),
-        PlayerSlot::occupied(2, PlayerType::Ai, Some("orc"), Some(1)),
+        PlayerSlot::occupied(
+            1,
+            PlayerType::Ai {
+                vision: AiVision::Filtered,
+            },
+            Some("human"),
+            Some(1),
+        ),
+        PlayerSlot::occupied(
+            2,
+            PlayerType::Ai {
+                vision: AiVision::Filtered,
+            },
+            Some("orc"),
+            Some(1),
+        ),
         PlayerSlot::free(3),
     ];
     let mut app = App::new();
     app.add_plugins(SimulationPlugin::new(
         GameSession::configured(
-            0,
+            LocalRole::Player(0),
             slots,
             map::NAME,
             Authority::Host {
@@ -135,12 +151,12 @@ fn boss_mans_its_fleet_and_defends_lake() {
         PlayerSlot::free(1),
         PlayerSlot::free(2),
         PlayerSlot::free(3),
-        PlayerSlot::environment(map::BOSS),
+        PlayerSlot::environment(map::BOSS, AiVision::Filtered),
     ];
     let mut app = App::new();
     app.add_plugins(SimulationPlugin::new(
         GameSession::configured(
-            0,
+            LocalRole::Player(0),
             slots,
             map::NAME,
             Authority::Host {
@@ -207,8 +223,22 @@ fn boss_mans_its_fleet_and_defends_lake() {
 fn ai_economy_runs_under_continuous_movement() {
     let slots = vec![
         PlayerSlot::occupied(0, PlayerType::Human, Some("human"), None),
-        PlayerSlot::occupied(1, PlayerType::Ai, Some("human"), Some(1)),
-        PlayerSlot::occupied(2, PlayerType::Ai, Some("orc"), Some(1)),
+        PlayerSlot::occupied(
+            1,
+            PlayerType::Ai {
+                vision: AiVision::Filtered,
+            },
+            Some("human"),
+            Some(1),
+        ),
+        PlayerSlot::occupied(
+            2,
+            PlayerType::Ai {
+                vision: AiVision::Filtered,
+            },
+            Some("orc"),
+            Some(1),
+        ),
         PlayerSlot::free(3),
     ];
     let mut data = map::data();
@@ -219,7 +249,7 @@ fn ai_economy_runs_under_continuous_movement() {
     let mut app = App::new();
     app.add_plugins(SimulationPlugin::new(
         GameSession::configured(
-            0,
+            LocalRole::Player(0),
             slots,
             map::NAME,
             Authority::Host {

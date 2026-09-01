@@ -14,6 +14,8 @@ use ferrets_simulation::{
     command::PlayerCommand,
     movement_model::MovementModel,
     session::{
+        ai_vision::AiVision,
+        elimination_scope::EliminationScope,
         finish_policy::FinishPolicy,
         player_slot::{PlayerId, PlayerSlot},
         player_type::PlayerType,
@@ -155,13 +157,22 @@ fn rejects_unsupported_format_version() {
 fn header() -> ReplayHeader {
     let slots = vec![
         PlayerSlot::occupied(0, PlayerType::Human, Some("human"), None),
-        PlayerSlot::occupied(1, PlayerType::Ai, Some("orc"), None),
+        PlayerSlot::occupied(
+            1,
+            PlayerType::Ai {
+                vision: AiVision::Filtered,
+            },
+            Some("orc"),
+            None,
+        ),
     ];
     ReplayHeader::new(
         RecordedGame::Skirmish(Skirmish {
             slots,
             map: "demo".to_string(),
-            finish_policy: FinishPolicy::LastStanding,
+            finish_policy: FinishPolicy::LastStanding {
+                elimination: EliminationScope::Player,
+            },
         }),
         MovementModel::Continuous,
         Projection::Isometric,

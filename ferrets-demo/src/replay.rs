@@ -13,6 +13,7 @@ use std::{
 
 use bevy::prelude::*;
 use ferrets_bevy_plugin::{ReplayPlayback, replay};
+use ferrets_content::registry::ContentRegistry;
 use ferrets_replay::{
     header::{RecordedGame, ReplayHeader},
     recorder::Recorder,
@@ -127,7 +128,7 @@ pub fn start_watching(world: &mut World) {
     // Resolve the recorded game's content before touching the session, so an
     // unknown scenario or map leaves the menu alive. The same resolution the
     // headless runner uses, so the two cannot rebuild different games.
-    let resolved = match playback::resolve(replay.header()) {
+    let resolved = match playback::resolve(replay.header(), world.resource::<ContentRegistry>()) {
         Ok(resolved) => resolved,
         Err(error) => {
             eprintln!("{error}");

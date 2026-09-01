@@ -27,12 +27,13 @@ use ferrets_simulation::{
         authority::Authority,
         drop_policy::DropPolicy,
         finish_policy::FinishPolicy,
+        local_role::LocalRole,
         player_slot::{self, PlayerId},
         player_type::PlayerType,
     },
 };
 
-use crate::{settings::Settings, setup, states::GameState};
+use crate::{ai, settings::Settings, setup, states::GameState};
 
 /// The scenario script. The engine holds the objective list (id + label,
 /// fixing the display order); the script only reports which are met and the
@@ -163,10 +164,11 @@ pub fn start_scenario(world: &mut World) {
     };
 
     {
+        let environment_vision = ai::environment_vision(world.resource::<ContentRegistry>());
         let mut session = world.resource_mut::<GameSession>();
         session.configure(
-            scenario.judged_player,
-            player_slot::scenario_slots(&scenario),
+            LocalRole::Player(scenario.judged_player),
+            player_slot::scenario_slots(&scenario, environment_vision),
             scenario.map.name(),
             Authority::Host {
                 ai_hosting: AiHosting::Replicated,

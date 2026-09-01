@@ -45,7 +45,7 @@ use ferrets_simulation::{
     impacts::PendingImpacts,
     order::Order,
     selection::Selection,
-    session::GameSession,
+    session::{GameSession, local_role::LocalRole, player_slot::PlayerId},
     simulation_id::SimulationId,
     visibility::{CellVisibility, VisibilityGrid},
 };
@@ -197,6 +197,106 @@ pub fn toggle_fog_reveal(keys: Res<ButtonInput<KeyCode>>, mut reveal: ResMut<Fog
     }
 }
 
+/// The fog a watching node looks through: everything (the caster's default),
+/// or one player's own view — flipping between what each player knows. Read
+/// only on a node with no local player; a player's node has exactly one
+/// honest perspective, its own.
+#[derive(Resource, Default)]
+pub struct ObserverPerspective(pub Option<PlayerId>);
+
+/// Cycles the watching perspective on `Tab`: everything → each side's view
+/// in seat order → everything. Sides, not players — vision is shared within
+/// a team, so every member's view is the same view, and each side appears
+/// once, represented by its first-seated member. Deliberately ungated: who
+/// actually sees through the choice is enforced where it is read
+/// ([`perspective`]) — on a playing node, whose fog is always its own, the
+/// keypress writes a choice nothing consults.
+pub fn perspective_input(
+    keys: Res<ButtonInput<KeyCode>>,
+    session: Res<GameSession>,
+    mut watch: ResMut<ObserverPerspective>,
+) {
+    if !keys.just_pressed(KeyCode::Tab) {
+        return;
+    }
+    let sides = side_representatives(&session);
+    watch.0 = match watch.0 {
+        None => sides.first().copied(),
+        Some(current) => sides
+            .iter()
+            .copied()
+            .skip_while(|&side| side != current)
+            .nth(1),
+    };
+}
+
+/// One player per side, in seat order: the first-seated member of each team,
+/// and every teamless player as its own side — the sides the watching
+/// perspective cycles through.
+fn side_representatives(session: &GameSession) -> Vec<PlayerId> {
+    let mut sides: Vec<PlayerId> = Vec::new();
+    for slot in session.player_slots() {
+        let seen = sides.iter().any(|&member| {
+            session
+                .slot(member)
+                .is_some_and(|held| held.team().is_some() && held.team() == slot.team())
+        });
+        if !seen {
+            sides.push(slot.id());
+        }
+    }
+    sides
+}
+
+/// Opens a game watching from the top: the perspective back on everything and
+/// the inspection empty, so nothing chosen in an earlier game leaks into this
+/// one.
+pub fn reset_watching(
+    mut watch: ResMut<ObserverPerspective>,
+    mut inspected: ResMut<crate::input::Inspected>,
+) {
+    watch.0 = None;
+    inspected.0.clear();
+}
+
+/// The knowledge this node watches the map through: the local player's own
+/// team vision — or, on a node with no local player, whatever
+/// [`ObserverPerspective`] holds: everything, or one chosen player's view.
+/// A player, eliminated or not, only ever sees what its side sees; the
+/// map-wide view and the flipping belong to the observer alone.
+pub fn perspective(
+    session: &GameSession,
+    watch: &ObserverPerspective,
+    fog: &VisibilityGrid,
+    x: u32,
+    y: u32,
+) -> CellVisibility {
+    match (session.local_player(), watch.0) {
+        (Some(local), _) => fog.visibility_to(session, local, x, y),
+        (None, Some(player)) => fog.visibility_to(session, player, x, y),
+        (None, None) => CellVisibility::Visible,
+    }
+}
+
+/// Whether this node currently sees the cell (see [`perspective`]).
+pub fn sees(
+    session: &GameSession,
+    watch: &ObserverPerspective,
+    fog: &VisibilityGrid,
+    x: u32,
+    y: u32,
+) -> bool {
+    perspective(session, watch, fog, x, y) == CellVisibility::Visible
+}
+
+/// Whether `player` is the local player or one of its allies — `false` on a
+/// node with no local player, which is on nobody's side.
+pub fn allied_with_local(session: &GameSession, player: PlayerId) -> bool {
+    session
+        .local_player()
+        .is_some_and(|local| session.are_allied(local, player))
+}
+
 /// Whether the drawing smooths what the simulation hands it — the walk between
 /// two ticks' positions, and the turn between their two looks.
 ///
@@ -281,11 +381,20 @@ pub(crate) fn color_for(
         return Color::srgb(0.2, 0.22, 0.26); // dark slate
     }
     match owner.map(|o| o.player()) {
-        Some(0) => Color::srgb(0.35, 0.55, 1.0), // player 0 — blue
-        Some(1) => Color::srgb(1.0, 0.35, 0.35), // player 1 — red
-        Some(2) => Color::srgb(0.4, 0.8, 0.4),   // player 2 — green
-        Some(3) => Color::srgb(0.7, 0.4, 0.9),   // player 3 — purple
-        _ => Color::srgb(0.75, 0.7, 0.4),        // neutral — tan
+        Some(player) => player_color(player),
+        None => Color::srgb(0.75, 0.7, 0.4), // neutral — tan
+    }
+}
+
+/// The color a player's presence is drawn in, wherever it appears — blips,
+/// selection rings, vision overlays.
+pub(crate) fn player_color(player: PlayerId) -> Color {
+    match player {
+        0 => Color::srgb(0.35, 0.55, 1.0), // blue
+        1 => Color::srgb(1.0, 0.35, 0.35), // red
+        2 => Color::srgb(0.4, 0.8, 0.4),   // green
+        3 => Color::srgb(0.7, 0.4, 0.9),   // purple
+        _ => Color::srgb(0.75, 0.7, 0.4),  // beyond the demo's seats — tan
     }
 }
 
@@ -766,6 +875,7 @@ pub fn interpolate_sprites(
     session: Res<GameSession>,
     registry: Res<ContentRegistry>,
     fog: Res<VisibilityGrid>,
+    watch: Res<ObserverPerspective>,
     reveal: Res<FogReveal>,
     mut query: Query<(
         &EntityInfoComponent,
@@ -788,7 +898,6 @@ pub fn interpolate_sprites(
     } else {
         1.0
     };
-    let local = session.local_player();
     for (
         info,
         location,
@@ -831,14 +940,11 @@ pub fn interpolate_sprites(
         // ghosts (draw_ghosts) stand in for last-seen enemy structures.
         let fogged = !reveal.0
             && match owner {
-                Some(owner)
-                    if owner.player() == local || session.are_allied(local, owner.player()) =>
-                {
-                    false
-                }
-                _ => !fog.is_visible_to(
+                Some(owner) if allied_with_local(&session, owner.player()) => false,
+                _ => !sees(
                     &session,
-                    local,
+                    &watch,
+                    &fog,
                     location.position.x.to_num::<u32>(),
                     location.position.y.to_num::<u32>(),
                 ),
@@ -890,29 +996,54 @@ pub fn draw_selection(
     mut gizmos: Gizmos,
     session: Res<GameSession>,
     selection: Res<Selection>,
+    inspected: Res<crate::input::Inspected>,
     registry: Res<ContentRegistry>,
     query: Query<
         (&EntityInfoComponent, &Transform, &Visibility),
         (With<Renderable>, Without<HiddenComponent>),
     >,
 ) {
-    let selected = selection.get(session.local_player());
-    if selected.is_empty() {
+    // A playing node rings its own selection. A defeated player rings only
+    // what it inspects — every player's selection is enemy attention, and a
+    // player, eliminated or not, knows only what its side knows. An observer
+    // rings its inspection first, then every player's selection in that
+    // player's color — what each player is doing is half of what a caster
+    // narrates.
+    let rings: Vec<(&[SimulationId], Color)> = match session.local_role() {
+        LocalRole::Player(local) if session.is_player_live(local) => {
+            vec![(selection.get(local), Color::srgb(0.2, 1.0, 0.4))]
+        }
+        LocalRole::Player(_) => vec![(&inspected.0[..], Color::srgb(0.95, 0.95, 1.0))],
+        LocalRole::Observer => std::iter::once((&inspected.0[..], Color::srgb(0.95, 0.95, 1.0)))
+            .chain(
+                session
+                    .player_slots()
+                    .map(|slot| (selection.get(slot.id()), player_color(slot.id()))),
+            )
+            .collect(),
+    };
+    if rings.iter().all(|(selected, ..)| selected.is_empty()) {
         return;
     }
     for (info, transform, visibility) in &query {
         if matches!(visibility, Visibility::Hidden) {
             continue;
         }
-        if selected.contains(&info.id()) {
-            let size = registry.def(info.type_id()).location.unwrap().size();
-            // Larger than the sprite so the ring isn't hidden behind it.
-            let radius = size.width.max(size.height) as f32 * CELL_PX * 0.7;
-            gizmos.circle_2d(
-                transform.translation.truncate(),
-                radius,
-                Color::srgb(0.2, 1.0, 0.4),
-            );
+        // Several watchers can hold the same entity — the inspection plus a
+        // player's selection, or two players targeting one unit. Equal radii
+        // would overlap into one circle showing only the last color, so each
+        // ring after the first steps outward and they read as concentric.
+        let mut rings_drawn = 0;
+        for (selected, color) in &rings {
+            if selected.contains(&info.id()) {
+                let size = registry.def(info.type_id()).location.unwrap().size();
+                // Larger than the sprite so the ring isn't hidden behind it.
+                let radius = size.width.max(size.height) as f32
+                    * CELL_PX
+                    * (0.7 + rings_drawn as f32 * 0.12);
+                gizmos.circle_2d(transform.translation.truncate(), radius, *color);
+                rings_drawn += 1;
+            }
         }
     }
 }
@@ -1008,6 +1139,7 @@ pub fn draw_shots(
     impacts: Res<PendingImpacts>,
     registry: Res<ContentRegistry>,
     grid: Res<VisibilityGrid>,
+    watch: Res<ObserverPerspective>,
     reveal: Res<FogReveal>,
     targets: Query<(&EntityInfoComponent, &Transform, Option<&HiddenComponent>), With<Renderable>>,
 ) {
@@ -1041,10 +1173,7 @@ pub fn draw_shots(
             (at.x / CELL_PX).max(0.0) as u32,
             (-at.y / CELL_PX).max(0.0) as u32,
         );
-        if !reveal.0
-            && grid.visibility_to(&session, session.local_player(), cell.x, cell.y)
-                != CellVisibility::Visible
-        {
+        if !reveal.0 && !sees(&session, &watch, &grid, cell.x, cell.y) {
             continue;
         }
         // Shapes tell the kinds apart; the colour is shared so every shot in the air
@@ -1121,7 +1250,10 @@ pub fn draw_rally(
 ) {
     const COLOR: Color = Color::srgb(1.0, 0.65, 0.2);
 
-    let local = session.local_player();
+    // Rally lines are own-units UI: a node with no local player owns nothing.
+    let Some(local) = session.local_player() else {
+        return;
+    };
     for (info, location, owner, rally) in &holders {
         if owner.player() != local || !selection.get(local).contains(&info.id()) {
             continue;
@@ -1282,15 +1414,15 @@ pub fn spawn_terrain_tiles(
 pub fn update_fog_overlay(
     session: Res<GameSession>,
     fog: Res<VisibilityGrid>,
+    watch: Res<ObserverPerspective>,
     reveal: Res<FogReveal>,
     mut tiles: Query<(&FogTile, &mut Sprite)>,
 ) {
-    let local = session.local_player();
     for (tile, mut sprite) in &mut tiles {
         let alpha = if reveal.0 {
             0.0
         } else {
-            match fog.visibility_to(&session, local, tile.x, tile.y) {
+            match perspective(&session, &watch, &fog, tile.x, tile.y) {
                 CellVisibility::Unexplored => 1.0,
                 CellVisibility::Explored => 0.55,
                 CellVisibility::Visible => 0.0,
@@ -1313,6 +1445,7 @@ pub fn draw_ghosts(
     session: Res<GameSession>,
     registry: Res<ContentRegistry>,
     fog: Res<VisibilityGrid>,
+    watch: Res<ObserverPerspective>,
     reveal: Res<FogReveal>,
     mut ghosts: ResMut<Ghosts>,
     buildings: Query<
@@ -1325,11 +1458,9 @@ pub fn draw_ghosts(
         Without<HiddenComponent>,
     >,
 ) {
-    let local = session.local_player();
     let mut alive = HashSet::new();
     for (info, location, tags, owner) in &buildings {
-        let own_team =
-            owner.is_some_and(|o| o.player() == local || session.are_allied(local, o.player()));
+        let own_team = owner.is_some_and(|o| allied_with_local(&session, o.player()));
         if own_team || !tags.contains(tags::BUILDING) {
             continue;
         }
@@ -1338,7 +1469,7 @@ pub fn draw_ghosts(
             location.position.x.to_num::<u32>(),
             location.position.y.to_num::<u32>(),
         );
-        if fog.is_visible_to(&session, local, x, y) {
+        if sees(&session, &watch, &fog, x, y) {
             let size = registry.def(info.type_id()).location.unwrap().size();
             ghosts.0.insert(
                 info.id(),
@@ -1353,7 +1484,7 @@ pub fn draw_ghosts(
     }
 
     ghosts.0.retain(|id, ghost| {
-        match fog.visibility_to(&session, local, ghost.origin.0, ghost.origin.1) {
+        match perspective(&session, &watch, &fog, ghost.origin.0, ghost.origin.1) {
             // Seen again: keep only if the building is still there (else it was
             // destroyed while we were away, so drop the stale ghost).
             CellVisibility::Visible => alive.contains(id),

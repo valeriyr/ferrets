@@ -37,14 +37,27 @@ pub fn frame_local_player(
     map: Res<Map>,
     mut camera: Query<&mut Transform, With<Camera2d>>,
 ) {
-    let Some(start) = map.start_point(session.local_player()) else {
-        return;
+    // A node with no local player — an observer's, a replay's — has no base
+    // of its own to open on, so it opens on the first player's instead: a
+    // watcher starts where the action starts. The middle of the map is the
+    // last resort, for a lineup with no start points at all.
+    let framed = session
+        .local_player()
+        .and_then(|local| map.start_point(local))
+        .or_else(|| {
+            session
+                .player_slots()
+                .find_map(|slot| map.start_point(slot.id()))
+        });
+    let (x, y) = match framed {
+        Some(start) => (start.x as f32 + 5.0, start.y as f32 + 5.0),
+        None => (map.width() as f32 / 2.0, map.height() as f32 / 2.0),
     };
     let Ok(mut transform) = camera.single_mut() else {
         return;
     };
-    transform.translation.x = (start.x as f32 + 5.0) * CELL_PX;
-    transform.translation.y = -(start.y as f32 + 5.0) * CELL_PX;
+    transform.translation.x = x * CELL_PX;
+    transform.translation.y = -y * CELL_PX;
 }
 
 /// Pans the camera with WASD/arrows and zooms with the scroll wheel, keeping the

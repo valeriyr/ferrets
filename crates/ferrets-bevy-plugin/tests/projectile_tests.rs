@@ -302,6 +302,7 @@ fn app() -> App {
         registry.register(
             EntityTypeDef::new("gunner")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_sight_range(12)
                 .with_health(40)
                 .with_bonus_damage_vs([("armored", 12u32)])
                 .with_attack(
@@ -329,6 +330,7 @@ fn app() -> App {
         registry.register(
             EntityTypeDef::new("sieger")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_sight_range(12)
                 .with_health(40)
                 .with_attack(
                     AttackDef::new(Weapon::new(utils::GROUND, Delivery::Projectile(lob), None)),
@@ -354,6 +356,7 @@ fn app() -> App {
         registry.register(
             EntityTypeDef::new("tank")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_sight_range(12)
                 .with_health(100)
                 .with_armor(6)
                 .with_tags(["armored"]),

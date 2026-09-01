@@ -1,19 +1,26 @@
 //! Manages the lifecycle and participants of a running game.
 
 pub mod ai_hosting;
+pub mod ai_vision;
 pub mod authority;
+pub mod defeat_conduct;
 pub mod drop_policy;
+pub mod elimination_scope;
 pub mod finish_policy;
 pub mod game_speed;
+pub mod local_role;
 pub mod player_slot;
 pub mod player_type;
 
 use crate::session::{
     ai_hosting::AiHosting,
     authority::Authority,
+    defeat_conduct::DefeatConduct,
     drop_policy::DropPolicy,
+    elimination_scope::EliminationScope,
     finish_policy::FinishPolicy,
     game_speed::GameSpeed,
+    local_role::LocalRole,
     player_slot::{Participation, PlayerId, PlayerSlot, TeamId},
     player_type::PlayerType,
 };
@@ -72,13 +79,18 @@ pub struct GameSession {
     tick: u32,
     /// Lifecycle state of the session.
     state: SessionState,
-    /// Player slots in this session.
+    /// Player slots in this session: the game's participants — combatants
+    /// seated by the lobby or the map, and the seats left free. Never a
+    /// watcher: an observer is a participant of the session, not of the
+    /// game, so the simulation knows nothing of it — observers exist only as
+    /// network subscribers, and their node runs with no local player.
     slots: Vec<PlayerSlot>,
     /// The map this session plays on, by name — the session holds the
     /// agreement, not the map itself.
     map: String,
-    /// The slot controlled by the local client.
-    local_player: PlayerId,
+    /// The role this node holds: the slot it fields, or a watcher's place —
+    /// an observer controls nothing, so no local player comes with it.
+    local: LocalRole,
     /// Who resolves session-level decisions (drops, pauses), and the
     /// host-dependent choices that come with a host.
     authority: Authority,
@@ -86,6 +98,9 @@ pub struct GameSession {
     drop_policy: DropPolicy,
     /// When this session ends on its own.
     finish_policy: FinishPolicy,
+    /// What this node does when the local player is defeated while the match
+    /// goes on.
+    defeat_conduct: DefeatConduct,
     /// How the game ended, once it has. `None` while still in progress.
     result: Option<GameResult>,
     /// The tick from which each slot's player contributes no further input (a
@@ -114,29 +129,22 @@ impl GameSession {
     /// session-level choices a lobby would otherwise install via
     /// [`configure`](Self::configure).
     ///
-    /// `local_player` is the [`PlayerId`] controlled by this client; the
-    /// remaining choices are the session-level agreement, each valid in any
-    /// combination by construction.
+    /// `local` is the role this node holds — the slot it fields, or a
+    /// watcher's place; the remaining choices are the session-level
+    /// agreement, each valid in any combination by construction.
     ///
-    /// Panics if the ids are not sorted and contiguous starting from `0` (i.e. `0, 1, 2, …`).
-    /// Panics if `local_player` is not in `slots`.
+    /// Panics if the slot ids are not sorted and contiguous starting from `0`
+    /// (i.e. `0, 1, 2, …`), or if `local` fields a slot outside them.
     pub fn configured(
-        local_player: PlayerId,
+        local: LocalRole,
         slots: Vec<PlayerSlot>,
         map: impl Into<String>,
         authority: Authority,
         drop_policy: DropPolicy,
         finish_policy: FinishPolicy,
     ) -> Self {
-        assert_valid_slots(local_player, &slots);
-        Self::new(
-            local_player,
-            slots,
-            map,
-            authority,
-            drop_policy,
-            finish_policy,
-        )
+        assert_valid_slots(local, &slots);
+        Self::new(local, slots, map, authority, drop_policy, finish_policy)
     }
 
     /// The inert pre-configuration placeholder: a game inserts the resource
@@ -147,14 +155,16 @@ impl GameSession {
     /// is configured and started.
     pub fn pending() -> Self {
         Self::new(
-            0,
+            LocalRole::Observer,
             Vec::new(),
             String::new(),
             Authority::Host {
                 ai_hosting: AiHosting::Replicated,
             },
             DropPolicy::Automatic,
-            FinishPolicy::LastStanding,
+            FinishPolicy::LastStanding {
+                elimination: EliminationScope::Player,
+            },
         )
     }
 
@@ -164,10 +174,10 @@ impl GameSession {
     /// rather than constructing a new one.
     ///
     /// Panics if the session has already started, or if the slot ids are not
-    /// contiguous from `0`, or `local_player` is not a valid slot.
+    /// contiguous from `0`, or `local` fields a slot outside them.
     pub fn configure(
         &mut self,
-        local_player: PlayerId,
+        local: LocalRole,
         slots: Vec<PlayerSlot>,
         map: impl Into<String>,
         authority: Authority,
@@ -179,12 +189,12 @@ impl GameSession {
             SessionState::Pending,
             "configure called after the session started",
         );
-        assert_valid_slots(local_player, &slots);
+        assert_valid_slots(local, &slots);
         self.dropped = vec![None; slots.len()];
         self.eliminated = vec![None; slots.len()];
         self.slots = slots;
         self.map = map.into();
-        self.local_player = local_player;
+        self.local = local;
         self.authority = authority;
         self.drop_policy = drop_policy;
         self.finish_policy = finish_policy;
@@ -298,8 +308,8 @@ impl GameSession {
     pub fn sources_locally(&self, slot: &PlayerSlot, is_host: bool) -> bool {
         match slot.player_type() {
             None => false,
-            Some(PlayerType::Human) => slot.id() == self.local_player,
-            Some(PlayerType::Ai) => match self.ai_hosting() {
+            Some(PlayerType::Human) => self.local == LocalRole::Player(slot.id()),
+            Some(PlayerType::Ai { .. }) => match self.ai_hosting() {
                 AiHosting::Replicated => true,
                 AiHosting::Host => is_host,
             },
@@ -314,6 +324,19 @@ impl GameSession {
     /// Returns when this session ends on its own.
     pub fn finish_policy(&self) -> FinishPolicy {
         self.finish_policy
+    }
+
+    /// Sets what this node does when the local player is defeated while the
+    /// match goes on. A local presentation choice — never synchronized, free
+    /// to differ between peers.
+    pub fn set_defeat_conduct(&mut self, conduct: DefeatConduct) {
+        self.defeat_conduct = conduct;
+    }
+
+    /// Returns what this node does when the local player is defeated while
+    /// the match goes on.
+    pub fn defeat_conduct(&self) -> DefeatConduct {
+        self.defeat_conduct
     }
 
     /// Returns how the game ended, or `None` while it is still in progress.
@@ -372,9 +395,29 @@ impl GameSession {
         self.slots.get(id as usize)
     }
 
-    /// Returns the [`PlayerId`] controlled by this client.
-    pub fn local_player(&self) -> PlayerId {
-        self.local_player
+    /// The role this node holds: the slot it fields, or a watcher's place.
+    pub fn local_role(&self) -> LocalRole {
+        self.local
+    }
+
+    /// Returns the [`PlayerId`] controlled by this client, or `None` on a
+    /// node that only watches — an observer controls nothing.
+    pub fn local_player(&self) -> Option<PlayerId> {
+        self.local.player()
+    }
+
+    /// Returns `true` while this node fields a live local player
+    /// ([`is_player_live`](Self::is_player_live)): one exists, and neither
+    /// its elimination nor its drop has taken effect. This is all the session
+    /// can certify — whether a node that plays nothing is actually *watched*
+    /// by anyone (an observer's screen, a replay viewer, nobody at all) is
+    /// the presentation layer's knowledge, composed from this answer and the
+    /// exclusion marks.
+    pub fn local_plays(&self) -> bool {
+        match self.local {
+            LocalRole::Player(local) => self.is_player_live(local),
+            LocalRole::Observer => false,
+        }
     }
 
     /// Returns `true` when `a` and `b` are allies: the same player, or two
@@ -493,6 +536,16 @@ impl GameSession {
         self.is_player_dropped(player) || self.is_player_eliminated(player)
     }
 
+    /// Returns `true` while `player` is a live participant of the game: its
+    /// slot is occupied, and neither a drop nor an elimination has taken
+    /// effect — the game still answers its commands.
+    pub fn is_player_live(&self, player: PlayerId) -> bool {
+        let occupied = self
+            .slot(player)
+            .is_some_and(|slot| slot.player_type().is_some());
+        occupied && !self.is_player_out(player)
+    }
+
     /// Whether the tick `player` is marked with in `marks` has arrived — the
     /// exclusion is in effect, not merely decided for a tick still ahead.
     fn mark_arrived(&self, marks: &[Option<u32>], player: PlayerId) -> bool {
@@ -504,7 +557,8 @@ impl GameSession {
     }
 
     /// Returns `true` when `tick` needs `player`'s input before it can
-    /// execute: the slot is occupied and neither the player's drop nor its
+    /// execute: the slot is occupied (an observer holds no slot, so no tick
+    /// ever needs its input), and neither the player's drop nor its
     /// elimination has taken effect by that tick. The exclusion ticks are
     /// derived or agreed identically on every node, so every node answers
     /// this identically for any tick — past, present, or future.
@@ -551,7 +605,7 @@ impl GameSession {
     /// coherent slot list, while [`pending`](Self::pending) is deliberately
     /// slotless.
     fn new(
-        local_player: PlayerId,
+        local: LocalRole,
         slots: Vec<PlayerSlot>,
         map: impl Into<String>,
         authority: Authority,
@@ -565,10 +619,11 @@ impl GameSession {
             eliminated: vec![None; slots.len()],
             slots,
             map: map.into(),
-            local_player,
+            local,
             authority,
             drop_policy,
             finish_policy,
+            defeat_conduct: DefeatConduct::Conclude,
             result: None,
             paused: false,
             speed: GameSpeed::NORMAL,
@@ -576,8 +631,9 @@ impl GameSession {
     }
 }
 
-/// Asserts the slot ids are contiguous from `0` and `local_player` is one of them.
-fn assert_valid_slots(local_player: PlayerId, slots: &[PlayerSlot]) {
+/// Asserts the slot ids are contiguous from `0` and `local`, when it fields
+/// a player, fields one of them.
+fn assert_valid_slots(local: LocalRole, slots: &[PlayerSlot]) {
     for (expected, slot) in slots.iter().enumerate() {
         assert_eq!(
             slot.id() as usize,
@@ -586,9 +642,11 @@ fn assert_valid_slots(local_player: PlayerId, slots: &[PlayerSlot]) {
             slot.id()
         );
     }
-    assert!(
-        (local_player as usize) < slots.len(),
-        "local_player {local_player} is not in slots (len {})",
-        slots.len()
-    );
+    if let LocalRole::Player(local) = local {
+        assert!(
+            (local as usize) < slots.len(),
+            "local_player {local} is not in slots (len {})",
+            slots.len()
+        );
+    }
 }

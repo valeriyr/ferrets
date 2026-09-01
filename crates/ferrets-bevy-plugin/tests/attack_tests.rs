@@ -219,6 +219,7 @@ fn send_to_entity_does_not_attack_ally() {
         registry.register(
             EntityTypeDef::new("soldier")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_sight_range(8)
                 .with_movement(
                     FixedU64::from_num(0.5),
                     FixedU64::from_num(0.5),

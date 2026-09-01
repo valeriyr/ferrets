@@ -13,7 +13,7 @@ use ferrets_replay::{buffer::SharedBuffer, recorder::Recorder, replay::Replay};
 use ferrets_simulation::{
     command::PlayerCommand,
     input::{InputFrames, PlayerFrame},
-    session::{GameSession, finish_policy::FinishPolicy},
+    session::{GameSession, elimination_scope::EliminationScope, finish_policy::FinishPolicy},
 };
 
 use utils::{GROUND, GROUND_LAYER};
@@ -54,7 +54,12 @@ fn run_playback_reports_finished_game_played_out() {
     let mut recorded = lone_base_app();
     let buffer = utils::record_into(
         &mut recorded,
-        &utils::skirmish_header(utils::human_slots(2), FinishPolicy::LastStanding),
+        &utils::skirmish_header(
+            utils::human_slots(2),
+            FinishPolicy::LastStanding {
+                elimination: EliminationScope::Player,
+            },
+        ),
     );
     for _ in 0..8 {
         // The building-less player has no frame source of its own; idle frames
@@ -473,7 +478,9 @@ fn lone_base_app() -> App {
     }
     app.world_mut()
         .resource_mut::<GameSession>()
-        .set_finish_policy(FinishPolicy::LastStanding);
+        .set_finish_policy(FinishPolicy::LastStanding {
+            elimination: EliminationScope::Player,
+        });
     utils::spawn_owned(&mut app, "base", 5, 5, 0);
     app.world_mut().resource_mut::<GameSession>().start();
     app

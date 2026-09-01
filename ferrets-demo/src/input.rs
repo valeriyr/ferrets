@@ -294,12 +294,25 @@ pub fn viewport_corners(
 fn entity_at(
     world: Vec2,
     registry: &ContentRegistry,
-    entities: &Query<(&EntityInfoComponent, &LocationComponent), Without<HiddenComponent>>,
+    entities: &Query<
+        (
+            &EntityInfoComponent,
+            &LocationComponent,
+            Option<&Visibility>,
+        ),
+        Without<HiddenComponent>,
+    >,
 ) -> Option<SimulationId> {
     let x = world.x / CELL_PX;
     let y = -world.y / CELL_PX;
     let mut best: Option<(u32, SimulationId)> = None;
-    for (info, location) in entities {
+    for (info, location, visibility) in entities {
+        // The click meets what the player sees: a sprite the fog (or the
+        // watching perspective) hides is not there to be clicked, and the
+        // simulation would refuse an order against it anyway.
+        if matches!(visibility, Some(Visibility::Hidden)) {
+            continue;
+        }
         let ox = location.position.x.to_num::<f32>();
         let oy = location.position.y.to_num::<f32>();
         let def = registry.def(info.type_id());
@@ -335,7 +348,14 @@ pub fn selection_input(
     interactions: Query<&Interaction>,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
-    entities: Query<(&EntityInfoComponent, &LocationComponent), Without<HiddenComponent>>,
+    entities: Query<
+        (
+            &EntityInfoComponent,
+            &LocationComponent,
+            Option<&Visibility>,
+        ),
+        Without<HiddenComponent>,
+    >,
 ) {
     if !matches!(*mode, InputMode::Normal) {
         // A drag interrupted by entering a mode must not fire when the click
@@ -448,7 +468,14 @@ pub fn order_input(
     interactions: Query<&Interaction>,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
-    entities: Query<(&EntityInfoComponent, &LocationComponent), Without<HiddenComponent>>,
+    entities: Query<
+        (
+            &EntityInfoComponent,
+            &LocationComponent,
+            Option<&Visibility>,
+        ),
+        Without<HiddenComponent>,
+    >,
     rally_holders: Query<(&EntityInfoComponent, &OwnerComponent), With<RallyPointComponent>>,
 ) {
     if !mouse.just_pressed(MouseButton::Right) || !matches!(*mode, InputMode::Normal) {
@@ -500,7 +527,9 @@ pub fn issue_orders_at(
     // Only a selection of stationary producers captures the click; a mixed
     // selection keeps ordering its units around normally, and anything that
     // can move is ordered around too — movement outranks rally.
-    let local = session.local_player();
+    let Some(local) = session.local_player() else {
+        return;
+    };
     let selected = selection.get(local);
     let all_producers = !selected.is_empty()
         && selected.iter().all(|&id| {
@@ -538,6 +567,114 @@ pub fn issue_orders_at(
 #[derive(Resource, Default, PartialEq, Eq)]
 pub struct Primary(pub Option<SimulationId>);
 
+/// The entities a spectator selected to look at: display-only, local to this
+/// node, and touching no synced state — a spectator's clicks never become
+/// commands.
+#[derive(Resource, Default)]
+pub struct Inspected(pub Vec<SimulationId>);
+
+/// Whether the local player is still at the controls: command-producing input
+/// runs only while the game answers this node's commands. Its complement is
+/// what the demo calls spectating — the session only certifies who plays;
+/// that the human behind this screen is then *watching* is the demo's own
+/// knowledge, since the demo is the screen.
+pub fn commands_live(session: Res<GameSession>) -> bool {
+    session.local_plays()
+}
+
+/// A spectator's selection: a left click picks the entity under the cursor
+/// for the info panel (Shift toggles it in and out), a drag frames a box and
+/// takes everything inside (Shift adds), a click on empty ground clears. All
+/// of it local and display-only — no command is ever produced; the sim's
+/// selection rules (buildings excluded from boxes, ownership) don't apply,
+/// because a watcher inspects anything.
+pub fn inspect_input(
+    mouse: Res<ButtonInput<MouseButton>>,
+    keys: Res<ButtonInput<KeyCode>>,
+    registry: Res<ContentRegistry>,
+    mut drag: ResMut<DragStart>,
+    mut inspected: ResMut<Inspected>,
+    mut gizmos: Gizmos,
+    interactions: Query<&Interaction>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    cameras: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
+    entities: Query<
+        (
+            &EntityInfoComponent,
+            &LocationComponent,
+            Option<&Visibility>,
+        ),
+        Without<HiddenComponent>,
+    >,
+) {
+    if pointer_over_ui(&interactions) {
+        // A click on a HUD button belongs to the UI, not the map beneath it.
+        drag.0 = None;
+        return;
+    }
+    let (Ok(window), Ok((camera, camera_transform))) = (windows.single(), cameras.single()) else {
+        return;
+    };
+    let Some(cursor) = cursor_world(window, camera, camera_transform) else {
+        return;
+    };
+
+    if mouse.just_pressed(MouseButton::Left) {
+        drag.0 = Some(cursor);
+    }
+
+    if let Some(start) = drag.0
+        && mouse.pressed(MouseButton::Left)
+        && start.distance(cursor) > CLICK_SLOP
+        && let Some(corners) = frame_corners(camera, camera_transform, start, cursor)
+    {
+        // The live box, drawn like the playing marquee so watching feels the
+        // same as playing — only the outcome differs.
+        let outline = [corners[0], corners[1], corners[2], corners[3], corners[0]];
+        gizmos.linestrip_2d(outline, Color::srgb(0.85, 0.9, 1.0));
+    }
+
+    if mouse.just_released(MouseButton::Left)
+        && let Some(start) = drag.0.take()
+    {
+        let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
+        if start.distance(cursor) <= CLICK_SLOP {
+            match entity_at(cursor, &registry, &entities) {
+                Some(id) if shift => {
+                    if let Some(held) = inspected.0.iter().position(|&it| it == id) {
+                        inspected.0.remove(held);
+                    } else {
+                        inspected.0.push(id);
+                    }
+                }
+                Some(id) => inspected.0 = vec![id],
+                None if shift => {}
+                None => inspected.0.clear(),
+            }
+        } else {
+            let rect = frame_corners(camera, camera_transform, start, cursor)
+                .map(|corners| covering_rect(&corners))
+                .unwrap_or_else(|| covering_rect(&[start, cursor]));
+            let framed = entities
+                .iter()
+                .filter(|(_, location, visibility)| {
+                    !matches!(visibility, Some(Visibility::Hidden))
+                        && rect.contains(location.position)
+                })
+                .map(|(info, ..)| info.id());
+            if shift {
+                for id in framed {
+                    if !inspected.0.contains(&id) {
+                        inspected.0.push(id);
+                    }
+                }
+            } else {
+                inspected.0 = framed.collect();
+            }
+        }
+    }
+}
+
 /// Recomputes [`Primary`] as the selection's highest-selection-priority entity,
 /// ties broken by lowest [`SimulationId`], so a mixed selection leads with its
 /// most significant unit (a caster over line infantry).
@@ -548,7 +685,9 @@ pub fn track_primary(
     entities: Query<&EntityInfoComponent>,
     mut primary: ResMut<Primary>,
 ) {
-    let local = session.local_player();
+    let Some(local) = session.local_player() else {
+        return;
+    };
     let next = selection
         .get(local)
         .iter()
@@ -580,7 +719,10 @@ pub fn order_mode_input(
     if matches!(*mode, InputMode::PlacingBuild(_)) {
         return;
     }
-    if selection.get(session.local_player()).is_empty() {
+    let Some(local) = session.local_player() else {
+        return;
+    };
+    if selection.get(local).is_empty() {
         return;
     }
     let armed = if keys.just_pressed(KeyCode::KeyF) {
@@ -614,7 +756,14 @@ pub fn targeting_input(
     interactions: Query<&Interaction>,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
-    entities: Query<(&EntityInfoComponent, &LocationComponent), Without<HiddenComponent>>,
+    entities: Query<
+        (
+            &EntityInfoComponent,
+            &LocationComponent,
+            Option<&Visibility>,
+        ),
+        Without<HiddenComponent>,
+    >,
 ) {
     let InputMode::Targeting(armed) = *mode else {
         return;
@@ -708,7 +857,10 @@ pub fn targeting_input(
             let Some(target) = entity_at(cursor, &registry, &entities) else {
                 return;
             };
-            for &caster in selection.get(session.local_player()) {
+            let Some(local) = session.local_player() else {
+                return;
+            };
+            for &caster in selection.get(local) {
                 pending.push(PlayerCommand::UseSkill {
                     skill,
                     caster: SkillCasterRef::Entity(caster),
@@ -823,7 +975,10 @@ fn center_on_group(
     positions: &Query<(&EntityInfoComponent, &LocationComponent)>,
     cameras: &mut Query<&mut Transform, With<Camera2d>>,
 ) {
-    let ids = groups.get(session.local_player(), group);
+    let Some(local) = session.local_player() else {
+        return;
+    };
+    let ids = groups.get(local, group);
     let mut sum = Vec2::ZERO;
     let mut count = 0.0;
     for &id in ids {

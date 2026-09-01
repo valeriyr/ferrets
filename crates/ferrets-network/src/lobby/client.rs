@@ -114,6 +114,20 @@ impl LobbyClient {
         Ok(())
     }
 
+    /// Requests to watch instead of play (granted while the host's observer
+    /// limit has room).
+    pub fn request_observe(&mut self) -> crate::Result<()> {
+        self.control
+            .send(&ControlMessage::Lobby(LobbyMessage::RequestObserve))
+    }
+
+    /// Requests to play instead of watch (granted while a player slot is
+    /// open).
+    pub fn request_play(&mut self) -> crate::Result<()> {
+        self.control
+            .send(&ControlMessage::Lobby(LobbyMessage::RequestPlay))
+    }
+
     /// Drains control events, applying lobby state to the mirror and surfacing
     /// the host's refusal or disconnect to the caller.
     pub fn poll(&mut self) -> PollOutcome {
@@ -148,7 +162,9 @@ impl LobbyClient {
                     LobbyMessage::Rejected { .. }
                     | LobbyMessage::Join { .. }
                     | LobbyMessage::RequestRace { .. }
-                    | LobbyMessage::RequestTeam { .. } => {}
+                    | LobbyMessage::RequestTeam { .. }
+                    | LobbyMessage::RequestObserve
+                    | LobbyMessage::RequestPlay => {}
                 },
                 // In-game control reaches a client only once it has started.
                 ControlEvent::Message {
@@ -186,6 +202,19 @@ impl LobbyClient {
             .iter()
             .find(|info| info.occupant == Occupant::Human { peer: me })
             .map(|info| info.slot)
+    }
+
+    /// Returns `true` while this client's peer watches.
+    pub fn local_observes(&self) -> bool {
+        self.observers().contains(&self.control.local_peer())
+    }
+
+    /// The peers watching the game — empty until the host's first broadcast.
+    pub fn observers(&self) -> &[PeerId] {
+        self.state
+            .as_ref()
+            .map(|state| state.observers.as_slice())
+            .unwrap_or(&[])
     }
 
     /// The host's start signal once it has arrived, or `None` until then.

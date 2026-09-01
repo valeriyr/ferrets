@@ -16,7 +16,8 @@ use ferrets_simulation::{
     movement_model::MovementModel,
     session::{
         GameSession, ai_hosting::AiHosting, authority::Authority, drop_policy::DropPolicy,
-        finish_policy::FinishPolicy, player_slot::PlayerSlot, player_type::PlayerType,
+        finish_policy::FinishPolicy, local_role::LocalRole, player_slot::PlayerSlot,
+        player_type::PlayerType,
     },
 };
 
@@ -36,7 +37,7 @@ pub fn scenario_app(model: MovementModel) -> App {
     let mut app = App::new();
     app.add_plugins(SimulationPlugin::new(
         GameSession::configured(
-            0,
+            LocalRole::Player(0),
             slots,
             "build_army",
             Authority::Host {
@@ -79,7 +80,7 @@ pub fn demo_map_app(model: MovementModel) -> App {
     let mut app = App::new();
     app.add_plugins(SimulationPlugin::new(
         GameSession::configured(
-            0,
+            LocalRole::Player(0),
             slots,
             ferrets_demo::map::NAME,
             Authority::Host {
@@ -123,7 +124,7 @@ pub fn run_ticks(app: &mut App, ticks: u32) {
             (session.tick(), session.local_player(), players)
         };
         for player in players {
-            if player != local_player {
+            if Some(player) != local_player {
                 world
                     .resource_mut::<InputFrames>()
                     .push_frame(PlayerFrame::idle(player, current_tick));
@@ -193,6 +194,7 @@ pub fn view_app() -> App {
     world.init_resource::<Time>();
     world.init_resource::<Time<Fixed>>();
     world.init_resource::<render::FogReveal>();
+    world.init_resource::<render::ObserverPerspective>();
     world.init_resource::<render::Smoothing>();
     world.init_resource::<render::Ghosts>();
     app

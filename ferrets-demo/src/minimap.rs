@@ -500,6 +500,7 @@ pub fn refresh_minimap(
     registry: Res<ContentRegistry>,
     selection: Res<Selection>,
     fog: Res<VisibilityGrid>,
+    watch: Res<render::ObserverPerspective>,
     reveal: Res<FogReveal>,
     ghosts: Res<Ghosts>,
     minimap: Option<ResMut<Minimap>>,
@@ -550,7 +551,7 @@ pub fn refresh_minimap(
     if !reveal.0 {
         for y in 0..height {
             for x in 0..width {
-                match fog.visibility_to(&session, local, x, y) {
+                match render::perspective(&session, &watch, &fog, x, y) {
                     CellVisibility::Unexplored => canvas.put(x, y, VOID),
                     CellVisibility::Explored => {
                         if let Some(color) = base.get(x, y) {
@@ -574,7 +575,7 @@ pub fn refresh_minimap(
 
     // Live blips, painted in ascending significance so nothing that matters is
     // buried: strangers first, then the local team, then what is selected.
-    let selected = selection.get(local);
+    let selected = local.map_or(&[][..], |local| selection.get(local));
     let mut blips: Vec<_> = entities
         .iter()
         .filter_map(|(info, location, owner, health)| {
@@ -582,13 +583,14 @@ pub fn refresh_minimap(
                 location.position.x.to_num::<u32>(),
                 location.position.y.to_num::<u32>(),
             );
-            if !reveal.0 && !fog.is_visible_to(&session, local, x, y) {
+            if !reveal.0 && !render::sees(&session, &watch, &fog, x, y) {
                 return None;
             }
             let def = registry.def(info.type_id());
             let size = def.location?.size();
-            let own = owner.is_some_and(|owner| owner.player() == local);
-            let team = own || owner.is_some_and(|owner| session.are_allied(local, owner.player()));
+            let own = owner.is_some_and(|owner| Some(owner.player()) == local);
+            let team =
+                owner.is_some_and(|owner| render::allied_with_local(&session, owner.player()));
 
             let color = if selected.contains(&info.id()) {
                 SELECTED

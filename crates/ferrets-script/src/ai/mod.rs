@@ -50,19 +50,9 @@
 
 pub mod view;
 
-use ferrets_simulation::command::PlayerCommand;
+use ferrets_simulation::{command::PlayerCommand, session::ai_vision::AiVision};
 
 use crate::ai::view::game::GameView;
-
-/// How much of the map an AI brain observes. Each AI implementation declares its
-/// own fog behaviour.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AiVision {
-    /// Sees only what its team's vision reveals — fog of war applies.
-    Filtered,
-    /// Sees the whole map, ignoring fog.
-    Omniscient,
-}
 
 /// A live brain for one AI player, kept alive for a whole session.
 ///

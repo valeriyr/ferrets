@@ -5,7 +5,7 @@ mod utils;
 
 use ferrets_network::{
     bootstrap,
-    message::control::{ControlMessage, InGameMessage, Occupant},
+    message::control::{ControlMessage, InGameMessage, Occupant, Proposer},
     peer::{HOST_PEER, PeerId},
     session::NetSession,
     session_mode::SessionMode,
@@ -15,7 +15,9 @@ use ferrets_simulation::{
     input::PlayerFrame,
     session::{
         ai_hosting::AiHosting,
+        ai_vision::AiVision,
         drop_policy::DropPolicy,
+        elimination_scope::EliminationScope,
         finish_policy::FinishPolicy,
         player_slot::{PlayerId, PlayerSlot},
         player_type::PlayerType,
@@ -52,7 +54,7 @@ fn host_star_start_builds_gameplay_channel_mapped_from_slots() {
     let mut session = NetSession::start_host(host, None, &humans(3)).expect("start host");
 
     let gameplay = session.gameplay();
-    assert_eq!(gameplay.local_player(), 0);
+    assert_eq!(gameplay.local_player(), Some(0));
     assert_eq!(gameplay.player_count(), 3);
     assert!(gameplay.is_networked(1));
     assert!(gameplay.is_networked(2));
@@ -70,7 +72,14 @@ fn ai_slots_are_networked_only_under_host_only_hosting() {
         host.set_occupant(2, Occupant::Ai).expect("slot 2 is an ai");
 
         let mut slots = humans(2);
-        slots.push(PlayerSlot::occupied(2, PlayerType::Ai, None, None));
+        slots.push(PlayerSlot::occupied(
+            2,
+            PlayerType::Ai {
+                vision: AiVision::Filtered,
+            },
+            None,
+            None,
+        ));
         let mut session = NetSession::start_host(host, None, &slots).expect("start host");
 
         assert_eq!(
@@ -118,7 +127,9 @@ fn decentralized_start_builds_control_mesh_outliving_lobby_star() {
         ("127.0.0.1", TCP),
         SessionMode::MeshDecentralized,
         DropPolicy::Automatic,
-        FinishPolicy::LastStanding,
+        FinishPolicy::LastStanding {
+            elimination: EliminationScope::Player,
+        },
         2,
         "human",
     )
@@ -159,7 +170,7 @@ fn decentralized_start_builds_control_mesh_outliving_lobby_star() {
     assert_eq!(received, vec![(CLIENT, ControlMessage::InGame(vote))]);
 
     let pause = InGameMessage::PauseAt {
-        proposer: HOST_PLAYER,
+        proposer: Proposer::Player(HOST_PLAYER),
         tick: 12,
         paused: true,
     };
@@ -186,7 +197,9 @@ fn mesh_start_exchanges_frames_both_ways_despite_unspecified_host_bind() {
             ai_hosting: AiHosting::Host,
         },
         DropPolicy::Automatic,
-        FinishPolicy::LastStanding,
+        FinishPolicy::LastStanding {
+            elimination: EliminationScope::Player,
+        },
         2,
         "human",
     )
@@ -295,7 +308,7 @@ fn control_flows_both_ways_after_host_star_game_starts() {
 
     // Host → client: the authoritative pause reaches the client.
     host.send_control(&ControlMessage::InGame(InGameMessage::PauseAt {
-        proposer: HOST_PLAYER,
+        proposer: Proposer::Player(HOST_PLAYER),
         tick: 50,
         paused: true,
     }))
@@ -306,7 +319,7 @@ fn control_flows_both_ways_after_host_star_game_starts() {
         vec![(
             HOST_PEER,
             ControlMessage::InGame(InGameMessage::PauseAt {
-                proposer: HOST_PLAYER,
+                proposer: Proposer::Player(HOST_PLAYER),
                 tick: 50,
                 paused: true
             })

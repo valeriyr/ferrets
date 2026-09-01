@@ -101,6 +101,54 @@ fn recalled_group_excludes_destroyed_member() {
 }
 
 #[test]
+fn recalled_group_omits_member_lost_to_fog() {
+    // A grouped enemy is a bookmark, not a beacon: once the fog swallows it,
+    // recalling the group must not hand its position back.
+    let mut app = utils::selection_app();
+    let world = app.world_mut();
+    let (_, own) = spawn::spawn_entity(world, "soldier", utils::pos(3, 5), Some(0)).unwrap();
+    // A harmless mark inside the watcher's sight of five, outside its
+    // auto-engage reach of three — nobody starts a fight over it.
+    let (_, enemy) = spawn::spawn_entity(world, "critter", utils::pos(7, 5), Some(1)).unwrap();
+    utils::run_ticks(&mut app, utils::APPLY);
+
+    // Seen, the enemy is grouped...
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SelectById {
+            id: enemy,
+            mode: SelectMode::Replace,
+        },
+    );
+    utils::push_command(&mut app, PlayerCommand::AssignGroup { group: 3 });
+    utils::run_ticks(&mut app, utils::APPLY);
+    assert_eq!(app.world().resource::<ControlGroups>().get(0, 3), &[enemy]);
+
+    // ...then the watcher walks away, taking the sight with it.
+    utils::select(&mut app, own);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Move {
+            target: utils::pos(25, 25),
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, 120);
+
+    utils::push_command(
+        &mut app,
+        PlayerCommand::RecallGroup {
+            group: 3,
+            mode: SelectMode::Replace,
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY);
+
+    // Nothing recallable: the no-op keeps the current selection instead.
+    assert_eq!(utils::selection(&app), vec![own]);
+}
+
+#[test]
 fn recalling_empty_group_keeps_selection() {
     let mut app = utils::selection_app();
     let world = app.world_mut();

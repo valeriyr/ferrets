@@ -19,7 +19,7 @@ use ferrets_math::{FixedI64, FixedU64, fixed_urect::FixedURect, fixed_uvec2::Fix
 use ferrets_pathfinder::nav_grid::LayerId;
 use ferrets_script::{
     ai::{
-        AiRuntime, AiVision,
+        AiRuntime,
         view::{
             content::{AttackView, ContentView, EntityContentView},
             game::{EntityView, GameView},
@@ -32,6 +32,7 @@ use ferrets_simulation::{
     command::{PlayerCommand, SelectMode, SkillCasterRef},
     components::{rally::RallyTarget, stance::Stance},
     order::AttackTarget,
+    session::ai_vision::AiVision,
     simulation_id::SimulationId,
 };
 

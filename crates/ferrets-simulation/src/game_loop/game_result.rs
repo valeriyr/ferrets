@@ -10,6 +10,8 @@ use crate::{
     entity_index::EntityIndex,
     session::{
         GameResult, GameSession, Winner,
+        defeat_conduct::DefeatConduct,
+        elimination_scope::EliminationScope,
         finish_policy::FinishPolicy,
         player_slot::{PlayerId, PlayerSlot},
     },
@@ -19,16 +21,23 @@ use ferrets_content::tags;
 /// Ends the session, under [`FinishPolicy::LastStanding`], once the players still
 /// holding a building are all on one side.
 ///
-/// A player survives while they own at least one standing building; losing the
-/// last one is defeat, independent of any surviving units. A defeated player is
-/// eliminated as of the next tick: every node derives the same elimination from
-/// its own simulation, so from that tick on no node requires the player's input
-/// — the survivors keep playing instead of stalling on frames the defeated
-/// player's node will never send.
+/// A player stands while a standing building keeps them in the game — their
+/// own under [`EliminationScope::Player`], any of their side's under
+/// [`EliminationScope::Side`] — independent of any surviving units. A player
+/// who stops standing is eliminated as of the next tick (under `Side`, a
+/// falling side is eliminated whole, on one tick): every node derives the
+/// same elimination from its own simulation, so from that tick on no node
+/// requires the player's input — the survivors keep playing instead of
+/// stalling on frames the eliminated player's node may never send.
 /// The game ends when every survivor is allied with all the others — one side
 /// left, winning as a team or as a lone player — or none survive (a draw).
-/// While two unallied survivors stand the match continues, but the local player
-/// is told of its own [`Defeat`](GameResult::Defeat) the moment it is out.
+/// While two unallied survivors stand the match continues, but the local
+/// player is told of its own [`Defeat`](GameResult::Defeat) the moment its
+/// whole side is out — under [`EliminationScope::Player`] a player may be
+/// eliminated (out of input, watching) while its side fights on, and is not
+/// defeated until the side falls. Under [`DefeatConduct::Spectate`] the
+/// defeat finishes nothing: the node keeps simulating and the player watches
+/// until the shared verdict arrives.
 /// A player whose drop has taken effect never counts as a survivor (a drop
 /// decided for a tick still ahead leaves them playing until it arrives), and
 /// an eliminated player stays out even if a leftover order finishes a new
@@ -45,7 +54,11 @@ use ferrets_content::tags;
 /// Runs at the end of a tick, after deaths have been resolved.
 pub fn check(world: &mut World) {
     let session = world.resource::<GameSession>();
-    if !session.is_active() || session.finish_policy() != FinishPolicy::LastStanding {
+    let elimination = match session.finish_policy() {
+        FinishPolicy::LastStanding { elimination } => elimination,
+        FinishPolicy::Endless | FinishPolicy::Scripted => return,
+    };
+    if !session.is_active() {
         return;
     }
 
@@ -70,28 +83,58 @@ pub fn check(world: &mut World) {
         }
     }
 
+    // The players a standing building keeps in the game this tick: holding
+    // one themselves, or — under side scope — allied with a player who does.
+    // A holder outside the accounting (an environment combatant) keeps no one
+    // standing: it is on no team, so it is allied with no player.
+    let session = world.resource::<GameSession>();
+    let standing: BTreeSet<PlayerId> = occupied
+        .iter()
+        .copied()
+        .filter(|&player| match elimination {
+            EliminationScope::Player => with_building.contains(&player),
+            EliminationScope::Side => with_building
+                .iter()
+                .any(|&holder| session.are_allied(player, holder)),
+        })
+        .collect();
+
     let mut session = world.resource_mut::<GameSession>();
 
-    // A player out of buildings is eliminated as of the next tick: this tick
-    // still executed its input on every node, the next requires none of it.
+    // A player no building keeps standing is eliminated as of the next tick:
+    // this tick still executed its input on every node, the next requires
+    // none of it.
     let eliminated_from = session.tick() + 1;
     for &player in &occupied {
-        if !with_building.contains(&player) && !session.is_player_out(player) {
+        if !standing.contains(&player) && !session.is_player_out(player) {
             session.eliminate_player(player, eliminated_from);
         }
     }
 
-    // A player survives while it holds a building and is not out of the game —
-    // a building finished by a leftover order does not revive an eliminated
-    // player.
+    // A player survives while a building keeps it standing and it is not out
+    // of the game — a building finished by a leftover order does not revive
+    // an eliminated player.
     let survivors: Vec<PlayerId> = occupied
         .iter()
         .copied()
-        .filter(|player| with_building.contains(player) && !session.is_player_out(*player))
+        .filter(|player| standing.contains(player) && !session.is_player_out(*player))
         .collect();
 
-    let local = session.local_player();
-    let local_out = !survivors.contains(&local) && !session.is_player_out(local);
+    // The local player is defeated once no survivor is on its side — itself
+    // included — provided the node fields a player at all (an observer's
+    // node has no side to lose) and it is not dropped: a dropped node's
+    // ending is decided by the network layer (`Aborted`), never called a
+    // defeat.
+    let local_out = match session.local_player() {
+        None => false,
+        Some(local) => {
+            occupied.contains(&local)
+                && !session.is_player_dropped(local)
+                && !survivors
+                    .iter()
+                    .any(|&survivor| session.are_allied(local, survivor))
+        }
+    };
 
     let result = match survivors.as_slice() {
         // Everyone was wiped out on the same tick.
@@ -106,10 +149,15 @@ pub fn check(world: &mut World) {
             };
             GameResult::Victory { winner }
         }
-        // Two or more unallied survivors: the match goes on. The local player
-        // hears of its own defeat as soon as it is out; every other node decides
-        // the same for its own local player.
-        _ if local_out => GameResult::Defeat,
+        // Two or more unallied survivors: the match goes on. The local
+        // player's defeat — its side out while others fight on — is answered
+        // by this node's conduct: conclude at the losing frame, or keep
+        // simulating so the player watches the match play out. Every other
+        // node decides the same for its own local player.
+        _ if local_out => match session.defeat_conduct() {
+            DefeatConduct::Conclude => GameResult::Defeat,
+            DefeatConduct::Spectate => return,
+        },
         _ => return,
     };
 

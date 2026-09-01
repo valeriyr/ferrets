@@ -286,6 +286,7 @@ fn rally_app() -> App {
         registry.register(
             EntityTypeDef::new("hall")
                 .with_location(utils::GROUND, CellSize::new(2, 2), Solidity::Solid)
+                .with_sight_range(8)
                 .with_health(100)
                 .with_dying(2, None)
                 .with_trainer(["worker"]),

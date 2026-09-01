@@ -15,7 +15,7 @@ use bevy::{ecs::world::EntityRef, prelude::*};
 use ferrets_content::{entity_stats::EntityStatId, registry::ContentRegistry};
 use ferrets_geometry::cell_pos::CellPos;
 use ferrets_script::ai::{
-    AiRuntime, AiVision,
+    AiRuntime,
     view::game::{EntityView, GameView},
 };
 use ferrets_simulation::{
@@ -40,7 +40,12 @@ use ferrets_simulation::{
     order::Order,
     player_research::PlayerResearch,
     resources::PlayerResources,
-    session::{GameSession, player_slot::PlayerId, player_type::PlayerType},
+    session::{
+        GameSession,
+        ai_vision::AiVision,
+        player_slot::{PlayerId, PlayerSlot},
+        player_type::PlayerType,
+    },
     simulation_id::SimulationId,
     supply,
     visibility::VisibilityGrid,
@@ -98,7 +103,7 @@ pub fn sourced_ai_players(world: &World) -> Vec<(PlayerId, String)> {
     session
         .slots()
         .iter()
-        .filter(|slot| slot.player_type() == Some(PlayerType::Ai))
+        .filter(|slot| matches!(slot.player_type(), Some(PlayerType::Ai { .. })))
         .filter(|slot| !session.is_player_out(slot.id()))
         .filter(|slot| session.sources_locally(slot, is_host))
         .map(|slot| (slot.id(), slot.race().unwrap_or_default().to_string()))
@@ -162,7 +167,8 @@ pub fn supply_unmanned_input(
         if session.is_player_out(slot.id()) || !session.sources_locally(slot, is_host) {
             continue;
         }
-        let unmanned = slot.player_type() == Some(PlayerType::Ai) && ai_active.is_none();
+        let unmanned =
+            matches!(slot.player_type(), Some(PlayerType::Ai { .. })) && ai_active.is_none();
         if unmanned {
             frames.push_frame(PlayerFrame::idle(slot.id(), target));
         }
@@ -196,7 +202,15 @@ pub fn supply_ai_input(world: &mut World) {
         }
         let commands = match runtimes.0.get_mut(&player) {
             Some(runtime) if is_think_tick(tick, player, runtime.period()) => {
-                let view = game_view(world, player, &race, runtime.vision());
+                // The seat's vision, not the runtime's: the seat is what the
+                // executor resolves the commands by, so the view must be built
+                // from the same declaration on every node.
+                let vision = world
+                    .resource::<GameSession>()
+                    .slot(player)
+                    .and_then(PlayerSlot::ai_vision)
+                    .unwrap_or(AiVision::Filtered);
+                let view = game_view(world, player, &race, vision);
                 match runtime.think(&view) {
                     Ok(commands) => commands,
                     Err(error) => {

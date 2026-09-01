@@ -13,6 +13,9 @@ use ferrets_geometry::cell_size::CellSize;
 use ferrets_simulation::{
     session::{
         GameResult, GameSession, Winner,
+        ai_vision::AiVision,
+        defeat_conduct::DefeatConduct,
+        elimination_scope::EliminationScope,
         finish_policy::FinishPolicy,
         player_slot::{PlayerId, PlayerSlot, TeamId},
         player_type::PlayerType,
@@ -288,8 +291,147 @@ fn lone_player_beside_environment_wins_at_once() {
 }
 
 //
+// ─── Defeat conduct ───────────────────────────────────────────────────────────
+//
+
+#[test]
+fn spectate_conduct_keeps_defeated_node_running() {
+    // Free-for-all under `Spectate`: the local player 0 loses its base while
+    // players 1 and 2 fight on. Where `Conclude` freezes the node at Defeat,
+    // the session stays unresolved and keeps ticking — the player watches.
+    let (mut app, bases) = bases_app(&[None, None, None]);
+    app.world_mut()
+        .resource_mut::<GameSession>()
+        .set_defeat_conduct(DefeatConduct::Spectate);
+    utils::run_ticks(&mut app, 1);
+
+    destroy(&mut app, bases[0]);
+    let tick = app.world().resource::<GameSession>().tick();
+    utils::run_ticks(&mut app, 5);
+
+    let session = app.world().resource::<GameSession>();
+    assert_eq!(session.result(), None);
+    assert!(session.is_player_eliminated(0));
+    assert!(session.tick() > tick, "the defeated node kept ticking");
+}
+
+#[test]
+fn spectating_node_receives_shared_verdict() {
+    // The spectating defeated node stays for the ending: when one side is
+    // finally left standing, it finishes with the same shared Victory the
+    // survivors get, not with its private Defeat.
+    let (mut app, bases) = bases_app(&[None, None, None]);
+    app.world_mut()
+        .resource_mut::<GameSession>()
+        .set_defeat_conduct(DefeatConduct::Spectate);
+    utils::run_ticks(&mut app, 1);
+
+    destroy(&mut app, bases[0]);
+    utils::run_ticks(&mut app, 3);
+    destroy(&mut app, bases[1]);
+    utils::run_ticks(&mut app, 1);
+
+    assert_eq!(
+        result(&app),
+        Some(GameResult::Victory {
+            winner: Winner::Player(2)
+        })
+    );
+}
+
+//
+// ─── Elimination scope ────────────────────────────────────────────────────────
+//
+
+#[test]
+fn side_scope_keeps_building_less_teammate_in_game() {
+    // Team 1 (players 0 and 1) against solo player 2, under side scope. Player
+    // 1 loses its only building, but its side still holds one through player
+    // 0 — player 1 stays in the game, commanding whatever it has left.
+    let (mut app, bases) = bases_app(&[Some(1), Some(1), None]);
+    set_scope(&mut app, EliminationScope::Side);
+    utils::run_ticks(&mut app, 1);
+
+    destroy(&mut app, bases[1]);
+    utils::run_ticks(&mut app, 2);
+
+    let session = app.world().resource::<GameSession>();
+    assert_eq!(session.result(), None);
+    assert!(!session.is_player_eliminated(1));
+    assert_eq!(session.required_players(session.tick()), vec![0, 1, 2]);
+}
+
+#[test]
+fn side_scope_eliminates_side_as_one() {
+    // Team 1 (players 0 and 1) against two solo players, under side scope.
+    // The side's last building falls: both members are eliminated on the same
+    // tick, and the local player — whose whole side is out while two unallied
+    // survivors fight on — hears of its defeat at once.
+    let (mut app, bases) = bases_app(&[Some(1), Some(1), None, None]);
+    set_scope(&mut app, EliminationScope::Side);
+    utils::run_ticks(&mut app, 1);
+
+    destroy(&mut app, bases[0]);
+    destroy(&mut app, bases[1]);
+    utils::run_ticks(&mut app, 1);
+
+    let session = app.world().resource::<GameSession>();
+    assert_eq!(session.result(), Some(GameResult::Defeat));
+    assert!(session.is_player_eliminated(0));
+    assert!(session.is_player_eliminated(1));
+    assert_eq!(session.required_players(session.tick() + 1), vec![2, 3]);
+}
+
+#[test]
+fn player_scope_defers_defeat_until_side_falls() {
+    // Team 1 (players 0 and 1) against two solo players, under player scope.
+    // The local player 0 loses its building: it is eliminated — out of input —
+    // but not defeated, because its side still stands through player 1. Only
+    // when player 1 falls too is the side out, and the defeat latches.
+    let (mut app, bases) = bases_app(&[Some(1), Some(1), None, None]);
+    utils::run_ticks(&mut app, 1);
+
+    destroy(&mut app, bases[0]);
+    utils::run_ticks(&mut app, 1);
+    {
+        let session = app.world().resource::<GameSession>();
+        assert_eq!(session.result(), None);
+        assert!(session.is_player_eliminated(0));
+        assert_eq!(session.required_players(session.tick() + 1), vec![1, 2, 3]);
+    }
+
+    destroy(&mut app, bases[1]);
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(result(&app), Some(GameResult::Defeat));
+}
+
+#[test]
+fn side_scope_ignores_environment_building() {
+    // An environment combatant's standing base keeps no side standing: it is
+    // on no team, so a building-less player beside it is eliminated all the
+    // same under side scope.
+    let (mut app, bases, _) = bases_app_with_environment(&[None, None, None]);
+    set_scope(&mut app, EliminationScope::Side);
+    utils::run_ticks(&mut app, 1);
+
+    destroy(&mut app, bases[1]);
+    utils::run_ticks(&mut app, 1);
+
+    let session = app.world().resource::<GameSession>();
+    assert_eq!(session.result(), None);
+    assert!(session.is_player_eliminated(1));
+}
+
+//
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 //
+
+/// Rewrites the app's finish policy to `LastStanding` under `elimination`.
+fn set_scope(app: &mut App, elimination: EliminationScope) {
+    app.world_mut()
+        .resource_mut::<GameSession>()
+        .set_finish_policy(FinishPolicy::LastStanding { elimination });
+}
 
 /// A started `LastStanding` app seating one player per entry in `teams` (each a
 /// team id, or `None` for no team), with the local player at slot `0`. The roster
@@ -304,7 +446,9 @@ fn bases_app(teams: &[Option<TeamId>]) -> (App, Vec<Entity>) {
     let mut app = utils::make_app(slots);
     app.world_mut()
         .resource_mut::<GameSession>()
-        .set_finish_policy(FinishPolicy::LastStanding);
+        .set_finish_policy(FinishPolicy::LastStanding {
+            elimination: EliminationScope::Player,
+        });
     register_bases_content(&mut app);
     let bases = {
         let world = app.world_mut();
@@ -336,12 +480,14 @@ fn bases_app_with_environment(teams: &[Option<TeamId>]) -> (App, Vec<Entity>, En
         .enumerate()
         .map(|(id, team)| PlayerSlot::occupied(id as PlayerId, PlayerType::Human, None, *team))
         .collect();
-    slots.push(PlayerSlot::environment(environment));
+    slots.push(PlayerSlot::environment(environment, AiVision::Filtered));
 
     let mut app = utils::make_app(slots);
     app.world_mut()
         .resource_mut::<GameSession>()
-        .set_finish_policy(FinishPolicy::LastStanding);
+        .set_finish_policy(FinishPolicy::LastStanding {
+            elimination: EliminationScope::Player,
+        });
     register_bases_content(&mut app);
 
     let world = app.world_mut();

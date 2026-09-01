@@ -86,6 +86,12 @@ impl NetSession {
         self.gameplay.player_of(peer)
     }
 
+    /// This node's own transport peer — a watching node's one identity at
+    /// the control plane.
+    pub fn local_peer(&self) -> PeerId {
+        self.gameplay.local_peer()
+    }
+
     /// Whether `peer` is the session host's node.
     pub fn is_host_peer(&self, peer: PeerId) -> bool {
         self.gameplay.is_host_peer(peer)
@@ -316,6 +322,10 @@ pub struct ReceivedControl {
 /// slot — lobby-configured, or seated by the game after the lobby's — follows
 /// the session's AI hosting; a free slot has no peer.
 ///
+/// Observers never enter the roster: a watcher sources no slot, and the
+/// gameplay traffic reaches its node anyway — every send is a transport
+/// broadcast to all connected peers.
+///
 /// Errors if a human slot has no connected peer in the lobby — the session
 /// and the lobby disagree about who is seated.
 fn roster_for_session(
@@ -327,7 +337,7 @@ fn roster_for_session(
         .iter()
         .map(|slot| match slot.player_type() {
             None => Ok(None),
-            Some(PlayerType::Ai) => Ok(match ai_hosting {
+            Some(PlayerType::Ai { .. }) => Ok(match ai_hosting {
                 AiHosting::Replicated => None,
                 AiHosting::Host => Some(HOST_PEER),
             }),
@@ -352,9 +362,10 @@ fn roster_for_session(
 }
 
 /// The endpoint table for a mesh game: the host's own `host_addr` plus every
-/// connected client's, each looked up through `client_addr` (its gameplay UDP
-/// endpoint, or its control-mesh listener). Fails if a client's endpoint is
-/// not yet known.
+/// connected client's — watching or playing, since gameplay traffic is
+/// broadcast to every connected peer — each looked up through `client_addr`
+/// (its gameplay UDP endpoint, or its control-mesh listener). Fails if a
+/// client's endpoint is not yet known.
 fn host_endpoint_table(
     host: &LobbyHost,
     host_addr: SocketAddr,
@@ -364,15 +375,18 @@ fn host_endpoint_table(
         peer: HOST_PEER,
         addr: host_addr,
     }];
-    for info in host.slots() {
-        if let Occupant::Human { peer } = info.occupant {
-            if peer == HOST_PEER {
-                continue;
-            }
-            let addr = client_addr(peer)
-                .ok_or_else(|| internal("missing endpoint for a connected client"))?;
-            table.push(UdpEntry { peer, addr });
+    let players = host.slots().iter().filter_map(|info| match info.occupant {
+        Occupant::Human { peer } => Some(peer),
+        Occupant::Open | Occupant::Ai | Occupant::Closed => None,
+    });
+    let watchers = host.observers().iter().copied();
+    for peer in players.chain(watchers) {
+        if peer == HOST_PEER {
+            continue;
         }
+        let addr =
+            client_addr(peer).ok_or_else(|| internal("missing endpoint for a connected client"))?;
+        table.push(UdpEntry { peer, addr });
     }
     Ok(table)
 }

@@ -8,7 +8,7 @@ use ferrets_bevy_plugin::{DropConfig, FrameMargins, NetworkSession, PeerCapaciti
 use ferrets_content::registry::ContentRegistry;
 use ferrets_math::FixedU64;
 use ferrets_network::{
-    message::control::{ControlMessage, InGameMessage},
+    message::control::{ControlMessage, InGameMessage, Proposer},
     roster::Roster,
     transport::loopback::LoopbackTransport,
 };
@@ -18,8 +18,9 @@ use ferrets_simulation::{
     command::PlayerCommand,
     input::{InputFrames, PlayerFrame, SYNC_LATENCY},
     session::{
-        GameResult, GameSession, Winner, ai_hosting::AiHosting, authority::Authority,
-        drop_policy::DropPolicy, finish_policy::FinishPolicy, game_speed::GameSpeed,
+        GameResult, GameSession, Winner, ai_hosting::AiHosting, ai_vision::AiVision,
+        authority::Authority, defeat_conduct::DefeatConduct, drop_policy::DropPolicy,
+        elimination_scope::EliminationScope, finish_policy::FinishPolicy, game_speed::GameSpeed,
         player_slot::PlayerSlot, player_type::PlayerType,
     },
     simulation_id::SimulationId,
@@ -447,7 +448,7 @@ fn duplicate_pause_at_on_frozen_tick_is_not_re_learned() {
     send_control(
         &mut peer,
         ControlMessage::InGame(InGameMessage::PauseAt {
-            proposer: 1,
+            proposer: Proposer::Player(1),
             tick: frozen,
             paused: true,
         }),
@@ -499,7 +500,7 @@ fn speed_at_from_client_is_refused_under_host_authority() {
     send_control(
         &mut peer,
         ControlMessage::InGame(InGameMessage::SpeedAt {
-            proposer: 1,
+            proposer: Proposer::Player(1),
             tick: ahead,
             speed: double_speed(),
         }),
@@ -726,7 +727,14 @@ fn host_with_local_ai_drops_lone_silent_client() {
     let slots = vec![
         PlayerSlot::occupied(0, PlayerType::Human, None, None),
         PlayerSlot::occupied(1, PlayerType::Human, None, None),
-        PlayerSlot::occupied(2, PlayerType::Ai, None, None),
+        PlayerSlot::occupied(
+            2,
+            PlayerType::Ai {
+                vision: AiVision::Filtered,
+            },
+            None,
+            None,
+        ),
     ];
     let authority = Authority::Host {
         ai_hosting: AiHosting::Replicated,
@@ -956,7 +964,7 @@ fn peer_consensus_drops_silent_player_despite_environment_slot() {
         PlayerSlot::occupied(0, PlayerType::Human, None, None),
         PlayerSlot::occupied(1, PlayerType::Human, None, None),
         PlayerSlot::occupied(2, PlayerType::Human, None, None),
-        PlayerSlot::environment(3),
+        PlayerSlot::environment(3, AiVision::Filtered),
     ];
     let mut host = utils::net_app_with_slots(a, roster.clone(), Authority::Peers, slots.clone());
     let mut peer = utils::net_app_with_slots(b, roster, Authority::Peers, slots);
@@ -1240,7 +1248,7 @@ fn stale_pause_proposal_does_not_resurrect_after_its_tick_passed() {
     send_control(
         &mut host,
         ControlMessage::InGame(InGameMessage::PauseAt {
-            proposer: 0,
+            proposer: Proposer::Player(0),
             tick: frozen,
             paused: true,
         }),
@@ -1350,13 +1358,20 @@ fn drop_decided_victory_replays_to_same_result() {
         spawn_starting_units(app);
         app.world_mut()
             .resource_mut::<GameSession>()
-            .set_finish_policy(FinishPolicy::LastStanding);
+            .set_finish_policy(FinishPolicy::LastStanding {
+                elimination: EliminationScope::Player,
+            });
         app.world_mut().resource_mut::<DropConfig>().timeout_steps = 5;
     }
 
     let buffer = utils::record_into(
         &mut host,
-        &utils::skirmish_header(teamed_human_slots(), FinishPolicy::LastStanding),
+        &utils::skirmish_header(
+            teamed_human_slots(),
+            FinishPolicy::LastStanding {
+                elimination: EliminationScope::Player,
+            },
+        ),
     );
 
     // The phantom sends nothing, so the host blocks, waits out the grace window,
@@ -1383,7 +1398,9 @@ fn drop_decided_victory_replays_to_same_result() {
     playback
         .world_mut()
         .resource_mut::<GameSession>()
-        .set_finish_policy(FinishPolicy::LastStanding);
+        .set_finish_policy(FinishPolicy::LastStanding {
+            elimination: EliminationScope::Player,
+        });
     {
         let mut registry = playback.world_mut().resource_mut::<ContentRegistry>();
         registry.register(utils::harness_soldier());
@@ -1441,14 +1458,21 @@ fn lone_winner_victory_past_drop_replays_to_same_result() {
         ids.push(spawn_lone_winner_lineup(app));
         app.world_mut()
             .resource_mut::<GameSession>()
-            .set_finish_policy(FinishPolicy::LastStanding);
+            .set_finish_policy(FinishPolicy::LastStanding {
+                elimination: EliminationScope::Player,
+            });
         app.world_mut().resource_mut::<DropConfig>().timeout_steps = 5;
     }
     let (attacker, target) = ids[0];
 
     let buffer = utils::record_into(
         &mut host,
-        &utils::skirmish_header(utils::human_slots(3), FinishPolicy::LastStanding),
+        &utils::skirmish_header(
+            utils::human_slots(3),
+            FinishPolicy::LastStanding {
+                elimination: EliminationScope::Player,
+            },
+        ),
     );
 
     // Player 0 sends its soldier onto player 1's base while the phantom stays
@@ -1484,7 +1508,9 @@ fn lone_winner_victory_past_drop_replays_to_same_result() {
     playback
         .world_mut()
         .resource_mut::<GameSession>()
-        .set_finish_policy(FinishPolicy::LastStanding);
+        .set_finish_policy(FinishPolicy::LastStanding {
+            elimination: EliminationScope::Player,
+        });
     {
         let mut registry = playback.world_mut().resource_mut::<ContentRegistry>();
         registry.register(utils::harness_soldier());
@@ -1535,7 +1561,12 @@ fn non_drop_victory_replays_to_same_result() {
     record_app.add_plugins(ReplayPlugin);
     let buffer = utils::record_into(
         &mut record_app,
-        &utils::skirmish_header(utils::human_slots(2), FinishPolicy::LastStanding),
+        &utils::skirmish_header(
+            utils::human_slots(2),
+            FinishPolicy::LastStanding {
+                elimination: EliminationScope::Player,
+            },
+        ),
     );
 
     let (attacker, enemy) = spawn_combatants(&mut record_app);
@@ -1606,7 +1637,9 @@ fn eliminated_player_node_freezing_does_not_stall_survivors() {
     for app in &mut apps {
         ids.push(spawn_ffa_combatants(app));
         let mut session = app.world_mut().resource_mut::<GameSession>();
-        session.set_finish_policy(FinishPolicy::LastStanding);
+        session.set_finish_policy(FinishPolicy::LastStanding {
+            elimination: EliminationScope::Player,
+        });
         session.set_drop_policy(DropPolicy::Manual);
     }
     let (attacker, target) = ids[0];
@@ -1657,7 +1690,12 @@ fn game_with_mid_game_elimination_records_and_replays_identically() {
     record_app.add_plugins(ReplayPlugin);
     let buffer = utils::record_into(
         &mut record_app,
-        &utils::skirmish_header(utils::human_slots(3), FinishPolicy::LastStanding),
+        &utils::skirmish_header(
+            utils::human_slots(3),
+            FinishPolicy::LastStanding {
+                elimination: EliminationScope::Player,
+            },
+        ),
     );
 
     let (attacker, target) = spawn_ffa_combatants(&mut record_app);
@@ -1709,8 +1747,446 @@ fn game_with_mid_game_elimination_records_and_replays_identically() {
 }
 
 //
+// ─── Spectators ─────────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn spectating_defeated_node_stays_in_lockstep_with_survivors() {
+    // The counterpart of `eliminated_player_node_freezing_does_not_stall_survivors`:
+    // the same three-way free-for-all, but node 2 runs `Spectate`. Its defeat
+    // finishes nothing — the node keeps ticking in lockstep, bit-identical to
+    // the survivors, with no result of its own.
+    let mut apps: Vec<App> = LoopbackTransport::mesh(3)
+        .into_iter()
+        .map(|t| utils::net_app(t, 3))
+        .collect();
+    let mut ids = Vec::new();
+    for app in &mut apps {
+        ids.push(spawn_ffa_combatants(app));
+        app.world_mut()
+            .resource_mut::<GameSession>()
+            .set_finish_policy(FinishPolicy::LastStanding {
+                elimination: EliminationScope::Player,
+            });
+    }
+    let (attacker, target) = ids[0];
+    apps[2]
+        .world_mut()
+        .resource_mut::<GameSession>()
+        .set_defeat_conduct(DefeatConduct::Spectate);
+
+    utils::select(&mut apps[0], attacker);
+    utils::push_command(
+        &mut apps[0],
+        PlayerCommand::SendToEntity {
+            target,
+            flush: true,
+        },
+    );
+    step_all(&mut apps, 80);
+
+    // Node 2 learned of its defeat and watched on instead of freezing...
+    {
+        let session = apps[2].world().resource::<GameSession>();
+        assert_eq!(session.result(), None);
+        assert!(session.is_player_eliminated(2));
+        assert!(!session.local_plays());
+    }
+    // ...in step with the survivors, not trailing them.
+    assert!(utils::tick(&apps[2]) + 2 >= utils::tick(&apps[0]));
+    let (left, right) = apps.split_at_mut(2);
+    align_ticks(&mut left[0], &mut right[0]);
+    assert_eq!(
+        checksum::state_checksum(left[0].world()),
+        checksum::state_checksum(right[0].world()),
+        "the spectating node must stay bit-identical to the survivors",
+    );
+}
+
+#[test]
+fn spectating_eliminated_host_keeps_relaying_for_survivors() {
+    // Star links: clients 1 and 2 reach only the host, so every frame between
+    // them relays through it. The HOST's player is eliminated — the boundary
+    // that used to end the game for everyone — but under `Spectate` its node
+    // keeps simulating, relaying, and deciding, and the survivors play the
+    // match to its shared verdict.
+    let mut apps: Vec<App> = LoopbackTransport::partial_mesh(3, [(0, 1), (0, 2)])
+        .into_iter()
+        .map(|t| utils::net_app(t, 3))
+        .collect();
+    let mut ids = Vec::new();
+    for app in &mut apps {
+        app.world_mut()
+            .resource_mut::<GameSession>()
+            .set_finish_policy(FinishPolicy::LastStanding {
+                elimination: EliminationScope::Player,
+            });
+        ids.push(spawn_host_elimination_lineup(app));
+    }
+    let (attacker, host_base, last_base) = ids[0];
+    apps[0]
+        .world_mut()
+        .resource_mut::<GameSession>()
+        .set_defeat_conduct(DefeatConduct::Spectate);
+
+    // Player 1 (a client) destroys the host's base.
+    utils::select(&mut apps[1], attacker);
+    utils::push_command(
+        &mut apps[1],
+        PlayerCommand::SendToEntity {
+            target: host_base,
+            flush: true,
+        },
+    );
+    step_all(&mut apps, 80);
+
+    for app in &apps {
+        let session = app.world().resource::<GameSession>();
+        assert!(session.is_player_eliminated(0));
+        assert_eq!(session.result(), None, "nobody aborted, nobody finished");
+    }
+
+    // The match plays on through the spectating host's relay to its verdict.
+    utils::push_command(
+        &mut apps[1],
+        PlayerCommand::SendToEntity {
+            target: last_base,
+            flush: true,
+        },
+    );
+    step_all(&mut apps, 200);
+
+    for app in &apps {
+        assert_eq!(
+            app.world().resource::<GameSession>().result(),
+            Some(GameResult::Victory {
+                winner: Winner::Player(1)
+            }),
+        );
+    }
+}
+
+#[test]
+fn observer_node_stays_synced_and_stalls_nobody() {
+    // A mesh game with a third connected peer holding no slot — an observer:
+    // its node simulates in lockstep from the broadcast frames and receives
+    // the shared verdict, with no local player at all.
+    let mut apps: Vec<App> = LoopbackTransport::mesh(3)
+        .into_iter()
+        .map(|t| {
+            observer_net_app(
+                t,
+                Authority::Host {
+                    ai_hosting: AiHosting::Replicated,
+                },
+            )
+        })
+        .collect();
+    let mut ids = Vec::new();
+    for app in &mut apps {
+        app.world_mut()
+            .resource_mut::<GameSession>()
+            .set_finish_policy(FinishPolicy::LastStanding {
+                elimination: EliminationScope::Player,
+            });
+        ids.push(spawn_combatants(app));
+    }
+    let (attacker, enemy_base) = ids[0];
+    {
+        let session = apps[2].world().resource::<GameSession>();
+        assert_eq!(session.local_player(), None);
+        assert!(!session.local_plays());
+    }
+
+    utils::select(&mut apps[0], attacker);
+    utils::push_command(
+        &mut apps[0],
+        PlayerCommand::SendToEntity {
+            target: enemy_base,
+            flush: true,
+        },
+    );
+    step_all(&mut apps, 90);
+
+    // Everyone — the observer included — reached the same shared verdict...
+    for app in &apps {
+        assert_eq!(
+            app.world().resource::<GameSession>().result(),
+            Some(GameResult::Victory {
+                winner: Winner::Player(0)
+            }),
+        );
+    }
+    let (left, right) = apps.split_at_mut(2);
+    align_ticks(&mut left[0], &mut right[0]);
+    assert_eq!(
+        checksum::state_checksum(left[0].world()),
+        checksum::state_checksum(right[0].world()),
+        "the observer must stay bit-identical to the combatants",
+    );
+}
+
+#[test]
+fn frozen_observer_node_stalls_and_drops_nobody() {
+    let mut apps: Vec<App> = LoopbackTransport::mesh(3)
+        .into_iter()
+        .map(|t| {
+            observer_net_app(
+                t,
+                Authority::Host {
+                    ai_hosting: AiHosting::Replicated,
+                },
+            )
+        })
+        .collect();
+    for app in &mut apps {
+        app.world_mut().resource_mut::<DropConfig>().timeout_steps = 3;
+    }
+    step_all(&mut apps, 6);
+
+    // The observer's node freezes; the combatants play far past it with no
+    // stall resolution of any kind.
+    step_some(&mut apps, &[0, 1], 40);
+
+    for combatant in [0, 1] {
+        let session = apps[combatant].world().resource::<GameSession>();
+        assert_eq!(session.result(), None);
+        assert!(!session.is_player_dropped(0));
+        assert!(!session.is_player_dropped(1));
+        assert!(utils::tick(&apps[combatant]) > utils::tick(&apps[2]) + 30);
+    }
+}
+
+#[test]
+fn observer_host_carries_game_for_combatant_clients() {
+    // Star links again, with the HOST node holding no slot at all — a
+    // caster's setup: the two combatants are clients who reach each other only
+    // through the watching host.
+    let roster = Roster::from_slots(vec![Some(1), Some(2)]);
+    let slots = vec![
+        PlayerSlot::occupied(0, PlayerType::Human, None, None),
+        PlayerSlot::occupied(1, PlayerType::Human, None, None),
+    ];
+    let authority = Authority::Host {
+        ai_hosting: AiHosting::Replicated,
+    };
+    let mut apps: Vec<App> = LoopbackTransport::partial_mesh(3, [(0, 1), (0, 2)])
+        .into_iter()
+        .map(|t| utils::net_app_with_slots(t, roster.clone(), authority, slots.clone()))
+        .collect();
+    let mut ids = Vec::new();
+    for app in &mut apps {
+        app.world_mut()
+            .resource_mut::<GameSession>()
+            .set_finish_policy(FinishPolicy::LastStanding {
+                elimination: EliminationScope::Player,
+            });
+        ids.push(spawn_combatants(app));
+    }
+    let (attacker, enemy_base) = ids[0];
+    {
+        let session = apps[0].world().resource::<GameSession>();
+        assert_eq!(session.local_player(), None);
+        assert!(!session.local_plays());
+    }
+
+    // Player 0 plays on the node behind peer 1.
+    utils::select(&mut apps[1], attacker);
+    utils::push_command(
+        &mut apps[1],
+        PlayerCommand::SendToEntity {
+            target: enemy_base,
+            flush: true,
+        },
+    );
+    step_all(&mut apps, 90);
+
+    for app in &apps {
+        assert_eq!(
+            app.world().resource::<GameSession>().result(),
+            Some(GameResult::Victory {
+                winner: Winner::Player(0)
+            }),
+        );
+    }
+}
+
+#[test]
+fn drop_consensus_with_observer_commits_on_every_node() {
+    // Peer authority: a combatant goes silent, and the drop commits by the
+    // unanimity of the LIVE COMBATANTS — an observer holds no vote at all,
+    // yet its node applies the same drop from the flooded votes.
+    let roster = Roster::new((0..3).collect());
+    let slots = vec![
+        PlayerSlot::occupied(0, PlayerType::Human, None, None),
+        PlayerSlot::occupied(1, PlayerType::Human, None, None),
+        PlayerSlot::occupied(2, PlayerType::Human, None, None),
+    ];
+    let mut apps: Vec<App> = LoopbackTransport::mesh(4)
+        .into_iter()
+        .map(|t| utils::net_app_with_slots(t, roster.clone(), Authority::Peers, slots.clone()))
+        .collect();
+    for app in &mut apps {
+        app.world_mut().resource_mut::<DropConfig>().timeout_steps = 3;
+    }
+
+    step_all(&mut apps, 6);
+    // Player 1's node goes silent; everyone else — observer included — plays on.
+    step_some(&mut apps, &[0, 2, 3], 40);
+
+    for alive in [0, 2, 3] {
+        let session = apps[alive].world().resource::<GameSession>();
+        assert!(session.is_player_dropped(1), "node {alive} missed the drop");
+        assert_eq!(session.result(), None);
+    }
+}
+
+#[test]
+fn game_recorded_by_observer_node_replays_identically() {
+    // The observer's node holds no slot, yet it simulates the whole game from
+    // the broadcast frames — so its recording carries every player's committed
+    // input and replays checksum-clean to the same verdict.
+    let mut apps: Vec<App> = LoopbackTransport::mesh(3)
+        .into_iter()
+        .map(|t| {
+            observer_net_app(
+                t,
+                Authority::Host {
+                    ai_hosting: AiHosting::Replicated,
+                },
+            )
+        })
+        .collect();
+    for app in &mut apps {
+        app.world_mut()
+            .resource_mut::<GameSession>()
+            .set_finish_policy(FinishPolicy::LastStanding {
+                elimination: EliminationScope::Player,
+            });
+    }
+    apps[2].add_plugins(ReplayPlugin);
+    let buffer = utils::record_into(
+        &mut apps[2],
+        &utils::skirmish_header(
+            utils::human_slots(2),
+            FinishPolicy::LastStanding {
+                elimination: EliminationScope::Player,
+            },
+        ),
+    );
+    let mut ids = Vec::new();
+    for app in &mut apps {
+        ids.push(spawn_combatants(app));
+    }
+    let (attacker, enemy_base) = ids[0];
+
+    utils::select(&mut apps[0], attacker);
+    utils::push_command(
+        &mut apps[0],
+        PlayerCommand::SendToEntity {
+            target: enemy_base,
+            flush: true,
+        },
+    );
+    step_all_recording(&mut apps, 90);
+    assert_eq!(
+        apps[2].world().resource::<GameSession>().result(),
+        Some(GameResult::Victory {
+            winner: Winner::Player(0)
+        }),
+    );
+
+    let replay = Replay::read(buffer.bytes().as_slice()).expect("read replay");
+    let mut playback = two_player_app();
+    playback.add_plugins(ReplayPlugin);
+    spawn_combatants(&mut playback);
+    ferrets_bevy_plugin::replay::playback::install_per_game(playback.world_mut(), replay);
+
+    for _ in 0..120 {
+        if playback
+            .world()
+            .resource::<ferrets_bevy_plugin::ReplayPlayback>()
+            .is_done()
+        {
+            break;
+        }
+        playback.world_mut().run_schedule(FixedUpdate);
+        playback.world_mut().run_schedule(FixedLast);
+    }
+
+    let watched = playback
+        .world()
+        .resource::<ferrets_bevy_plugin::ReplayPlayback>();
+    assert_eq!(watched.mismatch(), None);
+    assert_eq!(
+        playback.world().resource::<GameSession>().result(),
+        Some(GameResult::Victory {
+            winner: Winner::Player(0)
+        }),
+    );
+}
+
+//
 // ─── Helpers ────────────────────────────────────────────────────────────────────
 //
+
+/// A local two-player app with the armed soldier and the base, `LastStanding`,
+/// and the session started — what an observer's recording rebuilds into.
+fn two_player_app() -> App {
+    let mut app = utils::make_app(utils::human_slots(2));
+    {
+        let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
+        assert_eq!(registry.register_layer(GROUND_LAYER), GROUND);
+        registry.register(utils::harness_soldier());
+        registry.register(utils::harness_base());
+        registry.validate();
+    }
+    let mut session = app.world_mut().resource_mut::<GameSession>();
+    session.set_finish_policy(FinishPolicy::LastStanding {
+        elimination: EliminationScope::Player,
+    });
+    session.start();
+    app
+}
+
+/// Advances every app one fixed tick each — plus `FixedLast`, so a recording
+/// node captures each completed tick — for `ticks` ticks.
+fn step_all_recording(apps: &mut [App], ticks: u32) {
+    for _ in 0..ticks {
+        for app in apps.iter_mut() {
+            app.world_mut().run_schedule(FixedUpdate);
+            app.world_mut().run_schedule(FixedLast);
+        }
+    }
+}
+
+/// Like [`utils::net_app`], for a two-player game with a third connected peer
+/// that holds no slot at all — an observer: its node receives every broadcast
+/// and runs with no local player.
+fn observer_net_app(transport: LoopbackTransport, authority: Authority) -> App {
+    let roster = Roster::new((0..2).collect());
+    let slots = vec![
+        PlayerSlot::occupied(0, PlayerType::Human, None, None),
+        PlayerSlot::occupied(1, PlayerType::Human, None, None),
+    ];
+    utils::net_app_with_slots(transport, roster, authority, slots)
+}
+
+/// Sets up the eliminated-host lineup: every player's base — the host's within
+/// the attacker's reach — plus player 1's soldier beside it. Spawned in a fixed
+/// order so ids match across every node. Returns the attacker, the host's base,
+/// and player 2's base [`SimulationId`]s.
+fn spawn_host_elimination_lineup(app: &mut App) -> (SimulationId, SimulationId, SimulationId) {
+    let world = app.world_mut();
+    let (_, host_base) =
+        spawn::spawn_entity(world, "base", utils::pos(6, 5), Some(0)).expect("host base");
+    spawn::spawn_entity(world, "base", utils::pos(25, 25), Some(1)).expect("player 1 base");
+    let (_, last_base) =
+        spawn::spawn_entity(world, "base", utils::pos(5, 8), Some(2)).expect("player 2 base");
+    let (_, attacker) =
+        spawn::spawn_entity(world, "soldier", utils::pos(5, 5), Some(1)).expect("attacker");
+    (attacker, host_base, last_base)
+}
 
 /// Three occupied human slots with players 0 and 1 allied against the teamless
 /// slot 2 — so excluding slot 2 leaves a single side standing.
@@ -1822,7 +2298,9 @@ fn combat_victory_app() -> App {
         registry.validate();
     }
     let mut session = app.world_mut().resource_mut::<GameSession>();
-    session.set_finish_policy(FinishPolicy::LastStanding);
+    session.set_finish_policy(FinishPolicy::LastStanding {
+        elimination: EliminationScope::Player,
+    });
     session.start();
     app
 }
@@ -1840,7 +2318,9 @@ fn ffa_elimination_app() -> App {
         registry.validate();
     }
     let mut session = app.world_mut().resource_mut::<GameSession>();
-    session.set_finish_policy(FinishPolicy::LastStanding);
+    session.set_finish_policy(FinishPolicy::LastStanding {
+        elimination: EliminationScope::Player,
+    });
     session.start();
     app
 }
@@ -1908,7 +2388,7 @@ fn step_local_recording(app: &mut App, ticks: u32) {
                 .slots()
                 .iter()
                 .map(|slot| slot.id())
-                .filter(|&id| id != local)
+                .filter(|&id| Some(id) != local)
                 .collect();
             (session.tick(), others)
         };

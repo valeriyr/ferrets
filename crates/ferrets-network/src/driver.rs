@@ -51,27 +51,35 @@ pub struct LockstepDriver {
     transport: Box<dyn NetworkTransport>,
     role: Role,
     roster: Roster,
-    local_player: PlayerId,
 }
 
 impl LockstepDriver {
     /// Creates a driver over `transport` with an explicit `role` and the
-    /// authoritative `roster`. The local peer must appear in the roster.
+    /// authoritative `roster`. A local peer outside the roster is an
+    /// observer's node: it receives every broadcast and sources no slot.
+    ///
+    /// Which player this node fields is not the driver's to answer — the
+    /// session holds that; the driver only maps peers to slots
+    /// ([`player_of`](Self::player_of)).
     pub fn new(transport: Box<dyn NetworkTransport>, role: Role, roster: Roster) -> Self {
-        let local_player = roster
-            .player_of(transport.local_peer())
-            .expect("local peer is always in the roster");
         Self {
             transport,
             role,
             roster,
-            local_player,
         }
     }
 
-    /// The simulation slot this client controls.
-    pub fn local_player(&self) -> PlayerId {
-        self.local_player
+    /// The player the local peer sources, if any — an observer's node
+    /// sources none. What the session's local role is derived from at
+    /// configuration; the session, not the driver, is its holder afterwards.
+    pub fn local_player(&self) -> Option<PlayerId> {
+        self.roster.player_of(self.local_peer())
+    }
+
+    /// This node's own transport peer — a watching node's one identity at
+    /// the control plane.
+    pub fn local_peer(&self) -> PeerId {
+        self.transport.local_peer()
     }
 
     /// The player controlled by the session host's node ([`HOST_PEER`]), if
@@ -82,7 +90,7 @@ impl LockstepDriver {
 
     /// Whether this node is the session host's node.
     pub fn is_host_node(&self) -> bool {
-        self.is_host_peer(self.transport.local_peer())
+        self.is_host_peer(self.local_peer())
     }
 
     /// Whether `peer` is the session host's node.

@@ -2,12 +2,12 @@
 
 use std::{cell::RefCell, rc::Rc};
 
-use ferrets_simulation::command::PlayerCommand;
+use ferrets_simulation::{command::PlayerCommand, session::ai_vision::AiVision};
 use mlua::{Function, Lua, Table, Value};
 
 use crate::{
     ai::{
-        AiRuntime, AiVision,
+        AiRuntime,
         view::{content::ContentView, game::GameView},
     },
     engine::lua::{

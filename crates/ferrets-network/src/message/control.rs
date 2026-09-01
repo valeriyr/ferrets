@@ -53,9 +53,28 @@ pub struct SlotInfo {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LobbyState {
     pub slots: Vec<SlotInfo>,
+    /// The peers watching the game, kept apart from the player slots: they
+    /// are the session's observers, not the game's participants. A watcher
+    /// has no seat of its own to hold open or closed — one is admitted on
+    /// request, while [`observer_limit`](Self::observer_limit) has room.
+    pub observers: Vec<PeerId>,
+    /// How many watchers the host admits. `0` turns watching off.
+    pub observer_limit: u8,
     pub mode: SessionMode,
     pub drop_policy: DropPolicy,
     pub finish_policy: FinishPolicy,
+}
+
+/// Who proposed a session-level change — the two identities that exist at
+/// the control plane: a player by its slot, or a watching node by the peer
+/// its messages arrive from. Ordered with players first, so colliding
+/// proposals resolved by "lowest wins" always favor a player over a watcher.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum Proposer {
+    /// The node fielding this player.
+    Player(PlayerId),
+    /// A watching node.
+    Observer(PeerId),
 }
 
 /// A peer's gameplay (UDP) endpoint, distributed to every peer before a mesh game
@@ -100,6 +119,15 @@ pub enum LobbyMessage {
         slot: PlayerId,
         team: Option<TeamId>,
     },
+    /// Client → host: a request to watch instead of play. The host admits it
+    /// while the observer limit has room, vacating whatever player slot the
+    /// sender held, and re-broadcasts the [`State`](Self::State); a request
+    /// it cannot grant changes nothing.
+    RequestObserve,
+    /// Client → host: a watcher's request to play instead. The host grants it
+    /// while a player slot is open and re-broadcasts the
+    /// [`State`](Self::State); a request it cannot grant changes nothing.
+    RequestPlay,
     /// Host → all: lock the lobby and begin. The state is already synced, so this
     /// carries only what the lobby broadcasts did not — the endpoint tables:
     /// UDP gameplay endpoints for a mesh game, and TCP control endpoints for a
@@ -139,7 +167,7 @@ pub enum InGameMessage {
     /// proposals colliding on the same tick resolve by lowest
     /// `(proposer, paused)` everywhere.
     PauseAt {
-        proposer: PlayerId,
+        proposer: Proposer,
         tick: u32,
         paused: bool,
     },
@@ -159,7 +187,7 @@ pub enum InGameMessage {
     /// proposals colliding on the same tick resolve by lowest
     /// `(proposer, speed)` everywhere.
     SpeedAt {
-        proposer: PlayerId,
+        proposer: Proposer,
         tick: u32,
         speed: GameSpeed,
     },

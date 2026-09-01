@@ -18,7 +18,8 @@ use ferrets_simulation::{
     resources::PlayerResources,
     session::{
         GameSession, ai_hosting::AiHosting, authority::Authority, drop_policy::DropPolicy,
-        finish_policy::FinishPolicy, player_slot::PlayerSlot, player_type::PlayerType,
+        finish_policy::FinishPolicy, local_role::LocalRole, player_slot::PlayerSlot,
+        player_type::PlayerType,
     },
     simulation_id::SimulationId,
     spawn,
@@ -35,7 +36,7 @@ fn worker_harvests_wood_on_demo_map() {
     let mut app = App::new();
     app.add_plugins(SimulationPlugin::new(
         GameSession::configured(
-            0,
+            LocalRole::Player(0),
             slots,
             map::NAME,
             Authority::Host {

@@ -29,7 +29,12 @@ use ferrets_simulation::{
     requirements,
     resources::PlayerResources,
     selection::Selection,
-    session::{GameResult, GameSession, player_slot::PlayerId},
+    session::{
+        GameResult, GameSession, Winner,
+        local_role::LocalRole,
+        player_slot::{Participation, PlayerId},
+    },
+    simulation_id::SimulationId,
     supply,
 };
 
@@ -73,6 +78,12 @@ pub struct SelectionText;
 
 #[derive(Component)]
 pub struct GameOverText;
+
+#[derive(Component)]
+pub struct SpectatorText;
+
+#[derive(Component)]
+pub struct RosterText;
 
 /// The scenario objectives checklist, shown only during a scripted mission.
 #[derive(Component)]
@@ -287,6 +298,48 @@ pub fn setup_hud(mut commands: Commands, registry: Res<ContentRegistry>) {
             TextColor(Color::srgb(1.0, 0.95, 0.7)),
         )],
     ));
+    // The standing note that this node only watches: an observer from the
+    // start, or a defeated player spectating on. Top-center, clear of the
+    // resource bar; empty while the local player still plays.
+    commands.spawn((
+        InGameUi,
+        Node {
+            position_type: PositionType::Absolute,
+            width: Val::Percent(100.0),
+            // Its own band: under the resource/supply lines (top 8 and 34)
+            // and the debug readout (top 60), aligned with neither.
+            top: Val::Px(84.0),
+            justify_content: JustifyContent::Center,
+            ..default()
+        },
+        children![(
+            SpectatorText,
+            Text::new(""),
+            TextFont {
+                font_size: 22.0,
+                ..default()
+            },
+            TextColor(Color::srgb(0.95, 0.85, 0.6)),
+        )],
+    ));
+    // Who is in the match and how they stand — the spectator's map of whom
+    // they are watching, and every player's glance at the field.
+    commands.spawn((
+        InGameUi,
+        RosterText,
+        Text::new(""),
+        TextFont {
+            font_size: 15.0,
+            ..default()
+        },
+        TextColor(Color::srgb(0.75, 0.8, 0.85)),
+        Node {
+            position_type: PositionType::Absolute,
+            top: Val::Percent(30.0),
+            right: Val::Px(12.0),
+            ..default()
+        },
+    ));
     // A note shown during replay playback, below the game-over banner.
     commands.spawn((
         InGameUi,
@@ -412,14 +465,18 @@ pub fn update_resources(
     session: Res<GameSession>,
     mut text: Query<&mut Text, With<ResourceText>>,
 ) {
-    let player = session.local_player();
-    if let Ok(mut text) = text.single_mut() {
-        **text = format!(
+    let Ok(mut text) = text.single_mut() else {
+        return;
+    };
+    // A watcher has no stockpile to read out.
+    **text = match session.local_player() {
+        None => String::new(),
+        Some(player) => format!(
             "Gold: {}   Wood: {}",
             resources.amount(player, "gold"),
             resources.amount(player, "wood"),
-        );
-    }
+        ),
+    };
 }
 
 /// Updates the supply readout with the local player's used/provided totals,
@@ -428,20 +485,32 @@ pub fn update_resources(
 /// Exclusive, because the derived totals read entities and resources across the
 /// whole world.
 pub fn update_supply(world: &mut World) {
-    let player = world.resource::<GameSession>().local_player();
-    let provided = supply::provided(world, player).to_num::<u32>();
-    let used = supply::used(world, player).to_num::<u32>();
+    // A watcher has no supply of its own to read out — the line is cleared
+    // outright, or the element's spawn-time placeholder would linger.
+    let readout = world
+        .resource::<GameSession>()
+        .local_player()
+        .map(|player| {
+            let provided = supply::provided(world, player).to_num::<u32>();
+            let used = supply::used(world, player).to_num::<u32>();
+            (format!("Supply: {used}/{provided}"), used >= provided)
+        });
 
     let mut query = world.query_filtered::<(&mut Text, &mut TextColor), With<SupplyText>>();
     let Ok((mut text, mut color)) = query.single_mut(world) else {
         return;
     };
-    **text = format!("Supply: {used}/{provided}");
-    *color = TextColor(if used >= provided {
-        SUPPLY_BLOCKED
-    } else {
-        SUPPLY_NORMAL
-    });
+    match readout {
+        Some((line, blocked)) => {
+            **text = line;
+            *color = TextColor(if blocked {
+                SUPPLY_BLOCKED
+            } else {
+                SUPPLY_NORMAL
+            });
+        }
+        None => text.clear(),
+    }
 }
 
 /// Updates the context line with the selection's train/build options. The
@@ -458,8 +527,8 @@ pub fn update_help(
         "LMB select (Shift add, dbl-click all of type) | RMB move/harvest/attack | F/R/G/T/B/Q orders | X stance | 1-0 groups (Ctrl set)\nMinimap: LMB look (drag pans), RMB order | V reveal | P pause | -/= speed | . step | ] seek | F1 debug | F2 spawn | F3 layer",
     );
 
-    let local = session.local_player();
-    if let Some(&id) = selection.get(local).first()
+    if let Some(local) = session.local_player()
+        && let Some(&id) = selection.get(local).first()
         && let Some((info, _)) = producers.iter().find(|(info, owner)| {
             info.id() == id && owner.is_some_and(|owner| owner.player() == local)
         })
@@ -500,9 +569,16 @@ pub fn update_selection(
         Option<&EnergyComponent>,
         Option<&BuffsComponent>,
     )>,
+    inspected: Res<crate::input::Inspected>,
     mut text: Query<&mut Text, With<SelectionText>>,
 ) {
-    let selected = selection.get(session.local_player());
+    // A playing node's panel shows its live selection; a watching one's —
+    // by role, or a player whose defeat took effect — shows what it picked
+    // to look at. One slice either way, so the readout below serves both.
+    let selected: &[SimulationId] = match session.local_role() {
+        LocalRole::Player(local) if session.is_player_live(local) => selection.get(local),
+        LocalRole::Player(_) | LocalRole::Observer => &inspected.0,
+    };
     let message = match selected {
         [] => String::new(),
         [id] => entities
@@ -616,6 +692,83 @@ pub fn update_objectives(
     **text = message;
 }
 
+/// Shows the standing can't-play note while the local player is a spectator:
+/// "Observing" for an observer seat; for an eliminated player, defeat wording
+/// only once its whole side is out — eliminated alone, it watches allies who
+/// may still win for it. Cleared once the game ends — the verdict banner
+/// takes over.
+pub fn update_spectator_note(
+    session: Res<GameSession>,
+    watch: Res<crate::render::ObserverPerspective>,
+    mut text: Query<&mut Text, With<SpectatorText>>,
+) {
+    let message = if session.result().is_some() {
+        // The verdict banner has taken over.
+        String::new()
+    } else {
+        match session.local_role() {
+            // This node watches by role, through whichever perspective it
+            // flipped to — a side's view, named by its team when it has one.
+            LocalRole::Observer => match watch.0 {
+                None => "Observing - everything (Tab: next view)".to_string(),
+                Some(side) => match session.slot(side).and_then(|slot| slot.team()) {
+                    Some(team) => format!("Observing - team {team}'s view (Tab: next view)"),
+                    None => format!("Observing - player {side}'s view (Tab: next view)"),
+                },
+            },
+            // A player watching is one whose elimination has taken effect —
+            // called a defeat only once no ally plays on, since a side still
+            // standing can still win for it. A playing player gets no note —
+            // and neither does a dropped one, whose ending (`Aborted`) is the
+            // network layer's to announce.
+            LocalRole::Player(local) if session.is_player_eliminated(local) => {
+                let side_plays_on = session.player_slots().any(|slot| {
+                    session.are_allied(local, slot.id()) && session.is_player_live(slot.id())
+                });
+                if side_plays_on {
+                    "Eliminated - spectating (your side plays on)".to_string()
+                } else {
+                    "Defeat - spectating".to_string()
+                }
+            }
+            LocalRole::Player(_) => String::new(),
+        }
+    };
+    if let Ok(mut text) = text.single_mut() {
+        **text = message;
+    }
+}
+
+/// Refreshes the player roster: every seat in the match and how it stands.
+/// The environment's combatants are scenery, not participants, so they stay
+/// off the list.
+pub fn update_roster(session: Res<GameSession>, mut text: Query<&mut Text, With<RosterText>>) {
+    let Ok(mut text) = text.single_mut() else {
+        return;
+    };
+    let local = session.local_player();
+    let lines: Vec<String> = session
+        .occupied_slots()
+        .filter(|slot| slot.participation() != Some(Participation::Environment))
+        .map(|slot| {
+            let id = slot.id();
+            let team = slot
+                .team()
+                .map_or(String::new(), |team| format!(" [T{team}]"));
+            let standing = if session.is_player_dropped(id) {
+                "left"
+            } else if session.is_player_eliminated(id) {
+                "eliminated"
+            } else {
+                "playing"
+            };
+            let you = if Some(id) == local { " (you)" } else { "" };
+            format!("P{id}{team}: {standing}{you}")
+        })
+        .collect();
+    **text = lines.join("\n");
+}
+
 /// Shows a Victory/Defeat/Draw banner once the session has finished.
 pub fn update_game_over(session: Res<GameSession>, mut text: Query<&mut Text, With<GameOverText>>) {
     let message = match session.result() {
@@ -624,13 +777,20 @@ pub fn update_game_over(session: Res<GameSession>, mut text: Query<&mut Text, Wi
         Some(GameResult::Desynchronization { .. }) => "Desynchronization!",
         Some(GameResult::Aborted) => "Aborted",
         Some(GameResult::Defeat) => "Defeat",
-        // Victory for the winning side; every other player sees a defeat.
-        Some(GameResult::Victory { winner })
-            if session.is_winner(session.local_player(), winner) =>
-        {
-            "Victory!"
-        }
-        Some(GameResult::Victory { .. }) => "Defeat",
+        // Victory for the winning side; every other player sees a defeat —
+        // and a watcher, on nobody's side, sees the verdict itself.
+        Some(GameResult::Victory { winner }) => match session.local_player() {
+            None => {
+                return if let Ok(mut text) = text.single_mut() {
+                    **text = match winner {
+                        Winner::Team(team) => format!("Team {team} wins"),
+                        Winner::Player(player) => format!("Player {player} wins"),
+                    };
+                };
+            }
+            Some(local) if session.is_winner(local, winner) => "Victory!",
+            Some(_) => "Defeat",
+        },
     };
 
     if let Ok(mut text) = text.single_mut() {
@@ -665,6 +825,7 @@ fn card_button(label: &str, base: Color) -> impl Bundle {
 /// — and whenever the primary's own type is rewritten: a gryphon that takes
 /// off must swap its take-off button for the landing one on the spot.
 pub fn update_command_card(
+    session: Res<GameSession>,
     primary: Res<Primary>,
     registry: Res<ContentRegistry>,
     changed: Query<&EntityInfoComponent, Changed<EntityInfoComponent>>,
@@ -684,6 +845,14 @@ pub fn update_command_card(
     >,
     mut commands: Commands,
 ) {
+    // A spectator commands nothing, so it gets no command card at all; the
+    // buttons of the seat it played before its defeat despawn here too.
+    if !session.local_plays() {
+        for button in &buttons {
+            commands.entity(button).despawn();
+        }
+        return;
+    }
     let primary_type_changed = primary
         .0
         .is_some_and(|id| changed.iter().any(|info| info.id() == id));
@@ -911,7 +1080,10 @@ enum CardAction {
 /// allow: a train, build, or skill whose requirements are unmet, or a research
 /// that is unmet, done, or already under way, greys out.
 pub fn update_card_availability(world: &mut World) {
-    let player = world.resource::<GameSession>().local_player();
+    // A watcher has no card to recolor — update_command_card despawned it.
+    let Some(player) = world.resource::<GameSession>().local_player() else {
+        return;
+    };
 
     let mut buttons: Vec<(Entity, Interaction, CardAction)> = Vec::new();
     let mut query = world.query::<(
@@ -1047,7 +1219,10 @@ pub fn skill_card_input(
                     // Self-cast: fires immediately for every selected unit that
                     // has the skill.
                     EntityCastTarget::Caster => {
-                        for &caster in selection.get(session.local_player()) {
+                        let Some(local) = session.local_player() else {
+                            continue;
+                        };
+                        for &caster in selection.get(local) {
                             pending.push(PlayerCommand::UseSkill {
                                 skill: button.skill,
                                 caster: SkillCasterRef::Entity(caster),
@@ -1098,9 +1273,13 @@ pub fn update_player_skill_cooldown(
     buttons: Query<(&PlayerSkillButton, &Children)>,
     mut texts: Query<&mut Text>,
 ) {
+    // A watcher casts nothing, so there is no cooldown of its own to label.
+    let Some(local) = session.local_player() else {
+        return;
+    };
     for (button, children) in &buttons {
         let name = pretty_name(registry.skill_name(button.skill).unwrap_or("skill"));
-        let remaining = skills.cooldown_remaining(session.local_player(), button.skill);
+        let remaining = skills.cooldown_remaining(local, button.skill);
         let label = cooldown_label(name, remaining);
         for &child in children {
             if let Ok(mut text) = texts.get_mut(child)
@@ -1172,7 +1351,10 @@ pub fn update_group_roster(
     for chip in &chips {
         commands.entity(chip).despawn();
     }
-    let local = session.local_player();
+    // A watcher holds no control groups; the chips stay despawned.
+    let Some(local) = session.local_player() else {
+        return;
+    };
     commands.entity(roster).with_children(|parent| {
         for group in 0..CONTROL_GROUP_COUNT {
             let count = groups.get(local, group).len();

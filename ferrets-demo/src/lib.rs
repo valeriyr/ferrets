@@ -63,10 +63,12 @@ pub fn run() {
         .init_resource::<input::DragStart>()
         .init_resource::<input::InputMode>()
         .init_resource::<input::Primary>()
+        .init_resource::<input::Inspected>()
         .init_resource::<input::LastClick>()
         .init_resource::<input::LastRecall>()
         .init_resource::<render::Ghosts>()
         .init_resource::<render::FogReveal>()
+        .init_resource::<render::ObserverPerspective>()
         .init_resource::<render::Smoothing>()
         .init_resource::<minimap::Looking>()
         .init_resource::<render::SkillPulses>()
@@ -120,6 +122,7 @@ pub fn run() {
                 setup::spawn_demo_scene.run_if(not(resource_exists::<scenario::CurrentScenario>)),
                 scenario::spawn_scenario_scene.run_if(resource_exists::<scenario::CurrentScenario>),
                 render::spawn_terrain_tiles,
+                render::reset_watching,
                 minimap::spawn_minimap,
                 camera::frame_local_player,
                 replay::start_recording,
@@ -172,7 +175,18 @@ pub fn run() {
                 debug::spawn_debug,
             )
                 .chain()
-                .run_if(in_state(GameState::InGame).and(not(resource_exists::<ReplayPlayback>))),
+                .run_if(
+                    in_state(GameState::InGame)
+                        .and(not(resource_exists::<ReplayPlayback>))
+                        .and(input::commands_live),
+                ),
+        )
+        // A spectator's only pointer power: click an entity to read about it.
+        // Display-only and local, so it runs for replay watching too — the
+        // viewer is an observer, and reading a unit is half of watching.
+        .add_systems(
+            Update,
+            input::inspect_input.run_if(in_state(GameState::InGame).and(not(input::commands_live))),
         )
         // Viewing, HUD, debug, and rendering run for both live games and playback.
         .add_systems(
@@ -181,7 +195,13 @@ pub fn run() {
                 camera::pan_zoom,
                 // Grouped: the presentation-only view toggles, and one element
                 // of a system tuple that is at its limit.
-                (render::toggle_fog_reveal, render::toggle_smoothing),
+                (
+                    render::toggle_fog_reveal,
+                    render::toggle_smoothing,
+                    render::perspective_input,
+                    hud::update_spectator_note,
+                    hud::update_roster,
+                ),
                 hud::update_resources,
                 hud::update_supply,
                 hud::update_help,

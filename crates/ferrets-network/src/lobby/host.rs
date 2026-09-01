@@ -53,6 +53,10 @@ impl LobbyHost {
             control,
             state: LobbyState {
                 slots,
+                observers: Vec::new(),
+                // Watching starts off; a game that offers it raises the limit
+                // (see `set_observer_limit`).
+                observer_limit: 0,
                 mode,
                 drop_policy,
                 finish_policy,
@@ -62,9 +66,38 @@ impl LobbyHost {
         }
     }
 
-    /// The host always controls slot `0`.
-    pub fn local_player(&self) -> PlayerId {
-        0
+    /// The slot this host's own peer occupies, or `None` while the host sits
+    /// in a watching seat — an observer holds no slot.
+    pub fn local_player(&self) -> Option<PlayerId> {
+        let peer = self.local_peer();
+        self.state
+            .slots
+            .iter()
+            .find(|info| info.occupant == Occupant::Human { peer })
+            .map(|info| info.slot)
+    }
+
+    /// The host's own transport peer.
+    pub fn local_peer(&self) -> PeerId {
+        self.control.local_peer()
+    }
+
+    /// The peers watching the game.
+    pub fn observers(&self) -> &[PeerId] {
+        &self.state.observers
+    }
+
+    /// Returns `true` while this host's own peer watches.
+    pub fn local_observes(&self) -> bool {
+        self.state.observers.contains(&self.local_peer())
+    }
+
+    /// Sets how many watchers are admitted (`0` turns watching off). Gates
+    /// admission only: watchers already in stay when the limit drops below
+    /// them. Re-broadcasts.
+    pub fn set_observer_limit(&mut self, limit: u8) -> crate::Result<()> {
+        self.state.observer_limit = limit;
+        self.broadcast_state()
     }
 
     /// The current slot list.
@@ -106,6 +139,27 @@ impl LobbyHost {
     pub fn set_occupant(&mut self, slot: PlayerId, occupant: Occupant) -> crate::Result<()> {
         if let Some(info) = self.state.slots.get_mut(slot as usize) {
             info.occupant = occupant;
+            self.broadcast_state()?;
+        }
+        Ok(())
+    }
+
+    /// Moves `peer` from playing to watching, admitted while the observer
+    /// limit has room — whatever player slot it held reopens. The host's own
+    /// peer moves like any other. A request that cannot be granted changes
+    /// nothing. Re-broadcasts on a move.
+    pub fn observe(&mut self, peer: PeerId) -> crate::Result<()> {
+        if self.admit_watcher(peer) {
+            self.broadcast_state()?;
+        }
+        Ok(())
+    }
+
+    /// Moves the watching `peer` back to the first open player slot. A
+    /// request that cannot be granted changes nothing. Re-broadcasts on a
+    /// move.
+    pub fn play(&mut self, peer: PeerId) -> crate::Result<()> {
+        if self.seat_watcher(peer) {
             self.broadcast_state()?;
         }
         Ok(())
@@ -187,7 +241,9 @@ impl LobbyHost {
         self.control
     }
 
-    /// Seats a newly-connected peer in the first open slot.
+    /// Seats a newly-connected peer in the first open player slot — or, with
+    /// every player slot taken, among the watchers while the observer limit
+    /// has room: a latecomer to a full game may still watch it.
     fn seat(&mut self, peer: PeerId) -> bool {
         if let Some(info) = self
             .state
@@ -196,13 +252,52 @@ impl LobbyHost {
             .find(|info| info.occupant == Occupant::Open)
         {
             info.occupant = Occupant::Human { peer };
-            true
-        } else {
-            false
+            return true;
         }
+        self.admit_watcher(peer)
     }
 
-    /// Reopens whatever slot a departed peer held.
+    /// Admits `peer` among the watchers while the limit has room, reopening
+    /// whatever player slot it held. Returns whether it was admitted.
+    fn admit_watcher(&mut self, peer: PeerId) -> bool {
+        if self.state.observers.contains(&peer)
+            || self.state.observers.len() >= self.state.observer_limit as usize
+        {
+            return false;
+        }
+        if let Some(info) = self
+            .state
+            .slots
+            .iter_mut()
+            .find(|info| info.occupant == Occupant::Human { peer })
+        {
+            info.occupant = Occupant::Open;
+        }
+        self.state.observers.push(peer);
+        true
+    }
+
+    /// Seats the watching `peer` in the first open player slot. Returns
+    /// whether the move happened.
+    fn seat_watcher(&mut self, peer: PeerId) -> bool {
+        if !self.state.observers.contains(&peer) {
+            return false;
+        }
+        let Some(info) = self
+            .state
+            .slots
+            .iter_mut()
+            .find(|info| info.occupant == Occupant::Open)
+        else {
+            return false;
+        };
+        info.occupant = Occupant::Human { peer };
+        self.state.observers.retain(|&watcher| watcher != peer);
+        true
+    }
+
+    /// Reopens whatever place a departed peer held — a player slot, or one
+    /// among the watchers.
     fn unseat(&mut self, peer: PeerId) -> bool {
         self.udp_ports.remove(&peer);
         self.control_ports.remove(&peer);
@@ -213,10 +308,13 @@ impl LobbyHost {
             .find(|info| info.occupant == Occupant::Human { peer })
         {
             info.occupant = Occupant::Open;
-            true
-        } else {
-            false
+            return true;
         }
+        if self.state.observers.contains(&peer) {
+            self.state.observers.retain(|&watcher| watcher != peer);
+            return true;
+        }
+        false
     }
 
     /// Applies a client's control message.
@@ -277,6 +375,8 @@ impl LobbyHost {
                     _ => Ok(false),
                 }
             }
+            LobbyMessage::RequestObserve => Ok(self.admit_watcher(from)),
+            LobbyMessage::RequestPlay => Ok(self.seat_watcher(from)),
             // The host originates these; a client never sends them to the host.
             LobbyMessage::State { .. }
             | LobbyMessage::Start { .. }

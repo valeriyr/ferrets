@@ -17,13 +17,25 @@ use crate::input::PendingInput;
 /// and immutable — commands issued during the freeze stay buffered in
 /// [`PendingInput`] until the tick advances and a fresh target opens.
 ///
+/// Stands down while the game answers no local commands — an observer's node
+/// has no local player to build frames for, and an eliminated or dropped
+/// player's are required by no tick — so there is no frame to keep
+/// committing; anything still buffered is dropped rather than left to pile
+/// up.
+///
 /// Net-agnostic: it only writes the input queue.
 pub fn flush_input(
     mut pending: ResMut<PendingInput>,
     mut frames: ResMut<InputFrames>,
     session: Res<GameSession>,
 ) {
-    let player = session.local_player();
+    let player = match session.local_player() {
+        Some(player) if session.is_player_live(player) => player,
+        Some(_) | None => {
+            pending.commands.clear();
+            return;
+        }
+    };
     let target = session.tick() + SYNC_LATENCY;
     if frames.has_frame(player, target) {
         return;

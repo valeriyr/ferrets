@@ -4,10 +4,13 @@ use ferrets_math::FixedU64;
 use ferrets_simulation::session::{
     GameResult, GameSession, Winner,
     ai_hosting::AiHosting,
+    ai_vision::AiVision,
     authority::Authority,
     drop_policy::DropPolicy,
+    elimination_scope::EliminationScope,
     finish_policy::FinishPolicy,
     game_speed::GameSpeed,
+    local_role::LocalRole,
     player_slot::{Participation, PlayerSlot},
     player_type::PlayerType,
 };
@@ -39,7 +42,7 @@ fn configure_replaces_slots_and_local_player_while_pending() {
     let mut session = configured(0, humans(1));
 
     session.configure(
-        1,
+        LocalRole::Player(1),
         vec![
             PlayerSlot::occupied(0, PlayerType::Human, Some("human"), None),
             PlayerSlot::occupied(1, PlayerType::Human, Some("orc"), None),
@@ -50,11 +53,13 @@ fn configure_replaces_slots_and_local_player_while_pending() {
             ai_hosting: AiHosting::Host,
         },
         DropPolicy::Automatic,
-        FinishPolicy::LastStanding,
+        FinishPolicy::LastStanding {
+            elimination: EliminationScope::Player,
+        },
     );
 
     assert_eq!(session.slots().len(), 3);
-    assert_eq!(session.local_player(), 1);
+    assert_eq!(session.local_player(), Some(1));
     assert_eq!(session.slot(1).and_then(|s| s.race()), Some("orc"));
     assert_eq!(session.ai_hosting(), AiHosting::Host);
     // The dropped tracking resized to the new slot count.
@@ -67,14 +72,16 @@ fn configure_panics_after_start() {
     let mut session = pending(2);
     session.start();
     session.configure(
-        0,
+        LocalRole::Player(0),
         vec![PlayerSlot::occupied(0, PlayerType::Human, None, None)],
         "test",
         Authority::Host {
             ai_hosting: AiHosting::Replicated,
         },
         DropPolicy::Automatic,
-        FinishPolicy::LastStanding,
+        FinishPolicy::LastStanding {
+            elimination: EliminationScope::Player,
+        },
     );
 }
 
@@ -93,7 +100,7 @@ fn configured_session_starts_pending() {
 
     assert_eq!(session.result(), None);
 
-    assert_eq!(session.local_player(), 0);
+    assert_eq!(session.local_player(), Some(0));
 }
 
 #[test]
@@ -199,7 +206,12 @@ fn finish_keeps_first_result() {
 #[test]
 fn finish_policy_round_trips() {
     let mut session = session(2);
-    assert_eq!(session.finish_policy(), FinishPolicy::LastStanding);
+    assert_eq!(
+        session.finish_policy(),
+        FinishPolicy::LastStanding {
+            elimination: EliminationScope::Player
+        }
+    );
 
     session.set_finish_policy(FinishPolicy::Endless);
 
@@ -242,7 +254,15 @@ fn slot_team_round_trips() {
 
     // A slot starts on no team, whether occupied or free.
     assert_eq!(
-        PlayerSlot::occupied(1, PlayerType::Ai, None, None).team(),
+        PlayerSlot::occupied(
+            1,
+            PlayerType::Ai {
+                vision: AiVision::Filtered
+            },
+            None,
+            None
+        )
+        .team(),
         None
     );
     assert_eq!(PlayerSlot::free(2).team(), None);
@@ -264,18 +284,54 @@ fn set_team_updates_slot() {
 
 #[test]
 fn environment_slot_is_occupied_raceless_teamless_ai() {
-    let slot = PlayerSlot::environment(4);
+    let slot = PlayerSlot::environment(4, AiVision::Filtered);
 
     assert_eq!(slot.participation(), Some(Participation::Environment));
-    assert_eq!(slot.player_type(), Some(PlayerType::Ai));
+    assert_eq!(
+        slot.player_type(),
+        Some(PlayerType::Ai {
+            vision: AiVision::Filtered
+        })
+    );
     assert_eq!(slot.race(), None);
     assert_eq!(slot.team(), None);
 }
 
 #[test]
+fn ai_vision_is_declared_by_scripted_seats_only() {
+    let scripted = PlayerSlot::occupied(
+        0,
+        PlayerType::Ai {
+            vision: AiVision::Omniscient,
+        },
+        None,
+        None,
+    );
+    let human = PlayerSlot::occupied(1, PlayerType::Human, None, None);
+    let environment = PlayerSlot::environment(2, AiVision::Filtered);
+
+    assert_eq!(scripted.ai_vision(), Some(AiVision::Omniscient));
+    assert_eq!(environment.ai_vision(), Some(AiVision::Filtered));
+    assert_eq!(
+        human.ai_vision(),
+        None,
+        "a human observes through its screen"
+    );
+    assert_eq!(PlayerSlot::free(3).ai_vision(), None);
+}
+
+#[test]
 fn occupied_lobby_slot_participates_as_player_and_free_slot_as_nothing() {
     assert_eq!(
-        PlayerSlot::occupied(1, PlayerType::Ai, None, None).participation(),
+        PlayerSlot::occupied(
+            1,
+            PlayerType::Ai {
+                vision: AiVision::Filtered
+            },
+            None,
+            None
+        )
+        .participation(),
         Some(Participation::Player)
     );
     assert_eq!(PlayerSlot::free(0).participation(), None);
@@ -288,7 +344,7 @@ fn is_environment_slot_answers_only_for_environment_occupancy() {
         vec![
             PlayerSlot::occupied(0, PlayerType::Human, None, None),
             PlayerSlot::free(1),
-            PlayerSlot::environment(2),
+            PlayerSlot::environment(2, AiVision::Filtered),
         ],
     );
 
@@ -305,8 +361,15 @@ fn slot_accessors_partition_by_participation() {
         vec![
             PlayerSlot::occupied(0, PlayerType::Human, None, None),
             PlayerSlot::free(1),
-            PlayerSlot::occupied(2, PlayerType::Ai, None, None),
-            PlayerSlot::environment(3),
+            PlayerSlot::occupied(
+                2,
+                PlayerType::Ai {
+                    vision: AiVision::Filtered,
+                },
+                None,
+                None,
+            ),
+            PlayerSlot::environment(3, AiVision::Filtered),
         ],
     );
 
@@ -319,7 +382,7 @@ fn slot_accessors_partition_by_participation() {
 #[test]
 #[should_panic(expected = "only an occupied lobby player slot can change team")]
 fn setting_team_on_environment_slot_panics() {
-    PlayerSlot::environment(4).set_team(Some(1));
+    PlayerSlot::environment(4, AiVision::Filtered).set_team(Some(1));
 }
 
 #[test]
@@ -503,12 +566,87 @@ fn required_players_skips_free_slots() {
         vec![
             PlayerSlot::occupied(0, PlayerType::Human, None, None),
             PlayerSlot::free(1),
-            PlayerSlot::occupied(2, PlayerType::Ai, None, None),
+            PlayerSlot::occupied(
+                2,
+                PlayerType::Ai {
+                    vision: AiVision::Filtered,
+                },
+                None,
+                None,
+            ),
         ],
     );
     session.start();
 
     assert_eq!(session.required_players(0), vec![0, 2]);
+}
+
+//
+// ─── Watching nodes ─────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn session_without_local_player_is_valid_and_plays_nothing() {
+    // An observer's node: every slot is someone else's, and nothing is local.
+    let session = GameSession::configured(
+        LocalRole::Observer,
+        humans(2),
+        "test",
+        Authority::Host {
+            ai_hosting: AiHosting::Replicated,
+        },
+        DropPolicy::Automatic,
+        FinishPolicy::LastStanding {
+            elimination: EliminationScope::Player,
+        },
+    );
+
+    assert_eq!(session.local_player(), None);
+    assert!(!session.local_plays());
+}
+
+#[test]
+fn local_player_stops_playing_once_elimination_takes_effect() {
+    let mut session = session(2);
+    assert!(session.local_plays());
+
+    // The marked tick still executes with the player's input; only from the
+    // next one on does the game stop answering it.
+    session.eliminate_player(0, 1);
+    assert!(session.local_plays());
+    session.advance_tick();
+    assert!(!session.local_plays());
+}
+
+#[test]
+fn dropped_local_player_no_longer_plays() {
+    // Dropped or eliminated, the game stops answering the player either way
+    // — `local_plays` reads the one liveness predicate, not just the defeat.
+    let mut session = session(2);
+    assert!(session.is_player_live(0));
+    assert!(session.local_plays());
+
+    session.drop_player(0, 0);
+    session.advance_tick();
+
+    assert!(session.is_player_dropped(0));
+    assert!(!session.is_player_live(0));
+    assert!(!session.local_plays());
+}
+
+#[test]
+fn free_slot_and_unknown_id_are_not_live() {
+    let session = configured(
+        0,
+        vec![
+            PlayerSlot::occupied(0, PlayerType::Human, None, None),
+            PlayerSlot::free(1),
+        ],
+    );
+
+    assert!(session.is_player_live(0));
+    assert!(!session.is_player_live(1));
+    assert!(!session.is_player_live(9));
 }
 
 //
@@ -721,17 +859,26 @@ fn host_only_sources_ai_slots_on_host_only() {
 /// A session with a local human, a remote human, an AI, and a free slot.
 fn mixed_session(ai_hosting: AiHosting) -> GameSession {
     GameSession::configured(
-        0,
+        LocalRole::Player(0),
         vec![
             PlayerSlot::occupied(0, PlayerType::Human, Some("human"), None),
             PlayerSlot::occupied(1, PlayerType::Human, Some("orc"), None),
-            PlayerSlot::occupied(2, PlayerType::Ai, Some("orc"), None),
+            PlayerSlot::occupied(
+                2,
+                PlayerType::Ai {
+                    vision: AiVision::Filtered,
+                },
+                Some("orc"),
+                None,
+            ),
             PlayerSlot::free(3),
         ],
         "test",
         Authority::Host { ai_hosting },
         DropPolicy::Automatic,
-        FinishPolicy::LastStanding,
+        FinishPolicy::LastStanding {
+            elimination: EliminationScope::Player,
+        },
     )
 }
 
@@ -740,14 +887,16 @@ fn mixed_session(ai_hosting: AiHosting) -> GameSession {
 /// one of the choices construct explicitly instead.
 fn configured(local_player: u8, slots: Vec<PlayerSlot>) -> GameSession {
     GameSession::configured(
-        local_player,
+        LocalRole::Player(local_player),
         slots,
         "test",
         Authority::Host {
             ai_hosting: AiHosting::Replicated,
         },
         DropPolicy::Automatic,
-        FinishPolicy::LastStanding,
+        FinishPolicy::LastStanding {
+            elimination: EliminationScope::Player,
+        },
     )
 }
 

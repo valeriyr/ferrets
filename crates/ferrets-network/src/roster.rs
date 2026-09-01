@@ -16,6 +16,10 @@ use crate::peer::PeerId;
 pub struct Roster {
     /// Peers indexed by player slot. `None` marks a slot with no network peer (an
     /// AI or a closed seat), which still occupies a slot index in the session.
+    ///
+    /// Only players: an observer's peer appears in no roster — it is a
+    /// transport subscriber, reached because gameplay sends are broadcasts to
+    /// every connected peer, and waited on by nothing.
     peers: Vec<Option<PeerId>>,
 }
 

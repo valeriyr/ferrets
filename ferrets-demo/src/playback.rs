@@ -27,17 +27,16 @@ use ferrets_simulation::{
         authority::Authority,
         drop_policy::DropPolicy,
         finish_policy::FinishPolicy,
-        player_slot::{self, PlayerId, PlayerSlot},
+        local_role::LocalRole,
+        player_slot::{self, PlayerSlot},
     },
 };
 
-use crate::{map, scenario, scenario::CurrentScenario, setup};
+use crate::{ai, map, scenario, scenario::CurrentScenario, setup};
 
 /// What a recording resolves to in the demo's own content: everything needed to
 /// rebuild the recorded game.
 pub struct ResolvedGame {
-    /// The slot the spectating viewer follows: the first occupied one.
-    pub viewer: PlayerId,
     /// The session slots the recorded game seated.
     pub slots: Vec<PlayerSlot>,
     /// The name of the map it was played on.
@@ -64,7 +63,7 @@ pub struct Rebuilt {
 /// its own definition and only needs its map. The rules the game was played
 /// under come from the header, so nothing depends on how a menu happens to be
 /// set. Errs on a scenario or map this build does not know.
-pub fn resolve(header: &ReplayHeader) -> Result<ResolvedGame, String> {
+pub fn resolve(header: &ReplayHeader, registry: &ContentRegistry) -> Result<ResolvedGame, String> {
     let model = header.movement_model;
     let projection = header.projection;
     let (slots, map_name, finish_policy, data, scenario) = match header.game.clone() {
@@ -74,7 +73,7 @@ pub fn resolve(header: &ReplayHeader) -> Result<ResolvedGame, String> {
                 return Err(format!("the replay needs unknown scenario '{name}'"));
             }
             (
-                player_slot::scenario_slots(&mission),
+                player_slot::scenario_slots(&mission, ai::environment_vision(registry)),
                 mission.map.name().to_string(),
                 FinishPolicy::Scripted,
                 mission.map.clone(),
@@ -97,13 +96,7 @@ pub fn resolve(header: &ReplayHeader) -> Result<ResolvedGame, String> {
         }
     };
 
-    let viewer = slots
-        .iter()
-        .find(|slot| slot.player_type().is_some())
-        .map_or(0, |slot| slot.id());
-
     Ok(ResolvedGame {
-        viewer,
         slots,
         map_name,
         finish_policy,
@@ -112,13 +105,15 @@ pub fn resolve(header: &ReplayHeader) -> Result<ResolvedGame, String> {
     })
 }
 
-/// The playback session for a resolved game. The viewer is a spectator standing
-/// on the first occupied slot; the recording is the sole frame source, so the
-/// choices that only the net control plane and the AI frame sources read — the
-/// authority, its hosting mode, the drop policy — never come into play.
+/// The playback session for a resolved game. The viewer is an observer — a
+/// node with no local player, exactly like a watcher of the live game — so
+/// no result of the recorded players' can ever be its own; the recording is
+/// the sole frame source, so the choices that only the net control plane and
+/// the AI frame sources read — the authority, its hosting mode, the drop
+/// policy — never come into play.
 pub fn session(resolved: &ResolvedGame) -> GameSession {
     GameSession::configured(
-        resolved.viewer,
+        LocalRole::Observer,
         resolved.slots.clone(),
         resolved.map_name.clone(),
         Authority::Host {
@@ -134,7 +129,7 @@ pub fn session(resolved: &ResolvedGame) -> GameSession {
 pub fn rebuild(replay: Replay) -> Result<Rebuilt, String> {
     let registry = content::load(&LuaEngine, crate::content::CONTENT)
         .map_err(|error| format!("demo content failed to load: {error}"))?;
-    let resolved = resolve(replay.header())?;
+    let resolved = resolve(replay.header(), &registry)?;
     let last_tick = replay.last_tick();
     let game_map = Map::from_data(&resolved.data, &registry);
     let session = session(&resolved);

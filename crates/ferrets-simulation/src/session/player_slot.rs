@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     map_data::{MapData, MapSlot},
     scenario::Scenario,
-    session::player_type::PlayerType,
+    session::{ai_vision::AiVision, player_type::PlayerType},
 };
 
 /// A player unique ID, used to identify players in the simulation and replays.
@@ -43,7 +43,10 @@ enum Occupancy {
     /// A game/map-injected AI combatant outside the lobby. Always AI-driven,
     /// raceless (its entities come from map placements, not race-picked game
     /// rules), and on no team — hostile to everyone.
-    Environment,
+    Environment {
+        /// How much of the map its brain observes, as the brain declares.
+        vision: AiVision,
+    },
 }
 
 /// A player slot which can be either free or occupied by a player.
@@ -84,12 +87,12 @@ impl PlayerSlot {
     }
 
     /// Creates an occupied [`Participation::Environment`] slot with the given
-    /// ID: an AI combatant outside the lobby, raceless and on no team —
-    /// hostile to every other player.
-    pub fn environment(id: PlayerId) -> Self {
+    /// ID and the vision its brain declares: an AI combatant outside the
+    /// lobby, raceless and on no team — hostile to every other player.
+    pub fn environment(id: PlayerId, vision: AiVision) -> Self {
         Self {
             id,
-            occupancy: Occupancy::Environment,
+            occupancy: Occupancy::Environment { vision },
         }
     }
 
@@ -104,7 +107,7 @@ impl PlayerSlot {
         match self.occupancy {
             Occupancy::Free => None,
             Occupancy::Player { .. } => Some(Participation::Player),
-            Occupancy::Environment => Some(Participation::Environment),
+            Occupancy::Environment { .. } => Some(Participation::Environment),
         }
     }
 
@@ -114,14 +117,28 @@ impl PlayerSlot {
         match self.occupancy {
             Occupancy::Free => None,
             Occupancy::Player { player_type, .. } => Some(player_type),
-            Occupancy::Environment => Some(PlayerType::Ai),
+            Occupancy::Environment { vision } => Some(PlayerType::Ai { vision }),
+        }
+    }
+
+    /// Returns the vision the slot's scripted occupant declares, or `None`
+    /// when no script drives it — a human observes through its screen, a
+    /// free seat through nothing.
+    pub fn ai_vision(&self) -> Option<AiVision> {
+        match self.occupancy {
+            Occupancy::Free => None,
+            Occupancy::Player { player_type, .. } => match player_type {
+                PlayerType::Human => None,
+                PlayerType::Ai { vision } => Some(vision),
+            },
+            Occupancy::Environment { vision } => Some(vision),
         }
     }
 
     /// Returns the race name the player plays, or `None` if not chosen.
     pub fn race(&self) -> Option<&str> {
         match &self.occupancy {
-            Occupancy::Free | Occupancy::Environment => None,
+            Occupancy::Free | Occupancy::Environment { .. } => None,
             Occupancy::Player { race, .. } => race.as_deref(),
         }
     }
@@ -145,7 +162,7 @@ impl PlayerSlot {
     pub fn team(&self) -> Option<TeamId> {
         match self.occupancy {
             Occupancy::Player { team, .. } => team,
-            Occupancy::Free | Occupancy::Environment => None,
+            Occupancy::Free | Occupancy::Environment { .. } => None,
         }
     }
 
@@ -166,13 +183,17 @@ impl PlayerSlot {
 
 /// The vacant session slots for a map's seats: a free slot per player seat,
 /// an environment slot per environment seat, indexed by slot id.
-pub fn vacant_slots(map: &MapData) -> Vec<PlayerSlot> {
+///
+/// `environment_vision` is what the game's environment brain declares — the
+/// map places the seats, the game assigns the brain, so the caller carries
+/// the declaration in.
+pub fn vacant_slots(map: &MapData, environment_vision: AiVision) -> Vec<PlayerSlot> {
     map.slots()
         .iter()
         .enumerate()
         .map(|(id, seat)| match seat {
             MapSlot::Player { .. } => PlayerSlot::free(id as PlayerId),
-            MapSlot::Environment => PlayerSlot::environment(id as PlayerId),
+            MapSlot::Environment => PlayerSlot::environment(id as PlayerId, environment_vision),
         })
         .collect()
 }
@@ -183,8 +204,8 @@ pub fn vacant_slots(map: &MapData) -> Vec<PlayerSlot> {
 /// Panics if a cast entry names a seat the map does not declare as a player
 /// seat, or names a seat twice — the cast and the map are authored together,
 /// so a mismatch is a bug in the scenario.
-pub fn scenario_slots(scenario: &Scenario) -> Vec<PlayerSlot> {
-    let mut slots = vacant_slots(&scenario.map);
+pub fn scenario_slots(scenario: &Scenario, environment_vision: AiVision) -> Vec<PlayerSlot> {
+    let mut slots = vacant_slots(&scenario.map, environment_vision);
 
     for player in &scenario.players {
         let seat = slots.get_mut(player.seat as usize).unwrap_or_else(|| {

@@ -16,11 +16,11 @@ use ferrets_simulation::{command::PlayerCommand, input::PlayerFrame};
 #[test]
 fn broadcast_frames_reach_other_peer() {
     let (mut host, mut peer) = connected_pair();
-    assert_eq!(host.local_player(), 0);
-    assert_eq!(peer.local_player(), 1);
+    assert_eq!(host.local_player(), Some(0));
+    assert_eq!(peer.local_player(), Some(1));
 
     let frame = PlayerFrame {
-        player: host.local_player(),
+        player: host.local_player().expect("host plays"),
         tick: 5,
         commands: vec![PlayerCommand::Stop],
     };

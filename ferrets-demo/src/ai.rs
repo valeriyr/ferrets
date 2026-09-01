@@ -14,7 +14,7 @@ use ferrets_script::{
     ai::view::content::ContentView,
     engine::{ScriptEngine, lua::LuaEngine},
 };
-use ferrets_simulation::session::{GameSession, player_slot::PlayerId};
+use ferrets_simulation::session::{GameSession, ai_vision::AiVision, player_slot::PlayerId};
 
 /// The chassis both race brains run on: pure helpers plus the economy, build,
 /// research, and attack routines. Prepended to each brain, so its locals are
@@ -565,6 +565,41 @@ pub fn orc_ai() -> String {
     format!("{COMMON_AI}\n{ORC_AI}")
 }
 
+/// The brain source a race's AI slots load, or `None` for a race with no
+/// demo brain — its slots idle on unmanned input.
+fn race_brain(race: &str) -> Option<String> {
+    match race {
+        "human" => Some(human_ai()),
+        "orc" => Some(orc_ai()),
+        _ => None,
+    }
+}
+
+/// The vision the race's demo brain declares — filled into the seat, so
+/// every node (and a replay) resolves the brain's commands identically. A
+/// race with no brain observes through the fog.
+pub fn race_vision(race: &str, registry: &ContentRegistry) -> AiVision {
+    match race_brain(race) {
+        Some(script) => brain_vision(&script, registry),
+        None => AiVision::Filtered,
+    }
+}
+
+/// The vision the boss brain declares, for the environment seats it drives.
+pub fn environment_vision(registry: &ContentRegistry) -> AiVision {
+    brain_vision(BOSS_AI_SCRIPT, registry)
+}
+
+/// The vision `script` declares. A brain that fails to load (reported when
+/// the brains install) observes through the fog.
+fn brain_vision(script: &str, registry: &ContentRegistry) -> AiVision {
+    let content = ContentView::from_registry(registry);
+    match LuaEngine.load_ai(script, &content) {
+        Ok(runtime) => runtime.vision(),
+        Err(_) => AiVision::Filtered,
+    }
+}
+
 /// The boss brain, for the environment slot holding the lake. Thinks once a
 /// second: keeps the fleet manned from the fortress and shells the nearest
 /// enemy within aggro range with every idle ship. Ships never wander — an
@@ -645,11 +680,10 @@ pub fn install_demo_ai(world: &mut World) {
         let script = if environments.contains(&player) {
             BOSS_AI_SCRIPT.to_string()
         } else {
-            match race.as_str() {
-                "human" => human_ai(),
-                "orc" => orc_ai(),
-                other => {
-                    eprintln!("no demo ai for race '{other}'; the slot idles");
+            match race_brain(&race) {
+                Some(script) => script,
+                None => {
+                    eprintln!("no demo ai for race '{race}'; the slot idles");
                     continue;
                 }
             }

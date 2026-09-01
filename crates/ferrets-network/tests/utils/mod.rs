@@ -8,7 +8,9 @@ use ferrets_network::{
     session_mode::SessionMode,
     transport::NetworkTransport,
 };
-use ferrets_simulation::session::{drop_policy::DropPolicy, finish_policy::FinishPolicy};
+use ferrets_simulation::session::{
+    drop_policy::DropPolicy, elimination_scope::EliminationScope, finish_policy::FinishPolicy,
+};
 
 /// A lobby host over `transport` in the given `mode`, with the suite's
 /// baseline choices for everything else: automatic drops, last-standing
@@ -22,7 +24,9 @@ pub fn lobby_host(
         ControlChannel::new(Box::new(transport)),
         mode,
         DropPolicy::Automatic,
-        FinishPolicy::LastStanding,
+        FinishPolicy::LastStanding {
+            elimination: EliminationScope::Player,
+        },
         capacity,
         "human",
     )

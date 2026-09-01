@@ -78,6 +78,7 @@ use ferrets_simulation::{
         authority::Authority,
         drop_policy::DropPolicy,
         finish_policy::FinishPolicy,
+        local_role::LocalRole,
         player_slot::{PlayerId, PlayerSlot},
         player_type::PlayerType,
     },
@@ -120,7 +121,7 @@ pub fn make_app(slots: Vec<PlayerSlot>) -> App {
     let mut app = App::new();
     app.add_plugins(SimulationPlugin::new(
         GameSession::configured(
-            0,
+            LocalRole::Player(0),
             slots,
             "test",
             Authority::Host {
@@ -511,7 +512,7 @@ pub fn run_ticks(app: &mut App, ticks: u32) {
             (session.tick(), session.local_player(), players)
         };
         for player in players {
-            if player != local_player {
+            if Some(player) != local_player {
                 world
                     .resource_mut::<InputFrames>()
                     .push_frame(PlayerFrame::idle(player, current_tick));
@@ -830,6 +831,7 @@ pub fn combat_app() -> App {
         registry.register(
             EntityTypeDef::new("soldier")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_sight_range(8)
                 .with_movement(
                     FixedU64::from_num(0.5),
                     FixedU64::from_num(0.5),
@@ -844,8 +846,8 @@ pub fn combat_app() -> App {
         // A gun on a turret: it never moves and never turns, and what comes round
         // is the weapon, slowly, through a narrow arc. It notices further than it
         // shoots, so it starts coming round while a target is still closing.
-        // The bastion declares no sight of its own — acquisition reads the fog
-        // grid, so a test that wants it hunting unordered must give it eyes first.
+        // Sight covers its notice: naming a target — by an order or by its own
+        // hunting — first requires seeing it through the fog grid.
         let keep_gun = registry.register_turret(
             "keep_gun",
             TurretDef::new(
@@ -858,6 +860,7 @@ pub fn combat_app() -> App {
             EntityTypeDef::new("bastion")
                 .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
                 .with_health(200)
+                .with_sight_range(14)
                 .with_stat(EntityStatId::AIM_RATE, FixedU64::from_num(3))
                 .with_stat(EntityStatId::ATTACK_ARC, FixedU64::from_num(60))
                 .with_stat(EntityStatId::DAMAGE, FixedU64::from_num(30))
@@ -928,9 +931,10 @@ pub fn combat_app() -> App {
                     FixedU64::from_num(360),
                 )
                 .with_health(40)
-                // Sight wider than the range it engages at, so what it engages is
-                // something it can see — acquisition reads the fog grid.
-                .with_sight_range(10)
+                // Sight wider than the range it engages at, so what it engages —
+                // and what it is ordered onto across the map — is something it
+                // can see: naming a target reads the fog grid.
+                .with_sight_range(14)
                 .with_stat(EntityStatId::AIM_RATE, FixedU64::from_num(30))
                 .with_stat(EntityStatId::ATTACK_ARC, FixedU64::from_num(60))
                 .with_stat(EntityStatId::DAMAGE, FixedU64::from_num(10))
@@ -1242,6 +1246,7 @@ pub fn combat_app() -> App {
         registry.register(
             EntityTypeDef::new("ballista")
                 .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
+                .with_sight_range(12)
                 .with_movement(
                     FixedU64::from_num(0.5),
                     FixedU64::ONE,
@@ -1821,6 +1826,9 @@ pub fn train_queue_len(world: &World, entity: Entity) -> usize {
 }
 
 /// Registers the economy content roster ([`orders_app`]'s) and validates it.
+/// The mobile types see the whole harness map (sight 40): these suites
+/// exercise orders and economy, not scouting — fog has its own suites, and a
+/// fogged target would refuse the very commands under test.
 pub fn register_orders_content(app: &mut App) {
     {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
@@ -1829,6 +1837,7 @@ pub fn register_orders_content(app: &mut App) {
         registry.register(
             EntityTypeDef::new("soldier")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_sight_range(40)
                 .with_movement(
                     FixedU64::from_num(0.5),
                     FixedU64::from_num(0.5),
@@ -1848,6 +1857,7 @@ pub fn register_orders_content(app: &mut App) {
         registry.register(
             EntityTypeDef::new("wagon")
                 .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
+                .with_sight_range(40)
                 .with_movement(
                     FixedU64::from_num(0.5),
                     FixedU64::ONE,
@@ -1863,6 +1873,7 @@ pub fn register_orders_content(app: &mut App) {
         registry.register(
             EntityTypeDef::new("ox")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_sight_range(40)
                 .with_movement(
                     FixedU64::from_num(0.5),
                     FixedU64::from_num(0.5),
@@ -1886,6 +1897,7 @@ pub fn register_orders_content(app: &mut App) {
         registry.register(
             EntityTypeDef::new("worker")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_sight_range(40)
                 .with_movement(
                     FixedU64::from_num(0.5),
                     FixedU64::from_num(0.5),
@@ -1907,6 +1919,7 @@ pub fn register_orders_content(app: &mut App) {
         registry.register(
             EntityTypeDef::new("mason")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_sight_range(40)
                 .with_movement(
                     FixedU64::from_num(0.5),
                     FixedU64::from_num(0.5),
@@ -1923,6 +1936,7 @@ pub fn register_orders_content(app: &mut App) {
         registry.register(
             EntityTypeDef::new("carpenter")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_sight_range(40)
                 .with_movement(
                     FixedU64::from_num(0.5),
                     FixedU64::from_num(0.5),
@@ -1938,6 +1952,7 @@ pub fn register_orders_content(app: &mut App) {
         registry.register(
             EntityTypeDef::new("lumberjack")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_sight_range(40)
                 .with_movement(
                     FixedU64::from_num(0.5),
                     FixedU64::from_num(0.5),
@@ -1955,6 +1970,7 @@ pub fn register_orders_content(app: &mut App) {
         registry.register(
             EntityTypeDef::new("prospector")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_sight_range(40)
                 .with_movement(
                     FixedU64::from_num(0.5),
                     FixedU64::from_num(0.5),
@@ -1972,6 +1988,7 @@ pub fn register_orders_content(app: &mut App) {
         registry.register(
             EntityTypeDef::new("logger")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_sight_range(40)
                 .with_movement(
                     FixedU64::from_num(0.5),
                     FixedU64::from_num(0.5),
@@ -1990,6 +2007,7 @@ pub fn register_orders_content(app: &mut App) {
         registry.register(
             EntityTypeDef::new("barracks")
                 .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
+                .with_sight_range(8)
                 .with_health(100)
                 .with_dying(2, None)
                 .with_cost([("gold", 40)])
@@ -2007,6 +2025,7 @@ pub fn register_orders_content(app: &mut App) {
         registry.register(
             EntityTypeDef::new("forager")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_sight_range(40)
                 .with_movement(
                     FixedU64::from_num(0.5),
                     FixedU64::from_num(0.5),
@@ -2132,12 +2151,14 @@ pub fn net_app_with_slots(
     authority: Authority,
     slots: Vec<PlayerSlot>,
 ) -> App {
-    let local = roster
-        .player_of(transport.local_peer())
-        .expect("local peer is in the roster");
+    // A local peer outside the roster is an observer's node: it watches.
+    let local = match roster.player_of(transport.local_peer()) {
+        Some(player) => LocalRole::Player(player),
+        None => LocalRole::Observer,
+    };
     // Peer 0 is the host node, as the lobby would assign.
     let net = NetSession::over_shared(Box::new(transport), Role::Peer, roster);
-    assert_eq!(net.gameplay_ref().local_player(), local);
+    assert_eq!(net.gameplay_ref().local_player(), local.player());
 
     let mut nav_grid = NavGrid::new(32, 32);
     nav_grid.add_layer(GROUND);
@@ -2183,6 +2204,7 @@ pub fn net_app_with_slots(
 pub fn harness_soldier() -> EntityTypeDef {
     EntityTypeDef::new("soldier")
         .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+        .with_sight_range(8)
         .with_movement(
             FixedU64::from_num(0.5),
             FixedU64::from_num(0.5),

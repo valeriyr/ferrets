@@ -1,8 +1,8 @@
 use bevy::prelude::*;
-use ferrets_script::{ai::AiVision, scenario::Outcome};
+use ferrets_script::scenario::Outcome;
 use ferrets_simulation::{
     game_loop,
-    session::{GameResult, GameSession, Winner, finish_policy::FinishPolicy},
+    session::{GameResult, GameSession, Winner, ai_vision::AiVision, finish_policy::FinishPolicy},
 };
 
 use crate::{
@@ -15,7 +15,7 @@ use crate::{
 /// verdict, or nothing at all under `Endless`.
 pub fn check_game_result(world: &mut World) {
     match world.resource::<GameSession>().finish_policy() {
-        FinishPolicy::LastStanding => game_loop::game_result::check(world),
+        FinishPolicy::LastStanding { .. } => game_loop::game_result::check(world),
         FinishPolicy::Scripted => check_scenario(world),
         FinishPolicy::Endless => {}
     }

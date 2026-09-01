@@ -61,6 +61,8 @@ fn lobby_state_control_round_trips() {
                 team: None,
             },
         ],
+        observers: vec![7],
+        observer_limit: 2,
         mode: SessionMode::MeshDecentralized,
         drop_policy: DropPolicy::Manual,
         finish_policy: FinishPolicy::Endless,

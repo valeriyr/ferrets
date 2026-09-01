@@ -131,6 +131,9 @@ fn box_select_keeps_only_own_units_when_present() {
 fn box_select_falls_back_to_single_other_owner() {
     let mut app = utils::selection_app();
     let world = app.world_mut();
+    // A scout outside the box keeps the enemies in sight — a boxed enemy is
+    // selectable for inspection only while someone actually sees it.
+    spawn::spawn_entity(world, "soldier", utils::pos(3, 5), Some(0)).unwrap();
     let (_, first) = spawn::spawn_entity(world, "soldier", utils::pos(5, 5), Some(1)).unwrap();
     spawn::spawn_entity(world, "soldier", utils::pos(6, 5), Some(1)).unwrap();
 
@@ -172,6 +175,52 @@ fn select_by_type_grabs_own_class_on_screen() {
     utils::run_ticks(&mut app, utils::APPLY);
 
     assert_eq!(utils::selection(&app), vec![a, b]);
+}
+
+//
+// ─── Fog of war ──────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn fogged_enemy_is_not_selectable_by_id() {
+    // The enemy stands far beyond every own unit's sight: naming it selects
+    // nothing — the fog that hides the sprite hides the stats too.
+    let mut app = utils::selection_app();
+    let world = app.world_mut();
+    spawn::spawn_entity(world, "soldier", utils::pos(3, 5), Some(0)).unwrap();
+    let (_, fogged) = spawn::spawn_entity(world, "soldier", utils::pos(25, 25), Some(1)).unwrap();
+
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SelectById {
+            id: fogged,
+            mode: SelectMode::Replace,
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY);
+
+    assert_eq!(utils::selection(&app), vec![]);
+}
+
+#[test]
+fn boxed_fogged_enemy_is_not_kept_for_inspection() {
+    // The same box as the fallback test, with nobody watching it: the enemy
+    // inside is fogged, so the box selects nothing at all.
+    let mut app = utils::selection_app();
+    let world = app.world_mut();
+    spawn::spawn_entity(world, "soldier", utils::pos(25, 25), Some(0)).unwrap();
+    spawn::spawn_entity(world, "soldier", utils::pos(5, 5), Some(1)).unwrap();
+
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SelectByRect {
+            rect: rect((4, 4), (8, 8)),
+            mode: SelectMode::Replace,
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY);
+
+    assert_eq!(utils::selection(&app), vec![]);
 }
 
 //

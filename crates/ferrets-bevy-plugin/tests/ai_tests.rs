@@ -13,7 +13,7 @@ use ferrets_bevy_plugin::{
 };
 use ferrets_replay::{buffer::SharedBuffer, recorder::Recorder, replay::Replay};
 use ferrets_script::{
-    ai::{AiVision, view::content::ContentView},
+    ai::view::content::ContentView,
     engine::{ScriptEngine, lua::LuaEngine},
 };
 use ferrets_simulation::{
@@ -24,6 +24,7 @@ use ferrets_simulation::{
     resources::PlayerResources,
     session::{
         GameSession,
+        ai_vision::AiVision,
         finish_policy::FinishPolicy,
         player_slot::{PlayerId, PlayerSlot},
         player_type::PlayerType,
@@ -38,7 +39,14 @@ use ferrets_simulation::{
 fn ai_slots_without_runtimes_get_idle_frames_and_free_slots_get_none() {
     let mut app = utils::make_app(vec![
         PlayerSlot::occupied(0, PlayerType::Human, None, None),
-        PlayerSlot::occupied(1, PlayerType::Ai, Some("human"), None),
+        PlayerSlot::occupied(
+            1,
+            PlayerType::Ai {
+                vision: AiVision::Filtered,
+            },
+            Some("human"),
+            None,
+        ),
         PlayerSlot::free(2),
     ]);
     app.add_plugins(AiPlugin);
@@ -60,8 +68,22 @@ fn ai_slots_without_runtimes_get_idle_frames_and_free_slots_get_none() {
 fn ai_commands_land_only_on_staggered_think_ticks() {
     let mut app = utils::make_app(vec![
         PlayerSlot::occupied(0, PlayerType::Human, None, None),
-        PlayerSlot::occupied(1, PlayerType::Ai, Some("human"), None),
-        PlayerSlot::occupied(2, PlayerType::Ai, Some("orc"), None),
+        PlayerSlot::occupied(
+            1,
+            PlayerType::Ai {
+                vision: AiVision::Filtered,
+            },
+            Some("human"),
+            None,
+        ),
+        PlayerSlot::occupied(
+            2,
+            PlayerType::Ai {
+                vision: AiVision::Filtered,
+            },
+            Some("orc"),
+            None,
+        ),
     ]);
     app.add_plugins(AiPlugin);
     install_ai(&mut app, &[(1, STOPPER), (2, STOPPER)]);
@@ -98,7 +120,14 @@ fn blocked_ticks_do_not_rethink() {
         PlayerSlot::occupied(0, PlayerType::Human, None, None),
         // A remote human with no frame source: the loop blocks at tick 2.
         PlayerSlot::occupied(1, PlayerType::Human, None, None),
-        PlayerSlot::occupied(2, PlayerType::Ai, Some("human"), None),
+        PlayerSlot::occupied(
+            2,
+            PlayerType::Ai {
+                vision: AiVision::Filtered,
+            },
+            Some("human"),
+            None,
+        ),
     ]);
     app.add_plugins(AiPlugin);
     install_ai(&mut app, &[(2, COUNTER)]);
@@ -139,7 +168,14 @@ fn blocked_ticks_do_not_rethink() {
 fn replay_playback_gates_ai_sources_off() {
     let mut app = utils::make_app(vec![
         PlayerSlot::occupied(0, PlayerType::Human, None, None),
-        PlayerSlot::occupied(1, PlayerType::Ai, Some("human"), None),
+        PlayerSlot::occupied(
+            1,
+            PlayerType::Ai {
+                vision: AiVision::Filtered,
+            },
+            Some("human"),
+            None,
+        ),
         PlayerSlot::free(2),
     ]);
     app.add_plugins(AiPlugin);
@@ -164,7 +200,14 @@ fn replay_playback_gates_ai_sources_off() {
 fn game_view_classifies_and_snapshots_entities() {
     let mut app = utils::make_app(vec![
         PlayerSlot::occupied(0, PlayerType::Human, None, None),
-        PlayerSlot::occupied(1, PlayerType::Ai, Some("human"), None),
+        PlayerSlot::occupied(
+            1,
+            PlayerType::Ai {
+                vision: AiVision::Filtered,
+            },
+            Some("human"),
+            None,
+        ),
     ]);
     utils::register_orders_content(&mut app);
     let world = app.world_mut();
@@ -288,8 +331,22 @@ fn install_ai(app: &mut App, scripts: &[(PlayerId, &str)]) {
 fn run_ai_session() -> Vec<u64> {
     let mut app = utils::make_app(vec![
         PlayerSlot::occupied(0, PlayerType::Human, None, None),
-        PlayerSlot::occupied(1, PlayerType::Ai, Some("human"), None),
-        PlayerSlot::occupied(2, PlayerType::Ai, Some("orc"), None),
+        PlayerSlot::occupied(
+            1,
+            PlayerType::Ai {
+                vision: AiVision::Filtered,
+            },
+            Some("human"),
+            None,
+        ),
+        PlayerSlot::occupied(
+            2,
+            PlayerType::Ai {
+                vision: AiVision::Filtered,
+            },
+            Some("orc"),
+            None,
+        ),
     ]);
     app.add_plugins(AiPlugin);
     utils::register_orders_content(&mut app);
@@ -322,7 +379,14 @@ fn empty_replay() -> Replay {
     let header = utils::skirmish_header(
         vec![
             PlayerSlot::occupied(0, PlayerType::Human, None, None),
-            PlayerSlot::occupied(1, PlayerType::Ai, Some("human"), None),
+            PlayerSlot::occupied(
+                1,
+                PlayerType::Ai {
+                    vision: AiVision::Filtered,
+                },
+                Some("human"),
+                None,
+            ),
             PlayerSlot::free(2),
         ],
         FinishPolicy::Endless,

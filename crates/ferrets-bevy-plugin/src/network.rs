@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 use bevy::prelude::*;
 use ferrets_math::FixedU64;
 use ferrets_network::{
-    message::control::{ControlMessage, InGameMessage},
+    message::control::{ControlMessage, InGameMessage, Proposer},
     peer::PeerId,
     session::NetSession,
 };
@@ -23,7 +23,7 @@ use ferrets_simulation::{
     input::{InputFrames, SYNC_LATENCY},
     session::{
         GameResult, GameSession, authority::Authority, drop_policy::DropPolicy,
-        game_speed::GameSpeed, player_slot::PlayerId,
+        game_speed::GameSpeed, local_role::LocalRole, player_slot::PlayerId,
     },
 };
 
@@ -150,7 +150,7 @@ pub struct NetworkActive;
 /// duplicate and handed out again on every step.
 #[derive(Clone, Copy)]
 struct Scheduled<T> {
-    proposer: PlayerId,
+    proposer: Proposer,
     value: T,
     claimed: bool,
 }
@@ -158,7 +158,7 @@ struct Scheduled<T> {
 impl<T> Scheduled<T> {
     /// A change nobody has claimed yet — the only way one is born, so the flag
     /// is never a caller's to set.
-    fn unclaimed(proposer: PlayerId, value: T) -> Self {
+    fn unclaimed(proposer: Proposer, value: T) -> Self {
         Self {
             proposer,
             value,
@@ -171,7 +171,9 @@ impl<T> Scheduled<T> {
 /// takes effect on, and what it is.
 #[derive(Clone, Copy)]
 struct Proposal<T> {
-    proposer: PlayerId,
+    /// Who proposed the change — a player, or a watching node by its peer:
+    /// an observer host still steers the session it relays.
+    proposer: Proposer,
     effective: u32,
     value: T,
 }
@@ -197,7 +199,7 @@ impl<T: Copy + Ord> PendingChange<T> {
     /// their arrival order: the smallest `(player, value)` wins — and a winner
     /// arriving after the tick was already claimed is offered again, so every
     /// node converges on the same one.
-    fn propose(&mut self, tick: u32, player: PlayerId, value: T) -> bool {
+    fn propose(&mut self, tick: u32, player: Proposer, value: T) -> bool {
         match self.0.entry(tick) {
             Entry::Vacant(entry) => {
                 entry.insert(Scheduled::unclaimed(player, value));
@@ -528,6 +530,7 @@ pub fn net_control(
     let authority = session.authority();
     let tick = session.tick();
     let local = session.local_player();
+    let stamp = local_proposer(&session, &net);
     // Whether this node is the one that turns a bare request into an
     // authoritative change: the host's own node under host authority, and
     // nobody under peer authority, where every node proposes for itself and no
@@ -651,7 +654,7 @@ pub fn net_control(
                     missing,
                 } => {
                     let (voter, tick) = (*voter, *tick);
-                    if voter == local {
+                    if Some(voter) == local {
                         continue;
                     }
                     // Only the voter may originate its own vote. A relayed copy
@@ -694,12 +697,15 @@ pub fn net_control(
         }
         Authority::Peers => {
             // A player out of the game steers nothing — its node is expected
-            // to be gone, so a lost link to it proves no partition.
+            // to be gone, so a lost link to it proves no partition. Neither
+            // does an observer: a watcher's link keeps no game alive.
             let others: Vec<PlayerId> = session
                 .occupied_slots()
                 .map(|slot| slot.id())
                 .filter(|&player| {
-                    player != local && !session.is_player_out(player) && net.0.is_networked(player)
+                    Some(player) != local
+                        && !session.is_player_out(player)
+                        && net.0.is_networked(player)
                 })
                 .collect();
             !others.is_empty() && others.iter().all(|player| links.lost.contains(player))
@@ -723,12 +729,12 @@ pub fn net_control(
             &mut pending.0,
             &session,
             Proposal {
-                proposer: local,
+                proposer: stamp,
                 effective,
                 value: paused,
             },
             InGameMessage::PauseAt {
-                proposer: local,
+                proposer: stamp,
                 tick: effective,
                 paused,
             },
@@ -751,12 +757,12 @@ pub fn net_control(
             &mut speeds.0,
             &session,
             Proposal {
-                proposer: local,
+                proposer: stamp,
                 effective,
                 value: speed,
             },
             InGameMessage::SpeedAt {
-                proposer: local,
+                proposer: stamp,
                 tick: effective,
                 speed,
             },
@@ -1000,7 +1006,9 @@ pub fn detect_drops(
         Authority::Peers => {
             // Cast (or update) this node's observation, announcing it over the
             // reliable control mesh only when it changes.
-            if decided {
+            // An observer's node observes but holds no vote: consensus is the
+            // players' unanimity, and no one counts a watcher.
+            if decided && let Some(local) = local {
                 let mine = (tick, missing.clone());
                 if votes.0.get(&local) != Some(&mine) {
                     votes.0.insert(local, mine);
@@ -1015,15 +1023,16 @@ pub fn detect_drops(
                 }
             }
             // Unanimity: every live player outside the missing set — this node
-            // included — reports exactly this stall. A voter behind a single
-            // broken link still reaches here via the flood; a voter whose
-            // control died entirely aborts itself, its frames stop, and it
-            // joins the missing set — where its vote was never required.
+            // included, when a player sits at it — reports exactly this stall.
+            // A voter behind a single broken link still reaches here via the
+            // flood; a voter whose control died entirely aborts itself, its
+            // frames stop, and it joins the missing set — where its vote was
+            // never required.
             let committed = live_others
                 .iter()
                 .copied()
                 .filter(|player| !missing.contains(player))
-                .chain(std::iter::once(local))
+                .chain(local)
                 .all(|player| {
                     votes
                         .0
@@ -1133,10 +1142,19 @@ fn steers_local_players(session: &GameSession, net: &NetworkSession, is_host: bo
     matches!(session.authority(), Authority::Host { .. })
         && net.0.is_host_node()
         && session.occupied_slots().any(|slot| {
-            slot.id() != session.local_player()
+            Some(slot.id()) != session.local_player()
                 && session.sources_locally(slot, is_host)
                 && awaits_frames(session, slot.id())
         })
+}
+
+/// Who this node's own proposals are stamped as: its player, or — on a
+/// watching node — its peer, the one identity a watcher has on the wire.
+fn local_proposer(session: &GameSession, net: &NetworkSession) -> Proposer {
+    match session.local_role() {
+        LocalRole::Player(player) => Proposer::Player(player),
+        LocalRole::Observer => Proposer::Observer(net.0.local_peer()),
+    }
 }
 
 /// Merges one received tick-aligned proposal into its pending store: refuses a
@@ -1172,7 +1190,7 @@ fn receive_change<T: Copy + Ord>(
     if matches!(authority, Authority::Host { .. }) && !net.0.is_host_peer(from) {
         return;
     }
-    if proposer == session.local_player() {
+    if proposer == local_proposer(session, net) {
         return;
     }
     // A proposal for a tick already passed is a stale copy of a change that was
