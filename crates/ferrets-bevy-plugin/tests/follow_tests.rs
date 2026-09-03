@@ -10,9 +10,9 @@ fn follow_tracks_moving_target() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
     let (follower, follower_id) =
-        spawn::spawn_entity(world, "soldier", utils::pos(5, 5), Some(0)).unwrap();
+        spawn::create_entity(world, "soldier", utils::pos(5, 5), Some(0)).unwrap();
     let (leader, leader_id) =
-        spawn::spawn_entity(world, "soldier", utils::pos(8, 5), Some(0)).unwrap();
+        spawn::create_entity(world, "soldier", utils::pos(8, 5), Some(0)).unwrap();
 
     // A friendly target without collect/store intent resolves to a follow.
     utils::select(&mut app, follower_id);

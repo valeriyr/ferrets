@@ -3,7 +3,7 @@
 use bevy::{input::mouse::AccumulatedMouseScroll, prelude::*};
 use ferrets_simulation::{map::Map, session::GameSession};
 
-use crate::render::CELL_PX;
+use crate::{render::CELL_PX, sound};
 
 const PAN_SPEED: f32 = 700.0;
 /// Closest and furthest orthographic zoom (smaller = more zoomed in).
@@ -27,7 +27,7 @@ pub fn clamp_to_map(translation: Vec3, map: &Map) -> Vec3 {
 /// Spawns the 2D camera. It is framed on the local player's base once the game
 /// starts (see [`frame_local_player`]); the local player isn't known yet here.
 pub fn spawn_camera(mut commands: Commands) {
-    commands.spawn((Camera2d, Transform::default()));
+    commands.spawn((Camera2d, Transform::default(), sound::listener()));
 }
 
 /// Centers the camera on the local player's start point when the game begins.

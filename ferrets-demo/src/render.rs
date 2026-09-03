@@ -25,7 +25,6 @@ use ferrets_simulation::{
         build::{BuildComponent, UnderConstructionComponent},
         energy::EnergyComponent,
         entity_info::EntityInfoComponent,
-        entity_skills::SkillsComponent,
         entity_stats::StatsComponent,
         health::HealthComponent,
         hidden::HiddenComponent,
@@ -42,6 +41,9 @@ use ferrets_simulation::{
         transport::TransporterComponent,
         turret::TurretsComponent,
     },
+    entity_def,
+    entity_index::EntityIndex,
+    events::{EventRecord, SimulationEvent, SpawnCause},
     impacts::PendingImpacts,
     order::Order,
     selection::Selection,
@@ -248,15 +250,21 @@ fn side_representatives(session: &GameSession) -> Vec<PlayerId> {
     sides
 }
 
-/// Opens a game watching from the top: the perspective back on everything and
-/// the inspection empty, so nothing chosen in an earlier game leaks into this
-/// one.
-pub fn reset_watching(
+/// Drops everything the view kept for the game just left, on entering a new
+/// one. All of it keys off a tick or a simulation id, and both restart with a
+/// new game.
+pub fn reset_per_game(
     mut watch: ResMut<ObserverPerspective>,
     mut inspected: ResMut<crate::input::Inspected>,
+    mut ghosts: ResMut<Ghosts>,
+    mut pulses: ResMut<SkillPulses>,
+    mut puffs: ResMut<Puffs>,
 ) {
     watch.0 = None;
     inspected.0.clear();
+    ghosts.0.clear();
+    pulses.active.clear();
+    puffs.active.clear();
 }
 
 /// The knowledge this node watches the map through: the local player's own
@@ -1054,68 +1062,180 @@ pub fn draw_selection(
 /// the game rather than the same stretch of wall time.
 const PULSE_TICKS: u32 = 9;
 
+/// The moment the frame sees, in ticks, with the fixed step's overstep folded in
+/// so a ring grows smoothly between ticks rather than in steps.
+fn pulse_now(session: &GameSession, fixed: &Time<Fixed>) -> f32 {
+    session.tick() as f32 + fixed.overstep_fraction()
+}
+
+/// How far through its [`PULSE_TICKS`] life a pulse started at `started` has
+/// come, in `0.0..=1.0` — `None` once it has run out.
+fn pulse_progress(now: f32, started: u32) -> Option<f32> {
+    let age = now - started as f32;
+    (age <= PULSE_TICKS as f32).then(|| (age / PULSE_TICKS as f32).clamp(0.0, 1.0))
+}
+
 /// Ring pulses marking skills that have just been cast.
 #[derive(Resource, Default)]
 pub struct SkillPulses {
-    /// Which of each caster's skills were off cooldown last frame, in declaration
-    /// order. A skill leaving that set started its cooldown, which only a
-    /// successful cast does — so rejected casts never draw a pulse.
-    was_ready: HashMap<SimulationId, Vec<bool>>,
-    /// Live pulses: the caster and the tick its cast was spotted on.
+    /// Live pulses: the entity a skill was applied to, and the tick its cast was
+    /// announced on.
     active: Vec<(SimulationId, u32)>,
 }
 
-/// Draws an expanding ring on a unit for a moment after one of its skills is cast
+/// Starts a pulse for every skill the simulation announced this tick, and drops
+/// the expired ones (run once per tick, in the game's slot).
+///
+/// A refused cast — too little energy, or still cooling down — is never
+/// announced and draws nothing. Pruning here keeps the store bounded across a
+/// seek, which runs many ticks before anything draws.
+pub fn collect_skill_pulses(
+    record: Res<EventRecord>,
+    session: Res<GameSession>,
+    mut pulses: ResMut<SkillPulses>,
+) {
+    let tick = session.tick();
+    pulses
+        .active
+        .retain(|&(_, started)| tick.saturating_sub(started) <= PULSE_TICKS);
+    for event in record.events() {
+        if let SimulationEvent::SkillCast { target, .. } = event {
+            pulses.active.push((*target, tick));
+        }
+    }
+}
+
+/// What a brief place-marker is standing for.
+#[derive(Clone, Copy)]
+enum PuffKind {
+    /// Something left remains here.
+    Remains,
+    /// Something went off the map here — boarded, or stepped inside.
+    Hidden,
+    /// Something came back onto the map here.
+    Revealed,
+}
+
+impl PuffKind {
+    /// The ring's colour, so the three read apart at a glance.
+    fn color(self, fade: f32) -> Color {
+        match self {
+            PuffKind::Remains => Color::srgba(0.55, 0.5, 0.45, fade),
+            PuffKind::Hidden => Color::srgba(0.45, 0.6, 0.85, fade),
+            PuffKind::Revealed => Color::srgba(0.6, 0.85, 0.5, fade),
+        }
+    }
+}
+
+/// Brief rings marking announcements whose subject may already be dying or off
+/// the map, drawn from where the subject stood.
+#[derive(Resource, Default)]
+pub struct Puffs {
+    active: Vec<(FixedUVec2, CellSize, PuffKind, u32)>,
+}
+
+/// Starts a marker for each remains, hiding and reveal the tick announced, and
+/// drops the expired ones (run once per tick, in the game's slot).
+pub fn collect_puffs(world: &mut World) {
+    let tick = world.resource::<GameSession>().tick();
+    world.resource_scope(|world, mut puffs: Mut<Puffs>| {
+        puffs
+            .active
+            .retain(|&(_, _, _, started)| tick.saturating_sub(started) <= PULSE_TICKS);
+        for event in world.resource::<EventRecord>().events() {
+            let marked = match event {
+                SimulationEvent::EntitySpawned {
+                    entity,
+                    cause: SpawnCause::Remains { .. },
+                } => Some((*entity, PuffKind::Remains)),
+                SimulationEvent::EntityHidden { entity } => Some((*entity, PuffKind::Hidden)),
+                SimulationEvent::EntityRevealed { entity } => Some((*entity, PuffKind::Revealed)),
+                _ => None,
+            };
+            // The announcement names its subject; where it stands and how much
+            // ground it covers come from the subject itself. Remains begin their
+            // life dying, so the lookup has to accept that stage.
+            if let Some((id, kind)) = marked
+                && let Some(entity) = world.resource::<EntityIndex>().any(id)
+            {
+                let (position, size) = entity_def::footprint(world, entity);
+                puffs.active.push((position, size, kind, tick));
+            }
+        }
+    });
+}
+
+/// Draws each live marker as a ring that grows and fades (run in `Update`).
+///
+/// A marker over a cell the viewer cannot see is skipped.
+pub fn draw_puffs(
+    mut gizmos: Gizmos,
+    session: Res<GameSession>,
+    fixed: Res<Time<Fixed>>,
+    grid: Res<VisibilityGrid>,
+    watch: Res<ObserverPerspective>,
+    reveal: Res<FogReveal>,
+    mut puffs: ResMut<Puffs>,
+) {
+    let now = pulse_now(&session, &fixed);
+    puffs
+        .active
+        .retain(|&(_, _, _, started)| pulse_progress(now, started).is_some());
+
+    for &(position, size, kind, started) in &puffs.active {
+        let cell = CellPos::from(position);
+        if !reveal.0 && !sees(&session, &watch, &grid, cell.x, cell.y) {
+            continue;
+        }
+        let Some(progress) = pulse_progress(now, started) else {
+            continue;
+        };
+        // Grows with the footprint, so a marker reads as belonging to what stood
+        // there rather than always being unit-sized.
+        let span = size.width.max(size.height) as f32;
+        let radius = CELL_PX * span * (0.2 + 0.4 * progress);
+        // Centred on the footprint like everything else drawn from a position: a
+        // position is a footprint's corner, so drawing on it sits up and to the
+        // left of what it marks.
+        gizmos.circle_2d(
+            world_center(position, size).truncate(),
+            radius,
+            kind.color(1.0 - progress),
+        );
+    }
+}
+
+/// Draws an expanding ring on a unit for a moment after a skill is applied to it
 /// (run in `Update`).
 ///
-/// The cast is spotted from the caster's own cooldowns rather than from the issued
-/// command, so a cast the simulation refused — too little energy, or still on
-/// cooldown — draws nothing. The ring marks the caster, which is also the target
-/// for every self-targeted skill; a skill aimed at another entity would still
-/// mark the caster.
+/// The ring marks what the skill landed on rather than who cast it — the caster
+/// itself for a self-cast, and the ally healed or the enemy struck otherwise. A
+/// target the local player cannot see draws nothing.
 pub fn draw_skill_pulses(
     mut gizmos: Gizmos,
     session: Res<GameSession>,
     fixed: Res<Time<Fixed>>,
     mut pulses: ResMut<SkillPulses>,
-    casters: Query<(&EntityInfoComponent, &SkillsComponent)>,
     rendered: Query<
         (&EntityInfoComponent, &Transform, &Visibility),
         (With<Renderable>, Without<HiddenComponent>),
     >,
 ) {
-    let mut seen = HashSet::new();
-    for (info, skills) in &casters {
-        let ready: Vec<bool> = skills.skills().map(|id| skills.ready(id)).collect();
-        seen.insert(info.id());
-        if let Some(previous) = pulses.was_ready.get(&info.id())
-            && previous.len() == ready.len()
-            && previous
-                .iter()
-                .zip(&ready)
-                .any(|(before, now)| *before && !*now)
-        {
-            pulses.active.push((info.id(), session.tick()));
-        }
-        pulses.was_ready.insert(info.id(), ready);
-    }
-    pulses.was_ready.retain(|id, _| seen.contains(id));
-
-    // Ticks elapsed, with the fixed step's overstep folded in so the ring grows
-    // smoothly between ticks rather than in steps.
-    let now = session.tick() as f32 + fixed.overstep_fraction();
+    let now = pulse_now(&session, &fixed);
     pulses
         .active
-        .retain(|&(_, started)| now - started as f32 <= PULSE_TICKS as f32);
+        .retain(|&(_, started)| pulse_progress(now, started).is_some());
 
-    for &(caster, started) in &pulses.active {
+    for &(target, started) in &pulses.active {
         let Some((_, transform, _)) = rendered.iter().find(|(info, _, visibility)| {
-            info.id() == caster && !matches!(visibility, Visibility::Hidden)
+            info.id() == target && !matches!(visibility, Visibility::Hidden)
         }) else {
             continue;
         };
         // Expand and fade over the pulse's life.
-        let progress = ((now - started as f32) / PULSE_TICKS as f32).clamp(0.0, 1.0);
+        let Some(progress) = pulse_progress(now, started) else {
+            continue;
+        };
         let radius = CELL_PX * (0.35 + 0.55 * progress);
         gizmos.circle_2d(
             transform.translation.truncate(),

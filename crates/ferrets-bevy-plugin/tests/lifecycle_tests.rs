@@ -75,7 +75,7 @@ fn tearing_down_removes_game_state() {
     // playback keeps supplying).
     let (a, _b) = LoopbackTransport::pair();
     let mut app = utils::net_app(a, 2);
-    utils::spawn_owned(&mut app, "soldier", 10, 10, 0);
+    utils::create_owned(&mut app, "soldier", 10, 10, 0);
     assert_eq!(utils::count_of_type(app.world_mut(), "soldier"), 1);
 
     ferrets_bevy_plugin::teardown_game_resources(app.world_mut());

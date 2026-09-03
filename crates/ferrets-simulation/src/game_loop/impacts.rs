@@ -102,11 +102,7 @@ pub(super) fn deliver(
                 CellRect::new(CellPos::from(impact), target_size),
             );
             let tick = world.resource::<GameSession>().tick();
-            let attacker_type = world
-                .entity(attacker)
-                .get::<EntityInfoComponent>()
-                .expect("attacker carries entity info")
-                .type_id();
+            let attacker_type = entity_def::type_id(world, attacker);
             let shot = PendingImpact {
                 attacker: attacker_id,
                 attacker_type,

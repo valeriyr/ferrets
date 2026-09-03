@@ -15,9 +15,9 @@ fn guard_follows_moving_ward() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
     let (sentry, sentry_id) =
-        spawn::spawn_entity(world, "sentry", utils::pos(5, 10), Some(0)).unwrap();
+        spawn::create_entity(world, "sentry", utils::pos(5, 10), Some(0)).unwrap();
     let (worker, worker_id) =
-        spawn::spawn_entity(world, "worker", utils::pos(6, 10), Some(0)).unwrap();
+        spawn::create_entity(world, "worker", utils::pos(6, 10), Some(0)).unwrap();
 
     utils::select(&mut app, sentry_id);
     utils::push_command(
@@ -51,9 +51,9 @@ fn guard_of_building_holds_station() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
     let (sentry, sentry_id) =
-        spawn::spawn_entity(world, "sentry", utils::pos(3, 10), Some(0)).unwrap();
+        spawn::create_entity(world, "sentry", utils::pos(3, 10), Some(0)).unwrap();
     let (barracks, barracks_id) =
-        spawn::spawn_entity(world, "barracks", utils::pos(10, 10), Some(0)).unwrap();
+        spawn::create_entity(world, "barracks", utils::pos(10, 10), Some(0)).unwrap();
 
     utils::select(&mut app, sentry_id);
     utils::push_command(
@@ -78,9 +78,9 @@ fn guard_finishes_when_ward_dies() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
     let (sentry, sentry_id) =
-        spawn::spawn_entity(world, "sentry", utils::pos(5, 10), Some(0)).unwrap();
+        spawn::create_entity(world, "sentry", utils::pos(5, 10), Some(0)).unwrap();
     let (worker, worker_id) =
-        spawn::spawn_entity(world, "worker", utils::pos(6, 10), Some(0)).unwrap();
+        spawn::create_entity(world, "worker", utils::pos(6, 10), Some(0)).unwrap();
 
     utils::select(&mut app, sentry_id);
     utils::push_command(
@@ -108,12 +108,12 @@ fn guard_finishes_when_ward_dies() {
 fn guard_engages_attacker_threatening_ward() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
-    let (_, guard_id) = spawn::spawn_entity(world, "sentry", utils::pos(8, 10), Some(0)).unwrap();
+    let (_, guard_id) = spawn::create_entity(world, "sentry", utils::pos(8, 10), Some(0)).unwrap();
     let (_, barracks_id) =
-        spawn::spawn_entity(world, "barracks", utils::pos(10, 10), Some(0)).unwrap();
+        spawn::create_entity(world, "barracks", utils::pos(10, 10), Some(0)).unwrap();
     // The enemy sentry will engage the barracks on its own; the guard must
     // answer for it.
-    let (enemy, _) = spawn::spawn_entity(world, "sentry", utils::pos(15, 10), Some(1)).unwrap();
+    let (enemy, _) = spawn::create_entity(world, "sentry", utils::pos(15, 10), Some(1)).unwrap();
 
     utils::select(&mut app, guard_id);
     utils::push_command(
@@ -137,10 +137,10 @@ fn guard_on_hostile_ward_is_refused() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
     let (sentry, sentry_id) =
-        spawn::spawn_entity(world, "sentry", utils::pos(5, 10), Some(0)).unwrap();
+        spawn::create_entity(world, "sentry", utils::pos(5, 10), Some(0)).unwrap();
     // Well outside the sentry's acquire range, so only a guard order (escorting
     // toward it) could ever move the sentry — isolating the refusal.
-    let (_, enemy_id) = spawn::spawn_entity(world, "worker", utils::pos(25, 10), Some(1)).unwrap();
+    let (_, enemy_id) = spawn::create_entity(world, "worker", utils::pos(25, 10), Some(1)).unwrap();
 
     utils::select(&mut app, sentry_id);
     utils::push_command(

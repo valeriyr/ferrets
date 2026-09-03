@@ -31,6 +31,7 @@ use crate::{
     },
     entity_def,
     entity_index::EntityIndex,
+    events::{EventRecord, SimulationEvent, SpendCause},
     game_loop::cast_cost,
     map::{Map, OccupancyClass},
     movement_model::MovementModel,
@@ -106,11 +107,27 @@ pub fn prepare(entity: Entity, order: &Order, world: &mut World) -> OrderState {
         // the timed path keeps — the cost leaves the old form's pools before
         // the landing rescales them, and a fizzled refundable change gives
         // the payment back exactly as a timed landing does.
-        cast_cost::pay(world, entity, player, transition.costs());
+        cast_cost::pay(
+            world,
+            entity,
+            player,
+            transition.costs(),
+            SpendCause::Morph {
+                entity: entity_def::simulation_id(world, entity),
+            },
+        );
         if !land(world, entity, type_name, true)
             && let MorphCancel::Refundable = transition.cancel()
         {
-            cast_cost::refund(world, entity, player, transition.costs());
+            cast_cost::refund(
+                world,
+                entity,
+                player,
+                transition.costs(),
+                SpendCause::Morph {
+                    entity: entity_def::simulation_id(world, entity),
+                },
+            );
         }
         return OrderState::Finished;
     }
@@ -126,7 +143,15 @@ pub fn prepare(entity: Entity, order: &Order, world: &mut World) -> OrderState {
             reservation: None,
         },
     };
-    cast_cost::pay(world, entity, player, transition.costs());
+    cast_cost::pay(
+        world,
+        entity,
+        player,
+        transition.costs(),
+        SpendCause::Morph {
+            entity: entity_def::simulation_id(world, entity),
+        },
+    );
     world.entity_mut(entity).insert(morph);
     OrderState::InProcessing
 }
@@ -180,7 +205,15 @@ pub fn cancel_processing(
             && let Some(transition) = transition_into(world, entity, type_name)
             && let Some(player) = transition_payer(world, entity)
         {
-            cast_cost::refund(world, entity, player, transition.costs());
+            cast_cost::refund(
+                world,
+                entity,
+                player,
+                transition.costs(),
+                SpendCause::Morph {
+                    entity: entity_def::simulation_id(world, entity),
+                },
+            );
         }
     }
     OrderState::Finished
@@ -223,7 +256,15 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> OrderState 
     {
         // The change fizzled: the entity stays as it was, so a refundable
         // transition's payment goes back the same way a cancel returns it.
-        cast_cost::refund(world, entity, player, transition.costs());
+        cast_cost::refund(
+            world,
+            entity,
+            player,
+            transition.costs(),
+            SpendCause::Morph {
+                entity: entity_def::simulation_id(world, entity),
+            },
+        );
     }
     OrderState::Finished
 }
@@ -286,6 +327,7 @@ fn land(world: &mut World, entity: Entity, type_name: &str, revalidate: bool) ->
         .def(type_id)
         .base_stats
         .clone();
+    let morphed_from = entity_def::type_id(world, entity);
     if let Some(mut info) = world.entity_mut(entity).get_mut::<EntityInfoComponent>() {
         info.become_type(type_id, type_name);
     }
@@ -355,6 +397,14 @@ fn land(world: &mut World, entity: Entity, type_name: &str, revalidate: bool) ->
     if let Some(mut movement) = world.entity_mut(entity).get_mut::<MoveComponent>() {
         movement.repath_avoiding_claims();
     }
+
+    // Announced only once the transition has committed: a refused reoccupation
+    // returns above, and a morph that did not happen is not one to report.
+    let announced = SimulationEvent::EntityMorphed {
+        entity: entity_def::simulation_id(world, entity),
+        from: morphed_from,
+    };
+    world.resource_mut::<EventRecord>().emit(announced);
 
     true
 }

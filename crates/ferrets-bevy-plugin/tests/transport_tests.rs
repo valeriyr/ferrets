@@ -20,9 +20,9 @@ use ferrets_simulation::{
     spawn,
 };
 use utils::{
-    APPLY, GROUND, cell_of, health, passengers_of, pos, push_command, run_ticks, run_until_aboard,
-    select, selection, send_to, set_all_cells_statically_occupied, single_owned_of_type,
-    spawn_owned, transport_app, unload, within,
+    APPLY, GROUND, cell_of, create_owned, health, passengers_of, pos, push_command, run_ticks,
+    run_until_aboard, select, selection, send_to, set_all_cells_statically_occupied,
+    single_owned_of_type, transport_app, unload, within,
 };
 
 //
@@ -32,8 +32,8 @@ use utils::{
 #[test]
 fn unit_boards_transport_and_leaves_map_and_selection() {
     let mut app = transport_app();
-    let (wagon, wagon_id) = spawn_owned(&mut app, "wagon", 10, 10, 0);
-    let (rifleman, rifleman_id) = spawn_owned(&mut app, "rifleman", 14, 10, 0);
+    let (wagon, wagon_id) = create_owned(&mut app, "wagon", 10, 10, 0);
+    let (rifleman, rifleman_id) = create_owned(&mut app, "rifleman", 14, 10, 0);
 
     send_to(&mut app, rifleman_id, wagon_id);
     run_until_aboard(&mut app, wagon, 1, 40);
@@ -55,8 +55,8 @@ fn unit_boards_transport_and_leaves_map_and_selection() {
 #[test]
 fn untransportable_unit_does_not_board() {
     let mut app = transport_app();
-    let (wagon, wagon_id) = spawn_owned(&mut app, "wagon", 10, 10, 0);
-    let (civilian, civilian_id) = spawn_owned(&mut app, "civilian", 13, 10, 0);
+    let (wagon, wagon_id) = create_owned(&mut app, "wagon", 10, 10, 0);
+    let (civilian, civilian_id) = create_owned(&mut app, "civilian", 13, 10, 0);
 
     send_to(&mut app, civilian_id, wagon_id);
     run_ticks(&mut app, 30);
@@ -73,9 +73,9 @@ fn admission_list_matches_type_name() {
     let mut app = transport_app();
     // The bunker carries "rifleman" by type name; a grunt's "infantry" tag is
     // not on its list.
-    let (bunker, bunker_id) = spawn_owned(&mut app, "bunker", 10, 10, 0);
-    let (_, rifleman_id) = spawn_owned(&mut app, "rifleman", 13, 10, 0);
-    let (grunt, grunt_id) = spawn_owned(&mut app, "grunt", 13, 12, 0);
+    let (bunker, bunker_id) = create_owned(&mut app, "bunker", 10, 10, 0);
+    let (_, rifleman_id) = create_owned(&mut app, "rifleman", 13, 10, 0);
+    let (grunt, grunt_id) = create_owned(&mut app, "grunt", 13, 12, 0);
 
     send_to(&mut app, rifleman_id, bunker_id);
     send_to(&mut app, grunt_id, bunker_id);
@@ -88,8 +88,8 @@ fn admission_list_matches_type_name() {
 #[test]
 fn debuff_sealing_hold_turns_boarder_away() {
     let mut app = transport_app();
-    let (wagon, wagon_id) = spawn_owned(&mut app, "wagon", 10, 10, 0);
-    let (rifleman, rifleman_id) = spawn_owned(&mut app, "rifleman", 11, 10, 0);
+    let (wagon, wagon_id) = create_owned(&mut app, "wagon", 10, 10, 0);
+    let (rifleman, rifleman_id) = create_owned(&mut app, "rifleman", 11, 10, 0);
 
     // Capacity has no fold floor, so a debuff can seal the hold entirely.
     let sealed = utils::register_entity_buff(
@@ -115,11 +115,11 @@ fn debuff_sealing_hold_turns_boarder_away() {
 #[test]
 fn full_transport_turns_boarder_away() {
     let mut app = transport_app();
-    let (wagon, wagon_id) = spawn_owned(&mut app, "wagon", 10, 10, 0);
+    let (wagon, wagon_id) = create_owned(&mut app, "wagon", 10, 10, 0);
     // Two grunts at cargo size 2 each fill the four slots.
-    let (_, first_id) = spawn_owned(&mut app, "grunt", 12, 10, 0);
-    let (_, second_id) = spawn_owned(&mut app, "grunt", 12, 11, 0);
-    let (rifleman, rifleman_id) = spawn_owned(&mut app, "rifleman", 12, 12, 0);
+    let (_, first_id) = create_owned(&mut app, "grunt", 12, 10, 0);
+    let (_, second_id) = create_owned(&mut app, "grunt", 12, 11, 0);
+    let (rifleman, rifleman_id) = create_owned(&mut app, "rifleman", 12, 12, 0);
 
     send_to(&mut app, first_id, wagon_id);
     run_until_aboard(&mut app, wagon, 1, 40);
@@ -140,8 +140,8 @@ fn full_transport_turns_boarder_away() {
 fn own_boarding_policy_rejects_allied_holder() {
     let mut app = transport_app();
     // Player 1 is allied with the local player 0; the wagon admits own only.
-    let (wagon, wagon_id) = spawn_owned(&mut app, "wagon", 10, 10, 1);
-    let (rifleman, rifleman_id) = spawn_owned(&mut app, "rifleman", 13, 10, 0);
+    let (wagon, wagon_id) = create_owned(&mut app, "wagon", 10, 10, 1);
+    let (rifleman, rifleman_id) = create_owned(&mut app, "rifleman", 13, 10, 0);
 
     send_to(&mut app, rifleman_id, wagon_id);
     run_ticks(&mut app, 30);
@@ -153,8 +153,8 @@ fn own_boarding_policy_rejects_allied_holder() {
 #[test]
 fn allies_boarding_policy_admits_allied_unit() {
     let mut app = transport_app();
-    let (ferry, ferry_id) = spawn_owned(&mut app, "ferry", 10, 10, 1);
-    let (_, rifleman_id) = spawn_owned(&mut app, "rifleman", 13, 10, 0);
+    let (ferry, ferry_id) = create_owned(&mut app, "ferry", 10, 10, 1);
+    let (_, rifleman_id) = create_owned(&mut app, "rifleman", 13, 10, 0);
 
     send_to(&mut app, rifleman_id, ferry_id);
     run_until_aboard(&mut app, ferry, 1, 40);
@@ -165,10 +165,10 @@ fn allies_boarding_policy_admits_allied_unit() {
 #[test]
 fn load_period_meters_boardings() {
     let mut app = transport_app();
-    let (wagon, wagon_id) = spawn_owned(&mut app, "wagon", 10, 10, 0);
+    let (wagon, wagon_id) = create_owned(&mut app, "wagon", 10, 10, 0);
     // Both stand inside the load range already, so they arrive together.
-    let (_, first_id) = spawn_owned(&mut app, "rifleman", 11, 10, 0);
-    let (_, second_id) = spawn_owned(&mut app, "rifleman", 11, 11, 0);
+    let (_, first_id) = create_owned(&mut app, "rifleman", 11, 10, 0);
+    let (_, second_id) = create_owned(&mut app, "rifleman", 11, 11, 0);
 
     select(&mut app, first_id);
     push_command(
@@ -200,9 +200,9 @@ fn load_period_meters_boardings() {
 #[test]
 fn explicit_board_command_boards_mixed_selection() {
     let mut app = transport_app();
-    let (wagon, wagon_id) = spawn_owned(&mut app, "wagon", 10, 10, 0);
-    let (rifleman, rifleman_id) = spawn_owned(&mut app, "rifleman", 12, 10, 0);
-    let (civilian, civilian_id) = spawn_owned(&mut app, "civilian", 12, 11, 0);
+    let (wagon, wagon_id) = create_owned(&mut app, "wagon", 10, 10, 0);
+    let (rifleman, rifleman_id) = create_owned(&mut app, "rifleman", 12, 10, 0);
+    let (civilian, civilian_id) = create_owned(&mut app, "civilian", 12, 11, 0);
 
     select(&mut app, rifleman_id);
     push_command(
@@ -236,8 +236,8 @@ fn explicit_board_command_boards_mixed_selection() {
 #[test]
 fn explicit_follow_command_tails_own_transporter() {
     let mut app = transport_app();
-    let (wagon, wagon_id) = spawn_owned(&mut app, "wagon", 10, 10, 0);
-    let (rifleman, rifleman_id) = spawn_owned(&mut app, "rifleman", 12, 10, 0);
+    let (wagon, wagon_id) = create_owned(&mut app, "wagon", 10, 10, 0);
+    let (rifleman, rifleman_id) = create_owned(&mut app, "rifleman", 12, 10, 0);
 
     // The smart click would read this pairing as boarding; the explicit
     // command keeps the rifleman outside, tailing the wagon.
@@ -262,8 +262,8 @@ fn explicit_follow_command_tails_own_transporter() {
 #[test]
 fn transport_fetches_targeted_unit_aboard() {
     let mut app = transport_app();
-    let (wagon, wagon_id) = spawn_owned(&mut app, "wagon", 5, 5, 0);
-    let (grunt, grunt_id) = spawn_owned(&mut app, "grunt", 14, 5, 0);
+    let (wagon, wagon_id) = create_owned(&mut app, "wagon", 5, 5, 0);
+    let (grunt, grunt_id) = create_owned(&mut app, "grunt", 14, 5, 0);
 
     // The grunt is walking its own way; the wagon is sent to fetch it.
     select(&mut app, grunt_id);
@@ -297,8 +297,8 @@ fn transport_fetches_targeted_unit_aboard() {
 #[test]
 fn load_refuses_ineligible_unit() {
     let mut app = transport_app();
-    let (wagon, wagon_id) = spawn_owned(&mut app, "wagon", 5, 5, 0);
-    let (civilian, civilian_id) = spawn_owned(&mut app, "civilian", 8, 5, 0);
+    let (wagon, wagon_id) = create_owned(&mut app, "wagon", 5, 5, 0);
+    let (civilian, civilian_id) = create_owned(&mut app, "civilian", 8, 5, 0);
 
     push_command(
         &mut app,
@@ -324,9 +324,9 @@ fn load_refuses_ineligible_unit() {
 #[test]
 fn unload_period_meters_exits_in_id_order() {
     let mut app = transport_app();
-    let (wagon, wagon_id) = spawn_owned(&mut app, "wagon", 10, 10, 0);
-    let (first, first_id) = spawn_owned(&mut app, "rifleman", 11, 10, 0);
-    let (second, second_id) = spawn_owned(&mut app, "rifleman", 11, 11, 0);
+    let (wagon, wagon_id) = create_owned(&mut app, "wagon", 10, 10, 0);
+    let (first, first_id) = create_owned(&mut app, "rifleman", 11, 10, 0);
+    let (second, second_id) = create_owned(&mut app, "rifleman", 11, 11, 0);
     send_to(&mut app, first_id, wagon_id);
     run_until_aboard(&mut app, wagon, 1, 10);
     send_to(&mut app, second_id, wagon_id);
@@ -351,9 +351,9 @@ fn unload_period_meters_exits_in_id_order() {
 #[test]
 fn unmetered_holder_empties_in_one_tick() {
     let mut app = transport_app();
-    let (bunker, bunker_id) = spawn_owned(&mut app, "bunker", 10, 10, 0);
-    let (first, first_id) = spawn_owned(&mut app, "rifleman", 12, 10, 0);
-    let (second, second_id) = spawn_owned(&mut app, "rifleman", 12, 11, 0);
+    let (bunker, bunker_id) = create_owned(&mut app, "bunker", 10, 10, 0);
+    let (first, first_id) = create_owned(&mut app, "rifleman", 12, 10, 0);
+    let (second, second_id) = create_owned(&mut app, "rifleman", 12, 11, 0);
     send_to(&mut app, first_id, bunker_id);
     send_to(&mut app, second_id, bunker_id);
     run_until_aboard(&mut app, bunker, 2, 40);
@@ -369,8 +369,8 @@ fn unmetered_holder_empties_in_one_tick() {
 #[test]
 fn unload_at_point_walks_there_and_sends_passengers_on() {
     let mut app = transport_app();
-    let (wagon, wagon_id) = spawn_owned(&mut app, "wagon", 5, 5, 0);
-    let (rifleman, rifleman_id) = spawn_owned(&mut app, "rifleman", 6, 5, 0);
+    let (wagon, wagon_id) = create_owned(&mut app, "wagon", 5, 5, 0);
+    let (rifleman, rifleman_id) = create_owned(&mut app, "rifleman", 6, 5, 0);
     send_to(&mut app, rifleman_id, wagon_id);
     run_until_aboard(&mut app, wagon, 1, 10);
 
@@ -400,8 +400,8 @@ fn unload_at_point_walks_there_and_sends_passengers_on() {
 #[test]
 fn immobile_holder_unloads_in_place_toward_point() {
     let mut app = transport_app();
-    let (bunker, bunker_id) = spawn_owned(&mut app, "bunker", 10, 10, 0);
-    let (rifleman, rifleman_id) = spawn_owned(&mut app, "rifleman", 12, 10, 0);
+    let (bunker, bunker_id) = create_owned(&mut app, "bunker", 10, 10, 0);
+    let (rifleman, rifleman_id) = create_owned(&mut app, "rifleman", 12, 10, 0);
     send_to(&mut app, rifleman_id, bunker_id);
     run_until_aboard(&mut app, bunker, 1, 30);
 
@@ -426,8 +426,8 @@ fn immobile_holder_unloads_in_place_toward_point() {
 #[test]
 fn rally_point_sends_unloaded_passenger_on() {
     let mut app = transport_app();
-    let (wagon, wagon_id) = spawn_owned(&mut app, "wagon", 10, 10, 0);
-    let (rifleman, rifleman_id) = spawn_owned(&mut app, "rifleman", 11, 10, 0);
+    let (wagon, wagon_id) = create_owned(&mut app, "wagon", 10, 10, 0);
+    let (rifleman, rifleman_id) = create_owned(&mut app, "rifleman", 11, 10, 0);
     send_to(&mut app, rifleman_id, wagon_id);
     run_until_aboard(&mut app, wagon, 1, 10);
 
@@ -454,8 +454,8 @@ fn rally_point_sends_unloaded_passenger_on() {
 #[test]
 fn blocked_exit_holds_passenger_and_retries() {
     let mut app = transport_app();
-    let (wagon, wagon_id) = spawn_owned(&mut app, "wagon", 10, 10, 0);
-    let (rifleman, rifleman_id) = spawn_owned(&mut app, "rifleman", 11, 10, 0);
+    let (wagon, wagon_id) = create_owned(&mut app, "wagon", 10, 10, 0);
+    let (rifleman, rifleman_id) = create_owned(&mut app, "rifleman", 11, 10, 0);
     send_to(&mut app, rifleman_id, wagon_id);
     run_until_aboard(&mut app, wagon, 1, 10);
 
@@ -485,8 +485,8 @@ fn blocked_exit_holds_passenger_and_retries() {
 #[test]
 fn destroyed_wagon_takes_passengers_with_it() {
     let mut app = transport_app();
-    let (wagon, wagon_id) = spawn_owned(&mut app, "wagon", 10, 10, 0);
-    let (rifleman, rifleman_id) = spawn_owned(&mut app, "rifleman", 11, 10, 0);
+    let (wagon, wagon_id) = create_owned(&mut app, "wagon", 10, 10, 0);
+    let (rifleman, rifleman_id) = create_owned(&mut app, "rifleman", 11, 10, 0);
     send_to(&mut app, rifleman_id, wagon_id);
     run_until_aboard(&mut app, wagon, 1, 10);
 
@@ -506,8 +506,8 @@ fn destroyed_wagon_takes_passengers_with_it() {
 #[test]
 fn destroyed_bunker_ejects_passengers() {
     let mut app = transport_app();
-    let (bunker, bunker_id) = spawn_owned(&mut app, "bunker", 10, 10, 0);
-    let (rifleman, rifleman_id) = spawn_owned(&mut app, "rifleman", 12, 10, 0);
+    let (bunker, bunker_id) = create_owned(&mut app, "bunker", 10, 10, 0);
+    let (rifleman, rifleman_id) = create_owned(&mut app, "rifleman", 12, 10, 0);
     send_to(&mut app, rifleman_id, bunker_id);
     run_until_aboard(&mut app, bunker, 1, 30);
 
@@ -528,8 +528,8 @@ fn destroyed_bunker_ejects_passengers() {
 #[test]
 fn ejected_passenger_without_room_dies() {
     let mut app = transport_app();
-    let (bunker, bunker_id) = spawn_owned(&mut app, "bunker", 10, 10, 0);
-    let (rifleman, rifleman_id) = spawn_owned(&mut app, "rifleman", 12, 10, 0);
+    let (bunker, bunker_id) = create_owned(&mut app, "bunker", 10, 10, 0);
+    let (rifleman, rifleman_id) = create_owned(&mut app, "rifleman", 12, 10, 0);
     send_to(&mut app, rifleman_id, bunker_id);
     run_until_aboard(&mut app, bunker, 1, 30);
 
@@ -558,14 +558,14 @@ fn ejected_passenger_without_room_dies() {
 #[test]
 fn garrisoned_rifleman_fires_from_bunker() {
     let mut app = transport_app();
-    let (bunker, bunker_id) = spawn_owned(&mut app, "bunker", 10, 10, 0);
-    let (_, rifleman_id) = spawn_owned(&mut app, "rifleman", 12, 10, 0);
+    let (bunker, bunker_id) = create_owned(&mut app, "bunker", 10, 10, 0);
+    let (_, rifleman_id) = create_owned(&mut app, "rifleman", 12, 10, 0);
     send_to(&mut app, rifleman_id, bunker_id);
     run_until_aboard(&mut app, bunker, 1, 30);
 
     // A hostile in weapon range of the bunker, and one beyond it.
-    let (near, _) = spawn_owned(&mut app, "grunt", 13, 10, 2);
-    let (far, _) = spawn_owned(&mut app, "grunt", 20, 10, 2);
+    let (near, _) = create_owned(&mut app, "grunt", 13, 10, 2);
+    let (far, _) = create_owned(&mut app, "grunt", 20, 10, 2);
     let near_health = health(&app, near);
     run_ticks(&mut app, 40);
 
@@ -583,8 +583,8 @@ fn garrisoned_rifleman_fires_from_bunker() {
 #[test]
 fn garrison_fire_stops_once_unloaded() {
     let mut app = transport_app();
-    let (bunker, bunker_id) = spawn_owned(&mut app, "bunker", 10, 10, 0);
-    let (rifleman, rifleman_id) = spawn_owned(&mut app, "rifleman", 12, 10, 0);
+    let (bunker, bunker_id) = create_owned(&mut app, "bunker", 10, 10, 0);
+    let (rifleman, rifleman_id) = create_owned(&mut app, "rifleman", 12, 10, 0);
     send_to(&mut app, rifleman_id, bunker_id);
     run_until_aboard(&mut app, bunker, 1, 30);
 
@@ -600,12 +600,12 @@ fn garrison_fire_stops_once_unloaded() {
 #[test]
 fn wagon_passengers_do_not_fire() {
     let mut app = transport_app();
-    let (wagon, wagon_id) = spawn_owned(&mut app, "wagon", 10, 10, 0);
-    let (_, rifleman_id) = spawn_owned(&mut app, "rifleman", 11, 10, 0);
+    let (wagon, wagon_id) = create_owned(&mut app, "wagon", 10, 10, 0);
+    let (_, rifleman_id) = create_owned(&mut app, "rifleman", 11, 10, 0);
     send_to(&mut app, rifleman_id, wagon_id);
     run_until_aboard(&mut app, wagon, 1, 10);
 
-    let (near, _) = spawn_owned(&mut app, "grunt", 13, 10, 2);
+    let (near, _) = create_owned(&mut app, "grunt", 13, 10, 2);
     run_ticks(&mut app, 40);
 
     assert_eq!(
@@ -622,15 +622,15 @@ fn wagon_passengers_do_not_fire() {
 #[test]
 fn blast_spares_hidden_passenger_at_stale_position() {
     let mut app = transport_app();
-    let (bunker, bunker_id) = spawn_owned(&mut app, "bunker", 10, 10, 0);
-    let (rifleman, rifleman_id) = spawn_owned(&mut app, "rifleman", 12, 10, 0);
+    let (bunker, bunker_id) = create_owned(&mut app, "bunker", 10, 10, 0);
+    let (rifleman, rifleman_id) = create_owned(&mut app, "rifleman", 12, 10, 0);
     send_to(&mut app, rifleman_id, bunker_id);
     run_until_aboard(&mut app, bunker, 1, 30);
     let full = health(&app, rifleman);
 
     // A hostile bombard auto-engages the bunker; its blast covers the cell the
     // rifleman stood on when it boarded.
-    spawn_owned(&mut app, "bombard", 16, 10, 2);
+    create_owned(&mut app, "bombard", 16, 10, 2);
     run_ticks(&mut app, 30);
 
     let bunker = single_owned_of_type(app.world_mut(), "bunker", 0);
@@ -654,12 +654,12 @@ fn turret_only_passenger_sits_ride_out() {
     let mut app = utils::transport_app();
     let world = app.world_mut();
     let (bunker, bunker_id) =
-        spawn::spawn_entity(world, "bunker", utils::pos(10, 10), Some(0)).unwrap();
+        spawn::create_entity(world, "bunker", utils::pos(10, 10), Some(0)).unwrap();
     let (rider, rider_id) =
-        spawn::spawn_entity(world, "gun_rider", utils::pos(9, 10), Some(0)).unwrap();
+        spawn::create_entity(world, "gun_rider", utils::pos(9, 10), Some(0)).unwrap();
     // In the gun's reach from the bunker AND from the rider's own boarding cell,
     // so a shot wrongly fired from either place would land.
-    let (foe, _) = spawn::spawn_entity(world, "civilian", utils::pos(12, 10), Some(2)).unwrap();
+    let (foe, _) = spawn::create_entity(world, "civilian", utils::pos(12, 10), Some(2)).unwrap();
 
     utils::select(&mut app, rider_id);
     utils::push_command(

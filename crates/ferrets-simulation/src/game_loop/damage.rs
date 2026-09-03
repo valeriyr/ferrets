@@ -10,6 +10,8 @@ use ferrets_math::FixedU64;
 use crate::{
     components::{entity_info::EntityInfoComponent, health::HealthComponent, tags::TagsComponent},
     entity_def,
+    entity_index::EntityIndex,
+    events::{DeathCause, EventRecord, SimulationEvent},
     session::GameSession,
     simulation_id::SimulationId,
     spawn,
@@ -65,13 +67,43 @@ pub fn resolve_scaled(
 /// No-op for a target with no health pool.
 pub fn apply(world: &mut World, attacker: SimulationId, target: Entity, amount: FixedU64) {
     let tick = world.resource::<GameSession>().tick();
-    let mut died = false;
-    if let Some(mut health) = world.entity_mut(target).get_mut::<HealthComponent>() {
+    let died = {
+        let mut target_mut = world.entity_mut(target);
+        let Some(mut health) = target_mut.get_mut::<HealthComponent>() else {
+            return;
+        };
         health.apply_damage(amount);
         health.record_hit(attacker, tick);
-        died = health.is_dead();
-    }
+        health.is_dead()
+    };
+
+    // The attacker may already be gone — a shot outlives the weapon that fired
+    // it — so the credit is whatever the index can still resolve, its dying
+    // stage included.
+    let attacker_entity = world.resource::<EntityIndex>().any(attacker);
+    let attacker_owner = attacker_entity.and_then(|entity| entity_def::owner(world, entity));
+    let target_owner = entity_def::owner(world, target);
+    let position = entity_def::position(world, target);
+    let target_id = entity_def::simulation_id(world, target);
+    world
+        .resource_mut::<EventRecord>()
+        .emit(SimulationEvent::DamageLanded {
+            target: target_id,
+            target_owner,
+            attacker,
+            attacker_owner,
+            amount,
+            position,
+        });
+
     if died {
-        spawn::destroy_entity(world, target);
+        spawn::despawn_entity(
+            world,
+            target,
+            DeathCause::Killed {
+                by: attacker,
+                by_owner: attacker_owner,
+            },
+        );
     }
 }

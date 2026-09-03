@@ -13,7 +13,7 @@ mod utils;
 fn buff_modifies_effective_stat_then_reverts_on_expiry() {
     let mut app = utils::combat_app();
     let (soldier, _) =
-        spawn::spawn_entity(app.world_mut(), "soldier", utils::pos(5, 5), Some(0)).unwrap();
+        spawn::create_entity(app.world_mut(), "soldier", utils::pos(5, 5), Some(0)).unwrap();
 
     let base = utils::effective_damage(&app, soldier);
     let frenzy = utils::register_entity_buff(

@@ -34,8 +34,8 @@ use ferrets_simulation::{
 #[test]
 fn repair_restores_health_at_target_production_rate() {
     let mut app = app();
-    let (depot, depot_id) = utils::spawn_owned(&mut app, "depot", 10, 10, 0);
-    let (worker, worker_id) = utils::spawn_owned(&mut app, "worker", 8, 10, 0);
+    let (depot, depot_id) = utils::create_owned(&mut app, "depot", 10, 10, 0);
+    let (worker, worker_id) = utils::create_owned(&mut app, "worker", 8, 10, 0);
     utils::wound(&mut app, depot, "40");
     utils::grant_gold(&mut app, 500);
 
@@ -66,8 +66,8 @@ fn repair_restores_health_at_target_production_rate() {
 fn repair_ratio_scales_work_against_production_time() {
     let mut app = app();
     // Same pool and build_time as the depot, but declared to mend in half the time.
-    let (hall, hall_id) = utils::spawn_owned(&mut app, "hall", 10, 10, 0);
-    let (_, worker_id) = utils::spawn_owned(&mut app, "worker", 8, 10, 0);
+    let (hall, hall_id) = utils::create_owned(&mut app, "hall", 10, 10, 0);
+    let (_, worker_id) = utils::create_owned(&mut app, "worker", 8, 10, 0);
     utils::wound(&mut app, hall, "50");
     utils::grant_gold(&mut app, 500);
 
@@ -85,9 +85,9 @@ fn repair_ratio_scales_work_against_production_time() {
 #[test]
 fn several_workers_mend_faster_than_one() {
     let mut app = app();
-    let (depot, depot_id) = utils::spawn_owned(&mut app, "depot", 10, 10, 0);
-    let (_, first) = utils::spawn_owned(&mut app, "worker", 8, 10, 0);
-    let (_, second) = utils::spawn_owned(&mut app, "worker", 8, 11, 0);
+    let (depot, depot_id) = utils::create_owned(&mut app, "depot", 10, 10, 0);
+    let (_, first) = utils::create_owned(&mut app, "worker", 8, 10, 0);
+    let (_, second) = utils::create_owned(&mut app, "worker", 8, 11, 0);
     utils::wound(&mut app, depot, "40");
     utils::grant_gold(&mut app, 500);
 
@@ -112,10 +112,10 @@ fn flat_rate_ignores_what_target_cost_to_produce() {
     // The depot is built in 20 ticks, the hall mends in 10, and a flat-rate mender
     // must not care about either: both take the same eight ticks for 40 points.
     let mut app = app();
-    let (depot, depot_id) = utils::spawn_owned(&mut app, "depot", 10, 10, 0);
-    let (hall, hall_id) = utils::spawn_owned(&mut app, "hall", 20, 20, 0);
-    let (_, first) = utils::spawn_owned(&mut app, "medic", 8, 10, 0);
-    let (_, second) = utils::spawn_owned(&mut app, "medic", 18, 20, 0);
+    let (depot, depot_id) = utils::create_owned(&mut app, "depot", 10, 10, 0);
+    let (hall, hall_id) = utils::create_owned(&mut app, "hall", 20, 20, 0);
+    let (_, first) = utils::create_owned(&mut app, "medic", 8, 10, 0);
+    let (_, second) = utils::create_owned(&mut app, "medic", 18, 20, 0);
     utils::wound(&mut app, depot, "40");
     utils::wound(&mut app, hall, "40");
 
@@ -153,8 +153,8 @@ fn flat_rate_ignores_what_target_cost_to_produce() {
 fn flat_rate_mends_target_nothing_produces() {
     let mut app = app();
     // No build_time and no train_time — unmendable at a production-paced rate.
-    let (monolith, monolith_id) = utils::spawn_owned(&mut app, "monolith", 10, 10, 0);
-    let (_, medic_id) = utils::spawn_owned(&mut app, "medic", 8, 10, 0);
+    let (monolith, monolith_id) = utils::create_owned(&mut app, "monolith", 10, 10, 0);
+    let (_, medic_id) = utils::create_owned(&mut app, "medic", 8, 10, 0);
     utils::wound(&mut app, monolith, "40");
 
     repair(&mut app, medic_id, monolith_id);
@@ -172,8 +172,8 @@ fn repair_range_lets_mender_work_without_closing_in() {
     let mut app = app();
     // The depot's footprint starts at (10, 10); the medic stands two cells short of
     // it, which its repair_range of 2 already covers.
-    let (depot, depot_id) = utils::spawn_owned(&mut app, "depot", 10, 10, 0);
-    let (medic, medic_id) = utils::spawn_owned(&mut app, "medic", 8, 10, 0);
+    let (depot, depot_id) = utils::create_owned(&mut app, "depot", 10, 10, 0);
+    let (medic, medic_id) = utils::create_owned(&mut app, "medic", 8, 10, 0);
     utils::wound(&mut app, depot, "20");
     let stood_at = utils::cell_of(app.world_mut(), medic);
 
@@ -195,8 +195,8 @@ fn repair_range_lets_mender_work_without_closing_in() {
 #[test]
 fn energy_paid_repair_spends_worker_pool_not_treasury() {
     let mut app = app();
-    let (depot, depot_id) = utils::spawn_owned(&mut app, "depot", 10, 10, 0);
-    let (medic, medic_id) = utils::spawn_owned(&mut app, "medic", 8, 10, 0);
+    let (depot, depot_id) = utils::create_owned(&mut app, "depot", 10, 10, 0);
+    let (medic, medic_id) = utils::create_owned(&mut app, "medic", 8, 10, 0);
     utils::wound(&mut app, depot, "40");
     utils::grant_gold(&mut app, 500);
 
@@ -224,8 +224,8 @@ fn energy_paid_repair_spends_worker_pool_not_treasury() {
 #[test]
 fn spent_medic_waits_at_patient_and_resumes_once_it_can_pay() {
     let mut app = app();
-    let (depot, depot_id) = utils::spawn_owned(&mut app, "depot", 10, 10, 0);
-    let (medic, medic_id) = utils::spawn_owned(&mut app, "medic", 8, 10, 0);
+    let (depot, depot_id) = utils::create_owned(&mut app, "depot", 10, 10, 0);
+    let (medic, medic_id) = utils::create_owned(&mut app, "medic", 8, 10, 0);
     // More damage than the energy left can pay for: 10 energy buys 20 health.
     utils::wound(&mut app, depot, "90");
     drain_energy(&mut app, medic, "40");
@@ -264,8 +264,8 @@ fn spent_medic_waits_at_patient_and_resumes_once_it_can_pay() {
 #[test]
 fn full_repair_bills_cost_factor_share_of_price() {
     let mut app = app();
-    let (depot, depot_id) = utils::spawn_owned(&mut app, "depot", 10, 10, 0);
-    let (_, worker_id) = utils::spawn_owned(&mut app, "worker", 8, 10, 0);
+    let (depot, depot_id) = utils::create_owned(&mut app, "depot", 10, 10, 0);
+    let (_, worker_id) = utils::create_owned(&mut app, "worker", 8, 10, 0);
     // A whole pool restored at a factor of 0.5 on a 200-gold depot bills 100.
     utils::wound(&mut app, depot, "100");
     utils::grant_gold(&mut app, 500);
@@ -289,9 +289,9 @@ fn full_repair_bills_cost_factor_share_of_price() {
 #[test]
 fn workers_on_one_job_split_bill_rather_than_each_paying_it() {
     let mut app = app();
-    let (depot, depot_id) = utils::spawn_owned(&mut app, "depot", 10, 10, 0);
-    let (_, first) = utils::spawn_owned(&mut app, "worker", 8, 10, 0);
-    let (_, second) = utils::spawn_owned(&mut app, "worker", 8, 11, 0);
+    let (depot, depot_id) = utils::create_owned(&mut app, "depot", 10, 10, 0);
+    let (_, first) = utils::create_owned(&mut app, "worker", 8, 10, 0);
+    let (_, second) = utils::create_owned(&mut app, "worker", 8, 11, 0);
     utils::wound(&mut app, depot, "100");
     utils::grant_gold(&mut app, 500);
 
@@ -324,8 +324,8 @@ fn flat_per_tick_cost_is_charged_for_each_worker() {
 #[test]
 fn unaffordable_repair_holds_job_then_abandons_it() {
     let mut app = app();
-    let (depot, depot_id) = utils::spawn_owned(&mut app, "depot", 10, 10, 0);
-    let (worker, worker_id) = utils::spawn_owned(&mut app, "worker", 8, 10, 0);
+    let (depot, depot_id) = utils::create_owned(&mut app, "depot", 10, 10, 0);
+    let (worker, worker_id) = utils::create_owned(&mut app, "worker", 8, 10, 0);
     utils::wound(&mut app, depot, "100");
     // Enough for part of the work, then nothing.
     utils::grant_gold(&mut app, 10);
@@ -360,8 +360,8 @@ fn unaffordable_repair_holds_job_then_abandons_it() {
 #[test]
 fn patient_repairer_waits_indefinitely_and_resumes_when_paid() {
     let mut app = app();
-    let (depot, depot_id) = utils::spawn_owned(&mut app, "depot", 10, 10, 0);
-    let (worker, worker_id) = utils::spawn_owned(&mut app, "stoic", 8, 10, 0);
+    let (depot, depot_id) = utils::create_owned(&mut app, "depot", 10, 10, 0);
+    let (worker, worker_id) = utils::create_owned(&mut app, "stoic", 8, 10, 0);
     utils::wound(&mut app, depot, "100");
 
     repair(&mut app, worker_id, depot_id);
@@ -393,8 +393,8 @@ fn patient_repairer_waits_indefinitely_and_resumes_when_paid() {
 fn repairer_refuses_target_without_tag_it_mends() {
     let mut app = app();
     // A damageable, produced unit — but not tagged as a building.
-    let (soldier, soldier_id) = utils::spawn_owned(&mut app, "soldier", 10, 10, 0);
-    let (_, worker_id) = utils::spawn_owned(&mut app, "worker", 8, 10, 0);
+    let (soldier, soldier_id) = utils::create_owned(&mut app, "soldier", 10, 10, 0);
+    let (_, worker_id) = utils::create_owned(&mut app, "worker", 8, 10, 0);
     utils::wound(&mut app, soldier, "10");
     utils::grant_gold(&mut app, 500);
 
@@ -412,8 +412,8 @@ fn repairer_refuses_target_without_tag_it_mends() {
 fn repairer_refuses_target_nothing_produces() {
     let mut app = app();
     // Tagged as a building, but with no build_time to pace the work against.
-    let (monolith, monolith_id) = utils::spawn_owned(&mut app, "monolith", 10, 10, 0);
-    let (_, worker_id) = utils::spawn_owned(&mut app, "worker", 8, 10, 0);
+    let (monolith, monolith_id) = utils::create_owned(&mut app, "monolith", 10, 10, 0);
+    let (_, worker_id) = utils::create_owned(&mut app, "worker", 8, 10, 0);
     utils::wound(&mut app, monolith, "40");
     utils::grant_gold(&mut app, 500);
 
@@ -430,8 +430,8 @@ fn repairer_refuses_target_nothing_produces() {
 #[test]
 fn repairer_refuses_enemy_target() {
     let mut app = app();
-    let (depot, depot_id) = utils::spawn_owned(&mut app, "depot", 10, 10, 1);
-    let (_, worker_id) = utils::spawn_owned(&mut app, "worker", 8, 10, 0);
+    let (depot, depot_id) = utils::create_owned(&mut app, "depot", 10, 10, 1);
+    let (_, worker_id) = utils::create_owned(&mut app, "worker", 8, 10, 0);
     utils::wound(&mut app, depot, "40");
     utils::grant_gold(&mut app, 500);
 
@@ -448,8 +448,8 @@ fn repairer_refuses_enemy_target() {
 #[test]
 fn repairer_refuses_target_still_under_construction() {
     let mut app = app();
-    let (depot, depot_id) = utils::spawn_owned(&mut app, "depot", 10, 10, 0);
-    let (_, worker_id) = utils::spawn_owned(&mut app, "worker", 8, 10, 0);
+    let (depot, depot_id) = utils::create_owned(&mut app, "depot", 10, 10, 0);
+    let (_, worker_id) = utils::create_owned(&mut app, "worker", 8, 10, 0);
     utils::wound(&mut app, depot, "40");
     app.world_mut()
         .entity_mut(depot)
@@ -469,7 +469,7 @@ fn repairer_refuses_target_still_under_construction() {
 #[test]
 fn self_repair_is_refused_unless_declared() {
     let mut app = app();
-    let (worker, worker_id) = utils::spawn_owned(&mut app, "worker", 8, 10, 0);
+    let (worker, worker_id) = utils::create_owned(&mut app, "worker", 8, 10, 0);
     utils::wound(&mut app, worker, "10");
     utils::grant_gold(&mut app, 500);
 
@@ -490,9 +490,9 @@ fn self_repair_is_refused_unless_declared() {
 #[test]
 fn exclusive_job_turns_second_worker_away() {
     let mut app = app();
-    let (depot, depot_id) = utils::spawn_owned(&mut app, "depot", 10, 10, 0);
-    let (_, first) = utils::spawn_owned(&mut app, "loner", 8, 10, 0);
-    let (second, second_id) = utils::spawn_owned(&mut app, "loner", 8, 11, 0);
+    let (depot, depot_id) = utils::create_owned(&mut app, "depot", 10, 10, 0);
+    let (_, first) = utils::create_owned(&mut app, "loner", 8, 10, 0);
+    let (second, second_id) = utils::create_owned(&mut app, "loner", 8, 11, 0);
     utils::wound(&mut app, depot, "40");
     utils::grant_gold(&mut app, 500);
 
@@ -510,9 +510,9 @@ fn exclusive_job_turns_second_worker_away() {
 #[test]
 fn mended_target_records_crew_until_last_worker_leaves() {
     let mut app = app();
-    let (depot, depot_id) = utils::spawn_owned(&mut app, "depot", 10, 10, 0);
-    let (first, first_id) = utils::spawn_owned(&mut app, "worker", 8, 10, 0);
-    let (second, second_id) = utils::spawn_owned(&mut app, "worker", 8, 11, 0);
+    let (depot, depot_id) = utils::create_owned(&mut app, "depot", 10, 10, 0);
+    let (first, first_id) = utils::create_owned(&mut app, "worker", 8, 10, 0);
+    let (second, second_id) = utils::create_owned(&mut app, "worker", 8, 11, 0);
     utils::wound(&mut app, depot, "40");
     utils::grant_gold(&mut app, 500);
 
@@ -548,8 +548,8 @@ fn mended_target_records_crew_until_last_worker_leaves() {
 #[test]
 fn hidden_worker_leaves_map_and_comes_back() {
     let mut app = app();
-    let (depot, depot_id) = utils::spawn_owned(&mut app, "depot", 10, 10, 0);
-    let (worker, worker_id) = utils::spawn_owned(&mut app, "mole", 8, 10, 0);
+    let (depot, depot_id) = utils::create_owned(&mut app, "depot", 10, 10, 0);
+    let (worker, worker_id) = utils::create_owned(&mut app, "mole", 8, 10, 0);
     utils::wound(&mut app, depot, "20");
     utils::grant_gold(&mut app, 500);
 
@@ -575,8 +575,8 @@ fn hidden_worker_leaves_map_and_comes_back() {
 #[test]
 fn boxed_in_hidden_worker_finishes_job_and_waits_to_reappear() {
     let mut app = app();
-    let (depot, depot_id) = utils::spawn_owned(&mut app, "depot", 10, 10, 0);
-    let (worker, worker_id) = utils::spawn_owned(&mut app, "mole", 8, 10, 0);
+    let (depot, depot_id) = utils::create_owned(&mut app, "depot", 10, 10, 0);
+    let (worker, worker_id) = utils::create_owned(&mut app, "mole", 8, 10, 0);
     utils::wound(&mut app, depot, "20");
     utils::grant_gold(&mut app, 500);
 
@@ -602,8 +602,8 @@ fn boxed_in_hidden_worker_finishes_job_and_waits_to_reappear() {
 #[test]
 fn cancel_brings_hidden_worker_back_onto_map() {
     let mut app = app();
-    let (depot, depot_id) = utils::spawn_owned(&mut app, "depot", 10, 10, 0);
-    let (worker, worker_id) = utils::spawn_owned(&mut app, "mole", 8, 10, 0);
+    let (depot, depot_id) = utils::create_owned(&mut app, "depot", 10, 10, 0);
+    let (worker, worker_id) = utils::create_owned(&mut app, "mole", 8, 10, 0);
     // Deep enough that the job is nowhere near done when the cancel lands.
     utils::wound(&mut app, depot, "90");
     utils::grant_gold(&mut app, 500);
@@ -626,8 +626,8 @@ fn cancel_brings_hidden_worker_back_onto_map() {
 #[test]
 fn patient_destroyed_mid_repair_finishes_order_and_frees_worker() {
     let mut app = app();
-    let (depot, depot_id) = utils::spawn_owned(&mut app, "depot", 10, 10, 0);
-    let (worker, worker_id) = utils::spawn_owned(&mut app, "mole", 8, 10, 0);
+    let (depot, depot_id) = utils::create_owned(&mut app, "depot", 10, 10, 0);
+    let (worker, worker_id) = utils::create_owned(&mut app, "mole", 8, 10, 0);
     utils::wound(&mut app, depot, "90");
     utils::grant_gold(&mut app, 500);
 
@@ -652,8 +652,8 @@ fn patient_destroyed_mid_repair_finishes_order_and_frees_worker() {
 #[test]
 fn mender_in_open_follows_patient_that_walks_away() {
     let mut app = app();
-    let (patient, patient_id) = utils::spawn_owned(&mut app, "casualty", 10, 10, 0);
-    let (orderly, orderly_id) = utils::spawn_owned(&mut app, "orderly", 9, 10, 0);
+    let (patient, patient_id) = utils::create_owned(&mut app, "casualty", 10, 10, 0);
+    let (orderly, orderly_id) = utils::create_owned(&mut app, "orderly", 9, 10, 0);
     utils::wound(&mut app, patient, "60");
 
     repair(&mut app, orderly_id, patient_id);
@@ -695,8 +695,8 @@ fn mender_stops_at_near_side_of_target() {
     // The depot spans (10, 10) to (11, 11) and the worker comes at it from the east.
     // Closing on the position alone would send it round to the north-west corner,
     // since that is the cell the position names.
-    let (depot, depot_id) = utils::spawn_owned(&mut app, "depot", 10, 10, 0);
-    let (worker, worker_id) = utils::spawn_owned(&mut app, "worker", 18, 11, 0);
+    let (depot, depot_id) = utils::create_owned(&mut app, "depot", 10, 10, 0);
+    let (worker, worker_id) = utils::create_owned(&mut app, "worker", 18, 11, 0);
     utils::wound(&mut app, depot, "40");
     utils::grant_gold(&mut app, 500);
 
@@ -720,8 +720,8 @@ fn mender_faces_patient_rather_than_corner_its_position_names() {
     let mut app = app();
     // Level with the depot's lower row and just east of it, so the patient lies
     // due west. Its position names the north-west cell, which does not.
-    let (depot, depot_id) = utils::spawn_owned(&mut app, "depot", 10, 10, 0);
-    let (worker, worker_id) = utils::spawn_owned(&mut app, "worker", 12, 11, 0);
+    let (depot, depot_id) = utils::create_owned(&mut app, "depot", 10, 10, 0);
+    let (worker, worker_id) = utils::create_owned(&mut app, "worker", 12, 11, 0);
     utils::wound(&mut app, depot, "20");
     utils::grant_gold(&mut app, 500);
 
@@ -898,12 +898,12 @@ fn building(name: &str, repair_ratio: Option<FixedU64>) -> EntityTypeDef {
 /// charging a flat rate per tick.
 fn per_tick_spend(crew: &[&str]) -> u32 {
     let mut app = app();
-    let (depot, depot_id) = utils::spawn_owned(&mut app, "depot", 10, 10, 0);
+    let (depot, depot_id) = utils::create_owned(&mut app, "depot", 10, 10, 0);
     utils::wound(&mut app, depot, "40");
     utils::grant_gold(&mut app, 500);
 
     for (index, type_name) in crew.iter().enumerate() {
-        let (_, worker) = utils::spawn_owned(&mut app, type_name, 8, 10 + index as u32, 0);
+        let (_, worker) = utils::create_owned(&mut app, type_name, 8, 10 + index as u32, 0);
         repair(&mut app, worker, depot_id);
     }
     utils::run_ticks(&mut app, utils::APPLY + 30);

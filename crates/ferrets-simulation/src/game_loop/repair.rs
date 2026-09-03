@@ -25,9 +25,10 @@ use crate::{
     },
     entity_def,
     entity_index::EntityIndex,
+    events::SpendCause,
     map::Map,
     order::Order,
-    resources::PlayerResources,
+    resources::{self, PlayerResources},
     session::GameSession,
     simulation_id::SimulationId,
     spawn,
@@ -337,11 +338,14 @@ fn charge(
     if !world.resource::<PlayerResources>().can_afford(player, &due) {
         return None;
     }
-    if !due.is_empty() {
-        world
-            .resource_mut::<PlayerResources>()
-            .subtract(player, &due);
-    }
+    resources::charge(
+        world,
+        player,
+        due,
+        SpendCause::Repair {
+            target: entity_def::simulation_id(world, target),
+        },
+    );
     Some(carried)
 }
 

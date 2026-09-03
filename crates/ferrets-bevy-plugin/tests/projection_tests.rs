@@ -13,7 +13,7 @@ fn orthogonal_diagonal_walk_takes_its_priced_time() {
     // the orthogonal one √2 as long — the time its own path costs charge.
     let mut app = utils::orders_app();
     utils::install_map(&mut app, Projection::Orthogonal, MovementModel::Cell);
-    let (soldier, id) = utils::spawn_owned(&mut app, "soldier", 2, 2, 0);
+    let (soldier, id) = utils::create_owned(&mut app, "soldier", 2, 2, 0);
 
     utils::select(&mut app, id);
     utils::push_command(
@@ -38,8 +38,8 @@ fn orthogonal_diagonal_walk_takes_its_priced_time() {
 fn orthogonal_bodies_separate_as_circles() {
     let mut app = utils::orders_app();
     utils::install_map(&mut app, Projection::Orthogonal, MovementModel::Continuous);
-    let first = utils::spawn_owned(&mut app, "soldier", 3, 5, 0);
-    let second = utils::spawn_owned(&mut app, "soldier", 7, 5, 0);
+    let first = utils::create_owned(&mut app, "soldier", 3, 5, 0);
+    let second = utils::create_owned(&mut app, "soldier", 7, 5, 0);
     for (_, id) in [first, second] {
         utils::select(&mut app, id);
         utils::push_command(

@@ -19,7 +19,7 @@ use ferrets_simulation::{
 #[test]
 fn research_pays_at_issue_and_completes() {
     let mut app = utils::research_app();
-    let (_, lab_id) = utils::spawn_owned(&mut app, "lab", 10, 10, 0);
+    let (_, lab_id) = utils::create_owned(&mut app, "lab", 10, 10, 0);
     utils::grant_gold(&mut app, 50);
 
     start_research(&mut app, lab_id, "smithing");
@@ -37,8 +37,8 @@ fn research_pays_at_issue_and_completes() {
 #[test]
 fn completed_research_buffs_existing_and_new_units() {
     let mut app = utils::research_app();
-    let (_, lab_id) = utils::spawn_owned(&mut app, "lab", 10, 10, 0);
-    let (veteran, _) = utils::spawn_owned(&mut app, "pikeman", 5, 5, 0);
+    let (_, lab_id) = utils::create_owned(&mut app, "lab", 10, 10, 0);
+    let (veteran, _) = utils::create_owned(&mut app, "pikeman", 5, 5, 0);
     utils::grant_gold(&mut app, 50);
     utils::run_ticks(&mut app, 1);
     assert_eq!(
@@ -57,7 +57,7 @@ fn completed_research_buffs_existing_and_new_units() {
     );
 
     // ...and one spawned after it, through the same per-tick fold.
-    let (recruit, _) = utils::spawn_owned(&mut app, "pikeman", 6, 5, 0);
+    let (recruit, _) = utils::create_owned(&mut app, "pikeman", 6, 5, 0);
     utils::run_ticks(&mut app, 1);
     assert_eq!(
         utils::effective_damage(&app, recruit),
@@ -68,7 +68,7 @@ fn completed_research_buffs_existing_and_new_units() {
 #[test]
 fn completed_research_refuses_repeat() {
     let mut app = utils::research_app();
-    let (_, lab_id) = utils::spawn_owned(&mut app, "lab", 10, 10, 0);
+    let (_, lab_id) = utils::create_owned(&mut app, "lab", 10, 10, 0);
     utils::grant_gold(&mut app, 100);
 
     start_research(&mut app, lab_id, "smithing");
@@ -85,8 +85,8 @@ fn completed_research_refuses_repeat() {
 #[test]
 fn research_under_way_blocks_second_start() {
     let mut app = utils::research_app();
-    let (_, first_id) = utils::spawn_owned(&mut app, "lab", 10, 10, 0);
-    let (_, second_id) = utils::spawn_owned(&mut app, "lab", 20, 20, 0);
+    let (_, first_id) = utils::create_owned(&mut app, "lab", 10, 10, 0);
+    let (_, second_id) = utils::create_owned(&mut app, "lab", 20, 20, 0);
     utils::grant_gold(&mut app, 100);
 
     // The second command lands while the first order is in flight, anywhere
@@ -104,7 +104,7 @@ fn research_under_way_blocks_second_start() {
 #[test]
 fn force_cancel_refunds_and_frees_topic() {
     let mut app = utils::research_app();
-    let (lab, lab_id) = utils::spawn_owned(&mut app, "lab", 10, 10, 0);
+    let (lab, lab_id) = utils::create_owned(&mut app, "lab", 10, 10, 0);
     utils::grant_gold(&mut app, 50);
 
     start_research(&mut app, lab_id, "smithing");
@@ -128,8 +128,8 @@ fn force_cancel_refunds_and_frees_topic() {
 #[test]
 fn researcher_death_refunds_and_frees_topic() {
     let mut app = utils::research_app();
-    let (first, first_id) = utils::spawn_owned(&mut app, "lab", 10, 10, 0);
-    let (_, second_id) = utils::spawn_owned(&mut app, "lab", 20, 20, 0);
+    let (first, first_id) = utils::create_owned(&mut app, "lab", 10, 10, 0);
+    let (_, second_id) = utils::create_owned(&mut app, "lab", 20, 20, 0);
     utils::grant_gold(&mut app, 100);
 
     start_research(&mut app, first_id, "smithing");
@@ -154,7 +154,7 @@ fn researcher_death_refunds_and_frees_topic() {
 #[test]
 fn completion_outside_order_path_refunds_running_order() {
     let mut app = utils::research_app();
-    let (lab, lab_id) = utils::spawn_owned(&mut app, "lab", 10, 10, 0);
+    let (lab, lab_id) = utils::create_owned(&mut app, "lab", 10, 10, 0);
     utils::grant_gold(&mut app, 50);
 
     start_research(&mut app, lab_id, "smithing");
@@ -165,7 +165,7 @@ fn completion_outside_order_path_refunds_running_order() {
     let smithing = utils::research_id(&app, "smithing");
     app.world_mut()
         .resource_mut::<PlayerResearch>()
-        .complete(0, smithing);
+        .mark_completed(0, smithing);
     utils::run_ticks(&mut app, 2);
 
     // The running order has nothing left to work toward: it finishes and the
@@ -181,7 +181,7 @@ fn completion_outside_order_path_refunds_running_order() {
 #[test]
 fn research_requirement_gates_research() {
     let mut app = utils::research_app();
-    let (_, lab_id) = utils::spawn_owned(&mut app, "lab", 10, 10, 0);
+    let (_, lab_id) = utils::create_owned(&mut app, "lab", 10, 10, 0);
     utils::grant_gold(&mut app, 100);
 
     // Tactics requires smithing: refused outright, nothing paid.
@@ -203,8 +203,8 @@ fn research_requirement_gates_research() {
 #[test]
 fn research_requirement_gates_training() {
     let mut app = utils::research_app();
-    let (_, lab_id) = utils::spawn_owned(&mut app, "lab", 10, 10, 0);
-    let (guardhouse, guardhouse_id) = utils::spawn_owned(&mut app, "guardhouse", 20, 20, 0);
+    let (_, lab_id) = utils::create_owned(&mut app, "lab", 10, 10, 0);
+    let (guardhouse, guardhouse_id) = utils::create_owned(&mut app, "guardhouse", 20, 20, 0);
     utils::grant_gold(&mut app, 100);
 
     // The halberdier waits on smithing: refused, nothing queued, nothing paid.
@@ -226,7 +226,7 @@ fn research_requirement_gates_training() {
 #[test]
 fn tag_requirement_follows_standing_provider() {
     let mut app = utils::research_app();
-    let (_, guardhouse_id) = utils::spawn_owned(&mut app, "guardhouse", 20, 20, 0);
+    let (_, guardhouse_id) = utils::create_owned(&mut app, "guardhouse", 20, 20, 0);
     utils::grant_gold(&mut app, 100);
 
     // The knight needs a "workshop" tag on something standing: nothing does.
@@ -236,7 +236,7 @@ fn tag_requirement_follows_standing_provider() {
     assert_eq!(utils::gold(app.world()), 100);
 
     // A tagged building satisfies it...
-    let (lab, _) = utils::spawn_owned(&mut app, "lab", 10, 10, 0);
+    let (lab, _) = utils::create_owned(&mut app, "lab", 10, 10, 0);
     train(&mut app, guardhouse_id, "knight");
     utils::run_ticks(&mut app, utils::APPLY + 10);
     assert_eq!(utils::count_of_type(app.world_mut(), "knight"), 1);
@@ -253,8 +253,8 @@ fn tag_requirement_follows_standing_provider() {
 #[test]
 fn under_construction_provider_satisfies_nothing() {
     let mut app = utils::research_app();
-    let (lab, _) = utils::spawn_owned(&mut app, "lab", 10, 10, 0);
-    let (_, guardhouse_id) = utils::spawn_owned(&mut app, "guardhouse", 20, 20, 0);
+    let (lab, _) = utils::create_owned(&mut app, "lab", 10, 10, 0);
+    let (_, guardhouse_id) = utils::create_owned(&mut app, "guardhouse", 20, 20, 0);
     utils::grant_gold(&mut app, 100);
     app.world_mut()
         .entity_mut(lab)
@@ -280,8 +280,8 @@ fn under_construction_provider_satisfies_nothing() {
 #[test]
 fn requirement_loss_keeps_queued_production() {
     let mut app = utils::research_app();
-    let (lab, _) = utils::spawn_owned(&mut app, "lab", 10, 10, 0);
-    let (guardhouse, guardhouse_id) = utils::spawn_owned(&mut app, "guardhouse", 20, 20, 0);
+    let (lab, _) = utils::create_owned(&mut app, "lab", 10, 10, 0);
+    let (guardhouse, guardhouse_id) = utils::create_owned(&mut app, "guardhouse", 20, 20, 0);
     utils::grant_gold(&mut app, 100);
 
     // Queued while the workshop stood; the requirement gates only the command.

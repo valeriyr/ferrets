@@ -7,7 +7,11 @@ use bevy_ecs::prelude::*;
 use ferrets_content::costs::Cost;
 use serde::{Deserialize, Serialize};
 
-use crate::session::player_slot::PlayerId;
+use crate::{
+    events::{EventRecord, SimulationEvent, SpendCause},
+    session::player_slot::PlayerId,
+    simulation_id::SimulationId,
+};
 
 /// One player's starting amount of one resource, as declared data seeding the
 /// live stockpile.
@@ -53,16 +57,30 @@ impl PlayerResources {
         *stock = stock.saturating_add(amount);
     }
 
+    /// Adds every arm of `cost` to the player's stockpile.
+    ///
+    /// The multi-kind form of [`Self::add`], and the inverse of
+    /// [`Self::withdraw`]. Announces nothing; [`refund`] is the announcing
+    /// counterpart.
+    pub fn deposit(&mut self, player: PlayerId, cost: &Cost) {
+        for (kind, amount) in cost {
+            self.add(player, kind, *amount);
+        }
+    }
+
     /// Returns `true` if the player can pay `cost`.
     pub fn can_afford(&self, player: PlayerId, cost: &Cost) -> bool {
         cost.iter()
             .all(|(kind, amount)| self.amount(player, kind) >= *amount)
     }
 
-    /// Subtracts `cost` from the player's stockpile.
+    /// Subtracts every arm of `cost` from the player's stockpile.
+    ///
+    /// The inverse of [`Self::deposit`]. Announces nothing; [`charge`] is the
+    /// announcing counterpart.
     ///
     /// Panics if the player cannot afford it — check with [`Self::can_afford`] first.
-    pub fn subtract(&mut self, player: PlayerId, cost: &Cost) {
+    pub fn withdraw(&mut self, player: PlayerId, cost: &Cost) {
         assert!(
             self.can_afford(player, cost),
             "player {player} cannot afford {cost:?}"
@@ -71,11 +89,64 @@ impl PlayerResources {
             *self.0[player as usize].get_mut(kind).unwrap() -= amount;
         }
     }
+}
 
-    /// Adds `cost` back to the player's stockpile (e.g. a cancelled order refund).
-    pub fn refund(&mut self, player: PlayerId, cost: &Cost) {
-        for (kind, amount) in cost {
-            self.add(player, kind, *amount);
-        }
+/// Charges `cost` to `player` and announces what was spent. An empty `cost`
+/// charges nothing and announces nothing.
+///
+/// Panics if the player cannot afford it — check with
+/// [`PlayerResources::can_afford`] first.
+pub fn charge(world: &mut World, player: PlayerId, cost: Cost, cause: SpendCause) {
+    if cost.is_empty() {
+        return;
     }
+    world
+        .resource_mut::<PlayerResources>()
+        .withdraw(player, &cost);
+    world
+        .resource_mut::<EventRecord>()
+        .emit(SimulationEvent::ResourcesSpent {
+            player,
+            cost,
+            cause,
+        });
+}
+
+/// Gives `cost` back to `player` and announces the refund. An empty `cost`
+/// returns nothing and announces nothing.
+pub fn refund(world: &mut World, player: PlayerId, cost: Cost, cause: SpendCause) {
+    if cost.is_empty() {
+        return;
+    }
+    world
+        .resource_mut::<PlayerResources>()
+        .deposit(player, &cost);
+    world
+        .resource_mut::<EventRecord>()
+        .emit(SimulationEvent::ResourcesRefunded {
+            player,
+            cost,
+            cause,
+        });
+}
+
+/// Banks a carried load and announces the gather.
+pub fn credit_gathered(
+    world: &mut World,
+    player: PlayerId,
+    kind: &str,
+    amount: u32,
+    storage: SimulationId,
+) {
+    world
+        .resource_mut::<PlayerResources>()
+        .add(player, kind, amount);
+    world
+        .resource_mut::<EventRecord>()
+        .emit(SimulationEvent::ResourcesGathered {
+            player,
+            kind: kind.to_string(),
+            amount,
+            storage,
+        });
 }

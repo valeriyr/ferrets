@@ -15,7 +15,7 @@ use crate::{
         build::UnderConstructionComponent,
         entity_buffs::BuffsComponent,
         entity_info::EntityInfoComponent,
-        entity_skills::SkillsComponent,
+        entity_skills::{self, SkillsComponent},
         health::HealthComponent,
         location::LocationComponent,
         order_queue::{CancelPolicy, OrderQueueComponent},
@@ -29,14 +29,15 @@ use crate::{
     control_groups::{CONTROL_GROUP_COUNT, ControlGroups},
     entity_def,
     entity_index::EntityIndex,
-    game_loop::cast_cost,
+    events::{SpawnCause, SpendCause},
+    game_loop::{cast_cost, damage},
     input::InputFrames,
     order::{AttackTarget, Order},
     player_buffs::PlayerBuffs,
     player_research::PlayerResearch,
-    player_skills::PlayerSkills,
+    player_skills::{self, PlayerSkills},
     requirements,
-    resources::PlayerResources,
+    resources::{self, PlayerResources},
     selection::Selection,
     session::{
         GameSession,
@@ -437,7 +438,7 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
             // the cell origin the spawn contract requires rather than
             // trusted to be one.
             let corner = FixedUVec2::from(CellPos::from(*position));
-            spawn::spawn_entity(world, type_name, corner, Some(player));
+            spawn::spawn_entity(world, type_name, corner, Some(player), SpawnCause::Sandbox);
         }
     }
 }
@@ -629,9 +630,7 @@ fn train_entity(world: &mut World, player: PlayerId, trainer: SimulationId, type
     {
         return;
     }
-    world
-        .resource_mut::<PlayerResources>()
-        .subtract(player, &cost);
+    resources::charge(world, player, cost, SpendCause::Training { trainer });
 
     world
         .entity_mut(entity)
@@ -707,9 +706,7 @@ fn start_research(
     {
         return;
     }
-    world
-        .resource_mut::<PlayerResources>()
-        .subtract(player, &cost);
+    resources::charge(world, player, cost, SpendCause::Research { research });
 
     let mut entity_mut = world.entity_mut(entity);
     let mut queue = entity_mut
@@ -1018,9 +1015,7 @@ fn use_skill_as_player(
     if !world.resource::<PlayerResources>().can_afford(player, cost) {
         return;
     }
-    world
-        .resource_mut::<PlayerResources>()
-        .subtract(player, cost);
+    resources::charge(world, player, cost.clone(), SpendCause::Skill { skill });
 
     match effect {
         PlayerCastEffect::ApplyBuff(buff) => stats::apply_player_buff(world, player, buff),
@@ -1029,9 +1024,7 @@ fn use_skill_as_player(
         }
     }
 
-    world
-        .resource_mut::<PlayerSkills>()
-        .start_cooldown(player, skill, cooldown);
+    player_skills::cast(world, player, skill, cooldown);
 }
 
 /// The entity-cast path: the caster must be an owned entity whose type
@@ -1097,13 +1090,12 @@ fn use_skill_as_entity(
     if !cast_cost::can_pay(world, caster, player, costs) {
         return;
     }
-    cast_cost::pay(world, caster, player, costs);
+    cast_cost::pay(world, caster, player, costs, SpendCause::Skill { skill });
 
     apply_skill_effect(world, caster, target, effect);
 
-    if let Some(mut skills) = world.entity_mut(caster).get_mut::<SkillsComponent>() {
-        skills.start_cooldown(skill, cooldown);
-    }
+    let target_id = entity_def::simulation_id(world, target);
+    entity_skills::cast(world, caster, target_id, skill, cooldown);
 }
 
 /// Applies a resolved skill effect to `target`.
@@ -1116,18 +1108,10 @@ fn apply_skill_effect(world: &mut World, caster: Entity, target: Entity, effect:
             }
         }
         EntityCastEffect::Damage(amount) => {
+            // Skill damage bypasses armor, like an ability rather than a
+            // weapon.
             let caster_id = entity_def::simulation_id(world, caster);
-            let tick = world.resource::<GameSession>().tick();
-            let mut died = false;
-            if let Some(mut health) = world.entity_mut(target).get_mut::<HealthComponent>() {
-                // Skill damage bypasses armor, like an ability rather than a weapon.
-                health.apply_damage(amount);
-                health.record_hit(caster_id, tick);
-                died = health.is_dead();
-            }
-            if died {
-                spawn::destroy_entity(world, target);
-            }
+            damage::apply(world, caster_id, target, amount);
         }
         EntityCastEffect::Heal(amount) => {
             let max = entity_def::effective_stat(world, target, EntityStatId::MAX_HEALTH)

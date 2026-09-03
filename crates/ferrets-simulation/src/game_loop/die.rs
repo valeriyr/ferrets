@@ -113,5 +113,6 @@ fn leave_corpse(entity: Entity, world: &mut World) {
     // the cell model the two coincide.
     let cell = FixedUVec2::from(body::anchor(position));
 
-    spawn::spawn_corpse_entity(world, &corpse_type, cell);
+    let of = entity_def::simulation_id(world, entity);
+    spawn::spawn_corpse_entity(world, &corpse_type, cell, of);
 }

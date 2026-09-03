@@ -27,10 +27,11 @@ use crate::{
     },
     entity_def,
     entity_index::EntityIndex,
+    events::{DeathCause, EventRecord, SimulationEvent, SpawnCause, SpendCause},
     map::Map,
     order::Order,
     requirements,
-    resources::PlayerResources,
+    resources::{self, PlayerResources},
     session::player_slot::PlayerId,
     simulation_id::SimulationId,
     spawn, supply,
@@ -208,7 +209,14 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
         // the site the way anything else standing there would.
         work::enter(world, entity, presence(world, entity));
 
-        let placed = spawn::spawn_entity(world, type_name, position, owner);
+        let builder = entity_def::simulation_id(world, entity);
+        let placed = spawn::spawn_entity(
+            world,
+            type_name,
+            position,
+            owner,
+            SpawnCause::Founded { builder },
+        );
         let Some((building, building_sim_id)) = placed else {
             // Site blocked — give up, and bring back a builder that had already
             // stepped inside.
@@ -216,17 +224,21 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
             return Processing::state(OrderState::Finished);
         };
 
-        let builder_id = entity_def::simulation_id(world, entity);
         world
             .entity_mut(building)
             .insert(UnderConstructionComponent {
                 progress: 0,
-                builders: BTreeSet::from([builder_id]),
+                builders: BTreeSet::from([builder]),
             });
         if let Some(player) = owner {
-            world
-                .resource_mut::<PlayerResources>()
-                .subtract(player, &cost);
+            resources::charge(
+                world,
+                player,
+                cost,
+                SpendCause::Construction {
+                    site: building_sim_id,
+                },
+            );
         }
 
         build_component.building = Some(building_sim_id);
@@ -252,15 +264,27 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
     progress.progress += 1;
 
     if progress.progress >= build_time {
-        world
-            .entity_mut(building)
-            .remove::<UnderConstructionComponent>();
+        complete_site(world, building, entity);
         work::leave(world, entity, site_origin, size);
         return Processing::state(OrderState::Finished);
     }
 
     world.entity_mut(entity).insert(build_component);
     Processing::state(OrderState::InProcessing)
+}
+
+/// Removes the construction marker from `building` and announces the
+/// completion, naming `finisher` — whoever worked the completing tick — as its
+/// builder.
+fn complete_site(world: &mut World, building: Entity, finisher: Entity) {
+    world
+        .entity_mut(building)
+        .remove::<UnderConstructionComponent>();
+    let announced = SimulationEvent::ConstructionCompleted {
+        building: entity_def::simulation_id(world, building),
+        builder: entity_def::simulation_id(world, finisher),
+    };
+    world.resource_mut::<EventRecord>().emit(announced);
 }
 
 /// Destroys an unfinished site and refunds what it cost, called by the last builder
@@ -286,15 +310,13 @@ fn abandon_site(world: &mut World, entity: Entity, site: SimulationId, type_name
         .cost
         .clone();
 
-    spawn::destroy_entity(world, building);
+    spawn::despawn_entity(world, building, DeathCause::Cancelled);
     if let Some(player) = world
         .entity(entity)
         .get::<OwnerComponent>()
         .map(|o| o.player())
     {
-        world
-            .resource_mut::<PlayerResources>()
-            .refund(player, &cost);
+        resources::refund(world, player, cost, SpendCause::Construction { site });
     }
 }
 

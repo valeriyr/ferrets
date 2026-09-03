@@ -1,5 +1,6 @@
 mod auto_engage;
 mod check_game_result;
+mod collect_statistics;
 mod command_executor;
 mod flee;
 mod flush_input;
@@ -19,11 +20,13 @@ mod recompute_player_stats;
 mod recompute_visibility;
 mod refresh_nav_hierarchy;
 mod resolve_pushing;
+mod retire_events;
 mod tick_counter;
 mod tick_orders;
 
 pub use auto_engage::auto_engage;
 pub use check_game_result::check_game_result;
+pub use collect_statistics::collect_statistics;
 pub use command_executor::command_executor;
 pub use flee::flee;
 pub use flush_input::flush_input;
@@ -43,5 +46,6 @@ pub use recompute_player_stats::recompute_player_stats;
 pub use recompute_visibility::recompute_visibility;
 pub use refresh_nav_hierarchy::refresh_nav_hierarchy;
 pub use resolve_pushing::resolve_pushing;
+pub use retire_events::retire_events;
 pub use tick_counter::tick_counter;
 pub use tick_orders::tick_orders;

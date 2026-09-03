@@ -4,6 +4,12 @@ use bevy_ecs::prelude::*;
 
 use ferrets_content::skills::SkillId;
 
+use crate::{
+    entity_def,
+    events::{EventRecord, SimulationEvent},
+    simulation_id::SimulationId,
+};
+
 /// An entity's skills, each paired with the ticks remaining on its cooldown.
 #[derive(Component, Debug, Clone, Default, PartialEq, Eq)]
 pub struct SkillsComponent {
@@ -52,4 +58,30 @@ impl SkillsComponent {
             *remaining = remaining.saturating_sub(1);
         }
     }
+}
+
+/// Puts `skill` on `caster`'s cooldown and announces the cast against `target`.
+///
+/// The announcing counterpart to [`SkillsComponent::start_cooldown`], which
+/// starts the timer and says nothing. A caster with no skills component is left
+/// alone, and nothing is announced for a cast that could not have happened.
+pub fn cast(
+    world: &mut World,
+    caster: Entity,
+    target: SimulationId,
+    skill: SkillId,
+    cooldown: u32,
+) {
+    let mut caster_mut = world.entity_mut(caster);
+    let Some(mut skills) = caster_mut.get_mut::<SkillsComponent>() else {
+        return;
+    };
+    skills.start_cooldown(skill, cooldown);
+
+    let announced = SimulationEvent::SkillCast {
+        caster: entity_def::simulation_id(world, caster),
+        target,
+        skill,
+    };
+    world.resource_mut::<EventRecord>().emit(announced);
 }

@@ -13,10 +13,10 @@ use crate::{
         train::{TrainComponent, TrainQueueComponent},
     },
     entity_def,
+    events::{SpawnCause, SpendCause},
     map::Map,
     order::Order,
-    resources::PlayerResources,
-    spawn,
+    resources, spawn,
 };
 use ferrets_content::registry::ContentRegistry;
 
@@ -71,9 +71,14 @@ pub fn cancel_processing(
                         .entity(type_name)
                         .map(|def| def.cost.clone())
                         .unwrap_or_default();
-                    world
-                        .resource_mut::<PlayerResources>()
-                        .refund(player, &cost);
+                    resources::refund(
+                        world,
+                        player,
+                        cost,
+                        SpendCause::Training {
+                            trainer: entity_def::simulation_id(world, entity),
+                        },
+                    );
                 }
             }
 
@@ -153,9 +158,14 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> OrderState 
                 .entity(entity)
                 .get::<OwnerComponent>()
                 .map(|o| o.player());
-            if let Some((unit, _)) =
-                spawn::spawn_entity(world, &type_name, FixedUVec2::from(cell), owner)
-            {
+            let trainer = entity_def::simulation_id(world, entity);
+            if let Some((unit, _)) = spawn::spawn_entity(
+                world,
+                &type_name,
+                FixedUVec2::from(cell),
+                owner,
+                SpawnCause::Trained { trainer },
+            ) {
                 rally::send(world, entity, unit);
             }
 

@@ -32,7 +32,7 @@ fn same_layer_growth_lands_under_continuous_model() {
     // rebuild-owned no-op, so the lift has to take the claim where the
     // rebuilt plane holds it.
     let mut app = utils::morph_app(MovementModel::Continuous);
-    let (whelp, _) = utils::spawn_owned(&mut app, "whelp", 10, 10, 0);
+    let (whelp, _) = utils::create_owned(&mut app, "whelp", 10, 10, 0);
     // One tick so the rebuilt claim plane holds the whelp's footprint.
     utils::run_ticks(&mut app, 1);
 
@@ -45,7 +45,7 @@ fn same_layer_growth_lands_under_continuous_model() {
 #[test]
 fn same_layer_growth_lands_under_cell_model() {
     let mut app = utils::morph_app(MovementModel::Cell);
-    let (whelp, _) = utils::spawn_owned(&mut app, "whelp", 10, 10, 0);
+    let (whelp, _) = utils::create_owned(&mut app, "whelp", 10, 10, 0);
 
     order_morph(&mut app, whelp, "giant");
     utils::run_ticks(&mut app, 15);
@@ -59,7 +59,7 @@ fn unrooting_swaps_static_footprint_for_claim() {
     // static footprint must come off the grid and the golem's claim go on,
     // or the ghost of the building walls its own unit in forever.
     let mut app = utils::morph_app(MovementModel::Cell);
-    let (shrine, _) = utils::spawn_owned(&mut app, "shrine", 10, 10, 0);
+    let (shrine, _) = utils::create_owned(&mut app, "shrine", 10, 10, 0);
 
     order_morph(&mut app, shrine, "golem");
     utils::run_ticks(&mut app, 15);
@@ -91,7 +91,7 @@ fn instant_change_pays_from_old_pools() {
     // price from the husk's small pool and kill what the affordability
     // check promised would survive.
     let mut app = utils::morph_app(MovementModel::Continuous);
-    let (whelp, _) = utils::spawn_owned(&mut app, "whelp", 10, 10, 0);
+    let (whelp, _) = utils::create_owned(&mut app, "whelp", 10, 10, 0);
 
     order_morph(&mut app, whelp, "husk");
     utils::run_ticks(&mut app, 3);
@@ -114,7 +114,7 @@ fn form_without_pool_sheds_pool_component() {
     // The wisp declares no health: the pool component goes with the stat,
     // because a zero-maximum pool would read as dead rather than poolless.
     let mut app = utils::morph_app(MovementModel::Continuous);
-    let (whelp, whelp_id) = utils::spawn_owned(&mut app, "whelp", 10, 10, 0);
+    let (whelp, whelp_id) = utils::create_owned(&mut app, "whelp", 10, 10, 0);
 
     order_morph(&mut app, whelp, "wisp");
     utils::run_ticks(&mut app, 15);
@@ -140,7 +140,7 @@ fn form_without_pool_sheds_pool_component() {
 #[test]
 fn form_gaining_pool_starts_it_full() {
     let mut app = utils::morph_app(MovementModel::Continuous);
-    let (whelp, _) = utils::spawn_owned(&mut app, "whelp", 10, 10, 0);
+    let (whelp, _) = utils::create_owned(&mut app, "whelp", 10, 10, 0);
     order_morph(&mut app, whelp, "wisp");
     utils::run_ticks(&mut app, 15);
     assert_eq!(type_name_of(&app, whelp), "wisp");
@@ -171,7 +171,7 @@ fn queued_committed_change_drops_before_it_starts() {
     // a walk, the change has taken nothing and promised nothing — a soft
     // cancel drops it like any other waiting entry.
     let mut app = utils::morph_app(MovementModel::Continuous);
-    let (whelp, _) = utils::spawn_owned(&mut app, "whelp", 10, 10, 0);
+    let (whelp, _) = utils::create_owned(&mut app, "whelp", 10, 10, 0);
 
     app.world_mut()
         .entity_mut(whelp)
@@ -213,7 +213,7 @@ fn change_waits_for_production_it_would_cancel() {
     // what guarantees it — a soft flush leaves the Train order working, so
     // the change waits its turn and inherits an empty queue.
     let mut app = utils::morph_app(MovementModel::Cell);
-    let (shrine, shrine_id) = utils::spawn_owned(&mut app, "shrine", 10, 10, 0);
+    let (shrine, shrine_id) = utils::create_owned(&mut app, "shrine", 10, 10, 0);
     utils::grant_gold(&mut app, 100);
 
     utils::push_command(
@@ -248,7 +248,7 @@ fn change_dropping_paid_queue_panics() {
     // would forfeit what the player paid for, so it is caught rather than
     // quietly swallowed.
     let mut app = utils::morph_app(MovementModel::Cell);
-    let (shrine, _) = utils::spawn_owned(&mut app, "shrine", 10, 10, 0);
+    let (shrine, _) = utils::create_owned(&mut app, "shrine", 10, 10, 0);
     app.world_mut()
         .entity_mut(shrine)
         .get_mut::<TrainQueueComponent>()

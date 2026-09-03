@@ -1,5 +1,7 @@
 //! Minimal HUD: a resource bar and a context line for the current selection.
 
+use std::collections::BTreeSet;
+
 use bevy::prelude::*;
 use ferrets_bevy_plugin::{PendingInput, ReplayPlayback, ScenarioObjectives};
 use ferrets_content::{
@@ -35,6 +37,7 @@ use ferrets_simulation::{
         player_slot::{Participation, PlayerId},
     },
     simulation_id::SimulationId,
+    statistics::{PlayerTally, Statistics},
     supply,
 };
 
@@ -78,6 +81,10 @@ pub struct SelectionText;
 
 #[derive(Component)]
 pub struct GameOverText;
+
+/// Marks the per-player tallies shown beside the game-over banner.
+#[derive(Component)]
+pub struct FinalStatsText;
 
 #[derive(Component)]
 pub struct SpectatorText;
@@ -296,6 +303,26 @@ pub fn setup_hud(mut commands: Commands, registry: Res<ContentRegistry>) {
                 ..default()
             },
             TextColor(Color::srgb(1.0, 0.95, 0.7)),
+        )],
+    ));
+    // What each player did, under the banner and shown with it.
+    commands.spawn((
+        InGameUi,
+        Node {
+            position_type: PositionType::Absolute,
+            width: Val::Percent(100.0),
+            top: Val::Percent(50.0),
+            justify_content: JustifyContent::Center,
+            ..default()
+        },
+        children![(
+            FinalStatsText,
+            Text::new(""),
+            TextFont {
+                font_size: 15.0,
+                ..default()
+            },
+            TextColor(Color::srgb(0.85, 0.88, 0.9)),
         )],
     ));
     // The standing note that this node only watches: an observer from the
@@ -524,7 +551,7 @@ pub fn update_help(
     mut text: Query<&mut Text, With<HelpText>>,
 ) {
     let mut message = String::from(
-        "LMB select (Shift add, dbl-click all of type) | RMB move/harvest/attack | F/R/G/T/B/Q orders | X stance | 1-0 groups (Ctrl set)\nMinimap: LMB look (drag pans), RMB order | V reveal | P pause | -/= speed | . step | ] seek | F1 debug | F2 spawn | F3 layer",
+        "LMB select (Shift add, dbl-click all of type) | RMB move/harvest/attack | F/R/G/T/B/Q orders | X stance | 1-0 groups (Ctrl set)\nMinimap: LMB look (drag pans), RMB order | V reveal | P pause | -/= speed | . step | ] seek | M sound | F1 debug | F2 spawn | F3 layer",
     );
 
     if let Some(local) = session.local_player()
@@ -796,6 +823,93 @@ pub fn update_game_over(session: Res<GameSession>, mut text: Query<&mut Text, Wi
     if let Ok(mut text) = text.single_mut() {
         **text = message.to_string();
     }
+}
+
+/// Fills in what each seated player did, once the session has finished — every
+/// player's, not only the local one; free seats and environment combatants get
+/// no row. Empty while a game is still running.
+///
+/// The report is rebuilt only when it can have changed — the first frame after
+/// the result lands, and any frame the tallies still move (a defeated player
+/// spectating a game that plays on) — and written only when it differs.
+pub fn update_final_statistics(
+    session: Res<GameSession>,
+    statistics: Res<Statistics>,
+    mut text: Query<&mut Text, With<FinalStatsText>>,
+) {
+    let Ok(mut text) = text.single_mut() else {
+        return;
+    };
+    if session.result().is_none() {
+        if !text.is_empty() {
+            **text = String::new();
+        }
+        return;
+    }
+    if !text.is_empty() && !statistics.is_changed() {
+        return;
+    }
+
+    let local = session.local_player();
+    let lines: Vec<String> = session
+        .slots()
+        .iter()
+        .filter(|slot| matches!(slot.participation(), Some(Participation::Player)))
+        .map(|slot| {
+            let id = slot.id();
+            let tally = statistics.player(id);
+            let you = if Some(id) == local { " (you)" } else { "" };
+            // Per-type counts summed for the headline: the engine keeps the
+            // breakdown, and what it is worth is the game's business.
+            let produced: u32 = tally.produced_types().map(|(_, count)| count).sum();
+            let lost: u32 = tally.lost_types().map(|(_, count)| count).sum();
+            let killed: u32 = tally.killed_types().map(|(_, count)| count).sum();
+            format!(
+                "P{id}{you}: built {produced}, lost {lost}, killed {killed}, \
+                 damage {dealt}/{taken}, research {research}, skills {skills}\n\
+                 {spacer}{economy}",
+                dealt = tally.damage_dealt().to_num::<u32>(),
+                taken = tally.damage_taken().to_num::<u32>(),
+                research = tally.research_completed(),
+                skills = tally.skills_cast(),
+                spacer = " ".repeat(4),
+                economy = economy_line(tally),
+            )
+        })
+        .collect();
+    let report = lines.join("\n");
+    if **text != report {
+        **text = report;
+    }
+}
+
+/// One player's resource flow, by kind: what came in, what went out, and what
+/// came back. Kinds with no movement at all are left out.
+fn economy_line(tally: &PlayerTally) -> String {
+    let mut kinds: BTreeSet<&str> = BTreeSet::new();
+    kinds.extend(tally.gathered_kinds().map(|(kind, _)| kind));
+    kinds.extend(tally.spent_kinds().map(|(kind, _)| kind));
+    kinds.extend(tally.refunded_kinds().map(|(kind, _)| kind));
+    if kinds.is_empty() {
+        return "no economy".to_string();
+    }
+    kinds
+        .into_iter()
+        .map(|kind| {
+            let refunded = tally.refunded(kind);
+            let back = if refunded > 0 {
+                format!(" (back {refunded})")
+            } else {
+                String::new()
+            };
+            format!(
+                "{kind} +{gathered}/-{spent}{back}",
+                gathered = tally.gathered(kind),
+                spent = tally.spent(kind),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// The shared visual bundle for a command-card button labelled `label`, tinted

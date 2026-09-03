@@ -41,8 +41,8 @@ fn attack_kills_adjacent_target() {
     let mut app = utils::combat_app();
     let world = app.world_mut();
     let (attacker, attacker_id) =
-        spawn::spawn_entity(world, "soldier", utils::pos(5, 5), Some(0)).unwrap();
-    let (target, target_id) = spawn::spawn_entity(world, "dummy", utils::pos(6, 5), None).unwrap();
+        spawn::create_entity(world, "soldier", utils::pos(5, 5), Some(0)).unwrap();
+    let (target, target_id) = spawn::create_entity(world, "dummy", utils::pos(6, 5), None).unwrap();
 
     utils::select(&mut app, attacker_id);
     utils::push_command(
@@ -90,8 +90,9 @@ fn wide_attacker_stops_at_its_edge_reach() {
     // nearest footprint edge, so it stops a full body earlier than a
     // single-cell attacker with the same range stat would.
     let (ballista, ballista_id) =
-        spawn::spawn_entity(world, "ballista", utils::pos(2, 5), Some(0)).unwrap();
-    let (target, target_id) = spawn::spawn_entity(world, "dummy", utils::pos(10, 5), None).unwrap();
+        spawn::create_entity(world, "ballista", utils::pos(2, 5), Some(0)).unwrap();
+    let (target, target_id) =
+        spawn::create_entity(world, "dummy", utils::pos(10, 5), None).unwrap();
 
     utils::select(&mut app, ballista_id);
     utils::push_command(
@@ -120,8 +121,9 @@ fn wide_attacker_stops_at_its_edge_reach_continuous() {
     utils::install_map(&mut app, Projection::Isometric, MovementModel::Continuous);
     let world = app.world_mut();
     let (ballista, ballista_id) =
-        spawn::spawn_entity(world, "ballista", utils::pos(2, 5), Some(0)).unwrap();
-    let (target, target_id) = spawn::spawn_entity(world, "dummy", utils::pos(10, 5), None).unwrap();
+        spawn::create_entity(world, "ballista", utils::pos(2, 5), Some(0)).unwrap();
+    let (target, target_id) =
+        spawn::create_entity(world, "dummy", utils::pos(10, 5), None).unwrap();
 
     utils::select(&mut app, ballista_id);
     utils::push_command(
@@ -145,8 +147,9 @@ fn attack_chases_target_out_of_range() {
     let mut app = utils::combat_app();
     let world = app.world_mut();
     let (attacker, attacker_id) =
-        spawn::spawn_entity(world, "soldier", utils::pos(5, 5), Some(0)).unwrap();
-    let (target, target_id) = spawn::spawn_entity(world, "dummy", utils::pos(10, 5), None).unwrap();
+        spawn::create_entity(world, "soldier", utils::pos(5, 5), Some(0)).unwrap();
+    let (target, target_id) =
+        spawn::create_entity(world, "dummy", utils::pos(10, 5), None).unwrap();
 
     utils::select(&mut app, attacker_id);
     utils::push_command(
@@ -176,8 +179,8 @@ fn stop_cancels_attack() {
     let mut app = utils::combat_app();
     let world = app.world_mut();
     let (attacker, attacker_id) =
-        spawn::spawn_entity(world, "soldier", utils::pos(5, 5), Some(0)).unwrap();
-    let (target, target_id) = spawn::spawn_entity(world, "dummy", utils::pos(6, 5), None).unwrap();
+        spawn::create_entity(world, "soldier", utils::pos(5, 5), Some(0)).unwrap();
+    let (target, target_id) = spawn::create_entity(world, "dummy", utils::pos(6, 5), None).unwrap();
 
     utils::select(&mut app, attacker_id);
     utils::push_command(
@@ -243,8 +246,9 @@ fn send_to_entity_does_not_attack_ally() {
     app.world_mut().resource_mut::<GameSession>().start();
 
     let world = app.world_mut();
-    let (_, actor_id) = spawn::spawn_entity(world, "soldier", utils::pos(5, 5), Some(0)).unwrap();
-    let (ally, ally_id) = spawn::spawn_entity(world, "soldier", utils::pos(6, 5), Some(1)).unwrap();
+    let (_, actor_id) = spawn::create_entity(world, "soldier", utils::pos(5, 5), Some(0)).unwrap();
+    let (ally, ally_id) =
+        spawn::create_entity(world, "soldier", utils::pos(6, 5), Some(1)).unwrap();
 
     utils::select(&mut app, actor_id);
     utils::push_command(
@@ -271,7 +275,7 @@ fn attack_order_with_missing_target_finishes() {
     let mut app = utils::combat_app();
     let world = app.world_mut();
     let (attacker, attacker_id) =
-        spawn::spawn_entity(world, "soldier", utils::pos(5, 5), Some(0)).unwrap();
+        spawn::create_entity(world, "soldier", utils::pos(5, 5), Some(0)).unwrap();
 
     utils::select(&mut app, attacker_id);
     utils::push_command(
@@ -297,9 +301,9 @@ fn shortened_attack_cycle_still_lands_hits() {
     // clamp this attacker would never deal damage at all.
     let mut app = utils::combat_app();
     let (attacker, attacker_id) =
-        spawn::spawn_entity(app.world_mut(), "soldier", utils::pos(5, 5), Some(0)).unwrap();
+        spawn::create_entity(app.world_mut(), "soldier", utils::pos(5, 5), Some(0)).unwrap();
     let (target, target_id) =
-        spawn::spawn_entity(app.world_mut(), "dummy", utils::pos(6, 5), None).unwrap();
+        spawn::create_entity(app.world_mut(), "dummy", utils::pos(6, 5), None).unwrap();
 
     let hasty = utils::register_entity_buff(
         &mut app,
@@ -339,9 +343,9 @@ fn attack_gives_up_on_walled_in_target() {
     // and finish the order rather than walk forever.
     let mut app = utils::combat_app();
     let (_, attacker_id) =
-        spawn::spawn_entity(app.world_mut(), "soldier", utils::pos(5, 5), Some(0)).unwrap();
+        spawn::create_entity(app.world_mut(), "soldier", utils::pos(5, 5), Some(0)).unwrap();
     let (target, target_id) =
-        spawn::spawn_entity(app.world_mut(), "dummy", utils::pos(15, 15), None).unwrap();
+        spawn::create_entity(app.world_mut(), "dummy", utils::pos(15, 15), None).unwrap();
     for (x, y) in [
         (14, 14),
         (15, 14),
@@ -352,7 +356,7 @@ fn attack_gives_up_on_walled_in_target() {
         (15, 16),
         (16, 16),
     ] {
-        spawn::spawn_entity(app.world_mut(), "dummy", utils::pos(x, y), None)
+        spawn::create_entity(app.world_mut(), "dummy", utils::pos(x, y), None)
             .expect("wall segment must be placeable");
     }
 
@@ -393,8 +397,8 @@ fn turret_holds_fire_until_it_bears_on_target() {
     let world = app.world_mut();
     // Due north of the gun, which starts pointing south as anything freshly put
     // down does — half a circle to come round, at three degrees a tick.
-    let (gun, gun_id) = spawn::spawn_entity(world, "bastion", utils::pos(5, 8), Some(0)).unwrap();
-    let (target, target_id) = spawn::spawn_entity(world, "dummy", utils::pos(5, 3), None).unwrap();
+    let (gun, gun_id) = spawn::create_entity(world, "bastion", utils::pos(5, 8), Some(0)).unwrap();
+    let (target, target_id) = spawn::create_entity(world, "dummy", utils::pos(5, 3), None).unwrap();
     let square = app
         .world()
         .get::<LocationComponent>(gun)
@@ -441,8 +445,8 @@ fn turret_tracks_target_beyond_reach_without_walking() {
     let mut app = utils::combat_app();
     let world = app.world_mut();
     // Ten cells north: past the gun's reach of eight, inside the twelve it notices.
-    let (gun, gun_id) = spawn::spawn_entity(world, "bastion", utils::pos(5, 15), Some(0)).unwrap();
-    let (target, target_id) = spawn::spawn_entity(world, "dummy", utils::pos(5, 5), None).unwrap();
+    let (gun, gun_id) = spawn::create_entity(world, "bastion", utils::pos(5, 15), Some(0)).unwrap();
+    let (target, target_id) = spawn::create_entity(world, "dummy", utils::pos(5, 5), None).unwrap();
     let mounted = utils::bearing_of(app.world(), gun);
 
     utils::select(&mut app, gun_id);
@@ -484,8 +488,8 @@ fn walking_gun_keeps_hull_heading_while_it_aims() {
     let mut app = utils::combat_app();
     let world = app.world_mut();
     let (wagon, wagon_id) =
-        spawn::spawn_entity(world, "gun_wagon", utils::pos(5, 5), Some(0)).unwrap();
-    let (_, target_id) = spawn::spawn_entity(world, "dummy", utils::pos(9, 1), None).unwrap();
+        spawn::create_entity(world, "gun_wagon", utils::pos(5, 5), Some(0)).unwrap();
+    let (_, target_id) = spawn::create_entity(world, "dummy", utils::pos(9, 1), None).unwrap();
 
     // Drive east, which is what gives the hull its heading.
     utils::select(&mut app, wagon_id);
@@ -533,8 +537,8 @@ fn walking_gun_keeps_hull_heading_while_it_aims() {
 fn gun_keeps_its_bearing_after_its_fight_ends() {
     let mut app = utils::combat_app();
     let world = app.world_mut();
-    let (gun, gun_id) = spawn::spawn_entity(world, "bastion", utils::pos(5, 8), Some(0)).unwrap();
-    let (_, target_id) = spawn::spawn_entity(world, "dummy", utils::pos(5, 3), None).unwrap();
+    let (gun, gun_id) = spawn::create_entity(world, "bastion", utils::pos(5, 8), Some(0)).unwrap();
+    let (_, target_id) = spawn::create_entity(world, "dummy", utils::pos(5, 3), None).unwrap();
     let mounted = utils::bearing_of(app.world(), gun);
 
     utils::select(&mut app, gun_id);
@@ -581,8 +585,8 @@ fn body_mounted_weapon_turns_itself_and_fires_at_once() {
     let mut app = utils::combat_app();
     let world = app.world_mut();
     let (attacker, attacker_id) =
-        spawn::spawn_entity(world, "soldier", utils::pos(5, 5), Some(0)).unwrap();
-    let (target, target_id) = spawn::spawn_entity(world, "dummy", utils::pos(6, 5), None).unwrap();
+        spawn::create_entity(world, "soldier", utils::pos(5, 5), Some(0)).unwrap();
+    let (target, target_id) = spawn::create_entity(world, "dummy", utils::pos(6, 5), None).unwrap();
 
     utils::select(&mut app, attacker_id);
     utils::push_command(
@@ -621,10 +625,10 @@ fn rolling_gun_shoots_what_it_drives_past() {
     let mut app = utils::combat_app();
     let world = app.world_mut();
     let (wagon, wagon_id) =
-        spawn::spawn_entity(world, "rolling_gun", utils::pos(5, 10), Some(0)).unwrap();
+        spawn::create_entity(world, "rolling_gun", utils::pos(5, 10), Some(0)).unwrap();
     // Three cells north of the road: inside the weapon's reach of four, and never
     // on the way, so nothing about the walk is about the target.
-    let (target, _) = spawn::spawn_entity(world, "dummy", utils::pos(11, 7), Some(1)).unwrap();
+    let (target, _) = spawn::create_entity(world, "dummy", utils::pos(11, 7), Some(1)).unwrap();
 
     // A plain walk east along the road. Nothing here orders a fight.
     utils::select(&mut app, wagon_id);
@@ -670,10 +674,10 @@ fn rolling_gun_tracks_what_it_cannot_yet_reach() {
     let mut app = utils::combat_app();
     let world = app.world_mut();
     let (wagon, wagon_id) =
-        spawn::spawn_entity(world, "rolling_gun", utils::pos(5, 10), Some(0)).unwrap();
+        spawn::create_entity(world, "rolling_gun", utils::pos(5, 10), Some(0)).unwrap();
     // Six cells north of the road: inside the acquisition range of eight, outside
     // the weapon's reach of four for the whole drive.
-    let (target, _) = spawn::spawn_entity(world, "dummy", utils::pos(11, 4), Some(1)).unwrap();
+    let (target, _) = spawn::create_entity(world, "dummy", utils::pos(11, 4), Some(1)).unwrap();
 
     utils::select(&mut app, wagon_id);
     utils::push_command(
@@ -706,8 +710,8 @@ fn rolling_gun_holds_fire_until_it_bears_on_target() {
     let mut app = utils::combat_app();
     let world = app.world_mut();
     let (wagon, wagon_id) =
-        spawn::spawn_entity(world, "rolling_gun", utils::pos(5, 10), Some(0)).unwrap();
-    let (target, _) = spawn::spawn_entity(world, "dummy", utils::pos(11, 7), Some(1)).unwrap();
+        spawn::create_entity(world, "rolling_gun", utils::pos(5, 10), Some(0)).unwrap();
+    let (target, _) = spawn::create_entity(world, "dummy", utils::pos(11, 7), Some(1)).unwrap();
     // Left pointing down the road it is not driving: the gun has to come round
     // most of a half turn before the target is inside its sixty-degree arc, and
     // it comes into reach long before it comes to bear.
@@ -745,8 +749,8 @@ fn hull_keeps_its_heading_while_gun_fights() {
     let mut app = utils::combat_app();
     let world = app.world_mut();
     let (wagon, wagon_id) =
-        spawn::spawn_entity(world, "rolling_gun", utils::pos(5, 10), Some(0)).unwrap();
-    spawn::spawn_entity(world, "dummy", utils::pos(11, 7), Some(1)).unwrap();
+        spawn::create_entity(world, "rolling_gun", utils::pos(5, 10), Some(0)).unwrap();
+    spawn::create_entity(world, "dummy", utils::pos(11, 7), Some(1)).unwrap();
 
     utils::select(&mut app, wagon_id);
     utils::push_command(
@@ -782,10 +786,10 @@ fn ordered_gun_works_target_while_it_closes() {
     let mut app = utils::combat_app();
     let world = app.world_mut();
     let (wagon, wagon_id) =
-        spawn::spawn_entity(world, "rolling_gun", utils::pos(5, 10), Some(0)).unwrap();
+        spawn::create_entity(world, "rolling_gun", utils::pos(5, 10), Some(0)).unwrap();
     // Eight cells east: twice the weapon's reach, so the order must walk for it.
     let (target, target_id) =
-        spawn::spawn_entity(world, "dummy", utils::pos(13, 10), Some(1)).unwrap();
+        spawn::create_entity(world, "dummy", utils::pos(13, 10), Some(1)).unwrap();
 
     utils::select(&mut app, wagon_id);
     utils::push_command(
@@ -826,13 +830,13 @@ fn ordered_gun_keeps_to_target_it_was_given() {
     let mut app = utils::combat_app();
     let world = app.world_mut();
     let (_, wagon_id) =
-        spawn::spawn_entity(world, "rolling_gun", utils::pos(5, 10), Some(0)).unwrap();
+        spawn::create_entity(world, "rolling_gun", utils::pos(5, 10), Some(0)).unwrap();
     // Eight cells east: what the order named, and inside the range this gun engages
     // at, so it is the gun's fight for the whole drive.
     let (target, target_id) =
-        spawn::spawn_entity(world, "dummy", utils::pos(13, 10), Some(1)).unwrap();
+        spawn::create_entity(world, "dummy", utils::pos(13, 10), Some(1)).unwrap();
     // And one it drives right past, two cells off the road and well inside reach.
-    let (bystander, _) = spawn::spawn_entity(world, "dummy", utils::pos(9, 8), Some(1)).unwrap();
+    let (bystander, _) = spawn::create_entity(world, "dummy", utils::pos(9, 8), Some(1)).unwrap();
 
     utils::select(&mut app, wagon_id);
     utils::push_command(
@@ -863,9 +867,9 @@ fn held_fire_works_target_it_was_ordered_onto() {
     let mut app = utils::combat_app();
     let world = app.world_mut();
     let (_, wagon_id) =
-        spawn::spawn_entity(world, "rolling_gun", utils::pos(5, 10), Some(0)).unwrap();
+        spawn::create_entity(world, "rolling_gun", utils::pos(5, 10), Some(0)).unwrap();
     let (target, target_id) =
-        spawn::spawn_entity(world, "dummy", utils::pos(5, 8), Some(1)).unwrap();
+        spawn::create_entity(world, "dummy", utils::pos(5, 8), Some(1)).unwrap();
 
     utils::select(&mut app, wagon_id);
     utils::push_command(
@@ -896,9 +900,9 @@ fn ground_attack_takes_gun_back_from_its_last_target() {
     // A shell thrown at where it aims rather than at what it aims at: the one kind
     // of weapon an order may point at a place.
     let (_, mortar_id) =
-        spawn::spawn_entity(world, "rolling_mortar", utils::pos(5, 10), Some(0)).unwrap();
-    let (held, held_id) = spawn::spawn_entity(world, "dummy", utils::pos(5, 8), Some(1)).unwrap();
-    let (shelled, _) = spawn::spawn_entity(world, "dummy", utils::pos(9, 10), Some(1)).unwrap();
+        spawn::create_entity(world, "rolling_mortar", utils::pos(5, 10), Some(0)).unwrap();
+    let (held, held_id) = spawn::create_entity(world, "dummy", utils::pos(5, 8), Some(1)).unwrap();
+    let (shelled, _) = spawn::create_entity(world, "dummy", utils::pos(9, 10), Some(1)).unwrap();
 
     utils::select(&mut app, mortar_id);
     utils::push_command(
@@ -946,8 +950,8 @@ fn halting_gun_drives_past_without_shooting() {
     let mut app = utils::combat_app();
     let world = app.world_mut();
     let (_, wagon_id) =
-        spawn::spawn_entity(world, "gun_wagon", utils::pos(5, 10), Some(0)).unwrap();
-    let (target, _) = spawn::spawn_entity(world, "dummy", utils::pos(11, 7), Some(1)).unwrap();
+        spawn::create_entity(world, "gun_wagon", utils::pos(5, 10), Some(0)).unwrap();
+    let (target, _) = spawn::create_entity(world, "dummy", utils::pos(11, 7), Some(1)).unwrap();
 
     utils::select(&mut app, wagon_id);
     utils::push_command(
@@ -973,9 +977,9 @@ fn halting_gun_fires_where_it_stands() {
     let mut app = utils::combat_app();
     let world = app.world_mut();
     let (_, wagon_id) =
-        spawn::spawn_entity(world, "gun_wagon", utils::pos(5, 10), Some(0)).unwrap();
+        spawn::create_entity(world, "gun_wagon", utils::pos(5, 10), Some(0)).unwrap();
     let (target, target_id) =
-        spawn::spawn_entity(world, "dummy", utils::pos(8, 10), Some(1)).unwrap();
+        spawn::create_entity(world, "dummy", utils::pos(8, 10), Some(1)).unwrap();
 
     utils::select(&mut app, wagon_id);
     utils::push_command(
@@ -1003,9 +1007,9 @@ fn ordered_attack_fires_one_cycle_only() {
     let mut app = utils::combat_app();
     let world = app.world_mut();
     let (_, wagon_id) =
-        spawn::spawn_entity(world, "rolling_gun", utils::pos(5, 5), Some(0)).unwrap();
+        spawn::create_entity(world, "rolling_gun", utils::pos(5, 5), Some(0)).unwrap();
     let (target, target_id) =
-        spawn::spawn_entity(world, "dummy", utils::pos(5, 3), Some(1)).unwrap();
+        spawn::create_entity(world, "dummy", utils::pos(5, 3), Some(1)).unwrap();
 
     // Ordered onto a target its own initiative would have taken anyway, so both
     // paths want this fight and only one may have it.
@@ -1028,8 +1032,8 @@ fn held_fire_rolls_past_without_shooting() {
     let mut app = utils::combat_app();
     let world = app.world_mut();
     let (_, wagon_id) =
-        spawn::spawn_entity(world, "rolling_gun", utils::pos(5, 10), Some(0)).unwrap();
-    let (target, _) = spawn::spawn_entity(world, "dummy", utils::pos(11, 7), Some(1)).unwrap();
+        spawn::create_entity(world, "rolling_gun", utils::pos(5, 10), Some(0)).unwrap();
+    let (target, _) = spawn::create_entity(world, "dummy", utils::pos(11, 7), Some(1)).unwrap();
 
     utils::select(&mut app, wagon_id);
     utils::push_command(
@@ -1060,10 +1064,11 @@ fn held_fire_rolls_past_without_shooting() {
 fn idle_gun_hunts_what_it_cannot_reach_without_walking() {
     let mut app = utils::combat_app();
     let world = app.world_mut();
-    let (wagon, _) = spawn::spawn_entity(world, "rolling_gun", utils::pos(5, 10), Some(0)).unwrap();
+    let (wagon, _) =
+        spawn::create_entity(world, "rolling_gun", utils::pos(5, 10), Some(0)).unwrap();
     // Six cells north: inside the range it engages at, outside the reach it fires
     // at, and nothing has ordered it anywhere.
-    let (target, _) = spawn::spawn_entity(world, "dummy", utils::pos(5, 4), Some(1)).unwrap();
+    let (target, _) = spawn::create_entity(world, "dummy", utils::pos(5, 4), Some(1)).unwrap();
 
     utils::run_ticks(&mut app, 16);
 
@@ -1086,8 +1091,8 @@ fn held_fire_keeps_idle_guns_still() {
     let mut app = utils::combat_app();
     let world = app.world_mut();
     let (wagon, wagon_id) =
-        spawn::spawn_entity(world, "rolling_gun", utils::pos(5, 10), Some(0)).unwrap();
-    let (target, _) = spawn::spawn_entity(world, "dummy", utils::pos(5, 7), Some(1)).unwrap();
+        spawn::create_entity(world, "rolling_gun", utils::pos(5, 10), Some(0)).unwrap();
+    let (target, _) = spawn::create_entity(world, "dummy", utils::pos(5, 7), Some(1)).unwrap();
 
     utils::select(&mut app, wagon_id);
     utils::push_command(

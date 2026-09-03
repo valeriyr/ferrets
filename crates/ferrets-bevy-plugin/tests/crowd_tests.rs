@@ -27,8 +27,8 @@ fn head_on_movers_swap_in_corridor() {
             map.set_static_occupied(utils::GROUND, CellPos::new(x, 6), true);
         }
     }
-    let (left, left_id) = utils::spawn_owned(&mut app, "soldier", 2, 5, 0);
-    let (right, right_id) = utils::spawn_owned(&mut app, "soldier", 6, 5, 0);
+    let (left, left_id) = utils::create_owned(&mut app, "soldier", 2, 5, 0);
+    let (right, right_id) = utils::create_owned(&mut app, "soldier", 6, 5, 0);
 
     utils::select(&mut app, left_id);
     utils::push_command(
@@ -58,7 +58,7 @@ fn wide_walk_reaches_goal_and_reclaims_footprint() {
     let mut app = utils::orders_app();
     // A cell-model wide walk end to end: claims are law here, so the wagon
     // must carry its whole 2x2 claim along the route and settle it exactly.
-    let (wagon, id) = utils::spawn_owned(&mut app, "wagon", 2, 2, 0);
+    let (wagon, id) = utils::create_owned(&mut app, "wagon", 2, 2, 0);
 
     utils::select(&mut app, id);
     utils::push_command(
@@ -103,7 +103,7 @@ fn head_on_unequal_sizes_never_swap() {
             map.set_static_occupied(utils::GROUND, CellPos::new(x, 7), true);
         }
     }
-    let (wagon, wagon_id) = utils::spawn_owned(&mut app, "wagon", 2, 5, 0);
+    let (wagon, wagon_id) = utils::create_owned(&mut app, "wagon", 2, 5, 0);
 
     utils::select(&mut app, wagon_id);
     utils::push_command(
@@ -117,7 +117,7 @@ fn head_on_unequal_sizes_never_swap() {
     // the meeting arises mid-walk, where the crowd ladder runs. An equal
     // body would resolve it by the swap rung; the unequal pair must not.
     utils::run_ticks(&mut app, utils::APPLY + 2);
-    let (soldier, _) = utils::spawn_owned(&mut app, "soldier", 8, 5, 0);
+    let (soldier, _) = utils::create_owned(&mut app, "soldier", 8, 5, 0);
 
     utils::run_ticks(&mut app, 400);
 
@@ -136,7 +136,7 @@ fn head_on_unequal_sizes_never_swap() {
 #[test]
 fn idle_ally_steps_aside() {
     let mut app = utils::orders_app();
-    let (mover, mover_id) = utils::spawn_owned(&mut app, "soldier", 2, 5, 0);
+    let (mover, mover_id) = utils::create_owned(&mut app, "soldier", 2, 5, 0);
 
     utils::select(&mut app, mover_id);
     utils::push_command(
@@ -148,7 +148,7 @@ fn idle_ally_steps_aside() {
     );
     // Let the walk plan its straight line, then park an ally on it.
     utils::run_ticks(&mut app, utils::APPLY + 2);
-    let (bystander, _) = utils::spawn_owned(&mut app, "soldier", 6, 5, 0);
+    let (bystander, _) = utils::create_owned(&mut app, "soldier", 6, 5, 0);
 
     utils::run_ticks(&mut app, 80);
 
@@ -169,7 +169,7 @@ fn crowd_ordered_to_one_point_settles() {
 
     let soldiers: Vec<_> = starts
         .iter()
-        .map(|&(x, y)| utils::spawn_owned(&mut app, "soldier", x, y, 0))
+        .map(|&(x, y)| utils::create_owned(&mut app, "soldier", x, y, 0))
         .collect();
     for (_, id) in &soldiers {
         utils::select(&mut app, *id);
@@ -223,9 +223,9 @@ fn fanned_group_move_shares_one_corridor() {
     );
 
     let soldiers = [
-        utils::spawn_owned(&mut app, "soldier", 2, 2, 0),
-        utils::spawn_owned(&mut app, "soldier", 4, 2, 0),
-        utils::spawn_owned(&mut app, "soldier", 3, 4, 0),
+        utils::create_owned(&mut app, "soldier", 2, 2, 0),
+        utils::create_owned(&mut app, "soldier", 4, 2, 0),
+        utils::create_owned(&mut app, "soldier", 3, 4, 0),
     ];
     for (index, (_, id)) in soldiers.iter().enumerate() {
         utils::push_command(

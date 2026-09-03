@@ -34,6 +34,15 @@ impl EntityIndex {
         self.alive.get(&id).copied()
     }
 
+    /// Returns the entity with the given id whatever stage it is at, or `None`
+    /// once it is gone.
+    ///
+    /// A tick can name something that is already dying, and remains begin their
+    /// life that way.
+    pub fn any(&self, id: SimulationId) -> Option<Entity> {
+        self.alive.get(&id).or_else(|| self.dying.get(&id)).copied()
+    }
+
     /// Returns the alive, on-map entity with the given id — `None` if it is
     /// dying, hidden, or gone.
     pub fn interactable(&self, world: &World, id: SimulationId) -> Option<Entity> {

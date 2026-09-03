@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use bevy::{ecs::system::RunSystemOnce, prelude::*};
+use bevy::{app::FixedMain, ecs::system::RunSystemOnce, prelude::*};
 use ferrets_bevy_plugin::{PendingInput, SimulationPlugin};
 use ferrets_content::registry::ContentRegistry;
 use ferrets_demo::{content::CONTENT, minimap, render, scenario, view};
@@ -130,7 +130,10 @@ pub fn run_ticks(app: &mut App, ticks: u32) {
                     .push_frame(PlayerFrame::idle(player, current_tick));
             }
         }
-        world.run_schedule(FixedUpdate);
+        // The whole fixed step, not just `FixedUpdate`: the closing phases are
+        // where a completed tick is recorded, tallied and retired, and a suite
+        // that skipped them would not exercise anything hung there.
+        world.run_schedule(FixedMain);
     }
 }
 

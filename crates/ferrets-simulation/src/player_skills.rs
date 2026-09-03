@@ -9,7 +9,10 @@ use std::collections::BTreeMap;
 
 use bevy_ecs::prelude::*;
 
-use crate::session::player_slot::PlayerId;
+use crate::{
+    events::{EventRecord, SimulationEvent},
+    session::player_slot::PlayerId,
+};
 use ferrets_content::skills::SkillId;
 
 /// Skill cooldowns for all players in the session, indexed by [`PlayerId`].
@@ -56,4 +59,17 @@ impl PlayerSkills {
             });
         }
     }
+}
+
+/// Puts `skill` on cooldown for `player` and announces the cast.
+///
+/// The announcing counterpart to [`PlayerSkills::start_cooldown`], which starts
+/// the timer and says nothing.
+pub fn cast(world: &mut World, player: PlayerId, skill: SkillId, cooldown: u32) {
+    world
+        .resource_mut::<PlayerSkills>()
+        .start_cooldown(player, skill, cooldown);
+    world
+        .resource_mut::<EventRecord>()
+        .emit(SimulationEvent::PlayerSkillCast { player, skill });
 }

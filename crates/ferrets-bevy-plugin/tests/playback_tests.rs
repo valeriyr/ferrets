@@ -481,7 +481,7 @@ fn lone_base_app() -> App {
         .set_finish_policy(FinishPolicy::LastStanding {
             elimination: EliminationScope::Player,
         });
-    utils::spawn_owned(&mut app, "base", 5, 5, 0);
+    utils::create_owned(&mut app, "base", 5, 5, 0);
     app.world_mut().resource_mut::<GameSession>().start();
     app
 }

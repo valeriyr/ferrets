@@ -10,10 +10,11 @@ use crate::{
         research::ResearchComponent,
     },
     entity_def,
+    events::SpendCause,
     game_loop::stats,
     order::Order,
-    player_research::PlayerResearch,
-    resources::PlayerResources,
+    player_research::{self, PlayerResearch},
+    resources,
 };
 use ferrets_content::registry::ContentRegistry;
 
@@ -70,9 +71,14 @@ pub fn cancel_processing(
                     .expect("research orders carry a registry-minted id")
                     .cost
                     .clone();
-                world
-                    .resource_mut::<PlayerResources>()
-                    .refund(player, &cost);
+                resources::refund(
+                    world,
+                    player,
+                    cost,
+                    SpendCause::Research {
+                        research: *research,
+                    },
+                );
             }
 
             world.entity_mut(entity).remove::<ResearchComponent>();
@@ -116,9 +122,7 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> OrderState 
         .resource::<PlayerResearch>()
         .is_completed(player, research)
     {
-        world
-            .resource_mut::<PlayerResources>()
-            .refund(player, &cost);
+        resources::refund(world, player, cost, SpendCause::Research { research });
         return OrderState::Finished;
     }
 
@@ -128,9 +132,8 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> OrderState 
         return OrderState::InProcessing;
     }
 
-    world
-        .resource_mut::<PlayerResearch>()
-        .complete(player, research);
+    let researcher = Some(entity_def::simulation_id(world, entity));
+    player_research::complete(world, player, research, researcher);
     if let Some(buff) = buff {
         stats::apply_player_buff(world, player, buff);
     }

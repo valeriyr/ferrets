@@ -299,7 +299,7 @@ const EAST: Vec2 = Vec2::X;
 /// A drawn peasant at `x` on row 20, carrying the render components a drawn
 /// entity has.
 fn spawn_worker(app: &mut App, x: &str) -> Entity {
-    let (worker, _) = spawn::spawn_entity(
+    let (worker, _) = spawn::create_entity(
         app.world_mut(),
         "peasant",
         utils::part_way(x, "20"),
@@ -407,7 +407,7 @@ fn nose_of(rotation: Quat) -> Vec2 {
 /// Spawns `type_name` at a cell, with its sprite attached.
 fn spawn_at(app: &mut App, type_name: &str, x: u32, y: u32) -> Entity {
     let (entity, _) =
-        spawn::spawn_entity(app.world_mut(), type_name, utils::at_cell(x, y), Some(0))
+        spawn::create_entity(app.world_mut(), type_name, utils::at_cell(x, y), Some(0))
             .unwrap_or_else(|| panic!("{type_name} spawns"));
     app.world_mut()
         .run_system_once(render::attach_sprites)

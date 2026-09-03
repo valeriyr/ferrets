@@ -5,6 +5,7 @@ use bevy::prelude::*;
 use ferrets_simulation::{
     control_groups::ControlGroups,
     entity_index::EntityIndex,
+    events::EventRecord,
     game_loop::movement::MovePlanShare,
     impacts::PendingImpacts,
     input::{InputFrames, PlayerFrame, SYNC_LATENCY},
@@ -16,6 +17,7 @@ use ferrets_simulation::{
     selection::Selection,
     session::{GameSession, player_slot::PlayerSlot},
     simulation_id::SimulationIdGenerator,
+    statistics::Statistics,
 };
 
 use crate::input::PendingInput;
@@ -35,10 +37,12 @@ pub(crate) fn install_per_game(world: &mut World) {
     world.insert_resource(PlayerSkills::new(player_count));
     world.insert_resource(PlayerBuffs::new(player_count));
     world.insert_resource(PlayerResearch::new(player_count));
+    world.insert_resource(Statistics::new(player_count));
     world.insert_resource(frames);
     world.insert_resource(EntityIndex::default());
     world.insert_resource(SimulationIdGenerator::default());
     world.insert_resource(PendingImpacts::default());
+    world.insert_resource(EventRecord::default());
     world.insert_resource(PendingInput::default());
     world.insert_resource(MovePlanShare::default());
 }
@@ -57,9 +61,12 @@ pub(crate) fn remove_per_game(world: &mut World) {
     for entity in entities {
         world.despawn(entity);
     }
-    world.insert_resource(EntityIndex::default());
-    world.insert_resource(SimulationIdGenerator::default());
+    // The pending session has no slots, so re-installing sizes every per-player
+    // store to nothing and resets the rest. Done by reusing the installer rather
+    // than by listing the stores again: the two lists had already drifted once,
+    // leaving a finished game's tallies and stockpiles standing between games.
     world.insert_resource(GameSession::pending());
+    install_per_game(world);
 }
 
 /// Builds the input queue with the lockstep warmup pre-seeded: ticks

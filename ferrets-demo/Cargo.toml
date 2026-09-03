@@ -16,7 +16,7 @@ name = "replay"
 path = "src/bin/replay.rs"
 
 [dependencies]
-bevy = { workspace = true, features = ["2d", "ui", "default_font"] }
+bevy = { workspace = true, features = ["2d", "ui", "default_font", "bevy_audio"] }
 rfd = "0.17"
 
 ferrets-bevy-plugin.workspace = true

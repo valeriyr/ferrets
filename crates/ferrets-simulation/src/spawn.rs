@@ -35,6 +35,7 @@ use crate::{
     control_groups::ControlGroups,
     entity_def,
     entity_index::EntityIndex,
+    events::{DeathCause, EventRecord, SimulationEvent, SpawnCause},
     game_loop::movement::is_mid_crossing,
     map::{Map, OccupancyClass},
     movement_model::MovementModel,
@@ -47,15 +48,17 @@ use crate::{
 /// resting facing toward the viewer.
 pub(crate) const DEFAULT_FACING: Facing = Facing::SOUTH;
 
-/// Spawns an entity of the given type at `position`, owned by `owner`
-/// (`None` spawns a neutral entity).
+/// Creates an entity of the given type at `position`, owned by `owner`
+/// (`None` creates a neutral entity), announcing nothing.
 ///
 /// `position` must lie exactly on a cell's origin corner — a fresh entity is
 /// at rest, and rest positions are lattice points.
 ///
+/// [`spawn_entity`] is the announcing counterpart.
+///
 /// Returns `(entity, simulation_id)`, or `None` if `type_name` is not registered
 /// or the position is blocked on the nav grid.
-pub fn spawn_entity(
+pub fn create_entity(
     world: &mut World,
     type_name: &str,
     position: FixedUVec2,
@@ -119,6 +122,24 @@ pub fn spawn_entity(
     Some((entity, id))
 }
 
+/// Creates an entity of the given type and announces the spawn.
+///
+/// The announcing counterpart to [`create_entity`]. `cause` travels on the
+/// announcement, where a tally can tell a trained unit from a placed one.
+pub fn spawn_entity(
+    world: &mut World,
+    type_name: &str,
+    position: FixedUVec2,
+    owner: Option<PlayerId>,
+    cause: SpawnCause,
+) -> Option<(Entity, SimulationId)> {
+    let (entity, id) = create_entity(world, type_name, position, owner)?;
+    world
+        .resource_mut::<EventRecord>()
+        .emit(SimulationEvent::EntitySpawned { entity: id, cause });
+    Some((entity, id))
+}
+
 /// Spawns an entity of the given type as remains, directly in the dying state,
 /// at `position`.
 ///
@@ -140,10 +161,11 @@ pub fn spawn_entity(
 ///
 /// `position` must lie exactly on a cell's origin corner, like every rest
 /// position.
-pub fn spawn_corpse_entity(
+pub(crate) fn spawn_corpse_entity(
     world: &mut World,
     type_name: &str,
     position: FixedUVec2,
+    of: SimulationId,
 ) -> Option<(Entity, SimulationId)> {
     debug_assert!(
         !is_mid_crossing(position),
@@ -190,6 +212,12 @@ pub fn spawn_corpse_entity(
     let entity = entity_mut.id();
 
     world.resource_mut::<EntityIndex>().insert_dying(id, entity);
+    world
+        .resource_mut::<EventRecord>()
+        .emit(SimulationEvent::EntitySpawned {
+            entity: id,
+            cause: SpawnCause::Remains { of },
+        });
 
     Some((entity, id))
 }
@@ -206,6 +234,11 @@ pub(crate) fn hide_entity(world: &mut World, entity: Entity) {
     // again would clear whatever moved onto them while it was away — and the marker
     // below carries nothing, so setting it twice costs nothing either.
     if !world.entity(entity).contains::<HiddenComponent>() {
+        let announced = SimulationEvent::EntityHidden {
+            entity: entity_def::simulation_id(world, entity),
+        };
+        world.resource_mut::<EventRecord>().emit(announced);
+
         let location = *world
             .entity(entity)
             .get::<LocationComponent>()
@@ -285,7 +318,9 @@ pub(crate) fn reveal_entity_near_or_retry(
     });
 }
 
-/// Puts a hidden entity back on the map at `cell`.
+/// Puts a hidden entity back on the map at `cell`, announcing the return.
+///
+/// The one point every reveal path ends at.
 fn place_hidden_at(world: &mut World, entity: Entity, cell: CellPos, location_def: &LocationDef) {
     let class = OccupancyClass::of(entity_def::of(world, entity));
     let mut entity_mut = world.entity_mut(entity);
@@ -301,6 +336,11 @@ fn place_hidden_at(world: &mut World, entity: Entity, cell: CellPos, location_de
     world
         .resource_mut::<Map>()
         .place_entity(&location, location_def, class);
+
+    let announced = SimulationEvent::EntityRevealed {
+        entity: entity_def::simulation_id(world, entity),
+    };
+    world.resource_mut::<EventRecord>().emit(announced);
 }
 
 /// Starts the dying phase for an alive entity.
@@ -311,6 +351,9 @@ fn place_hidden_at(world: &mut World, entity: Entity, cell: CellPos, location_de
 /// footprint on the nav grid under the cell model, while the continuous
 /// rebuild stops counting its body — until the `Die` order completes and
 /// frees it.
+///
+/// Announces nothing; [`despawn_entity`] is the announcing counterpart, as
+/// [`spawn_entity`] is to [`create_entity`].
 ///
 /// No-op if the entity is already dying or has died.
 pub fn destroy_entity(world: &mut World, entity: Entity) {
@@ -373,6 +416,35 @@ pub fn destroy_entity(world: &mut World, entity: Entity) {
     world.resource_mut::<EntityIndex>().mark_dying(id);
 }
 
+/// Starts the dying phase for an alive entity and announces the death.
+///
+/// The announcing counterpart to [`destroy_entity`]. Announced *before* the
+/// teardown runs, while the entity still carries what the announcement reports;
+/// anything aboard dies during that teardown, so the holder's death precedes its
+/// passengers' in the record.
+///
+/// No-op if the entity is already dying or has died, so a death is never
+/// announced twice.
+pub fn despawn_entity(world: &mut World, entity: Entity, cause: DeathCause) {
+    {
+        let entity_ref = world.entity(entity);
+        if entity_ref.contains::<DyingComponent>() || entity_ref.contains::<DiedComponent>() {
+            return;
+        }
+    }
+
+    let announced = SimulationEvent::EntityDied {
+        entity: entity_def::simulation_id(world, entity),
+        entity_type: entity_def::type_id(world, entity),
+        owner: entity_def::owner(world, entity),
+        position: entity_def::position(world, entity),
+        cause,
+    };
+    world.resource_mut::<EventRecord>().emit(announced);
+
+    destroy_entity(world, entity);
+}
+
 /// Applies a dying transporter's declared passenger fate to everyone aboard.
 ///
 /// Ejection is one placement attempt per passenger, in id order so earlier ids
@@ -396,6 +468,7 @@ fn settle_passengers(world: &mut World, entity: Entity) {
         .passenger_fate();
     let (around, around_size) = entity_def::footprint(world, entity);
     let around = CellPos::from(around);
+    let holder = entity_def::simulation_id(world, entity);
 
     for id in passengers {
         let Some(passenger) = world.resource::<EntityIndex>().alive(id) else {
@@ -405,10 +478,12 @@ fn settle_passengers(world: &mut World, entity: Entity) {
             .entity_mut(passenger)
             .remove::<(BoardedComponent, GarrisonFireComponent)>();
         match fate {
-            PassengerFate::Destroy => destroy_entity(world, passenger),
+            PassengerFate::Destroy => {
+                despawn_entity(world, passenger, DeathCause::PassengerLost { holder })
+            }
             PassengerFate::Eject => {
                 if !reveal_entity_near(world, passenger, around, around_size) {
-                    destroy_entity(world, passenger);
+                    despawn_entity(world, passenger, DeathCause::PassengerLost { holder });
                 }
             }
         }

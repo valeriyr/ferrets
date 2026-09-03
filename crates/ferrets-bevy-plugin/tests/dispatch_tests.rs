@@ -31,9 +31,9 @@ fn send_to_entity_attacks_hostiles() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
     let (_, attacker_id) =
-        spawn::spawn_entity(world, "soldier", utils::pos(5, 5), Some(0)).unwrap();
+        spawn::create_entity(world, "soldier", utils::pos(5, 5), Some(0)).unwrap();
     let (enemy, enemy_id) =
-        spawn::spawn_entity(world, "soldier", utils::pos(7, 5), Some(1)).unwrap();
+        spawn::create_entity(world, "soldier", utils::pos(7, 5), Some(1)).unwrap();
 
     utils::select(&mut app, attacker_id);
     utils::push_command(
@@ -54,8 +54,8 @@ fn send_to_entity_falls_through_to_follow_for_uncarryable_kinds() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
     let (worker, worker_id) =
-        spawn::spawn_entity(world, "worker", utils::pos(5, 5), Some(0)).unwrap();
-    let (tree, tree_id) = spawn::spawn_entity(world, "tree", utils::pos(10, 5), None).unwrap();
+        spawn::create_entity(world, "worker", utils::pos(5, 5), Some(0)).unwrap();
+    let (tree, tree_id) = spawn::create_entity(world, "tree", utils::pos(10, 5), None).unwrap();
     world
         .get_mut::<ResourceSourceComponent>(tree)
         .unwrap()
@@ -93,8 +93,8 @@ fn send_to_entity_falls_through_to_follow_for_uncarryable_kinds() {
 #[test]
 fn send_to_entity_resolves_repair_for_damaged_friendly() {
     let mut app = repair_dispatch_app();
-    let (warehouse, warehouse_id) = utils::spawn_owned(&mut app, "warehouse", 10, 10, 0);
-    let (_, handyman_id) = utils::spawn_owned(&mut app, "handyman", 9, 10, 0);
+    let (warehouse, warehouse_id) = utils::create_owned(&mut app, "warehouse", 10, 10, 0);
+    let (_, handyman_id) = utils::create_owned(&mut app, "handyman", 9, 10, 0);
     utils::wound(&mut app, warehouse, "20");
 
     utils::select(&mut app, handyman_id);
@@ -119,8 +119,8 @@ fn send_to_entity_resolves_repair_for_damaged_friendly() {
 #[test]
 fn loaded_carrier_sent_to_damaged_storage_still_delivers() {
     let mut app = repair_dispatch_app();
-    let (warehouse, warehouse_id) = utils::spawn_owned(&mut app, "warehouse", 10, 10, 0);
-    let (handyman, handyman_id) = utils::spawn_owned(&mut app, "handyman", 9, 10, 0);
+    let (warehouse, warehouse_id) = utils::create_owned(&mut app, "warehouse", 10, 10, 0);
+    let (handyman, handyman_id) = utils::create_owned(&mut app, "handyman", 9, 10, 0);
     utils::wound(&mut app, warehouse, "20");
     // A full load, as if the handyman had just walked out of a mine.
     {

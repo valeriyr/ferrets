@@ -6,7 +6,8 @@
 
 use bevy::prelude::*;
 use ferrets_bevy_plugin::{
-    NetworkPlugin, NominalTimestep, ReplayPlayback, ReplayPlugin, SimulationPlugin, ai::AiPlugin,
+    GameSet, NetworkPlugin, NominalTimestep, ReplayPlayback, ReplayPlugin, SimulationPlugin,
+    ai::AiPlugin,
 };
 use ferrets_simulation::session::GameSession;
 
@@ -15,8 +16,8 @@ use crate::states::GameState;
 pub mod ai;
 mod camera;
 pub mod content;
-mod debug;
-mod hud;
+pub mod debug;
+pub mod hud;
 pub mod input;
 pub mod lobby;
 pub mod map;
@@ -29,6 +30,7 @@ pub mod scenario;
 pub mod settings;
 pub mod setup;
 pub mod skirmish;
+pub mod sound;
 mod states;
 pub mod time;
 pub mod view;
@@ -52,6 +54,7 @@ pub fn run() {
         .add_plugins(NetworkPlugin)
         .add_plugins(ReplayPlugin)
         .add_plugins(AiPlugin)
+        .add_plugins(sound::SoundPlugin)
         .init_state::<GameState>()
         .insert_resource(fixed_clock)
         .insert_resource(nominal)
@@ -72,6 +75,7 @@ pub fn run() {
         .init_resource::<render::Smoothing>()
         .init_resource::<minimap::Looking>()
         .init_resource::<render::SkillPulses>()
+        .init_resource::<render::Puffs>()
         .init_resource::<debug::DebugState>()
         // Camera and content exist for every screen; the game scene is set up on
         // entering InGame once the lobby has configured the session.
@@ -122,7 +126,7 @@ pub fn run() {
                 setup::spawn_demo_scene.run_if(not(resource_exists::<scenario::CurrentScenario>)),
                 scenario::spawn_scenario_scene.run_if(resource_exists::<scenario::CurrentScenario>),
                 render::spawn_terrain_tiles,
-                render::reset_watching,
+                render::reset_per_game,
                 minimap::spawn_minimap,
                 camera::frame_local_player,
                 replay::start_recording,
@@ -131,7 +135,11 @@ pub fn run() {
         )
         .add_systems(
             OnExit(GameState::InGame),
-            (replay::teardown_session, minimap::teardown_minimap),
+            (
+                replay::teardown_session,
+                minimap::teardown_minimap,
+                sound::reset_per_game,
+            ),
         )
         // Tick-synced time: bracket each fixed step to measure and scale it, and
         // snapshot positions before the simulation advances (for interpolation).
@@ -214,7 +222,9 @@ pub fn run() {
                 hud::update_group_roster,
                 hud::update_selection,
                 hud::update_objectives,
-                hud::update_game_over,
+                // Nested so the group stays inside Bevy's tuple size limit; the
+                // tallies are shown with the banner, so they belong together.
+                (hud::update_game_over, hud::update_final_statistics),
                 hud::update_replay_note,
                 hud::leave_button,
                 debug::toggle_debug,
@@ -237,6 +247,7 @@ pub fn run() {
                     render::draw_air_shadows,
                     render::draw_selection,
                     render::draw_skill_pulses,
+                    render::draw_puffs,
                     render::draw_shots,
                     render::draw_facing,
                     render::draw_rally,
@@ -252,6 +263,19 @@ pub fn run() {
         .add_systems(
             Update,
             (debug::draw_hierarchy, debug::draw_bodies).run_if(in_state(GameState::InGame)),
+        )
+        // Per tick rather than per frame: what the simulation announced is
+        // retired at the end of the tick that announced it, and a frame can span
+        // none of those ticks or hundreds of them.
+        .add_systems(
+            FixedLast,
+            (
+                render::collect_skill_pulses,
+                render::collect_puffs,
+                sound::play_cues,
+            )
+                .in_set(GameSet)
+                .run_if(in_state(GameState::InGame)),
         )
         // Its own group because the viewing tuple above is at Bevy's size limit.
         // Looking around the minimap steers the view rather than the game, so

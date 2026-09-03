@@ -12,7 +12,7 @@ fn train_spawns_units_and_deducts_cost() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
     let (barracks, barracks_id) =
-        spawn::spawn_entity(world, "barracks", utils::pos(10, 10), Some(0)).unwrap();
+        spawn::create_entity(world, "barracks", utils::pos(10, 10), Some(0)).unwrap();
     world.resource_mut::<PlayerResources>().add(0, "gold", 100);
 
     for _ in 0..3 {
@@ -68,7 +68,7 @@ fn building_under_construction_refuses_training() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
     let (barracks, barracks_id) =
-        spawn::spawn_entity(world, "barracks", utils::pos(10, 10), Some(0)).unwrap();
+        spawn::create_entity(world, "barracks", utils::pos(10, 10), Some(0)).unwrap();
     world
         .entity_mut(barracks)
         .insert(UnderConstructionComponent::default());

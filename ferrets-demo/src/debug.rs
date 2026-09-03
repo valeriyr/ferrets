@@ -26,6 +26,7 @@ use crate::{
     input::InputMode,
     map,
     render::{self, CELL_PX, FogReveal, Smoothing, world_center},
+    sound::Muted,
     states::InGameUi,
 };
 
@@ -148,6 +149,7 @@ pub fn debug_readout(
     registry: Res<ContentRegistry>,
     debug: Res<DebugState>,
     smoothing: Res<Smoothing>,
+    muted: Res<Muted>,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
     entities: Query<(&EntityInfoComponent, &LocationComponent), Without<HiddenComponent>>,
@@ -207,10 +209,11 @@ pub fn debug_readout(
 
     if let Ok(mut text) = text.single_mut() {
         **text = format!(
-            "tick {} | {held_hz:.1}/{wanted_hz:.0} Hz | {} | {} | layer {} | cursor {} | hover {} | LMB {} RMB {} | selected {} | {}",
+            "tick {} | {held_hz:.1}/{wanted_hz:.0} Hz | {} | {} | sound {} | layer {} | cursor {} | hover {} | LMB {} RMB {} | selected {} | {}",
             session.tick(),
             model_str,
             if smoothing.0 { "smoothed" } else { "per tick" },
+            if muted.0 { "off" } else { "on" },
             debug.layer,
             cell_str,
             hover_str,

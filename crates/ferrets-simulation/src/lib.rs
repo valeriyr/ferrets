@@ -7,6 +7,7 @@ pub mod components;
 pub mod control_groups;
 pub mod entity_def;
 pub mod entity_index;
+pub mod events;
 pub mod game_loop;
 pub mod impacts;
 pub mod input;
@@ -27,6 +28,7 @@ pub mod simulation_id;
 pub mod skirmish;
 pub mod spawn;
 mod stat_store;
+pub mod statistics;
 pub mod supply;
 pub mod visibility;
 

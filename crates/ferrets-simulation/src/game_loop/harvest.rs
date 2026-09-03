@@ -22,9 +22,10 @@ use crate::{
     },
     entity_def,
     entity_index::EntityIndex,
+    events::DeathCause,
     map::Map,
     order::Order,
-    resources::PlayerResources,
+    resources,
     session::player_slot::PlayerId,
     simulation_id::SimulationId,
     spawn,
@@ -281,9 +282,8 @@ fn advance(
         }
 
         chase::face_entity(world, entity, storage);
-        world
-            .resource_mut::<PlayerResources>()
-            .add(player, &kind, carried_amount);
+        let banked_at = entity_def::simulation_id(world, storage);
+        resources::credit_gathered(world, player, &kind, carried_amount, banked_at);
         let mut entity_mut = world.entity_mut(entity);
         let mut carrier = entity_mut.get_mut::<ResourceCarrierComponent>().unwrap();
         carrier.kind = None;
@@ -398,7 +398,9 @@ fn advance(
 
         if remaining == 0 {
             match depletion {
-                DepletionPolicy::Destroy => spawn::destroy_entity(world, source_entity),
+                DepletionPolicy::Destroy => {
+                    spawn::despawn_entity(world, source_entity, DeathCause::Depleted)
+                }
                 DepletionPolicy::Persist => {}
             }
         }

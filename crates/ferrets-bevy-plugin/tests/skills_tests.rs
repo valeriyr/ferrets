@@ -32,7 +32,7 @@ mod utils;
 fn using_skill_applies_effect_and_spends_energy() {
     let mut app = app();
     let (mage, mage_id) =
-        spawn::spawn_entity(app.world_mut(), "mage", utils::pos(5, 5), Some(0)).unwrap();
+        spawn::create_entity(app.world_mut(), "mage", utils::pos(5, 5), Some(0)).unwrap();
 
     let battle_focus = app
         .world()
@@ -73,7 +73,7 @@ fn using_skill_applies_effect_and_spends_energy() {
 fn skill_with_resource_cost_pays_stockpile() {
     let mut app = app();
     let (mage, mage_id) =
-        spawn::spawn_entity(app.world_mut(), "mage", utils::pos(5, 5), Some(0)).unwrap();
+        spawn::create_entity(app.world_mut(), "mage", utils::pos(5, 5), Some(0)).unwrap();
     utils::grant_gold(&mut app, 30);
 
     let rally = skill(&app, "rally");
@@ -104,7 +104,7 @@ fn skill_with_resource_cost_pays_stockpile() {
 fn skill_with_unaffordable_resource_cost_is_refused() {
     let mut app = app();
     let (mage, mage_id) =
-        spawn::spawn_entity(app.world_mut(), "mage", utils::pos(5, 5), Some(0)).unwrap();
+        spawn::create_entity(app.world_mut(), "mage", utils::pos(5, 5), Some(0)).unwrap();
     utils::grant_gold(&mut app, 10);
 
     let rally = skill(&app, "rally");
@@ -135,7 +135,7 @@ fn skill_with_unaffordable_resource_cost_is_refused() {
 fn skill_with_health_cost_pays_health() {
     let mut app = app();
     let (mage, mage_id) =
-        spawn::spawn_entity(app.world_mut(), "mage", utils::pos(5, 5), Some(0)).unwrap();
+        spawn::create_entity(app.world_mut(), "mage", utils::pos(5, 5), Some(0)).unwrap();
 
     let sacrifice = skill(&app, "sacrifice");
     let base = utils::effective_damage(&app, mage);
@@ -165,7 +165,7 @@ fn skill_with_health_cost_pays_health() {
 fn skill_with_lethal_health_cost_is_refused() {
     let mut app = app();
     let (mage, mage_id) =
-        spawn::spawn_entity(app.world_mut(), "mage", utils::pos(5, 5), Some(0)).unwrap();
+        spawn::create_entity(app.world_mut(), "mage", utils::pos(5, 5), Some(0)).unwrap();
 
     // The cost equals the mage's full health: surviving on zero is not
     // surviving, so the cast is refused.
@@ -201,7 +201,7 @@ fn skill_with_lethal_health_cost_is_refused() {
 fn skill_requirement_gates_cast() {
     let mut app = app();
     let (mage, mage_id) =
-        spawn::spawn_entity(app.world_mut(), "mage", utils::pos(5, 5), Some(0)).unwrap();
+        spawn::create_entity(app.world_mut(), "mage", utils::pos(5, 5), Some(0)).unwrap();
 
     let war_secret = skill(&app, "war_secret");
     let base = utils::effective_damage(&app, mage);
@@ -230,7 +230,7 @@ fn skill_requirement_gates_cast() {
         .expect("research defined");
     app.world_mut()
         .resource_mut::<PlayerResearch>()
-        .complete(0, arcana);
+        .mark_completed(0, arcana);
 
     utils::push_command(
         &mut app,

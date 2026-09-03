@@ -56,7 +56,7 @@ fn worker_harvests_wood_on_demo_map() {
     }
 
     // A worker beside player 0's grove at (8..10, 16..17).
-    let (worker, worker_id) = spawn::spawn_entity(
+    let (worker, worker_id) = spawn::create_entity(
         app.world_mut(),
         "peasant",
         FixedUVec2::new(FixedU64::from_num(7), FixedU64::from_num(16)),

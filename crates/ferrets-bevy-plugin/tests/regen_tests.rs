@@ -24,7 +24,7 @@ use ferrets_simulation::{
 #[test]
 fn health_regenerates_toward_max_and_holds_there() {
     let mut app = app();
-    let (troll, _) = utils::spawn_owned(&mut app, "troll", 5, 5, 0);
+    let (troll, _) = utils::create_owned(&mut app, "troll", 5, 5, 0);
     utils::wound(&mut app, troll, "10");
 
     // A fractional rate accumulates across ticks rather than truncating away.
@@ -46,7 +46,7 @@ fn health_regenerates_toward_max_and_holds_there() {
 #[test]
 fn entity_without_regeneration_stays_wounded() {
     let mut app = app();
-    let (dummy, _) = utils::spawn_owned(&mut app, "dummy", 8, 8, 0);
+    let (dummy, _) = utils::create_owned(&mut app, "dummy", 8, 8, 0);
     utils::wound(&mut app, dummy, "5");
 
     utils::run_ticks(&mut app, 20);
@@ -64,7 +64,7 @@ fn entity_without_regeneration_stays_wounded() {
 #[test]
 fn health_settles_under_lowered_ceiling() {
     let mut app = app();
-    let (troll, _) = utils::spawn_owned(&mut app, "troll", 5, 5, 0);
+    let (troll, _) = utils::create_owned(&mut app, "troll", 5, 5, 0);
 
     let frailty = utils::register_entity_buff(
         &mut app,
@@ -87,7 +87,7 @@ fn health_settles_under_lowered_ceiling() {
 #[test]
 fn lowered_ceiling_does_not_kill() {
     let mut app = app();
-    let (troll, _) = utils::spawn_owned(&mut app, "troll", 5, 5, 0);
+    let (troll, _) = utils::create_owned(&mut app, "troll", 5, 5, 0);
 
     // Deep enough to zero the ceiling outright, which the max_health floor forbids.
     let withering = utils::register_entity_buff(
@@ -115,7 +115,7 @@ fn lowered_ceiling_does_not_kill() {
 #[test]
 fn dying_entity_does_not_regenerate() {
     let mut app = app();
-    let (troll, _) = utils::spawn_owned(&mut app, "troll", 5, 5, 0);
+    let (troll, _) = utils::create_owned(&mut app, "troll", 5, 5, 0);
     utils::wound(&mut app, troll, "10");
     spawn::destroy_entity(app.world_mut(), troll);
 
@@ -130,7 +130,7 @@ fn dying_entity_does_not_regenerate() {
 #[test]
 fn entity_under_construction_does_not_regenerate() {
     let mut app = app();
-    let (troll, _) = utils::spawn_owned(&mut app, "troll", 5, 5, 0);
+    let (troll, _) = utils::create_owned(&mut app, "troll", 5, 5, 0);
     utils::wound(&mut app, troll, "10");
     app.world_mut()
         .entity_mut(troll)

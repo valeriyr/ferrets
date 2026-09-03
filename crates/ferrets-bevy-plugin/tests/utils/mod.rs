@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use bevy::{ecs::entity::EntityNotSpawnedError, prelude::*};
+use bevy::{app::FixedMain, ecs::entity::EntityNotSpawnedError, prelude::*};
 use ferrets_bevy_plugin::{
     NetworkPlugin, NominalTimestep, PendingInput, SimulationPlugin, TickPacing, replay,
 };
@@ -225,17 +225,17 @@ pub fn offset(from: FixedUVec2, to: FixedUVec2) -> FixedVec2 {
     )
 }
 
-/// Spawns one entity of `type_name` at `(x, y)` owned by `player`, panicking when
-/// the spawn is refused.
-pub fn spawn_owned(
+/// A fixture entity of `type_name` at `(x, y)` owned by `player`, created
+/// without announcing it. Panics when the position cannot host the type.
+pub fn create_owned(
     app: &mut App,
     type_name: &str,
     x: u32,
     y: u32,
     player: PlayerId,
 ) -> (Entity, SimulationId) {
-    spawn::spawn_entity(app.world_mut(), type_name, pos(x, y), Some(player))
-        .unwrap_or_else(|| panic!("{type_name} spawns"))
+    spawn::create_entity(app.world_mut(), type_name, pos(x, y), Some(player))
+        .unwrap_or_else(|| panic!("{type_name} fits at ({x}, {y})"))
 }
 
 pub fn push_command(app: &mut App, command: PlayerCommand) {
@@ -519,7 +519,10 @@ pub fn run_ticks(app: &mut App, ticks: u32) {
             }
         }
 
-        world.run_schedule(FixedUpdate);
+        // The whole fixed step, not just `FixedUpdate`: the closing phases are
+        // where a completed tick is recorded, tallied and retired, and a suite
+        // that skipped them would not exercise anything a game hangs there.
+        world.run_schedule(FixedMain);
     }
 }
 
@@ -527,7 +530,7 @@ pub fn run_ticks(app: &mut App, ticks: u32) {
 /// for suites whose registered frame sources already feed every slot.
 pub fn run_steps(app: &mut App, steps: u32) {
     for _ in 0..steps {
-        app.world_mut().run_schedule(FixedUpdate);
+        app.world_mut().run_schedule(FixedMain);
     }
 }
 

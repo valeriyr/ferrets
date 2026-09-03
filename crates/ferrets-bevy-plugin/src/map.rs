@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use ferrets_content::registry::ContentRegistry;
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_simulation::{
-    components::resource::ResourceSourceComponent, map::Map, map_data::MapData,
+    components::resource::ResourceSourceComponent, events::SpawnCause, map::Map, map_data::MapData,
     session::GameSession, spawn, visibility::VisibilityGrid,
 };
 
@@ -36,9 +36,13 @@ pub fn instantiate_map(world: &mut World, data: &MapData) {
         }
         let (x, y) = placement.cell;
         let position = FixedUVec2::new(FixedU64::from_num(x), FixedU64::from_num(y));
-        let Some((entity, _)) =
-            spawn::spawn_entity(world, &placement.type_name, position, placement.owner)
-        else {
+        let Some((entity, _)) = spawn::spawn_entity(
+            world,
+            &placement.type_name,
+            position,
+            placement.owner,
+            SpawnCause::Placed,
+        ) else {
             eprintln!(
                 "map cell ({x},{y}) cannot host '{}'; placement skipped",
                 placement.type_name

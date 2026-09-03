@@ -16,10 +16,13 @@
 //! # Ordering
 //!
 //! All simulation systems run in `FixedUpdate` inside [`SimulationSet`], whose
-//! phases ([`FixedUpdateSet`]) give the tick loop its shape — a plugin joins a
-//! phase rather than ordering against another plugin's systems, and the sequence
-//! is stated once where the phases are configured. `FixedLast` closes the step
-//! in the same way ([`FixedLastSet`]).
+//! phases give the tick loop its shape — a plugin joins a phase rather than
+//! ordering against another plugin's systems, and the sequence is stated once
+//! where the phases are configured. `FixedLast` closes the step in the same way.
+//!
+//! Both phase enums are internal to this crate. A game with per-tick work of its
+//! own joins [`GameSet`], which runs once the tick is finished and the engine
+//! has settled it.
 //!
 //! The order mirrors a classic RTS tick loop:
 //!
@@ -143,6 +146,19 @@ use ferrets_simulation::{map::Map, session::GameSession};
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SimulationSet;
 
+/// System set for a game's own per-tick work — the one place outside this crate
+/// may join the tick.
+///
+/// Runs in `FixedLast`, after the tick has finished and after the engine has
+/// settled it: what the tick announced has been tallied and recorded, and none of
+/// it has been retired yet. So a system here reads a complete, final tick rather
+/// than racing the engine for it.
+///
+/// Members are not ordered against each other — a game putting two systems here
+/// that write the same state still owes them an explicit order of its own.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct GameSet;
+
 /// The phases of `FixedUpdate`, in the order they run — the tick loop's shape,
 /// stated once.
 ///
@@ -152,8 +168,11 @@ pub struct SimulationSet;
 /// tick is left to the executor's choice, because `push_frame` is
 /// first-write-wins — two sources reaching the same slot in an undeclared order
 /// would resolve differently on different nodes, which is a desync.
+///
+/// A game extending the tick joins [`GameSet`] instead, which is ordered after
+/// all of this.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
-pub enum FixedUpdateSet {
+pub(crate) enum FixedUpdateSet {
     /// Remote frames land and the session-level decisions riding with them
     /// apply (a tick-aligned pause, a speed change, an authoritative drop).
     Receive,
@@ -187,14 +206,20 @@ pub enum FixedUpdateSet {
 /// adding end-of-tick work states which phase it belongs to, instead of naming
 /// another plugin's systems — and so the order stays stated in one place as more
 /// of them appear.
+///
+/// [`GameSet`] sits between [`Work`](Self::Work) and [`Retire`](Self::Retire)
+/// and is what a game joins.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
-pub enum FixedLastSet {
+pub(crate) enum FixedLastSet {
     /// Work that belongs to the tick just executed: recording its input,
     /// verifying its checksum, anything a game does with a completed tick. Its
     /// cost is part of what the tick cost.
     Work,
-    /// Closes the step's cost measurement, so everything in [`Work`](Self::Work)
-    /// counts toward what a tick is measured to cost.
+    /// The tick's scratch state is dropped, now that everything reading it has
+    /// run.
+    Retire,
+    /// Closes the step's cost measurement, so everything the tick owed counts
+    /// toward what it is measured to cost.
     Measure,
 }
 
@@ -318,9 +343,26 @@ impl Plugin for SimulationPlugin {
             )
             // The step's closing phases, ordered once here; `measure_tick` sits
             // in the last one so it observes everything the tick caused.
+            // A game's own per-tick work sits between the engine settling the
+            // tick and retiring it, so it reads a complete tick and everything
+            // the tick announced is still there to read.
             .configure_sets(
                 FixedLast,
-                (FixedLastSet::Work, FixedLastSet::Measure).chain(),
+                (
+                    FixedLastSet::Work,
+                    GameSet,
+                    FixedLastSet::Retire,
+                    FixedLastSet::Measure,
+                )
+                    .chain(),
+            )
+            .add_systems(
+                FixedLast,
+                systems::collect_statistics.in_set(FixedLastSet::Work),
+            )
+            .add_systems(
+                FixedLast,
+                systems::retire_events.in_set(FixedLastSet::Retire),
             )
             .add_systems(FixedLast, tick::measure_tick.in_set(FixedLastSet::Measure))
             // A requested step or seek runs its ticks itself, so it belongs

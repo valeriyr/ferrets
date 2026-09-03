@@ -29,9 +29,9 @@ use ferrets_simulation::{
 #[test]
 fn unit_modifier_reaches_every_owned_unit() {
     let mut app = utils::player_effects_app();
-    let (first, _) = utils::spawn_owned(&mut app, "runner", 5, 5, 0);
-    let (second, _) = utils::spawn_owned(&mut app, "runner", 7, 5, 0);
-    let (enemy, _) = utils::spawn_owned(&mut app, "runner", 20, 20, 1);
+    let (first, _) = utils::create_owned(&mut app, "runner", 5, 5, 0);
+    let (second, _) = utils::create_owned(&mut app, "runner", 7, 5, 0);
+    let (enemy, _) = utils::create_owned(&mut app, "runner", 20, 20, 1);
     utils::run_ticks(&mut app, 1);
     let base = utils::effective_speed(&app, first);
 
@@ -52,7 +52,7 @@ fn unit_modifier_reaches_every_owned_unit() {
 #[test]
 fn unit_modifier_reaches_unit_spawned_after_it() {
     let mut app = utils::player_effects_app();
-    let (veteran, _) = utils::spawn_owned(&mut app, "runner", 5, 5, 0);
+    let (veteran, _) = utils::create_owned(&mut app, "runner", 5, 5, 0);
     utils::run_ticks(&mut app, 1);
     let base = utils::effective_speed(&app, veteran);
 
@@ -63,7 +63,7 @@ fn unit_modifier_reaches_unit_spawned_after_it() {
     assert_eq!(utils::effective_speed(&app, veteran), base + base);
 
     // A unit arriving after the modifier picks it up on its first recompute.
-    let (recruit, _) = utils::spawn_owned(&mut app, "runner", 7, 5, 0);
+    let (recruit, _) = utils::create_owned(&mut app, "runner", 7, 5, 0);
     utils::run_ticks(&mut app, 1);
     assert_eq!(utils::effective_speed(&app, recruit), base + base);
 }
@@ -71,7 +71,7 @@ fn unit_modifier_reaches_unit_spawned_after_it() {
 #[test]
 fn buff_and_unit_modifier_fold_together() {
     let mut app = utils::player_effects_app();
-    let (runner, _) = utils::spawn_owned(&mut app, "runner", 5, 5, 0);
+    let (runner, _) = utils::create_owned(&mut app, "runner", 5, 5, 0);
 
     let haste = app
         .world_mut()
@@ -110,7 +110,7 @@ fn player_buff_mixes_both_arms() {
         PlayerStatId::MAX_SUPPLY,
         FixedU64::from_num(10),
     );
-    let (runner, _) = utils::spawn_owned(&mut app, "runner", 5, 5, 0);
+    let (runner, _) = utils::create_owned(&mut app, "runner", 5, 5, 0);
     utils::run_ticks(&mut app, 1);
     let base = utils::effective_speed(&app, runner);
 
@@ -164,7 +164,7 @@ fn player_buff_mixes_both_arms() {
 #[test]
 fn player_skill_cast_boosts_then_expires() {
     let mut app = utils::player_effects_app();
-    let (runner, _) = utils::spawn_owned(&mut app, "runner", 5, 5, 0);
+    let (runner, _) = utils::create_owned(&mut app, "runner", 5, 5, 0);
     utils::grant_gold(&mut app, 30);
     utils::run_ticks(&mut app, 1);
     let base = utils::effective_speed(&app, runner);
@@ -225,7 +225,7 @@ fn player_skill_cast_boosts_then_expires() {
 #[test]
 fn unknown_player_skill_id_is_ignored() {
     let mut app = utils::player_effects_app();
-    let (runner, _) = utils::spawn_owned(&mut app, "runner", 5, 5, 0);
+    let (runner, _) = utils::create_owned(&mut app, "runner", 5, 5, 0);
     utils::grant_gold(&mut app, 30);
     utils::run_ticks(&mut app, 1);
     let base = utils::effective_speed(&app, runner);

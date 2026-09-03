@@ -9,7 +9,11 @@ use std::collections::BTreeSet;
 
 use bevy_ecs::prelude::*;
 
-use crate::session::player_slot::PlayerId;
+use crate::{
+    events::{EventRecord, SimulationEvent},
+    session::player_slot::PlayerId,
+    simulation_id::SimulationId,
+};
 use ferrets_content::research::ResearchId;
 
 /// The completed researches of all players in the session, indexed by
@@ -24,7 +28,7 @@ impl PlayerResearch {
     }
 
     /// Marks the research `id` completed for `player`.
-    pub fn complete(&mut self, player: PlayerId, id: ResearchId) {
+    pub fn mark_completed(&mut self, player: PlayerId, id: ResearchId) {
         self.0[player as usize].insert(id);
     }
 
@@ -37,4 +41,26 @@ impl PlayerResearch {
     pub fn completed(&self, player: PlayerId) -> impl Iterator<Item = ResearchId> + '_ {
         self.0[player as usize].iter().copied()
     }
+}
+
+/// Records `research` as finished for `player` and announces it.
+///
+/// The announcing counterpart to [`PlayerResearch::mark_completed`], which
+/// records the topic and says nothing.
+pub fn complete(
+    world: &mut World,
+    player: PlayerId,
+    research: ResearchId,
+    researcher: Option<SimulationId>,
+) {
+    world
+        .resource_mut::<PlayerResearch>()
+        .mark_completed(player, research);
+    world
+        .resource_mut::<EventRecord>()
+        .emit(SimulationEvent::ResearchCompleted {
+            player,
+            research,
+            researcher,
+        });
 }

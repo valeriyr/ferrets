@@ -7,13 +7,19 @@ use ferrets_physics::body;
 
 use crate::{
     components::{
-        entity_info::EntityInfoComponent, entity_stats::StatsComponent, location::LocationComponent,
+        entity_info::EntityInfoComponent, entity_stats::StatsComponent,
+        location::LocationComponent, owner::OwnerComponent,
     },
+    session::player_slot::PlayerId,
     simulation_id::SimulationId,
 };
 use ferrets_content::{
-    attack::Weapon, entity_stats::EntityStatId, entity_type_def::EntityTypeDef,
-    registry::ContentRegistry, targeting, turret::TurretStats,
+    attack::Weapon,
+    entity_stats::EntityStatId,
+    entity_type_def::{EntityTypeDef, EntityTypeId},
+    registry::ContentRegistry,
+    targeting,
+    turret::TurretStats,
 };
 use ferrets_pathfinder::layer_mask::LayerMask;
 
@@ -28,17 +34,33 @@ pub fn simulation_id(world: &World, entity: Entity) -> SimulationId {
         .id()
 }
 
+/// Returns the type handle `entity` currently is.
+///
+/// Panics if `entity` is not a simulation entity.
+pub fn type_id(world: &World, entity: Entity) -> EntityTypeId {
+    world
+        .entity(entity)
+        .get::<EntityInfoComponent>()
+        .expect("simulation entity must have EntityInfoComponent")
+        .type_id()
+}
+
+/// Returns the player owning `entity`, or `None` for a neutral one.
+pub fn owner(world: &World, entity: Entity) -> Option<PlayerId> {
+    world
+        .entity(entity)
+        .get::<OwnerComponent>()
+        .map(OwnerComponent::player)
+}
+
 /// Returns the [`EntityTypeDef`] for `entity`, resolved through the type handle on
 /// its [`EntityInfoComponent`].
 ///
 /// Panics if `entity` is not a simulation entity.
 pub fn of(world: &World, entity: Entity) -> &EntityTypeDef {
-    let type_id = world
-        .entity(entity)
-        .get::<EntityInfoComponent>()
-        .expect("simulation entity must have EntityInfoComponent")
-        .type_id();
-    world.resource::<ContentRegistry>().def(type_id)
+    world
+        .resource::<ContentRegistry>()
+        .def(type_id(world, entity))
 }
 
 /// Returns where `entity` stands.

@@ -177,7 +177,7 @@ fn boss_mans_its_fleet_and_defends_lake() {
     }
 
     // A lone archer strays to the lake shore, within a ship's aggro range.
-    spawn::spawn_entity(
+    spawn::create_entity(
         app.world_mut(),
         "archer",
         FixedUVec2::new(FixedU64::from_num(40), FixedU64::from_num(53)),

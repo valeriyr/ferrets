@@ -17,7 +17,7 @@ use ferrets_simulation::{
 #[test]
 fn train_blocked_without_headroom() {
     let mut app = utils::supply_app();
-    let (lodge, lodge_id) = utils::spawn_owned(&mut app, "lodge", 10, 10, 0);
+    let (lodge, lodge_id) = utils::create_owned(&mut app, "lodge", 10, 10, 0);
     utils::grant_gold(&mut app, 50);
 
     train_settler(&mut app, lodge_id);
@@ -34,8 +34,8 @@ fn train_blocked_without_headroom() {
 #[test]
 fn provider_grants_headroom_and_training_proceeds() {
     let mut app = utils::supply_app();
-    let (_, lodge_id) = utils::spawn_owned(&mut app, "lodge", 10, 10, 0);
-    utils::spawn_owned(&mut app, "camp", 20, 20, 0);
+    let (_, lodge_id) = utils::create_owned(&mut app, "lodge", 10, 10, 0);
+    utils::create_owned(&mut app, "camp", 20, 20, 0);
     utils::grant_gold(&mut app, 50);
 
     assert_eq!(supply::provided(app.world(), 0), FixedU64::from_num(8));
@@ -54,8 +54,8 @@ fn provider_grants_headroom_and_training_proceeds() {
 #[test]
 fn queued_units_reserve_supply() {
     let mut app = utils::supply_app();
-    let (lodge, lodge_id) = utils::spawn_owned(&mut app, "lodge", 10, 10, 0);
-    utils::spawn_owned(&mut app, "camp", 20, 20, 0);
+    let (lodge, lodge_id) = utils::create_owned(&mut app, "lodge", 10, 10, 0);
+    utils::create_owned(&mut app, "camp", 20, 20, 0);
     app.world_mut().resource_mut::<PlayerStats>().set_base(
         0,
         PlayerStatId::MAX_SUPPLY,
@@ -89,8 +89,8 @@ fn queued_units_reserve_supply() {
 #[test]
 fn provider_death_blocks_new_training_only() {
     let mut app = utils::supply_app();
-    let (_, lodge_id) = utils::spawn_owned(&mut app, "lodge", 10, 10, 0);
-    let (camp, _) = utils::spawn_owned(&mut app, "camp", 20, 20, 0);
+    let (_, lodge_id) = utils::create_owned(&mut app, "lodge", 10, 10, 0);
+    let (camp, _) = utils::create_owned(&mut app, "camp", 20, 20, 0);
     utils::grant_gold(&mut app, 50);
 
     train_settler(&mut app, lodge_id);
@@ -113,8 +113,8 @@ fn provider_death_blocks_new_training_only() {
 #[test]
 fn queued_unit_finishes_after_provider_dies() {
     let mut app = utils::supply_app();
-    let (lodge, lodge_id) = utils::spawn_owned(&mut app, "lodge", 10, 10, 0);
-    let (camp, _) = utils::spawn_owned(&mut app, "camp", 20, 20, 0);
+    let (lodge, lodge_id) = utils::create_owned(&mut app, "lodge", 10, 10, 0);
+    let (camp, _) = utils::create_owned(&mut app, "camp", 20, 20, 0);
     utils::grant_gold(&mut app, 50);
 
     train_settler(&mut app, lodge_id);
@@ -135,7 +135,7 @@ fn queued_unit_finishes_after_provider_dies() {
 #[test]
 fn under_construction_provider_feeds_nobody() {
     let mut app = utils::supply_app();
-    let (_, pioneer_id) = utils::spawn_owned(&mut app, "pioneer", 9, 10, 0);
+    let (_, pioneer_id) = utils::create_owned(&mut app, "pioneer", 9, 10, 0);
     utils::grant_gold(&mut app, 50);
 
     utils::push_command(
@@ -177,7 +177,7 @@ fn under_construction_provider_feeds_nobody() {
 #[test]
 fn max_supply_caps_provided() {
     let mut app = utils::supply_app();
-    utils::spawn_owned(&mut app, "camp", 10, 10, 0);
+    utils::create_owned(&mut app, "camp", 10, 10, 0);
     assert_eq!(supply::provided(app.world(), 0), FixedU64::from_num(8));
 
     app.world_mut().resource_mut::<PlayerStats>().set_base(
@@ -192,9 +192,9 @@ fn max_supply_caps_provided() {
 #[test]
 fn zero_cost_type_trains_over_cap() {
     let mut app = utils::supply_app();
-    let (_, lodge_id) = utils::spawn_owned(&mut app, "lodge", 10, 10, 0);
+    let (_, lodge_id) = utils::create_owned(&mut app, "lodge", 10, 10, 0);
     // A settler placed directly puts the player over its (empty) supply.
-    utils::spawn_owned(&mut app, "settler", 5, 5, 0);
+    utils::create_owned(&mut app, "settler", 5, 5, 0);
     utils::grant_gold(&mut app, 50);
     assert_eq!(supply::provided(app.world(), 0), FixedU64::ZERO);
     assert_eq!(supply::used(app.world(), 0), FixedU64::ONE);

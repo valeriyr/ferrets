@@ -153,8 +153,8 @@ fn point_order_blocked_at_final_approach_accepts_by_cell() {
     // The keep occupies cells (8..=10, 6..=8); the ordered spot lies on the
     // runner's own cell, but standing on it exactly would poke the body into
     // the keep's west face — the exact spot is unreachable forever.
-    utils::spawn_owned(&mut app, "keep", 8, 6, 0);
-    let (runner, _) = utils::spawn_owned(&mut app, "runner", 7, 7, 0);
+    utils::create_owned(&mut app, "keep", 8, 6, 0);
+    let (runner, _) = utils::create_owned(&mut app, "runner", 7, 7, 0);
 
     app.world_mut()
         .entity_mut(runner)
@@ -187,8 +187,8 @@ fn point_order_blocked_at_final_approach_accepts_by_cell() {
 #[test]
 fn body_clipped_into_footprint_walks_itself_free() {
     let mut app = utils::corner_app();
-    utils::spawn_owned(&mut app, "keep", 8, 6, 0);
-    let (runner, _) = utils::spawn_owned(&mut app, "runner", 7, 7, 0);
+    utils::create_owned(&mut app, "keep", 8, 6, 0);
+    let (runner, _) = utils::create_owned(&mut app, "runner", 7, 7, 0);
 
     // A building raised against the body's edge leaves the circle clipping
     // the static footprint — staged directly, since placement reads claims at
@@ -245,8 +245,8 @@ fn wide_blocker_steps_aside_where_its_footprint_fits() {
         }
         map.set_static_occupied(utils::GROUND, CellPos::new(10, 6), true);
     }
-    let (wagon, _) = utils::spawn_owned(&mut app, "wagon", 8, 5, 0);
-    let (soldier, _) = utils::spawn_owned(&mut app, "soldier", 6, 5, 0);
+    let (wagon, _) = utils::create_owned(&mut app, "wagon", 8, 5, 0);
+    let (soldier, _) = utils::create_owned(&mut app, "soldier", 6, 5, 0);
 
     app.world_mut()
         .entity_mut(soldier)
@@ -287,7 +287,7 @@ fn cell_walk_follows_corridor_past_its_first_leg() {
     // first crossing a couple of cells from where it started.
     let mut app = utils::orders_app();
     utils::install_chokepoint_map(&mut app);
-    let (soldier, id) = utils::spawn_owned(&mut app, "soldier", 2, 2, 0);
+    let (soldier, id) = utils::create_owned(&mut app, "soldier", 2, 2, 0);
 
     utils::select(&mut app, id);
     utils::push_command(
@@ -323,7 +323,7 @@ fn stop_ends_cell_walk_after_its_current_step() {
     // player just cancelled.
     let mut app = utils::orders_app();
     utils::install_map(&mut app, Projection::Isometric, MovementModel::Cell);
-    let (soldier, id) = utils::spawn_owned(&mut app, "soldier", 2, 2, 0);
+    let (soldier, id) = utils::create_owned(&mut app, "soldier", 2, 2, 0);
 
     utils::select(&mut app, id);
     utils::push_command(
@@ -360,7 +360,7 @@ fn stop_ends_cell_walk_after_its_current_step() {
 #[test]
 fn ponderous_body_comes_round_before_it_walks() {
     let mut app = utils::turning_app();
-    let (mover, _) = utils::spawn_owned(&mut app, "ponderous", 10, 10, 0);
+    let (mover, _) = utils::create_owned(&mut app, "ponderous", 10, 10, 0);
     // A fresh body looks south, so due north is the longest turn there is: half a
     // circle at a degree a tick, less the lean it is released at, is a hundred and
     // fifty-eight ticks of standing still.
@@ -391,7 +391,7 @@ fn ponderous_body_comes_round_before_it_walks() {
 #[test]
 fn nimble_body_walks_while_its_look_catches_up() {
     let mut app = utils::turning_app();
-    let (mover, _) = utils::spawn_owned(&mut app, "nimble", 10, 10, 0);
+    let (mover, _) = utils::create_owned(&mut app, "nimble", 10, 10, 0);
     walk_to_spot(&mut app, mover, utils::pos(10, 4));
     let start = utils::position_of(app.world_mut(), mover);
 
@@ -414,7 +414,7 @@ fn nimble_body_walks_while_its_look_catches_up() {
 #[test]
 fn ticks_spent_coming_round_do_not_escalate_walk() {
     let mut app = utils::turning_app();
-    let (mover, _) = utils::spawn_owned(&mut app, "ponderous", 10, 10, 0);
+    let (mover, _) = utils::create_owned(&mut app, "ponderous", 10, 10, 0);
     // A hundred and fifty-eight ticks of turning, against a stall clock that
     // escalates every fifteen and gives the walk up after eight escalations.
     let spot = utils::pos(10, 4);
@@ -444,7 +444,7 @@ fn ticks_spent_coming_round_do_not_escalate_walk() {
 #[test]
 fn cell_walk_comes_round_before_it_claims() {
     let mut app = utils::turning_cell_app();
-    let (mover, _) = utils::spawn_owned(&mut app, "ponderous", 10, 10, 0);
+    let (mover, _) = utils::create_owned(&mut app, "ponderous", 10, 10, 0);
     let start = utils::position_of(app.world_mut(), mover);
     walk_to_spot(&mut app, mover, utils::pos(10, 4));
 
@@ -481,8 +481,8 @@ fn cell_walk_comes_round_before_it_claims() {
 /// whole way. Pushed rather than placed, because placement reads claims at the
 /// rounded anchor and cannot leave a body part way across a cell.
 fn runner_clipping_keep_corner(app: &mut App) -> Entity {
-    utils::spawn_owned(app, "keep", 8, 6, 0);
-    let (runner, _) = utils::spawn_owned(app, "runner", 12, 5, 0);
+    utils::create_owned(app, "keep", 8, 6, 0);
+    let (runner, _) = utils::create_owned(app, "runner", 12, 5, 0);
     app.world_mut()
         .entity_mut(runner)
         .get_mut::<LocationComponent>()

@@ -11,7 +11,8 @@ use ferrets_math::FixedU64;
 use crate::{
     components::{energy::EnergyComponent, health::HealthComponent},
     entity_def,
-    resources::PlayerResources,
+    events::SpendCause,
+    resources::{self, PlayerResources},
     session::player_slot::PlayerId,
 };
 use ferrets_content::{costs::Cost, entity_stats::EntityStatId, skills::EntityCastCost};
@@ -52,11 +53,15 @@ pub(super) fn can_pay(
 
 /// Draws every arm of the cost. The caller has checked [`can_pay`] in the
 /// same breath, so nothing here can come up short.
-pub(super) fn pay(world: &mut World, entity: Entity, player: PlayerId, costs: &[EntityCastCost]) {
+pub(super) fn pay(
+    world: &mut World,
+    entity: Entity,
+    player: PlayerId,
+    costs: &[EntityCastCost],
+    cause: SpendCause,
+) {
     let (resources, energy_cost, health_cost) = folded(costs);
-    world
-        .resource_mut::<PlayerResources>()
-        .subtract(player, &resources);
+    resources::charge(world, player, resources, cause);
     let mut entity_mut = world.entity_mut(entity);
     if energy_cost > FixedU64::ZERO
         && let Some(mut energy) = entity_mut.get_mut::<EnergyComponent>()
@@ -78,11 +83,10 @@ pub(super) fn refund(
     entity: Entity,
     player: PlayerId,
     costs: &[EntityCastCost],
+    cause: SpendCause,
 ) {
     let (resources, energy_cost, health_cost) = folded(costs);
-    world
-        .resource_mut::<PlayerResources>()
-        .refund(player, &resources);
+    resources::refund(world, player, resources, cause);
     let max_energy = entity_def::effective_stat(world, entity, EntityStatId::MAX_ENERGY)
         .unwrap_or(FixedU64::ZERO);
     let max_health = entity_def::effective_stat(world, entity, EntityStatId::MAX_HEALTH)

@@ -85,12 +85,12 @@ fn exact_amount_is_affordable() {
 //
 
 #[test]
-fn subtract_deducts_each_kind() {
+fn withdraw_deducts_each_kind() {
     let mut resources = PlayerResources::new(1);
     resources.add(0, "gold", 100);
     resources.add(0, "wood", 50);
 
-    resources.subtract(0, &costs::cost([("gold", 30), ("wood", 50)]));
+    resources.withdraw(0, &costs::cost([("gold", 30), ("wood", 50)]));
 
     assert_eq!(resources.amount(0, "gold"), 70);
     assert_eq!(resources.amount(0, "wood"), 0);
@@ -98,24 +98,24 @@ fn subtract_deducts_each_kind() {
 
 #[test]
 #[should_panic(expected = "cannot afford")]
-fn subtracting_more_than_owned_panics() {
+fn withdrawing_more_than_owned_panics() {
     let mut resources = PlayerResources::new(1);
     resources.add(0, "gold", 10);
 
-    resources.subtract(0, &costs::cost([("gold", 11)]));
+    resources.withdraw(0, &costs::cost([("gold", 11)]));
 }
 
 #[test]
-fn refund_returns_cost_to_stockpile() {
+fn deposit_adds_each_kind() {
     let mut resources = PlayerResources::new(1);
     resources.add(0, "gold", 100);
     let price = costs::cost([("gold", 40), ("wood", 20)]);
 
-    resources.subtract(0, &costs::cost([("gold", 40)]));
-    resources.refund(0, &price);
+    resources.withdraw(0, &costs::cost([("gold", 40)]));
+    resources.deposit(0, &price);
 
-    // The gold spent is back, and the refunded wood is stocked even though it was
-    // never spent (refund just adds).
+    // The gold spent is back, and the wood is stocked even though it was never
+    // spent — a deposit just adds.
     assert_eq!(resources.amount(0, "gold"), 100);
     assert_eq!(resources.amount(0, "wood"), 20);
 }

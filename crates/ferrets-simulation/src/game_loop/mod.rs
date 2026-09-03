@@ -30,6 +30,7 @@ mod rally;
 pub mod repair;
 pub mod research;
 pub mod stats;
+pub mod tally;
 pub mod tick_counter;
 pub mod train;
 mod turn;

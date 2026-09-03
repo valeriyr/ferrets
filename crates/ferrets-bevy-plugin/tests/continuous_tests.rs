@@ -20,7 +20,7 @@ use ferrets_simulation::{
 fn continuous_walk_reaches_goal() {
     let mut app = utils::orders_app();
     utils::install_map(&mut app, Projection::Isometric, MovementModel::Continuous);
-    let (soldier, id) = utils::spawn_owned(&mut app, "soldier", 2, 2, 0);
+    let (soldier, id) = utils::create_owned(&mut app, "soldier", 2, 2, 0);
 
     utils::select(&mut app, id);
     utils::push_command(
@@ -49,8 +49,8 @@ fn overlapping_bodies_push_apart() {
     utils::install_map(&mut app, Projection::Isometric, MovementModel::Continuous);
     // Two soldiers ordered onto the same cell end up as separated bodies,
     // not stacked points, and both walks settle.
-    let first = utils::spawn_owned(&mut app, "soldier", 3, 5, 0);
-    let second = utils::spawn_owned(&mut app, "soldier", 7, 5, 0);
+    let first = utils::create_owned(&mut app, "soldier", 3, 5, 0);
+    let second = utils::create_owned(&mut app, "soldier", 7, 5, 0);
     for (_, id) in [first, second] {
         utils::select(&mut app, id);
         utils::push_command(
@@ -98,7 +98,7 @@ fn pushing_never_commits_into_walls() {
 
     let soldiers: Vec<_> = [(2, 4), (3, 5), (2, 6), (4, 5), (3, 4)]
         .iter()
-        .map(|&(x, y)| utils::spawn_owned(&mut app, "soldier", x, y, 0))
+        .map(|&(x, y)| utils::create_owned(&mut app, "soldier", x, y, 0))
         .collect();
     for (_, id) in &soldiers {
         utils::select(&mut app, *id);
@@ -180,8 +180,8 @@ fn head_on_bodies_flow_past_each_other() {
     // Exactly aligned on one row — the lattice's common case. Radial-only
     // pushing stalls or tunnels here; the sideways share must carry both
     // around and through to their targets in near-direct time.
-    let (left, left_id) = utils::spawn_owned(&mut app, "soldier", 2, 5, 0);
-    let (right, right_id) = utils::spawn_owned(&mut app, "soldier", 9, 5, 0);
+    let (left, left_id) = utils::create_owned(&mut app, "soldier", 2, 5, 0);
+    let (right, right_id) = utils::create_owned(&mut app, "soldier", 9, 5, 0);
 
     utils::select(&mut app, left_id);
     utils::push_command(
@@ -232,7 +232,7 @@ fn crowded_group_settles_and_stops_milling() {
     // churning bodies around each other.
     let soldiers: Vec<_> = [(2, 2), (10, 2), (2, 8), (10, 8), (6, 1), (6, 9)]
         .iter()
-        .map(|&(x, y)| utils::spawn_owned(&mut app, "soldier", x, y, 0))
+        .map(|&(x, y)| utils::create_owned(&mut app, "soldier", x, y, 0))
         .collect();
     for (_, id) in &soldiers {
         utils::select(&mut app, *id);
@@ -304,7 +304,7 @@ fn crowd_of_ten_rests_one_per_cell() {
     // than one per cell, so without the rest-separation nudge some pair
     // ends up sharing a cell and occupancy stops being countable.
     let soldiers: Vec<_> = (0..10)
-        .map(|i| utils::spawn_owned(&mut app, "soldier", 2 + i % 2, 2 + i / 2, 0))
+        .map(|i| utils::create_owned(&mut app, "soldier", 2 + i % 2, 2 + i / 2, 0))
         .collect();
     for (_, id) in &soldiers {
         utils::select(&mut app, *id);
@@ -379,8 +379,8 @@ fn pushed_idle_body_claims_cell_it_settles_on() {
             map.set_static_occupied(utils::GROUND, CellPos::new(x, 6), true);
         }
     }
-    let (idle, _) = utils::spawn_owned(&mut app, "soldier", 6, 5, 0);
-    let (walker, walker_id) = utils::spawn_owned(&mut app, "soldier", 2, 5, 0);
+    let (idle, _) = utils::create_owned(&mut app, "soldier", 6, 5, 0);
+    let (walker, walker_id) = utils::create_owned(&mut app, "soldier", 2, 5, 0);
 
     utils::select(&mut app, walker_id);
     utils::push_command(
@@ -445,7 +445,7 @@ fn wide_body_claims_whole_footprint() {
     // A resting 2x2 body claims all four cells of its footprint — the claim
     // plane is rebuilt as wide as the body moves, not one cell under its
     // anchor.
-    let _ = utils::spawn_owned(&mut app, "wagon", 5, 5, 0);
+    let _ = utils::create_owned(&mut app, "wagon", 5, 5, 0);
     utils::run_ticks(&mut app, 2);
 
     let world = app.world_mut();
@@ -473,11 +473,11 @@ fn mixed_size_bodies_push_apart() {
     // anchor, deeper in than a same-anchor small body's — so the pair parts
     // by the sum of their radii instead of missing the overlap or phantom
     // pushing on one side.
-    let (wagon, _) = utils::spawn_owned(&mut app, "wagon", 5, 5, 0);
+    let (wagon, _) = utils::create_owned(&mut app, "wagon", 5, 5, 0);
     // Spawned clear — placement rightly refuses the claimed footprint — and
     // moved into the overlap directly; the claim plane re-derives from the
     // bodies either way.
-    let (soldier, _) = utils::spawn_owned(&mut app, "soldier", 9, 9, 0);
+    let (soldier, _) = utils::create_owned(&mut app, "soldier", 9, 9, 0);
     app.world_mut()
         .entity_mut(soldier)
         .get_mut::<LocationComponent>()
@@ -513,10 +513,10 @@ fn mixed_size_bodies_push_apart() {
 fn heavier_body_is_carried_less_than_lighter_of_same_size() {
     let mut app = utils::orders_app();
     utils::install_map(&mut app, Projection::Isometric, MovementModel::Continuous);
-    let (ox, _) = utils::spawn_owned(&mut app, "ox", 5, 5, 0);
+    let (ox, _) = utils::create_owned(&mut app, "ox", 5, 5, 0);
     // Spawned clear — placement rightly refuses the claimed cell — then set
     // half a cell into the ox, half the radii sum of the two bodies.
-    let (soldier, _) = utils::spawn_owned(&mut app, "soldier", 9, 9, 0);
+    let (soldier, _) = utils::create_owned(&mut app, "soldier", 9, 9, 0);
     app.world_mut()
         .entity_mut(soldier)
         .get_mut::<LocationComponent>()
@@ -539,7 +539,7 @@ fn heavier_body_is_carried_less_than_lighter_of_same_size() {
 fn wide_walk_reaches_goal() {
     let mut app = utils::orders_app();
     utils::install_map(&mut app, Projection::Isometric, MovementModel::Continuous);
-    let (wagon, id) = utils::spawn_owned(&mut app, "wagon", 2, 2, 0);
+    let (wagon, id) = utils::create_owned(&mut app, "wagon", 2, 2, 0);
 
     utils::select(&mut app, id);
     utils::push_command(
@@ -562,7 +562,7 @@ fn wide_walk_reaches_goal() {
 fn claims_are_rebuilt_from_bodies() {
     let mut app = utils::orders_app();
     utils::install_map(&mut app, Projection::Isometric, MovementModel::Continuous);
-    let (soldier, id) = utils::spawn_owned(&mut app, "soldier", 2, 2, 0);
+    let (soldier, id) = utils::create_owned(&mut app, "soldier", 2, 2, 0);
 
     utils::select(&mut app, id);
     utils::push_command(

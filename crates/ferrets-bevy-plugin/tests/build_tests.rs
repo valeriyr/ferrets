@@ -26,7 +26,7 @@ use ferrets_simulation::{
 #[test]
 fn build_constructs_building() {
     let mut app = utils::orders_app();
-    let (worker, worker_id) = utils::spawn_owned(&mut app, "worker", 5, 5, 0);
+    let (worker, worker_id) = utils::create_owned(&mut app, "worker", 5, 5, 0);
     utils::grant_gold(&mut app, 80);
 
     utils::push_command(
@@ -86,7 +86,7 @@ fn build_constructs_building() {
 #[test]
 fn cancelling_build_refunds_and_restores_builder() {
     let mut app = utils::orders_app();
-    let (worker, worker_id) = utils::spawn_owned(&mut app, "worker", 5, 5, 0);
+    let (worker, worker_id) = utils::create_owned(&mut app, "worker", 5, 5, 0);
     utils::grant_gold(&mut app, 80);
 
     utils::push_command(
@@ -122,7 +122,7 @@ fn unaffordable_placement_finishes_order_without_site() {
     let mut app = utils::orders_app();
     // Already in reach of the site, so there is nothing to walk before the cost
     // check — and no gold is ever granted.
-    let (mason, mason_id) = utils::spawn_owned(&mut app, "mason", 9, 10, 0);
+    let (mason, mason_id) = utils::create_owned(&mut app, "mason", 9, 10, 0);
     let stood_at = utils::cell_of(app.world_mut(), mason);
 
     utils::push_command(
@@ -156,7 +156,7 @@ fn unaffordable_placement_finishes_order_without_site() {
 #[test]
 fn site_destroyed_mid_construction_frees_builder() {
     let mut app = utils::orders_app();
-    let (worker, worker_id) = utils::spawn_owned(&mut app, "worker", 10, 10, 0);
+    let (worker, worker_id) = utils::create_owned(&mut app, "worker", 10, 10, 0);
     utils::grant_gold(&mut app, 80);
 
     utils::push_command(
@@ -193,7 +193,7 @@ fn site_destroyed_mid_construction_frees_builder() {
 #[test]
 fn builder_working_in_open_stays_on_map() {
     let mut app = utils::orders_app();
-    let (mason, mason_id) = utils::spawn_owned(&mut app, "mason", 5, 5, 0);
+    let (mason, mason_id) = utils::create_owned(&mut app, "mason", 5, 5, 0);
     utils::grant_gold(&mut app, 80);
 
     utils::push_command(
@@ -234,7 +234,7 @@ fn builder_walks_up_to_site_rather_than_into_it() {
     // east. Closing on the position alone would stop it a cell short of (10, 10) —
     // which is inside the footprint, where it would block its own site.
     let mut app = utils::orders_app();
-    let (mason, mason_id) = utils::spawn_owned(&mut app, "mason", 14, 11, 0);
+    let (mason, mason_id) = utils::create_owned(&mut app, "mason", 14, 11, 0);
     utils::grant_gold(&mut app, 80);
 
     utils::push_command(
@@ -265,7 +265,7 @@ fn long_reach_builder_raises_site_without_closing_in() {
     let mut app = surveyor_app();
     // The depot's footprint ends at (11, 11); the surveyor stands three cells east
     // of it, which its build_range of 3 already covers.
-    let (surveyor, surveyor_id) = utils::spawn_owned(&mut app, "surveyor", 14, 10, 0);
+    let (surveyor, surveyor_id) = utils::create_owned(&mut app, "surveyor", 14, 10, 0);
     utils::grant_gold(&mut app, 80);
     let stood_at = utils::cell_of(app.world_mut(), surveyor);
 
@@ -298,7 +298,7 @@ fn builder_standing_on_site_blocks_it_and_is_never_moved() {
     // footprint exactly as anything else standing there would. The order gives up
     // rather than shoving it out of the way.
     let mut app = utils::orders_app();
-    let (mason, mason_id) = utils::spawn_owned(&mut app, "mason", 10, 10, 0);
+    let (mason, mason_id) = utils::create_owned(&mut app, "mason", 10, 10, 0);
     utils::grant_gold(&mut app, 80);
     let stood_at = utils::cell_of(app.world_mut(), mason);
 
@@ -338,7 +338,7 @@ fn builder_that_works_hidden_raises_site_it_stands_on() {
     // raise a site from the spot it is standing on — the one thing the open worker
     // above cannot do.
     let mut app = utils::orders_app();
-    let (worker, worker_id) = utils::spawn_owned(&mut app, "worker", 10, 10, 0);
+    let (worker, worker_id) = utils::create_owned(&mut app, "worker", 10, 10, 0);
     utils::grant_gold(&mut app, 80);
 
     utils::push_command(
@@ -365,7 +365,7 @@ fn builder_that_works_hidden_raises_site_it_stands_on() {
 #[test]
 fn boxed_in_builder_finishes_site_and_waits_to_reappear() {
     let mut app = utils::orders_app();
-    let (worker, worker_id) = utils::spawn_owned(&mut app, "worker", 10, 10, 0);
+    let (worker, worker_id) = utils::create_owned(&mut app, "worker", 10, 10, 0);
     utils::grant_gold(&mut app, 80);
 
     utils::push_command(
@@ -400,7 +400,7 @@ fn builder_faces_site_rather_than_corner_its_position_names() {
     let mut app = utils::orders_app();
     // Level with the depot's lower row and just east of it, so the building lies
     // due west. Its position names the north-west cell, which does not.
-    let (mason, mason_id) = utils::spawn_owned(&mut app, "mason", 12, 11, 0);
+    let (mason, mason_id) = utils::create_owned(&mut app, "mason", 12, 11, 0);
     utils::grant_gold(&mut app, 80);
 
     utils::push_command(
@@ -431,8 +431,8 @@ fn builder_faces_site_rather_than_corner_its_position_names() {
 #[test]
 fn crew_shares_one_site_and_each_member_adds_own_work() {
     let mut app = utils::orders_app();
-    let (first, first_id) = utils::spawn_owned(&mut app, "carpenter", 9, 10, 0);
-    let (second, second_id) = utils::spawn_owned(&mut app, "carpenter", 12, 11, 0);
+    let (first, first_id) = utils::create_owned(&mut app, "carpenter", 9, 10, 0);
+    let (second, second_id) = utils::create_owned(&mut app, "carpenter", 12, 11, 0);
     utils::grant_gold(&mut app, 80);
 
     order_depot(&mut app, first_id);
@@ -470,8 +470,8 @@ fn sending_builder_to_unfinished_site_puts_it_to_work() {
     // The way a player actually asks for help: right-click the half-built thing,
     // rather than re-issuing the build command on its exact cell.
     let mut app = utils::orders_app();
-    let (_, first_id) = utils::spawn_owned(&mut app, "carpenter", 9, 10, 0);
-    let (second, second_id) = utils::spawn_owned(&mut app, "carpenter", 12, 11, 0);
+    let (_, first_id) = utils::create_owned(&mut app, "carpenter", 9, 10, 0);
+    let (second, second_id) = utils::create_owned(&mut app, "carpenter", 12, 11, 0);
     utils::grant_gold(&mut app, 80);
 
     order_depot(&mut app, first_id);
@@ -511,8 +511,8 @@ fn sending_builder_to_unfinished_site_puts_it_to_work() {
 #[test]
 fn builder_that_works_alone_turns_away_from_site_another_holds() {
     let mut app = utils::orders_app();
-    let (_, first_id) = utils::spawn_owned(&mut app, "mason", 9, 10, 0);
-    let (second, second_id) = utils::spawn_owned(&mut app, "mason", 12, 11, 0);
+    let (_, first_id) = utils::create_owned(&mut app, "mason", 9, 10, 0);
+    let (second, second_id) = utils::create_owned(&mut app, "mason", 12, 11, 0);
     utils::grant_gold(&mut app, 80);
 
     order_depot(&mut app, first_id);
@@ -534,8 +534,8 @@ fn builder_that_works_alone_turns_away_from_site_another_holds() {
 #[test]
 fn cancelling_one_of_crew_leaves_site_standing() {
     let mut app = utils::orders_app();
-    let (first, first_id) = utils::spawn_owned(&mut app, "carpenter", 9, 10, 0);
-    let (_, second_id) = utils::spawn_owned(&mut app, "carpenter", 12, 11, 0);
+    let (first, first_id) = utils::create_owned(&mut app, "carpenter", 9, 10, 0);
+    let (_, second_id) = utils::create_owned(&mut app, "carpenter", 12, 11, 0);
     utils::grant_gold(&mut app, 80);
 
     order_depot(&mut app, first_id);
@@ -561,8 +561,8 @@ fn cancelling_one_of_crew_leaves_site_standing() {
 #[test]
 fn raised_site_records_crew_until_last_builder_leaves() {
     let mut app = utils::orders_app();
-    let (first, first_id) = utils::spawn_owned(&mut app, "carpenter", 9, 10, 0);
-    let (second, second_id) = utils::spawn_owned(&mut app, "carpenter", 12, 11, 0);
+    let (first, first_id) = utils::create_owned(&mut app, "carpenter", 9, 10, 0);
+    let (second, second_id) = utils::create_owned(&mut app, "carpenter", 12, 11, 0);
     utils::grant_gold(&mut app, 80);
 
     order_depot(&mut app, first_id);

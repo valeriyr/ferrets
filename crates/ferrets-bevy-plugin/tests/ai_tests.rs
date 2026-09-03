@@ -212,12 +212,12 @@ fn game_view_classifies_and_snapshots_entities() {
     utils::register_orders_content(&mut app);
     let world = app.world_mut();
 
-    let (_, _) = spawn::spawn_entity(world, "worker", utils::pos(5, 5), Some(1)).unwrap();
-    let (hidden_own, _) = spawn::spawn_entity(world, "worker", utils::pos(7, 5), Some(1)).unwrap();
-    let (_, _) = spawn::spawn_entity(world, "worker", utils::pos(10, 10), Some(0)).unwrap();
+    let (_, _) = spawn::create_entity(world, "worker", utils::pos(5, 5), Some(1)).unwrap();
+    let (hidden_own, _) = spawn::create_entity(world, "worker", utils::pos(7, 5), Some(1)).unwrap();
+    let (_, _) = spawn::create_entity(world, "worker", utils::pos(10, 10), Some(0)).unwrap();
     let (hidden_enemy, _) =
-        spawn::spawn_entity(world, "worker", utils::pos(12, 10), Some(0)).unwrap();
-    let (mine, _) = spawn::spawn_entity(world, "mine", utils::pos(2, 2), None).unwrap();
+        spawn::create_entity(world, "worker", utils::pos(12, 10), Some(0)).unwrap();
+    let (mine, _) = spawn::create_entity(world, "mine", utils::pos(2, 2), None).unwrap();
     world
         .get_mut::<ResourceSourceComponent>(mine)
         .unwrap()
@@ -352,8 +352,8 @@ fn run_ai_session() -> Vec<u64> {
     utils::register_orders_content(&mut app);
     {
         let world = app.world_mut();
-        spawn::spawn_entity(world, "worker", utils::pos(4, 4), Some(1)).unwrap();
-        spawn::spawn_entity(world, "worker", utils::pos(20, 20), Some(2)).unwrap();
+        spawn::create_entity(world, "worker", utils::pos(4, 4), Some(1)).unwrap();
+        spawn::create_entity(world, "worker", utils::pos(20, 20), Some(2)).unwrap();
     }
     install_ai(&mut app, &[(1, PATROL), (2, PATROL)]);
     app.world_mut().resource_mut::<GameSession>().start();
