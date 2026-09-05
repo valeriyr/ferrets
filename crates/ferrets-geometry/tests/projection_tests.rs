@@ -252,6 +252,154 @@ fn rect_wide_clamps_to_facing_side() {
 }
 
 //
+// ─── cells_in_range_of_rect ─────────────────────────────────────────────────
+//
+
+#[test]
+fn cells_around_single_cell_follow_projection_metric() {
+    let cell = CellRect::new(CellPos::new(5, 5), CellSize::ONE);
+
+    // Euclidean: the four neighbours and the cell itself, no corners.
+    assert_eq!(
+        Projection::Orthogonal.cells_in_range_of_rect(cell, 1),
+        vec![
+            CellPos::new(5, 4),
+            CellPos::new(4, 5),
+            CellPos::new(5, 5),
+            CellPos::new(6, 5),
+            CellPos::new(5, 6),
+        ]
+    );
+
+    // Chebyshev: the whole 3×3 block, row-major.
+    assert_eq!(
+        Projection::Isometric.cells_in_range_of_rect(cell, 1),
+        (4..=6)
+            .flat_map(|y| (4..=6).map(move |x| CellPos::new(x, y)))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn cells_around_rect_are_measured_from_its_nearest_edge() {
+    let rect = CellRect::new(CellPos::new(10, 10), CellSize::new(3, 3));
+
+    for projection in [Projection::Orthogonal, Projection::Isometric] {
+        let cells = projection.cells_in_range_of_rect(rect, 2);
+        assert!(
+            cells.contains(&CellPos::new(14, 12)),
+            "two right of the edge"
+        );
+        assert!(cells.contains(&CellPos::new(8, 10)), "two left of the edge");
+        assert!(!cells.contains(&CellPos::new(15, 12)), "three right is out");
+    }
+
+    // The block and a two-deep band on each edge are common to both; the
+    // corners differ: Euclidean reaches one diagonal cell per corner (dx = dy
+    // = 1 is within two; dx = 2, dy = 1 is not), Chebyshev the whole 2×2.
+    let orthogonal = Projection::Orthogonal.cells_in_range_of_rect(rect, 2);
+    assert!(!orthogonal.contains(&CellPos::new(14, 14)));
+    assert_eq!(orthogonal.len(), 9 + 4 * 3 * 2 + 4);
+
+    let isometric = Projection::Isometric.cells_in_range_of_rect(rect, 2);
+    assert!(isometric.contains(&CellPos::new(14, 14)));
+    assert_eq!(isometric.len(), 7 * 7);
+}
+
+#[test]
+fn cells_around_rect_stop_at_zero() {
+    let rect = CellRect::new(CellPos::new(0, 0), CellSize::ONE);
+
+    for projection in [Projection::Orthogonal, Projection::Isometric] {
+        let cells = projection.cells_in_range_of_rect(rect, 2);
+        assert!(
+            cells.iter().all(|cell| cell.x <= 2 && cell.y <= 2),
+            "only the quadrant with non-negative coordinates"
+        );
+    }
+    // Euclidean keeps the quarter disc, Chebyshev the whole quarter block.
+    assert_eq!(
+        Projection::Orthogonal.cells_in_range_of_rect(rect, 2).len(),
+        6
+    );
+    assert_eq!(
+        Projection::Isometric.cells_in_range_of_rect(rect, 2).len(),
+        9
+    );
+}
+
+//
+// ─── in_circle and circle_cells ──────────────────────────────────────────────
+//
+
+#[test]
+fn circle_is_euclidean_whatever_projection_map_uses() {
+    let rect = CellRect::new(CellPos::new(10, 10), CellSize::ONE);
+
+    // Two along an axis is in; the diagonal at (2, 2) is not, as under the
+    // Orthogonal metric and unlike the Isometric one.
+    assert!(projection::in_circle(CellPos::new(12, 10), rect, 2));
+    assert!(!projection::in_circle(CellPos::new(12, 12), rect, 2));
+    assert_eq!(
+        projection::in_circle(CellPos::new(12, 12), rect, 2),
+        Projection::Orthogonal.in_range_of_rect(CellPos::new(12, 12), rect, 2)
+    );
+    assert_ne!(
+        projection::in_circle(CellPos::new(12, 12), rect, 2),
+        Projection::Isometric.in_range_of_rect(CellPos::new(12, 12), rect, 2)
+    );
+}
+
+#[test]
+fn circle_is_measured_from_nearest_cell_of_rect() {
+    let rect = CellRect::new(CellPos::new(10, 10), CellSize::new(3, 3));
+
+    assert!(
+        projection::in_circle(CellPos::new(14, 12), rect, 2),
+        "two right of the edge"
+    );
+    assert!(
+        !projection::in_circle(CellPos::new(15, 12), rect, 2),
+        "three right is out"
+    );
+    assert!(
+        projection::in_circle(CellPos::new(11, 11), rect, 0),
+        "inside is at zero"
+    );
+}
+
+#[test]
+fn circle_cells_lists_orthogonal_disc_row_major() {
+    let rect = CellRect::new(CellPos::new(5, 5), CellSize::ONE);
+
+    assert_eq!(
+        projection::circle_cells(rect, 1),
+        Projection::Orthogonal.cells_in_range_of_rect(rect, 1)
+    );
+    assert_eq!(
+        projection::circle_cells(rect, 1),
+        vec![
+            CellPos::new(5, 4),
+            CellPos::new(4, 5),
+            CellPos::new(5, 5),
+            CellPos::new(6, 5),
+            CellPos::new(5, 6),
+        ]
+    );
+}
+
+#[test]
+fn circle_cells_stop_at_zero() {
+    let rect = CellRect::new(CellPos::new(0, 0), CellSize::ONE);
+
+    let cells = projection::circle_cells(rect, 2);
+
+    // The quarter disc: the origin, two along each axis, and one diagonal.
+    assert_eq!(cells.len(), 6);
+    assert!(cells.iter().all(|cell| cell.x <= 2 && cell.y <= 2));
+}
+
+//
 // ─── in_range_for_rects ───────────────────────────────────────────────────────────
 //
 // Two footprints, so a wide mover reaches as far as its nearest edge:

@@ -4,9 +4,10 @@
 use ferrets_content::{
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
+    morph::MorphTime,
     registry::ContentRegistry,
     research::ResearchId,
-    skills::{EntityCastTarget, SkillCaster, SkillId},
+    skills::{EntityCastCost, EntityCastTarget, SkillCaster, SkillId},
 };
 
 /// The static content catalogue a script can consult.
@@ -59,6 +60,7 @@ impl ContentView {
                                 EntityCastTarget::Caster => "caster",
                                 EntityCastTarget::Ally => "ally",
                                 EntityCastTarget::Enemy => "enemy",
+                                EntityCastTarget::Position => "position",
                             }),
                         ),
                         SkillCaster::Player { .. } => ("player", None),
@@ -133,6 +135,20 @@ pub struct EntityContentView {
     /// Resource kinds accepted for delivery. `None` when not a storage.
     pub stores: Option<Vec<String>>,
     pub can_move: bool,
+    /// Changes of form instances can start, in declaration order. `None`
+    /// when the type declares none.
+    pub morphs: Option<Vec<MorphView>>,
+}
+
+/// One change of form a type declares.
+pub struct MorphView {
+    /// The type the change lands as.
+    pub into: String,
+    /// The stockpile price per resource kind, in ascending kind order. Empty
+    /// means the change draws nothing from the stockpile.
+    pub cost: Vec<(String, u32)>,
+    /// Ticks the change takes. `None` when the time is read from a stat.
+    pub time: Option<u32>,
 }
 
 /// A type's weapon — the combat stats a script reads together (a type carries
@@ -197,6 +213,29 @@ impl EntityContentView {
                 .as_ref()
                 .map(|s| s.kinds().map(str::to_string).collect()),
             can_move: def.can_move(),
+            morphs: (!def.morphs.is_empty()).then(|| {
+                def.morphs
+                    .iter()
+                    .map(|transition| MorphView {
+                        into: transition.into_type().to_string(),
+                        cost: transition
+                            .costs()
+                            .iter()
+                            .flat_map(|cost| match cost {
+                                EntityCastCost::Resources(resources) => resources
+                                    .iter()
+                                    .map(|(kind, amount)| (kind.clone(), *amount))
+                                    .collect(),
+                                EntityCastCost::Energy(_) | EntityCastCost::Health(_) => Vec::new(),
+                            })
+                            .collect(),
+                        time: match transition.time() {
+                            MorphTime::Constant(ticks) => Some(ticks),
+                            MorphTime::Stat(_) => None,
+                        },
+                    })
+                    .collect()
+            }),
         }
     }
 }

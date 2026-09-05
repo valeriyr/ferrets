@@ -15,114 +15,156 @@ use bevy_ecs::{
 
 use crate::{
     components::{
-        build::UnderConstructionComponent, repair::UnderRepairComponent,
-        resource::UnderHarvestComponent, transport::TransporterComponent,
+        build::{SiteWork, UnderConstructionComponent},
+        repair::UnderRepairComponent,
+        resource::UnderHarvestComponent,
+        transport::TransporterComponent,
     },
     entity_def,
     entity_index::EntityIndex,
     simulation_id::SimulationId,
 };
 
+/// The invariant every joiner relies on: a job that takes no crew is shut to
+/// newcomers before anyone tries to join it.
+const NO_CREW_TO_JOIN: &str = "a job that takes no crew admits nobody, so nobody is joined to it";
+
 /// A component that holds the workers attending the entity carrying it.
-pub(super) trait Crew: Component<Mutability = Mutable> + Default {
-    /// The workers on the job.
-    fn members(&self) -> &BTreeSet<SimulationId>;
-    /// The workers on the job, to add to or remove from.
-    fn members_mut(&mut self) -> &mut BTreeSet<SimulationId>;
+pub(super) trait Crew: Component<Mutability = Mutable> {
+    /// The workers on the job, or `None` for a job that takes no crew.
+    fn members(&self) -> Option<&BTreeSet<SimulationId>>;
+    /// The workers on the job, to add to or remove from, or `None` for a job
+    /// that takes no crew.
+    fn members_mut(&mut self) -> Option<&mut BTreeSet<SimulationId>>;
 }
 
 impl Crew for UnderHarvestComponent {
-    fn members(&self) -> &BTreeSet<SimulationId> {
-        &self.carriers
+    fn members(&self) -> Option<&BTreeSet<SimulationId>> {
+        Some(&self.carriers)
     }
 
-    fn members_mut(&mut self) -> &mut BTreeSet<SimulationId> {
-        &mut self.carriers
+    fn members_mut(&mut self) -> Option<&mut BTreeSet<SimulationId>> {
+        Some(&mut self.carriers)
     }
 }
 
 impl Crew for UnderConstructionComponent {
-    fn members(&self) -> &BTreeSet<SimulationId> {
-        &self.builders
+    fn members(&self) -> Option<&BTreeSet<SimulationId>> {
+        match &self.work {
+            SiteWork::Crew { builders } => Some(builders),
+            SiteWork::Unattended { .. } => None,
+        }
     }
 
-    fn members_mut(&mut self) -> &mut BTreeSet<SimulationId> {
-        &mut self.builders
+    fn members_mut(&mut self) -> Option<&mut BTreeSet<SimulationId>> {
+        match &mut self.work {
+            SiteWork::Crew { builders } => Some(builders),
+            SiteWork::Unattended { .. } => None,
+        }
     }
 }
 
 impl Crew for UnderRepairComponent {
-    fn members(&self) -> &BTreeSet<SimulationId> {
-        &self.repairers
+    fn members(&self) -> Option<&BTreeSet<SimulationId>> {
+        Some(&self.repairers)
     }
 
-    fn members_mut(&mut self) -> &mut BTreeSet<SimulationId> {
-        &mut self.repairers
+    fn members_mut(&mut self) -> Option<&mut BTreeSet<SimulationId>> {
+        Some(&mut self.repairers)
     }
 }
 
 impl Crew for TransporterComponent {
-    fn members(&self) -> &BTreeSet<SimulationId> {
-        &self.passengers
+    fn members(&self) -> Option<&BTreeSet<SimulationId>> {
+        Some(&self.passengers)
     }
 
-    fn members_mut(&mut self) -> &mut BTreeSet<SimulationId> {
-        &mut self.passengers
+    fn members_mut(&mut self) -> Option<&mut BTreeSet<SimulationId>> {
+        Some(&mut self.passengers)
     }
 }
 
 /// Adds `member` to the crew on `job`, marking a job nobody was on yet.
-pub(super) fn join<C: Crew>(world: &mut World, job: Entity, member: Entity) {
+///
+/// Panics if the job takes no crew: nothing is ever joined to such a job.
+pub(super) fn join<C: Crew + Default>(world: &mut World, job: Entity, member: Entity) {
     let id = entity_def::simulation_id(world, member);
     let mut job_mut = world.entity_mut(job);
 
     match job_mut.get_mut::<C>() {
         Some(mut crew) => {
-            crew.members_mut().insert(id);
+            crew.members_mut().expect(NO_CREW_TO_JOIN).insert(id);
         }
         None => {
             let mut crew = C::default();
-            crew.members_mut().insert(id);
+            crew.members_mut().expect(NO_CREW_TO_JOIN).insert(id);
             job_mut.insert(crew);
         }
     }
 }
 
-/// Adds `member` to a crew the job already carries, and leaves a job carrying none
-/// alone.
+/// Adds `member` to the crew the job already carries.
 ///
 /// For a crew that rides along on a component saying something else as well — a
 /// site's construction progress — where conjuring the component up would claim
 /// something about the job that is not this module's to claim.
+///
+/// Panics if the job carries no component, or takes no crew: a caller joins
+/// only a job it has just found under way and open to it.
 pub(super) fn join_existing<C: Crew>(world: &mut World, job: Entity, member: Entity) {
     let id = entity_def::simulation_id(world, member);
 
-    if let Some(mut crew) = world.entity_mut(job).get_mut::<C>() {
-        crew.members_mut().insert(id);
-    }
+    world
+        .entity_mut(job)
+        .get_mut::<C>()
+        .expect("a member joins only a job it has just found under way")
+        .members_mut()
+        .expect(NO_CREW_TO_JOIN)
+        .insert(id);
 }
 
-/// Removes `member` from the crew on `job`, and reports whether that leaves the job
-/// unmanned.
+/// What leaving a job came to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Departure {
+    /// The member left, and others remain on the job.
+    OthersRemain,
+    /// The member was the last one out: the job stands unmanned.
+    LastOut,
+    /// The job no longer carries the component: it finished or was torn down
+    /// before the member's order noticed.
+    JobGone,
+}
+
+/// Removes `member` from the crew on `job`.
 ///
-/// A job carrying no crew reports `false`: nobody is the last one out of a crew that
-/// does not exist.
-pub(super) fn leave<C: Crew>(world: &mut World, job: Entity, member: Entity) -> bool {
+/// Panics if the job takes no crew, or the member was not on it: every member
+/// joined before it leaves.
+pub(super) fn leave<C: Crew>(world: &mut World, job: Entity, member: Entity) -> Departure {
     let id = entity_def::simulation_id(world, member);
     let mut job_mut = world.entity_mut(job);
 
     let Some(mut crew) = job_mut.get_mut::<C>() else {
-        return false;
+        return Departure::JobGone;
     };
-    crew.members_mut().remove(&id);
-    crew.members().is_empty()
+    let members = crew
+        .members_mut()
+        .expect("a job that takes no crew has nobody on it to leave");
+    assert!(members.remove(&id), "a member leaves only a job it joined");
+    if members.is_empty() {
+        Departure::LastOut
+    } else {
+        Departure::OthersRemain
+    }
 }
 
 /// Like [`leave`], but the last worker out takes the marker with it — for a crew whose
 /// component says nothing beyond "somebody is on this".
 pub(super) fn leave_and_unmark<C: Crew>(world: &mut World, job: Entity, member: Entity) {
-    if leave::<C>(world, job, member) {
-        world.entity_mut(job).remove::<C>();
+    match leave::<C>(world, job, member) {
+        Departure::LastOut => {
+            world.entity_mut(job).remove::<C>();
+        }
+        Departure::OthersRemain | Departure::JobGone => {}
     }
 }
 
@@ -131,8 +173,10 @@ pub(super) fn leave_and_unmark<C: Crew>(world: &mut World, job: Entity, member: 
 ///
 /// A job is exclusive when either side declines to share it, so a lone worker turns
 /// every newcomer away and a stacking crew still yields to one that works alone.
-/// What being shut out means for the newcomer's order — waiting in place for the
-/// crew to clear, or giving the job up — is the caller's to decide.
+/// A job that takes no crew shuts everyone out; a job no longer carrying the
+/// component shuts nobody out. What being
+/// shut out means for the newcomer's order — waiting in place for the crew to
+/// clear, or giving the job up — is the caller's to decide.
 pub(super) fn excludes<C: Crew>(
     world: &World,
     job: Entity,
@@ -142,9 +186,12 @@ pub(super) fn excludes<C: Crew>(
     let Some(crew) = world.entity(job).get::<C>() else {
         return false;
     };
+    let Some(members) = crew.members() else {
+        return true;
+    };
     let newcomer_shares = shares(world, newcomer);
 
-    crew.members()
+    members
         .iter()
         .filter_map(|&id| world.resource::<EntityIndex>().alive(id))
         .filter(|&other| other != newcomer)

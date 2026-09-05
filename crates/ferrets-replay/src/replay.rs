@@ -2,7 +2,7 @@
 
 use std::{collections::BTreeMap, io::Read};
 
-use ferrets_simulation::{command::PlayerCommand, session::player_slot::PlayerId};
+use ferrets_simulation::{command::PlayerCommand, session::player_id::PlayerId};
 
 use crate::{format, header::ReplayHeader, record::TickRecord};
 

@@ -241,6 +241,7 @@ pub fn run() {
                     render::snap_revealed,
                     render::interpolate_sprites,
                     render::update_fog_overlay,
+                    render::update_field_overlay,
                     render::draw_ghosts,
                     // Before the selection ring and the bars, so a flier's
                     // shadow sits under both rather than over them.

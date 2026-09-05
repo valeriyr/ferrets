@@ -3,7 +3,7 @@
 use ferrets_geometry::projection::Projection;
 use serde::{Deserialize, Serialize};
 
-use crate::{movement_model::MovementModel, session::player_slot::PlayerId};
+use crate::{movement_model::MovementModel, session::player_id::PlayerId};
 
 /// One entity a map opens with.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

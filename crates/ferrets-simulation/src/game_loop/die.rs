@@ -5,6 +5,7 @@ use bevy_ecs::{entity::Entity, world::World};
 use ferrets_math::fixed_uvec2::FixedUVec2;
 use ferrets_physics::body;
 
+use super::orders::{Processing, Refusal};
 use crate::{
     components::{
         dying::{DiedComponent, DyingComponent},
@@ -17,6 +18,11 @@ use crate::{
     order::Order,
     spawn,
 };
+
+/// Whether `entity` may start a Die: always.
+pub fn can_start(_world: &World, _entity: Entity, _order: &Order) -> Result<(), Refusal> {
+    Ok(())
+}
 
 /// Called once when a Die order becomes the front `New` entry.
 ///
@@ -48,7 +54,7 @@ pub fn cancel_processing(
 /// Counts down the dying timer. When it expires, [`DyingComponent`] is replaced
 /// with [`DiedComponent`], the configured corpse (if any) is left behind, and
 /// the order finishes.
-pub fn process(entity: Entity, _order: &Order, world: &mut World) -> OrderState {
+pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing {
     {
         let mut entity_mut = world.entity_mut(entity);
         let mut dying = entity_mut
@@ -57,7 +63,7 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> OrderState 
 
         if dying.ticks_remaining > 0 {
             dying.ticks_remaining -= 1;
-            return OrderState::InProcessing;
+            return Processing::state(OrderState::InProcessing);
         }
 
         entity_mut.remove::<DyingComponent>();
@@ -66,7 +72,7 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> OrderState 
 
     free_footprint(entity, world);
     leave_corpse(entity, world);
-    OrderState::Finished
+    Processing::state(OrderState::Finished)
 }
 
 /// Frees the footprint the entity has held through its dying phase, so the
@@ -103,11 +109,7 @@ fn leave_corpse(entity: Entity, world: &mut World) {
     else {
         return;
     };
-    let position = world
-        .entity(entity)
-        .get::<LocationComponent>()
-        .unwrap()
-        .position;
+    let position = entity_def::position(world, entity);
     // Remains rest on the lattice: a continuous mover dies wherever pushing
     // left it, and the corpse takes the cell the body visually stood on. On
     // the cell model the two coincide.

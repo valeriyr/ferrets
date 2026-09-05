@@ -7,8 +7,8 @@
 use bevy_ecs::{entity::Entity, world::World};
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 
-use crate::{components::entity_stats::StatsComponent, spawn};
-use ferrets_content::{entity_stats::EntityStatId, work::WorkPresence};
+use crate::spawn;
+use ferrets_content::work::WorkPresence;
 
 /// Takes a worker off the map for a job its presence says it disappears into,
 /// which frees any of the job's cells it was standing on.
@@ -28,17 +28,4 @@ pub(super) fn enter(world: &mut World, entity: Entity, presence: WorkPresence) {
 /// order in the same tick and are in no position to retry it themselves.
 pub(super) fn leave(world: &mut World, entity: Entity, around: CellPos, around_size: CellSize) {
     spawn::reveal_entity_near_or_retry(world, entity, around, around_size);
-}
-
-/// How close a worker has to be to its work, in cells.
-///
-/// Registration pairs every work capability with its reach stat, so a worker
-/// partway through the order always carries it.
-pub(super) fn reach(world: &World, entity: Entity, stat: EntityStatId) -> u32 {
-    world
-        .entity(entity)
-        .get::<StatsComponent>()
-        .expect("workers have a stat store")
-        .effective_as_u32(stat)
-        .unwrap()
 }

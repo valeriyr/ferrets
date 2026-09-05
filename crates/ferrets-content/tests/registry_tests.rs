@@ -7,10 +7,16 @@ mod utils;
 
 use ferrets_content::{
     attack::{Delivery, Weapon},
+    build::BuilderAttendance,
     costs::{self, Cost},
     entity_buffs::EntityBuffDef,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
+    field::{
+        FieldAction, FieldAffiliation, FieldCoverage, FieldDecay, FieldDef, FieldEffect,
+        FieldEffectKind, FieldGrowth, FieldId, FieldPlacement, FieldSide, FieldSourceDef,
+        FieldVision,
+    },
     location::Solidity,
     morph::{MorphCancel, MorphPlacement, MorphTime, MorphTransition},
     player_buffs::{PlayerBuffDef, PlayerBuffId},
@@ -23,6 +29,7 @@ use ferrets_content::{
         EntityCastCost, EntityCastEffect, EntityCastTarget, PlayerCastEffect, SkillCaster, SkillDef,
     },
     stack_rule::StackRule,
+    stand::StandingAct,
     stats::{EntityModifier, ModifierOp},
     tags,
     transport::{BoardingPolicy, PassengerConduct, PassengerFate},
@@ -170,7 +177,7 @@ fn validate_accepts_registered_production_catalogues() {
     registry.register(
         utils::standing("worker", GROUND)
             .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
-            .with_builder(["depot"], WorkPresence::Hidden),
+            .with_builder(["depot"], BuilderAttendance::Crew(WorkPresence::Hidden)),
     );
 
     registry.validate();
@@ -191,7 +198,7 @@ fn validate_accepts_production_cycle() {
         utils::standing("worker", GROUND)
             .with_train_time(4)
             .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
-            .with_builder(["town_hall"], WorkPresence::Hidden),
+            .with_builder(["town_hall"], BuilderAttendance::Crew(WorkPresence::Hidden)),
     );
 
     registry.validate();
@@ -231,7 +238,7 @@ fn validate_rejects_unknown_built_type() {
     registry.register(
         utils::standing("worker", GROUND)
             .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
-            .with_builder(["nexus"], WorkPresence::Hidden),
+            .with_builder(["nexus"], BuilderAttendance::Crew(WorkPresence::Hidden)),
     );
     registry.validate();
 }
@@ -248,7 +255,7 @@ fn validate_rejects_unconstructible_built_type() {
     registry.register(
         utils::standing("worker", GROUND)
             .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
-            .with_builder(["statue"], WorkPresence::Hidden),
+            .with_builder(["statue"], BuilderAttendance::Crew(WorkPresence::Hidden)),
     );
     registry.validate();
 }
@@ -855,8 +862,10 @@ fn register_rejects_repair_speed_without_capability() {
 #[should_panic(expected = "can build but is missing build_range")]
 fn register_rejects_builder_without_reach() {
     let mut registry = utils::ground_registry();
-    registry
-        .register(utils::standing("worker", GROUND).with_builder(["depot"], WorkPresence::Hidden));
+    registry.register(
+        utils::standing("worker", GROUND)
+            .with_builder(["depot"], BuilderAttendance::Crew(WorkPresence::Hidden)),
+    );
 }
 
 #[test]
@@ -1670,6 +1679,7 @@ fn validate_rejects_transition_with_unresolved_requirement() {
             )
             .with_morphs([MorphTransition::new(
                 "flier",
+                None,
                 MorphTime::Constant(20),
                 MorphPlacement::Revalidate,
                 MorphCancel::Committed,
@@ -1707,6 +1717,7 @@ fn validate_rejects_transition_timed_by_undeclared_stat() {
             )
             .with_morphs([MorphTransition::new(
                 "flier",
+                None,
                 MorphTime::Stat(stat),
                 MorphPlacement::Revalidate,
                 MorphCancel::Committed,
@@ -1743,6 +1754,7 @@ fn validate_rejects_transition_with_energy_cost_but_no_energy_pool() {
             )
             .with_morphs([MorphTransition::new(
                 "flier",
+                None,
                 MorphTime::Constant(20),
                 MorphPlacement::Revalidate,
                 MorphCancel::Committed,
@@ -1779,6 +1791,7 @@ fn validate_rejects_transition_with_unregistered_resource_cost() {
             )
             .with_morphs([MorphTransition::new(
                 "flier",
+                None,
                 MorphTime::Constant(20),
                 MorphPlacement::Revalidate,
                 MorphCancel::Committed,
@@ -1793,6 +1806,49 @@ fn validate_rejects_transition_with_unregistered_resource_cost() {
         FixedU64::from_num(360),
         FixedU64::from_num(360),
     ));
+
+    registry.validate();
+}
+
+#[test]
+#[should_panic(expected = "wears a form that is not registered")]
+fn validate_rejects_transition_through_unregistered_form() {
+    let mut registry = utils::ground_registry();
+    registry.register(
+        utils::standing("larva", GROUND)
+            .with_health(20)
+            .with_morphs([morph_through("egg", "hatchling")]),
+    );
+    registry.register(utils::standing("hatchling", GROUND).with_health(30));
+
+    registry.validate();
+}
+
+#[test]
+#[should_panic(expected = "wears a form whose footprint differs from its own")]
+fn validate_rejects_transition_through_form_of_other_footprint() {
+    let mut registry = utils::ground_registry();
+    registry.register(
+        utils::standing("larva", GROUND)
+            .with_health(20)
+            .with_morphs([morph_through("egg", "hatchling")]),
+    );
+    registry.register(utils::sized("egg", GROUND, CellSize::new(2, 2)).with_health(60));
+    registry.register(utils::standing("hatchling", GROUND).with_health(30));
+
+    registry.validate();
+}
+
+#[test]
+fn validate_accepts_transition_through_form_of_same_footprint() {
+    let mut registry = utils::ground_registry();
+    registry.register(
+        utils::standing("larva", GROUND)
+            .with_health(20)
+            .with_morphs([morph_through("egg", "hatchling")]),
+    );
+    registry.register(utils::standing("egg", GROUND).with_health(60));
+    registry.register(utils::standing("hatchling", GROUND).with_health(30));
 
     registry.validate();
 }
@@ -1813,6 +1869,7 @@ fn validate_accepts_transition_with_payable_costs() {
             .with_energy(100, FixedU64::from_num(0.1))
             .with_morphs([MorphTransition::new(
                 "flier",
+                None,
                 MorphTime::Constant(20),
                 MorphPlacement::Reserve,
                 MorphCancel::Refundable,
@@ -1842,7 +1899,7 @@ fn validate_accepts_transition_with_payable_costs() {
 #[should_panic(
     expected = "entity type 'bunker' carries a turret that fires on the move but cannot move"
 )]
-fn validate_rejects_turret_firing_on_the_move_without_movement() {
+fn validate_rejects_turret_firing_while_moving_without_movement() {
     let mut registry = utils::ground_registry();
     let rolling = registry.register_turret(
         "rolling",
@@ -1921,6 +1978,292 @@ fn validate_rejects_turret_reading_stat_its_body_lacks() {
 }
 
 //
+// ─── Fields ───────────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn register_accepts_field_sources_placement_and_effects() {
+    let mut registry = utils::ground_registry();
+    let creep = creep_field(&mut registry);
+    registry.register(
+        utils::standing("hive", GROUND)
+            .with_field_sources([emitter(creep)])
+            .with_field_placement([FieldPlacement::Requires {
+                field: creep,
+                of: FieldAffiliation::Anyone,
+                coverage: FieldCoverage::Footprint,
+            }])
+            .with_field_effects([FieldEffect::new(
+                creep,
+                FieldAffiliation::Anyone,
+                FieldSide::Inside,
+                FieldEffectKind::Modifiers(vec![EntityModifier {
+                    stat: EntityStatId::SPEED,
+                    op: ModifierOp::PercentAdd,
+                    magnitude: FixedI64::ONE,
+                }]),
+            )]),
+    );
+    registry.validate();
+
+    assert_eq!(registry.field("creep"), Some(creep));
+    assert_eq!(registry.field_name(creep), Some("creep"));
+    assert_eq!(
+        registry.field_def(creep).decay(),
+        FieldDecay::Gradual { cycle: 4 }
+    );
+    assert_eq!(registry.field_def(creep).vision(), FieldVision::Dark);
+    assert_eq!(registry.field_ids().collect::<Vec<_>>(), vec![creep]);
+}
+
+#[test]
+#[should_panic(expected = "acts on an unregistered field when it stands")]
+fn validate_rejects_standing_act_on_unregistered_field() {
+    let mut registry = utils::ground_registry();
+    // A handle minted by another registry, which this one never registered.
+    let foreign = utils::ground_registry().register_field(
+        "blight",
+        FieldDef::new(GROUND, FieldDecay::Never, FieldVision::Dark),
+    );
+    registry.register(
+        utils::standing("pylon", GROUND)
+            .with_health(100)
+            .with_standing_acts([StandingAct::Field {
+                field: foreign,
+                radius: 3,
+                action: FieldAction::Clear,
+            }]),
+    );
+    registry.validate();
+}
+
+#[test]
+fn register_accepts_standing_act_on_registered_field() {
+    let mut registry = utils::ground_registry();
+    let creep = creep_field(&mut registry);
+    registry.register(
+        utils::standing("pylon", GROUND)
+            .with_health(100)
+            .with_standing_acts([StandingAct::Field {
+                field: creep,
+                radius: 3,
+                action: FieldAction::Clear,
+            }]),
+    );
+    registry.validate();
+
+    let pylon = registry.entity("pylon").expect("pylon is registered");
+    assert_eq!(
+        pylon.on_stand,
+        vec![StandingAct::Field {
+            field: creep,
+            radius: 3,
+            action: FieldAction::Clear,
+        }]
+    );
+}
+
+#[test]
+fn register_keeps_field_vision() {
+    let mut registry = utils::ground_registry();
+    let watched = registry.register_field(
+        "creep",
+        FieldDef::new(GROUND, FieldDecay::Never, FieldVision::Watched),
+    );
+    let dark = registry.register_field(
+        "power",
+        FieldDef::new(GROUND, FieldDecay::Instant, FieldVision::Dark),
+    );
+
+    assert_eq!(registry.field_def(watched).vision(), FieldVision::Watched);
+    assert_eq!(registry.field_def(dark).vision(), FieldVision::Dark);
+}
+
+#[test]
+#[should_panic(expected = "field 'creep' is already registered")]
+fn register_rejects_duplicate_field() {
+    let mut registry = utils::ground_registry();
+    creep_field(&mut registry);
+    creep_field(&mut registry);
+}
+
+#[test]
+#[should_panic(expected = "field 'creep' covers unregistered layers")]
+fn register_rejects_field_over_unregistered_layer() {
+    utils::ground_registry().register_field(
+        "creep",
+        FieldDef::new(utils::WATER, FieldDecay::Instant, FieldVision::Dark),
+    );
+}
+
+#[test]
+#[should_panic(expected = "entity type 'hive' projects an unregistered field")]
+fn register_rejects_source_of_foreign_field() {
+    let mut foreign = utils::ground_registry();
+    let creep = creep_field(&mut foreign);
+    utils::ground_registry()
+        .register(utils::standing("hive", GROUND).with_field_sources([emitter(creep)]));
+}
+
+#[test]
+#[should_panic(expected = "entity type 'spore' reads an unregistered field for placement")]
+fn register_rejects_placement_on_foreign_field() {
+    let mut foreign = utils::ground_registry();
+    let creep = creep_field(&mut foreign);
+    utils::ground_registry().register(
+        utils::standing("spore", GROUND)
+            .with_field_placement([FieldPlacement::Forbids { field: creep }]),
+    );
+}
+
+#[test]
+#[should_panic(expected = "entity type 'zergling' answers to an unregistered field")]
+fn register_rejects_effect_of_foreign_field() {
+    let mut foreign = utils::ground_registry();
+    let creep = creep_field(&mut foreign);
+    utils::ground_registry().register(utils::standing("zergling", GROUND).with_field_effects([
+        FieldEffect::new(
+            creep,
+            FieldAffiliation::Own,
+            FieldSide::Outside,
+            FieldEffectKind::Disabled,
+        ),
+    ]));
+}
+
+#[test]
+#[should_panic(expected = "decay cycle must be positive")]
+fn field_rejects_zero_decay_cycle() {
+    FieldDef::new(GROUND, FieldDecay::Gradual { cycle: 0 }, FieldVision::Dark);
+}
+
+#[test]
+#[should_panic(expected = "entity type 'hive' starts a field beyond its radius")]
+fn register_rejects_source_starting_beyond_radius() {
+    let mut registry = utils::ground_registry();
+    let creep = creep_field(&mut registry);
+    registry.register(
+        utils::standing("hive", GROUND).with_field_sources([FieldSourceDef::new(
+            creep,
+            3,
+            FieldGrowth::Gradual {
+                cycle: 2,
+                initial_radius: 5,
+            },
+            None,
+        )]),
+    );
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'hive' projects a field beyond its radius while constructing"
+)]
+fn register_rejects_source_constructing_beyond_radius() {
+    let mut registry = utils::ground_registry();
+    let creep = creep_field(&mut registry);
+    registry.register(
+        utils::standing("hive", GROUND)
+            .with_build_time(4)
+            .with_field_sources([FieldSourceDef::new(creep, 3, FieldGrowth::Instant, Some(5))]),
+    );
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'hive' projects a field while constructing but is never constructed"
+)]
+fn register_rejects_source_constructing_on_type_never_built() {
+    let mut registry = utils::ground_registry();
+    let creep = creep_field(&mut registry);
+    registry.register(
+        utils::standing("hive", GROUND).with_field_sources([FieldSourceDef::new(
+            creep,
+            3,
+            FieldGrowth::Instant,
+            Some(1),
+        )]),
+    );
+}
+
+#[test]
+#[should_panic(expected = "entity type 'zergling' has a field effect with no modifiers")]
+fn register_rejects_field_effect_with_no_modifiers() {
+    let mut registry = utils::ground_registry();
+    let creep = creep_field(&mut registry);
+    registry.register(
+        utils::standing("zergling", GROUND).with_field_effects([FieldEffect::new(
+            creep,
+            FieldAffiliation::Anyone,
+            FieldSide::Inside,
+            FieldEffectKind::Modifiers(Vec::new()),
+        )]),
+    );
+}
+
+#[test]
+fn register_accepts_position_cast_with_field_effect() {
+    let mut registry = utils::ground_registry();
+    let creep = creep_field(&mut registry);
+    registry.register_skill(
+        "spew",
+        SkillDef {
+            cooldown: 1,
+            caster: SkillCaster::Entity {
+                costs: Vec::new(),
+                target: EntityCastTarget::Position,
+                effect: EntityCastEffect::Field {
+                    field: creep,
+                    radius: 2,
+                    action: FieldAction::Cover,
+                },
+            },
+            requires: Vec::new(),
+        },
+    );
+}
+
+#[test]
+#[should_panic(expected = "skill 'zap' aims at a position but its effect needs an entity")]
+fn register_rejects_position_cast_with_entity_effect() {
+    utils::ground_registry().register_skill(
+        "zap",
+        SkillDef {
+            cooldown: 1,
+            caster: SkillCaster::Entity {
+                costs: Vec::new(),
+                target: EntityCastTarget::Position,
+                effect: EntityCastEffect::Damage(FixedU64::ONE),
+            },
+            requires: Vec::new(),
+        },
+    );
+}
+
+#[test]
+#[should_panic(expected = "skill 'spew' acts on an unregistered field")]
+fn register_rejects_cast_on_foreign_field() {
+    let mut foreign = utils::ground_registry();
+    let creep = creep_field(&mut foreign);
+    utils::ground_registry().register_skill(
+        "spew",
+        SkillDef {
+            cooldown: 1,
+            caster: SkillCaster::Entity {
+                costs: Vec::new(),
+                target: EntityCastTarget::Position,
+                effect: EntityCastEffect::Field {
+                    field: creep,
+                    radius: 2,
+                    action: FieldAction::Cover,
+                },
+            },
+            requires: Vec::new(),
+        },
+    );
+}
+
+//
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 //
 
@@ -1960,14 +2303,41 @@ fn haste_buff(registry: &mut ContentRegistry) -> PlayerBuffId {
     )
 }
 
-/// A free, timed, committed transition into the named type.
-fn morph_into(into: &str) -> MorphTransition {
+/// A free, timed, committed transition into `into` worn as `via` on the way.
+fn morph_through(via: &str, into: &str) -> MorphTransition {
     MorphTransition::new(
         into,
+        Some(via),
         MorphTime::Constant(20),
         MorphPlacement::Revalidate,
         MorphCancel::Committed,
         Vec::new(),
         Vec::<String>::new(),
     )
+}
+
+/// A free, timed, committed transition into the named type.
+fn morph_into(into: &str) -> MorphTransition {
+    MorphTransition::new(
+        into,
+        None,
+        MorphTime::Constant(20),
+        MorphPlacement::Revalidate,
+        MorphCancel::Committed,
+        Vec::new(),
+        Vec::<String>::new(),
+    )
+}
+
+/// A gradually receding ground field named "creep", registered into `registry`.
+fn creep_field(registry: &mut ContentRegistry) -> FieldId {
+    registry.register_field(
+        "creep",
+        FieldDef::new(GROUND, FieldDecay::Gradual { cycle: 4 }, FieldVision::Dark),
+    )
+}
+
+/// An instant emitter of `field` reaching three cells.
+fn emitter(field: FieldId) -> FieldSourceDef {
+    FieldSourceDef::new(field, 3, FieldGrowth::Instant, None)
 }

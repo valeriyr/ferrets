@@ -33,12 +33,34 @@ fn start_point_indexes_by_player() {
         MovementModel::Cell,
         NavGrid::new(8, 8),
         vec![Some(CellPos::new(1, 2)), None, Some(CellPos::new(5, 6))],
+        &[],
     );
 
     assert_eq!(map.start_point(0), Some(CellPos::new(1, 2)));
     assert_eq!(map.start_point(1), None, "a seat without a start position");
     assert_eq!(map.start_point(2), Some(CellPos::new(5, 6)));
     assert_eq!(map.start_point(3), None, "a seat the map does not declare");
+}
+
+//
+// ─── Bounds ───────────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn contains_cells_inside_and_not_past_edges() {
+    let map = Map::new(
+        "test",
+        Projection::Isometric,
+        MovementModel::Cell,
+        NavGrid::new(8, 6),
+        Vec::new(),
+        &[],
+    );
+
+    assert!(map.contains(CellPos::new(0, 0)));
+    assert!(map.contains(CellPos::new(7, 5)));
+    assert!(!map.contains(CellPos::new(8, 5)), "past the right edge");
+    assert!(!map.contains(CellPos::new(7, 6)), "past the bottom edge");
 }
 
 //
@@ -369,6 +391,60 @@ fn map_without_terrain_opens_every_layer_everywhere() {
 }
 
 #[test]
+fn terrain_query_reports_layers_each_cell_blocks() {
+    let registry = lake_registry();
+    let map = Map::from_data(&lake_map(), &registry);
+    let ground = registry.layer("ground").unwrap();
+    let water = registry.layer("water").unwrap();
+
+    let lake = CellPos::new(1, 1);
+    assert!(!map.nav_grid().is_terrain_passable_by(ground, lake));
+    assert!(map.nav_grid().is_terrain_passable_by(water, lake));
+
+    let grass = CellPos::new(0, 0);
+    assert!(map.nav_grid().is_terrain_passable_by(ground, grass));
+    assert!(!map.nav_grid().is_terrain_passable_by(water, grass));
+}
+
+#[test]
+fn terrain_query_ignores_what_stands_on_cell() {
+    let registry = lake_registry();
+    let mut map = Map::from_data(&lake_map(), &registry);
+    let ground = registry.layer("ground").unwrap();
+    let grass = CellPos::new(0, 0);
+
+    map.set_static_occupied(ground, grass, true);
+
+    assert!(
+        !map.nav_grid().is_passable(ground, grass),
+        "the footprint blocks walkers"
+    );
+    assert!(
+        map.nav_grid().is_terrain_passable_by(ground, grass),
+        "the terrain under it still passes them"
+    );
+}
+
+#[test]
+fn map_without_terrain_passes_every_layer_everywhere() {
+    let data = MapData::new("pond", Projection::Isometric, 4, 4);
+    let registry = lake_registry();
+    let map = Map::from_data(&data, &registry);
+
+    for y in 0..data.height() {
+        for x in 0..data.width() {
+            let cell = CellPos::new(x, y);
+            for (name, layer) in registry.layers() {
+                assert!(
+                    map.nav_grid().is_terrain_passable_by(layer, cell),
+                    "cell ({x}, {y}) terrain must pass layer '{name}'"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 #[should_panic(expected = "map 'pond' uses unregistered terrain 'water'")]
 fn unregistered_terrain_panics() {
     let mut registry = ContentRegistry::default();
@@ -561,7 +637,7 @@ fn ground_shape() -> MoverShape {
 fn wall_test_map() -> Map {
     let mut nav_grid = NavGrid::new(8, 2);
     nav_grid.add_layer(GROUND_LAYER);
-    Map::with_hierarchy_shapes(
+    Map::new(
         "test",
         Projection::Isometric,
         MovementModel::Cell,
@@ -582,6 +658,7 @@ fn continuous_test_map() -> Map {
         MovementModel::Continuous,
         nav_grid,
         vec![],
+        &[],
     )
 }
 

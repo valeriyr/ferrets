@@ -13,7 +13,7 @@
 use bevy::prelude::*;
 use ferrets_script::scenario::{ObjectiveStatus, ScenarioRuntime};
 use ferrets_simulation::{
-    resources::PlayerResources, scenario::Scenario, session::player_slot::PlayerId,
+    resources::PlayerResources, scenario::Scenario, session::player_id::PlayerId,
 };
 
 /// The live scenario evaluator and the player whose progress it judges. A

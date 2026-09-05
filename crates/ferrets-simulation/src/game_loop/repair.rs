@@ -10,7 +10,7 @@ use ferrets_math::FixedU64;
 use super::{
     chase::{self, Destination},
     crew,
-    orders::Processing,
+    orders::{self, Processing, Refusal},
     work,
 };
 use crate::{
@@ -20,7 +20,6 @@ use crate::{
         entity_stats::StatsComponent,
         health::HealthComponent,
         order_queue::{CancelPolicy, OrderState},
-        owner::OwnerComponent,
         repair::{RepairComponent, UnderRepairComponent},
     },
     entity_def,
@@ -42,31 +41,51 @@ use ferrets_content::{
 /// The fractional cost carried between ticks, by resource kind.
 type Carried = BTreeMap<String, FixedU64>;
 
-/// Called once when a Repair order becomes the front `New` entry.
-///
-/// Inserts the driver component and returns `InProcessing`, or `Finished`
-/// immediately when the entity will not mend this target — see [`accepts`].
-pub fn prepare(entity: Entity, order: &Order, world: &mut World) -> OrderState {
+/// Whether `entity` may start this Repair: it operates and will mend the
+/// target (see `accepts`), the target is there with damage on it, and the
+/// crew already mending it does not shut this one out. A disabled target is
+/// mended like any other.
+pub fn can_start(world: &World, entity: Entity, order: &Order) -> Result<(), Refusal> {
     let target_id = order
         .repair_target()
         .expect("Repair order must have a target");
-
+    if entity_def::of(world, entity).repairer.is_none() {
+        return Err(Refusal::Incapable);
+    }
+    orders::requires_operating(world, entity)?;
     let Some(target) = world
         .resource::<EntityIndex>()
         .interactable(world, target_id)
     else {
-        return OrderState::Finished;
+        return Err(Refusal::TargetGone);
     };
     if !accepts(world, entity, target) {
-        return OrderState::Finished;
+        return Err(Refusal::TargetUnfit);
     }
-    // Nothing to mend, so the walk is not worth starting.
     if remaining_damage(world, target) == FixedU64::ZERO {
-        return OrderState::Finished;
+        return Err(Refusal::NothingToDo);
     }
     if job_excludes(world, target, entity) {
+        return Err(Refusal::TargetUnfit);
+    }
+    Ok(())
+}
+
+/// Called once when a Repair order becomes the front `New` entry.
+///
+/// Inserts the driver component and returns `InProcessing`, or `Finished`
+/// immediately when the order cannot start — see [`can_start`].
+pub fn prepare(entity: Entity, order: &Order, world: &mut World) -> OrderState {
+    let target_id = order
+        .repair_target()
+        .expect("Repair order must have a target");
+    if can_start(world, entity, order).is_err() {
         return OrderState::Finished;
     }
+    let target = world
+        .resource::<EntityIndex>()
+        .interactable(world, target_id)
+        .expect("can_start found the target");
 
     crew::join::<UnderRepairComponent>(world, target, entity);
     world
@@ -138,7 +157,7 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
             chaser_size,
             target_position,
             target_size,
-            work::reach(world, entity, EntityStatId::REPAIR_RANGE),
+            entity_def::effective_stat_u32(world, entity, EntityStatId::REPAIR_RANGE),
         ) {
             Destination::OutOfReach => return finish(world, entity, target_id),
             Destination::Walk(move_order) => {
@@ -187,12 +206,6 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
     Processing::state(OrderState::InProcessing)
 }
 
-/// Whether sending `entity` to `target` should be read as an offer to mend it —
-/// [`accepts`] plus something actually being wrong with the target.
-pub(super) fn would_repair(world: &World, entity: Entity, target: Entity) -> bool {
-    accepts(world, entity, target) && remaining_damage(world, target) > FixedU64::ZERO
-}
-
 /// Whether `entity` will mend `target`: it has the capability, the target is
 /// repairable and carries a tag it mends, the two are on the same side, and
 /// self-repair is either allowed or not being asked for.
@@ -221,13 +234,10 @@ fn accepts(world: &World, entity: Entity, target: Entity) -> bool {
     // Mending an enemy is never the intent, and a neutral belongs to nobody.
     matches!(
         (
-            world.entity(entity).get::<OwnerComponent>(),
-            world.entity(target).get::<OwnerComponent>(),
+            entity_def::owner(world, entity),
+            entity_def::owner(world, target),
         ),
-        (Some(worker), Some(subject))
-            if world
-                .resource::<GameSession>()
-                .are_allied(worker.player(), subject.player())
+        (Some(worker), Some(subject)) if world.resource::<GameSession>().are_allied(worker, subject)
     )
 }
 
@@ -330,11 +340,8 @@ fn charge(
         }
     };
 
-    let player = world
-        .entity(entity)
-        .get::<OwnerComponent>()
-        .expect("repair only starts between owned entities — see accepts")
-        .player();
+    let player = entity_def::owner(world, entity)
+        .expect("repair only starts between owned entities — see accepts");
     if !world.resource::<PlayerResources>().can_afford(player, &due) {
         return None;
     }

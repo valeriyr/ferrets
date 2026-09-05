@@ -72,7 +72,7 @@ pub fn apply(world: &mut World, attacker: SimulationId, target: Entity, amount: 
         let Some(mut health) = target_mut.get_mut::<HealthComponent>() else {
             return;
         };
-        health.apply_damage(amount);
+        health.drain(amount);
         health.record_hit(attacker, tick);
         health.is_dead()
     };

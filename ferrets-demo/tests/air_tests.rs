@@ -32,7 +32,7 @@ use ferrets_simulation::{
 fn flier_crosses_river_and_rests_on_water() {
     let mut app = utils::demo_map_app(MovementModel::Continuous);
 
-    let (flier, _) = spawn::create_entity(
+    let (flier, _) = utils::create_entity(
         app.world_mut(),
         "gryphon_aloft",
         utils::at_cell(CLEAR_GROUND.0, CLEAR_GROUND.1),
@@ -81,7 +81,7 @@ fn walker_cannot_stand_where_flier_rests() {
     // genuinely closed to the ground layer, so the flight test is not just
     // walking across open grass.
     assert!(
-        spawn::create_entity(
+        utils::create_entity(
             app.world_mut(),
             "peasant",
             utils::at_cell(RIVER.0, RIVER.1),
@@ -102,7 +102,7 @@ fn ground_building_does_not_block_flight() {
     let cell = utils::at_cell(CLEAR_GROUND.0, CLEAR_GROUND.1);
 
     // A 2x2 farm holds the ground layer only, so the air over it stays open.
-    spawn::create_entity(app.world_mut(), "farm", cell, Some(0)).expect("the farm is raised");
+    utils::create_entity(app.world_mut(), "farm", cell, Some(0)).expect("the farm is raised");
 
     let world = app.world();
     let registry = world.resource::<ContentRegistry>();
@@ -130,7 +130,7 @@ fn tall_building_blocks_flight() {
     // The fortress holds the water beneath it and the air above it at once, so
     // its footprint is closed to ships and fliers alike.
     let origin = (46, 46);
-    spawn::create_entity(
+    utils::create_entity(
         app.world_mut(),
         "sea_fortress",
         utils::at_cell(origin.0, origin.1),
@@ -167,7 +167,7 @@ fn flier_routes_around_tall_building() {
     // Standing on open water beside the fortress, ordered to the water on its
     // far side: the only way through is around, and the flight must still finish.
     let fortress = (46, 46);
-    spawn::create_entity(
+    utils::create_entity(
         app.world_mut(),
         "sea_fortress",
         utils::at_cell(fortress.0, fortress.1),
@@ -178,7 +178,7 @@ fn flier_routes_around_tall_building() {
     let start = (44, 47);
     // Clear of the keep's own five cells, which start at its corner.
     let goal = (53, 47);
-    let (flier, _) = spawn::create_entity(
+    let (flier, _) = utils::create_entity(
         app.world_mut(),
         "gryphon_aloft",
         utils::at_cell(start.0, start.1),
@@ -241,14 +241,14 @@ fn melee_ignores_flier_overhead() {
     // A grunt with a flier parked inside its acquire range. Its axe reaches the
     // ground and the water, so the flier is not a target and the grunt must
     // never start swinging at it.
-    let (grunt, _) = spawn::create_entity(
+    let (grunt, _) = utils::create_entity(
         app.world_mut(),
         "grunt",
         utils::at_cell(CLEAR_GROUND.0, CLEAR_GROUND.1),
         Some(0),
     )
     .expect("the grunt spawns");
-    let (flier, _) = spawn::create_entity(
+    let (flier, _) = utils::create_entity(
         app.world_mut(),
         "zeppelin",
         utils::at_cell(CLEAR_GROUND.0 + 1, CLEAR_GROUND.1),
@@ -283,14 +283,14 @@ fn archer_engages_flier_overhead() {
     // The same arrangement with an archer, whose weapon declares every layer:
     // this is the control that proves the test above is about the gate rather
     // than about fliers being unhittable.
-    spawn::create_entity(
+    utils::create_entity(
         app.world_mut(),
         "archer",
         utils::at_cell(CLEAR_GROUND.0, CLEAR_GROUND.1),
         Some(0),
     )
     .expect("the archer spawns");
-    let (flier, _) = spawn::create_entity(
+    let (flier, _) = utils::create_entity(
         app.world_mut(),
         "zeppelin",
         utils::at_cell(CLEAR_GROUND.0 + 1, CLEAR_GROUND.1),
@@ -305,11 +305,12 @@ fn archer_engages_flier_overhead() {
         .entity(flier)
         .get::<HealthComponent>()
         .map(|health| health.current());
-    // Three arrows landed over the hundred ticks — the pinned toll of an
-    // engagement that genuinely happened.
+    // Six arrows of 6 landed over the hundred ticks — the pinned toll of an
+    // engagement that genuinely happened, the chasing archer seeing from the
+    // cell its body rounds to.
     assert_eq!(
         health,
-        Some(FixedU64::from_num(126)),
+        Some(FixedU64::from_num(114)),
         "the archer never engaged the flier, so nothing answers one"
     );
 }
@@ -321,14 +322,14 @@ fn garrisoned_melee_ignores_flier_overhead() {
     // A grunt firing from a bunker: reach is judged by the passenger's own
     // weapon, not the holder's — the bunker has none, and an unarmed holder
     // must not read as reaching everything.
-    let (bunker, _) = spawn::create_entity(
+    let (bunker, _) = utils::create_entity(
         app.world_mut(),
         "bunker",
         utils::at_cell(CLEAR_GROUND.0, CLEAR_GROUND.1),
         Some(0),
     )
     .expect("the bunker spawns");
-    let (grunt, grunt_id) = spawn::create_entity(
+    let (grunt, grunt_id) = utils::create_entity(
         app.world_mut(),
         "grunt",
         utils::at_cell(CLEAR_GROUND.0 + 3, CLEAR_GROUND.1),
@@ -343,7 +344,7 @@ fn garrisoned_melee_ignores_flier_overhead() {
         .insert(grunt_id);
     app.world_mut().entity_mut(grunt).insert(HiddenComponent);
 
-    let (flier, _) = spawn::create_entity(
+    let (flier, _) = utils::create_entity(
         app.world_mut(),
         "zeppelin",
         utils::at_cell(CLEAR_GROUND.0 + 2, CLEAR_GROUND.1),
@@ -370,14 +371,14 @@ fn garrisoned_archer_engages_flier_overhead() {
 
     // The control: the archer's weapon declares the air, so from the same
     // bunker the same flier is fair game.
-    let (bunker, _) = spawn::create_entity(
+    let (bunker, _) = utils::create_entity(
         app.world_mut(),
         "bunker",
         utils::at_cell(CLEAR_GROUND.0, CLEAR_GROUND.1),
         Some(0),
     )
     .expect("the bunker spawns");
-    let (archer, archer_id) = spawn::create_entity(
+    let (archer, archer_id) = utils::create_entity(
         app.world_mut(),
         "archer",
         utils::at_cell(CLEAR_GROUND.0 + 3, CLEAR_GROUND.1),
@@ -392,7 +393,7 @@ fn garrisoned_archer_engages_flier_overhead() {
         .insert(archer_id);
     app.world_mut().entity_mut(archer).insert(HiddenComponent);
 
-    let (flier, _) = spawn::create_entity(
+    let (flier, _) = utils::create_entity(
         app.world_mut(),
         "zeppelin",
         utils::at_cell(CLEAR_GROUND.0 + 2, CLEAR_GROUND.1),
@@ -426,7 +427,7 @@ fn wide_flier_crosses_map_and_rests_on_goal() {
 
     let start = (16, 12);
     let goal = (40, 12);
-    let (zeppelin, _) = spawn::create_entity(
+    let (zeppelin, _) = utils::create_entity(
         app.world_mut(),
         "zeppelin",
         utils::at_cell(start.0, start.1),
@@ -467,7 +468,7 @@ fn wide_flier_crosses_map_and_rests_on_goal() {
 fn wide_flier_claims_its_whole_footprint() {
     let mut app = utils::demo_map_app(MovementModel::Continuous);
     let anchor = (16, 12);
-    spawn::create_entity(
+    utils::create_entity(
         app.world_mut(),
         "zeppelin",
         utils::at_cell(anchor.0, anchor.1),
@@ -503,7 +504,7 @@ fn wide_flier_cannot_spawn_where_its_footprint_does_not_fit() {
 
     // The fortress closes a 3x3 of air; a 2x2 anchored one cell short of it
     // still reaches in, so there is nowhere here for the footprint to go.
-    spawn::create_entity(
+    utils::create_entity(
         app.world_mut(),
         "sea_fortress",
         utils::at_cell(46, 46),
@@ -512,12 +513,12 @@ fn wide_flier_cannot_spawn_where_its_footprint_does_not_fit() {
     .expect("the fortress stands");
 
     assert!(
-        spawn::create_entity(app.world_mut(), "zeppelin", utils::at_cell(45, 46), Some(1))
+        utils::create_entity(app.world_mut(), "zeppelin", utils::at_cell(45, 46), Some(1))
             .is_none(),
         "a 2x2 flier was placed overlapping the fortress it cannot fit beside"
     );
     assert!(
-        spawn::create_entity(app.world_mut(), "zeppelin", utils::at_cell(44, 46), Some(1))
+        utils::create_entity(app.world_mut(), "zeppelin", utils::at_cell(44, 46), Some(1))
             .is_some(),
         "a 2x2 flier could not be placed where its whole footprint is clear"
     );
@@ -538,7 +539,7 @@ fn mixed_fliers_settle_without_milling() {
         ("gryphon_aloft", (20, 24)),
         ("gryphon_aloft", (23, 24)),
     ] {
-        let (entity, _) = spawn::create_entity(
+        let (entity, _) = utils::create_entity(
             app.world_mut(),
             type_name,
             utils::at_cell(cell.0, cell.1),
@@ -602,11 +603,11 @@ fn flier_and_walker_share_cell() {
     let cell = utils::at_cell(CLEAR_GROUND.0, CLEAR_GROUND.1);
 
     assert!(
-        spawn::create_entity(app.world_mut(), "peasant", cell, Some(0)).is_some(),
+        utils::create_entity(app.world_mut(), "peasant", cell, Some(0)).is_some(),
         "the walker spawns on clear ground"
     );
     assert!(
-        spawn::create_entity(app.world_mut(), "gryphon_aloft", cell, Some(0)).is_some(),
+        utils::create_entity(app.world_mut(), "gryphon_aloft", cell, Some(0)).is_some(),
         "the flier was blocked by a walker, but their layers are disjoint"
     );
 }
@@ -617,11 +618,11 @@ fn second_flier_cannot_take_held_air_cell() {
     let cell = utils::at_cell(CLEAR_GROUND.0, CLEAR_GROUND.1);
 
     assert!(
-        spawn::create_entity(app.world_mut(), "gryphon_aloft", cell, Some(0)).is_some(),
+        utils::create_entity(app.world_mut(), "gryphon_aloft", cell, Some(0)).is_some(),
         "the first flier spawns"
     );
     assert!(
-        spawn::create_entity(app.world_mut(), "gryphon_aloft", cell, Some(0)).is_none(),
+        utils::create_entity(app.world_mut(), "gryphon_aloft", cell, Some(0)).is_none(),
         "two fliers took the same air cell, so the layer excludes nothing"
     );
 }
@@ -636,14 +637,14 @@ fn holder_with_passenger(
     holder: &str,
     passenger: &str,
 ) -> (Entity, Entity, SimulationId) {
-    let (held, _) = spawn::create_entity(
+    let (held, _) = utils::create_entity(
         app.world_mut(),
         holder,
         utils::at_cell(CLEAR_GROUND.0, CLEAR_GROUND.1),
         Some(0),
     )
     .unwrap_or_else(|| panic!("'{holder}' spawns"));
-    let (aboard, aboard_id) = spawn::create_entity(
+    let (aboard, aboard_id) = utils::create_entity(
         app.world_mut(),
         passenger,
         utils::at_cell(CLEAR_GROUND.0 + 3, CLEAR_GROUND.1),

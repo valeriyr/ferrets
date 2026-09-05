@@ -17,6 +17,7 @@ use crate::{
         entity_info::EntityInfoComponent,
         entity_skills::SkillsComponent,
         entity_stats::StatsComponent,
+        field_source::FieldSourcesComponent,
         health::HealthComponent,
         hidden::HiddenComponent,
         location::LocationComponent,
@@ -27,6 +28,7 @@ use crate::{
         rally::RallyPointComponent,
         resource::{ResourceCarrierComponent, ResourceSourceComponent},
         stance::{Stance, StanceComponent},
+        stand::{StandComponent, Standing},
         tags::TagsComponent,
         train::TrainQueueComponent,
         transport::{BoardedComponent, GarrisonFireComponent, TransporterComponent},
@@ -41,15 +43,36 @@ use crate::{
     movement_model::MovementModel,
     order::Order,
     selection::Selection,
-    session::player_slot::PlayerId,
+    session::player_id::PlayerId,
     simulation_id::{SimulationId, SimulationIdGenerator},
 };
 /// Look direction a freshly spawned entity starts with: south, the conventional
 /// resting facing toward the viewer.
 pub(crate) const DEFAULT_FACING: Facing = Facing::SOUTH;
 
+/// What fitting a type does about the acts it performs on standing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StandingActs {
+    /// The acts lie ahead again: the entity is coming to stand as something
+    /// new.
+    Rearm,
+    /// Acts already performed stay performed; only a form that had none and
+    /// gains some has them ahead.
+    Keep,
+}
+
+/// How far an entity's field sources reach the moment it enters the world.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FieldReach {
+    /// Each source starts at its declared initial reach and grows from there.
+    Initial,
+    /// Each source already spans its whole radius.
+    Full,
+}
+
 /// Creates an entity of the given type at `position`, owned by `owner`
-/// (`None` creates a neutral entity), announcing nothing.
+/// (`None` creates a neutral entity), its field sources reaching as `reach`
+/// says, announcing nothing.
 ///
 /// `position` must lie exactly on a cell's origin corner — a fresh entity is
 /// at rest, and rest positions are lattice points.
@@ -63,6 +86,7 @@ pub fn create_entity(
     type_name: &str,
     position: FixedUVec2,
     owner: Option<PlayerId>,
+    reach: FieldReach,
 ) -> Option<(Entity, SimulationId)> {
     debug_assert!(
         !is_mid_crossing(position),
@@ -111,7 +135,7 @@ pub fn create_entity(
             .entity_mut(entity)
             .insert(EnergyComponent::full(max_energy));
     }
-    fit_components(world, entity, type_id);
+    fit_components(world, entity, type_id, reach, StandingActs::Rearm);
 
     let class = OccupancyClass::of(world.resource::<ContentRegistry>().def(type_id));
     world
@@ -132,8 +156,9 @@ pub fn spawn_entity(
     position: FixedUVec2,
     owner: Option<PlayerId>,
     cause: SpawnCause,
+    reach: FieldReach,
 ) -> Option<(Entity, SimulationId)> {
-    let (entity, id) = create_entity(world, type_name, position, owner)?;
+    let (entity, id) = create_entity(world, type_name, position, owner, reach)?;
     world
         .resource_mut::<EventRecord>()
         .emit(SimulationEvent::EntitySpawned { entity: id, cause });
@@ -374,7 +399,7 @@ pub fn destroy_entity(world: &mut World, entity: Entity) {
     // state that knows which cell a crossing claimed is about to be cancelled —
     // so a mid-crossing entity snaps onto its claimed cell. Continuous
     // movers die where they stand: their positions are free points and their
-    // claim already tracks the floored cell.
+    // claim already tracks the cell they round to.
     match world.resource::<Map>().movement_model() {
         MovementModel::Cell => {
             if is_mid_crossing(location.position)
@@ -466,8 +491,8 @@ fn settle_passengers(world: &mut World, entity: Entity) {
         .as_ref()
         .expect("a passenger list belongs to a transporter")
         .passenger_fate();
-    let (around, around_size) = entity_def::footprint(world, entity);
-    let around = CellPos::from(around);
+    let around = entity_def::footprint_rect(world, entity);
+    let (around, around_size) = (around.origin, around.size);
     let holder = entity_def::simulation_id(world, entity);
 
     for id in passengers {
@@ -544,8 +569,16 @@ pub(crate) fn seed_stats(
 /// quietest way this could go wrong.
 ///
 /// Stance is preserved when present, because a player sets it deliberately;
-/// only an entity that has none is given its type's default.
-pub(crate) fn fit_components(world: &mut World, entity: Entity, type_id: EntityTypeId) {
+/// only an entity that has none is given its type's default. Field sources
+/// reach as far as `reach` says, and the acts on standing are armed or kept
+/// as `acts` says.
+pub(crate) fn fit_components(
+    world: &mut World,
+    entity: Entity,
+    type_id: EntityTypeId,
+    reach: FieldReach,
+    acts: StandingActs,
+) {
     let (
         can_attack,
         mounted_turrets,
@@ -557,6 +590,8 @@ pub(crate) fn fit_components(world: &mut World, entity: Entity, type_id: EntityT
         carrier,
         tags,
         skills,
+        field_sources,
+        acts_on_standing,
     ) = {
         let def = world.resource::<ContentRegistry>().def(type_id);
         (
@@ -570,6 +605,8 @@ pub(crate) fn fit_components(world: &mut World, entity: Entity, type_id: EntityT
             def.resource_carrier.is_some(),
             def.tags.clone(),
             def.skills.clone(),
+            def.field_sources.clone(),
+            !def.on_stand.is_empty(),
         )
     };
     // A rally point serves the trainer and the holder alike, so it stays while
@@ -640,6 +677,37 @@ pub(crate) fn fit_components(world: &mut World, entity: Entity, type_id: EntityT
         entity_mut.remove::<SkillsComponent>();
     } else {
         entity_mut.insert(SkillsComponent::new(skills));
+    }
+
+    if acts_on_standing {
+        match acts {
+            StandingActs::Rearm => {
+                entity_mut.insert(StandComponent(Standing::Pending));
+            }
+            StandingActs::Keep => {
+                if !entity_mut.contains::<StandComponent>() {
+                    entity_mut.insert(StandComponent(Standing::Pending));
+                }
+            }
+        }
+    } else {
+        entity_mut.remove::<StandComponent>();
+    }
+
+    // Field sources reach as far as asked. Left to grow, a source takes over
+    // the reach of the one it replaces at the same index, so a form change
+    // does not pull a field back to its seed.
+    if field_sources.is_empty() {
+        entity_mut.remove::<FieldSourcesComponent>();
+    } else {
+        let sources = match reach {
+            FieldReach::Full => FieldSourcesComponent::full(&field_sources),
+            FieldReach::Initial => match entity_mut.get::<FieldSourcesComponent>() {
+                Some(previous) => FieldSourcesComponent::carried(&field_sources, previous),
+                None => FieldSourcesComponent::seeded(&field_sources),
+            },
+        };
+        entity_mut.insert(sources);
     }
 }
 

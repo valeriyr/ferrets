@@ -5,7 +5,7 @@ mod utils;
 
 use bevy::prelude::*;
 use ferrets_geometry::cell_pos::CellPos;
-use ferrets_simulation::{command::PlayerCommand, spawn};
+use ferrets_simulation::command::PlayerCommand;
 
 //
 // ─── Route ──────────────────────────────────────────────────────────────────
@@ -16,7 +16,7 @@ fn patrol_ping_pongs_between_endpoints() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
     let (sentry, sentry_id) =
-        spawn::create_entity(world, "sentry", utils::pos(5, 10), Some(0)).unwrap();
+        utils::create_entity(world, "sentry", utils::pos(5, 10), Some(0)).unwrap();
 
     utils::select(&mut app, sentry_id);
     utils::push_command(
@@ -51,9 +51,9 @@ fn patrol_engages_en_route_and_resumes_route() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
     let (sentry, sentry_id) =
-        spawn::create_entity(world, "sentry", utils::pos(5, 10), Some(0)).unwrap();
+        utils::create_entity(world, "sentry", utils::pos(5, 10), Some(0)).unwrap();
     let (barracks, _) =
-        spawn::create_entity(world, "barracks", utils::pos(8, 12), Some(1)).unwrap();
+        utils::create_entity(world, "barracks", utils::pos(8, 12), Some(1)).unwrap();
 
     utils::select(&mut app, sentry_id);
     utils::push_command(

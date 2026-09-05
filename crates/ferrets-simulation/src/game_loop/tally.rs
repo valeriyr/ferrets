@@ -10,7 +10,7 @@ use crate::{
     entity_def,
     entity_index::EntityIndex,
     events::{DeathCause, EventRecord, SimulationEvent, SpawnCause},
-    session::{GameSession, player_slot::PlayerId},
+    session::{GameSession, player_id::PlayerId},
     simulation_id::SimulationId,
     statistics::Statistics,
 };
@@ -82,9 +82,9 @@ fn fold(
             ..
         } => {
             // A loss is something fire took: an owner cancelling its own
-            // construction, or a resource node running dry, is neither a loss
-            // nor anyone's kill. A passenger's death traces to whoever brought
-            // its carrier down.
+            // construction, a builder spent on its site, or a resource node
+            // running dry, is neither a loss nor anyone's kill. A passenger's
+            // death traces to whoever brought its carrier down.
             let Some(by_owner) = fire_behind(*cause, deaths) else {
                 return;
             };
@@ -180,7 +180,7 @@ fn fire_behind(
                 Some(holder_cause) => cause = *holder_cause,
                 None => return None,
             },
-            DeathCause::Depleted | DeathCause::Cancelled => return None,
+            DeathCause::Depleted | DeathCause::Cancelled | DeathCause::Consumed => return None,
         }
     }
 }

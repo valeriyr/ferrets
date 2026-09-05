@@ -3,16 +3,16 @@
 mod utils;
 
 use ferrets_geometry::cell_pos::CellPos;
-use ferrets_simulation::{command::PlayerCommand, spawn};
+use ferrets_simulation::command::PlayerCommand;
 
 #[test]
 fn follow_tracks_moving_target() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
     let (follower, follower_id) =
-        spawn::create_entity(world, "soldier", utils::pos(5, 5), Some(0)).unwrap();
+        utils::create_entity(world, "soldier", utils::pos(5, 5), Some(0)).unwrap();
     let (leader, leader_id) =
-        spawn::create_entity(world, "soldier", utils::pos(8, 5), Some(0)).unwrap();
+        utils::create_entity(world, "soldier", utils::pos(8, 5), Some(0)).unwrap();
 
     // A friendly target without collect/store intent resolves to a follow.
     utils::select(&mut app, follower_id);

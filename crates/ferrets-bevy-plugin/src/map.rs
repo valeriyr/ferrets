@@ -4,8 +4,14 @@ use bevy::prelude::*;
 use ferrets_content::registry::ContentRegistry;
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_simulation::{
-    components::resource::ResourceSourceComponent, events::SpawnCause, map::Map, map_data::MapData,
-    session::GameSession, spawn, visibility::VisibilityGrid,
+    components::resource::ResourceSourceComponent,
+    events::SpawnCause,
+    fields::FieldGrid,
+    map::Map,
+    map_data::MapData,
+    session::GameSession,
+    spawn::{self, FieldReach},
+    visibility::VisibilityGrid,
 };
 
 /// Builds the described map in the world: installs the live grid and spawns
@@ -18,7 +24,7 @@ use ferrets_simulation::{
 /// and slots, so the skips are identical everywhere.
 pub fn instantiate_map(world: &mut World, data: &MapData) {
     let map = Map::from_data(data, world.resource::<ContentRegistry>());
-    install_per_game(world, map);
+    install_map(world, map);
 
     for placement in data.placements() {
         if let Some(owner) = placement.owner {
@@ -42,6 +48,7 @@ pub fn instantiate_map(world: &mut World, data: &MapData) {
             position,
             placement.owner,
             SpawnCause::Placed,
+            FieldReach::Full,
         ) else {
             eprintln!(
                 "map cell ({x},{y}) cannot host '{}'; placement skipped",
@@ -59,12 +66,12 @@ pub fn instantiate_map(world: &mut World, data: &MapData) {
     }
 }
 
-/// Installs `map` together with a visibility grid sized to it. The pair is
-/// always replaced as one: fog is per-cell over exactly this map's grid, so a
-/// grid sized to any other map would be wrong the moment it was read.
-pub(crate) fn install_per_game(world: &mut World, map: Map) {
+/// Installs `map` together with the visibility and field grids sized to it.
+/// The three are always replaced as one.
+pub fn install_map(world: &mut World, map: Map) {
     let (width, height) = (map.width(), map.height());
     world.insert_resource(map);
     let player_count = world.resource::<GameSession>().slots().len();
     world.insert_resource(VisibilityGrid::new(player_count, width, height));
+    world.insert_resource(FieldGrid::new(width, height));
 }

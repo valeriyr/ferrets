@@ -15,7 +15,7 @@ use ferrets_content::{
     costs::Cost, entity_type_def::EntityTypeId, research::ResearchId, skills::SkillId,
 };
 
-use crate::{session::player_slot::PlayerId, simulation_id::SimulationId};
+use crate::{session::player_id::PlayerId, simulation_id::SimulationId};
 
 /// How an entity came to be.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,6 +95,8 @@ pub enum DeathCause {
     Depleted,
     /// Called off by its owner before it was finished.
     Cancelled,
+    /// Consumed by the construction site it founded.
+    Consumed,
     /// Went down with the carrier holding it.
     PassengerLost {
         /// The carrier it was inside.
@@ -195,6 +197,9 @@ pub enum SimulationEvent {
     /// An entity became a different type in place.
     ///
     /// Neither a spawn nor a death: the subject is the same entity throughout.
+    /// Every landing announces, an interim form's included, so a change that
+    /// passes through one is two of these, and a change called off in it a
+    /// third.
     EntityMorphed {
         /// The entity that changed.
         entity: SimulationId,

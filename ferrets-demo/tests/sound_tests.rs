@@ -32,8 +32,8 @@ use ferrets_simulation::{
 fn kill_is_heard_where_it_happened() {
     let mut app = sound_app();
     let world = app.world_mut();
-    let (victim, _) = spawn::create_entity(world, "grunt", utils::at_cell(6, 6), Some(1)).unwrap();
-    let (_, killer) = spawn::create_entity(world, "grunt", utils::at_cell(5, 6), Some(0)).unwrap();
+    let (victim, _) = utils::create_entity(world, "grunt", utils::at_cell(6, 6), Some(1)).unwrap();
+    let (_, killer) = utils::create_entity(world, "grunt", utils::at_cell(5, 6), Some(0)).unwrap();
     spawn::despawn_entity(
         world,
         victim,
@@ -55,7 +55,7 @@ fn kill_is_heard_where_it_happened() {
 fn cancelled_death_makes_no_sound() {
     let mut app = sound_app();
     let world = app.world_mut();
-    let (site, _) = spawn::create_entity(world, "grunt", utils::at_cell(6, 6), Some(0)).unwrap();
+    let (site, _) = utils::create_entity(world, "grunt", utils::at_cell(6, 6), Some(0)).unwrap();
     spawn::despawn_entity(world, site, DeathCause::Cancelled);
     play(&mut app);
 
@@ -70,7 +70,7 @@ fn burst_of_cues_stops_at_ceiling() {
     let mut app = sound_app();
     for step in 0..30u32 {
         let world = app.world_mut();
-        let placed = spawn::create_entity(world, "grunt", utils::at_cell(4 + step, 8), Some(1));
+        let placed = utils::create_entity(world, "grunt", utils::at_cell(4 + step, 8), Some(1));
         let Some((victim, _)) = placed else {
             continue;
         };
@@ -119,7 +119,7 @@ fn construction_completion_is_heard_at_building() {
     let mut app = sound_app();
     let world = app.world_mut();
     let (_, building) =
-        spawn::create_entity(world, "grunt", utils::at_cell(7, 7), Some(0)).unwrap();
+        utils::create_entity(world, "grunt", utils::at_cell(7, 7), Some(0)).unwrap();
     world
         .resource_mut::<EventRecord>()
         .emit(SimulationEvent::ConstructionCompleted {
@@ -140,7 +140,7 @@ fn enemy_construction_completion_is_not_heard() {
     let mut app = sound_app();
     let world = app.world_mut();
     let (_, building) =
-        spawn::create_entity(world, "grunt", utils::at_cell(7, 7), Some(1)).unwrap();
+        utils::create_entity(world, "grunt", utils::at_cell(7, 7), Some(1)).unwrap();
     world
         .resource_mut::<EventRecord>()
         .emit(SimulationEvent::ConstructionCompleted {
@@ -164,7 +164,7 @@ fn enemy_research_at_visible_lab_is_not_heard() {
         .research("iron_weapons")
         .expect("demo content declares iron_weapons");
     let world = app.world_mut();
-    let (_, lab) = spawn::create_entity(world, "grunt", utils::at_cell(7, 7), Some(1)).unwrap();
+    let (_, lab) = utils::create_entity(world, "grunt", utils::at_cell(7, 7), Some(1)).unwrap();
     world
         .resource_mut::<EventRecord>()
         .emit(SimulationEvent::ResearchCompleted {
@@ -189,8 +189,8 @@ fn cast_across_map_is_heard_at_both_ends() {
     let mut app = sound_app();
     let skill = battle_focus(&app);
     let world = app.world_mut();
-    let (_, mage) = spawn::create_entity(world, "grunt", utils::at_cell(4, 4), Some(0)).unwrap();
-    let (_, victim) = spawn::create_entity(world, "grunt", utils::at_cell(20, 4), Some(1)).unwrap();
+    let (_, mage) = utils::create_entity(world, "grunt", utils::at_cell(4, 4), Some(0)).unwrap();
+    let (_, victim) = utils::create_entity(world, "grunt", utils::at_cell(20, 4), Some(1)).unwrap();
     world
         .resource_mut::<EventRecord>()
         .emit(SimulationEvent::SkillCast {
@@ -212,7 +212,7 @@ fn self_cast_is_heard_once() {
     let mut app = sound_app();
     let skill = battle_focus(&app);
     let world = app.world_mut();
-    let (_, mage) = spawn::create_entity(world, "grunt", utils::at_cell(4, 4), Some(0)).unwrap();
+    let (_, mage) = utils::create_entity(world, "grunt", utils::at_cell(4, 4), Some(0)).unwrap();
     world
         .resource_mut::<EventRecord>()
         .emit(SimulationEvent::SkillCast {

@@ -4,11 +4,7 @@ use bevy_ecs::{entity::Entity, world::World};
 use ferrets_geometry::cell_rect::CellRect;
 
 use crate::{
-    components::{
-        health::HealthComponent,
-        location::LocationComponent,
-        owner::{self, OwnerComponent},
-    },
+    components::{health::HealthComponent, owner},
     entity_def,
     entity_index::EntityIndex,
     map::Map,
@@ -138,8 +134,8 @@ pub(super) fn qualifies(
     }
     if !owner::are_hostile(
         world.resource::<GameSession>(),
-        world.entity(seeker).get::<OwnerComponent>(),
-        target_ref.get::<OwnerComponent>(),
+        entity_def::owner(world, seeker),
+        entity_def::owner(world, target),
     ) {
         return false;
     }
@@ -152,11 +148,11 @@ pub(super) fn qualifies(
 
     // Fog of war: a unit only auto-engages what its team can see. An ownerless
     // attacker has no team vision, so it is not fog-limited.
-    if let Some(seeker_owner) = world.entity(seeker).get::<OwnerComponent>() {
-        let position = target_ref.get::<LocationComponent>().unwrap().position;
+    if let Some(seeker_owner) = entity_def::owner(world, seeker) {
+        let position = entity_def::position(world, target);
         if !world.resource::<VisibilityGrid>().is_visible_to(
             world.resource::<GameSession>(),
-            seeker_owner.player(),
+            seeker_owner,
             position.x.to_num::<u32>(),
             position.y.to_num::<u32>(),
         ) {

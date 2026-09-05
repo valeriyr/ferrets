@@ -72,6 +72,7 @@ fn entity_table(lua: &Lua, entity: &EntityView) -> mlua::Result<Table> {
     }
     table.set("train_queue", strings_table(lua, &entity.train_queue)?)?;
     table.set("under_construction", entity.under_construction)?;
+    table.set("disabled", entity.disabled)?;
     table.set("stance", entity.stance.as_deref())?;
     table.set("resource_amount", entity.resource_amount)?;
     table.set("boarded", entity.boarded)?;
@@ -129,14 +130,7 @@ pub(super) fn content_table(lua: &Lua, content: &ContentView) -> mlua::Result<Ta
 fn entity_content_table(lua: &Lua, entity: &EntityContentView) -> mlua::Result<Table> {
     let table = lua.create_table()?;
 
-    let cost = lua.create_table()?;
-    for (index, (kind, amount)) in entity.cost.iter().enumerate() {
-        let entry = lua.create_table()?;
-        entry.set("kind", kind.as_str())?;
-        entry.set("amount", *amount)?;
-        cost.set(index + 1, entry)?;
-    }
-    table.set("cost", cost)?;
+    table.set("cost", cost_table(lua, &entity.cost)?)?;
 
     table.set("train_time", entity.train_time)?;
     table.set("build_time", entity.build_time)?;
@@ -170,6 +164,29 @@ fn entity_content_table(lua: &Lua, entity: &EntityContentView) -> mlua::Result<T
     )?;
     table.set("stores", optional_strings(lua, entity.stores.as_deref())?)?;
     table.set("can_move", entity.can_move)?;
+    if let Some(morphs) = &entity.morphs {
+        let array = lua.create_table()?;
+        for (index, morph) in morphs.iter().enumerate() {
+            let entry = lua.create_table()?;
+            entry.set("into", morph.into.as_str())?;
+            entry.set("cost", cost_table(lua, &morph.cost)?)?;
+            entry.set("time", morph.time)?;
+            array.set(index + 1, entry)?;
+        }
+        table.set("morphs", array)?;
+    }
+    Ok(table)
+}
+
+/// Encodes a price as an array of `{ kind, amount }` entries.
+fn cost_table(lua: &Lua, cost: &[(String, u32)]) -> mlua::Result<Table> {
+    let table = lua.create_table()?;
+    for (index, (kind, amount)) in cost.iter().enumerate() {
+        let entry = lua.create_table()?;
+        entry.set("kind", kind.as_str())?;
+        entry.set("amount", *amount)?;
+        table.set(index + 1, entry)?;
+    }
     Ok(table)
 }
 

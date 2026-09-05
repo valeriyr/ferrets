@@ -4,14 +4,17 @@ use std::time::Duration;
 
 use bevy::{app::FixedMain, ecs::entity::EntityNotSpawnedError, prelude::*};
 use ferrets_bevy_plugin::{
-    NetworkPlugin, NominalTimestep, PendingInput, SimulationPlugin, TickPacing, replay,
+    GameSet, NetworkPlugin, NominalTimestep, PendingInput, SimulationPlugin, TickPacing, map,
+    replay,
 };
 use ferrets_content::{
     attack::{AttackDef, Delivery, Weapon},
+    build::BuilderAttendance,
     costs,
     entity_buffs::{EntityBuffDef, EntityBuffId},
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
+    field::FieldId,
     location::Solidity,
     morph::{MorphCancel, MorphPlacement, MorphTime, MorphTransition},
     player_buffs::PlayerBuffDef,
@@ -66,6 +69,8 @@ use ferrets_simulation::{
         turret::TurretsComponent,
     },
     entity_def,
+    events::{DeathCause, EventRecord, SimulationEvent, SpawnCause},
+    fields::FieldGrid,
     input::{InputFrames, PlayerFrame},
     map::Map,
     movement_model::MovementModel,
@@ -73,18 +78,13 @@ use ferrets_simulation::{
     resources::PlayerResources,
     selection::Selection,
     session::{
-        GameSession,
-        ai_hosting::AiHosting,
-        authority::Authority,
-        drop_policy::DropPolicy,
-        finish_policy::FinishPolicy,
-        local_role::LocalRole,
-        player_slot::{PlayerId, PlayerSlot},
-        player_type::PlayerType,
+        GameSession, ai_hosting::AiHosting, authority::Authority, drop_policy::DropPolicy,
+        finish_policy::FinishPolicy, local_role::LocalRole, player_id::PlayerId,
+        player_slot::PlayerSlot, player_type::PlayerType,
     },
     simulation_id::SimulationId,
     skirmish::Skirmish,
-    spawn,
+    spawn::{self, FieldReach},
 };
 
 /// The single navigation layer the harness content declares.
@@ -136,6 +136,7 @@ pub fn make_app(slots: Vec<PlayerSlot>) -> App {
             MovementModel::Cell,
             nav_grid,
             vec![],
+            &[],
         ),
     ));
     app.insert_resource(registry);
@@ -225,6 +226,51 @@ pub fn offset(from: FixedUVec2, to: FixedUVec2) -> FixedVec2 {
     )
 }
 
+/// Creates an entity of `type_name` at `position` for `owner`, its field
+/// sources at their initial reach, announcing nothing.
+pub fn create_entity(
+    world: &mut World,
+    type_name: &str,
+    position: FixedUVec2,
+    owner: Option<PlayerId>,
+) -> Option<(Entity, SimulationId)> {
+    spawn::create_entity(world, type_name, position, owner, FieldReach::Initial)
+}
+
+/// Like [`create_entity`], announcing the spawn with `cause`.
+pub fn spawn_entity(
+    world: &mut World,
+    type_name: &str,
+    position: FixedUVec2,
+    owner: Option<PlayerId>,
+    cause: ferrets_simulation::events::SpawnCause,
+) -> Option<(Entity, SimulationId)> {
+    spawn::spawn_entity(
+        world,
+        type_name,
+        position,
+        owner,
+        cause,
+        FieldReach::Initial,
+    )
+}
+
+/// Every announcement of every tick run so far, as a game system in [`GameSet`]
+/// saw it. Suites filter the log for what they assert on.
+#[derive(Resource, Default)]
+pub struct Announced(pub Vec<SimulationEvent>);
+
+/// Keeps every tick's announcements in [`Announced`] from here on: a game
+/// system in [`GameSet`] reads the record before the tick retires it.
+pub fn record_announcements(app: &mut App) {
+    app.init_resource::<Announced>();
+    app.add_systems(FixedLast, note_announced.in_set(GameSet));
+}
+
+fn note_announced(record: Res<EventRecord>, mut seen: ResMut<Announced>) {
+    seen.0.extend(record.events().iter().cloned());
+}
+
 /// A fixture entity of `type_name` at `(x, y)` owned by `player`, created
 /// without announcing it. Panics when the position cannot host the type.
 pub fn create_owned(
@@ -234,8 +280,41 @@ pub fn create_owned(
     y: u32,
     player: PlayerId,
 ) -> (Entity, SimulationId) {
-    spawn::create_entity(app.world_mut(), type_name, pos(x, y), Some(player))
-        .unwrap_or_else(|| panic!("{type_name} fits at ({x}, {y})"))
+    spawn::create_entity(
+        app.world_mut(),
+        type_name,
+        pos(x, y),
+        Some(player),
+        FieldReach::Initial,
+    )
+    .unwrap_or_else(|| panic!("{type_name} fits at ({x}, {y})"))
+}
+
+/// Whether `player` covers the cell in `field`.
+pub fn covered_by(app: &App, field: FieldId, x: u32, y: u32, player: PlayerId) -> bool {
+    app.world()
+        .resource::<FieldGrid>()
+        .covered(field, CellPos::new(x, y))
+        .contains(player)
+}
+
+/// Spawns `type_name` as the map would place it, its field at full reach.
+pub fn place(app: &mut App, type_name: &str, x: u32, y: u32, player: PlayerId) -> Entity {
+    spawn::spawn_entity(
+        app.world_mut(),
+        type_name,
+        pos(x, y),
+        Some(player),
+        SpawnCause::Placed,
+        FieldReach::Full,
+    )
+    .unwrap_or_else(|| panic!("{type_name} fits at ({x}, {y})"))
+    .0
+}
+
+/// Removes the entity the way a mined-out node goes: no loss, no kill.
+pub fn deplete(app: &mut App, entity: Entity) {
+    spawn::despawn_entity(app.world_mut(), entity, DeathCause::Depleted);
 }
 
 pub fn push_command(app: &mut App, command: PlayerCommand) {
@@ -313,7 +392,7 @@ pub fn cell_crowd_app() -> App {
     {
         let mut grid = NavGrid::new(32, 32);
         grid.add_layer(GROUND);
-        app.world_mut().insert_resource(Map::with_hierarchy_shapes(
+        app.world_mut().insert_resource(Map::new(
             "test",
             Projection::Isometric,
             MovementModel::Cell,
@@ -388,6 +467,7 @@ pub fn morph_app(model: MovementModel) -> App {
                 .with_morphs([
                     MorphTransition::new(
                         "giant",
+                        None,
                         MorphTime::Constant(10),
                         MorphPlacement::Reserve,
                         MorphCancel::Refundable,
@@ -396,6 +476,7 @@ pub fn morph_app(model: MovementModel) -> App {
                     ),
                     MorphTransition::new(
                         "husk",
+                        None,
                         MorphTime::Constant(0),
                         MorphPlacement::Revalidate,
                         MorphCancel::Committed,
@@ -404,13 +485,44 @@ pub fn morph_app(model: MovementModel) -> App {
                     ),
                     MorphTransition::new(
                         "wisp",
+                        None,
                         MorphTime::Constant(10),
                         MorphPlacement::Revalidate,
                         MorphCancel::Forfeit,
                         Vec::new(),
                         Vec::<String>::new(),
                     ),
+                    // Worn as a chrysalis on the way, paid, and refunded if
+                    // the change ends early.
+                    MorphTransition::new(
+                        "wyrm",
+                        Some("chrysalis"),
+                        MorphTime::Constant(10),
+                        MorphPlacement::Revalidate,
+                        MorphCancel::Refundable,
+                        vec![EntityCastCost::Resources(costs::cost([("gold", 10)]))],
+                        Vec::<String>::new(),
+                    ),
                 ]),
+        );
+        registry.register(
+            EntityTypeDef::new("chrysalis")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_health(60)
+                .with_dying(2, None),
+        );
+        registry.register(
+            EntityTypeDef::new("wyrm")
+                .with_location(GROUND, CellSize::new(3, 3), Solidity::Solid)
+                .with_movement(
+                    FixedU64::from_num(0.3),
+                    FixedU64::ONE,
+                    FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
+                )
+                .with_health(90)
+                .with_dying(2, None),
         );
         registry.register(
             EntityTypeDef::new("giant")
@@ -450,6 +562,7 @@ pub fn morph_app(model: MovementModel) -> App {
                 )
                 .with_morphs([MorphTransition::new(
                     "whelp",
+                    None,
                     MorphTime::Constant(10),
                     MorphPlacement::Revalidate,
                     MorphCancel::Forfeit,
@@ -469,6 +582,7 @@ pub fn morph_app(model: MovementModel) -> App {
                 .with_trainer(["whelp"])
                 .with_morphs([MorphTransition::new(
                     "golem",
+                    None,
                     MorphTime::Constant(10),
                     MorphPlacement::Reserve,
                     MorphCancel::Refundable,
@@ -722,7 +836,7 @@ pub fn wound(app: &mut App, entity: Entity, amount: &str) {
     app.world_mut()
         .get_mut::<HealthComponent>(entity)
         .unwrap()
-        .apply_damage(fixed(amount));
+        .drain(fixed(amount));
 }
 
 /// Selects `attacker` for the local player and orders it to attack `target`,
@@ -780,14 +894,17 @@ pub fn effective_damage(app: &App, entity: Entity) -> FixedU64 {
 pub fn install_map(app: &mut App, projection: Projection, model: MovementModel) {
     let mut grid = NavGrid::new(32, 32);
     grid.add_layer(GROUND);
-    app.world_mut().insert_resource(Map::with_hierarchy_shapes(
-        "test",
-        projection,
-        model,
-        grid,
-        vec![],
-        &[MoverShape::point(GROUND)],
-    ));
+    map::install_map(
+        app.world_mut(),
+        Map::new(
+            "test",
+            projection,
+            model,
+            grid,
+            vec![],
+            &[MoverShape::point(GROUND)],
+        ),
+    );
 }
 
 /// Side of [`install_chokepoint_map`]'s map. Several clusters across, so a walk
@@ -810,14 +927,17 @@ pub fn install_chokepoint_map(app: &mut App) {
             grid.set_occupied(GROUND, CellPos::new(CHOKEPOINT_SIZE / 2, y), true);
         }
     }
-    app.world_mut().insert_resource(Map::with_hierarchy_shapes(
-        "test",
-        Projection::Isometric,
-        MovementModel::Cell,
-        grid,
-        vec![],
-        &[MoverShape::point(GROUND)],
-    ));
+    map::install_map(
+        app.world_mut(),
+        Map::new(
+            "test",
+            Projection::Isometric,
+            MovementModel::Cell,
+            grid,
+            vec![],
+            &[MoverShape::point(GROUND)],
+        ),
+    );
 }
 
 /// App with the combat content roster — an attacking soldier (50 hp, 3-tick
@@ -1358,7 +1478,7 @@ pub fn supply_app() -> App {
                 .with_health(20)
                 .with_dying(2, None)
                 .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
-                .with_builder(["camp"], WorkPresence::Present),
+                .with_builder(["camp"], BuilderAttendance::Crew(WorkPresence::Present)),
         );
     }
     app.world_mut().resource::<ContentRegistry>().validate();
@@ -1914,7 +2034,7 @@ pub fn register_orders_content(app: &mut App) {
                 .with_train_time(2)
                 .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
                 .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
-                .with_builder(["depot"], WorkPresence::Hidden)
+                .with_builder(["depot"], BuilderAttendance::Crew(WorkPresence::Hidden))
                 .with_resource_carrier([("gold", HarvestData::new(5, 2, WorkPresence::Hidden))]),
         );
         // Same catalogue as `worker`, but it works from outside the site — the pair
@@ -1933,7 +2053,7 @@ pub fn register_orders_content(app: &mut App) {
                 .with_health(20)
                 .with_dying(2, None)
                 .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
-                .with_builder(["depot"], WorkPresence::Present),
+                .with_builder(["depot"], BuilderAttendance::Crew(WorkPresence::Present)),
         );
         // Same catalogue again, and any number of them can crowd one site.
         registry.register(
@@ -1950,7 +2070,47 @@ pub fn register_orders_content(app: &mut App) {
                 .with_health(20)
                 .with_dying(2, None)
                 .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
-                .with_builder(["depot"], WorkPresence::PresentStacking),
+                .with_builder(
+                    ["depot"],
+                    BuilderAttendance::Crew(WorkPresence::PresentStacking),
+                ),
+        );
+        // Same catalogue once more, but it only places the site: the depot
+        // advances itself from there.
+        registry.register(
+            EntityTypeDef::new("architect")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_sight_range(40)
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
+                )
+                .with_health(20)
+                .with_dying(2, None)
+                .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
+                .with_builder(["depot"], BuilderAttendance::Unattended),
+        );
+        // Same catalogue, and the site is what becomes of it: placing a depot
+        // spends the larva.
+        registry.register(
+            EntityTypeDef::new("larva")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_sight_range(40)
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
+                )
+                .with_health(20)
+                .with_dying(2, None)
+                .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
+                .with_stat(EntityStatId::SUPPLY_COST, FixedU64::ONE)
+                .with_builder(["depot"], BuilderAttendance::Consumed),
         );
         registry.register(
             EntityTypeDef::new("lumberjack")
@@ -2183,6 +2343,7 @@ pub fn net_app_with_slots(
             MovementModel::Cell,
             nav_grid,
             vec![],
+            &[],
         ),
     ));
     app.add_plugins(NetworkPlugin);

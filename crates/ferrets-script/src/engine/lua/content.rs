@@ -10,18 +10,20 @@ use ferrets_content::{
     entity_buffs::EntityBuffDef,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
-    morph::{MorphCancel, MorphPlacement, MorphTime, MorphTransition},
+    field::{
+        FieldDecay, FieldDef, FieldEffect, FieldEffectKind, FieldGrowth, FieldId, FieldPlacement,
+        FieldSide, FieldSourceDef, FieldVision,
+    },
+    morph::{MorphTime, MorphTransition},
     player_buffs::PlayerBuffDef,
     projectile::ProjectileDef,
     registry::ContentRegistry,
     repair::{RepairCost, RepairRate},
     research::ResearchDef,
     resource::HarvestData,
-    skills::{
-        EntityCastCost, EntityCastEffect, EntityCastTarget, PlayerCastEffect, SkillCaster, SkillDef,
-    },
+    skills::{EntityCastCost, EntityCastEffect, PlayerCastEffect, SkillCaster, SkillDef},
     splash::SplashDef,
-    stack_rule::StackRule,
+    stand::StandingAct,
     stats::{EntityModifier, ModifierOp, PlayerModifier},
     turret::{TurretDef, TurretMount, TurretStats, WeaponConduct},
 };
@@ -86,6 +88,16 @@ pub(super) fn register(lua: &Lua, registry: &Rc<RefCell<ContentRegistry>>) -> ml
         "define_terrain",
         lua.create_function(move |_, (name, passable): (String, u32)| {
             terrains.borrow_mut().register_terrain(name, passable);
+            Ok(())
+        })?,
+    )?;
+
+    let fields = Rc::clone(registry);
+    globals.set(
+        "define_field",
+        lua.create_function(move |_, (name, table): (String, Table)| {
+            let field = parse_field(&table).map_err(mlua::Error::external)?;
+            fields.borrow_mut().register_field(name, field);
             Ok(())
         })?,
     )?;
@@ -259,8 +271,8 @@ fn build_entity(
     }
     if let Some(builder) = optional::<Table>(table, "builder")? {
         let builds = required::<Vec<String>>(&builder, "builds")?;
-        let presence = required::<String>(&builder, "presence")?;
-        def = def.with_builder(builds, content::work_presence(&presence)?);
+        let attendance = required::<String>(&builder, "attendance")?;
+        def = def.with_builder(builds, content::builder_attendance(&attendance)?);
     }
     if let Some(repairer) = optional::<Table>(table, "repairer")? {
         let repairs = required::<Vec<String>>(&repairer, "repairs")?;
@@ -330,6 +342,18 @@ fn build_entity(
     if let Some(morphs) = optional::<Vec<Table>>(table, "morphs")? {
         def = def.with_morphs(parse_morphs(morphs, registry)?);
     }
+    if let Some(sources) = optional::<Vec<Table>>(table, "field_sources")? {
+        def = def.with_field_sources(parse_field_sources(&sources, registry)?);
+    }
+    if let Some(rules) = optional::<Vec<Table>>(table, "field_placement")? {
+        def = def.with_field_placement(parse_field_placement(&rules, registry)?);
+    }
+    if let Some(effects) = optional::<Vec<Table>>(table, "field_effects")? {
+        def = def.with_field_effects(parse_field_effects(&effects, registry)?);
+    }
+    if let Some(acts) = optional::<Vec<Table>>(table, "on_stand")? {
+        def = def.with_standing_acts(parse_on_stand(&acts, registry)?);
+    }
     if let Some(skills) = optional::<Vec<String>>(table, "skills")? {
         let ids = skills
             .iter()
@@ -360,9 +384,11 @@ fn parse_repair_rate(repairer: &Table) -> crate::Result<RepairRate> {
             let health = required::<String>(&rate, "health")?;
             Ok(RepairRate::PerTick(content::fixed(&health)?))
         }
-        other => Err(ScriptError::ContentError(format!(
-            "unknown repair rate mode '{other}'"
-        ))),
+        other => Err(content::unexpected(
+            "repair rate mode",
+            &["'production'", "'per_tick'"],
+            &content::quoted(other),
+        )),
     }
 }
 
@@ -389,9 +415,11 @@ fn parse_repair_cost(repairer: &Table) -> crate::Result<RepairCost> {
             let per_health = required::<String>(&cost, "per_health")?;
             Ok(RepairCost::Energy(content::fixed(&per_health)?))
         }
-        other => Err(ScriptError::ContentError(format!(
-            "unknown repair cost mode '{other}'"
-        ))),
+        other => Err(content::unexpected(
+            "repair cost mode",
+            &["'free'", "'pro_rata'", "'per_tick'", "'energy'"],
+            &content::quoted(other),
+        )),
     }
 }
 
@@ -660,7 +688,7 @@ fn parse_skill(table: &Table, registry: &ContentRegistry) -> crate::Result<Skill
                 Some(cost) => parse_entity_cast_cost(&cost)?,
                 None => Vec::new(),
             },
-            target: parse_entity_cast_target(&required::<String>(table, "target")?)?,
+            target: content::entity_cast_target(&required::<String>(table, "target")?)?,
             effect: parse_entity_effect(&required::<Table>(table, "effect")?, registry)?,
         },
         "player" => {
@@ -679,9 +707,11 @@ fn parse_skill(table: &Table, registry: &ContentRegistry) -> crate::Result<Skill
             }
         }
         other => {
-            return Err(ScriptError::ContentError(format!(
-                "unknown skill caster '{other}' (expected entity or player)"
-            )));
+            return Err(content::unexpected(
+                "skill caster",
+                &["'entity'", "'player'"],
+                &content::quoted(other),
+            ));
         }
     };
     let requires = optional::<Vec<String>>(table, "requires")?.unwrap_or_default();
@@ -737,9 +767,10 @@ fn parse_entity_cast_cost(cost: &Table) -> crate::Result<Vec<EntityCastCost>> {
 }
 
 /// Reads the `morphs` list: each entry names the destination type and the
-/// terms — `time` (a tick count, or `{ stat = ... }` naming a registered
-/// entity stat), `placement`, `cancel`, an optional `cost` block shaped like a
-/// skill cost, and an optional `requires` list.
+/// terms — an optional `via` form worn while the change runs, `time` (a tick
+/// count, or `{ stat = ... }` naming a registered entity stat), `placement`,
+/// `cancel`, an optional `cost` block shaped like a skill cost, and an optional
+/// `requires` list.
 fn parse_morphs(
     morphs: Vec<Table>,
     registry: &ContentRegistry,
@@ -747,6 +778,7 @@ fn parse_morphs(
     let mut transitions = Vec::with_capacity(morphs.len());
     for entry in morphs {
         let into = required::<String>(&entry, "into")?;
+        let via = optional::<String>(&entry, "via")?;
         let time = match required::<Value>(&entry, "time")? {
             Value::Integer(ticks) => MorphTime::Constant(u32::try_from(ticks).map_err(|_| {
                 ScriptError::ContentError(format!(
@@ -761,40 +793,28 @@ fn parse_morphs(
                 MorphTime::Stat(stat)
             }
             other => {
-                return Err(ScriptError::ContentError(format!(
-                    "morph time must be a tick count or a {{ stat = ... }} table, \
-                     found {}",
-                    other.type_name()
-                )));
+                return Err(content::unexpected(
+                    "morph time",
+                    &["a tick count", "a { stat = ... } table"],
+                    &found(&other),
+                ));
             }
         };
-        let placement = match required::<String>(&entry, "placement")?.as_str() {
-            "reserve" => MorphPlacement::Reserve,
-            "revalidate" => MorphPlacement::Revalidate,
-            other => {
-                return Err(ScriptError::ContentError(format!(
-                    "morph placement must be 'reserve' or 'revalidate', found '{other}'"
-                )));
-            }
-        };
-        let cancel = match required::<String>(&entry, "cancel")?.as_str() {
-            "committed" => MorphCancel::Committed,
-            "forfeit" => MorphCancel::Forfeit,
-            "refundable" => MorphCancel::Refundable,
-            other => {
-                return Err(ScriptError::ContentError(format!(
-                    "morph cancel must be 'committed', 'forfeit', or 'refundable', \
-                     found '{other}'"
-                )));
-            }
-        };
+        let placement = content::morph_placement(&required::<String>(&entry, "placement")?)?;
+        let cancel = content::morph_cancel(&required::<String>(&entry, "cancel")?)?;
         let costs = match optional::<Table>(&entry, "cost")? {
             Some(cost) => parse_entity_cast_cost(&cost)?,
             None => Vec::new(),
         };
         let requires = optional::<Vec<String>>(&entry, "requires")?.unwrap_or_default();
         transitions.push(MorphTransition::new(
-            into, time, placement, cancel, costs, requires,
+            into,
+            via.as_deref(),
+            time,
+            placement,
+            cancel,
+            costs,
+            requires,
         ));
     }
     Ok(transitions)
@@ -807,19 +827,9 @@ fn parse_player_cast_cost(cost: &Table) -> crate::Result<Cost> {
     Ok(pairs::<u32>(&resources, "resources")?.into_iter().collect())
 }
 
-fn parse_entity_cast_target(target: &str) -> crate::Result<EntityCastTarget> {
-    match target {
-        "caster" => Ok(EntityCastTarget::Caster),
-        "ally" => Ok(EntityCastTarget::Ally),
-        "enemy" => Ok(EntityCastTarget::Enemy),
-        other => Err(ScriptError::ContentError(format!(
-            "unknown skill target '{other}' (expected caster, ally, or enemy)"
-        ))),
-    }
-}
-
 /// Reads an entity cast's effect: exactly one of `apply_buff`, `remove_buff`,
-/// `damage`, `heal`. Buff names resolve in the entity-buff registry.
+/// `damage`, `heal`, `field`. Buff names resolve in the entity-buff registry,
+/// field names in the field registry.
 fn parse_entity_effect(
     table: &Table,
     registry: &ContentRegistry,
@@ -838,11 +848,210 @@ fn parse_entity_effect(
         Ok(EntityCastEffect::Damage(content::fixed(&amount)?))
     } else if let Some(amount) = optional::<String>(table, "heal")? {
         Ok(EntityCastEffect::Heal(content::fixed(&amount)?))
+    } else if let Some(field) = optional::<Table>(table, "field")? {
+        Ok(EntityCastEffect::Field {
+            field: field_id(&field, registry)?,
+            radius: required::<u32>(&field, "radius")?,
+            action: content::field_action(&required::<String>(&field, "action")?)?,
+        })
     } else {
         Err(ScriptError::ContentError(
-            "skill effect must be one of apply_buff, remove_buff, damage, or heal".to_string(),
+            "skill effect must be one of apply_buff, remove_buff, damage, heal, or field"
+                .to_string(),
         ))
     }
+}
+
+/// Reads a field definition: the `layer` mask its cells must pass, its
+/// `decay` — `"instant"`, `"never"`, or a `{ cycle = ticks }` table — and its
+/// `vision` — `"dark"` unless declared, or `"watched"` to put covered cells in
+/// sight of whoever covers them.
+fn parse_field(table: &Table) -> crate::Result<FieldDef> {
+    let layer = LayerMask::from(required::<u32>(table, "layer")?);
+    let decay = parse_field_decay(required::<Value>(table, "decay")?)?;
+    let vision = match optional::<String>(table, "vision")? {
+        Some(name) => content::field_vision(&name)?,
+        None => FieldVision::Dark,
+    };
+    Ok(FieldDef::new(layer, decay, vision))
+}
+
+/// Reads a field's decay: `"instant"`, `"never"`, or `{ cycle = ticks }`.
+fn parse_field_decay(value: Value) -> crate::Result<FieldDecay> {
+    match &value {
+        Value::String(name) if name == "instant" => Ok(FieldDecay::Instant),
+        Value::String(name) if name == "never" => Ok(FieldDecay::Never),
+        Value::Table(gradual) => Ok(FieldDecay::Gradual {
+            cycle: required::<u32>(gradual, "cycle")?,
+        }),
+        other => Err(content::unexpected(
+            "field decay",
+            &["'instant'", "'never'", "a { cycle = ... } table"],
+            &found(other),
+        )),
+    }
+}
+
+/// Reads a source's growth: `"instant"` or `{ cycle = ticks, initial_radius =
+/// cells }`.
+fn parse_field_growth(value: Value) -> crate::Result<FieldGrowth> {
+    match &value {
+        Value::String(name) if name == "instant" => Ok(FieldGrowth::Instant),
+        Value::Table(gradual) => Ok(FieldGrowth::Gradual {
+            cycle: required::<u32>(gradual, "cycle")?,
+            initial_radius: required::<u32>(gradual, "initial_radius")?,
+        }),
+        other => Err(content::unexpected(
+            "field growth",
+            &["'instant'", "a { cycle = ..., initial_radius = ... } table"],
+            &found(other),
+        )),
+    }
+}
+
+/// Reads what a field does to an entity: `"disabled"` or `{ modifiers = { ... } }`.
+fn parse_field_effect_kind(
+    value: Value,
+    registry: &ContentRegistry,
+) -> crate::Result<FieldEffectKind> {
+    match &value {
+        Value::String(name) if name == "disabled" => Ok(FieldEffectKind::Disabled),
+        Value::Table(table) => Ok(FieldEffectKind::Modifiers(parse_entity_modifiers(
+            &required::<Vec<Table>>(table, "modifiers")?,
+            registry,
+        )?)),
+        other => Err(content::unexpected(
+            "field effect",
+            &["'disabled'", "a { modifiers = ... } table"],
+            &found(other),
+        )),
+    }
+}
+
+/// A Lua value as an error message names it: a string by its quoted text,
+/// anything else by its type.
+fn found(value: &Value) -> String {
+    match value {
+        Value::String(text) => content::quoted(&text.to_string_lossy()),
+        other => other.type_name().to_string(),
+    }
+}
+
+/// Resolves the `field` entry of `table` in the field registry.
+fn field_id(table: &Table, registry: &ContentRegistry) -> crate::Result<FieldId> {
+    field_by_name(&required::<String>(table, "field")?, registry)
+}
+
+/// Resolves a field by the name content gave it.
+fn field_by_name(name: &str, registry: &ContentRegistry) -> crate::Result<FieldId> {
+    registry
+        .field(name)
+        .ok_or_else(|| ScriptError::ContentError(format!("field '{name}' is not defined")))
+}
+
+/// Reads the `field_sources` list: each entry names a `field`, a `radius`, a
+/// `growth` — `"instant"` or `{ cycle = ticks, initial_radius = cells }` — and
+/// an optional `while_constructing` radius.
+fn parse_field_sources(
+    sources: &[Table],
+    registry: &ContentRegistry,
+) -> crate::Result<Vec<FieldSourceDef>> {
+    sources
+        .iter()
+        .map(|entry| {
+            let growth = parse_field_growth(required::<Value>(entry, "growth")?)?;
+            Ok(FieldSourceDef::new(
+                field_id(entry, registry)?,
+                required::<u32>(entry, "radius")?,
+                growth,
+                optional::<u32>(entry, "while_constructing")?,
+            ))
+        })
+        .collect()
+}
+
+/// Reads the `on_stand` list: each entry is one act, named by its one verb
+/// key — `field = { field, radius, action }` covers or clears a field around
+/// the footprint.
+fn parse_on_stand(acts: &[Table], registry: &ContentRegistry) -> crate::Result<Vec<StandingAct>> {
+    acts.iter()
+        .map(|entry| {
+            if let Some(field) = optional::<Table>(entry, "field")? {
+                Ok(StandingAct::Field {
+                    field: field_id(&field, registry)?,
+                    radius: required::<u32>(&field, "radius")?,
+                    action: content::field_action(&required::<String>(&field, "action")?)?,
+                })
+            } else {
+                Err(ScriptError::ContentError(
+                    "standing act must carry a field = { ... } table".to_string(),
+                ))
+            }
+        })
+        .collect()
+}
+
+/// Reads the `field_placement` list: each entry either `requires` a field
+/// (with `of` and `coverage`) or `forbids` one.
+fn parse_field_placement(
+    rules: &[Table],
+    registry: &ContentRegistry,
+) -> crate::Result<Vec<FieldPlacement>> {
+    rules
+        .iter()
+        .map(|entry| {
+            let resolve = |name: String| field_by_name(&name, registry);
+            match (
+                optional::<String>(entry, "requires")?,
+                optional::<String>(entry, "forbids")?,
+            ) {
+                (Some(name), None) => Ok(FieldPlacement::Requires {
+                    field: resolve(name)?,
+                    of: content::field_affiliation(&required::<String>(entry, "of")?)?,
+                    coverage: content::field_coverage(&required::<String>(entry, "coverage")?)?,
+                }),
+                (None, Some(name)) => Ok(FieldPlacement::Forbids {
+                    field: resolve(name)?,
+                }),
+                (Some(_), Some(_)) | (None, None) => Err(ScriptError::ContentError(
+                    "a field placement rule names exactly one of requires or forbids".to_string(),
+                )),
+            }
+        })
+        .collect()
+}
+
+/// Reads the `field_effects` list: each entry names a `field` and `of`, and
+/// exactly one of `inside` or `outside` holding either
+/// `{ modifiers = {...} }` or the string `"disabled"`.
+fn parse_field_effects(
+    effects: &[Table],
+    registry: &ContentRegistry,
+) -> crate::Result<Vec<FieldEffect>> {
+    effects
+        .iter()
+        .map(|entry| {
+            let (side, value) = match (
+                optional::<Value>(entry, "inside")?,
+                optional::<Value>(entry, "outside")?,
+            ) {
+                (Some(value), None) => (FieldSide::Inside, value),
+                (None, Some(value)) => (FieldSide::Outside, value),
+                (Some(_), Some(_)) | (None, None) => {
+                    return Err(ScriptError::ContentError(
+                        "a field effect names exactly one of inside or outside".to_string(),
+                    ));
+                }
+            };
+            let kind = parse_field_effect_kind(value, registry)?;
+            Ok(FieldEffect::new(
+                field_id(entry, registry)?,
+                content::field_affiliation(&required::<String>(entry, "of")?)?,
+                side,
+                kind,
+            ))
+        })
+        .collect()
 }
 
 /// Reads a player cast's effect: exactly one of `apply_buff` and
@@ -872,7 +1081,7 @@ fn parse_player_effect(
 fn parse_entity_buff(table: &Table, registry: &ContentRegistry) -> crate::Result<EntityBuffDef> {
     Ok(EntityBuffDef {
         duration: optional::<u32>(table, "duration")?,
-        stack_rule: parse_stack_rule(&required::<String>(table, "stack")?)?,
+        stack_rule: content::stack_rule(&required::<String>(table, "stack")?)?,
         modifiers: parse_entity_modifiers(&required::<Vec<Table>>(table, "modifiers")?, registry)?,
     })
 }
@@ -897,24 +1106,8 @@ fn parse_player_buff(table: &Table, registry: &ContentRegistry) -> crate::Result
         player_modifiers,
         entity_modifiers,
         duration: optional::<u32>(table, "duration")?,
-        stack_rule: parse_stack_rule(&required::<String>(table, "stack")?)?,
+        stack_rule: content::stack_rule(&required::<String>(table, "stack")?)?,
     })
-}
-
-fn parse_stack_rule(rule: &str) -> crate::Result<StackRule> {
-    match rule {
-        "refresh" => Ok(StackRule::Refresh),
-        "ignore" => Ok(StackRule::Ignore),
-        other => other
-            .strip_prefix("stack:")
-            .and_then(|cap| cap.parse::<u32>().ok())
-            .map(StackRule::StackToCap)
-            .ok_or_else(|| {
-                ScriptError::ContentError(format!(
-                    "unknown stack rule '{other}' (expected refresh, ignore, or stack:N)"
-                ))
-            }),
-    }
 }
 
 fn parse_entity_modifiers(
@@ -985,15 +1178,7 @@ fn parse_player_modifier(
 
 /// Reads a modifier's `op` and `value` fields, shared by both modifier kinds.
 fn parse_modifier_op_value(table: &Table) -> crate::Result<(ModifierOp, FixedI64)> {
-    let op = match required::<String>(table, "op")?.as_str() {
-        "flat" => ModifierOp::FlatAdd,
-        "percent" => ModifierOp::PercentAdd,
-        other => {
-            return Err(ScriptError::ContentError(format!(
-                "unknown modifier op '{other}' (expected flat or percent)"
-            )));
-        }
-    };
+    let op = content::modifier_op(&required::<String>(table, "op")?)?;
     let value = FixedI64::from_str(&required::<String>(table, "value")?)
         .map_err(|error| ScriptError::ContentError(format!("invalid modifier value: {error}")))?;
     Ok((op, value))

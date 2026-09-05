@@ -116,6 +116,9 @@ impl EntityStatId {
     /// centred on where it points — ninety shoots forty-five either side. Zero
     /// fires only along the bearing itself; omitted, the span is the whole circle.
     pub const ATTACK_ARC: EntityStatId = EntityStatId(31);
+    /// Health points removed each tick, after regeneration, while the entity
+    /// stands. Fractional and zero by default.
+    pub const HEALTH_DRAIN: EntityStatId = EntityStatId(32);
 
     /// Creates an entity stat id for the given registration index.
     pub(crate) fn from_index(index: usize) -> Self {
@@ -131,7 +134,7 @@ impl EntityStatId {
 
 /// The built-in entity stats, registered first and in this order, so their
 /// assigned ids equal the [`EntityStatId`] constants above.
-pub(crate) const ENTITY_BUILTIN_STATS: [BuiltinStat<EntityStatId>; 32] = [
+pub(crate) const ENTITY_BUILTIN_STATS: [BuiltinStat<EntityStatId>; 33] = [
     // Current health settles under this ceiling, so a zero would turn any debuff
     // that reached it into an instant kill.
     stats::builtin(EntityStatId::MAX_HEALTH, "max_health", FixedU64::ONE),
@@ -205,6 +208,8 @@ pub(crate) const ENTITY_BUILTIN_STATS: [BuiltinStat<EntityStatId>; 32] = [
     stats::builtin(EntityStatId::PIVOT_ANGLE, "pivot_angle", FixedU64::ZERO),
     stats::builtin(EntityStatId::AIM_RATE, "aim_rate", FixedU64::ZERO),
     stats::builtin(EntityStatId::ATTACK_ARC, "attack_arc", FixedU64::ZERO),
+    // No floor: a fractional per-tick amount where zero means no drain.
+    stats::builtin(EntityStatId::HEALTH_DRAIN, "health_drain", FixedU64::ZERO),
 ];
 
 // Floors and names are looked up by `EntityStatId::index`, so every entry must sit at

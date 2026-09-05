@@ -20,14 +20,16 @@ use ferrets_pathfinder::{
 };
 use ferrets_physics::{body, terrain};
 
-use super::turn;
+use super::{
+    orders::{self, Processing, Refusal},
+    turn,
+};
 use crate::{
     components::{
         hidden::HiddenComponent,
         location::LocationComponent,
         movement::MoveComponent,
         order_queue::{CancelPolicy, OrderQueueComponent, OrderState},
-        owner::OwnerComponent,
     },
     entity_def,
     entity_index::EntityIndex,
@@ -107,13 +109,21 @@ impl MovePlanShare {
     }
 }
 
+/// Whether `entity` may start a Move: its type moves and it operates.
+pub fn can_start(world: &World, entity: Entity, _order: &Order) -> Result<(), Refusal> {
+    if !entity_def::of(world, entity).can_move() {
+        return Err(Refusal::Incapable);
+    }
+    orders::requires_operating(world, entity)
+}
+
 /// Called once when a Move order becomes the front `New` entry.
 ///
-/// Inserts the driver component and returns `InProcessing` if the move should proceed,
-/// or `Finished` immediately if the entity cannot move. Whether the target is already
-/// reached is not checked here — that is deferred to [`process`].
-pub fn prepare(entity: Entity, _order: &Order, world: &mut World) -> OrderState {
-    if !entity_def::of(world, entity).can_move() {
+/// Inserts the driver component and returns `InProcessing`, or `Finished`
+/// immediately when the order cannot start — see [`can_start`]. Whether the
+/// target is already reached is decided in [`process`].
+pub fn prepare(entity: Entity, order: &Order, world: &mut World) -> OrderState {
+    if can_start(world, entity, order).is_err() {
         return OrderState::Finished;
     }
     insert_driver(entity, world);
@@ -176,11 +186,11 @@ pub fn cancel_processing(
 }
 
 /// Advance a Move order by one tick under the session's movement model.
-pub fn process(entity: Entity, order: &Order, world: &mut World) -> OrderState {
-    match world.resource::<Map>().movement_model() {
+pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
+    Processing::state(match world.resource::<Map>().movement_model() {
         MovementModel::Cell => process_cell(entity, order, world),
         MovementModel::Continuous => process_continuous(entity, order, world),
-    }
+    })
 }
 
 /// How many ticks without progress count as one blockage escalation for a
@@ -196,11 +206,7 @@ const CONTINUOUS_STUCK_TICKS: u32 = 15;
 fn process_continuous(entity: Entity, order: &Order, world: &mut World) -> OrderState {
     let (target, size, range) = order.move_params().expect("Move order must have params");
 
-    let position = world
-        .entity(entity)
-        .get::<LocationComponent>()
-        .unwrap()
-        .position;
+    let position = entity_def::position(world, entity);
     let speed = entity_def::effective_stat(world, entity, EntityStatId::SPEED)
         .expect("movable entities have a speed stat");
     let location_def = entity_def::of(world, entity).location.unwrap();
@@ -584,11 +590,7 @@ fn process_continuous(entity: Entity, order: &Order, world: &mut World) -> Order
 fn process_cell(entity: Entity, order: &Order, world: &mut World) -> OrderState {
     let (target, size, range) = order.move_params().expect("Move order must have params");
 
-    let position = world
-        .entity(entity)
-        .get::<LocationComponent>()
-        .unwrap()
-        .position;
+    let position = entity_def::position(world, entity);
     let speed = entity_def::effective_stat(world, entity, EntityStatId::SPEED)
         .expect("movable entities have a speed stat");
     let location_def = entity_def::of(world, entity).location.unwrap();
@@ -1017,11 +1019,7 @@ fn resolve_blocked_crossing(
     let projection = world.resource::<Map>().projection();
 
     if let Some(blocker) = claimant_at(world, shape.mask, next_cell) {
-        let blocker_position = world
-            .entity(blocker)
-            .get::<LocationComponent>()
-            .unwrap()
-            .position;
+        let blocker_position = entity_def::position(world, blocker);
         let blocker_at_rest = !is_mid_crossing(blocker_position);
 
         // Swap: the blocker rests on my next cell and wants mine — the
@@ -1337,13 +1335,7 @@ fn resting_ally_within(
 
 /// Whether both entities have owners the session treats as allies.
 fn allied(world: &World, a: Entity, b: Entity) -> bool {
-    let owner = |entity: Entity| {
-        world
-            .entity(entity)
-            .get::<OwnerComponent>()
-            .map(|component| component.player())
-    };
-    match (owner(a), owner(b)) {
+    match (entity_def::owner(world, a), entity_def::owner(world, b)) {
         (Some(first), Some(second)) => world.resource::<GameSession>().are_allied(first, second),
         (None, _) | (_, None) => false,
     }

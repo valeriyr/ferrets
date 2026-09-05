@@ -11,7 +11,7 @@ use ferrets_content::{
 use ferrets_geometry::cell_size::CellSize;
 use ferrets_math::FixedU64;
 use ferrets_simulation::{
-    components::build::UnderConstructionComponent,
+    components::build::{SiteWork, UnderConstructionComponent},
     game_loop,
     session::{GameSession, player_slot::PlayerSlot, player_type::PlayerType},
     spawn,
@@ -134,7 +134,12 @@ fn entity_under_construction_does_not_regenerate() {
     utils::wound(&mut app, troll, "10");
     app.world_mut()
         .entity_mut(troll)
-        .insert(UnderConstructionComponent::default());
+        .insert(UnderConstructionComponent {
+            progress: 0,
+            work: SiteWork::Crew {
+                builders: Default::default(),
+            },
+        });
 
     utils::run_ticks(&mut app, 10);
     assert_eq!(

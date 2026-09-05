@@ -1,6 +1,6 @@
 //! Shared vocabulary for how a worker attends a job it takes time to finish.
 
-/// Where a worker stands while it works, and whether others may join it.
+/// Where a worker stands while it attends a job, and whether others may join it.
 ///
 /// Declared per capability rather than per entity: one worker can reasonably
 /// disappear into a job it does alone and stand out in the open beside another its

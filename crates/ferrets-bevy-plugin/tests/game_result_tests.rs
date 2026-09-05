@@ -17,7 +17,8 @@ use ferrets_simulation::{
         defeat_conduct::DefeatConduct,
         elimination_scope::EliminationScope,
         finish_policy::FinishPolicy,
-        player_slot::{PlayerId, PlayerSlot, TeamId},
+        player_id::PlayerId,
+        player_slot::{PlayerSlot, TeamId},
         player_type::PlayerType,
     },
     spawn,
@@ -50,7 +51,7 @@ fn surviving_unit_does_not_save_player_whose_last_building_falls() {
 
     // Player 1 keeps a soldier on the field, but only buildings count.
     let world = app.world_mut();
-    spawn::create_entity(world, "soldier", utils::pos(20, 20), Some(1)).unwrap();
+    utils::create_entity(world, "soldier", utils::pos(20, 20), Some(1)).unwrap();
     utils::run_ticks(&mut app, 1);
     assert_eq!(result(&app), None);
 
@@ -157,7 +158,7 @@ fn eliminated_player_regaining_building_stays_out() {
 
     // A new building appears for the eliminated player — as a build order
     // still in flight at the defeat would place one.
-    spawn::create_entity(app.world_mut(), "base", utils::pos(14, 2), Some(1)).expect("late base");
+    utils::create_entity(app.world_mut(), "base", utils::pos(14, 2), Some(1)).expect("late base");
     destroy(&mut app, bases[2]);
     utils::run_ticks(&mut app, 1);
 
@@ -456,7 +457,7 @@ fn bases_app(teams: &[Option<TeamId>]) -> (App, Vec<Entity>) {
             .iter()
             .enumerate()
             .map(|(id, _)| {
-                let (entity, _) = spawn::create_entity(
+                let (entity, _) = utils::create_entity(
                     world,
                     "base",
                     utils::pos(2 + id as u32 * 4, 2),
@@ -495,7 +496,7 @@ fn bases_app_with_environment(teams: &[Option<TeamId>]) -> (App, Vec<Entity>, En
         .iter()
         .enumerate()
         .map(|(id, _)| {
-            let (entity, _) = spawn::create_entity(
+            let (entity, _) = utils::create_entity(
                 world,
                 "base",
                 utils::pos(2 + id as u32 * 4, 2),
@@ -506,7 +507,7 @@ fn bases_app_with_environment(teams: &[Option<TeamId>]) -> (App, Vec<Entity>, En
         })
         .collect();
     let (environment_base, _) =
-        spawn::create_entity(world, "base", utils::pos(2, 8), Some(environment))
+        utils::create_entity(world, "base", utils::pos(2, 8), Some(environment))
             .expect("environment base placement");
 
     app.world_mut().resource_mut::<GameSession>().start();

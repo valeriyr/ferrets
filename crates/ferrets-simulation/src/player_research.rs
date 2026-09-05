@@ -11,7 +11,7 @@ use bevy_ecs::prelude::*;
 
 use crate::{
     events::{EventRecord, SimulationEvent},
-    session::player_slot::PlayerId,
+    session::player_id::PlayerId,
     simulation_id::SimulationId,
 };
 use ferrets_content::research::ResearchId;

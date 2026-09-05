@@ -10,7 +10,7 @@ use ferrets_content::{research::ResearchId, skills::SkillId};
 use ferrets_geometry::cell_pos::CellPos;
 use ferrets_math::{FixedU64, fixed_urect::FixedURect, fixed_uvec2::FixedUVec2};
 use ferrets_simulation::{
-    command::{PlayerCommand, SelectMode, SkillCasterRef},
+    command::{PlayerCommand, SelectMode, SkillCasterRef, SkillTarget},
     components::{rally::RallyTarget, stance::Stance},
     order::AttackTarget,
     simulation_id::SimulationId,
@@ -152,10 +152,25 @@ fn command(table: &Table, index: usize, names: &CommandNames) -> crate::Result<P
                 names.skills.get(&name).copied().ok_or_else(|| {
                     field_error(index, "skill", &format!("unknown skill '{name}'"))
                 })?;
+            // A cast aims at an entity (`target`) or a cell (`x`, `y`);
+            // a self-cast names neither.
+            let target = match optional_integer(table, index, "target")? {
+                Some(id) => Some(SkillTarget::Entity(SimulationId(id))),
+                None => match (
+                    optional_integer(table, index, "x")?,
+                    optional_integer(table, index, "y")?,
+                ) {
+                    (Some(x), Some(y)) => Some(SkillTarget::Position(cell(x, y))),
+                    (None, None) => None,
+                    (Some(_), None) | (None, Some(_)) => {
+                        return Err(field_error(index, "x", "a cell aim names both x and y"));
+                    }
+                },
+            };
             Ok(PlayerCommand::UseSkill {
                 skill,
                 caster: skill_caster(table, index)?,
-                target: optional_integer(table, index, "target")?.map(SimulationId),
+                target,
             })
         }
         "rally" => Ok(PlayerCommand::SetRallyPoint {
@@ -187,6 +202,10 @@ fn command(table: &Table, index: usize, names: &CommandNames) -> crate::Result<P
                 flush: flush(table, index)?,
             })
         }
+        "morph" => Ok(PlayerCommand::Morph {
+            type_name: field(table, index, "type_name")?,
+            flush: flush(table, index)?,
+        }),
         "stop" => Ok(PlayerCommand::Stop),
         other => Err(element_error(index, &format!("unknown kind '{other}'"))),
     }

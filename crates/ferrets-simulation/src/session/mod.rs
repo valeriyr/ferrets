@@ -9,6 +9,8 @@ pub mod elimination_scope;
 pub mod finish_policy;
 pub mod game_speed;
 pub mod local_role;
+pub mod player_id;
+pub mod player_mask;
 pub mod player_slot;
 pub mod player_type;
 
@@ -21,7 +23,8 @@ use crate::session::{
     finish_policy::FinishPolicy,
     game_speed::GameSpeed,
     local_role::LocalRole,
-    player_slot::{Participation, PlayerId, PlayerSlot, TeamId},
+    player_id::PlayerId,
+    player_slot::{Participation, PlayerSlot, TeamId},
     player_type::PlayerType,
 };
 use bevy_ecs::prelude::*;

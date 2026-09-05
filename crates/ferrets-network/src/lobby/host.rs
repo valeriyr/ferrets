@@ -3,9 +3,7 @@
 use std::{collections::HashMap, net::SocketAddr};
 
 use ferrets_simulation::session::{
-    drop_policy::DropPolicy,
-    finish_policy::FinishPolicy,
-    player_slot::{PlayerId, TeamId},
+    drop_policy::DropPolicy, finish_policy::FinishPolicy, player_id::PlayerId, player_slot::TeamId,
 };
 
 use crate::{

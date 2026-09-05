@@ -7,10 +7,7 @@ mod utils;
 use std::collections::BTreeMap;
 
 use bevy::prelude::*;
-use ferrets_bevy_plugin::{
-    ai::{AiPlugin, AiRuntimes, game_view, install_ai_runtimes},
-    spawn,
-};
+use ferrets_bevy_plugin::ai::{AiPlugin, AiRuntimes, game_view, install_ai_runtimes};
 use ferrets_replay::{buffer::SharedBuffer, recorder::Recorder, replay::Replay};
 use ferrets_script::{
     ai::view::content::ContentView,
@@ -23,11 +20,8 @@ use ferrets_simulation::{
     input::{InputFrames, PlayerFrame, SYNC_LATENCY},
     resources::PlayerResources,
     session::{
-        GameSession,
-        ai_vision::AiVision,
-        finish_policy::FinishPolicy,
-        player_slot::{PlayerId, PlayerSlot},
-        player_type::PlayerType,
+        GameSession, ai_vision::AiVision, finish_policy::FinishPolicy, player_id::PlayerId,
+        player_slot::PlayerSlot, player_type::PlayerType,
     },
 };
 
@@ -212,12 +206,12 @@ fn game_view_classifies_and_snapshots_entities() {
     utils::register_orders_content(&mut app);
     let world = app.world_mut();
 
-    let (_, _) = spawn::create_entity(world, "worker", utils::pos(5, 5), Some(1)).unwrap();
-    let (hidden_own, _) = spawn::create_entity(world, "worker", utils::pos(7, 5), Some(1)).unwrap();
-    let (_, _) = spawn::create_entity(world, "worker", utils::pos(10, 10), Some(0)).unwrap();
+    let (_, _) = utils::create_entity(world, "worker", utils::pos(5, 5), Some(1)).unwrap();
+    let (hidden_own, _) = utils::create_entity(world, "worker", utils::pos(7, 5), Some(1)).unwrap();
+    let (_, _) = utils::create_entity(world, "worker", utils::pos(10, 10), Some(0)).unwrap();
     let (hidden_enemy, _) =
-        spawn::create_entity(world, "worker", utils::pos(12, 10), Some(0)).unwrap();
-    let (mine, _) = spawn::create_entity(world, "mine", utils::pos(2, 2), None).unwrap();
+        utils::create_entity(world, "worker", utils::pos(12, 10), Some(0)).unwrap();
+    let (mine, _) = utils::create_entity(world, "mine", utils::pos(2, 2), None).unwrap();
     world
         .get_mut::<ResourceSourceComponent>(mine)
         .unwrap()
@@ -352,8 +346,8 @@ fn run_ai_session() -> Vec<u64> {
     utils::register_orders_content(&mut app);
     {
         let world = app.world_mut();
-        spawn::create_entity(world, "worker", utils::pos(4, 4), Some(1)).unwrap();
-        spawn::create_entity(world, "worker", utils::pos(20, 20), Some(2)).unwrap();
+        utils::create_entity(world, "worker", utils::pos(4, 4), Some(1)).unwrap();
+        utils::create_entity(world, "worker", utils::pos(20, 20), Some(2)).unwrap();
     }
     install_ai(&mut app, &[(1, PATROL), (2, PATROL)]);
     app.world_mut().resource_mut::<GameSession>().start();

@@ -28,12 +28,12 @@ use ferrets_simulation::{
         hidden::HiddenComponent,
         location::LocationComponent,
         order_queue::OrderQueueComponent,
-        owner::OwnerComponent,
         resource::{ResourceCarrierComponent, ResourceSourceComponent},
         stance::StanceComponent,
         train::TrainQueueComponent,
         transport::{BoardedComponent, TransporterComponent},
     },
+    entity_def::{self, Operation},
     entity_index::EntityIndex,
     input::{InputFrames, PlayerFrame, SYNC_LATENCY},
     map::Map,
@@ -41,9 +41,7 @@ use ferrets_simulation::{
     player_research::PlayerResearch,
     resources::PlayerResources,
     session::{
-        GameSession,
-        ai_vision::AiVision,
-        player_slot::{PlayerId, PlayerSlot},
+        GameSession, ai_vision::AiVision, player_id::PlayerId, player_slot::PlayerSlot,
         player_type::PlayerType,
     },
     simulation_id::SimulationId,
@@ -256,9 +254,7 @@ pub fn game_view(world: &World, player: PlayerId, race: &str, vision: AiVision) 
     let mut neutral_entities = Vec::new();
     for (id, entity) in world.resource::<EntityIndex>().alive_entries() {
         let entity_ref = world.entity(entity);
-        let owner = entity_ref
-            .get::<OwnerComponent>()
-            .map(|owner| owner.player());
+        let owner = entity_def::owner(world, entity);
         // A brain keeps seeing its own hidden entities (a worker inside a mine
         // still counts toward its economy); other players' hidden entities are
         // omitted, matching what its commands could target.
@@ -266,7 +262,8 @@ pub fn game_view(world: &World, player: PlayerId, race: &str, vision: AiVision) 
         if hidden && owner != Some(player) {
             continue;
         }
-        let view = entity_view(&entity_ref, id, hidden);
+        let disabled = matches!(entity_def::operation(world, entity), Operation::Disabled);
+        let view = entity_view(&entity_ref, id, hidden, disabled);
         match owner {
             // Own and allied entities are always seen; enemy and neutral ones
             // only when the brain's team can see their cell (unless the AI is
@@ -325,10 +322,7 @@ fn research_views(world: &World, player: PlayerId) -> (Vec<String>, Vec<String>)
     let mut researching: Vec<String> = Vec::new();
     for (_, entity) in world.resource::<EntityIndex>().alive_entries() {
         let entity_ref = world.entity(entity);
-        if entity_ref
-            .get::<OwnerComponent>()
-            .is_none_or(|owner| owner.player() != player)
-        {
+        if entity_def::owner(world, entity) != Some(player) {
             continue;
         }
         let Some(queue) = entity_ref.get::<OrderQueueComponent>() else {
@@ -347,7 +341,7 @@ fn research_views(world: &World, player: PlayerId) -> (Vec<String>, Vec<String>)
 }
 
 /// Snapshots one entity to its integer view.
-fn entity_view(entity: &EntityRef, id: SimulationId, hidden: bool) -> EntityView {
+fn entity_view(entity: &EntityRef, id: SimulationId, hidden: bool, disabled: bool) -> EntityView {
     let cell = entity
         .get::<LocationComponent>()
         .map_or(CellPos::new(0, 0), |location| {
@@ -381,6 +375,7 @@ fn entity_view(entity: &EntityRef, id: SimulationId, hidden: bool) -> EntityView
             .get::<TrainQueueComponent>()
             .map_or_else(Vec::new, |queue| queue.0.iter().cloned().collect()),
         under_construction: entity.contains::<UnderConstructionComponent>(),
+        disabled,
         stance: entity
             .get::<StanceComponent>()
             .map(|stance| stance.0.name().to_string()),

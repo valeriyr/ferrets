@@ -8,9 +8,9 @@ use bevy_ecs::{entity::Entity, world::World};
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::{FixedU64, fixed_urect::FixedURect, fixed_uvec2::FixedUVec2};
 
-use super::{board, morph, repair, stats};
+use super::{morph, orders, stats};
 use crate::{
-    command::{PlayerCommand, SelectMode, SkillCasterRef},
+    command::{PlayerCommand, SelectMode, SkillCasterRef, SkillTarget},
     components::{
         build::UnderConstructionComponent,
         entity_buffs::BuffsComponent,
@@ -19,19 +19,19 @@ use crate::{
         health::HealthComponent,
         location::LocationComponent,
         order_queue::{CancelPolicy, OrderQueueComponent},
-        owner::{self, OwnerComponent},
+        owner,
         rally::{RallyPointComponent, RallyTarget},
-        resource::{ResourceCarrierComponent, ResourceSourceComponent},
         stance::StanceComponent,
         tags::TagsComponent,
         train::TrainQueueComponent,
     },
     control_groups::{CONTROL_GROUP_COUNT, ControlGroups},
-    entity_def,
+    entity_def::{self, Operation},
     entity_index::EntityIndex,
     events::{SpawnCause, SpendCause},
     game_loop::{cast_cost, damage},
     input::InputFrames,
+    map::Map,
     order::{AttackTarget, Order},
     player_buffs::PlayerBuffs,
     player_research::PlayerResearch,
@@ -39,13 +39,10 @@ use crate::{
     requirements,
     resources::{self, PlayerResources},
     selection::Selection,
-    session::{
-        GameSession,
-        ai_vision::AiVision,
-        player_slot::{PlayerId, PlayerSlot},
-    },
+    session::{GameSession, ai_vision::AiVision, player_id::PlayerId, player_slot::PlayerSlot},
     simulation_id::SimulationId,
-    spawn, supply,
+    spawn::{self, FieldReach},
+    supply,
     visibility::VisibilityGrid,
 };
 use ferrets_content::{
@@ -56,7 +53,7 @@ use ferrets_content::{
     skills::{
         EntityCastCost, EntityCastEffect, EntityCastTarget, PlayerCastEffect, SkillCaster, SkillId,
     },
-    tags, targeting,
+    tags,
 };
 
 /// Processes the frame for `current_tick` once every player the tick requires
@@ -144,18 +141,17 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
             apply_selection(world, player, candidates, *mode);
         }
         PlayerCommand::Move { target, flush } => {
-            for entity in commanded_selection(world, player) {
-                push_order(
-                    world,
-                    entity,
-                    Order::Move {
-                        target: *target,
-                        size: CellSize::ONE,
-                        range: 0,
-                    },
-                    CancelPolicy::from_bool(*flush),
-                );
-            }
+            let commanded = commanded_selection(world, player);
+            issue(
+                world,
+                commanded,
+                Order::Move {
+                    target: *target,
+                    size: CellSize::ONE,
+                    range: 0,
+                },
+                CancelPolicy::from_bool(*flush),
+            );
         }
         PlayerCommand::Attack { target, flush } => {
             // An explicit attack is honored as given — including force-attacking an
@@ -175,72 +171,45 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
                 Some(id) => commanded_selection_excluding(world, player, id),
                 None => commanded_selection(world, player),
             };
-            let aimed_at_ground = target.entity().is_none();
-            for entity in commanded {
-                // Only a weapon that sends its shots to a cell can be aimed at one.
-                if aimed_at_ground && !aims_at_cells(world, entity) {
-                    continue;
-                }
-                // Refused rather than accepted-and-abandoned: a weapon that cannot
-                // reach the target's layers would otherwise walk into range and
-                // stand there swinging at nothing.
-                if let Some(id) = target.entity()
-                    && !reaches_target(world, entity, id)
-                {
-                    continue;
-                }
-                push_order(
-                    world,
-                    entity,
-                    Order::Attack {
-                        target: *target,
-                        leash: None,
-                    },
-                    CancelPolicy::from_bool(*flush),
-                );
-            }
+            issue(
+                world,
+                commanded,
+                Order::Attack {
+                    target: *target,
+                    leash: None,
+                },
+                CancelPolicy::from_bool(*flush),
+            );
         }
         PlayerCommand::AttackMove { target, flush } => {
-            for entity in commanded_selection(world, player) {
-                push_order(
-                    world,
-                    entity,
-                    Order::AttackMove { target: *target },
-                    CancelPolicy::from_bool(*flush),
-                );
-            }
+            let commanded = commanded_selection(world, player);
+            issue(
+                world,
+                commanded,
+                Order::AttackMove { target: *target },
+                CancelPolicy::from_bool(*flush),
+            );
         }
         PlayerCommand::Patrol { target, flush } => {
-            for entity in commanded_selection(world, player) {
-                push_order(
-                    world,
-                    entity,
-                    Order::Patrol { target: *target },
-                    CancelPolicy::from_bool(*flush),
-                );
-            }
+            let commanded = commanded_selection(world, player);
+            issue(
+                world,
+                commanded,
+                Order::Patrol { target: *target },
+                CancelPolicy::from_bool(*flush),
+            );
         }
         PlayerCommand::Guard { target, flush } => {
-            let Some(ward) = interactable_entity(world, player, *target) else {
-                return;
-            };
-            // Guarding is for own, allied, and neutral wards — a hostile ward
-            // would immediately become the guard's own scan target.
-            if let Some(owner) = world.entity(ward).get::<OwnerComponent>()
-                && !world
-                    .resource::<GameSession>()
-                    .are_allied(player, owner.player())
-            {
+            if interactable_entity(world, player, *target).is_none() {
                 return;
             }
-            for entity in commanded_selection_excluding(world, player, *target) {
-                push_order(
-                    world,
-                    entity,
-                    Order::Guard { target: *target },
-                    CancelPolicy::from_bool(*flush),
-                );
-            }
+            let commanded = commanded_selection_excluding(world, player, *target);
+            issue(
+                world,
+                commanded,
+                Order::Guard { target: *target },
+                CancelPolicy::from_bool(*flush),
+            );
         }
         PlayerCommand::SetStance { stance } => {
             for entity in commanded_selection(world, player) {
@@ -293,23 +262,9 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
             let Some(entity) = find_owned_interactable(world, player, *builder) else {
                 return;
             };
-            if !entity_def::of(world, entity)
-                .builder
-                .as_ref()
-                .is_some_and(|b| b.can_build(type_name))
-            {
-                return;
-            }
-            let constructible = world
-                .resource::<ContentRegistry>()
-                .entity(type_name)
-                .is_some_and(|def| def.build_time.is_some());
-            if !constructible {
-                return;
-            }
-            push_order(
+            issue(
                 world,
-                entity,
+                vec![entity],
                 Order::Build {
                     type_name: type_name.clone(),
                     position: *position,
@@ -321,45 +276,40 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
             if interactable_entity(world, player, *target).is_none() {
                 return;
             }
-            // Entities that cannot mend this target drop the order in `prepare`, so
-            // a mixed selection simply sends the ones that can.
-            for entity in commanded_selection(world, player) {
-                push_order(
-                    world,
-                    entity,
-                    Order::Repair { target: *target },
-                    CancelPolicy::from_bool(*flush),
-                );
-            }
+            // A mixed selection sends the ones that can mend this target.
+            let commanded = commanded_selection(world, player);
+            issue(
+                world,
+                commanded,
+                Order::Repair { target: *target },
+                CancelPolicy::from_bool(*flush),
+            );
         }
         PlayerCommand::Follow { target, flush } => {
             // Following what the fog hides would be a tracking beacon.
             if interactable_entity(world, player, *target).is_none() {
                 return;
             }
-            for entity in commanded_selection_excluding(world, player, *target) {
-                push_order(
-                    world,
-                    entity,
-                    Order::Follow { target: *target },
-                    CancelPolicy::from_bool(*flush),
-                );
-            }
+            let commanded = commanded_selection_excluding(world, player, *target);
+            issue(
+                world,
+                commanded,
+                Order::Follow { target: *target },
+                CancelPolicy::from_bool(*flush),
+            );
         }
         PlayerCommand::Board { target, flush } => {
-            // Entities the target will not take aboard drop the order in
-            // `prepare`, so a mixed selection simply sends the ones that fit.
+            // A mixed selection sends the ones the target takes aboard.
             if interactable_entity(world, player, *target).is_none() {
                 return;
             }
-            for entity in commanded_selection_excluding(world, player, *target) {
-                push_order(
-                    world,
-                    entity,
-                    Order::Board { target: *target },
-                    CancelPolicy::from_bool(*flush),
-                );
-            }
+            let commanded = commanded_selection_excluding(world, player, *target);
+            issue(
+                world,
+                commanded,
+                Order::Board { target: *target },
+                CancelPolicy::from_bool(*flush),
+            );
         }
         PlayerCommand::Load {
             transport,
@@ -372,9 +322,9 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
             if interactable_entity(world, player, *target).is_none() {
                 return;
             }
-            push_order(
+            issue(
                 world,
-                entity,
+                vec![entity],
                 Order::Load { target: *target },
                 CancelPolicy::from_bool(*flush),
             );
@@ -389,9 +339,9 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
             let Some(entity) = find_owned_interactable(world, player, *transport) else {
                 return;
             };
-            push_order(
+            issue(
                 world,
-                entity,
+                vec![entity],
                 Order::Unload { at: *at },
                 CancelPolicy::from_bool(*flush),
             );
@@ -411,23 +361,20 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
             use_skill(world, player, *skill, *caster, *target);
         }
         PlayerCommand::Morph { type_name, flush } => {
-            // Refused here for what can be known at issue — a destination the
-            // entity's type declares no transition into, requirements the
-            // player does not meet, or a form that cannot seat what is aboard
-            // — so a hopeless change never takes the queue. Costs and ground
-            // are settled when the order actually starts.
-            for entity in commanded_selection(world, player) {
-                if morph::would_start(world, player, entity, type_name) {
-                    push_order(
-                        world,
-                        entity,
-                        Order::Morph {
-                            type_name: type_name.clone(),
-                        },
-                        CancelPolicy::from_bool(*flush),
-                    );
-                }
-            }
+            // Requirements gate only the command, as they do for training;
+            // costs and ground are settled when the order actually starts.
+            let commanded: Vec<Entity> = commanded_selection(world, player)
+                .into_iter()
+                .filter(|&entity| morph::requirements_met(world, player, entity, type_name))
+                .collect();
+            issue(
+                world,
+                commanded,
+                Order::Morph {
+                    type_name: type_name.clone(),
+                },
+                CancelPolicy::from_bool(*flush),
+            );
         }
         PlayerCommand::Spawn {
             type_name,
@@ -438,13 +385,21 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
             // the cell origin the spawn contract requires rather than
             // trusted to be one.
             let corner = FixedUVec2::from(CellPos::from(*position));
-            spawn::spawn_entity(world, type_name, corner, Some(player), SpawnCause::Sandbox);
+            spawn::spawn_entity(
+                world,
+                type_name,
+                corner,
+                Some(player),
+                SpawnCause::Sandbox,
+                FieldReach::Initial,
+            );
         }
     }
 }
 
 /// Resolves a send-to-entity intent for one unit, by priority: harvest from a
-/// source, deliver carried resources to an own storage, attack a hostile, follow.
+/// source or deliver to a storage, join the crew raising a site, mend, board,
+/// attack a hostile, follow. The first order the unit may start wins.
 pub(super) fn resolve_send_to_entity(
     world: &World,
     entity: Entity,
@@ -453,129 +408,64 @@ pub(super) fn resolve_send_to_entity(
     let target = world
         .resource::<EntityIndex>()
         .interactable(world, target_id)?;
-    let entity_ref = world.entity(entity);
-    let target_ref = world.entity(target);
 
-    let carries_source_kind = entity_def::of(world, entity)
-        .resource_carrier
-        .as_ref()
-        .zip(entity_def::of(world, target).resource_source.as_ref())
-        .is_some_and(|(carrier, source)| carrier.can_carry(source.kind()));
-    if carries_source_kind && target_ref.contains::<ResourceSourceComponent>() {
-        return Some(Order::Harvest { target: target_id });
-    }
-
-    // A site still going up is a call for help: a unit that builds its type joins the
-    // crew raising it. Read before the delivery below, because a half-built storage
-    // is not a drop-off yet however much its type says it accepts the load.
-    if target_ref.contains::<UnderConstructionComponent>()
-        && let Some(order) = assist_construction(world, entity, target)
-    {
-        return Some(order);
-    }
-
-    let carried = entity_ref
-        .get::<ResourceCarrierComponent>()
-        .map_or(0, |carrier| carrier.amount);
-    // Only a storage the carrier itself owns is a drop-off — not an ally's or a
-    // neutral one (matches the storage the delivery actually resolves to, see
-    // `resolve_storage`). Being non-hostile is not enough now that allies exist.
-    let own_storage = matches!(
-        (
-            entity_ref.get::<OwnerComponent>(),
-            target_ref.get::<OwnerComponent>(),
-        ),
-        (Some(carrier), Some(storage)) if carrier.player() == storage.player()
-    );
-    let accepts_delivery = carried > 0
-        && own_storage
-        && entity_ref
-            .get::<ResourceCarrierComponent>()
-            .and_then(|carrier| carrier.kind.as_deref())
-            .zip(entity_def::of(world, target).resource_storage.as_ref())
-            .is_some_and(|(kind, storage)| storage.accepts(kind));
-    if accepts_delivery {
-        return Some(Order::Harvest { target: target_id });
-    }
-
-    // A damaged friendly the unit can mend, after the harvest readings so a loaded
-    // carrier still delivers to a storage that happens to be hurt.
-    if repair::would_repair(world, entity, target) {
-        return Some(Order::Repair { target: target_id });
-    }
-
-    // A transporter with room takes the unit aboard — after repair, so a worker
-    // sent to a damaged transport patches it up instead of climbing in.
-    if board::would_board(world, entity, target) {
-        return Some(Order::Board { target: target_id });
-    }
-
-    let hostile = owner::are_hostile(
+    let mut candidates = vec![Order::Harvest { target: target_id }];
+    // A site still going up is a call for help, read before a delivery: a
+    // half-built storage is not a drop-off yet however much its type says it
+    // accepts the load — and Harvest refuses it for that reason.
+    candidates.extend(assist_construction(world, entity, target));
+    candidates.push(Order::Repair { target: target_id });
+    // Boarding comes after repair, so a worker sent to a damaged transport
+    // patches it up instead of climbing in.
+    candidates.push(Order::Board { target: target_id });
+    // An explicit Attack command honours any target; the smart click attacks
+    // only a hostile one, and a weapon that cannot reach it falls through to
+    // following, which is the honest reading of the click.
+    if owner::are_hostile(
         world.resource::<GameSession>(),
-        entity_ref.get::<OwnerComponent>(),
-        target_ref.get::<OwnerComponent>(),
-    );
-    // Reachability is part of "can I attack this": a melee unit sent at a flier
-    // falls through to following it, which is the honest reading of the click.
-    if hostile
-        && entity_def::of(world, entity).can_attack()
-        && target_ref.contains::<HealthComponent>()
-        && targeting::reaches(
-            world
-                .resource::<ContentRegistry>()
-                .targets_of(entity_def::of(world, entity)),
-            entity_def::of(world, target),
-        )
+        entity_def::owner(world, entity),
+        entity_def::owner(world, target),
+    ) && world.entity(target).contains::<HealthComponent>()
     {
-        return Some(Order::Attack {
+        candidates.push(Order::Attack {
             target: AttackTarget::Entity(target_id),
             leash: None,
         });
     }
+    candidates.push(Order::Follow { target: target_id });
 
-    Some(Order::Follow { target: target_id })
+    candidates
+        .into_iter()
+        .find(|order| orders::can_start(world, entity, order).is_ok())
 }
 
 /// The Build order that puts `entity` to work on the unfinished site `target`, or
-/// `None` if it is not a site this one can join.
+/// `None` if `target` is not an own site.
 ///
 /// The order names the site's own type and cell, which is what
 /// [`game_loop::build`](super::build) matches an existing site on — so the builder
 /// takes up the work already under way rather than trying to place a second one.
-/// Only the owner's own sites qualify, because that is the whole of what can be
-/// joined.
+/// Only the owner's own sites qualify.
 fn assist_construction(world: &World, entity: Entity, target: Entity) -> Option<Order> {
     let target_ref = world.entity(target);
-
+    if !target_ref.contains::<UnderConstructionComponent>() {
+        return None;
+    }
     let same_owner = matches!(
-        (
-            world.entity(entity).get::<OwnerComponent>(),
-            target_ref.get::<OwnerComponent>(),
-        ),
-        (Some(builder), Some(site)) if builder.player() == site.player()
+        (entity_def::owner(world, entity), entity_def::owner(world, target)),
+        (Some(builder), Some(site)) if builder == site
     );
     if !same_owner {
         return None;
     }
-
     let type_name = target_ref
         .get::<EntityInfoComponent>()
         .expect("simulation entity must have EntityInfoComponent")
         .type_name();
-    if !entity_def::of(world, entity)
-        .builder
-        .as_ref()
-        .is_some_and(|builder| builder.can_build(type_name))
-    {
-        return None;
-    }
 
     Some(Order::Build {
         type_name: type_name.to_string(),
-        position: target_ref
-            .get::<LocationComponent>()
-            .expect("a placed site has a location")
-            .position,
+        position: entity_def::position(world, target),
     })
 }
 
@@ -585,11 +475,7 @@ fn train_entity(world: &mut World, player: PlayerId, trainer: SimulationId, type
     let Some(entity) = find_owned_interactable(world, player, trainer) else {
         return;
     };
-    // A building still being constructed cannot produce yet.
-    if world
-        .entity(entity)
-        .contains::<UnderConstructionComponent>()
-    {
+    if orders::can_start(world, entity, &Order::Train).is_err() {
         return;
     }
     if !entity_def::of(world, entity)
@@ -661,18 +547,7 @@ fn start_research(
     let Some(entity) = find_owned_interactable(world, player, researcher) else {
         return;
     };
-    // A building still being constructed cannot research yet.
-    if world
-        .entity(entity)
-        .contains::<UnderConstructionComponent>()
-    {
-        return;
-    }
-    if !entity_def::of(world, entity)
-        .researcher
-        .as_ref()
-        .is_some_and(|r| r.can_research(research))
-    {
+    if orders::can_start(world, entity, &Order::Research { research }).is_err() {
         return;
     }
     if world
@@ -720,10 +595,7 @@ fn start_research(
 fn research_in_flight(world: &World, player: PlayerId, research: ResearchId) -> bool {
     for (_, entity) in world.resource::<EntityIndex>().alive_entries() {
         let entity_ref = world.entity(entity);
-        if entity_ref
-            .get::<OwnerComponent>()
-            .is_none_or(|owner| owner.player() != player)
-        {
+        if entity_def::owner(world, entity) != Some(player) {
             continue;
         }
         let Some(queue) = entity_ref.get::<OrderQueueComponent>() else {
@@ -766,12 +638,7 @@ fn resolve_box_selection(world: &World, player: PlayerId, rect: &FixedURect) -> 
 
     let own: Vec<SimulationId> = in_rect
         .iter()
-        .filter(|&&(_, entity)| {
-            world
-                .entity(entity)
-                .get::<OwnerComponent>()
-                .is_some_and(|owner| owner.player() == player)
-        })
+        .filter(|&&(_, entity)| entity_def::owner(world, entity) == Some(player))
         .map(|&(id, _)| id)
         .collect();
 
@@ -803,10 +670,7 @@ fn resolve_type_selection(
         .into_iter()
         .filter(|&(id, entity)| {
             index.interactable(world, id).is_some()
-                && world
-                    .entity(entity)
-                    .get::<OwnerComponent>()
-                    .is_some_and(|owner| owner.player() == player)
+                && entity_def::owner(world, entity) == Some(player)
                 && world.entity(entity).contains::<LocationComponent>()
                 && rect.contains(entity_def::footprint_center(world, entity))
                 && world
@@ -896,40 +760,21 @@ fn commanded_selection_excluding(
         .collect()
 }
 
-/// Whether `attacker`'s weapon can reach the layers the entity with `target_id`
-/// is answerable on. A target that is gone reads as unreachable, so the order is
-/// refused rather than queued against nothing.
-fn reaches_target(world: &World, attacker: Entity, target_id: SimulationId) -> bool {
-    world
-        .resource::<EntityIndex>()
-        .interactable(world, target_id)
-        .is_some_and(|target| {
-            targeting::reaches(
-                world
-                    .resource::<ContentRegistry>()
-                    .targets_of(entity_def::of(world, attacker)),
-                entity_def::of(world, target),
-            )
-        })
-}
-
-/// Whether any weapon the entity carries sends its shots to a cell rather than
-/// following a target — the only kind that can be aimed at bare ground.
-fn aims_at_cells(world: &World, entity: Entity) -> bool {
-    let registry = world.resource::<ContentRegistry>();
-    registry
-        .weapons_of(entity_def::of(world, entity))
-        .any(|weapon| registry.weapon_aims_at_cells(weapon))
-}
-
 /// Resolves `id` if it is interactable and owned by `player`.
 fn find_owned_interactable(world: &World, player: PlayerId, id: SimulationId) -> Option<Entity> {
     let entity = world.resource::<EntityIndex>().interactable(world, id)?;
-    world
-        .entity(entity)
-        .get::<OwnerComponent>()
-        .filter(|o| o.player() == player)
-        .map(|_| entity)
+    (entity_def::owner(world, entity) == Some(player)).then_some(entity)
+}
+
+/// Pushes `order` on each of `entities` that may start it now (see
+/// [`orders::can_start`]); the rest are refused without a trace, so a mixed
+/// selection simply sends the ones that can.
+fn issue(world: &mut World, entities: Vec<Entity>, order: Order, flush: Option<CancelPolicy>) {
+    for entity in entities {
+        if orders::can_start(world, entity, &order).is_ok() {
+            push_order(world, entity, order.clone(), flush);
+        }
+    }
 }
 
 fn push_order(world: &mut World, entity: Entity, order: Order, flush: Option<CancelPolicy>) {
@@ -946,7 +791,7 @@ fn use_skill(
     player: PlayerId,
     skill: SkillId,
     caster: SkillCasterRef,
-    target_id: Option<SimulationId>,
+    target: Option<SkillTarget>,
 ) {
     // Resolved defensively: the id arrives over the wire, and an id this
     // registry never minted is a peer to distrust, not a panic. The same goes
@@ -960,7 +805,7 @@ fn use_skill(
     };
     // A named target must be in sight to be named at all — fog refuses the
     // cast the way it hides the sprite.
-    if let Some(target) = target_id
+    if let Some(SkillTarget::Entity(target)) = target
         && interactable_entity(world, player, target).is_none()
     {
         return;
@@ -978,7 +823,7 @@ fn use_skill(
             SkillCasterRef::Entity(caster_id),
             SkillCaster::Entity {
                 costs,
-                target,
+                target: cast_target,
                 effect,
             },
         ) => {
@@ -988,10 +833,10 @@ fn use_skill(
                 skill,
                 def.cooldown,
                 &costs,
-                target,
+                cast_target,
                 effect,
                 caster_id,
-                target_id,
+                target,
             );
         }
         (SkillCasterRef::Player, SkillCaster::Entity { .. })
@@ -1027,9 +872,18 @@ fn use_skill_as_player(
     player_skills::cast(world, player, skill, cooldown);
 }
 
+/// Where a resolved entity cast lands.
+#[derive(Clone, Copy)]
+enum CastAim {
+    /// On an entity.
+    Entity(Entity),
+    /// On a cell.
+    Cell(CellPos),
+}
+
 /// The entity-cast path: the caster must be an owned entity whose type
 /// declares the skill; cooldown per entity, pool costs draw from the caster,
-/// the effect lands on the resolved target entity.
+/// the effect lands at the resolved aim.
 #[allow(clippy::too_many_arguments)]
 fn use_skill_as_entity(
     world: &mut World,
@@ -1040,7 +894,7 @@ fn use_skill_as_entity(
     cast_target: EntityCastTarget,
     effect: EntityCastEffect,
     caster_id: SimulationId,
-    target_id: Option<SimulationId>,
+    target: Option<SkillTarget>,
 ) {
     let Some(caster) = find_owned_interactable(world, player, caster_id) else {
         return;
@@ -1054,11 +908,27 @@ fn use_skill_as_entity(
         return;
     }
 
-    // Resolve and validate the target.
-    let target = match cast_target {
-        EntityCastTarget::Caster => caster,
+    // Only an operating caster casts.
+    match entity_def::operation(world, caster) {
+        Operation::Operating => {}
+        Operation::UnderConstruction | Operation::Disabled => return,
+    }
+
+    // Resolve and validate the aim.
+    let aim = match cast_target {
+        EntityCastTarget::Caster => CastAim::Entity(caster),
+        EntityCastTarget::Position => {
+            let Some(SkillTarget::Position(position)) = target else {
+                return;
+            };
+            let cell = CellPos::from(position);
+            if !world.resource::<Map>().contains(cell) {
+                return;
+            }
+            CastAim::Cell(cell)
+        }
         EntityCastTarget::Ally | EntityCastTarget::Enemy => {
-            let Some(target_id) = target_id else {
+            let Some(SkillTarget::Entity(target_id)) = target else {
                 return;
             };
             let Some(target) = world
@@ -1068,22 +938,22 @@ fn use_skill_as_entity(
                 return;
             };
             let session = world.resource::<GameSession>();
-            let caster_ref = world.entity(caster);
-            let target_ref = world.entity(target);
-            let caster_owner = caster_ref.get::<OwnerComponent>();
-            let target_owner = target_ref.get::<OwnerComponent>();
+            let caster_owner = entity_def::owner(world, caster);
+            let target_owner = entity_def::owner(world, target);
             let valid = match cast_target {
                 EntityCastTarget::Ally => matches!(
                     (caster_owner, target_owner),
-                    (Some(caster), Some(target)) if session.are_allied(caster.player(), target.player())
+                    (Some(caster), Some(target)) if session.are_allied(caster, target)
                 ),
                 EntityCastTarget::Enemy => owner::are_hostile(session, caster_owner, target_owner),
-                EntityCastTarget::Caster => unreachable!("handled above"),
+                EntityCastTarget::Caster | EntityCastTarget::Position => {
+                    unreachable!("handled above")
+                }
             };
             if !valid {
                 return;
             }
-            target
+            CastAim::Entity(target)
         }
     };
 
@@ -1092,14 +962,41 @@ fn use_skill_as_entity(
     }
     cast_cost::pay(world, caster, player, costs, SpendCause::Skill { skill });
 
-    apply_skill_effect(world, caster, target, effect);
+    apply_skill_effect(world, player, caster, aim, effect);
 
-    let target_id = entity_def::simulation_id(world, target);
+    // A cast on a cell is announced against the caster, like a self-cast.
+    let target_id = match aim {
+        CastAim::Entity(target) => entity_def::simulation_id(world, target),
+        CastAim::Cell(_) => caster_id,
+    };
     entity_skills::cast(world, caster, target_id, skill, cooldown);
 }
 
-/// Applies a resolved skill effect to `target`.
-fn apply_skill_effect(world: &mut World, caster: Entity, target: Entity, effect: EntityCastEffect) {
+/// Applies a resolved skill effect at `aim`.
+fn apply_skill_effect(
+    world: &mut World,
+    player: PlayerId,
+    caster: Entity,
+    aim: CastAim,
+    effect: EntityCastEffect,
+) {
+    if let EntityCastEffect::Field {
+        field,
+        radius,
+        action,
+    } = effect
+    {
+        let center = match aim {
+            CastAim::Cell(cell) => cell,
+            CastAim::Entity(target) => CellPos::from(entity_def::position(world, target)),
+        };
+        super::fields::apply_action(world, player, field, center, radius, action);
+        return;
+    }
+    let target = match aim {
+        CastAim::Entity(target) => target,
+        CastAim::Cell(_) => unreachable!("registration pairs a cell aim with a field effect only"),
+    };
     match effect {
         EntityCastEffect::ApplyBuff(id) => super::stats::apply_entity_buff(world, target, id),
         EntityCastEffect::RemoveBuff(id) => {
@@ -1120,5 +1017,6 @@ fn apply_skill_effect(world: &mut World, caster: Entity, target: Entity, effect:
                 health.heal(amount, max);
             }
         }
+        EntityCastEffect::Field { .. } => unreachable!("handled above"),
     }
 }

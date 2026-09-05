@@ -2,12 +2,12 @@
 //! Called by [`super::orders`] as part of the shared order lifecycle.
 
 use bevy_ecs::{entity::Entity, world::World};
-use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
+use ferrets_geometry::cell_size::CellSize;
 use ferrets_math::fixed_uvec2::FixedUVec2;
 
 use super::{
     chase::{self, Destination},
-    orders::Processing,
+    orders::{self, Processing, Refusal},
     rally,
 };
 use crate::{
@@ -26,26 +26,35 @@ use crate::{
 };
 use ferrets_content::entity_stats::EntityStatId;
 
-/// Called once when an Unload order becomes the front `New` entry.
-///
-/// Inserts the driver component and returns `InProcessing`, or `Finished`
-/// immediately if the entity is not a transporter or holds nobody.
-pub fn prepare(entity: Entity, order: &Order, world: &mut World) -> OrderState {
-    let at = order
-        .unload_at()
-        .expect("Unload order carries a destination");
-
+/// Whether `entity` may start an Unload: its type transports, it operates,
+/// and somebody is aboard.
+pub fn can_start(world: &World, entity: Entity, _order: &Order) -> Result<(), Refusal> {
     if !entity_def::of(world, entity).can_transport() {
-        return OrderState::Finished;
+        return Err(Refusal::Incapable);
     }
+    orders::requires_operating(world, entity)?;
     if world
         .entity(entity)
         .get::<TransporterComponent>()
         .is_none_or(|transporter| transporter.passengers.is_empty())
     {
+        return Err(Refusal::NothingToDo);
+    }
+    Ok(())
+}
+
+/// Called once when an Unload order becomes the front `New` entry.
+///
+/// Inserts the driver component and returns `InProcessing`, or `Finished`
+/// immediately when the order cannot start — see [`can_start`].
+pub fn prepare(entity: Entity, order: &Order, world: &mut World) -> OrderState {
+    let at = order
+        .unload_at()
+        .expect("Unload order carries a destination");
+
+    if can_start(world, entity, order).is_err() {
         return OrderState::Finished;
     }
-
     world.entity_mut(entity).insert(UnloadComponent::new(at));
     OrderState::InProcessing
 }
@@ -136,8 +145,8 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
             continue;
         };
 
-        let (origin, size) = entity_def::footprint(world, entity);
-        if !spawn::reveal_entity_near(world, passenger, CellPos::from(origin), size) {
+        let footprint = entity_def::footprint_rect(world, entity);
+        if !spawn::reveal_entity_near(world, passenger, footprint.origin, footprint.size) {
             // Boxed in: hold the door and retry next tick.
             world.entity_mut(entity).insert(unload);
             return Processing::state(OrderState::InProcessing);

@@ -9,12 +9,12 @@ use bevy_ecs::world::World;
 
 use crate::{
     components::{
-        build::UnderConstructionComponent, entity_info::EntityInfoComponent, owner::OwnerComponent,
-        tags::TagsComponent,
+        build::UnderConstructionComponent, entity_info::EntityInfoComponent, tags::TagsComponent,
     },
+    entity_def,
     entity_index::EntityIndex,
     player_research::PlayerResearch,
-    session::player_slot::PlayerId,
+    session::player_id::PlayerId,
 };
 use ferrets_content::registry::ContentRegistry;
 
@@ -51,10 +51,7 @@ pub fn met(world: &World, player: PlayerId, requires: &[String]) -> bool {
 
     for (_, entity) in world.resource::<EntityIndex>().alive_entries() {
         let entity_ref = world.entity(entity);
-        if entity_ref
-            .get::<OwnerComponent>()
-            .is_none_or(|owner| owner.player() != player)
-        {
+        if entity_def::owner(world, entity) != Some(player) {
             continue;
         }
         // A site still going up unlocks nothing until it stands.

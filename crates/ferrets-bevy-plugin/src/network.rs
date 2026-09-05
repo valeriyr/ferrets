@@ -23,7 +23,7 @@ use ferrets_simulation::{
     input::{InputFrames, SYNC_LATENCY},
     session::{
         GameResult, GameSession, authority::Authority, drop_policy::DropPolicy,
-        game_speed::GameSpeed, local_role::LocalRole, player_slot::PlayerId,
+        game_speed::GameSpeed, local_role::LocalRole, player_id::PlayerId,
     },
 };
 

@@ -1,11 +1,13 @@
 //! The demo's embedded AI script: it loads against the demo content and, in a
 //! headless game, builds its economy and army.
 
+mod utils;
+
 use bevy::prelude::*;
 use ferrets_bevy_plugin::{SimulationPlugin, ai::AiPlugin};
 use ferrets_content::registry::ContentRegistry;
 use ferrets_demo::{
-    ai::{human_ai, install_demo_ai, orc_ai},
+    ai::{conclave_ai, human_ai, install_demo_ai, orc_ai, swarm_ai},
     content::CONTENT,
     map, setup,
 };
@@ -23,15 +25,9 @@ use ferrets_simulation::{
     movement_model::MovementModel,
     player_research::PlayerResearch,
     session::{
-        GameSession,
-        ai_hosting::AiHosting,
-        ai_vision::AiVision,
-        authority::Authority,
-        drop_policy::DropPolicy,
-        finish_policy::FinishPolicy,
-        local_role::LocalRole,
-        player_slot::{PlayerId, PlayerSlot},
-        player_type::PlayerType,
+        GameSession, ai_hosting::AiHosting, ai_vision::AiVision, authority::Authority,
+        drop_policy::DropPolicy, finish_policy::FinishPolicy, local_role::LocalRole,
+        player_id::PlayerId, player_slot::PlayerSlot, player_type::PlayerType,
     },
     spawn,
 };
@@ -41,10 +37,79 @@ fn ai_scripts_load() {
     let registry = content::load(&LuaEngine, CONTENT).expect("demo content");
     let content = ContentView::from_registry(&registry);
 
-    for script in [human_ai(), orc_ai()] {
+    for script in [human_ai(), orc_ai(), swarm_ai(), conclave_ai()] {
         let runtime = LuaEngine.load_ai(&script, &content).expect("demo ai loads");
         assert_eq!(runtime.period(), 20);
     }
+}
+
+#[test]
+fn field_races_ai_build_economy_and_army() {
+    let slots = vec![
+        // An idle human for the waves to march on.
+        PlayerSlot::occupied(0, PlayerType::Human, Some("human"), None),
+        PlayerSlot::occupied(
+            1,
+            PlayerType::Ai {
+                vision: AiVision::Filtered,
+            },
+            Some("swarm"),
+            Some(1),
+        ),
+        PlayerSlot::occupied(
+            2,
+            PlayerType::Ai {
+                vision: AiVision::Filtered,
+            },
+            Some("conclave"),
+            Some(1),
+        ),
+        PlayerSlot::free(3),
+    ];
+    let mut app = App::new();
+    app.add_plugins(SimulationPlugin::new(
+        GameSession::configured(
+            LocalRole::Player(0),
+            slots,
+            map::NAME,
+            Authority::Host {
+                ai_hosting: AiHosting::Replicated,
+            },
+            DropPolicy::Automatic,
+            FinishPolicy::Endless,
+        ),
+        map::build(),
+    ));
+    app.add_plugins(AiPlugin);
+    {
+        let world = app.world_mut();
+        *world.resource_mut::<ContentRegistry>() =
+            content::load(&LuaEngine, CONTENT).expect("demo content");
+        setup::spawn_demo_scene(world);
+        install_demo_ai(world);
+    }
+
+    for _ in 0..7000 {
+        app.world_mut().run_schedule(FixedUpdate);
+    }
+
+    let world = app.world_mut();
+    // The swarm's structures are drones that changed: the pit the swarmlings
+    // come from, a nest for headroom, a tumor walking the creep out — and the
+    // drone line is kept topped up behind them.
+    assert!(count_owned(world, 1, "spawning_pit") >= 1);
+    assert!(count_owned(world, 1, "brood_nest") >= 1);
+    assert!(count_owned(world, 1, "tumor") >= 1);
+    assert!(count_owned(world, 1, "swarmling") >= 1);
+    assert!(count_owned(world, 1, "ravager") + count_owned(world, 1, "cocoon") >= 1);
+    assert!(count_owned(world, 1, "drone") >= 3);
+    // The conclave's structures warped in on their own after a probe placed
+    // them: the gateway in the nexus's power, a pylon, the cannon.
+    assert!(count_owned(world, 2, "gateway") >= 1);
+    assert!(count_owned(world, 2, "pylon") >= 1);
+    assert!(count_owned(world, 2, "photon_cannon") >= 1);
+    assert!(count_owned(world, 2, "zealot") >= 1);
+    assert_eq!(count_owned(world, 2, "probe"), 5);
 }
 
 #[test]
@@ -177,7 +242,7 @@ fn boss_mans_its_fleet_and_defends_lake() {
     }
 
     // A lone archer strays to the lake shore, within a ship's aggro range.
-    spawn::create_entity(
+    utils::create_entity(
         app.world_mut(),
         "archer",
         FixedUVec2::new(FixedU64::from_num(40), FixedU64::from_num(53)),

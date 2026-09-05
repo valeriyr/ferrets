@@ -328,15 +328,7 @@ fn crowd_of_ten_rests_one_per_cell() {
     }
     let mut cells: Vec<CellPos> = soldiers
         .iter()
-        .map(|(soldier, _)| {
-            body::anchor(
-                world
-                    .entity(*soldier)
-                    .get::<LocationComponent>()
-                    .unwrap()
-                    .position,
-            )
-        })
+        .map(|(soldier, _)| body::anchor(utils::position_of(world, *soldier)))
         .collect();
     cells.sort_unstable();
     cells.dedup();

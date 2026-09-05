@@ -4,11 +4,16 @@
 
 use bevy::{prelude::*, window::PrimaryWindow};
 use ferrets_bevy_plugin::{NetworkActive, PauseIntent, PendingInput, SpeedIntent, tick};
-use ferrets_content::{registry::ContentRegistry, skills::SkillId};
-use ferrets_geometry::cell_pos::CellPos;
+use ferrets_content::{
+    field::FieldId,
+    registry::ContentRegistry,
+    skills::{EntityCastTarget, SkillCaster, SkillId},
+};
+use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::{FixedU64, fixed_urect::FixedURect, fixed_uvec2::FixedUVec2};
+use ferrets_physics::body;
 use ferrets_simulation::{
-    command::{PlayerCommand, SelectMode, SkillCasterRef},
+    command::{PlayerCommand, SelectMode, SkillCasterRef, SkillTarget},
     components::{
         entity_info::EntityInfoComponent,
         hidden::HiddenComponent,
@@ -18,11 +23,13 @@ use ferrets_simulation::{
         stance::{Stance, StanceComponent},
     },
     control_groups::ControlGroups,
+    fields::{self, FieldGrid},
     map::Map,
     order::AttackTarget,
     selection::Selection,
     session::GameSession,
     simulation_id::SimulationId,
+    visibility::VisibilityGrid,
 };
 
 use crate::{
@@ -852,13 +859,27 @@ pub fn targeting_input(
             }
         }
         TargetedOrder::Skill(skill) => {
-            // The cast needs an entity under the cursor; a miss keeps the mode
-            // armed so the player can click again.
-            let Some(target) = entity_at(cursor, &registry, &entities) else {
-                return;
-            };
             let Some(local) = session.local_player() else {
                 return;
+            };
+            let aims_at_position = registry.skill_def(skill).is_some_and(|def| {
+                matches!(
+                    def.caster,
+                    SkillCaster::Entity {
+                        target: EntityCastTarget::Position,
+                        ..
+                    }
+                )
+            });
+            let target = if aims_at_position {
+                SkillTarget::Position(world_to_pos(cursor))
+            } else {
+                // The cast needs an entity under the cursor; a miss keeps the
+                // mode armed so the player can click again.
+                let Some(target) = entity_at(cursor, &registry, &entities) else {
+                    return;
+                };
+                SkillTarget::Entity(target)
             };
             for &caster in selection.get(local) {
                 pending.push(PlayerCommand::UseSkill {
@@ -1009,14 +1030,28 @@ pub fn placement_input(
     primary: Res<Primary>,
     map: Res<Map>,
     registry: Res<ContentRegistry>,
+    session: Res<GameSession>,
+    fields: Res<FieldGrid>,
+    visibility: Res<VisibilityGrid>,
     interactions: Query<&Interaction>,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
+    sources: Query<
+        (
+            &EntityInfoComponent,
+            &LocationComponent,
+            Option<&OwnerComponent>,
+        ),
+        Without<HiddenComponent>,
+    >,
 ) {
     let InputMode::PlacingBuild(type_name) = &*mode else {
         return;
     };
     let type_name = type_name.clone();
+    let Some(local) = session.local_player() else {
+        return;
+    };
 
     if keys.just_pressed(KeyCode::Escape) || mouse.just_pressed(MouseButton::Right) {
         *mode = InputMode::Normal;
@@ -1037,17 +1072,67 @@ pub fn placement_input(
     let Some((cx, cy)) = world_to_cell(cursor) else {
         return;
     };
-    let Some(location_def) = registry.entity(&type_name).and_then(|def| def.location) else {
+    let Some(def) = registry.entity(&type_name) else {
         *mode = InputMode::Normal;
         return;
     };
+    let location_def = def.location.expect("validated content defines a location");
     let size = location_def.size();
 
+    // What the raise will judge: the ground, and the fields the type reads.
     let passable = map.nav_grid().is_footprint_passable_by(
         location_def.occupation(),
         CellPos::new(cx, cy),
         size,
+    ) && fields::allows_placement_in(
+        &fields,
+        &session,
+        session.local_player(),
+        def,
+        CellPos::new(cx, cy),
     );
+
+    // The area each field the type projects would cover, and the areas the
+    // standing sources of those fields already cover, so a pylon is placed
+    // where it links up and a tumor where it reaches.
+    for source in &def.field_sources {
+        let color = field_color(&registry, source.field());
+        draw_reach(
+            &mut gizmos,
+            CellPos::new(cx, cy),
+            size,
+            source.radius(),
+            color,
+        );
+        // Other sources of the same field: own ones, and those the fog does
+        // not hide.
+        for (info, location, owner) in &sources {
+            let cell = body::anchor(location.position);
+            let seen = owner.is_some_and(|owner| owner.player() == local)
+                || visibility.is_visible_to(&session, local, cell.x, cell.y);
+            if !seen {
+                continue;
+            }
+            let standing = registry.def(info.type_id());
+            for other in standing
+                .field_sources
+                .iter()
+                .filter(|other| other.field() == source.field())
+            {
+                let dimmed = color.with_alpha(0.35);
+                draw_reach(
+                    &mut gizmos,
+                    cell,
+                    standing
+                        .location
+                        .expect("validated content defines a location")
+                        .size(),
+                    other.radius(),
+                    dimmed,
+                );
+            }
+        }
+    }
     let center = Vec2::new(
         (cx as f32 + size.width as f32 / 2.0) * CELL_PX,
         -(cy as f32 + size.height as f32 / 2.0) * CELL_PX,
@@ -1071,4 +1156,24 @@ pub fn placement_input(
         });
         *mode = InputMode::Normal;
     }
+}
+
+/// The outline colour of a field's reach, by content name.
+fn field_color(registry: &ContentRegistry, field: FieldId) -> Color {
+    match registry.field_name(field) {
+        Some("power") => render::POWER_TINT.with_alpha(0.9),
+        _ => render::CREEP_TINT.with_alpha(0.9),
+    }
+}
+
+/// Outlines the reach of a `size` footprint anchored at `anchor`: a circle
+/// of `radius` cells around the footprint, whatever the map's metric.
+fn draw_reach(gizmos: &mut Gizmos, anchor: CellPos, size: CellSize, radius: u32, color: Color) {
+    let center = Vec2::new(
+        (anchor.x as f32 + size.width as f32 / 2.0) * CELL_PX,
+        -(anchor.y as f32 + size.height as f32 / 2.0) * CELL_PX,
+    );
+    let half = (size.width.max(size.height) as f32 / 2.0) * CELL_PX;
+    let reach = radius as f32 * CELL_PX;
+    gizmos.circle_2d(Isometry2d::from_translation(center), half + reach, color);
 }

@@ -2,7 +2,7 @@
 
 use bevy_ecs::prelude::*;
 
-use crate::session::{GameSession, player_slot::PlayerId};
+use crate::session::{GameSession, player_id::PlayerId};
 
 /// The player that owns this entity.
 ///
@@ -26,18 +26,14 @@ impl OwnerComponent {
     }
 }
 
-/// Returns `true` when both owners are present and belong to players that are
-/// not allied (see [`GameSession::are_allied`]).
+/// Returns `true` when both owners are present and are players that are not
+/// allied (see [`GameSession::are_allied`]).
 ///
 /// Neutral entities (no owner) are hostile to no one, and allies are hostile to
 /// each other no more than a player is to itself.
-pub fn are_hostile(
-    session: &GameSession,
-    a: Option<&OwnerComponent>,
-    b: Option<&OwnerComponent>,
-) -> bool {
+pub fn are_hostile(session: &GameSession, a: Option<PlayerId>, b: Option<PlayerId>) -> bool {
     match (a, b) {
-        (Some(a), Some(b)) => !session.are_allied(a.player(), b.player()),
+        (Some(a), Some(b)) => !session.are_allied(a, b),
         _ => false,
     }
 }

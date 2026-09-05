@@ -8,7 +8,7 @@
 //! events, translating transport [`PeerId`](crate::peer::PeerId)s to
 //! [`PlayerId`]s.
 
-use ferrets_simulation::{input::PlayerFrame, session::player_slot::PlayerId};
+use ferrets_simulation::{input::PlayerFrame, session::player_id::PlayerId};
 
 use crate::{
     message::{self, Message, gameplay::GameplayMessage},

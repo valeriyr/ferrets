@@ -14,7 +14,6 @@ use ferrets_simulation::{
         stance::{Stance, StanceComponent},
     },
     session::GameSession,
-    spawn,
 };
 
 //
@@ -25,10 +24,10 @@ use ferrets_simulation::{
 fn armed_unit_defaults_to_defend_and_worker_to_flee() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
-    let (soldier, _) = spawn::create_entity(world, "soldier", utils::pos(5, 5), Some(0)).unwrap();
-    let (worker, _) = spawn::create_entity(world, "worker", utils::pos(7, 5), Some(0)).unwrap();
+    let (soldier, _) = utils::create_entity(world, "soldier", utils::pos(5, 5), Some(0)).unwrap();
+    let (worker, _) = utils::create_entity(world, "worker", utils::pos(7, 5), Some(0)).unwrap();
     let (barracks, _) =
-        spawn::create_entity(world, "barracks", utils::pos(10, 10), Some(0)).unwrap();
+        utils::create_entity(world, "barracks", utils::pos(10, 10), Some(0)).unwrap();
 
     assert_eq!(
         world.get::<StanceComponent>(soldier).unwrap().0,
@@ -46,9 +45,9 @@ fn armed_unit_defaults_to_defend_and_worker_to_flee() {
 fn set_stance_applies_to_owned_selection_only() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
-    let (own, own_id) = spawn::create_entity(world, "sentry", utils::pos(5, 5), Some(0)).unwrap();
+    let (own, own_id) = utils::create_entity(world, "sentry", utils::pos(5, 5), Some(0)).unwrap();
     let (foreign, foreign_id) =
-        spawn::create_entity(world, "sentry", utils::pos(20, 20), Some(1)).unwrap();
+        utils::create_entity(world, "sentry", utils::pos(20, 20), Some(1)).unwrap();
 
     utils::select(&mut app, own_id);
     utils::push_command(
@@ -140,9 +139,9 @@ fn ground_held_part_way_across_cells_engages_what_its_reach_covers() {
 fn defend_unit_destroys_enemy_in_acquire_range_and_returns_home() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
-    let (sentry, _) = spawn::create_entity(world, "sentry", utils::pos(10, 10), Some(0)).unwrap();
+    let (sentry, _) = utils::create_entity(world, "sentry", utils::pos(10, 10), Some(0)).unwrap();
     let (barracks, _) =
-        spawn::create_entity(world, "barracks", utils::pos(13, 10), Some(1)).unwrap();
+        utils::create_entity(world, "barracks", utils::pos(13, 10), Some(1)).unwrap();
 
     // 100 hp at 10 damage per 4-tick swing, plus walking there and back.
     utils::run_ticks(&mut app, 80);
@@ -158,8 +157,8 @@ fn stand_ground_unit_fires_in_weapon_range_and_never_moves() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
     let (sentry, sentry_id) =
-        spawn::create_entity(world, "sentry", utils::pos(10, 10), Some(0)).unwrap();
-    let (ghost, _) = spawn::create_entity(world, "ghost", utils::pos(14, 10), Some(1)).unwrap();
+        utils::create_entity(world, "sentry", utils::pos(10, 10), Some(0)).unwrap();
+    let (ghost, _) = utils::create_entity(world, "ghost", utils::pos(14, 10), Some(1)).unwrap();
 
     utils::select(&mut app, sentry_id);
     utils::push_command(
@@ -182,7 +181,7 @@ fn stand_ground_unit_fires_in_weapon_range_and_never_moves() {
     // the zero leash refuses to follow.
     let (ghost2, _) = {
         let world = app.world_mut();
-        spawn::create_entity(world, "ghost", utils::pos(11, 10), Some(1)).unwrap()
+        utils::create_entity(world, "ghost", utils::pos(11, 10), Some(1)).unwrap()
     };
     utils::run_ticks(&mut app, 30);
 
@@ -197,8 +196,8 @@ fn hold_fire_unit_never_engages() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
     let (sentry, sentry_id) =
-        spawn::create_entity(world, "sentry", utils::pos(10, 10), Some(0)).unwrap();
-    let (ghost, _) = spawn::create_entity(world, "ghost", utils::pos(11, 10), Some(1)).unwrap();
+        utils::create_entity(world, "sentry", utils::pos(10, 10), Some(0)).unwrap();
+    let (ghost, _) = utils::create_entity(world, "ghost", utils::pos(11, 10), Some(1)).unwrap();
 
     utils::select(&mut app, sentry_id);
     utils::push_command(
@@ -220,8 +219,8 @@ fn ordered_unit_is_not_hijacked_by_idle_engagement() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
     let (sentry, sentry_id) =
-        spawn::create_entity(world, "sentry", utils::pos(2, 10), Some(0)).unwrap();
-    let (ghost, _) = spawn::create_entity(world, "ghost", utils::pos(10, 12), Some(1)).unwrap();
+        utils::create_entity(world, "sentry", utils::pos(2, 10), Some(0)).unwrap();
+    let (ghost, _) = utils::create_entity(world, "ghost", utils::pos(10, 12), Some(1)).unwrap();
 
     // A plain move straight past an enemy: the order is executed as given.
     utils::select(&mut app, sentry_id);
@@ -243,8 +242,8 @@ fn ordered_unit_is_not_hijacked_by_idle_engagement() {
 fn leashed_chase_abandons_fled_target_and_returns_home() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
-    let (archer, _) = spawn::create_entity(world, "archer", utils::pos(10, 10), Some(0)).unwrap();
-    let (ghost, _) = spawn::create_entity(world, "ghost", utils::pos(13, 10), Some(1)).unwrap();
+    let (archer, _) = utils::create_entity(world, "archer", utils::pos(10, 10), Some(0)).unwrap();
+    let (ghost, _) = utils::create_entity(world, "ghost", utils::pos(13, 10), Some(1)).unwrap();
 
     // The archer engages at range, the hit sends the ghost fleeing beyond the
     // leash, and the archer gives up the chase and walks home.
@@ -265,12 +264,12 @@ fn leashed_chase_abandons_fled_target_and_returns_home() {
 fn fresh_attacker_is_preferred_over_nearer_target() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
-    let (sentry, _) = spawn::create_entity(world, "sentry", utils::pos(10, 10), Some(0)).unwrap();
+    let (sentry, _) = utils::create_entity(world, "sentry", utils::pos(10, 10), Some(0)).unwrap();
     // A passive enemy farther out, and a nearer enemy worker.
     let (attacker, attacker_id) =
-        spawn::create_entity(world, "sentry", utils::pos(14, 10), Some(1)).unwrap();
+        utils::create_entity(world, "sentry", utils::pos(14, 10), Some(1)).unwrap();
     hold_fire(world, attacker);
-    let (nearer, _) = spawn::create_entity(world, "worker", utils::pos(11, 12), Some(1)).unwrap();
+    let (nearer, _) = utils::create_entity(world, "worker", utils::pos(11, 12), Some(1)).unwrap();
 
     // A hit landing this tick makes the far attacker the fresh target.
     let tick = current_tick(world);
@@ -298,7 +297,7 @@ fn fresh_attacker_is_preferred_over_nearer_target() {
 fn stale_attacker_is_not_preferred_over_nearer_target() {
     let mut app = utils::orders_app();
     let (sentry, _) =
-        spawn::create_entity(app.world_mut(), "sentry", utils::pos(10, 10), Some(0)).unwrap();
+        utils::create_entity(app.world_mut(), "sentry", utils::pos(10, 10), Some(0)).unwrap();
 
     // Carry the clock well past the memory window with no enemies present, so
     // a hit stamped at tick 0 is already stale by the time either enemy exists.
@@ -306,9 +305,9 @@ fn stale_attacker_is_not_preferred_over_nearer_target() {
 
     let world = app.world_mut();
     let (attacker, attacker_id) =
-        spawn::create_entity(world, "sentry", utils::pos(14, 10), Some(1)).unwrap();
+        utils::create_entity(world, "sentry", utils::pos(14, 10), Some(1)).unwrap();
     hold_fire(world, attacker);
-    let (nearer, _) = spawn::create_entity(world, "worker", utils::pos(11, 12), Some(1)).unwrap();
+    let (nearer, _) = utils::create_entity(world, "worker", utils::pos(11, 12), Some(1)).unwrap();
     world
         .get_mut::<HealthComponent>(sentry)
         .unwrap()
@@ -335,8 +334,8 @@ fn body_engages_only_what_its_own_weapon_reaches() {
     // takes none — its gun answers for itself (see the turret tests).
     let mut app = utils::combat_app();
     let world = app.world_mut();
-    let (post, _) = spawn::create_entity(world, "flak_post", utils::pos(5, 5), Some(0)).unwrap();
-    spawn::create_entity(world, "kite", utils::pos(5, 3), Some(1)).unwrap();
+    let (post, _) = utils::create_entity(world, "flak_post", utils::pos(5, 5), Some(0)).unwrap();
+    utils::create_entity(world, "kite", utils::pos(5, 3), Some(1)).unwrap();
 
     utils::run_ticks(&mut app, 16);
 

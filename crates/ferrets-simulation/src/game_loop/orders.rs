@@ -9,8 +9,11 @@
 //! - [`process_tick`] — advance the front `InProcessing` order by one tick and handle
 //!   `Finished` and `Suspended` transitions.
 //!
-//! Each order type module (`movement`, `attack`, …) implements `prepare`,
-//! `prepare_suspended`, `cancel_processing`, and `process`, plus an optional `watch`.
+//! Each order type module (`movement`, `attack`, …) implements `can_start`,
+//! `prepare`, `prepare_suspended`, `cancel_processing`, and `process`, plus an
+//! optional `watch`. `can_start` is the one start check for its order, run
+//! before the order is pushed and again by `prepare` when it reaches the
+//! front.
 //! Each module owns its driver component lifecycle — inserting and removing the
 //! component as part of those calls. This module dispatches to the right
 //! implementation and enforces state-machine invariants with assertions.
@@ -23,29 +26,70 @@ use super::{
 };
 use crate::{
     components::{
-        location::LocationComponent,
+        build::BuildComponent,
         order_queue::{CancelPolicy, OrderQueueComponent, OrderState},
     },
+    entity_def::{self, Operation},
     map::Map,
     movement_model::MovementModel,
     order::Order,
 };
 
+/// Why an entity may not start an order now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refusal {
+    /// The type cannot do this at all.
+    Incapable,
+    /// The entity is still being raised.
+    UnderConstruction,
+    /// A field switches the entity off.
+    Disabled,
+    /// The order has no work in it: nobody aboard, nothing to mend.
+    NothingToDo,
+    /// The named target is gone or out of sight.
+    TargetGone,
+    /// The target exists but is not one this order takes.
+    TargetUnfit,
+}
+
+/// What an order does while its entity is disabled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DisabledConduct {
+    /// Stays where it is, untouched, until the entity operates again.
+    Holds,
+    /// Keeps running.
+    Completes,
+    /// Force-cancelled.
+    Cancels,
+}
+
+/// What the order loop does to the queue once an order's tick is over, on the
+/// order's instruction — the queue is the loop's to hold while an order runs.
+pub enum FollowUp {
+    /// Nothing beyond recording the new state.
+    None,
+    /// Push this sub-order to the front, to run before the order resumes. Only
+    /// valid together with [`OrderState::Suspended`].
+    SubOrder(Order),
+    /// The entity died during the tick: cancel whatever else is queued and push
+    /// its Die order, as a death from outside an order would have.
+    Dies,
+}
+
 /// Result of advancing an order by one tick.
 pub struct Processing {
     /// The order's new state.
     pub state: OrderState,
-    /// A sub-order to execute at the front of the queue before this order resumes.
-    /// Only valid together with [`OrderState::Suspended`].
-    pub sub_order: Option<Order>,
+    /// What the loop does to the queue afterwards.
+    pub follow_up: FollowUp,
 }
 
 impl Processing {
-    /// A result with no sub-order.
+    /// A result with no follow-up.
     pub fn state(state: OrderState) -> Self {
         Self {
             state,
-            sub_order: None,
+            follow_up: FollowUp::None,
         }
     }
 
@@ -53,8 +97,111 @@ impl Processing {
     pub fn suspend(sub_order: Order) -> Self {
         Self {
             state: OrderState::Suspended,
-            sub_order: Some(sub_order),
+            follow_up: FollowUp::SubOrder(sub_order),
         }
+    }
+
+    /// Finishes the order with the entity dead: it was despawned during the
+    /// tick, and the loop gives it the Die order its queue was out of reach for.
+    pub fn finished_dying() -> Self {
+        Self {
+            state: OrderState::Finished,
+            follow_up: FollowUp::Dies,
+        }
+    }
+}
+
+/// Whether `entity` may start `order` now: its type has the capability, its
+/// [`Operation`] admits the order, and the order's target is there and fit.
+/// Costs, supply and requirements are not judged here.
+pub fn can_start(world: &World, entity: Entity, order: &Order) -> Result<(), Refusal> {
+    match order {
+        Order::Move { .. } => movement::can_start(world, entity, order),
+        Order::Attack { .. } => attack::can_start(world, entity, order),
+        Order::AttackMove { .. } => attack_move::can_start(world, entity, order),
+        Order::Patrol { .. } => patrol::can_start(world, entity, order),
+        Order::Guard { .. } => guard::can_start(world, entity, order),
+        Order::Follow { .. } => follow::can_start(world, entity, order),
+        Order::Train => train::can_start(world, entity, order),
+        Order::Research { .. } => research::can_start(world, entity, order),
+        Order::Morph { .. } => morph::can_start(world, entity, order),
+        Order::Build { .. } => build::can_start(world, entity, order),
+        Order::Harvest { .. } => harvest::can_start(world, entity, order),
+        Order::Repair { .. } => repair::can_start(world, entity, order),
+        Order::Board { .. } => board::can_start(world, entity, order),
+        Order::Load { .. } => load::can_start(world, entity, order),
+        Order::Unload { .. } => unload::can_start(world, entity, order),
+        Order::Die => die::can_start(world, entity, order),
+    }
+}
+
+/// The refusal an entity's [`Operation`] hands an order that only an operating
+/// entity may run.
+pub(super) fn requires_operating(world: &World, entity: Entity) -> Result<(), Refusal> {
+    match entity_def::operation(world, entity) {
+        Operation::Operating => Ok(()),
+        Operation::UnderConstruction => Err(Refusal::UnderConstruction),
+        Operation::Disabled => Err(Refusal::Disabled),
+    }
+}
+
+/// The refusal an entity's [`Operation`] hands an order that a disabled
+/// entity may still queue and wait with.
+pub(super) fn requires_raised(world: &World, entity: Entity) -> Result<(), Refusal> {
+    match entity_def::operation(world, entity) {
+        Operation::Operating | Operation::Disabled => Ok(()),
+        Operation::UnderConstruction => Err(Refusal::UnderConstruction),
+    }
+}
+
+/// The refusal a target's [`Operation`] hands an order that needs it
+/// operating.
+pub(super) fn target_operating(world: &World, target: Entity) -> Result<(), Refusal> {
+    match entity_def::operation(world, target) {
+        Operation::Operating => Ok(()),
+        Operation::UnderConstruction | Operation::Disabled => Err(Refusal::TargetUnfit),
+    }
+}
+
+/// The [`DisabledConduct`] of `entity`'s `order`, an entry in `state`.
+fn disabled_conduct(
+    world: &World,
+    entity: Entity,
+    order: &Order,
+    state: OrderState,
+) -> DisabledConduct {
+    match order {
+        Order::Train | Order::Research { .. } => DisabledConduct::Holds,
+        Order::Die => DisabledConduct::Completes,
+        // A change under way lands; one still queued has nothing to finish.
+        Order::Morph { .. } => match state {
+            OrderState::InProcessing | OrderState::Suspended => DisabledConduct::Completes,
+            OrderState::New | OrderState::Finished => DisabledConduct::Cancels,
+        },
+        // A Build with its site raised finishes the site; one still queued or
+        // walking to the ground has raised nothing to finish.
+        Order::Build { .. } => match state {
+            OrderState::InProcessing | OrderState::Suspended => match world
+                .entity(entity)
+                .get::<BuildComponent>()
+                .and_then(|build| build.building)
+            {
+                Some(_) => DisabledConduct::Completes,
+                None => DisabledConduct::Cancels,
+            },
+            OrderState::New | OrderState::Finished => DisabledConduct::Cancels,
+        },
+        Order::Move { .. }
+        | Order::Attack { .. }
+        | Order::AttackMove { .. }
+        | Order::Patrol { .. }
+        | Order::Guard { .. }
+        | Order::Follow { .. }
+        | Order::Harvest { .. }
+        | Order::Repair { .. }
+        | Order::Board { .. }
+        | Order::Load { .. }
+        | Order::Unload { .. } => DisabledConduct::Cancels,
     }
 }
 
@@ -147,22 +294,22 @@ fn dispatch_cancel(
 
 fn dispatch_process(entity: Entity, order: &Order, world: &mut World) -> Processing {
     match order {
-        Order::Move { .. } => Processing::state(movement::process(entity, order, world)),
+        Order::Move { .. } => movement::process(entity, order, world),
         Order::Attack { .. } => attack::process(entity, order, world),
         Order::AttackMove { .. } => attack_move::process(entity, order, world),
         Order::Patrol { .. } => patrol::process(entity, order, world),
         Order::Guard { .. } => guard::process(entity, order, world),
         Order::Follow { .. } => follow::process(entity, order, world),
-        Order::Train => Processing::state(train::process(entity, order, world)),
-        Order::Research { .. } => Processing::state(research::process(entity, order, world)),
-        Order::Morph { .. } => Processing::state(morph::process(entity, order, world)),
+        Order::Train => train::process(entity, order, world),
+        Order::Research { .. } => research::process(entity, order, world),
+        Order::Morph { .. } => morph::process(entity, order, world),
         Order::Build { .. } => build::process(entity, order, world),
         Order::Harvest { .. } => harvest::process(entity, order, world),
         Order::Repair { .. } => repair::process(entity, order, world),
         Order::Board { .. } => board::process(entity, order, world),
         Order::Load { .. } => load::process(entity, order, world),
         Order::Unload { .. } => unload::process(entity, order, world),
-        Order::Die => Processing::state(die::process(entity, order, world)),
+        Order::Die => die::process(entity, order, world),
     }
 }
 
@@ -200,6 +347,10 @@ fn dispatch_watch(
 /// reinserting it after. This keeps the world borrow free so per-type handlers can
 /// access and mutate other components (e.g. `MoveComponent`, `LocationComponent`).
 ///
+/// **Sweep**: a disabled entity first marks every entry whose disabled
+/// conduct is `Cancels` for a force cancel, so the flush below
+/// empties them in the same tick.
+///
 /// **Flush**: for every entry with a cancel policy, calls the per-type
 /// `cancel_processing` (which handles driver removal). If the result is `Finished`,
 /// removes the entry. Entries whose cancel returns `InProcessing` (cancel deferred or
@@ -212,6 +363,18 @@ fn dispatch_watch(
 ///
 /// After this call the front entry (if any) is always `InProcessing`.
 pub fn prepare_tick(entity: Entity, queue: &mut OrderQueueComponent, world: &mut World) {
+    match entity_def::operation(world, entity) {
+        Operation::Disabled => {
+            for entry in &mut queue.0 {
+                match disabled_conduct(world, entity, &entry.order, entry.state) {
+                    DisabledConduct::Cancels => entry.cancel = Some(CancelPolicy::Force),
+                    DisabledConduct::Holds | DisabledConduct::Completes => {}
+                }
+            }
+        }
+        Operation::Operating | Operation::UnderConstruction => {}
+    }
+
     // Flush cancelled entries.
     let mut i = 0;
     while let Some(e) = queue.0.get(i) {
@@ -259,11 +422,7 @@ pub fn watch_tick(entity: Entity, queue: &mut OrderQueueComponent, world: &mut W
     if watcher.state != OrderState::Suspended {
         return;
     }
-    let position = world
-        .entity(entity)
-        .get::<LocationComponent>()
-        .unwrap()
-        .position;
+    let position = entity_def::position(world, entity);
     match world.resource::<Map>().movement_model() {
         // A continuous mover's position is a free point with no crossing
         // state to finish — watchers may always interrupt.
@@ -309,10 +468,24 @@ pub fn watch_tick(entity: Entity, queue: &mut OrderQueueComponent, world: &mut W
 /// - `Suspended`: updates state and pushes the requested sub-order to the front.
 ///   The suspended entry resumes via the next [`prepare_tick`] call after the
 ///   sub-order finishes.
+/// - A `Dies` follow-up: the entity was despawned during the tick; the rest of
+///   the queue is marked for a force cancel and its Die order pushed.
+///
+/// A disabled entity's front order is skipped without dispatch when its
+/// disabled conduct is `Holds`; it resumes untouched once the entity
+/// operates again.
 ///
 /// After this call the front entry (if any) is `New`, `InProcessing`, or `Suspended`.
 pub fn process_tick(entity: Entity, queue: &mut OrderQueueComponent, world: &mut World) {
     let Some(front) = queue.0.front() else { return };
+    match (
+        entity_def::operation(world, entity),
+        disabled_conduct(world, entity, &front.order, front.state),
+    ) {
+        (Operation::Disabled, DisabledConduct::Holds) => return,
+        (Operation::Disabled, DisabledConduct::Completes | DisabledConduct::Cancels)
+        | (Operation::Operating | Operation::UnderConstruction, _) => {}
+    }
     // An order pushed onto this queue after its prepare ran — by another
     // entity's processing, e.g. a transporter dispatching a passenger it just
     // let out — waits for the next tick's prepare.
@@ -330,8 +503,12 @@ pub fn process_tick(entity: Entity, queue: &mut OrderQueueComponent, world: &mut
     let result = dispatch_process(entity, &order, world);
 
     debug_assert!(
-        result.sub_order.is_none() || result.state == OrderState::Suspended,
-        "a sub-order is only valid together with Suspended"
+        match result.follow_up {
+            FollowUp::SubOrder(_) => result.state == OrderState::Suspended,
+            FollowUp::Dies => result.state == OrderState::Finished,
+            FollowUp::None => true,
+        },
+        "a sub-order goes with Suspended and a death with Finished"
     );
 
     queue.0.front_mut().unwrap().state = result.state;
@@ -347,8 +524,10 @@ pub fn process_tick(entity: Entity, queue: &mut OrderQueueComponent, world: &mut
         ),
     }
 
-    if let Some(sub_order) = result.sub_order {
-        queue.push_front(sub_order);
+    match result.follow_up {
+        FollowUp::None => {}
+        FollowUp::SubOrder(sub_order) => queue.push_front(sub_order),
+        FollowUp::Dies => queue.push(Order::Die, Some(CancelPolicy::Force)),
     }
 
     debug_assert!(

@@ -21,7 +21,7 @@ use ferrets_script::{
     ai::{
         AiRuntime,
         view::{
-            content::{AttackView, ContentView, EntityContentView},
+            content::{AttackView, ContentView, EntityContentView, MorphView},
             game::{EntityView, GameView},
         },
     },
@@ -29,7 +29,7 @@ use ferrets_script::{
     error::ScriptError,
 };
 use ferrets_simulation::{
-    command::{PlayerCommand, SelectMode, SkillCasterRef},
+    command::{PlayerCommand, SelectMode, SkillCasterRef, SkillTarget},
     components::{rally::RallyTarget, stance::Stance},
     order::AttackTarget,
     session::ai_vision::AiVision,
@@ -59,6 +59,7 @@ fn think_returns_commands_as_player_commands() {
                 { kind = "patrol", x = 22, y = 23, flush = false },
                 { kind = "guard", target = 24 },
                 { kind = "stance", stance = "stand_ground" },
+                { kind = "morph", type_name = "gryphon_aloft", flush = false },
                 { kind = "stop" },
             }
         end"#,
@@ -132,6 +133,10 @@ fn think_returns_commands_as_player_commands() {
             },
             PlayerCommand::SetStance {
                 stance: Stance::StandGround,
+            },
+            PlayerCommand::Morph {
+                type_name: "gryphon_aloft".to_string(),
+                flush: false,
             },
             PlayerCommand::Stop,
         ]
@@ -211,7 +216,7 @@ fn use_skill_command_resolves_name_and_caster() {
             PlayerCommand::UseSkill {
                 skill: skill_id("second_wind"),
                 caster: SkillCasterRef::Entity(SimulationId(9)),
-                target: Some(SimulationId(4)),
+                target: Some(SkillTarget::Entity(SimulationId(4))),
             },
             PlayerCommand::UseSkill {
                 skill: skill_id("war_drums"),
@@ -713,7 +718,11 @@ fn scripts_read_view_and_content_tables() {
             if worker.train_time ~= 40 then error("train_time") end
             if not worker.can_move then error("can_move") end
             if worker.max_health ~= 30 then error("max_health") end
+            if worker.morphs[1].into ~= "town_hall" then error("morph into") end
+            if worker.morphs[1].cost[1].amount ~= 400 then error("morph cost") end
+            if worker.morphs[1].time ~= 200 then error("morph time") end
             local soldier = content.entities.soldier
+            if soldier.morphs ~= nil then error("soldier morphs") end
             if soldier.attack.damage ~= 10 then error("attack damage") end
             if soldier.attack.attack_range ~= 1 then error("attack range") end
             if content.resources[1] ~= "gold" then error("resources") end
@@ -875,6 +884,11 @@ fn demo_like_content() -> ContentView {
                 researches: None,
                 skills: None,
                 requires: None,
+                morphs: Some(vec![MorphView {
+                    into: "town_hall".to_string(),
+                    cost: vec![("gold".to_string(), 400)],
+                    time: Some(200),
+                }]),
             },
             EntityContentView {
                 name: "soldier".to_string(),
@@ -895,6 +909,7 @@ fn demo_like_content() -> ContentView {
                 researches: None,
                 skills: None,
                 requires: None,
+                morphs: None,
             },
         ],
         researches: Vec::new(),
@@ -953,6 +968,7 @@ fn populated_view(tick: u32) -> GameView {
                 carrying: None,
                 train_queue: vec!["peasant".to_string()],
                 under_construction: false,
+                disabled: false,
                 stance: None,
                 resource_amount: None,
                 boarded: None,
@@ -972,6 +988,7 @@ fn populated_view(tick: u32) -> GameView {
                 carrying: Some(("gold".to_string(), 3)),
                 train_queue: Vec::new(),
                 under_construction: false,
+                disabled: false,
                 stance: Some("flee".to_string()),
                 resource_amount: None,
                 boarded: None,
@@ -994,6 +1011,7 @@ fn populated_view(tick: u32) -> GameView {
             carrying: None,
             train_queue: Vec::new(),
             under_construction: false,
+            disabled: false,
             stance: None,
             resource_amount: Some(900),
             boarded: None,

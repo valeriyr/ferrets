@@ -87,6 +87,26 @@ impl Projection {
         self.in_range(from, nearest, distance)
     }
 
+    /// Every cell within `distance` of `rect` (see
+    /// [`in_range_of_rect`](Self::in_range_of_rect)), row-major. Cells are
+    /// clamped to non-negative coordinates and unbounded above.
+    pub fn cells_in_range_of_rect(self, rect: CellRect, distance: u32) -> Vec<CellPos> {
+        let min_x = rect.origin.x.saturating_sub(distance);
+        let min_y = rect.origin.y.saturating_sub(distance);
+        let max_x = rect.origin.x + rect.size.width + distance;
+        let max_y = rect.origin.y + rect.size.height + distance;
+        let mut cells = Vec::new();
+        for y in min_y..max_y {
+            for x in min_x..max_x {
+                let cell = CellPos::new(x, y);
+                if self.in_range_of_rect(cell, rect, distance) {
+                    cells.push(cell);
+                }
+            }
+        }
+        cells
+    }
+
     /// Whether a `size` footprint anchored at `from` satisfies stopping
     /// within `distance` of `goal`: measured by the footprint's nearest edge
     /// for a ranged stop, by the anchor itself for a stop of zero (see
@@ -244,4 +264,17 @@ fn step_axis(current: FixedU64, target: FixedU64, step: FixedU64) -> FixedU64 {
     } else {
         current
     }
+}
+
+/// Whether `cell` lies within `distance` of the nearest cell of `rect` by the
+/// Euclidean metric: the reach of a circle, whatever the map's projection.
+pub fn in_circle(cell: CellPos, rect: CellRect, distance: u32) -> bool {
+    Projection::Orthogonal.in_range_of_rect(cell, rect, distance)
+}
+
+/// Every cell within `distance` of `rect` by the Euclidean metric (see
+/// [`in_circle`]), row-major; clamped to non-negative coordinates and
+/// unbounded above.
+pub fn circle_cells(rect: CellRect, distance: u32) -> Vec<CellPos> {
+    Projection::Orthogonal.cells_in_range_of_rect(rect, distance)
 }

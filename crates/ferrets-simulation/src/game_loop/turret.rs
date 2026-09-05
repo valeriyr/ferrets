@@ -28,7 +28,7 @@ use crate::{
         stance::{Stance, StanceComponent},
         turret::{TurretState, TurretsComponent},
     },
-    entity_def,
+    entity_def::{self, Operation},
     entity_index::EntityIndex,
     impacts::FiredFrom,
     order::{AttackTarget, Order},
@@ -49,6 +49,12 @@ pub fn process_turrets(world: &mut World) {
         // then it fights from the holder — which is [`super::garrison`]'s work.
         if world.entity(entity).contains::<HiddenComponent>() {
             continue;
+        }
+        // A body's guns work only while it operates: a site still going up
+        // and a disabled body stand idle.
+        match entity_def::operation(world, entity) {
+            Operation::Operating => {}
+            Operation::UnderConstruction | Operation::Disabled => continue,
         }
         work_body(world, entity, id);
     }

@@ -68,9 +68,9 @@ impl HealthComponent {
         self.current == FixedU64::ZERO
     }
 
-    /// Reduces health by `amount`, saturating at `0`.
+    /// Removes `amount` health, saturating at `0`.
     #[inline]
-    pub fn apply_damage(&mut self, amount: FixedU64) {
+    pub fn drain(&mut self, amount: FixedU64) {
         self.current = self.current.saturating_sub(amount);
     }
 

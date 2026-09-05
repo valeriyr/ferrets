@@ -17,7 +17,7 @@ use ferrets_math::FixedU64;
 
 use ferrets_content::entity_type_def::EntityTypeId;
 
-use crate::session::player_slot::PlayerId;
+use crate::session::player_id::PlayerId;
 
 /// What one player has done.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

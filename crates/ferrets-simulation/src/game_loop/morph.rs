@@ -11,13 +11,17 @@
 //! [`MorphTransition`] the entity's own type declares. The order settles those
 //! terms at [`prepare`] and lands the change when its progress runs out; a
 //! change that cannot happen finishes silently, like any other order that
-//! finds its work impossible.
+//! finds its work impossible. A transition may name an interim form, worn from
+//! the start of the change until it lands, and returned from when the change
+//! ends early.
 
 use bevy_ecs::{entity::Entity, world::World};
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 
+use super::orders::{self, Processing, Refusal};
 use crate::{
     components::{
+        dying::DyingComponent,
         energy::EnergyComponent,
         entity_info::EntityInfoComponent,
         health::HealthComponent,
@@ -26,19 +30,19 @@ use crate::{
         morph::{MorphComponent, MorphReservation},
         movement::MoveComponent,
         order_queue::{CancelPolicy, OrderState},
-        owner::OwnerComponent,
         transport::TransporterComponent,
     },
     entity_def,
     entity_index::EntityIndex,
     events::{EventRecord, SimulationEvent, SpendCause},
+    fields,
     game_loop::cast_cost,
     map::{Map, OccupancyClass},
     movement_model::MovementModel,
     order::Order,
     requirements,
-    session::player_slot::PlayerId,
-    spawn,
+    session::player_id::PlayerId,
+    spawn::{self, FieldReach, StandingActs},
 };
 use ferrets_content::{
     entity_stats::EntityStatId,
@@ -50,52 +54,58 @@ use ferrets_content::{
 use ferrets_geometry::cell_pos::CellPos;
 use ferrets_physics::body;
 
-/// Whether ordering `entity` into `type_name` is worth queueing at all: the
-/// entity's own type must declare the transition, the player must meet its
-/// requirements, and the destination must be able to seat whatever is aboard.
-///
-/// Deliberately silent about costs and whether the footprint fits, because
-/// both are only knowable when the order actually starts.
-pub fn would_start(world: &World, player: PlayerId, entity: Entity, type_name: &str) -> bool {
-    let Some(transition) = transition_into(world, entity, type_name) else {
-        return false;
+/// Whether `entity` may start this Morph: its type declares the transition,
+/// the destination exists and seats whatever is aboard, and it operates.
+/// Requirements, the cost and the ground are settled when the order starts.
+pub fn can_start(world: &World, entity: Entity, order: &Order) -> Result<(), Refusal> {
+    let Order::Morph { type_name } = order else {
+        unreachable!("can_start called with a non-Morph order");
     };
-    requirements::met(world, player, transition.requires())
-        && destination(world, type_name)
-            .is_some_and(|(type_id, _)| cargo_fits(world, entity, type_id))
+    if transition_into(world, entity, type_name).is_none() {
+        return Err(Refusal::Incapable);
+    }
+    let Some((type_id, _)) = destination(world, type_name) else {
+        return Err(Refusal::Incapable);
+    };
+    if !cargo_fits(world, entity, type_id) {
+        return Err(Refusal::TargetUnfit);
+    }
+    orders::requires_operating(world, entity)
+}
+
+/// Whether `player` meets the requirements of `entity`'s transition into
+/// `type_name`. A transition the type does not declare has none to meet.
+pub fn requirements_met(world: &World, player: PlayerId, entity: Entity, type_name: &str) -> bool {
+    transition_into(world, entity, type_name)
+        .is_none_or(|transition| requirements::met(world, player, transition.requires()))
 }
 
 /// Called once when a Morph order becomes the front `New` entry.
 ///
-/// Settles every term the transition declares: refuses outright what could
-/// never work (a destination the type declares no transition into, cargo that
-/// would not fit, requirements no longer met, a cost that cannot be paid), and
-/// only then commits — a reserving transition claims its destination footprint
+/// Settles every term the transition declares: refuses outright what cannot
+/// start (see [`can_start`]), requirements no longer met, or a cost that cannot
+/// be paid, and only then commits — a reserving transition claims its destination footprint
 /// or refuses on the spot, and the cost is drawn. A revalidating transition
 /// touches no ground early; whether its footprint fits is decided when the
-/// change lands, because the ground can be taken while the unit is still
-/// turning into something.
+/// change lands.
 ///
-/// While the change runs the unit keeps its old form entirely — layer,
-/// footprint, and answerability — and takes the new one only when the progress
-/// lands. It is helpless for the window either way, since the order occupies
-/// its queue.
+/// While the change runs the unit wears its interim form, when the transition
+/// declares one, or keeps its old form, and takes the new one only when the
+/// progress lands. The order occupies its queue for the window either way.
 pub fn prepare(entity: Entity, order: &Order, world: &mut World) -> OrderState {
     let Order::Morph { type_name } = order else {
         unreachable!("prepare called with a non-Morph order");
     };
 
-    let Some(transition) = transition_into(world, entity, type_name) else {
+    if can_start(world, entity, order).is_err() {
+        return OrderState::Finished;
+    }
+    let transition =
+        transition_into(world, entity, type_name).expect("can_start found the transition");
+    let Some(player) = entity_def::owner(world, entity) else {
         return OrderState::Finished;
     };
-    let Some((type_id, _)) = destination(world, type_name) else {
-        return OrderState::Finished;
-    };
-    let Some(player) = transition_payer(world, entity) else {
-        return OrderState::Finished;
-    };
-    if !cargo_fits(world, entity, type_id)
-        || !requirements::met(world, player, transition.requires())
+    if !requirements::met(world, player, transition.requires())
         || !cast_cost::can_pay(world, entity, player, transition.costs())
     {
         return OrderState::Finished;
@@ -116,7 +126,7 @@ pub fn prepare(entity: Entity, order: &Order, world: &mut World) -> OrderState {
                 entity: entity_def::simulation_id(world, entity),
             },
         );
-        if !land(world, entity, type_name, true)
+        if !land(world, entity, type_name, Landing::Revalidated)
             && let MorphCancel::Refundable = transition.cancel()
         {
             cast_cost::refund(
@@ -138,7 +148,8 @@ pub fn prepare(entity: Entity, order: &Order, world: &mut World) -> OrderState {
             None => return OrderState::Finished,
         },
         MorphPlacement::Revalidate => MorphComponent {
-            type_name: type_name.clone(),
+            from: entity_def::type_id(world, entity),
+            into: type_name.clone(),
             progress: 0,
             reservation: None,
         },
@@ -152,6 +163,26 @@ pub fn prepare(entity: Entity, order: &Order, world: &mut World) -> OrderState {
             entity: entity_def::simulation_id(world, entity),
         },
     );
+    // The interim form is put on as the change starts; a form that cannot be
+    // worn — it will not seat what is aboard, or its ground is refused — ends
+    // the change before it began, on the same refund terms as a fizzle.
+    if let Some(via) = transition.via_type()
+        && !land(world, entity, via, Landing::Reserved)
+    {
+        release_reservation(world, &morph);
+        if let MorphCancel::Refundable = transition.cancel() {
+            cast_cost::refund(
+                world,
+                entity,
+                player,
+                transition.costs(),
+                SpendCause::Morph {
+                    entity: entity_def::simulation_id(world, entity),
+                },
+            );
+        }
+        return OrderState::Finished;
+    }
     world.entity_mut(entity).insert(morph);
     OrderState::InProcessing
 }
@@ -177,8 +208,21 @@ pub fn cancel_processing(
     let Order::Morph { type_name } = order else {
         unreachable!("cancel_processing called with a non-Morph order");
     };
+    // A queued entry was never prepared: nothing was paid or reserved for it,
+    // and the change on the entity, if any, is the one under way in front.
+    match entry_state {
+        OrderState::New => return OrderState::Finished,
+        OrderState::InProcessing | OrderState::Suspended => {}
+        OrderState::Finished => unreachable!("Finished entries never stay in the queue"),
+    }
 
-    let cancel = transition_into(world, entity, type_name)
+    let under_way = world.entity(entity).get::<MorphComponent>().cloned();
+    let transition = match &under_way {
+        Some(morph) => terms(world, morph),
+        None => transition_into(world, entity, type_name),
+    };
+    let cancel = transition
+        .as_ref()
         .map(|transition| transition.cancel())
         // The transition existed when the order started; content does not
         // change mid-session, so this is only a guard against a component
@@ -201,9 +245,13 @@ pub fn cancel_processing(
 
     if let Some(morph) = world.entity_mut(entity).take::<MorphComponent>() {
         release_reservation(world, &morph);
+        // A dying entity keeps the form its death was announced in.
+        if !world.entity(entity).contains::<DyingComponent>() {
+            return_to_origin(world, entity, &morph);
+        }
         if refundable
-            && let Some(transition) = transition_into(world, entity, type_name)
-            && let Some(player) = transition_payer(world, entity)
+            && let Some(transition) = transition
+            && let Some(player) = entity_def::owner(world, entity)
         {
             cast_cost::refund(
                 world,
@@ -227,35 +275,39 @@ pub fn cancel_processing(
 /// revalidating one re-checks the destination and is refused if the ground was
 /// taken — refunding a refundable transition's cost, since the change never
 /// happened.
-pub fn process(entity: Entity, _order: &Order, world: &mut World) -> OrderState {
+pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing {
     let Some(mut morph) = world.entity_mut(entity).take::<MorphComponent>() else {
-        return OrderState::Finished;
+        return Processing::state(OrderState::Finished);
     };
-    let Some(transition) = transition_into(world, entity, &morph.type_name) else {
+    let Some(transition) = terms(world, &morph) else {
         release_reservation(world, &morph);
-        return OrderState::Finished;
+        return Processing::state(OrderState::Finished);
     };
     let time = morph_time(world, entity, transition.time());
 
     morph.progress += 1;
     if morph.progress < time {
         world.entity_mut(entity).insert(morph);
-        return OrderState::InProcessing;
+        return Processing::state(OrderState::InProcessing);
     }
 
     // Between the release and the landing nothing else runs, so the ground a
     // reservation held passes to the new footprint atomically.
     release_reservation(world, &morph);
-    let revalidate = match transition.placement() {
-        MorphPlacement::Reserve => false,
-        MorphPlacement::Revalidate => true,
+    let landing = match transition.placement() {
+        MorphPlacement::Reserve => Landing::Reserved,
+        MorphPlacement::Revalidate => Landing::Revalidated,
     };
-    if !land(world, entity, &morph.type_name, revalidate)
+    if !land(world, entity, &morph.into, landing) {
+        // The change fizzled: the entity returns to what it was, so a
+        // refundable transition's payment goes back the same way a cancel
+        // returns it.
+        return_to_origin(world, entity, &morph);
+    }
+    if !land_succeeded(world, entity, &morph)
         && let MorphCancel::Refundable = transition.cancel()
-        && let Some(player) = transition_payer(world, entity)
+        && let Some(player) = entity_def::owner(world, entity)
     {
-        // The change fizzled: the entity stays as it was, so a refundable
-        // transition's payment goes back the same way a cancel returns it.
         cast_cost::refund(
             world,
             entity,
@@ -266,32 +318,37 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> OrderState 
             },
         );
     }
-    OrderState::Finished
+    Processing::state(OrderState::Finished)
 }
 
 //
 // ─── Landing the change ─────────────────────────────────────────────────────────
 //
 
+/// What a landing checks before it takes the ground.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Landing {
+    /// Onto ground secured in advance: nothing is re-tested but what the
+    /// entity itself carries and where it stands.
+    Reserved,
+    /// Onto ground last judged when the change was ordered: the fields and
+    /// the footprint are tested again, and the landing is refused if either
+    /// no longer allows the form.
+    Revalidated,
+    /// Back into the form the change started from, on the footprint it never
+    /// left: nothing is tested.
+    Return,
+}
+
 /// The landing: rewrites the entity's type in place, or returns `false` with
-/// everything untouched when the change cannot happen — a destination that is
-/// unregistered or that the entity's own type declares no transition into
-/// (the vocabulary is the authority: a command merely names a destination,
-/// and anything undeclared is refused, or any wire-legal command could turn
-/// any unit into any registered type), a cell-model mover caught between
-/// cells (its anchor names a cell it only partly holds, so there is no
-/// settled footprint to swap), cargo the new form cannot seat, or a
-/// destination footprint that no longer fits.
-///
-/// Whether the footprint is re-tested is the caller's `revalidate`: a
-/// reserving completion skips the check because it holds the ground already.
-fn land(world: &mut World, entity: Entity, type_name: &str, revalidate: bool) -> bool {
+/// everything untouched when the change cannot happen — an unregistered
+/// destination, a cell-model mover caught between cells, cargo the new form
+/// cannot seat, or a destination footprint that no longer fits. Which of those
+/// a landing checks before it takes the ground is its [`Landing`].
+fn land(world: &mut World, entity: Entity, type_name: &str, landing: Landing) -> bool {
     let Some((type_id, to)) = destination(world, type_name) else {
         return false;
     };
-    if transition_into(world, entity, type_name).is_none() {
-        return false;
-    }
     let Some(from) = entity_def::of(world, entity).location else {
         return false;
     };
@@ -303,21 +360,26 @@ fn land(world: &mut World, entity: Entity, type_name: &str, revalidate: bool) ->
         return false;
     };
 
-    if let MovementModel::Cell = world.resource::<Map>().movement_model()
-        && super::movement::is_mid_crossing(position)
-    {
-        return false;
-    }
-    if !cargo_fits(world, entity, type_id) {
-        return false;
+    match landing {
+        Landing::Reserved | Landing::Revalidated => {
+            if let MovementModel::Cell = world.resource::<Map>().movement_model()
+                && super::movement::is_mid_crossing(position)
+            {
+                return false;
+            }
+            if !cargo_fits(world, entity, type_id) {
+                return false;
+            }
+        }
+        // The form returned to stood here with this cargo before the change
+        // began, and an interim form stands on the same footprint.
+        Landing::Return => {}
     }
 
     // The footprint is anchored at its origin, so a size change recentres it:
     // growing from the same corner would shift the unit's middle sideways.
     let anchor = recentred(position, from, to);
-    if !reoccupy(
-        world, entity, position, anchor, from, to, type_id, revalidate,
-    ) {
+    if !reoccupy(world, entity, position, anchor, from, to, type_id, landing) {
         return false;
     }
 
@@ -355,7 +417,13 @@ fn land(world: &mut World, entity: Entity, type_name: &str, revalidate: bool) ->
     );
 
     spawn::seed_stats(world, entity, &base_stats);
-    spawn::fit_components(world, entity, type_id);
+    spawn::fit_components(
+        world,
+        entity,
+        type_id,
+        FieldReach::Initial,
+        StandingActs::Keep,
+    );
 
     // The pools are re-fitted to what the destination declares: a form with
     // the stat keeps the carried proportion — or starts full when the old
@@ -421,8 +489,8 @@ fn land(world: &mut World, entity: Entity, type_name: &str, revalidate: bool) ->
 /// settled cell itself under the cell model — because displacing a claim is a
 /// no-op under the continuous model (its clears belong to the rebuild alone)
 /// and the put-back would mint bits the plane never held. A refused change
-/// restores exactly what came off. A caller that secured the ground in
-/// advance passes `revalidate = false` and the swap is unconditional.
+/// restores exactly what came off. Only a revalidated landing tests the
+/// ground; the other landings swap unconditionally.
 #[allow(clippy::too_many_arguments)]
 fn reoccupy(
     world: &mut World,
@@ -432,12 +500,25 @@ fn reoccupy(
     from: LocationDef,
     to: LocationDef,
     type_id: EntityTypeId,
-    revalidate: bool,
+    landing: Landing,
 ) -> bool {
     // A hidden entity holds no cells at all, so there is nothing to move.
     if world.entity(entity).contains::<HiddenComponent>() {
         return true;
     }
+    // Fields judge the destination form where it will stand, like any
+    // placement of that form — whatever its footprint.
+    match landing {
+        Landing::Revalidated => {
+            let owner = entity_def::owner(world, entity);
+            let def = world.resource::<ContentRegistry>().def(type_id);
+            if !fields::allows_placement(world, owner, def, body::anchor(anchor)) {
+                return false;
+            }
+        }
+        Landing::Reserved | Landing::Return => {}
+    }
+
     let old_class = OccupancyClass::of(entity_def::of(world, entity));
     let new_class = OccupancyClass::of(world.resource::<ContentRegistry>().def(type_id));
     // Unchanged presence needs no check and cannot fail: the same cells stay
@@ -461,7 +542,11 @@ fn reoccupy(
 
     let mut map = world.resource_mut::<Map>();
     let own = lift_standing_presence(&mut map, &standing, &from, old_class);
-    if revalidate && !map.can_place_entity(&placed, &to) {
+    let fits = match landing {
+        Landing::Revalidated => map.can_place_entity(&placed, &to),
+        Landing::Reserved | Landing::Return => true,
+    };
+    if !fits {
         restore_standing_presence(&mut map, &standing, &from, old_class, &own);
         return false;
     }
@@ -610,7 +695,8 @@ fn reserve(world: &mut World, entity: Entity, type_name: &str) -> Option<MorphCo
     // so there is nothing to secure.
     if world.entity(entity).contains::<HiddenComponent>() {
         return Some(MorphComponent {
-            type_name: type_name.to_string(),
+            from: entity_def::type_id(world, entity),
+            into: type_name.to_string(),
             progress: 0,
             reservation: None,
         });
@@ -626,6 +712,18 @@ fn reserve(world: &mut World, entity: Entity, type_name: &str) -> Option<MorphCo
     let placed = LocationComponent::new(anchor, facing);
     let old_class = OccupancyClass::of(entity_def::of(world, entity));
 
+    // Fields judge the destination form where it will stand.
+    {
+        let owner = entity_def::owner(world, entity);
+        let def = world
+            .resource::<ContentRegistry>()
+            .entity(type_name)
+            .expect("destination resolved above");
+        if !fields::allows_placement(world, owner, def, body::anchor(anchor)) {
+            return None;
+        }
+    }
+
     // The entity's own presence comes off before the destination is tested,
     // exactly as the landing itself will do, and goes straight back either way.
     let mut map = world.resource_mut::<Map>();
@@ -636,15 +734,40 @@ fn reserve(world: &mut World, entity: Entity, type_name: &str) -> Option<MorphCo
         return None;
     }
 
-    let cells = map.reserve_claim(to.occupation(), CellPos::from(anchor), to.size());
+    let cells = map.reserve_claim(to.occupation(), body::anchor(anchor), to.size());
     Some(MorphComponent {
-        type_name: type_name.to_string(),
+        from: entity_def::type_id(world, entity),
+        into: type_name.to_string(),
         progress: 0,
         reservation: Some(MorphReservation {
             cells,
             mask: to.occupation(),
         }),
     })
+}
+
+/// Puts an entity that ended its change early back into the form it started
+/// from, when it was wearing an interim form. The return cannot be refused:
+/// the interim form stands on the origin's footprint, and the origin is not
+/// judged again on ground it already stood on, whatever the fields there say
+/// by now.
+fn return_to_origin(world: &mut World, entity: Entity, morph: &MorphComponent) {
+    if entity_def::type_id(world, entity) == morph.from {
+        return;
+    }
+    let origin = world
+        .resource::<ContentRegistry>()
+        .def(morph.from)
+        .name
+        .clone();
+    let returned = land(world, entity, &origin, Landing::Return);
+    debug_assert!(returned, "a return to the origin form is unconditional");
+}
+
+/// Whether the change `morph` describes has landed: the entity now is what it
+/// was changing into.
+fn land_succeeded(world: &World, entity: Entity, morph: &MorphComponent) -> bool {
+    entity_def::of(world, entity).name == morph.into
 }
 
 /// Lets go of the ground a reserving change held.
@@ -676,6 +799,18 @@ fn transition_into(world: &World, entity: Entity, type_name: &str) -> Option<Mor
         .cloned()
 }
 
+/// The terms of a change under way, read from the type that declared it —
+/// which the entity may no longer be, when it wears an interim form.
+fn terms(world: &World, morph: &MorphComponent) -> Option<MorphTransition> {
+    world
+        .resource::<ContentRegistry>()
+        .def(morph.from)
+        .morphs
+        .iter()
+        .find(|transition| transition.into_type() == morph.into)
+        .cloned()
+}
+
 /// Ticks the change takes for this entity, under the transition's own terms: a
 /// constant is what it says, and a stat names the changing entity's
 /// **effective** value — so buffs and researches move it, and it is re-read
@@ -687,13 +822,4 @@ fn morph_time(world: &World, entity: Entity, time: MorphTime) -> u32 {
             .map(|time| time.to_num::<u32>())
             .unwrap_or(0),
     }
-}
-
-/// The player whose stockpile the transition draws from and refunds to: the
-/// changing entity's owner.
-fn transition_payer(world: &World, entity: Entity) -> Option<PlayerId> {
-    world
-        .entity(entity)
-        .get::<OwnerComponent>()
-        .map(|owner| owner.player())
 }

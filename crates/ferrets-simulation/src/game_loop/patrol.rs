@@ -3,10 +3,9 @@
 
 use bevy_ecs::{entity::Entity, world::World};
 
-use super::orders::Processing;
+use super::orders::{self, Processing, Refusal};
 use crate::{
     components::{
-        location::LocationComponent,
         order_queue::{CancelPolicy, OrderState},
         patrol::PatrolComponent,
     },
@@ -14,19 +13,24 @@ use crate::{
     order::Order,
 };
 
+/// Whether `entity` may start a Patrol: its type moves and it operates.
+pub fn can_start(world: &World, entity: Entity, _order: &Order) -> Result<(), Refusal> {
+    if !entity_def::of(world, entity).can_move() {
+        return Err(Refusal::Incapable);
+    }
+    orders::requires_operating(world, entity)
+}
+
 /// Called once when a Patrol order becomes the front `New` entry.
 ///
 /// Records the current position as the return endpoint and returns
-/// `InProcessing`, or `Finished` immediately if the entity cannot move.
-pub fn prepare(entity: Entity, _order: &Order, world: &mut World) -> OrderState {
-    if !entity_def::of(world, entity).can_move() {
+/// `InProcessing`, or `Finished` immediately when the order cannot start — see
+/// [`can_start`].
+pub fn prepare(entity: Entity, order: &Order, world: &mut World) -> OrderState {
+    if can_start(world, entity, order).is_err() {
         return OrderState::Finished;
     }
-    let home = world
-        .entity(entity)
-        .get::<LocationComponent>()
-        .unwrap()
-        .position;
+    let home = entity_def::position(world, entity);
     world.entity_mut(entity).insert(PatrolComponent {
         home,
         outbound: true,

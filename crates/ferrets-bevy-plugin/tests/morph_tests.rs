@@ -12,12 +12,14 @@ use ferrets_simulation::{
         energy::EnergyComponent,
         entity_info::EntityInfoComponent,
         health::HealthComponent,
+        location::LocationComponent,
         order_queue::{CancelPolicy, OrderQueueComponent},
         train::TrainQueueComponent,
     },
     map::Map,
     movement_model::MovementModel,
     order::Order,
+    spawn,
 };
 
 //
@@ -200,6 +202,116 @@ fn queued_committed_change_drops_before_it_starts() {
         "whelp",
         "a queued committed change survived the cancel and landed"
     );
+}
+
+//
+// ─── An interim form ──────────────────────────────────────────────────────────
+//
+
+#[test]
+fn interim_form_is_worn_until_change_lands() {
+    let mut app = utils::morph_app(MovementModel::Continuous);
+    let (whelp, _) = utils::create_owned(&mut app, "whelp", 10, 10, 0);
+    utils::grant_gold(&mut app, 10);
+
+    order_morph(&mut app, whelp, "wyrm");
+
+    // Paid and in its chrysalis the tick the change starts; a full whelp is
+    // a full chrysalis.
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(type_name_of(&app, whelp), "chrysalis");
+    assert_eq!(utils::gold(app.world()), 0);
+    assert_eq!(utils::health(&app, whelp), 60);
+
+    utils::run_ticks(&mut app, 12);
+    assert_eq!(type_name_of(&app, whelp), "wyrm");
+}
+
+#[test]
+fn interim_form_keeps_position_and_holds_cell_mover_stood_on() {
+    let mut app = utils::morph_app(MovementModel::Continuous);
+    let (whelp, _) = utils::create_owned(&mut app, "whelp", 10, 10, 0);
+    utils::grant_gold(&mut app, 10);
+    // Part way across a cell boundary: the body rounds onto (11, 10) while the
+    // position floors into (10, 10). A tick lets the claim plane follow.
+    app.world_mut()
+        .get_mut::<LocationComponent>(whelp)
+        .unwrap()
+        .position = utils::part_way("10.6", "10.3");
+    utils::run_ticks(&mut app, 1);
+
+    order_morph(&mut app, whelp, "wyrm");
+    utils::run_ticks(&mut app, 1);
+
+    assert_eq!(type_name_of(&app, whelp), "chrysalis");
+    assert_eq!(
+        utils::position_of(app.world(), whelp),
+        utils::part_way("10.6", "10.3"),
+        "the chrysalis stands exactly where the whelp stood"
+    );
+    let map = app.world().resource::<Map>();
+    assert!(
+        map.nav_grid()
+            .is_statically_occupied_by(utils::GROUND, CellPos::new(11, 10)),
+        "the chrysalis holds the cell the whelp stood on"
+    );
+    assert!(
+        !map.nav_grid()
+            .is_statically_occupied_by(utils::GROUND, CellPos::new(10, 10)),
+        "and not the cell its position floored into"
+    );
+}
+
+#[test]
+fn cancelled_change_takes_interim_form_off() {
+    let mut app = utils::morph_app(MovementModel::Continuous);
+    let (whelp, _) = utils::create_owned(&mut app, "whelp", 10, 10, 0);
+    utils::grant_gold(&mut app, 10);
+
+    order_morph(&mut app, whelp, "wyrm");
+    utils::run_ticks(&mut app, 3);
+    assert_eq!(type_name_of(&app, whelp), "chrysalis");
+
+    utils::stop_orders(app.world_mut(), whelp);
+    utils::run_ticks(&mut app, 1);
+
+    // Back to a whelp with the price returned.
+    assert_eq!(type_name_of(&app, whelp), "whelp");
+    assert_eq!(utils::gold(app.world()), 10);
+}
+
+#[test]
+fn dying_entity_keeps_interim_form() {
+    let mut app = utils::morph_app(MovementModel::Continuous);
+    let (whelp, _) = utils::create_owned(&mut app, "whelp", 10, 10, 0);
+    utils::grant_gold(&mut app, 10);
+    order_morph(&mut app, whelp, "wyrm");
+    utils::run_ticks(&mut app, 3);
+    assert_eq!(type_name_of(&app, whelp), "chrysalis");
+
+    spawn::destroy_entity(app.world_mut(), whelp);
+    utils::run_ticks(&mut app, 1);
+
+    // The cancelled change does not dress the corpse as a whelp again.
+    assert_eq!(type_name_of(&app, whelp), "chrysalis");
+}
+
+#[test]
+fn fizzled_change_takes_interim_form_off() {
+    let mut app = utils::morph_app(MovementModel::Continuous);
+    let (whelp, _) = utils::create_owned(&mut app, "whelp", 10, 10, 0);
+    // Standing where the wyrm's footprint would spread, so the revalidating
+    // landing is refused.
+    utils::create_owned(&mut app, "whelp", 11, 10, 0);
+    utils::grant_gold(&mut app, 10);
+
+    order_morph(&mut app, whelp, "wyrm");
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(type_name_of(&app, whelp), "chrysalis");
+
+    utils::run_ticks(&mut app, 12);
+    assert_eq!(type_name_of(&app, whelp), "whelp");
+    assert_eq!(utils::gold(app.world()), 10);
 }
 
 //

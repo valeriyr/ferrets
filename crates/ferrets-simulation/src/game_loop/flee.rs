@@ -7,11 +7,10 @@ use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use crate::{
     components::{
         health::HealthComponent,
-        location::LocationComponent,
         order_queue::{CancelPolicy, OrderQueueComponent},
         stance::StanceComponent,
     },
-    entity_def,
+    entity_def::{self, Operation},
     entity_index::EntityIndex,
     map::Map,
     order::Order,
@@ -44,6 +43,11 @@ pub fn tick(world: &mut World) {
         if !entity_def::of(world, entity).can_move() {
             continue;
         }
+        // A frozen entity does not run.
+        match entity_def::operation(world, entity) {
+            Operation::Operating => {}
+            Operation::UnderConstruction | Operation::Disabled => continue,
+        }
         // Commanded entities stay commanded: only an empty queue flees.
         if entity_ref
             .get::<OrderQueueComponent>()
@@ -67,12 +71,8 @@ pub fn tick(world: &mut World) {
             continue;
         };
 
-        let position = entity_ref.get::<LocationComponent>().unwrap().position;
-        let attacker_position = world
-            .entity(attacker)
-            .get::<LocationComponent>()
-            .unwrap()
-            .position;
+        let position = entity_def::position(world, entity);
+        let attacker_position = entity_def::position(world, attacker);
         let target = flee_target(world, position, attacker_position);
 
         if let Some(mut queue) = world.entity_mut(entity).get_mut::<OrderQueueComponent>() {

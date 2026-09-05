@@ -29,7 +29,7 @@ use ferrets_script::engine::lua::LuaEngine;
 use ferrets_simulation::{
     map::Map,
     map_data::{MapData, Placement},
-    session::{GameSession, player_slot::PlayerId},
+    session::{GameSession, player_id::PlayerId},
 };
 
 use crate::{content, scenario::CurrentScenario};

@@ -8,7 +8,12 @@
 use ferrets_math::FixedU64;
 use serde::{Deserialize, Serialize};
 
-use crate::{costs::Cost, entity_buffs::EntityBuffId, player_buffs::PlayerBuffId};
+use crate::{
+    costs::Cost,
+    entity_buffs::EntityBuffId,
+    field::{FieldAction, FieldId},
+    player_buffs::PlayerBuffId,
+};
 
 /// A handle to a registered skill, assigned in registration order.
 ///
@@ -70,8 +75,8 @@ pub enum EntityCastCost {
     Health(FixedU64),
 }
 
-/// Who an entity cast acts on — always an entity. Allegiance is judged from
-/// the caster's owner, and ally includes self.
+/// What an entity cast is aimed at. Allegiance is judged from the caster's
+/// owner, and ally includes self.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EntityCastTarget {
     /// The casting entity itself; the use command carries no target.
@@ -80,9 +85,11 @@ pub enum EntityCastTarget {
     Ally,
     /// A hostile entity.
     Enemy,
+    /// A cell of the map; the use command carries a position.
+    Position,
 }
 
-/// What a cast does to its resolved target entity.
+/// What a cast does at its resolved aim.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EntityCastEffect {
     /// Applies the entity buff with the given id.
@@ -93,6 +100,16 @@ pub enum EntityCastEffect {
     Damage(FixedU64),
     /// Restores health, up to the target's maximum.
     Heal(FixedU64),
+    /// Covers or clears a field around the aim: the aimed cell for a
+    /// position cast, the target's anchor cell otherwise.
+    Field {
+        /// The field acted on.
+        field: FieldId,
+        /// How far from the aim the action reaches, in cells.
+        radius: u32,
+        /// Whether the cells are covered or cleared.
+        action: FieldAction,
+    },
 }
 
 /// What a cast does to the casting player.

@@ -7,10 +7,8 @@
 use std::net::SocketAddr;
 
 use ferrets_simulation::session::{
-    drop_policy::DropPolicy,
-    finish_policy::FinishPolicy,
-    game_speed::GameSpeed,
-    player_slot::{PlayerId, TeamId},
+    drop_policy::DropPolicy, finish_policy::FinishPolicy, game_speed::GameSpeed,
+    player_id::PlayerId, player_slot::TeamId,
 };
 use serde::{Deserialize, Serialize};
 

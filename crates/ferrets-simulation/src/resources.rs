@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     events::{EventRecord, SimulationEvent, SpendCause},
-    session::player_slot::PlayerId,
+    session::player_id::PlayerId,
     simulation_id::SimulationId,
 };
 

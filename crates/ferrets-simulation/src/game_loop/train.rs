@@ -2,30 +2,43 @@
 //! Called by [`super::orders`] as part of the shared order lifecycle.
 
 use bevy_ecs::{entity::Entity, world::World};
-use ferrets_geometry::cell_pos::CellPos;
+use ferrets_geometry::cell_rect::CellRect;
 use ferrets_math::fixed_uvec2::FixedUVec2;
 
-use super::rally;
+use super::{
+    orders::{self, Processing, Refusal},
+    rally,
+};
 use crate::{
     components::{
         order_queue::{CancelPolicy, OrderState},
-        owner::OwnerComponent,
         train::{TrainComponent, TrainQueueComponent},
     },
     entity_def,
     events::{SpawnCause, SpendCause},
     map::Map,
     order::Order,
-    resources, spawn,
+    resources,
+    spawn::{self, FieldReach},
 };
 use ferrets_content::registry::ContentRegistry;
+
+/// Whether `entity` may start a Train: its type trains and it stands raised.
+/// A disabled trainer is admitted and waits.
+pub fn can_start(world: &World, entity: Entity, _order: &Order) -> Result<(), Refusal> {
+    if entity_def::of(world, entity).trainer.is_none() {
+        return Err(Refusal::Incapable);
+    }
+    orders::requires_raised(world, entity)
+}
 
 /// Called once when a Train order becomes the front `New` entry.
 ///
 /// Inserts the driver component and returns `InProcessing`, or `Finished`
-/// immediately if the entity cannot train or has nothing queued.
-pub fn prepare(entity: Entity, _order: &Order, world: &mut World) -> OrderState {
-    if entity_def::of(world, entity).trainer.is_none() {
+/// immediately when the order cannot start — see [`can_start`] — or nothing
+/// is queued.
+pub fn prepare(entity: Entity, order: &Order, world: &mut World) -> OrderState {
+    if can_start(world, entity, order).is_err() {
         return OrderState::Finished;
     }
     let entity_ref = world.entity(entity);
@@ -54,10 +67,7 @@ pub fn cancel_processing(
     match policy {
         CancelPolicy::Soft => OrderState::InProcessing,
         CancelPolicy::Force => {
-            let owner = world
-                .entity(entity)
-                .get::<OwnerComponent>()
-                .map(|o| o.player());
+            let owner = entity_def::owner(world, entity);
             let queued: Vec<String> = world
                 .entity_mut(entity)
                 .get_mut::<TrainQueueComponent>()
@@ -94,9 +104,9 @@ pub fn cancel_processing(
 /// unit is spawned on the nearest free cell around the trainer's footprint and the
 /// entry is dequeued; with no free cell the unit waits, retrying every tick. The
 /// order finishes when the queue is empty.
-pub fn process(entity: Entity, _order: &Order, world: &mut World) -> OrderState {
+pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing {
     let Some(mut train_component) = world.entity_mut(entity).take::<TrainComponent>() else {
-        return OrderState::Finished;
+        return Processing::state(OrderState::Finished);
     };
 
     let Some(type_name) = world
@@ -104,7 +114,7 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> OrderState 
         .get::<TrainQueueComponent>()
         .and_then(|queue| queue.0.front().cloned())
     else {
-        return OrderState::Finished;
+        return Processing::state(OrderState::Finished);
     };
 
     let allowed = entity_def::of(world, entity)
@@ -129,7 +139,7 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> OrderState 
                 .0
                 .pop_front();
             world.entity_mut(entity).insert(train_component);
-            return OrderState::InProcessing;
+            return Processing::state(OrderState::InProcessing);
         };
         (
             type_def.train_time.expect("queued type must be trainable"),
@@ -144,8 +154,7 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> OrderState 
     }
 
     if train_component.progress >= train_time {
-        let (position, size) = entity_def::footprint(world, entity);
-        let origin = CellPos::from(position);
+        let CellRect { origin, size } = entity_def::footprint_rect(world, entity);
 
         let placement =
             world
@@ -154,10 +163,7 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> OrderState 
 
         // No free cell around the trainer — hold the finished unit and retry.
         if let Some(cell) = placement {
-            let owner = world
-                .entity(entity)
-                .get::<OwnerComponent>()
-                .map(|o| o.player());
+            let owner = entity_def::owner(world, entity);
             let trainer = entity_def::simulation_id(world, entity);
             if let Some((unit, _)) = spawn::spawn_entity(
                 world,
@@ -165,6 +171,7 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> OrderState 
                 FixedUVec2::from(cell),
                 owner,
                 SpawnCause::Trained { trainer },
+                FieldReach::Initial,
             ) {
                 rally::send(world, entity, unit);
             }
@@ -175,11 +182,11 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> OrderState 
             train_component.progress = 0;
 
             if queue.0.is_empty() {
-                return OrderState::Finished;
+                return Processing::state(OrderState::Finished);
             }
         }
     }
 
     world.entity_mut(entity).insert(train_component);
-    OrderState::InProcessing
+    Processing::state(OrderState::InProcessing)
 }

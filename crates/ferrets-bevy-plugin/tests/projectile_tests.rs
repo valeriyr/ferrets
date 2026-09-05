@@ -30,10 +30,10 @@ mod utils;
 #[test]
 fn shot_lands_after_its_flight_time() {
     let mut app = app();
-    let (_, gunner) = spawn::create_entity(app.world_mut(), "gunner", utils::pos(5, 5), Some(0))
+    let (_, gunner) = utils::create_entity(app.world_mut(), "gunner", utils::pos(5, 5), Some(0))
         .expect("gunner spawns");
     let (target, target_id) =
-        spawn::create_entity(app.world_mut(), "dummy", utils::pos(9, 5), Some(1))
+        utils::create_entity(app.world_mut(), "dummy", utils::pos(9, 5), Some(1))
             .expect("target spawns");
 
     utils::attack(&mut app, gunner, target_id);
@@ -65,15 +65,15 @@ fn shot_lands_after_its_flight_time() {
 #[test]
 fn blast_damages_bystanders_by_band() {
     let mut app = app();
-    let (_, gunner) = spawn::create_entity(app.world_mut(), "gunner", utils::pos(5, 20), Some(0))
+    let (_, gunner) = utils::create_entity(app.world_mut(), "gunner", utils::pos(5, 20), Some(0))
         .expect("gunner spawns");
     let (target, target_id) =
-        spawn::create_entity(app.world_mut(), "dummy", utils::pos(9, 20), Some(1))
+        utils::create_entity(app.world_mut(), "dummy", utils::pos(9, 20), Some(1))
             .expect("target spawns");
     // One cell from the impact (half damage) and two cells away (quarter damage).
-    let (near, _) = spawn::create_entity(app.world_mut(), "dummy", utils::pos(10, 20), Some(1))
+    let (near, _) = utils::create_entity(app.world_mut(), "dummy", utils::pos(10, 20), Some(1))
         .expect("near bystander spawns");
-    let (far, _) = spawn::create_entity(app.world_mut(), "dummy", utils::pos(11, 20), Some(1))
+    let (far, _) = utils::create_entity(app.world_mut(), "dummy", utils::pos(11, 20), Some(1))
         .expect("far bystander spawns");
 
     utils::attack(&mut app, gunner, target_id);
@@ -91,13 +91,13 @@ fn blast_damages_bystanders_by_band() {
 #[test]
 fn blast_spares_own_side_without_friendly_fire() {
     let mut app = app();
-    let (_, gunner) = spawn::create_entity(app.world_mut(), "gunner", utils::pos(5, 26), Some(0))
+    let (_, gunner) = utils::create_entity(app.world_mut(), "gunner", utils::pos(5, 26), Some(0))
         .expect("gunner spawns");
     let (target, target_id) =
-        spawn::create_entity(app.world_mut(), "dummy", utils::pos(9, 26), Some(1))
+        utils::create_entity(app.world_mut(), "dummy", utils::pos(9, 26), Some(1))
             .expect("target spawns");
     // An own-side unit standing inside the blast.
-    let (ally, _) = spawn::create_entity(app.world_mut(), "dummy", utils::pos(10, 26), Some(0))
+    let (ally, _) = utils::create_entity(app.world_mut(), "dummy", utils::pos(10, 26), Some(0))
         .expect("ally spawns");
 
     utils::attack(&mut app, gunner, target_id);
@@ -117,12 +117,12 @@ fn blast_scales_bonus_and_subtracts_armor_in_full() {
     // bonus along with the base — otherwise the blast edge deals its full bonus —
     // and armor must then come off in full, because it mitigates each hit it takes.
     let mut app = app();
-    let (_, gunner) = spawn::create_entity(app.world_mut(), "gunner", utils::pos(5, 30), Some(0))
+    let (_, gunner) = utils::create_entity(app.world_mut(), "gunner", utils::pos(5, 30), Some(0))
         .expect("gunner spawns");
     let (target, target_id) =
-        spawn::create_entity(app.world_mut(), "dummy", utils::pos(9, 30), Some(1))
+        utils::create_entity(app.world_mut(), "dummy", utils::pos(9, 30), Some(1))
             .expect("target spawns");
-    let (tank, _) = spawn::create_entity(app.world_mut(), "tank", utils::pos(10, 30), Some(1))
+    let (tank, _) = utils::create_entity(app.world_mut(), "tank", utils::pos(10, 30), Some(1))
         .expect("armored bystander spawns");
 
     utils::attack(&mut app, gunner, target_id);
@@ -143,10 +143,10 @@ fn cell_aimed_shot_misses_target_that_moves_away() {
     // The shell is sent to the cell the target stood on. The target walks off before
     // it lands, so nothing is there to take the hit.
     let mut app = app();
-    let (_, sieger) = spawn::create_entity(app.world_mut(), "sieger", utils::pos(5, 4), Some(0))
+    let (_, sieger) = utils::create_entity(app.world_mut(), "sieger", utils::pos(5, 4), Some(0))
         .expect("sieger spawns");
     let (runner, runner_id) =
-        spawn::create_entity(app.world_mut(), "runner", utils::pos(11, 4), Some(1))
+        utils::create_entity(app.world_mut(), "runner", utils::pos(11, 4), Some(1))
             .expect("runner spawns");
 
     utils::attack(&mut app, sieger, runner_id);
@@ -172,10 +172,10 @@ fn cell_aimed_shot_hits_whoever_stands_on_cell() {
     // Same shot against a target that does not move: the cell is still occupied when
     // the shell arrives, so the occupant takes the full hit even with no blast.
     let mut app = app();
-    let (_, sieger) = spawn::create_entity(app.world_mut(), "sieger", utils::pos(5, 8), Some(0))
+    let (_, sieger) = utils::create_entity(app.world_mut(), "sieger", utils::pos(5, 8), Some(0))
         .expect("sieger spawns");
     let (target, target_id) =
-        spawn::create_entity(app.world_mut(), "dummy", utils::pos(11, 8), Some(1))
+        utils::create_entity(app.world_mut(), "dummy", utils::pos(11, 8), Some(1))
             .expect("target spawns");
 
     utils::attack(&mut app, sieger, target_id);
@@ -189,7 +189,7 @@ fn cell_aiming_weapon_can_be_ordered_onto_bare_ground() {
     // Nothing is standing on the cell, so the shell simply lands. What matters is
     // that the order is accepted and the shot is released at all.
     let mut app = app();
-    let (_, sieger) = spawn::create_entity(app.world_mut(), "sieger", utils::pos(5, 14), Some(0))
+    let (_, sieger) = utils::create_entity(app.world_mut(), "sieger", utils::pos(5, 14), Some(0))
         .expect("sieger spawns");
 
     utils::push_command(
@@ -221,7 +221,7 @@ fn target_following_weapon_refuses_ground_order() {
     // bare cell to mean and the order is dropped rather than silently reinterpreted.
     let mut app = app();
     let (gunner_entity, gunner) =
-        spawn::create_entity(app.world_mut(), "gunner", utils::pos(5, 18), Some(0))
+        utils::create_entity(app.world_mut(), "gunner", utils::pos(5, 18), Some(0))
             .expect("gunner spawns");
 
     utils::push_command(
@@ -259,10 +259,10 @@ fn target_following_weapon_refuses_ground_order() {
 fn shot_lands_after_its_attacker_dies() {
     let mut app = app();
     let (gunner_entity, gunner) =
-        spawn::create_entity(app.world_mut(), "gunner", utils::pos(5, 12), Some(0))
+        utils::create_entity(app.world_mut(), "gunner", utils::pos(5, 12), Some(0))
             .expect("gunner spawns");
     let (target, target_id) =
-        spawn::create_entity(app.world_mut(), "dummy", utils::pos(9, 12), Some(1))
+        utils::create_entity(app.world_mut(), "dummy", utils::pos(9, 12), Some(1))
             .expect("target spawns");
 
     utils::attack(&mut app, gunner, target_id);

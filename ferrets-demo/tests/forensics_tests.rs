@@ -25,7 +25,7 @@ use ferrets_simulation::{
         resource::ResourceCarrierComponent,
     },
     entity_index::EntityIndex,
-    session::{GameSession, player_slot::PlayerId},
+    session::{GameSession, player_id::PlayerId},
     simulation_id::SimulationId,
 };
 

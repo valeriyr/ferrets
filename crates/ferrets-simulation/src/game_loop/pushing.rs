@@ -108,11 +108,7 @@ pub fn resolve(world: &mut World) {
         .iter()
         .zip(&bodies)
         .map(|(&entity, body)| {
-            let position = world
-                .entity(entity)
-                .get::<LocationComponent>()
-                .unwrap()
-                .position;
+            let position = entity_def::position(world, entity);
             (body.mask, body.size, body::anchor(position))
         })
         .collect();

@@ -27,7 +27,6 @@ use ferrets_simulation::{
         GameResult, GameSession, Winner, finish_policy::FinishPolicy, player_slot::PlayerSlot,
         player_type::PlayerType,
     },
-    spawn,
 };
 
 //
@@ -43,10 +42,10 @@ fn victory_once_objectives_are_met() {
     install_army(&mut app);
 
     let world = app.world_mut();
-    spawn::create_entity(world, "barracks", utils::pos(5, 5), Some(0)).unwrap();
-    spawn::create_entity(world, "soldier", utils::pos(10, 10), Some(0)).unwrap();
-    spawn::create_entity(world, "soldier", utils::pos(12, 10), Some(0)).unwrap();
-    spawn::create_entity(world, "soldier", utils::pos(14, 10), Some(0)).unwrap();
+    utils::create_entity(world, "barracks", utils::pos(5, 5), Some(0)).unwrap();
+    utils::create_entity(world, "soldier", utils::pos(10, 10), Some(0)).unwrap();
+    utils::create_entity(world, "soldier", utils::pos(12, 10), Some(0)).unwrap();
+    utils::create_entity(world, "soldier", utils::pos(14, 10), Some(0)).unwrap();
 
     utils::run_ticks(&mut app, 1);
 
@@ -84,8 +83,8 @@ fn objectives_reflect_partial_progress() {
     install_army(&mut app);
 
     let world = app.world_mut();
-    spawn::create_entity(world, "barracks", utils::pos(5, 5), Some(0)).unwrap();
-    spawn::create_entity(world, "soldier", utils::pos(10, 10), Some(0)).unwrap();
+    utils::create_entity(world, "barracks", utils::pos(5, 5), Some(0)).unwrap();
+    utils::create_entity(world, "soldier", utils::pos(10, 10), Some(0)).unwrap();
 
     utils::run_ticks(&mut app, 1);
 
@@ -112,10 +111,10 @@ fn no_evaluation_without_scenario_installed() {
 
     // A full army, but no scenario runtime: the check must not run.
     let world = app.world_mut();
-    spawn::create_entity(world, "barracks", utils::pos(5, 5), Some(0)).unwrap();
-    spawn::create_entity(world, "soldier", utils::pos(10, 10), Some(0)).unwrap();
-    spawn::create_entity(world, "soldier", utils::pos(12, 10), Some(0)).unwrap();
-    spawn::create_entity(world, "soldier", utils::pos(14, 10), Some(0)).unwrap();
+    utils::create_entity(world, "barracks", utils::pos(5, 5), Some(0)).unwrap();
+    utils::create_entity(world, "soldier", utils::pos(10, 10), Some(0)).unwrap();
+    utils::create_entity(world, "soldier", utils::pos(12, 10), Some(0)).unwrap();
+    utils::create_entity(world, "soldier", utils::pos(14, 10), Some(0)).unwrap();
 
     utils::run_ticks(&mut app, 3);
 
@@ -132,7 +131,7 @@ fn scripted_policy_stands_down_last_standing() {
     // Only player 0 has a unit. Under LastStanding this is an immediate win for 0;
     // under Scripted the built-in check stays out, and no scenario decides it.
     let world = app.world_mut();
-    spawn::create_entity(world, "soldier", utils::pos(10, 10), Some(0)).unwrap();
+    utils::create_entity(world, "soldier", utils::pos(10, 10), Some(0)).unwrap();
 
     utils::run_ticks(&mut app, 2);
 

@@ -15,7 +15,6 @@ use ferrets_simulation::{
     },
     movement_model::MovementModel,
     order::Order,
-    spawn,
 };
 
 #[test]
@@ -27,7 +26,7 @@ fn continuous_group_move_settles_without_milling() {
     // bodies arrive together and contest the exact destination.
     let mut units: Vec<Entity> = Vec::new();
     for (x, y) in [(10, 6), (10, 7)] {
-        let (entity, _) = spawn::create_entity(
+        let (entity, _) = utils::create_entity(
             app.world_mut(),
             "peasant",
             FixedUVec2::new(FixedU64::from_num(x), FixedU64::from_num(y)),
@@ -133,7 +132,7 @@ fn harvest_of_unreachable_tree_switches_to_reachable_neighbor() {
     let mut ring = Vec::new();
     for y in 20..23 {
         for x in 20..23 {
-            let (tree, id) = spawn::create_entity(
+            let (tree, id) = utils::create_entity(
                 app.world_mut(),
                 "tree",
                 FixedUVec2::new(FixedU64::from_num(x), FixedU64::from_num(y)),
@@ -156,7 +155,7 @@ fn harvest_of_unreachable_tree_switches_to_reachable_neighbor() {
         }
     }
     let center = center.unwrap();
-    let (worker, _) = spawn::create_entity(
+    let (worker, _) = utils::create_entity(
         app.world_mut(),
         "peasant",
         FixedUVec2::new(FixedU64::from_num(15), FixedU64::from_num(21)),
@@ -225,7 +224,7 @@ fn walk_rounds_water_corner_without_creeping_at_it() {
     // without ever creeping, whatever the gap's width or the body's speed. It
     // moves to the plugin once the demo's content is shared with it.
     let mut app = utils::demo_map_app(MovementModel::Continuous);
-    let (walker, _) = spawn::create_entity(
+    let (walker, _) = utils::create_entity(
         app.world_mut(),
         "peasant",
         FixedUVec2::new(FixedU64::from_num(48), FixedU64::from_num(19)),

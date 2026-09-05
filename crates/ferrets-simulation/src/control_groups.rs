@@ -2,7 +2,7 @@
 
 use bevy_ecs::prelude::*;
 
-use crate::{session::player_slot::PlayerId, simulation_id::SimulationId};
+use crate::{session::player_id::PlayerId, simulation_id::SimulationId};
 
 /// The number of control groups each player has.
 pub const CONTROL_GROUP_COUNT: usize = 10;

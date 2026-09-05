@@ -6,14 +6,13 @@ use std::collections::BTreeSet;
 use bevy_ecs::world::World;
 
 use crate::{
-    components::{owner::OwnerComponent, tags::TagsComponent},
+    components::tags::TagsComponent,
+    entity_def,
     entity_index::EntityIndex,
     session::{
-        GameResult, GameSession, Winner,
-        defeat_conduct::DefeatConduct,
-        elimination_scope::EliminationScope,
-        finish_policy::FinishPolicy,
-        player_slot::{PlayerId, PlayerSlot},
+        GameResult, GameSession, Winner, defeat_conduct::DefeatConduct,
+        elimination_scope::EliminationScope, finish_policy::FinishPolicy, player_id::PlayerId,
+        player_slot::PlayerSlot,
     },
 };
 use ferrets_content::tags;
@@ -78,8 +77,8 @@ pub fn check(world: &mut World) {
         let is_building = entity_ref
             .get::<TagsComponent>()
             .is_some_and(|carried| carried.contains(tags::BUILDING));
-        if is_building && let Some(owner) = entity_ref.get::<OwnerComponent>() {
-            with_building.insert(owner.player());
+        if is_building && let Some(owner) = entity_def::owner(world, entity) {
+            with_building.insert(owner);
         }
     }
 

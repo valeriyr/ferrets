@@ -74,7 +74,8 @@
 //! process_entity_skills — exclusive system; age entity-skill cooldowns by one tick
 //! process_player_skills — exclusive system; age player-skill cooldowns
 //! process_energy_regen — exclusive system; refill energy pools toward max_energy
-//! process_health_regen — exclusive system; refill health pools toward max_health,
+//! process_health_flow — exclusive system; move health pools up by health_regen
+//!                      toward max_health and down by health_drain,
 //!                      skipping the dying and the still-under-construction
 //! process_entity_ai  — per-entity AI think (throttled, every N ticks) [not yet implemented]
 //! check_game_result  — apply the finish policy; may end the session (last player
@@ -248,9 +249,9 @@ fn session_is_advancing(session: Res<GameSession>) -> bool {
 /// game's own choices ([`DropConfig`], [`ThrottleConfig`]) and the cadence it
 /// installed ([`NominalTimestep`]).
 ///
-/// The map-shaped resources — [`Map`] and [`VisibilityGrid`] — are not installed
-/// here: the scene spawner builds them from the game's map data (see
-/// [`instantiate_map`]).
+/// The map-shaped resources — [`Map`], [`VisibilityGrid`] and the field grid —
+/// are not installed here: the scene spawner builds them from the game's map
+/// data (see [`instantiate_map`]).
 pub fn install_game_resources(world: &mut World) {
     // Each subsystem owns its own per-game roster; this only gathers them so
     // every entry path installs the same set.
@@ -310,7 +311,7 @@ impl Plugin for SimulationPlugin {
         // The map-shaped pair and the per-game rosters come from the functions
         // that own them, so the plugin cannot drift from what the game-start
         // installers build.
-        map::install_per_game(app.world_mut(), map);
+        map::install_map(app.world_mut(), map);
         simulation::install_per_game(app.world_mut());
         intents::pause::install_per_game(app.world_mut());
         intents::speed::install_per_game(app.world_mut());
@@ -425,10 +426,20 @@ impl Plugin for SimulationPlugin {
                 (
                     ApplyDeferred,
                     systems::process_dying,
-                    // Refresh fog of war before anything acts on it, so this
-                    // tick's acquisition and AI see current-tick visibility (dead
-                    // entities already removed, no longer granting sight).
-                    systems::recompute_visibility,
+                    // Refresh fields, let what has just come to stand act on
+                    // them, then refresh fog of war, before anything acts on
+                    // either: dead sources are gone, a standing act sees this
+                    // tick's sustained cells, what stands inside or outside a
+                    // field is judged before stats fold it in, and this tick's
+                    // acquisition and AI see current-tick visibility — dead
+                    // entities no longer granting sight, and a field that
+                    // grants vision read as it stands this tick.
+                    (
+                        systems::recompute_fields,
+                        systems::perform_standing_acts,
+                        systems::recompute_visibility,
+                    )
+                        .chain(),
                     // Fold active buffs into effective stats before consumers
                     // read them, so a buff applied by a command this tick is in
                     // this tick's snapshot.
@@ -442,7 +453,10 @@ impl Plugin for SimulationPlugin {
                     // changes before orders path against it, never lazily at
                     // query time.
                     systems::refresh_nav_hierarchy,
-                    systems::tick_orders,
+                    // Sites no builder works put in their tick right after
+                    // the crews put in theirs, so every construction completes
+                    // at the same point of the tick.
+                    (systems::tick_orders, systems::advance_sites_without_builder).chain(),
                     // The two fights that run outside the order lifecycle, right
                     // after it, so their shots join this tick's impacts on the
                     // same schedule as ordered attacks: a garrisoned passenger
@@ -468,7 +482,7 @@ impl Plugin for SimulationPlugin {
                     // applied.
                     systems::process_entity_skills,
                     systems::process_player_skills,
-                    (systems::process_energy_regen, systems::process_health_regen).chain(),
+                    (systems::process_energy_regen, systems::process_health_flow).chain(),
                     systems::check_game_result,
                     systems::tick_counter,
                 )

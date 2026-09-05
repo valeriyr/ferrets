@@ -20,12 +20,9 @@ use ferrets_simulation::{
     input::{InputFrames, PlayerFrame},
     order::AttackTarget,
     session::{
-        GameSession,
-        ai_vision::AiVision,
-        player_slot::{PlayerId, PlayerSlot},
+        GameSession, ai_vision::AiVision, player_id::PlayerId, player_slot::PlayerSlot,
         player_type::PlayerType,
     },
-    spawn,
     visibility::{CellVisibility, VisibilityGrid},
 };
 
@@ -36,7 +33,7 @@ use ferrets_simulation::{
 #[test]
 fn unit_reveals_cells_within_sight() {
     let mut app = fog_app(vec![PlayerSlot::occupied(0, PlayerType::Human, None, None)]);
-    spawn::create_entity(app.world_mut(), "scout", utils::pos(5, 5), Some(0)).unwrap();
+    utils::create_entity(app.world_mut(), "scout", utils::pos(5, 5), Some(0)).unwrap();
     utils::run_ticks(&mut app, utils::APPLY);
 
     assert!(visible(&app, 0, 5, 5));
@@ -45,10 +42,25 @@ fn unit_reveals_cells_within_sight() {
 }
 
 #[test]
+fn structure_sees_from_its_whole_footprint() {
+    let mut app = fog_app(vec![PlayerSlot::occupied(0, PlayerType::Human, None, None)]);
+    utils::create_entity(app.world_mut(), "keep", utils::pos(10, 10), Some(0)).unwrap();
+    utils::run_ticks(&mut app, utils::APPLY);
+
+    // The keep covers (10..=12, 10..=12); sight 2 reaches two cells past every
+    // edge, not two cells past its anchor corner.
+    assert!(visible(&app, 0, 8, 10), "two cells left of the footprint");
+    assert!(visible(&app, 0, 14, 12), "two cells right of the footprint");
+    assert!(visible(&app, 0, 12, 14), "two cells below the footprint");
+    assert!(!visible(&app, 0, 15, 12), "three cells right is past sight");
+    assert!(!visible(&app, 0, 14, 14), "the corner is farther than two");
+}
+
+#[test]
 fn exploration_persists_after_unit_moves_away() {
     let mut app = fog_app(vec![PlayerSlot::occupied(0, PlayerType::Human, None, None)]);
     let (_, scout) =
-        spawn::create_entity(app.world_mut(), "scout", utils::pos(5, 5), Some(0)).unwrap();
+        utils::create_entity(app.world_mut(), "scout", utils::pos(5, 5), Some(0)).unwrap();
     utils::run_ticks(&mut app, utils::APPLY);
 
     utils::select(&mut app, scout);
@@ -73,7 +85,7 @@ fn allies_share_vision() {
         PlayerSlot::occupied(1, PlayerType::Human, None, Some(1)),
     ]);
     // The ally (player 1) has the only unit; its sight reaches player 0.
-    spawn::create_entity(app.world_mut(), "scout", utils::pos(5, 5), Some(1)).unwrap();
+    utils::create_entity(app.world_mut(), "scout", utils::pos(5, 5), Some(1)).unwrap();
     utils::run_ticks(&mut app, utils::APPLY);
 
     assert!(visible(&app, 0, 5, 5));
@@ -91,9 +103,9 @@ fn auto_attack_waits_for_team_vision() {
     ]);
     // The sniper out-ranges its own sight: the dummy is within weapon/acquire
     // range (8) but outside sight (3), so it stays unseen and unengaged.
-    spawn::create_entity(app.world_mut(), "sniper", utils::pos(5, 5), Some(0)).unwrap();
+    utils::create_entity(app.world_mut(), "sniper", utils::pos(5, 5), Some(0)).unwrap();
     let (dummy, _) =
-        spawn::create_entity(app.world_mut(), "dummy", utils::pos(11, 5), Some(1)).unwrap();
+        utils::create_entity(app.world_mut(), "dummy", utils::pos(11, 5), Some(1)).unwrap();
     utils::run_ticks(&mut app, 20);
     assert!(
         app.world().get_entity(dummy).is_ok(),
@@ -101,7 +113,7 @@ fn auto_attack_waits_for_team_vision() {
     );
 
     // A scout reveals the dummy to the team; now the sniper engages it.
-    spawn::create_entity(app.world_mut(), "scout", utils::pos(9, 5), Some(0)).unwrap();
+    utils::create_entity(app.world_mut(), "scout", utils::pos(9, 5), Some(0)).unwrap();
     utils::run_ticks(&mut app, 30);
     utils::assert_despawned(app.world_mut(), dummy);
 }
@@ -116,8 +128,8 @@ fn ai_view_hides_fogged_enemies_only_when_fog_limited() {
         PlayerSlot::occupied(0, PlayerType::Human, None, None),
         PlayerSlot::occupied(1, PlayerType::Human, None, None),
     ]);
-    spawn::create_entity(app.world_mut(), "scout", utils::pos(5, 5), Some(0)).unwrap();
-    spawn::create_entity(app.world_mut(), "dummy", utils::pos(25, 25), Some(1)).unwrap();
+    utils::create_entity(app.world_mut(), "scout", utils::pos(5, 5), Some(0)).unwrap();
+    utils::create_entity(app.world_mut(), "dummy", utils::pos(25, 25), Some(1)).unwrap();
     utils::run_ticks(&mut app, utils::APPLY);
 
     let world = app.world();
@@ -150,8 +162,8 @@ fn attack_refuses_target_in_weapon_range_but_out_of_sight() {
     // The sniper shoots to eight but sees to three: its target stands in
     // weapon range yet out of sight.
     let (sniper, sniper_id) =
-        spawn::create_entity(world, "sniper", utils::pos(5, 5), Some(0)).unwrap();
-    let (mark, mark_id) = spawn::create_entity(world, "dummy", utils::pos(5, 10), Some(1)).unwrap();
+        utils::create_entity(world, "sniper", utils::pos(5, 5), Some(0)).unwrap();
+    let (mark, mark_id) = utils::create_entity(world, "dummy", utils::pos(5, 10), Some(1)).unwrap();
     utils::run_ticks(&mut app, utils::APPLY);
 
     utils::select(&mut app, sniper_id);
@@ -171,7 +183,7 @@ fn attack_refuses_target_in_weapon_range_but_out_of_sight() {
     );
 
     // A scout beside the mark lends the eyes; the same order now lands.
-    spawn::create_entity(app.world_mut(), "scout", utils::pos(5, 12), Some(0)).unwrap();
+    utils::create_entity(app.world_mut(), "scout", utils::pos(5, 12), Some(0)).unwrap();
     utils::run_ticks(&mut app, utils::APPLY);
     utils::push_command(
         &mut app,
@@ -217,8 +229,8 @@ fn guard_refuses_fogged_ward() {
     let mut app = fog_app(vec![PlayerSlot::occupied(0, PlayerType::Human, None, None)]);
     let world = app.world_mut();
     let (scout, scout_id) =
-        spawn::create_entity(world, "scout", utils::pos(5, 5), Some(0)).unwrap();
-    let (_, ward_id) = spawn::create_entity(world, "dummy", utils::pos(25, 25), None).unwrap();
+        utils::create_entity(world, "scout", utils::pos(5, 5), Some(0)).unwrap();
+    let (_, ward_id) = utils::create_entity(world, "dummy", utils::pos(25, 25), None).unwrap();
     utils::run_ticks(&mut app, utils::APPLY);
 
     utils::select(&mut app, scout_id);
@@ -243,8 +255,8 @@ fn follow_refuses_fogged_target() {
     ]);
     let world = app.world_mut();
     let (scout, scout_id) =
-        spawn::create_entity(world, "scout", utils::pos(5, 5), Some(0)).unwrap();
-    let (_, quarry_id) = spawn::create_entity(world, "dummy", utils::pos(25, 25), Some(1)).unwrap();
+        utils::create_entity(world, "scout", utils::pos(5, 5), Some(0)).unwrap();
+    let (_, quarry_id) = utils::create_entity(world, "dummy", utils::pos(25, 25), Some(1)).unwrap();
     utils::run_ticks(&mut app, utils::APPLY);
 
     utils::select(&mut app, scout_id);
@@ -271,8 +283,8 @@ fn send_to_entity_refuses_fogged_target() {
     ]);
     let world = app.world_mut();
     let (scout, scout_id) =
-        spawn::create_entity(world, "scout", utils::pos(5, 5), Some(0)).unwrap();
-    let (_, target_id) = spawn::create_entity(world, "dummy", utils::pos(25, 25), Some(1)).unwrap();
+        utils::create_entity(world, "scout", utils::pos(5, 5), Some(0)).unwrap();
+    let (_, target_id) = utils::create_entity(world, "dummy", utils::pos(25, 25), Some(1)).unwrap();
     utils::run_ticks(&mut app, utils::APPLY);
 
     utils::select(&mut app, scout_id);
@@ -295,11 +307,11 @@ fn rally_refuses_fogged_entity_target() {
         PlayerSlot::occupied(1, PlayerType::Human, None, None),
     ]);
     let world = app.world_mut();
-    let (post, post_id) = spawn::create_entity(world, "post", utils::pos(5, 5), Some(0)).unwrap();
+    let (post, post_id) = utils::create_entity(world, "post", utils::pos(5, 5), Some(0)).unwrap();
     // The post has no eyes; the scout beside it sees for its owner.
-    spawn::create_entity(world, "scout", utils::pos(5, 6), Some(0)).unwrap();
-    let (_, far_id) = spawn::create_entity(world, "dummy", utils::pos(25, 25), Some(1)).unwrap();
-    let (_, near_id) = spawn::create_entity(world, "dummy", utils::pos(5, 8), Some(1)).unwrap();
+    utils::create_entity(world, "scout", utils::pos(5, 6), Some(0)).unwrap();
+    let (_, far_id) = utils::create_entity(world, "dummy", utils::pos(25, 25), Some(1)).unwrap();
+    let (_, near_id) = utils::create_entity(world, "dummy", utils::pos(5, 8), Some(1)).unwrap();
     utils::run_ticks(&mut app, utils::APPLY);
 
     // Fogged: the rally point stays unset.
@@ -347,8 +359,8 @@ fn scripted_sniper_attacks_fogged_mark(vision: AiVision) -> (App, Entity, Entity
     ]);
     let world = app.world_mut();
     let (sniper, sniper_id) =
-        spawn::create_entity(world, "sniper", utils::pos(5, 5), Some(1)).unwrap();
-    let (mark, mark_id) = spawn::create_entity(world, "dummy", utils::pos(5, 10), Some(0)).unwrap();
+        utils::create_entity(world, "sniper", utils::pos(5, 5), Some(1)).unwrap();
+    let (mark, mark_id) = utils::create_entity(world, "dummy", utils::pos(5, 10), Some(0)).unwrap();
     run_ticks_commanding(
         &mut app,
         25,
@@ -465,6 +477,13 @@ fn fog_app(slots: Vec<PlayerSlot>) -> App {
                     1,
                 )
                 .with_sight_range(3),
+        );
+        registry.register(
+            EntityTypeDef::new("keep")
+                .with_location(utils::GROUND, CellSize::new(3, 3), Solidity::Solid)
+                .with_health(200)
+                .with_dying(1, None)
+                .with_sight_range(2),
         );
         registry.register(
             EntityTypeDef::new("dummy")

@@ -7,7 +7,7 @@ use super::{
     board,
     chase::{self, Destination},
     movement,
-    orders::Processing,
+    orders::{self, Processing, Refusal},
 };
 use crate::{
     components::{
@@ -23,24 +23,46 @@ use crate::{
 };
 use ferrets_content::entity_stats::EntityStatId;
 
-/// Called once when a Load order becomes the front `New` entry.
-///
-/// Inserts the driver component and returns `InProcessing`, or `Finished`
-/// immediately when this entity would not take the target aboard — see
-/// [`board::would_board`].
-pub fn prepare(entity: Entity, order: &Order, world: &mut World) -> OrderState {
+/// Whether `entity` may start this Load: its type transports and it operates,
+/// and the passenger is there, operating, and one it would take aboard (see
+/// `board::would_board`).
+pub fn can_start(world: &World, entity: Entity, order: &Order) -> Result<(), Refusal> {
     let target_id = order.load_target().expect("Load order must have a target");
-
+    if !entity_def::of(world, entity).can_transport() {
+        return Err(Refusal::Incapable);
+    }
+    orders::requires_operating(world, entity)?;
     let Some(target) = world
         .resource::<EntityIndex>()
         .interactable(world, target_id)
     else {
-        return OrderState::Finished;
+        return Err(Refusal::TargetGone);
     };
-    if !board::would_board(world, target, entity) {
+    orders::target_operating(world, target)?;
+    match board::would_board(world, target, entity) {
+        Ok(()) => Ok(()),
+        // Judged from the holder's side: a passenger that cannot ride is a
+        // target this order does not take.
+        Err(Refusal::Incapable | Refusal::TargetUnfit) => Err(Refusal::TargetUnfit),
+        Err(
+            refusal @ (Refusal::UnderConstruction
+            | Refusal::Disabled
+            | Refusal::NothingToDo
+            | Refusal::TargetGone),
+        ) => unreachable!("would_board judges fit only, got {refusal:?}"),
+    }
+}
+
+/// Called once when a Load order becomes the front `New` entry.
+///
+/// Inserts the driver component and returns `InProcessing`, or `Finished`
+/// immediately when the order cannot start — see [`can_start`].
+pub fn prepare(entity: Entity, order: &Order, world: &mut World) -> OrderState {
+    let target_id = order.load_target().expect("Load order must have a target");
+
+    if can_start(world, entity, order).is_err() {
         return OrderState::Finished;
     }
-
     world
         .entity_mut(entity)
         .insert(LoadComponent::new(target_id));
@@ -89,7 +111,7 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
     else {
         return Processing::state(OrderState::Finished);
     };
-    if !board::would_board(world, target, entity) {
+    if board::would_board(world, target, entity).is_err() {
         return Processing::state(OrderState::Finished);
     }
 

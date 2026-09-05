@@ -22,13 +22,8 @@ use ferrets_simulation::{
     resources::StartingStock,
     scenario::{Scenario, ScenarioPlayer},
     session::{
-        GameSession,
-        ai_hosting::AiHosting,
-        authority::Authority,
-        drop_policy::DropPolicy,
-        finish_policy::FinishPolicy,
-        local_role::LocalRole,
-        player_slot::{self, PlayerId},
+        GameSession, ai_hosting::AiHosting, authority::Authority, drop_policy::DropPolicy,
+        finish_policy::FinishPolicy, local_role::LocalRole, player_id::PlayerId, player_slot,
         player_type::PlayerType,
     },
 };

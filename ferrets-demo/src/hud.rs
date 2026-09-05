@@ -10,21 +10,29 @@ use ferrets_content::{
     research::ResearchId,
     skills::{EntityCastTarget, SkillCaster, SkillId},
 };
+use ferrets_math::fixed_uvec2::FixedUVec2;
+use ferrets_physics::body;
 use ferrets_simulation::{
     command::{PlayerCommand, SelectMode, SkillCasterRef},
     components::{
+        build::UnderConstructionComponent,
         energy::EnergyComponent,
         entity_buffs::BuffsComponent,
         entity_info::EntityInfoComponent,
         entity_skills::SkillsComponent,
         entity_stats::StatsComponent,
         health::HealthComponent,
+        location::LocationComponent,
         order_queue::OrderQueueComponent,
         owner::OwnerComponent,
         resource::{ResourceCarrierComponent, ResourceSourceComponent},
         stance::StanceComponent,
     },
     control_groups::{CONTROL_GROUP_COUNT, ControlGroups},
+    entity_def::{self, Operation},
+    entity_index::EntityIndex,
+    fields::{self, FieldGrid},
+    game_loop::orders,
     order::Order,
     player_research::PlayerResearch,
     player_skills::PlayerSkills,
@@ -32,9 +40,8 @@ use ferrets_simulation::{
     resources::PlayerResources,
     selection::Selection,
     session::{
-        GameResult, GameSession, Winner,
-        local_role::LocalRole,
-        player_slot::{Participation, PlayerId},
+        GameResult, GameSession, Winner, local_role::LocalRole, player_id::PlayerId,
+        player_slot::Participation,
     },
     simulation_id::SimulationId,
     statistics::{PlayerTally, Statistics},
@@ -186,7 +193,7 @@ pub fn setup_hud(mut commands: Commands, registry: Res<ContentRegistry>) {
                 InGameUi,
                 Node {
                     position_type: PositionType::Absolute,
-                    bottom: Val::Px(116.0),
+                    bottom: Val::Px(140.0),
                     left: Val::Px(10.0),
                     ..default()
                 },
@@ -393,20 +400,21 @@ pub fn setup_hud(mut commands: Commands, registry: Res<ContentRegistry>) {
         GroupRoster,
         Node {
             position_type: PositionType::Absolute,
-            bottom: Val::Px(82.0),
+            bottom: Val::Px(106.0),
             left: Val::Px(10.0),
             column_gap: Val::Px(6.0),
             ..default()
         },
     ));
     // Command card: train/build buttons for the selected producer, sitting
-    // clear above the help line so a wrapped hint never runs into the buttons.
+    // clear above the help line — two rows of hint plus one wrapped row on a
+    // narrow window — so the hint never runs into the buttons.
     commands.spawn((
         InGameUi,
         CommandCard,
         Node {
             position_type: PositionType::Absolute,
-            bottom: Val::Px(48.0),
+            bottom: Val::Px(72.0),
             left: Val::Px(10.0),
             column_gap: Val::Px(6.0),
             ..default()
@@ -586,8 +594,11 @@ pub fn update_selection(
     session: Res<GameSession>,
     selection: Res<Selection>,
     registry: Res<ContentRegistry>,
+    fields: Res<FieldGrid>,
     entities: Query<(
         &EntityInfoComponent,
+        &LocationComponent,
+        Option<&OwnerComponent>,
         Option<&HealthComponent>,
         Option<&StatsComponent>,
         Option<&ResourceCarrierComponent>,
@@ -595,6 +606,7 @@ pub fn update_selection(
         Option<&StanceComponent>,
         Option<&EnergyComponent>,
         Option<&BuffsComponent>,
+        Option<&UnderConstructionComponent>,
     )>,
     inspected: Res<crate::input::Inspected>,
     mut text: Query<&mut Text, With<SelectionText>>,
@@ -612,7 +624,19 @@ pub fn update_selection(
             .iter()
             .find(|(info, ..)| info.id() == *id)
             .map(
-                |(info, health, stats, carrier, source, stance, energy, buffs)| {
+                |(
+                    info,
+                    location,
+                    owner,
+                    health,
+                    stats,
+                    carrier,
+                    source,
+                    stance,
+                    energy,
+                    buffs,
+                    under_construction,
+                )| {
                     let def = registry.def(info.type_id());
                     // The simulation id rides along with the name: it is the
                     // handle a replay, a log line, or a forensics run names the
@@ -680,6 +704,21 @@ pub fn update_selection(
                             })
                             .collect();
                         parts.push(names.join(", "));
+                    }
+                    // Not operating: still going up, or standing outside the
+                    // field it needs. Construction wins, as it does for the
+                    // engine's own reading.
+                    let disabled = fields::disabled_in(
+                        &fields,
+                        &session,
+                        def,
+                        owner.map(|owner| owner.player()),
+                        body::anchor(location.position),
+                    );
+                    match (under_construction, disabled) {
+                        (Some(_), _) => parts.push("under construction".to_string()),
+                        (None, true) => parts.push("disabled".to_string()),
+                        (None, false) => {}
                     }
                     parts.join("   ")
                 },
@@ -1186,17 +1225,32 @@ enum CardAction {
     Build(String),
     /// Starts the research.
     Research(ResearchId),
-    /// Casts the skill (whichever arm casts it).
+    /// Casts the skill from the primary entity.
     Skill(SkillId),
+    /// Casts the skill as the player.
+    PlayerSkill(SkillId),
 }
 
 /// Recolors the gated card buttons from what the executor would currently
-/// allow: a train, build, or skill whose requirements are unmet, or a research
-/// that is unmet, done, or already under way, greys out.
+/// allow: a train, build, research or skill the primary entity may not start
+/// now (see [`orders::can_start`]), or whose requirements are unmet, greys
+/// out, as does a research that is done or already under way.
 pub fn update_card_availability(world: &mut World) {
     // A watcher has no card to recolor — update_command_card despawned it.
     let Some(player) = world.resource::<GameSession>().local_player() else {
         return;
+    };
+    let primary = world
+        .resource::<Primary>()
+        .0
+        .and_then(|id| world.resource::<EntityIndex>().interactable(world, id));
+    let starts = |world: &World, order: Order| {
+        primary.is_some_and(|entity| orders::can_start(world, entity, &order).is_ok())
+    };
+    let operating = |world: &World| {
+        primary.is_some_and(|entity| {
+            matches!(entity_def::operation(world, entity), Operation::Operating)
+        })
     };
 
     let mut buttons: Vec<(Entity, Interaction, CardAction)> = Vec::new();
@@ -1219,7 +1273,7 @@ pub fn update_card_availability(world: &mut World) {
         } else if let Some(button) = skill {
             CardAction::Skill(button.skill)
         } else if let Some(button) = player_skill {
-            CardAction::Skill(button.skill)
+            CardAction::PlayerSkill(button.skill)
         } else {
             continue;
         };
@@ -1234,17 +1288,32 @@ pub fn update_card_availability(world: &mut World) {
                 .map(|def| def.requires.clone())
                 .is_none_or(|requires| requirements::met(world, player, &requires))
         };
+        let skill_requirements_met = |world: &mut World, skill: SkillId| {
+            world
+                .resource::<ContentRegistry>()
+                .skill_def(skill)
+                .map(|def| def.requires.clone())
+                .is_none_or(|requires| requirements::met(world, player, &requires))
+        };
         let (available, normal, hovered) = match &action {
             CardAction::Train(type_name) => (
-                type_requirements_met(world, type_name),
+                type_requirements_met(world, type_name) && starts(world, Order::Train),
                 BUTTON_NORMAL,
                 BUTTON_HOVERED,
             ),
-            CardAction::Build(type_name) => (
-                type_requirements_met(world, type_name),
-                BUILD_NORMAL,
-                BUILD_HOVERED,
-            ),
+            CardAction::Build(type_name) => {
+                // The site's cell is chosen after the click; the start check
+                // reads the builder and the type, not the ground.
+                let order = Order::Build {
+                    type_name: type_name.clone(),
+                    position: FixedUVec2::ZERO,
+                };
+                (
+                    type_requirements_met(world, type_name) && starts(world, order),
+                    BUILD_NORMAL,
+                    BUILD_HOVERED,
+                )
+            }
             CardAction::Research(research) => {
                 let available = !world
                     .resource::<PlayerResearch>()
@@ -1254,17 +1323,25 @@ pub fn update_card_availability(world: &mut World) {
                         .resource::<ContentRegistry>()
                         .research_def(*research)
                         .map(|def| def.requires.clone())
-                        .is_none_or(|requires| requirements::met(world, player, &requires));
+                        .is_none_or(|requires| requirements::met(world, player, &requires))
+                    && starts(
+                        world,
+                        Order::Research {
+                            research: *research,
+                        },
+                    );
                 (available, RESEARCH_NORMAL, RESEARCH_HOVERED)
             }
-            CardAction::Skill(skill) => {
-                let available = world
-                    .resource::<ContentRegistry>()
-                    .skill_def(*skill)
-                    .map(|def| def.requires.clone())
-                    .is_none_or(|requires| requirements::met(world, player, &requires));
-                (available, SKILL_NORMAL, SKILL_HOVERED)
-            }
+            CardAction::Skill(skill) => (
+                skill_requirements_met(world, *skill) && operating(world),
+                SKILL_NORMAL,
+                SKILL_HOVERED,
+            ),
+            CardAction::PlayerSkill(skill) => (
+                skill_requirements_met(world, *skill),
+                SKILL_NORMAL,
+                SKILL_HOVERED,
+            ),
         };
 
         let color = match (available, interaction) {
@@ -1345,7 +1422,9 @@ pub fn skill_card_input(
                         }
                     }
                     // Targeted cast: arm the click that names the target.
-                    EntityCastTarget::Ally | EntityCastTarget::Enemy => {
+                    EntityCastTarget::Ally
+                    | EntityCastTarget::Enemy
+                    | EntityCastTarget::Position => {
                         *mode = InputMode::Targeting(TargetedOrder::Skill(button.skill));
                     }
                 }

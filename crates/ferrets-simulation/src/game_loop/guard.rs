@@ -6,9 +6,10 @@ use bevy_ecs::{entity::Entity, world::World};
 use super::{
     acquire, attack_move,
     chase::{self, Destination},
-    orders::Processing,
+    orders::{self, Processing, Refusal},
 };
 use crate::{
+    components::owner,
     components::{
         guard::GuardComponent,
         order_queue::{CancelPolicy, OrderState},
@@ -22,25 +23,37 @@ use crate::{
 /// How close a guard stays to the entity it guards, in grid cells.
 const GUARD_DISTANCE: u32 = 2;
 
-/// Called once when a Guard order becomes the front `New` entry.
-///
-/// Inserts the driver component and returns `InProcessing`, or `Finished`
-/// immediately if the entity cannot move or the guarded entity is gone.
-pub fn prepare(entity: Entity, order: &Order, world: &mut World) -> OrderState {
-    if !entity_def::of(world, entity).can_move() {
-        return OrderState::Finished;
-    }
+/// Whether `entity` may start a Guard: its type moves and it operates, and the
+/// ward is there and not hostile.
+pub fn can_start(world: &World, entity: Entity, order: &Order) -> Result<(), Refusal> {
     let ward = order
         .guard_target()
         .expect("Guard order must have a target");
-    if world
-        .resource::<EntityIndex>()
-        .interactable(world, ward)
-        .is_none()
-    {
+    if !entity_def::of(world, entity).can_move() {
+        return Err(Refusal::Incapable);
+    }
+    orders::requires_operating(world, entity)?;
+    let Some(ward) = world.resource::<EntityIndex>().interactable(world, ward) else {
+        return Err(Refusal::TargetGone);
+    };
+    if owner::are_hostile(
+        world.resource::<GameSession>(),
+        entity_def::owner(world, entity),
+        entity_def::owner(world, ward),
+    ) {
+        return Err(Refusal::TargetUnfit);
+    }
+    Ok(())
+}
+
+/// Called once when a Guard order becomes the front `New` entry.
+///
+/// Inserts the driver component and returns `InProcessing`, or `Finished`
+/// immediately when the order cannot start — see [`can_start`].
+pub fn prepare(entity: Entity, order: &Order, world: &mut World) -> OrderState {
+    if can_start(world, entity, order).is_err() {
         return OrderState::Finished;
     }
-
     world.entity_mut(entity).insert(GuardComponent::default());
     OrderState::InProcessing
 }

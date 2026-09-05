@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use bevy_ecs::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::{command::PlayerCommand, session::player_slot::PlayerId};
+use crate::{command::PlayerCommand, session::player_id::PlayerId};
 
 /// How many ticks ahead commands are scheduled, giving all peers time to
 /// receive them before they must execute. Commands from the UI or network

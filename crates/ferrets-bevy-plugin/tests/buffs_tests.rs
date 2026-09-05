@@ -1,7 +1,7 @@
 //! Buff pipeline: a buff modifies effective stats for its duration, then reverts.
 
 use ferrets_content::{entity_stats::EntityStatId, stats::ModifierOp};
-use ferrets_simulation::{game_loop, spawn};
+use ferrets_simulation::game_loop;
 
 mod utils;
 
@@ -13,7 +13,7 @@ mod utils;
 fn buff_modifies_effective_stat_then_reverts_on_expiry() {
     let mut app = utils::combat_app();
     let (soldier, _) =
-        spawn::create_entity(app.world_mut(), "soldier", utils::pos(5, 5), Some(0)).unwrap();
+        utils::create_entity(app.world_mut(), "soldier", utils::pos(5, 5), Some(0)).unwrap();
 
     let base = utils::effective_damage(&app, soldier);
     let frenzy = utils::register_entity_buff(

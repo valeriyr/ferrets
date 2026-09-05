@@ -7,12 +7,11 @@ use ferrets_geometry::cell_size::CellSize;
 use super::{
     acquire,
     chase::{self, Destination},
-    orders::Processing,
+    orders::{self, Processing, Refusal},
 };
 use crate::{
     components::{
         attack_move::AttackMoveComponent,
-        location::LocationComponent,
         order_queue::{CancelPolicy, OrderState},
     },
     entity_def,
@@ -23,12 +22,20 @@ use crate::{
 };
 use ferrets_pathfinder::layer_mask::LayerMask;
 
+/// Whether `entity` may start an AttackMove: its type moves and it operates.
+pub fn can_start(world: &World, entity: Entity, _order: &Order) -> Result<(), Refusal> {
+    if !entity_def::of(world, entity).can_move() {
+        return Err(Refusal::Incapable);
+    }
+    orders::requires_operating(world, entity)
+}
+
 /// Called once when an AttackMove order becomes the front `New` entry.
 ///
 /// Inserts the driver component and returns `InProcessing`, or `Finished`
-/// immediately if the entity cannot move.
-pub fn prepare(entity: Entity, _order: &Order, world: &mut World) -> OrderState {
-    if !entity_def::of(world, entity).can_move() {
+/// immediately when the order cannot start — see [`can_start`].
+pub fn prepare(entity: Entity, order: &Order, world: &mut World) -> OrderState {
+    if can_start(world, entity, order).is_err() {
         return OrderState::Finished;
     }
     world
@@ -160,11 +167,7 @@ pub(super) fn engagement_on(
 }
 
 fn leashed_attack(world: &World, entity: Entity, target: SimulationId, radius: u32) -> Order {
-    let anchor = world
-        .entity(entity)
-        .get::<LocationComponent>()
-        .unwrap()
-        .position;
+    let anchor = entity_def::position(world, entity);
     Order::Attack {
         target: AttackTarget::Entity(target),
         leash: Some(Leash { anchor, radius }),

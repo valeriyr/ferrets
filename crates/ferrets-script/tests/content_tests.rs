@@ -8,6 +8,10 @@ use ferrets_content::{
     costs,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
+    field::{
+        FieldAction, FieldAffiliation, FieldCoverage, FieldDecay, FieldEffect, FieldEffectKind,
+        FieldGrowth, FieldPlacement, FieldSide, FieldSourceDef, FieldVision,
+    },
     location::Solidity,
     morph::{MorphCancel, MorphPlacement, MorphTime},
     player_stats::PlayerStatId,
@@ -17,6 +21,7 @@ use ferrets_content::{
         EntityCastCost, EntityCastEffect, EntityCastTarget, PlayerCastEffect, SkillCaster, SkillDef,
     },
     splash::{SplashDef, SplashShape},
+    stand::StandingAct,
     stats::{EntityModifier, ModifierOp, PlayerModifier},
     transport::{BoardingPolicy, PassengerConduct, PassengerFate},
     turret::{TurretDef, TurretMount, TurretStats, WeaponConduct},
@@ -24,7 +29,7 @@ use ferrets_content::{
 };
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::{FixedI64, FixedU64};
-use ferrets_pathfinder::nav_grid::LayerId;
+use ferrets_pathfinder::{layer_mask::LayerMask, nav_grid::LayerId};
 use ferrets_script::{
     content,
     engine::{ScriptEngine, lua::LuaEngine},
@@ -341,7 +346,7 @@ fn unknown_passenger_conduct_errors() {
         panic!("must reject an unknown passenger conduct");
     };
     assert!(
-        matches!(&error, ScriptError::ContentError(m) if m.contains("unknown passenger conduct 'mutiny'")),
+        matches!(&error, ScriptError::ContentError(m) if m.contains("passenger conduct must be 'shelter' or 'fight', found 'mutiny'")),
         "unexpected error: {error:?}"
     );
 }
@@ -365,7 +370,7 @@ fn unknown_boarding_policy_errors() {
         panic!("must reject an unknown boarding policy");
     };
     assert!(
-        matches!(&error, ScriptError::ContentError(m) if m.contains("unknown boarding policy 'anyone'")),
+        matches!(&error, ScriptError::ContentError(m) if m.contains("boarding policy must be 'own' or 'allies', found 'anyone'")),
         "unexpected error: {error:?}"
     );
 }
@@ -389,7 +394,7 @@ fn unknown_passenger_fate_errors() {
         panic!("must reject an unknown passenger fate");
     };
     assert!(
-        matches!(&error, ScriptError::ContentError(m) if m.contains("unknown passenger fate 'scatter'")),
+        matches!(&error, ScriptError::ContentError(m) if m.contains("passenger fate must be 'destroy' or 'eject', found 'scatter'")),
         "unexpected error: {error:?}"
     );
 }
@@ -633,7 +638,7 @@ fn unknown_skill_caster_errors() {
         panic!("must reject an unknown caster kind");
     };
     assert!(
-        matches!(&error, ScriptError::ContentError(m) if m.contains("unknown skill caster 'building' (expected entity or player)")),
+        matches!(&error, ScriptError::ContentError(m) if m.contains("skill caster must be 'entity' or 'player', found 'building'")),
         "unexpected error: {error:?}"
     );
 }
@@ -652,7 +657,7 @@ fn unknown_skill_target_errors() {
         panic!("must reject an unknown target");
     };
     assert!(
-        matches!(&error, ScriptError::ContentError(m) if m.contains("unknown skill target 'everyone'")),
+        matches!(&error, ScriptError::ContentError(m) if m.contains("skill target must be 'caster', 'ally', 'enemy', or 'position', found 'everyone'")),
         "unexpected error: {error:?}"
     );
 }
@@ -931,7 +936,7 @@ fn unknown_projectile_aim_is_rejected() {
     };
     assert_eq!(
         error.to_string(),
-        "content error: unknown attack aim 'sideways'"
+        "content error: attack aim must be 'entity' or 'position', found 'sideways'"
     );
 }
 
@@ -1372,7 +1377,7 @@ fn unknown_repair_rate_mode_errors() {
         panic!("must reject an unknown repair rate mode");
     };
     assert!(
-        matches!(&error, ScriptError::ContentError(m) if m.contains("unknown repair rate mode 'instant'")),
+        matches!(&error, ScriptError::ContentError(m) if m.contains("repair rate mode must be 'production' or 'per_tick', found 'instant'")),
         "unexpected error: {error:?}"
     );
 }
@@ -1398,7 +1403,7 @@ fn unknown_work_presence_errors() {
         panic!("must reject an unknown work presence");
     };
     assert!(
-        matches!(&error, ScriptError::ContentError(m) if m.contains("unknown work presence 'lurking'")),
+        matches!(&error, ScriptError::ContentError(m) if m.contains("work presence must be 'hidden', 'present', or 'present_stacking', found 'lurking'")),
         "unexpected error: {error:?}"
     );
 }
@@ -1491,6 +1496,169 @@ fn reports_lua_syntax_error_as_engine_error() {
 }
 
 //
+// ─── Fields ───────────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn parses_fields_sources_placement_and_effects() {
+    let registry = content::load(&engine(), FIELDS).expect("load content");
+    let creep = registry.field("creep").expect("creep defined");
+    let power = registry.field("power").expect("power defined");
+    let blight = registry.field("blight").expect("blight defined");
+
+    assert_eq!(
+        registry.field_def(creep).decay(),
+        FieldDecay::Gradual { cycle: 9 }
+    );
+    assert_eq!(registry.field_def(power).decay(), FieldDecay::Instant);
+    assert_eq!(registry.field_def(blight).decay(), FieldDecay::Never);
+    assert_eq!(registry.field_def(creep).vision(), FieldVision::Watched);
+    assert_eq!(registry.field_def(power).vision(), FieldVision::Dark);
+    assert_eq!(
+        registry.field_def(creep).layer(),
+        LayerMask::from(LayerId::new(1))
+    );
+
+    assert_eq!(
+        registry.entity("hive").unwrap().field_sources,
+        vec![FieldSourceDef::new(
+            creep,
+            10,
+            FieldGrowth::Gradual {
+                cycle: 9,
+                initial_radius: 1,
+            },
+            Some(1),
+        )]
+    );
+    let pylon = registry.entity("pylon").unwrap();
+    assert_eq!(
+        pylon.field_sources,
+        vec![FieldSourceDef::new(power, 6, FieldGrowth::Instant, None)]
+    );
+    assert_eq!(
+        pylon.on_stand,
+        vec![StandingAct::Field {
+            field: creep,
+            radius: 6,
+            action: FieldAction::Clear,
+        }]
+    );
+    let gateway = registry.entity("gateway").unwrap();
+    assert_eq!(
+        gateway.field_placement,
+        vec![
+            FieldPlacement::Requires {
+                field: power,
+                of: FieldAffiliation::Own,
+                coverage: FieldCoverage::Anchor,
+            },
+            FieldPlacement::Forbids { field: creep },
+        ]
+    );
+    assert_eq!(
+        gateway.field_effects,
+        vec![FieldEffect::new(
+            power,
+            FieldAffiliation::Own,
+            FieldSide::Outside,
+            FieldEffectKind::Disabled,
+        )]
+    );
+    assert_eq!(
+        registry.entity("zergling").unwrap().field_effects,
+        vec![FieldEffect::new(
+            creep,
+            FieldAffiliation::Anyone,
+            FieldSide::Inside,
+            FieldEffectKind::Modifiers(vec![EntityModifier {
+                stat: EntityStatId::SPEED,
+                op: ModifierOp::PercentAdd,
+                magnitude: FixedI64::from_str("0.3").unwrap(),
+            }]),
+        )]
+    );
+    let spew = registry.skill("spew").expect("skill defined");
+    assert_eq!(
+        registry.skill_def(spew),
+        Some(&SkillDef {
+            cooldown: 20,
+            caster: SkillCaster::Entity {
+                costs: Vec::new(),
+                target: EntityCastTarget::Position,
+                effect: EntityCastEffect::Field {
+                    field: creep,
+                    radius: 1,
+                    action: FieldAction::Cover,
+                },
+            },
+            requires: Vec::new(),
+        })
+    );
+}
+
+#[test]
+fn unknown_field_name_errors() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_entity("hive", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            field_sources = { { field = "creep", radius = 3, growth = "instant" } },
+        })
+    "#;
+    let error = content::load(&engine(), source)
+        .err()
+        .expect("undefined field");
+    assert!(
+        matches!(&error, ScriptError::ContentError(message) if message.contains("field 'creep' is not defined")),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn field_placement_rule_names_exactly_one_verb() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_field("creep", { layer = GROUND, decay = "never" })
+        define_entity("spore", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            field_placement = { { requires = "creep", forbids = "creep", of = "anyone", coverage = "anchor" } },
+        })
+    "#;
+    let error = content::load(&engine(), source).err().expect("two verbs");
+    assert!(
+        matches!(&error, ScriptError::ContentError(message) if message.contains("exactly one of requires or forbids")),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn unknown_field_vision_errors() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_field("creep", { layer = GROUND, decay = "never", vision = "glowing" })
+    "#;
+    let error = content::load(&engine(), source).err().expect("bad vision");
+    assert!(
+        matches!(&error, ScriptError::ContentError(message) if message.contains("field vision must be 'dark' or 'watched', found 'glowing'")),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn unknown_field_decay_errors() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_field("creep", { layer = GROUND, decay = "slowly" })
+    "#;
+    let error = content::load(&engine(), source).err().expect("bad decay");
+    assert!(
+        matches!(&error, ScriptError::ContentError(message) if message.contains("field decay must be")),
+        "{error:?}"
+    );
+}
+
+//
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 //
 
@@ -1532,7 +1700,7 @@ const BASE: &str = r#"
         dying = { time = 2 },
         cost = { gold = 50 },
         train_time = 40,
-        builder = { builds = { "town_hall" }, presence = "hidden" },
+        builder = { builds = { "town_hall" }, attendance = "hidden" },
         resource_carrier = {
             gold = { capacity = 5, time = 20, presence = "hidden" },
             wood = { capacity = 5, time = 20, presence = "present" },
@@ -1548,6 +1716,63 @@ const BASE: &str = r#"
         build_time = 200,
         trainer = { "peasant" },
         resource_storage = { "gold", "wood" },
+    })
+"#;
+
+const FIELDS: &str = r#"
+    local GROUND = define_layer("ground")
+
+    define_field("creep", { layer = GROUND, decay = { cycle = 9 }, vision = "watched" })
+    define_field("power", { layer = GROUND, decay = "instant" })
+    define_field("blight", { layer = GROUND, decay = "never" })
+
+    define_entity("hive", {
+        location = { occupation = GROUND, size = 2, solidity = "solid" },
+        stats = { max_health = 100 },
+        build_time = 20,
+        field_sources = {
+            { field = "creep", radius = 10, growth = { cycle = 9, initial_radius = 1 }, while_constructing = 1 },
+        },
+    })
+
+    define_entity("pylon", {
+        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        stats = { max_health = 100 },
+        field_sources = {
+            { field = "power", radius = 6, growth = "instant" },
+        },
+        on_stand = {
+            { field = { field = "creep", radius = 6, action = "clear" } },
+        },
+    })
+
+    define_entity("gateway", {
+        location = { occupation = GROUND, size = 2, solidity = "solid" },
+        stats = { max_health = 100 },
+        field_placement = {
+            { requires = "power", of = "own", coverage = "anchor" },
+            { forbids = "creep" },
+        },
+        field_effects = {
+            { field = "power", of = "own", outside = "disabled" },
+        },
+    })
+
+    define_entity("zergling", {
+        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        stats = { speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1, max_health = 20 },
+        field_effects = {
+            { field = "creep", of = "anyone", inside = {
+                modifiers = { { entity_stat = "speed", op = "percent", value = "0.3" } },
+            } },
+        },
+    })
+
+    define_skill("spew", {
+        caster = "entity",
+        cooldown = 20,
+        target = "position",
+        effect = { field = { field = "creep", radius = 1, action = "cover" } },
     })
 "#;
 
@@ -1590,6 +1815,7 @@ fn morph_transitions_round_trip() {
                   cost = { energy = "20" },
                   requires = { "winged" } },
                 { into = "statue",
+                  via = "chrysalis",
                   time = 40,
                   placement = "reserve",
                   cancel = "refundable",
@@ -1599,6 +1825,10 @@ fn morph_transitions_round_trip() {
         define_entity("flier", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
             stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5" },
+        })
+        define_entity("chrysalis", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = { max_health = 60 },
         })
         define_entity("statue", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
@@ -1634,6 +1864,8 @@ fn morph_transitions_round_trip() {
         [EntityCastCost::Resources(costs::cost([("gold", 30)]))]
     );
     assert!(second.requires().is_empty());
+    assert_eq!(first.via_type(), None);
+    assert_eq!(second.via_type(), Some("chrysalis"));
 }
 
 #[test]
@@ -1694,7 +1926,7 @@ fn morph_time_of_wrong_shape_errors() {
         panic!("must reject a morph time that is neither ticks nor a stat table");
     };
     assert!(
-        matches!(&error, ScriptError::ContentError(m) if m.contains("morph time must be a tick count or a { stat = ... } table, found string")),
+        matches!(&error, ScriptError::ContentError(m) if m.contains("morph time must be a tick count or a { stat = ... } table, found 'fast'")),
         "unexpected error: {error:?}"
     );
 }
@@ -1824,7 +2056,7 @@ fn rejects_unknown_weapon_conduct() {
         panic!("must reject an unknown weapon conduct");
     };
     assert!(
-        matches!(&error, ScriptError::ContentError(m) if m.contains("unknown weapon conduct 'whenever'")),
+        matches!(&error, ScriptError::ContentError(m) if m.contains("weapon conduct must be 'halts' or 'on_the_move', found 'whenever'")),
         "unexpected error: {error:?}"
     );
 }

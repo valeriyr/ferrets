@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::session::player_slot::PlayerId;
+use crate::session::player_id::PlayerId;
 
 /// The role a node holds in the session: it fields a player, or it only
 /// watches. A watching node carries no identity here — the simulation is

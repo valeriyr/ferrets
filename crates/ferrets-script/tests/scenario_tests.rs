@@ -329,6 +329,7 @@ fn entity(id: u32, type_name: &str, under_construction: bool) -> EntityView {
         carrying: None,
         train_queue: Vec::new(),
         under_construction,
+        disabled: false,
         stance: None,
         resource_amount: None,
         boarded: None,

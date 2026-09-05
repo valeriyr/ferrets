@@ -3,10 +3,10 @@
 
 use bevy_ecs::{entity::Entity, world::World};
 
+use super::orders::{self, Processing, Refusal};
 use crate::{
     components::{
         order_queue::{CancelPolicy, OrderState},
-        owner::OwnerComponent,
         research::ResearchComponent,
     },
     entity_def,
@@ -18,20 +18,31 @@ use crate::{
 };
 use ferrets_content::registry::ContentRegistry;
 
-/// Called once when a Research order becomes the front `New` entry.
-///
-/// Inserts the driver component and returns `InProcessing`, or `Finished`
-/// immediately if the entity cannot host this research.
-pub fn prepare(entity: Entity, order: &Order, world: &mut World) -> OrderState {
+/// Whether `entity` may start this Research: its type hosts the topic and it
+/// stands raised. A disabled researcher is admitted and waits.
+pub fn can_start(world: &World, entity: Entity, order: &Order) -> Result<(), Refusal> {
     let Order::Research { research } = order else {
-        unreachable!("prepare called with a non-Research order");
+        unreachable!("can_start called with a non-Research order");
     };
-
     if !entity_def::of(world, entity)
         .researcher
         .as_ref()
         .is_some_and(|r| r.can_research(*research))
     {
+        return Err(Refusal::Incapable);
+    }
+    orders::requires_raised(world, entity)
+}
+
+/// Called once when a Research order becomes the front `New` entry.
+///
+/// Inserts the driver component and returns `InProcessing`, or `Finished`
+/// immediately when the order cannot start — see [`can_start`].
+pub fn prepare(entity: Entity, order: &Order, world: &mut World) -> OrderState {
+    let Order::Research { research } = order else {
+        unreachable!("prepare called with a non-Research order");
+    };
+    if can_start(world, entity, order).is_err() {
         return OrderState::Finished;
     }
 
@@ -60,10 +71,7 @@ pub fn cancel_processing(
     match policy {
         CancelPolicy::Soft => OrderState::InProcessing,
         CancelPolicy::Force => {
-            let owner = world
-                .entity(entity)
-                .get::<OwnerComponent>()
-                .map(|o| o.player());
+            let owner = entity_def::owner(world, entity);
             if let Some(player) = owner {
                 let cost = world
                     .resource::<ContentRegistry>()
@@ -92,18 +100,14 @@ pub fn cancel_processing(
 /// Each tick the progress grows; when the research time is reached, the
 /// research is marked completed for the owning player, its buff (when it
 /// carries one) is applied, and the order finishes.
-pub fn process(entity: Entity, _order: &Order, world: &mut World) -> OrderState {
+pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing {
     let Some(mut research_component) = world.entity_mut(entity).take::<ResearchComponent>() else {
-        return OrderState::Finished;
+        return Processing::state(OrderState::Finished);
     };
     let research = research_component.research;
 
-    let Some(player) = world
-        .entity(entity)
-        .get::<OwnerComponent>()
-        .map(|o| o.player())
-    else {
-        return OrderState::Finished;
+    let Some(player) = entity_def::owner(world, entity) else {
+        return Processing::state(OrderState::Finished);
     };
     let (cost, research_time, buff) = {
         let def = world
@@ -123,13 +127,13 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> OrderState 
         .is_completed(player, research)
     {
         resources::refund(world, player, cost, SpendCause::Research { research });
-        return OrderState::Finished;
+        return Processing::state(OrderState::Finished);
     }
 
     research_component.progress += 1;
     if research_component.progress < research_time {
         world.entity_mut(entity).insert(research_component);
-        return OrderState::InProcessing;
+        return Processing::state(OrderState::InProcessing);
     }
 
     let researcher = Some(entity_def::simulation_id(world, entity));
@@ -137,5 +141,5 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> OrderState 
     if let Some(buff) = buff {
         stats::apply_player_buff(world, player, buff);
     }
-    OrderState::Finished
+    Processing::state(OrderState::Finished)
 }

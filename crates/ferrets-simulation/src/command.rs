@@ -37,6 +37,15 @@ pub enum SkillCasterRef {
     Entity(SimulationId),
 }
 
+/// What a cast is aimed at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SkillTarget {
+    /// The given entity.
+    Entity(SimulationId),
+    /// The given position.
+    Position(FixedUVec2),
+}
+
 /// A player command.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PlayerCommand {
@@ -149,12 +158,12 @@ pub enum PlayerCommand {
         type_name: String,
         position: FixedUVec2,
     },
-    /// Casts `skill` with `caster`, on `target` when the skill needs one
+    /// Casts `skill` with `caster`, at `target` when the skill needs one
     /// (`None` for a self-targeted skill).
     UseSkill {
         skill: SkillId,
         caster: SkillCasterRef,
-        target: Option<SimulationId>,
+        target: Option<SkillTarget>,
     },
     /// Changes every commanded entity that can into `type_name` — a
     /// destination its own type must declare a transition into.

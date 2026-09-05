@@ -16,7 +16,7 @@ use ferrets_physics::body;
 use super::{
     chase::{self, Destination},
     impacts,
-    orders::Processing,
+    orders::{self, Processing, Refusal},
     turn,
 };
 use crate::{
@@ -45,28 +45,62 @@ pub(super) struct WeaponStats {
     pub(super) damage_point: u32,
 }
 
-/// Called once when an Attack order becomes the front `New` entry.
-///
-/// Inserts the fight state and returns `InProcessing`, or `Finished` immediately
-/// if the entity cannot attack or the target is no longer alive.
-pub fn prepare(entity: Entity, order: &Order, world: &mut World) -> OrderState {
+/// Whether `entity` may start an Attack: its type fights and it operates, a
+/// named target is there and on a layer the weapon reaches, and a bare cell
+/// is aimed at only by a weapon that sends its shots to one.
+pub fn can_start(world: &World, entity: Entity, order: &Order) -> Result<(), Refusal> {
     let target = order
         .attack_target()
         .expect("Attack order must have a target");
-
     if !entity_def::of(world, entity).can_attack() {
-        return OrderState::Finished;
+        return Err(Refusal::Incapable);
     }
-    // A cell is always there to be shelled; only a named entity can already be gone.
-    if let Some(id) = target.entity()
-        && world
-            .resource::<EntityIndex>()
-            .interactable(world, id)
-            .is_none()
-    {
-        return OrderState::Finished;
+    orders::requires_operating(world, entity)?;
+    match target {
+        AttackTarget::Entity(id) => {
+            let Some(target) = world.resource::<EntityIndex>().interactable(world, id) else {
+                return Err(Refusal::TargetGone);
+            };
+            if !reaches(world, entity, target) {
+                return Err(Refusal::TargetUnfit);
+            }
+        }
+        AttackTarget::Position(_) => {
+            if !aims_at_cells(world, entity) {
+                return Err(Refusal::TargetUnfit);
+            }
+        }
     }
+    Ok(())
+}
 
+/// Whether `attacker`'s weapon can reach the layers `target` is answerable on.
+fn reaches(world: &World, attacker: Entity, target: Entity) -> bool {
+    targeting::reaches(
+        world
+            .resource::<ContentRegistry>()
+            .targets_of(entity_def::of(world, attacker)),
+        entity_def::of(world, target),
+    )
+}
+
+/// Whether any weapon the entity carries sends its shots to a cell rather than
+/// following a target.
+fn aims_at_cells(world: &World, entity: Entity) -> bool {
+    let registry = world.resource::<ContentRegistry>();
+    registry
+        .weapons_of(entity_def::of(world, entity))
+        .any(|weapon| registry.weapon_aims_at_cells(weapon))
+}
+
+/// Called once when an Attack order becomes the front `New` entry.
+///
+/// Inserts the fight state and returns `InProcessing`, or `Finished`
+/// immediately when the order cannot start — see [`can_start`].
+pub fn prepare(entity: Entity, order: &Order, world: &mut World) -> OrderState {
+    if can_start(world, entity, order).is_err() {
+        return OrderState::Finished;
+    }
     world.entity_mut(entity).insert(AttackComponent::default());
     OrderState::InProcessing
 }

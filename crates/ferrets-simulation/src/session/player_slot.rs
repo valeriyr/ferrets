@@ -5,11 +5,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     map_data::{MapData, MapSlot},
     scenario::Scenario,
-    session::{ai_vision::AiVision, player_type::PlayerType},
+    session::{ai_vision::AiVision, player_id::PlayerId, player_type::PlayerType},
 };
-
-/// A player unique ID, used to identify players in the simulation and replays.
-pub type PlayerId = u8;
 
 /// A team a player belongs to. Players sharing a team are allies; a player with
 /// no team (`None`) is hostile to everyone.

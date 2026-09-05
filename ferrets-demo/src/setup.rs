@@ -14,8 +14,8 @@ use ferrets_simulation::{
     movement_model::MovementModel,
     player_stats::PlayerStats,
     resources::PlayerResources,
-    session::{GameSession, player_slot::PlayerId},
-    spawn,
+    session::{GameSession, player_id::PlayerId},
+    spawn::{self, FieldReach},
 };
 
 use crate::{map, settings::Settings};
@@ -108,6 +108,8 @@ pub fn seed_player_stats(world: &mut World) {
 fn spawn_base(world: &mut World, player: PlayerId, race: &str, (x, y): (u32, u32)) {
     let (hall, worker) = match race {
         "human" => ("town_hall", "peasant"),
+        "swarm" => ("hive", "drone"),
+        "conclave" => ("nexus", "probe"),
         _ => ("great_hall", "peon"),
     };
     let mut place = |type_name: &str, x: u32, y: u32| {
@@ -117,6 +119,7 @@ fn spawn_base(world: &mut World, player: PlayerId, race: &str, (x, y): (u32, u32
             cell(x, y),
             Some(player),
             SpawnCause::Placed,
+            FieldReach::Full,
         )
         .is_none()
         {

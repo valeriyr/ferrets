@@ -12,8 +12,7 @@ use std::net::SocketAddr;
 use ferrets_simulation::{
     input::PlayerFrame,
     session::{
-        ai_hosting::AiHosting,
-        player_slot::{PlayerId, PlayerSlot},
+        ai_hosting::AiHosting, player_id::PlayerId, player_slot::PlayerSlot,
         player_type::PlayerType,
     },
 };

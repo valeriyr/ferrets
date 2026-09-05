@@ -1,5 +1,5 @@
-//! Demo content: two races (human, orc) plus neutral resource sources, authored
-//! in Lua and loaded at startup.
+//! Demo content: four races (human, orc, swarm, conclave) plus neutral resource
+//! sources, authored in Lua and loaded at startup.
 //!
 //! Times are in ticks (20 Hz), tuned short so mechanics are quick to test.
 
@@ -24,6 +24,16 @@ pub const CONTENT: &str = r#"
 
     define_race("human")
     define_race("orc")
+    -- Two more races carry the fields: the swarm builds on creep it spreads,
+    -- the conclave builds in the power its pylons project.
+    define_race("swarm")
+    define_race("conclave")
+
+    -- Creep covers the ground and recedes ring by ring, half a second a ring,
+    -- once nothing sustains it, and whoever spreads it sees every cell of it;
+    -- power is there while its pylon stands and gone the tick it falls.
+    define_field("creep", { layer = GROUND, decay = { cycle = 10 }, vision = "watched" })
+    define_field("power", { layer = GROUND, decay = "instant" })
 
     define_resource("gold")
     define_resource("wood")
@@ -203,9 +213,10 @@ pub const CONTENT: &str = r#"
     })
 
     -- The two races differ only in how their workers attend a job, not in what they
-    -- charge or how fast they work, so the presences can be compared side by side:
-    -- `presence` names the one to use for building, mending and chopping.
-    local function worker(name, race, builds, presence)
+    -- charge or how fast they work, so the ways can be compared side by side:
+    -- `work` names the builder attendance and the presence kept while mending
+    -- and while chopping.
+    local function worker(name, race, builds, work)
         define_entity(name, {
             race = race,
             location = { occupation = GROUND, size = 1, solidity = "solid" },
@@ -227,13 +238,13 @@ pub const CONTENT: &str = r#"
             dying = { time = 2 },
             cost = { gold = 50 },
             train_time = 40,
-            builder = { builds = builds, presence = presence.build },
+            builder = { builds = builds, attendance = work.attendance },
             -- Workers mend structures at the pace the structure took to raise, and
             -- each pays its own share of the bill.
             repairer = {
                 repairs = { "building" },
                 rate = { mode = "production" },
-                presence = presence.repair,
+                presence = work.repair_presence,
                 cost = { mode = "pro_rata" },
                 -- Broke for ten seconds and the job is abandoned.
                 patience = 200,
@@ -243,7 +254,7 @@ pub const CONTENT: &str = r#"
             -- open, and how many axes one stand takes is the race's own business.
             resource_carrier = {
                 gold = { capacity = 5, time = 20, presence = "hidden" },
-                wood = { capacity = 5, time = 20, presence = presence.wood },
+                wood = { capacity = 5, time = 20, presence = work.wood_presence },
             },
         })
     end
@@ -301,7 +312,9 @@ pub const CONTENT: &str = r#"
     -- repair or a stand of trees, each adding its own tick of work, so a gang of
     -- them raises a building in a fraction of the time one would take.
     worker("peasant", "human", { "town_hall", "barracks", "farm", "blacksmith", "bunker" }, {
-        build = "present_stacking", repair = "present_stacking", wood = "present_stacking",
+        attendance = "present_stacking",
+        repair_presence = "present_stacking",
+        wood_presence = "present_stacking",
     })
     main_hall("town_hall", "human", "peasant")
     farm("farm", "human")
@@ -577,7 +590,7 @@ pub const CONTENT: &str = r#"
     -- peon until the walls are up, where a repair or a stand only ties one up in the
     -- open. Nothing they do goes faster for a second pair of hands.
     worker("peon", "orc", { "great_hall", "war_camp", "pig_farm", "watch_tower", "siege_works" }, {
-        build = "hidden", repair = "present", wood = "present",
+        attendance = "hidden", repair_presence = "present", wood_presence = "present",
     })
     main_hall("great_hall", "orc", "peon")
 
@@ -783,6 +796,302 @@ pub const CONTENT: &str = r#"
         selection = { priority = 5 },
         -- A completed research as a requirement: shamans answer the ritual.
         requires = { "frenzy_ritual" },
+    })
+
+    -- ── The Swarm ──────────────────────────────────────────────────────────
+    -- A drone is spent on what it builds: it walks to the site, pays, and
+    -- becomes the structure going up, so the swarm has no repairers. Every
+    -- structure but the hive must stand on creep; the hive itself spreads it,
+    -- at full reach when it is placed by the map, and from three cells a cell
+    -- every third of a second when it is built, showing a patch under itself
+    -- while still going up. Structures left off creep waste away; swarmlings run a third
+    -- faster on anyone's creep.
+    local ON_CREEP = { requires = "creep", of = "anyone", coverage = "footprint" }
+    local WITHERS_OFF_CREEP = { field = "creep", of = "anyone", outside = {
+        modifiers = { { entity_stat = "health_drain", op = "flat", value = "0.2" } },
+    } }
+
+    define_entity("hive", {
+        race = "swarm",
+        location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
+        stats = { max_health = 800, sight_range = 9, supply_provided = 10 },
+        dying = { time = 2 },
+        cost = { gold = 400 },
+        build_time = 200,
+        trainer = { "drone" },
+        resource_storage = { "gold", "wood" },
+        tags = { "building" },
+        field_sources = {
+            { field = "creep", radius = 10, growth = { cycle = 6, initial_radius = 3 }, while_constructing = 1 },
+        },
+    })
+
+    -- Drones spew a patch of creep on any cell they can see, which lets the
+    -- swarm plant a tumor away from home. The patch has nothing sustaining it,
+    -- so it recedes unless a tumor takes root on it in time.
+    define_skill("spew_creep", {
+        caster = "entity",
+        cooldown = 200,
+        target = "position",
+        effect = { field = { field = "creep", radius = 2, action = "cover" } },
+    })
+    define_entity("drone", {
+        race = "swarm",
+        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        stats = {
+            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1, max_health = 30, sight_range = 4,
+            build_range = 1, harvest_range = 1,
+            supply_cost = 1,
+            cargo_size = 1,
+        },
+        dying = { time = 2 },
+        cost = { gold = 50 },
+        train_time = 40,
+        builder = { builds = { "hive", "tumor", "spawning_pit", "brood_nest" }, attendance = "consumed" },
+        tags = { "biological" },
+        skills = { "spew_creep" },
+        resource_carrier = {
+            gold = { capacity = 5, time = 20, presence = "hidden" },
+            wood = { capacity = 5, time = 20, presence = "hidden" },
+        },
+    })
+
+    -- A tumor is cheap, small, and only ever planted on creep; it spreads a
+    -- patch of its own so the creep can be walked outward tumor by tumor. It
+    -- barely sees past itself: the creep is what watches.
+    define_entity("tumor", {
+        race = "swarm",
+        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        stats = { max_health = 50, sight_range = 1 },
+        dying = { time = 2 },
+        cost = { gold = 25 },
+        build_time = 40,
+        tags = { "building" },
+        field_placement = { ON_CREEP },
+        field_sources = {
+            { field = "creep", radius = 6, growth = { cycle = 8, initial_radius = 1 } },
+        },
+    })
+
+    -- The brood nest feeds the swarm the way a farm does.
+    define_entity("brood_nest", {
+        race = "swarm",
+        location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
+        stats = { max_health = 200, sight_range = 3, supply_provided = 6, health_drain = "0" },
+        dying = { time = 2 },
+        cost = { gold = 40, wood = 20 },
+        build_time = 60,
+        tags = { "building" },
+        field_placement = { ON_CREEP },
+        field_effects = { WITHERS_OFF_CREEP },
+    })
+
+    define_entity("spawning_pit", {
+        race = "swarm",
+        location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
+        stats = { max_health = 500, sight_range = 6, health_drain = "0" },
+        dying = { time = 2 },
+        cost = { gold = 200, wood = 100 },
+        build_time = 120,
+        trainer = { "swarmling" },
+        tags = { "building" },
+        field_placement = { ON_CREEP },
+        field_effects = { WITHERS_OFF_CREEP },
+    })
+
+    define_entity("swarmling", {
+        race = "swarm",
+        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        stats = {
+            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 2, max_health = 35,
+            damage = 5, attack_range = 1, acquire_range = 5, attack_period = 4, damage_point = 2,
+            health_regen = "0.05",
+            sight_range = 8,
+            supply_cost = 1,
+            cargo_size = 1,
+        },
+        dying = { time = 2 },
+        tags = { "biological" },
+        attack = { targets = GROUND | WATER },
+        cost = { gold = 50 },
+        train_time = 40,
+        selection = { priority = 10 },
+        field_effects = {
+            { field = "creep", of = "anyone", inside = {
+                modifiers = { { entity_stat = "speed", op = "percent", value = "0.3" } },
+            } },
+        },
+        -- A swarmling grows into a ravager inside a cocoon: three seconds
+        -- wrapped up and helpless but thick-skinned, for a price the pit's
+        -- presence unlocks, and the price comes back if the growth is called
+        -- off or finds no room to finish.
+        morphs = {
+            { into = "ravager",
+              via = "cocoon",
+              time = 60,
+              placement = "revalidate",
+              cancel = "refundable",
+              cost = { resources = { gold = 25, wood = 25 } },
+              requires = { "spawning_pit" } },
+        },
+    })
+
+    -- The cocoon neither moves nor fights; it only endures until it opens.
+    define_entity("cocoon", {
+        race = "swarm",
+        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        stats = { max_health = 120, armor = 3, sight_range = 2, supply_cost = 1 },
+        dying = { time = 2 },
+        tags = { "biological" },
+    })
+
+    -- What comes out: heavier, harder-hitting, slower, and twice the mouth
+    -- to feed.
+    define_entity("ravager", {
+        race = "swarm",
+        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        stats = {
+            speed = "0.25", turn_rate = 24, pivot_rate = 24, radius = "0.5", weight = 3, max_health = 90,
+            damage = 12, attack_range = 1, acquire_range = 5, attack_period = 6, damage_point = 3,
+            armor = 1,
+            health_regen = "0.05",
+            sight_range = 8,
+            supply_cost = 2,
+            cargo_size = 1,
+        },
+        dying = { time = 2 },
+        tags = { "biological" },
+        attack = { targets = GROUND | WATER },
+        selection = { priority = 12 },
+        field_effects = {
+            { field = "creep", of = "anyone", inside = {
+                modifiers = { { entity_stat = "speed", op = "percent", value = "0.3" } },
+            } },
+        },
+    })
+
+    -- ── The Conclave ───────────────────────────────────────────────────────
+    -- Every structure but the nexus and the pylon must be warped in with its
+    -- whole footprint inside the conclave's own power, and stands idle — no
+    -- training, no firing — while it is not. The nexus and the pylons project that
+    -- power. A probe only places a structure and leaves: the warp-in finishes
+    -- on its own, so no probe ever stands at a site or mends anything. Nothing
+    -- of the conclave's is built on creep, and a pylon that finishes burns
+    -- away creep nothing sustains around it.
+    local POWERED = { requires = "power", of = "own", coverage = "footprint" }
+    local NOT_ON_CREEP = { forbids = "creep" }
+    local UNPOWERED_IDLES = { field = "power", of = "own", outside = "disabled" }
+
+    define_entity("nexus", {
+        race = "conclave",
+        location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
+        stats = { max_health = 800, sight_range = 9, supply_provided = 10 },
+        dying = { time = 2 },
+        cost = { gold = 400 },
+        build_time = 200,
+        trainer = { "probe" },
+        resource_storage = { "gold", "wood" },
+        tags = { "building" },
+        field_placement = { NOT_ON_CREEP },
+        field_sources = {
+            { field = "power", radius = 7, growth = "instant" },
+        },
+    })
+
+    -- Probes purge creep nothing sustains from any cell they can see, the way
+    -- a finished pylon does around itself.
+    define_skill("purge_creep", {
+        caster = "entity",
+        cooldown = 200,
+        target = "position",
+        effect = { field = { field = "creep", radius = 3, action = "clear" } },
+    })
+    define_entity("probe", {
+        race = "conclave",
+        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        stats = {
+            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1, max_health = 30, sight_range = 4,
+            build_range = 1, harvest_range = 1,
+            supply_cost = 1,
+            cargo_size = 1,
+        },
+        dying = { time = 2 },
+        cost = { gold = 50 },
+        train_time = 40,
+        builder = { builds = { "nexus", "pylon", "gateway", "photon_cannon" }, attendance = "unattended" },
+        tags = { "biological" },
+        skills = { "purge_creep" },
+        resource_carrier = {
+            gold = { capacity = 5, time = 20, presence = "hidden" },
+            wood = { capacity = 5, time = 20, presence = "present" },
+        },
+    })
+
+    define_entity("pylon", {
+        race = "conclave",
+        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        stats = { max_health = 200, sight_range = 6, supply_provided = 6 },
+        dying = { time = 2 },
+        cost = { gold = 60 },
+        build_time = 50,
+        tags = { "building" },
+        field_placement = { NOT_ON_CREEP },
+        field_sources = {
+            { field = "power", radius = 6, growth = "instant" },
+        },
+        on_stand = {
+            { field = { field = "creep", radius = 6, action = "clear" } },
+        },
+    })
+
+    define_entity("gateway", {
+        race = "conclave",
+        location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
+        stats = { max_health = 500, sight_range = 6 },
+        dying = { time = 2 },
+        cost = { gold = 200, wood = 100 },
+        build_time = 120,
+        repair_ratio = "0.5",
+        trainer = { "zealot" },
+        tags = { "building" },
+        field_placement = { POWERED, NOT_ON_CREEP },
+        field_effects = { UNPOWERED_IDLES },
+    })
+
+    define_entity("photon_cannon", {
+        race = "conclave",
+        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        stats = {
+            max_health = 300, armor = 1,
+            damage = 12, attack_range = 6, acquire_range = 7, attack_period = 20, damage_point = 5,
+            sight_range = 8,
+        },
+        dying = { time = 2 },
+        cost = { gold = 120 },
+        build_time = 80,
+        tags = { "building" },
+        attack = { targets = GROUND | WATER | AIR, projectile = "arrow" },
+        field_placement = { POWERED, NOT_ON_CREEP },
+        field_effects = { UNPOWERED_IDLES },
+    })
+
+    define_entity("zealot", {
+        race = "conclave",
+        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        stats = {
+            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 3, max_health = 60,
+            damage = 8, attack_range = 1, acquire_range = 5, attack_period = 5, damage_point = 2,
+            armor = 1,
+            sight_range = 8,
+            supply_cost = 1,
+            cargo_size = 1,
+        },
+        dying = { time = 2 },
+        tags = { "biological" },
+        attack = { targets = GROUND | WATER },
+        cost = { gold = 100 },
+        train_time = 60,
+        selection = { priority = 10 },
     })
 "#;
 

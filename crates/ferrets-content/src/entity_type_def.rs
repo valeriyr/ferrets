@@ -8,10 +8,11 @@ use ferrets_pathfinder::layer_mask::LayerMask;
 
 use crate::{
     attack::{AttackDef, Delivery, Weapon},
-    build::BuilderDef,
+    build::{BuilderAttendance, BuilderDef},
     costs::{self, Cost},
     dying::DyingDef,
     entity_stats::EntityStatId,
+    field::{FieldEffect, FieldPlacement, FieldSourceDef},
     location::{LocationDef, Solidity},
     morph::MorphTransition,
     repair::{RepairCost, RepairRate, RepairerDef},
@@ -22,6 +23,7 @@ use crate::{
     selection::SelectionDef,
     skills::SkillId,
     splash::SplashDef,
+    stand::StandingAct,
     train::TrainerDef,
     transport::{BoardingPolicy, PassengerConduct, PassengerFate, TransporterDef},
     turret::{TurretFire, TurretMount},
@@ -103,6 +105,18 @@ pub struct EntityTypeDef {
     pub targetable: Option<LayerMask>,
     /// Activated skills instances of this type can use, by registered id.
     pub skills: Vec<SkillId>,
+    /// The fields instances project, and how. Empty means instances project
+    /// no field.
+    pub field_sources: Vec<FieldSourceDef>,
+    /// The field rules a placement of this type must satisfy. Empty means
+    /// fields never gate placement.
+    pub field_placement: Vec<FieldPlacement>,
+    /// What fields do to instances standing inside or outside them. Empty
+    /// means fields never affect instances.
+    pub field_effects: Vec<FieldEffect>,
+    /// What instances do once, the tick they come to stand. Empty means
+    /// nothing.
+    pub on_stand: Vec<StandingAct>,
     /// How instances behave under selection. Every type is selectable, so this is
     /// always present.
     pub selection: SelectionDef,
@@ -161,6 +175,10 @@ impl EntityTypeDef {
             morphs: Vec::new(),
             targetable: None,
             skills: Vec::new(),
+            field_sources: Vec::new(),
+            field_placement: Vec::new(),
+            field_effects: Vec::new(),
+            on_stand: Vec::new(),
             selection: SelectionDef::default(),
             cost: Cost::new(),
             train_time: None,
@@ -370,10 +388,10 @@ impl EntityTypeDef {
         self
     }
 
-    /// Mounts `turrets` on this type, each naming a gun and the patch of the
-    /// footprint it sits on.
+    /// Adds turret mounts to this type, each naming a gun and the patch of the
+    /// footprint it sits on (see [`turrets`](Self::turrets)).
     pub fn with_turrets(mut self, turrets: impl IntoIterator<Item = TurretMount>) -> Self {
-        self.turrets = turrets.into_iter().collect();
+        self.turrets.extend(turrets);
         self
     }
 
@@ -480,6 +498,34 @@ impl EntityTypeDef {
         self
     }
 
+    /// Adds fields instances of this type project (see
+    /// [`field_sources`](Self::field_sources)).
+    pub fn with_field_sources(mut self, sources: impl IntoIterator<Item = FieldSourceDef>) -> Self {
+        self.field_sources.extend(sources);
+        self
+    }
+
+    /// Adds field rules a placement of this type must satisfy (see
+    /// [`field_placement`](Self::field_placement)).
+    pub fn with_field_placement(mut self, rules: impl IntoIterator<Item = FieldPlacement>) -> Self {
+        self.field_placement.extend(rules);
+        self
+    }
+
+    /// Adds what fields do to instances of this type (see
+    /// [`field_effects`](Self::field_effects)).
+    pub fn with_field_effects(mut self, effects: impl IntoIterator<Item = FieldEffect>) -> Self {
+        self.field_effects.extend(effects);
+        self
+    }
+
+    /// Adds acts instances of this type perform when they come to stand (see
+    /// [`on_stand`](Self::on_stand)).
+    pub fn with_standing_acts(mut self, acts: impl IntoIterator<Item = StandingAct>) -> Self {
+        self.on_stand.extend(acts);
+        self
+    }
+
     /// Sets the primary-selection ordering weight and the select-all-of-type
     /// class, which falls back to the type name when `class` is `None`.
     ///
@@ -561,15 +607,15 @@ impl EntityTypeDef {
     }
 
     /// Allows instances of this type to construct buildings of the `builds` types,
-    /// attending the site as `presence` describes.
+    /// relating to each site as `attendance` describes.
     ///
     /// Panics if `builds` is empty or any entry is empty.
     pub fn with_builder(
         mut self,
         builds: impl IntoIterator<Item = impl Into<String>>,
-        presence: WorkPresence,
+        attendance: BuilderAttendance,
     ) -> Self {
-        self.builder = Some(BuilderDef::new(builds, presence));
+        self.builder = Some(BuilderDef::new(builds, attendance));
         self
     }
 

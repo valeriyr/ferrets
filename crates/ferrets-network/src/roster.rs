@@ -1,6 +1,6 @@
 //! The authoritative mapping of peers to player slots.
 
-use ferrets_simulation::session::player_slot::PlayerId;
+use ferrets_simulation::session::player_id::PlayerId;
 
 use crate::peer::PeerId;
 

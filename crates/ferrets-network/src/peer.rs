@@ -1,7 +1,7 @@
 //! Peer identity.
 
 /// An opaque transport-native peer handle — *not* a dense slot index (that is
-/// [`PlayerId`](ferrets_simulation::session::player_slot::PlayerId)). Concrete
+/// [`PlayerId`](ferrets_simulation::session::player_id::PlayerId)). Concrete
 /// transports put their own identity here, and the
 /// [`Roster`](crate::roster::Roster) maps it to a slot, so the values may be sparse.
 ///

@@ -13,7 +13,7 @@ use crate::{
     entity_def,
     events::SpendCause,
     resources::{self, PlayerResources},
-    session::player_slot::PlayerId,
+    session::player_id::PlayerId,
 };
 use ferrets_content::{costs::Cost, entity_stats::EntityStatId, skills::EntityCastCost};
 
@@ -71,7 +71,7 @@ pub(super) fn pay(
     if health_cost > FixedU64::ZERO
         && let Some(mut health) = entity_mut.get_mut::<HealthComponent>()
     {
-        health.apply_damage(health_cost);
+        health.drain(health_cost);
     }
 }
 

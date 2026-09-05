@@ -24,7 +24,6 @@ use ferrets_simulation::{
         player_slot::PlayerSlot, player_type::PlayerType,
     },
     simulation_id::SimulationId,
-    spawn,
 };
 
 use utils::{GROUND, GROUND_LAYER, NOMINAL_MILLIS};
@@ -793,7 +792,7 @@ fn diverging_one_peer_trips_desync() {
 
     // Force a divergence: spawn an entity on the host OUTSIDE the lockstep command
     // pipeline, so only the host's state (and checksum) changes.
-    spawn::create_entity(host.world_mut(), "soldier", utils::pos(3, 3), Some(0))
+    utils::create_entity(host.world_mut(), "soldier", utils::pos(3, 3), Some(0))
         .expect("spawn perturbation");
 
     // Run past the next checksum interval plus delivery latency.
@@ -2179,12 +2178,12 @@ fn observer_net_app(transport: LoopbackTransport, authority: Authority) -> App {
 fn spawn_host_elimination_lineup(app: &mut App) -> (SimulationId, SimulationId, SimulationId) {
     let world = app.world_mut();
     let (_, host_base) =
-        spawn::create_entity(world, "base", utils::pos(6, 5), Some(0)).expect("host base");
-    spawn::create_entity(world, "base", utils::pos(25, 25), Some(1)).expect("player 1 base");
+        utils::create_entity(world, "base", utils::pos(6, 5), Some(0)).expect("host base");
+    utils::create_entity(world, "base", utils::pos(25, 25), Some(1)).expect("player 1 base");
     let (_, last_base) =
-        spawn::create_entity(world, "base", utils::pos(5, 8), Some(2)).expect("player 2 base");
+        utils::create_entity(world, "base", utils::pos(5, 8), Some(2)).expect("player 2 base");
     let (_, attacker) =
-        spawn::create_entity(world, "soldier", utils::pos(5, 5), Some(1)).expect("attacker");
+        utils::create_entity(world, "soldier", utils::pos(5, 5), Some(1)).expect("attacker");
     (attacker, host_base, last_base)
 }
 
@@ -2281,9 +2280,9 @@ fn step_some(apps: &mut [App], indices: &[usize], ticks: u32) {
 /// the replay. A base is the presence the win rule counts.
 fn spawn_starting_units(app: &mut App) {
     let world = app.world_mut();
-    spawn::create_entity(world, "base", utils::pos(5, 5), Some(0)).expect("player 0 base");
-    spawn::create_entity(world, "base", utils::pos(10, 10), Some(1)).expect("player 1 base");
-    spawn::create_entity(world, "base", utils::pos(20, 20), Some(2)).expect("phantom base");
+    utils::create_entity(world, "base", utils::pos(5, 5), Some(0)).expect("player 0 base");
+    utils::create_entity(world, "base", utils::pos(10, 10), Some(1)).expect("player 1 base");
+    utils::create_entity(world, "base", utils::pos(20, 20), Some(2)).expect("phantom base");
 }
 
 /// A fresh two-player app with a combat-capable soldier, `LastStanding`, and the
@@ -2332,12 +2331,12 @@ fn ffa_elimination_app() -> App {
 /// while players 0 and 1, unallied, fight on.
 fn spawn_ffa_combatants(app: &mut App) -> (SimulationId, SimulationId) {
     let world = app.world_mut();
-    spawn::create_entity(world, "base", utils::pos(5, 8), Some(0)).expect("player 0 base");
-    spawn::create_entity(world, "base", utils::pos(25, 25), Some(1)).expect("player 1 base");
+    utils::create_entity(world, "base", utils::pos(5, 8), Some(0)).expect("player 0 base");
+    utils::create_entity(world, "base", utils::pos(25, 25), Some(1)).expect("player 1 base");
     let (_, target) =
-        spawn::create_entity(world, "base", utils::pos(6, 5), Some(2)).expect("player 2 base");
+        utils::create_entity(world, "base", utils::pos(6, 5), Some(2)).expect("player 2 base");
     let (_, attacker) =
-        spawn::create_entity(world, "soldier", utils::pos(5, 5), Some(0)).expect("attacker");
+        utils::create_entity(world, "soldier", utils::pos(5, 5), Some(0)).expect("attacker");
     (attacker, target)
 }
 
@@ -2347,12 +2346,12 @@ fn spawn_ffa_combatants(app: &mut App) -> (SimulationId, SimulationId) {
 /// and the replay. Returns the attacker and player 1's base [`SimulationId`]s.
 fn spawn_lone_winner_lineup(app: &mut App) -> (SimulationId, SimulationId) {
     let world = app.world_mut();
-    spawn::create_entity(world, "base", utils::pos(5, 8), Some(0)).expect("player 0 base");
+    utils::create_entity(world, "base", utils::pos(5, 8), Some(0)).expect("player 0 base");
     let (_, target) =
-        spawn::create_entity(world, "base", utils::pos(6, 5), Some(1)).expect("player 1 base");
-    spawn::create_entity(world, "base", utils::pos(25, 25), Some(2)).expect("phantom base");
+        utils::create_entity(world, "base", utils::pos(6, 5), Some(1)).expect("player 1 base");
+    utils::create_entity(world, "base", utils::pos(25, 25), Some(2)).expect("phantom base");
     let (_, attacker) =
-        spawn::create_entity(world, "soldier", utils::pos(5, 5), Some(0)).expect("attacker");
+        utils::create_entity(world, "soldier", utils::pos(5, 5), Some(0)).expect("attacker");
     (attacker, target)
 }
 
@@ -2364,11 +2363,11 @@ fn spawn_lone_winner_lineup(app: &mut App) -> (SimulationId, SimulationId) {
 fn spawn_combatants(app: &mut App) -> (SimulationId, SimulationId) {
     let world = app.world_mut();
     // Player 0's own base keeps it in the game after the kill.
-    spawn::create_entity(world, "base", utils::pos(5, 8), Some(0)).expect("player 0 base");
+    utils::create_entity(world, "base", utils::pos(5, 8), Some(0)).expect("player 0 base");
     let (_, attacker) =
-        spawn::create_entity(world, "soldier", utils::pos(5, 5), Some(0)).expect("attacker");
+        utils::create_entity(world, "soldier", utils::pos(5, 5), Some(0)).expect("attacker");
     let (_, enemy_base) =
-        spawn::create_entity(world, "base", utils::pos(6, 5), Some(1)).expect("enemy base");
+        utils::create_entity(world, "base", utils::pos(6, 5), Some(1)).expect("enemy base");
     (attacker, enemy_base)
 }
 

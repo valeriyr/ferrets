@@ -1,6 +1,7 @@
 //! Progress of an in-flight form change.
 
 use bevy_ecs::prelude::*;
+use ferrets_content::entity_type_def::EntityTypeId;
 use ferrets_geometry::cell_pos::CellPos;
 use ferrets_pathfinder::layer_mask::LayerMask;
 
@@ -18,15 +19,14 @@ pub struct MorphReservation {
 }
 
 /// A type change under way on this entity.
-///
-/// The destination is held by name, because transitions are inherently
-/// circular — two forms can each name the other — and no registration order
-/// can resolve both ends to a handle. Requirements and admission lists are
-/// name-based for the same reason.
 #[derive(Component, Debug, Clone)]
 pub struct MorphComponent {
-    /// The type being changed into.
-    pub type_name: String,
+    /// The type the entity was when the change started, which declared the
+    /// transition: the terms are read from it, and a change that ends early
+    /// returns to it.
+    pub from: EntityTypeId,
+    /// The name of the type being changed into.
+    pub into: String,
     /// Ticks spent so far.
     pub progress: u32,
     /// The ground claimed ahead for the destination footprint. `None` when

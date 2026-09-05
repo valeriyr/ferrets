@@ -13,12 +13,13 @@ use ferrets_pathfinder::{
 };
 
 use ferrets_math::FixedU64;
+use ferrets_physics::body;
 
 use crate::{
     components::location::LocationComponent,
     map_data::{MapData, MapSlot},
     movement_model::MovementModel,
-    session::player_slot::PlayerId,
+    session::player_id::PlayerId,
 };
 use ferrets_content::{
     entity_stats::EntityStatId, entity_type_def::EntityTypeDef, location::LocationDef,
@@ -157,7 +158,7 @@ impl Map {
             }
         }
 
-        Self::with_hierarchy_shapes(
+        Self::new(
             data.name(),
             data.projection(),
             data.movement_model(),
@@ -167,7 +168,8 @@ impl Map {
         )
     }
 
-    /// Marks each cell occupied on the layers its terrain leaves impassable.
+    /// Writes the grid's terrain plane: each cell blocked on the layers its
+    /// terrain leaves impassable.
     fn seed_terrain(nav_grid: &mut NavGrid, data: &MapData, registry: &ContentRegistry) {
         assert_eq!(
             data.terrain_cells().len(),
@@ -197,31 +199,13 @@ impl Map {
                     )
                 });
             let pos = CellPos::new(i as u32 % data.width(), i as u32 / data.width());
-            nav_grid.set_occupied_by(blocked, pos, true);
+            nav_grid.set_terrain_blocked(blocked, pos);
         }
     }
 
-    /// Creates a map from loaded content, without any hierarchy abstractions.
+    /// Creates a map over `nav_grid`, building one hierarchy abstraction per
+    /// mover shape in `shapes`.
     pub fn new(
-        name: impl Into<String>,
-        projection: Projection,
-        movement_model: MovementModel,
-        nav_grid: NavGrid,
-        start_points: Vec<Option<CellPos>>,
-    ) -> Self {
-        Self::with_hierarchy_shapes(
-            name,
-            projection,
-            movement_model,
-            nav_grid,
-            start_points,
-            &[],
-        )
-    }
-
-    /// Creates a map from loaded content, building one hierarchy abstraction
-    /// per given mover shape.
-    pub fn with_hierarchy_shapes(
         name: impl Into<String>,
         projection: Projection,
         movement_model: MovementModel,
@@ -283,16 +267,25 @@ impl Map {
         self.nav_grid.height()
     }
 
+    /// Whether `pos` lies on the map.
+    #[inline]
+    pub fn contains(&self, pos: CellPos) -> bool {
+        pos.x < self.width() && pos.y < self.height()
+    }
+
     /// Returns a reference to the navigation grid.
     pub fn nav_grid(&self) -> &NavGrid {
         &self.nav_grid
     }
 
-    /// Returns `true` if every cell in the entity's footprint is passable.
+    /// Returns `true` if every cell in the entity's footprint is passable. The
+    /// footprint is anchored at the cell the position rounds to
+    /// ([`body::anchor`]), which is the position itself for an entity at
+    /// rest on the lattice.
     pub fn can_place_entity(&self, loc: &LocationComponent, location_def: &LocationDef) -> bool {
         self.nav_grid.is_footprint_passable_by(
             location_def.occupation(),
-            CellPos::from(loc.position),
+            body::anchor(loc.position),
             location_def.size(),
         )
     }
@@ -357,11 +350,11 @@ impl Map {
     /// models: unlike the claim plane, the static plane keeps one discipline
     /// everywhere.
     ///
-    /// Like every occupancy write, it must flip the cell, and debug builds
-    /// assert it: the plane's bits carry no owner, so two writers blocking
-    /// the same cell would silently merge and the first to free it would
-    /// free it for both — the flip is the only point where that collision
-    /// can surface. A caller that has not read the cell checks it first.
+    /// Like every occupancy write, it must flip the cell's static reading, and
+    /// debug builds assert it: the plane's bits carry no owner, so two writers
+    /// blocking the same cell would silently merge and the first to free it
+    /// would free it for both. A caller that has not read the cell checks it
+    /// first.
     pub fn set_static_occupied(
         &mut self,
         mask: impl Into<LayerMask>,
@@ -579,6 +572,8 @@ impl Map {
     }
 
     /// Marks or clears every cell in the entity's footprint as occupied based on the `occupied` parameter.
+    /// The footprint is anchored at the cell the position rounds to
+    /// ([`body::anchor`]).
     ///
     /// Static footprints dirty the hierarchy; claims never do. No-op for
     /// [`Solidity::Passable`] entities — they never claim cells.
@@ -593,7 +588,7 @@ impl Map {
             return;
         }
 
-        let origin = CellPos::from(loc.position);
+        let origin = body::anchor(loc.position);
         let CellSize { width, height } = location_def.size();
         for dy in 0..height {
             for dx in 0..width {
@@ -611,8 +606,8 @@ impl Map {
                         // the plane from bodies each tick and legally
                         // collapses shared cells into one bit — and its
                         // clears belong to that rebuild alone: a footprint
-                        // release keyed on the floored anchor could wipe a
-                        // neighbor's center-cell claim mid-tick.
+                        // release could wipe a neighbor's claim on a shared
+                        // cell mid-tick.
                         match self.movement_model {
                             MovementModel::Cell => {
                                 debug_assert!(

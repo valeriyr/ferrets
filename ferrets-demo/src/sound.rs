@@ -28,7 +28,7 @@ use ferrets_simulation::{
     entity_def,
     entity_index::EntityIndex,
     events::{DeathCause, EventRecord, SimulationEvent},
-    session::{GameSession, local_role::LocalRole, player_slot::PlayerId},
+    session::{GameSession, local_role::LocalRole, player_id::PlayerId},
     visibility::VisibilityGrid,
 };
 

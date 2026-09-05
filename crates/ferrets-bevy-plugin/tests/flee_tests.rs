@@ -15,7 +15,6 @@ use ferrets_simulation::{
     },
     resources::PlayerResources,
     session::GameSession,
-    spawn,
 };
 
 #[test]
@@ -23,17 +22,17 @@ fn commanded_worker_keeps_harvesting_under_fire() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
     let (worker, worker_id) =
-        spawn::create_entity(world, "worker", utils::pos(9, 10), Some(0)).unwrap();
-    let (mine, mine_id) = spawn::create_entity(world, "mine", utils::pos(10, 10), None).unwrap();
+        utils::create_entity(world, "worker", utils::pos(9, 10), Some(0)).unwrap();
+    let (mine, mine_id) = utils::create_entity(world, "mine", utils::pos(10, 10), None).unwrap();
     world
         .get_mut::<ResourceSourceComponent>(mine)
         .unwrap()
         .amount = 100;
-    spawn::create_entity(world, "depot", utils::pos(4, 10), Some(0)).unwrap();
+    utils::create_entity(world, "depot", utils::pos(4, 10), Some(0)).unwrap();
     // An enemy to be hit by, parked far outside its own acquisition range, so
     // the only damage is the hit staged below.
     let (_, sentry_id) =
-        spawn::create_entity(world, "sentry", utils::pos(26, 10), Some(1)).unwrap();
+        utils::create_entity(world, "sentry", utils::pos(26, 10), Some(1)).unwrap();
 
     utils::select(&mut app, worker_id);
     utils::push_command(
@@ -51,7 +50,7 @@ fn commanded_worker_keeps_harvesting_under_fire() {
     let tick = world.resource::<GameSession>().tick();
     assert_eq!(world.resource::<PlayerResources>().amount(0, "gold"), 5);
     let mut health = world.get_mut::<HealthComponent>(worker).unwrap();
-    health.apply_damage(FixedU64::from_num(5));
+    health.drain(FixedU64::from_num(5));
     health.record_hit(sentry_id, tick);
     utils::run_ticks(&mut app, 60);
 
@@ -78,8 +77,8 @@ fn fleeing_soldier_runs_instead_of_fighting_back() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
     let (runner, runner_id) =
-        spawn::create_entity(world, "sentry", utils::pos(10, 10), Some(0)).unwrap();
-    let (enemy, _) = spawn::create_entity(world, "sentry", utils::pos(13, 10), Some(1)).unwrap();
+        utils::create_entity(world, "sentry", utils::pos(10, 10), Some(0)).unwrap();
+    let (enemy, _) = utils::create_entity(world, "sentry", utils::pos(13, 10), Some(1)).unwrap();
 
     utils::select(&mut app, runner_id);
     utils::push_command(

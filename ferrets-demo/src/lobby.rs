@@ -35,7 +35,8 @@ use ferrets_simulation::{
         elimination_scope::EliminationScope,
         finish_policy::FinishPolicy,
         local_role::LocalRole,
-        player_slot::{self, PlayerId, PlayerSlot, TeamId},
+        player_id::PlayerId,
+        player_slot::{self, PlayerSlot, TeamId},
         player_type::PlayerType,
     },
     skirmish::Skirmish,
@@ -64,6 +65,8 @@ const HOVERED: Color = Color::srgb(0.30, 0.30, 0.38);
 pub enum Race {
     Human,
     Orc,
+    Swarm,
+    Conclave,
 }
 
 impl Race {
@@ -71,6 +74,8 @@ impl Race {
         match self {
             Race::Human => "human",
             Race::Orc => "orc",
+            Race::Swarm => "swarm",
+            Race::Conclave => "conclave",
         }
     }
 
@@ -78,19 +83,25 @@ impl Race {
         match self {
             Race::Human => "Humans",
             Race::Orc => "Orcs",
+            Race::Swarm => "Swarm",
+            Race::Conclave => "Conclave",
         }
     }
 
     fn toggled(self) -> Race {
         match self {
             Race::Human => Race::Orc,
-            Race::Orc => Race::Human,
+            Race::Orc => Race::Swarm,
+            Race::Swarm => Race::Conclave,
+            Race::Conclave => Race::Human,
         }
     }
 
     fn from_id(id: Option<&str>) -> Race {
         match id {
             Some("orc") => Race::Orc,
+            Some("swarm") => Race::Swarm,
+            Some("conclave") => Race::Conclave,
             _ => Race::Human,
         }
     }

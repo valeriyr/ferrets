@@ -54,6 +54,10 @@ pub struct EntityView {
     /// In-flight production, front first. Empty when nothing is queued.
     pub train_queue: Vec<String>,
     pub under_construction: bool,
+    /// `true` while a field effect switches the entity off: it stands but
+    /// starts no order but Train and Research, which wait, and neither fights,
+    /// hunts, casts nor moves.
+    pub disabled: bool,
     /// The stance name, when the entity has one.
     pub stance: Option<String>,
     /// Remaining amount in a resource source. `None` when not a source.

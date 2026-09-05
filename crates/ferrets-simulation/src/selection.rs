@@ -2,7 +2,7 @@
 
 use bevy_ecs::prelude::*;
 
-use crate::{session::player_slot::PlayerId, simulation_id::SimulationId};
+use crate::{session::player_id::PlayerId, simulation_id::SimulationId};
 
 /// Units selection for all players in the session, indexed by [`PlayerId`].
 #[derive(Resource)]

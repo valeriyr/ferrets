@@ -7,7 +7,7 @@
 
 use bevy_ecs::prelude::*;
 
-use crate::{buffs_store::BuffsStore, session::player_slot::PlayerId};
+use crate::{buffs_store::BuffsStore, session::player_id::PlayerId};
 use ferrets_content::{player_buffs::PlayerBuffId, stack_rule::StackRule};
 
 /// The active buffs of all players in the session, indexed by [`PlayerId`] —

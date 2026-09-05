@@ -2,19 +2,17 @@
 //! Called by [`super::orders`] as part of the shared order lifecycle.
 
 use bevy_ecs::{entity::Entity, world::World};
-use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
+use ferrets_geometry::cell_rect::CellRect;
 
 use super::{
     chase::{self, Destination},
     crew,
-    orders::Processing,
+    orders::{self, Processing, Refusal},
     work,
 };
 use crate::{
     components::{
-        build::UnderConstructionComponent,
         order_queue::{CancelPolicy, OrderState},
-        owner::OwnerComponent,
         resource::{
             HarvestComponent, HarvestingComponent, ResourceCarrierComponent,
             ResourceSourceComponent, UnderHarvestComponent,
@@ -26,7 +24,7 @@ use crate::{
     map::Map,
     order::Order,
     resources,
-    session::player_slot::PlayerId,
+    session::player_id::PlayerId,
     simulation_id::SimulationId,
     spawn,
 };
@@ -50,58 +48,80 @@ const SOURCE_SEARCH_RADIUS: u32 = 12;
 /// source or to a storage, in ticks.
 const BLOCKED_WALK_RETRY_PERIOD: u32 = 8;
 
-/// Called once when a Harvest order becomes the front `New` entry.
-///
-/// Inserts the driver component and returns `InProcessing`, or `Finished`
-/// immediately if the entity cannot carry resources or the target is neither a
-/// source nor a storage.
-pub fn prepare(entity: Entity, order: &Order, world: &mut World) -> OrderState {
+/// What a Harvest order reads its target as.
+struct Reading {
+    /// The resource kind the order works.
+    kind: String,
+    /// The source harvested, or `None` when the target is a storage.
+    source: Option<SimulationId>,
+}
+
+/// Whether `entity` may start this Harvest: its type carries resources and it
+/// operates, and the target is an operating source of a kind it carries, or an
+/// operating storage of its own that accepts the load it holds.
+pub fn can_start(world: &World, entity: Entity, order: &Order) -> Result<(), Refusal> {
+    reading(world, entity, order).map(|_| ())
+}
+
+/// The [`Reading`] of `order`'s target for `entity`, or why there is none.
+fn reading(world: &World, entity: Entity, order: &Order) -> Result<Reading, Refusal> {
     let target_id = order
         .harvest_target()
         .expect("Harvest order must have a target");
+    let Some(carrier_def) = entity_def::of(world, entity).resource_carrier.as_ref() else {
+        return Err(Refusal::Incapable);
+    };
+    orders::requires_operating(world, entity)?;
     let Some(target) = world
         .resource::<EntityIndex>()
         .interactable(world, target_id)
     else {
-        return OrderState::Finished;
+        return Err(Refusal::TargetGone);
     };
-    let Some(carrier_def) = entity_def::of(world, entity).resource_carrier.as_ref() else {
-        return OrderState::Finished;
-    };
+    orders::target_operating(world, target)?;
 
-    let target_ref = world.entity(target);
     let target_def = entity_def::of(world, target);
-    let is_source = target_ref.contains::<ResourceSourceComponent>()
-        && target_def
-            .resource_source
-            .as_ref()
-            .is_some_and(|source| carrier_def.can_carry(source.kind()));
-    let is_storage = target_def.resource_storage.is_some();
-    if !is_source && !is_storage {
-        return OrderState::Finished;
+    // A source of a kind the carrier works names the order's kind outright.
+    if world.entity(target).contains::<ResourceSourceComponent>()
+        && let Some(source) = target_def.resource_source.as_ref()
+        && carrier_def.can_carry(source.kind())
+    {
+        return Ok(Reading {
+            kind: source.kind().to_string(),
+            source: Some(target_id),
+        });
     }
-
-    // The order's kind: a source target names it outright, a storage target
-    // inherits the carried load's. With neither there is nothing to harvest,
-    // and the order refuses outright.
-    let kind = if is_source {
-        target_def
-            .resource_source
-            .as_ref()
-            .map(|source| source.kind().to_string())
-    } else {
-        world
-            .entity(entity)
-            .get::<ResourceCarrierComponent>()
-            .and_then(|carrier| carrier.kind.clone())
+    // A storage takes a delivery: the carrier's own, holding a load of a kind
+    // the storage accepts.
+    let Some(storage) = target_def.resource_storage.as_ref() else {
+        return Err(Refusal::TargetUnfit);
     };
-    let Some(kind) = kind else {
+    let own = matches!(
+        (entity_def::owner(world, entity), entity_def::owner(world, target)),
+        (Some(carrier), Some(holder)) if carrier == holder
+    );
+    let load = world
+        .entity(entity)
+        .get::<ResourceCarrierComponent>()
+        .filter(|carrier| carrier.amount > 0)
+        .and_then(|carrier| carrier.kind.clone());
+    match load {
+        Some(kind) if own && storage.accepts(&kind) => Ok(Reading { kind, source: None }),
+        Some(_) | None => Err(Refusal::TargetUnfit),
+    }
+}
+
+/// Called once when a Harvest order becomes the front `New` entry.
+///
+/// Inserts the driver component and returns `InProcessing`, or `Finished`
+/// immediately when the order cannot start — see [`can_start`].
+pub fn prepare(entity: Entity, order: &Order, world: &mut World) -> OrderState {
+    let Ok(Reading { kind, source }) = reading(world, entity, order) else {
         return OrderState::Finished;
     };
-
     world
         .entity_mut(entity)
-        .insert(HarvestComponent::new(kind, is_source.then_some(target_id)));
+        .insert(HarvestComponent::new(kind, source));
     OrderState::InProcessing
 }
 
@@ -248,11 +268,7 @@ fn advance(
             return Processing::state(OrderState::InProcessing);
         }
 
-        let Some(player) = world
-            .entity(entity)
-            .get::<OwnerComponent>()
-            .map(|o| o.player())
-        else {
+        let Some(player) = entity_def::owner(world, entity) else {
             return Processing::state(OrderState::Finished);
         };
         let Some(storage) = resolve_storage(entity, order, &kind, player, world) else {
@@ -308,7 +324,7 @@ fn advance(
         world,
         entity,
         source_entity,
-        work::reach(world, entity, EntityStatId::HARVEST_RANGE),
+        entity_def::effective_stat_u32(world, entity, EntityStatId::HARVEST_RANGE),
     ) {
         Destination::OutOfReach => {
             // The way to this source is shut, not the source spent: pick
@@ -455,8 +471,8 @@ fn begin_trip(
 /// stands in that case — it is still at work and still holds its source — and the
 /// caller retries next tick.
 fn end_trip(world: &mut World, entity: Entity, harvest: &mut HarvestComponent) -> bool {
-    let (anchor, size) = own_footprint(world, entity);
-    if !spawn::reveal_entity_near(world, entity, anchor, size) {
+    let footprint = entity_def::footprint_rect(world, entity);
+    if !spawn::reveal_entity_near(world, entity, footprint.origin, footprint.size) {
         return false;
     }
 
@@ -470,8 +486,8 @@ fn end_trip(world: &mut World, entity: Entity, harvest: &mut HarvestComponent) -
 fn end_trip_or_retry(world: &mut World, entity: Entity, harvest: &mut HarvestComponent) {
     stop_work(world, entity, harvest);
 
-    let (anchor, size) = own_footprint(world, entity);
-    work::leave(world, entity, anchor, size);
+    let footprint = entity_def::footprint_rect(world, entity);
+    work::leave(world, entity, footprint.origin, footprint.size);
 }
 
 /// Puts down the work: the carrier is at it no longer, and its source is given back up
@@ -489,12 +505,6 @@ fn stop_work(world: &mut World, entity: Entity, harvest: &mut HarvestComponent) 
     if let Some(source) = world.resource::<EntityIndex>().alive(source_id) {
         crew::leave_and_unmark::<UnderHarvestComponent>(world, source, entity);
     }
-}
-
-/// The cell and footprint size the entity stands on, used as the reveal anchor.
-fn own_footprint(world: &World, entity: Entity) -> (CellPos, CellSize) {
-    let (position, size) = entity_def::footprint(world, entity);
-    (CellPos::from(position), size)
 }
 
 /// Picks the source to harvest from: the trip in progress, the source the order
@@ -557,7 +567,7 @@ fn source_matches(
 }
 
 /// Picks the storage to deliver to: the ordered target if it qualifies, otherwise
-/// the nearest finished storage of the owner that accepts `kind`.
+/// the nearest operating storage of the owner that accepts `kind`.
 fn resolve_storage(
     entity: Entity,
     order: &Order,
@@ -566,15 +576,12 @@ fn resolve_storage(
     world: &World,
 ) -> Option<Entity> {
     let qualifies = |storage: Entity| -> bool {
-        let storage_ref = world.entity(storage);
         entity_def::of(world, storage)
             .resource_storage
             .as_ref()
             .is_some_and(|s| s.accepts(kind))
-            && storage_ref
-                .get::<OwnerComponent>()
-                .is_some_and(|o| o.player() == player)
-            && !storage_ref.contains::<UnderConstructionComponent>()
+            && entity_def::owner(world, storage) == Some(player)
+            && orders::target_operating(world, storage).is_ok()
     };
 
     let target_id = order

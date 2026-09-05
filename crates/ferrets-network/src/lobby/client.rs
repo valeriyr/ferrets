@@ -2,7 +2,7 @@
 
 use std::net::{TcpListener, UdpSocket};
 
-use ferrets_simulation::session::player_slot::{PlayerId, TeamId};
+use ferrets_simulation::session::{player_id::PlayerId, player_slot::TeamId};
 
 use crate::{
     control::{ControlChannel, ControlEvent},

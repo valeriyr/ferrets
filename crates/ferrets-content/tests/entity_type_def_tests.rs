@@ -4,6 +4,7 @@
 mod utils;
 
 use ferrets_content::{
+    build::BuilderAttendance,
     dying::DyingDef,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
@@ -38,7 +39,7 @@ fn fully_loaded_definition_is_valid() {
         .with_build_time(6)
         .with_trainer(["footman"])
         .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
-        .with_builder(["depot"], WorkPresence::Hidden)
+        .with_builder(["depot"], BuilderAttendance::Crew(WorkPresence::Hidden))
         .with_resource_source("gold", DepletionPolicy::Destroy)
         .with_resource_carrier([("gold", HarvestData::new(5, 2, WorkPresence::Hidden))])
         .with_resource_storage(["gold"]);
@@ -130,13 +131,16 @@ fn empty_trains_entry_panics() {
 #[test]
 #[should_panic(expected = "builds must not be empty")]
 fn empty_builds_list_panics() {
-    footman().with_builder(Vec::<String>::new(), WorkPresence::Hidden);
+    footman().with_builder(
+        Vec::<String>::new(),
+        BuilderAttendance::Crew(WorkPresence::Hidden),
+    );
 }
 
 #[test]
 #[should_panic(expected = "constructed type names must not be empty")]
 fn empty_builds_entry_panics() {
-    footman().with_builder([""], WorkPresence::Hidden);
+    footman().with_builder([""], BuilderAttendance::Crew(WorkPresence::Hidden));
 }
 
 //

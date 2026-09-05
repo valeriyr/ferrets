@@ -14,9 +14,9 @@ use ferrets_script::{
     ai::view::content::ContentView,
     engine::{ScriptEngine, lua::LuaEngine},
 };
-use ferrets_simulation::session::{GameSession, ai_vision::AiVision, player_slot::PlayerId};
+use ferrets_simulation::session::{GameSession, ai_vision::AiVision, player_id::PlayerId};
 
-/// The chassis both race brains run on: pure helpers plus the economy, build,
+/// The chassis every race brain runs on: pure helpers plus the economy, build,
 /// research, and attack routines. Prepended to each brain, so its locals are
 /// in scope for the race's `define_ai`. Routines that spend take a mutable
 /// `budget` table (`gold`, `wood`, `supply`) so one think never over-commits
@@ -202,7 +202,8 @@ const COMMON_AI: &str = r#"
     -- Queues one `type_name` on `building` when the budget allows. Returns
     -- whether the order was placed.
     local function train_from(commands, budget, building, type_name)
-        if not building.under_construction and #building.train_queue < MAX_QUEUE
+        if not building.under_construction and not building.disabled
+            and #building.train_queue < MAX_QUEUE
             and budget.supply >= 1
             and afford(budget, type_name) then
             commands[#commands + 1] =
@@ -247,6 +248,34 @@ const COMMON_AI: &str = r#"
             budget.gold = budget.gold - cost_of(wanted, "gold")
             budget.wood = budget.wood - cost_of(wanted, "wood")
         end
+    end
+
+    -- The stockpile price of `type_name` changing into `into`, per kind.
+    local function morph_cost_of(type_name, into, kind)
+        for _, morph in ipairs(content.entities[type_name].morphs or {}) do
+            if morph.into == into then
+                for _, entry in ipairs(morph.cost) do
+                    if entry.kind == kind then return entry.amount end
+                end
+                return 0
+            end
+        end
+        return 0
+    end
+
+    -- Changes one idle `unit` into `into` when the budget allows. Returns
+    -- whether the order was placed.
+    local function morph_one(commands, budget, unit, into)
+        local gold = morph_cost_of(unit.type_name, into, "gold")
+        local wood = morph_cost_of(unit.type_name, into, "wood")
+        if unit.idle and not unit.hidden and budget.gold >= gold and budget.wood >= wood then
+            commands[#commands + 1] = { kind = "select", id = unit.id }
+            commands[#commands + 1] = { kind = "morph", type_name = into }
+            budget.gold = budget.gold - gold
+            budget.wood = budget.wood - wood
+            return true
+        end
+        return false
     end
 
     -- Once the wave is big enough, pushes it out: fighters attack-move onto
@@ -555,6 +584,125 @@ const ORC_AI: &str = r#"
     })
 "#;
 
+/// The swarm brain: drone economy, then drones spent on the spawning pit the
+/// swarmlings come from, a brood nest whenever headroom runs dry, and a tumor
+/// to walk the creep outward; a swarmling in four cocoons into a ravager, and
+/// the swarm musters and marches as a wave.
+const SWARM_AI: &str = r#"
+    define_ai("swarm", {
+        period = 20,
+        vision = "filtered",
+        think = function(state, view)
+            local commands = {}
+            local budget = budget_of(view)
+            local groups = muster(view)
+            local hives = group(groups, "hive")
+            local drones = group(groups, "drone")
+            local pits = group(groups, "spawning_pit")
+            local nests = group(groups, "brood_nest")
+            local tumors = group(groups, "tumor")
+            local swarmlings = group(groups, "swarmling")
+            local cocoons = group(groups, "cocoon")
+            local ravagers = group(groups, "ravager")
+            local hive = hives[1]
+
+            keep_workers(commands, budget, hive, hives, drones, "drone")
+
+            -- The pit first, a nest whenever headroom runs dry, and once the
+            -- army is fed a tumor that carries the creep outward. Each costs
+            -- the drone that becomes it, which the worker line replaces.
+            local wanted = nil
+            if #pits == 0 then
+                wanted = "spawning_pit"
+            elseif budget.supply < 2 then
+                wanted = "brood_nest"
+            elseif #tumors == 0 then
+                wanted = "tumor"
+            end
+            local builder_id =
+                build_next(commands, state, view, drones, hive, wanted, budget)
+            local need_wood = wanted ~= nil and budget.wood < cost_of(wanted, "wood")
+            assign_harvesters(commands, view, drones, need_wood, builder_id)
+
+            -- The pending structure holds its price back from the army.
+            reserve(budget, wanted)
+
+            -- One swarmling in four grows into a ravager, cocoons counting
+            -- as ravagers on the way; the growth is refused for free before
+            -- the pit stands.
+            if any_standing(pits)
+                and (#ravagers + #cocoons) * 4 < #swarmlings then
+                for _, s in ipairs(swarmlings) do
+                    if morph_one(commands, budget, s, "ravager") then break end
+                end
+            end
+
+            for _, pit in ipairs(pits) do
+                if train_from(commands, budget, pit, "swarmling") then break end
+            end
+
+            local fighters = {}
+            for _, e in ipairs(swarmlings) do fighters[#fighters + 1] = e end
+            for _, e in ipairs(ravagers) do fighters[#fighters + 1] = e end
+            attack_wave(commands, view, fighters, {}, hive)
+
+            return commands
+        end,
+    })
+"#;
+
+/// The conclave brain: probe economy, a pylon for headroom and a gateway in
+/// the nexus's own power, the probes placing each site and leaving it to warp
+/// in on its own; a photon cannon guards the base once the army is fed, and
+/// zealots muster and march as a wave.
+const CONCLAVE_AI: &str = r#"
+    define_ai("conclave", {
+        period = 20,
+        vision = "filtered",
+        think = function(state, view)
+            local commands = {}
+            local budget = budget_of(view)
+            local groups = muster(view)
+            local halls = group(groups, "nexus")
+            local probes = group(groups, "probe")
+            local pylons = group(groups, "pylon")
+            local gateways = group(groups, "gateway")
+            local cannons = group(groups, "photon_cannon")
+            local zealots = group(groups, "zealot")
+            local hall = halls[1]
+
+            keep_workers(commands, budget, hall, halls, probes, "probe")
+
+            -- The gateway stands in the nexus's power, so it comes first; a
+            -- pylon whenever headroom runs dry, and once production is fed the
+            -- cannon.
+            local wanted = nil
+            if #gateways == 0 then
+                wanted = "gateway"
+            elseif budget.supply < 2 then
+                wanted = "pylon"
+            elseif #cannons == 0 then
+                wanted = "photon_cannon"
+            end
+            local builder_id =
+                build_next(commands, state, view, probes, hall, wanted, budget)
+            local need_wood = wanted ~= nil and budget.wood < cost_of(wanted, "wood")
+            assign_harvesters(commands, view, probes, need_wood, builder_id)
+
+            -- The pending structure holds its price back from the army.
+            reserve(budget, wanted)
+
+            for _, gateway in ipairs(gateways) do
+                if train_from(commands, budget, gateway, "zealot") then break end
+            end
+
+            attack_wave(commands, view, zealots, {}, hall)
+
+            return commands
+        end,
+    })
+"#;
+
 /// The human brain's full source: the shared chassis plus its `define_ai`.
 pub fn human_ai() -> String {
     format!("{COMMON_AI}\n{HUMAN_AI}")
@@ -565,12 +713,24 @@ pub fn orc_ai() -> String {
     format!("{COMMON_AI}\n{ORC_AI}")
 }
 
+/// The swarm brain's full source: the shared chassis plus its `define_ai`.
+pub fn swarm_ai() -> String {
+    format!("{COMMON_AI}\n{SWARM_AI}")
+}
+
+/// The conclave brain's full source: the shared chassis plus its `define_ai`.
+pub fn conclave_ai() -> String {
+    format!("{COMMON_AI}\n{CONCLAVE_AI}")
+}
+
 /// The brain source a race's AI slots load, or `None` for a race with no
 /// demo brain — its slots idle on unmanned input.
 fn race_brain(race: &str) -> Option<String> {
     match race {
         "human" => Some(human_ai()),
         "orc" => Some(orc_ai()),
+        "swarm" => Some(swarm_ai()),
+        "conclave" => Some(conclave_ai()),
         _ => None,
     }
 }

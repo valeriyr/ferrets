@@ -11,16 +11,18 @@ use ferrets_math::FixedU64;
 
 use crate::{
     components::{
-        build::UnderConstructionComponent, entity_stats::StatsComponent, owner::OwnerComponent,
+        build::{BuildComponent, UnderConstructionComponent},
+        entity_stats::StatsComponent,
         train::TrainQueueComponent,
     },
+    entity_def,
     entity_index::EntityIndex,
     player_stats::PlayerStats,
-    session::player_slot::PlayerId,
+    session::player_id::PlayerId,
 };
 use ferrets_content::{
-    entity_stats::EntityStatId, entity_type_def::EntityTypeDef, player_stats::PlayerStatId,
-    registry::ContentRegistry,
+    build::BuilderAttendance, entity_stats::EntityStatId, entity_type_def::EntityTypeDef,
+    player_stats::PlayerStatId, registry::ContentRegistry,
 };
 
 /// The supply available to `player`: everything its standing entities provide,
@@ -61,15 +63,21 @@ fn totals(world: &World, player: PlayerId) -> (FixedU64, FixedU64) {
 
     for (_, entity) in world.resource::<EntityIndex>().alive_entries() {
         let entity_ref = world.entity(entity);
-        if entity_ref
-            .get::<OwnerComponent>()
-            .is_none_or(|owner| owner.player() != player)
-        {
+        if entity_def::owner(world, entity) != Some(player) {
             continue;
         }
         // A site still going up neither feeds nor eats: it provides nothing
         // until it stands, and costs nothing until then either.
         if entity_ref.contains::<UnderConstructionComponent>() {
+            continue;
+        }
+        // A builder inside the site that will consume it has given its supply
+        // up already: it comes back only if the work ends early.
+        if entity_ref
+            .get::<BuildComponent>()
+            .is_some_and(|build| build.building.is_some())
+            && let Some(BuilderAttendance::Consumed) = entity_def::builder_attendance(world, entity)
+        {
             continue;
         }
 

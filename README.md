@@ -38,7 +38,7 @@ cargo test
 Run the demo game:
 
 ```bash
-cargo run -p ferrets-demo
+cargo run --bin demo
 ```
 
 ## Workspace

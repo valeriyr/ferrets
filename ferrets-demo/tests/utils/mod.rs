@@ -11,15 +11,47 @@ use ferrets_script::{content, engine::lua::LuaEngine};
 use ferrets_simulation::{
     command::{PlayerCommand, SelectMode},
     components::location::LocationComponent,
+    events::SpawnCause,
     input::{InputFrames, PlayerFrame},
     map::Map,
     movement_model::MovementModel,
     session::{
         GameSession, ai_hosting::AiHosting, authority::Authority, drop_policy::DropPolicy,
-        finish_policy::FinishPolicy, local_role::LocalRole, player_slot::PlayerSlot,
-        player_type::PlayerType,
+        finish_policy::FinishPolicy, local_role::LocalRole, player_id::PlayerId,
+        player_slot::PlayerSlot, player_type::PlayerType,
     },
+    simulation_id::SimulationId,
+    spawn::{self, FieldReach},
 };
+
+/// Creates an entity of `type_name` at `position` for `owner`, its field
+/// sources at their initial reach, announcing nothing.
+pub fn create_entity(
+    world: &mut World,
+    type_name: &str,
+    position: FixedUVec2,
+    owner: Option<PlayerId>,
+) -> Option<(Entity, SimulationId)> {
+    spawn::create_entity(world, type_name, position, owner, FieldReach::Initial)
+}
+
+/// Like [`create_entity`], announcing the spawn with `cause`.
+pub fn spawn_entity(
+    world: &mut World,
+    type_name: &str,
+    position: FixedUVec2,
+    owner: Option<PlayerId>,
+    cause: SpawnCause,
+) -> Option<(Entity, SimulationId)> {
+    spawn::spawn_entity(
+        world,
+        type_name,
+        position,
+        owner,
+        cause,
+        FieldReach::Initial,
+    )
+}
 
 /// A headless single-player game on the built-in mission's map and content,
 /// forced onto the given movement model.

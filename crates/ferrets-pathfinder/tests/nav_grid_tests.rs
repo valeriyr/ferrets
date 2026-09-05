@@ -1,9 +1,9 @@
-//! `NavGrid` layer occupancy and footprint passability.
+//! `NavGrid` terrain, layer occupancy, unit claims and footprint passability.
 
 mod utils;
 
 use ferrets_geometry::cell_size::CellSize;
-use ferrets_pathfinder::{mover_shape::MoverShape, nav_grid::NavGrid};
+use ferrets_pathfinder::{layer_mask::LayerMask, mover_shape::MoverShape, nav_grid::NavGrid};
 
 //
 // ─── Layers ───────────────────────────────────────────────────────────────────
@@ -342,4 +342,56 @@ fn clear_claims_releases_units_but_keeps_statics() {
 
     assert!(grid.is_passable_by(utils::GROUND, utils::nav(2, 2)));
     assert!(grid.is_statically_occupied_by(utils::GROUND, utils::nav(5, 5)));
+}
+
+//
+// ─── Terrain ──────────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn terrain_blocks_static_and_movement_queries() {
+    let mut grid = utils::grid(8, 8);
+    grid.set_terrain_blocked(utils::GROUND, utils::nav(3, 3));
+
+    assert!(grid.is_statically_occupied_by(utils::GROUND, utils::nav(3, 3)));
+    assert!(grid.is_occupied_by(utils::GROUND, utils::nav(3, 3)));
+    assert!(!grid.is_terrain_passable_by(utils::GROUND, utils::nav(3, 3)));
+}
+
+#[test]
+fn terrain_query_ignores_occupancy_and_claims() {
+    let mut grid = utils::grid(8, 8);
+    grid.set_occupied(utils::GROUND, utils::nav(3, 3), true);
+    grid.set_claimed_by(utils::GROUND, utils::nav(4, 4), true);
+
+    assert!(grid.is_terrain_passable_by(utils::GROUND, utils::nav(3, 3)));
+    assert!(grid.is_terrain_passable_by(utils::GROUND, utils::nav(4, 4)));
+}
+
+#[test]
+fn freeing_occupancy_keeps_terrain_blocked() {
+    let mut grid = utils::grid(8, 8);
+    grid.set_terrain_blocked(utils::GROUND, utils::nav(3, 3));
+    grid.set_occupied(utils::GROUND, utils::nav(3, 3), true);
+
+    grid.set_occupied(utils::GROUND, utils::nav(3, 3), false);
+
+    assert!(grid.is_statically_occupied_by(utils::GROUND, utils::nav(3, 3)));
+}
+
+#[test]
+fn set_terrain_replaces_earlier_terrain() {
+    let mut grid = utils::grid(8, 8);
+    grid.set_terrain_blocked(utils::GROUND, utils::nav(3, 3));
+    grid.set_terrain_blocked(LayerMask::EMPTY, utils::nav(3, 3));
+
+    assert!(grid.is_terrain_passable_by(utils::GROUND, utils::nav(3, 3)));
+    assert!(grid.is_passable_by(utils::GROUND, utils::nav(3, 3)));
+}
+
+#[test]
+fn terrain_query_blocks_out_of_bounds() {
+    let grid = utils::grid(8, 8);
+
+    assert!(!grid.is_terrain_passable_by(utils::GROUND, utils::nav(8, 0)));
 }

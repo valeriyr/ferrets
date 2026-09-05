@@ -3,10 +3,7 @@
 mod utils;
 
 use ferrets_math::fixed_urect::FixedURect;
-use ferrets_simulation::{
-    command::{PlayerCommand, SelectMode},
-    spawn,
-};
+use ferrets_simulation::command::{PlayerCommand, SelectMode};
 
 //
 // ─── Combine modes ───────────────────────────────────────────────────────────
@@ -16,8 +13,8 @@ use ferrets_simulation::{
 fn shift_add_extends_selection() {
     let mut app = utils::selection_app();
     let world = app.world_mut();
-    let (_, a) = spawn::create_entity(world, "soldier", utils::pos(5, 5), Some(0)).unwrap();
-    let (_, b) = spawn::create_entity(world, "soldier", utils::pos(6, 5), Some(0)).unwrap();
+    let (_, a) = utils::create_entity(world, "soldier", utils::pos(5, 5), Some(0)).unwrap();
+    let (_, b) = utils::create_entity(world, "soldier", utils::pos(6, 5), Some(0)).unwrap();
 
     utils::select(&mut app, a);
     utils::push_command(
@@ -36,8 +33,8 @@ fn shift_add_extends_selection() {
 fn toggle_removes_selected_and_adds_unselected() {
     let mut app = utils::selection_app();
     let world = app.world_mut();
-    let (_, a) = spawn::create_entity(world, "soldier", utils::pos(5, 5), Some(0)).unwrap();
-    let (_, b) = spawn::create_entity(world, "soldier", utils::pos(6, 5), Some(0)).unwrap();
+    let (_, a) = utils::create_entity(world, "soldier", utils::pos(5, 5), Some(0)).unwrap();
+    let (_, b) = utils::create_entity(world, "soldier", utils::pos(6, 5), Some(0)).unwrap();
 
     utils::select(&mut app, a);
     utils::push_command(
@@ -63,8 +60,8 @@ fn toggle_removes_selected_and_adds_unselected() {
 fn remove_mode_subtracts_from_selection() {
     let mut app = utils::selection_app();
     let world = app.world_mut();
-    let (_, a) = spawn::create_entity(world, "soldier", utils::pos(5, 5), Some(0)).unwrap();
-    let (_, b) = spawn::create_entity(world, "soldier", utils::pos(6, 5), Some(0)).unwrap();
+    let (_, a) = utils::create_entity(world, "soldier", utils::pos(5, 5), Some(0)).unwrap();
+    let (_, b) = utils::create_entity(world, "soldier", utils::pos(6, 5), Some(0)).unwrap();
 
     utils::push_command(
         &mut app,
@@ -93,8 +90,8 @@ fn remove_mode_subtracts_from_selection() {
 fn box_select_excludes_buildings() {
     let mut app = utils::selection_app();
     let world = app.world_mut();
-    let (_, unit) = spawn::create_entity(world, "soldier", utils::pos(5, 5), Some(0)).unwrap();
-    spawn::create_entity(world, "keep", utils::pos(7, 7), Some(0)).unwrap();
+    let (_, unit) = utils::create_entity(world, "soldier", utils::pos(5, 5), Some(0)).unwrap();
+    utils::create_entity(world, "keep", utils::pos(7, 7), Some(0)).unwrap();
 
     utils::push_command(
         &mut app,
@@ -112,8 +109,8 @@ fn box_select_excludes_buildings() {
 fn box_select_keeps_only_own_units_when_present() {
     let mut app = utils::selection_app();
     let world = app.world_mut();
-    let (_, own) = spawn::create_entity(world, "soldier", utils::pos(5, 5), Some(0)).unwrap();
-    spawn::create_entity(world, "soldier", utils::pos(6, 5), Some(1)).unwrap();
+    let (_, own) = utils::create_entity(world, "soldier", utils::pos(5, 5), Some(0)).unwrap();
+    utils::create_entity(world, "soldier", utils::pos(6, 5), Some(1)).unwrap();
 
     utils::push_command(
         &mut app,
@@ -133,9 +130,9 @@ fn box_select_falls_back_to_single_other_owner() {
     let world = app.world_mut();
     // A scout outside the box keeps the enemies in sight — a boxed enemy is
     // selectable for inspection only while someone actually sees it.
-    spawn::create_entity(world, "soldier", utils::pos(3, 5), Some(0)).unwrap();
-    let (_, first) = spawn::create_entity(world, "soldier", utils::pos(5, 5), Some(1)).unwrap();
-    spawn::create_entity(world, "soldier", utils::pos(6, 5), Some(1)).unwrap();
+    utils::create_entity(world, "soldier", utils::pos(3, 5), Some(0)).unwrap();
+    let (_, first) = utils::create_entity(world, "soldier", utils::pos(5, 5), Some(1)).unwrap();
+    utils::create_entity(world, "soldier", utils::pos(6, 5), Some(1)).unwrap();
 
     utils::push_command(
         &mut app,
@@ -158,11 +155,11 @@ fn box_select_falls_back_to_single_other_owner() {
 fn select_by_type_grabs_own_class_on_screen() {
     let mut app = utils::selection_app();
     let world = app.world_mut();
-    let (_, a) = spawn::create_entity(world, "soldier", utils::pos(5, 5), Some(0)).unwrap();
-    let (_, b) = spawn::create_entity(world, "soldier", utils::pos(6, 5), Some(0)).unwrap();
+    let (_, a) = utils::create_entity(world, "soldier", utils::pos(5, 5), Some(0)).unwrap();
+    let (_, b) = utils::create_entity(world, "soldier", utils::pos(6, 5), Some(0)).unwrap();
     // A same-class enemy and a different-class own unit are both excluded.
-    spawn::create_entity(world, "soldier", utils::pos(7, 5), Some(1)).unwrap();
-    spawn::create_entity(world, "critter", utils::pos(8, 5), Some(0)).unwrap();
+    utils::create_entity(world, "soldier", utils::pos(7, 5), Some(1)).unwrap();
+    utils::create_entity(world, "critter", utils::pos(8, 5), Some(0)).unwrap();
 
     utils::push_command(
         &mut app,
@@ -187,8 +184,8 @@ fn fogged_enemy_is_not_selectable_by_id() {
     // nothing — the fog that hides the sprite hides the stats too.
     let mut app = utils::selection_app();
     let world = app.world_mut();
-    spawn::create_entity(world, "soldier", utils::pos(3, 5), Some(0)).unwrap();
-    let (_, fogged) = spawn::create_entity(world, "soldier", utils::pos(25, 25), Some(1)).unwrap();
+    utils::create_entity(world, "soldier", utils::pos(3, 5), Some(0)).unwrap();
+    let (_, fogged) = utils::create_entity(world, "soldier", utils::pos(25, 25), Some(1)).unwrap();
 
     utils::push_command(
         &mut app,
@@ -208,8 +205,8 @@ fn boxed_fogged_enemy_is_not_kept_for_inspection() {
     // inside is fogged, so the box selects nothing at all.
     let mut app = utils::selection_app();
     let world = app.world_mut();
-    spawn::create_entity(world, "soldier", utils::pos(25, 25), Some(0)).unwrap();
-    spawn::create_entity(world, "soldier", utils::pos(5, 5), Some(1)).unwrap();
+    utils::create_entity(world, "soldier", utils::pos(25, 25), Some(0)).unwrap();
+    utils::create_entity(world, "soldier", utils::pos(5, 5), Some(1)).unwrap();
 
     utils::push_command(
         &mut app,

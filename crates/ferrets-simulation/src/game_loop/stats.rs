@@ -8,13 +8,14 @@ use crate::{
     components::{
         build::UnderConstructionComponent, energy::EnergyComponent, entity_buffs::BuffsComponent,
         entity_skills::SkillsComponent, entity_stats::StatsComponent, health::HealthComponent,
-        owner::OwnerComponent,
     },
+    entity_def,
     entity_index::EntityIndex,
+    fields,
     player_buffs::PlayerBuffs,
     player_skills::PlayerSkills,
     player_stats::PlayerStats,
-    session::{GameSession, player_slot::PlayerId},
+    session::{GameSession, player_id::PlayerId},
 };
 use ferrets_content::{
     entity_buffs::EntityBuffId,
@@ -44,8 +45,9 @@ pub fn apply_entity_buff(world: &mut World, entity: Entity, id: EntityBuffId) {
 
 /// Recomputes every entity's effective stats — the once-per-tick snapshot the
 /// rest of the tick reads — from its base stats and the entity modifiers that
-/// reach it: its own buffs, plus its owner's buffs and applied modifiers,
-/// which cover every unit the owner has. Runs before the systems that consume
+/// reach it: its own buffs, its owner's buffs and applied modifiers, which
+/// cover every unit the owner has, and the field effects that hold for where
+/// it stands. Runs before the systems that consume
 /// stats, so a buff applied by a command this tick is already in effect this
 /// tick. The dying are out of the alive index and keep their last snapshot.
 pub fn recompute_entity_stats(world: &mut World) {
@@ -75,9 +77,10 @@ pub fn recompute_entity_stats(world: &mut World) {
             Some(buffs) => entity_buff_modifiers(registry, buffs),
             None => Vec::new(),
         };
-        if let Some(owner) = entity_ref.get::<OwnerComponent>() {
-            modifiers.extend_from_slice(&owner_modifiers[owner.player() as usize]);
+        if let Some(owner) = entity_def::owner(world, entity) {
+            modifiers.extend_from_slice(&owner_modifiers[owner as usize]);
         }
+        modifiers.extend(fields::modifiers(world, entity));
         folds.push((entity, modifiers));
     }
 
@@ -179,12 +182,13 @@ pub fn process_energy_regen(world: &mut World) {
     }
 }
 
-/// Refills each health pool by one tick's `health_regen`, up to `max_health`.
+/// Moves each health pool by one tick: up by `health_regen` to `max_health`,
+/// then down by `health_drain`.
 ///
 /// Runs over the alive index, so the dying are already excluded; entities still
-/// under construction are skipped too — neither should mend on its own. A pool
-/// also settles back under a ceiling a debuff has lowered.
-pub fn process_health_regen(world: &mut World) {
+/// under construction are skipped too. A pool also settles back under a ceiling
+/// a debuff has lowered.
+pub fn process_health_flow(world: &mut World) {
     for (_, entity) in world.resource::<EntityIndex>().alive_entries() {
         let entity_ref = world.entity(entity);
         if entity_ref.contains::<UnderConstructionComponent>() {
@@ -209,8 +213,12 @@ pub fn process_health_regen(world: &mut World) {
         let regen = stats
             .effective(EntityStatId::HEALTH_REGEN)
             .unwrap_or(FixedU64::ZERO);
+        let drain = stats
+            .effective(EntityStatId::HEALTH_DRAIN)
+            .unwrap_or(FixedU64::ZERO);
         if let Some(mut health) = world.entity_mut(entity).get_mut::<HealthComponent>() {
             health.heal(regen, max);
+            health.drain(drain);
         }
     }
 }

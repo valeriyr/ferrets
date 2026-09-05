@@ -2,10 +2,13 @@
 //! with each other.
 
 use ferrets_content::{
+    build::BuilderAttendance,
     costs,
     entity_stats::EntityStatId,
+    field::{FieldAction, FieldCoverage, FieldPlacement, FieldVision},
     morph::{MorphCancel, MorphPlacement, MorphTime},
     skills::{EntityCastCost, EntityCastTarget, PlayerCastEffect, SkillCaster},
+    stand::StandingAct,
     targeting,
     work::WorkPresence,
 };
@@ -40,10 +43,26 @@ fn content_loads_and_validates() {
         "gryphon",
         "gryphon_aloft",
         "zeppelin",
+        "hive",
+        "drone",
+        "tumor",
+        "brood_nest",
+        "spawning_pit",
+        "swarmling",
+        "cocoon",
+        "ravager",
+        "nexus",
+        "probe",
+        "pylon",
+        "gateway",
+        "photon_cannon",
+        "zealot",
     ] {
         assert!(registry.entity(name).is_some(), "missing entity '{name}'");
     }
     assert!(registry.has_race("human") && registry.has_race("orc"));
+    assert!(registry.has_race("swarm") && registry.has_race("conclave"));
+    assert!(registry.field("creep").is_some() && registry.field("power").is_some());
     assert!(
         registry.has_layer(map::GROUND)
             && registry.has_layer(map::WATER)
@@ -85,8 +104,13 @@ fn worker_presences_cover_every_variant_and_differ_by_race() {
             .resource_carrier
             .as_ref()
             .expect("workers carry resources");
+        let BuilderAttendance::Crew(building) =
+            def.builder.as_ref().expect("workers build").attendance()
+        else {
+            panic!("the old races' workers attend their sites");
+        };
         vec![
-            def.builder.as_ref().expect("workers build").presence(),
+            building,
             def.repairer.as_ref().expect("workers mend").presence(),
             carrier
                 .harvest_data("wood")
@@ -118,6 +142,149 @@ fn worker_presences_cover_every_variant_and_differ_by_race() {
         peasant, peon,
         "the two races are meant to attend their work differently"
     );
+
+    // The field races' workers do not attend their sites, each in its own way.
+    let builds_as = |name: &str| {
+        registry
+            .entity(name)
+            .and_then(|def| def.builder.as_ref())
+            .map(|builder| builder.attendance())
+            .expect("the worker builds")
+    };
+    assert_eq!(builds_as("probe"), BuilderAttendance::Unattended);
+    assert_eq!(builds_as("drone"), BuilderAttendance::Consumed);
+}
+
+#[test]
+fn swarm_structures_are_built_by_drone_they_consume() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    let drone = registry.entity("drone").expect("drone is registered");
+    let builder = drone.builder.as_ref().expect("the drone builds");
+
+    // A drone is consumed by its site, and nothing of the swarm's mends: a hurt
+    // structure stays hurt. Structures keep ordinary build terms.
+    assert_eq!(builder.attendance(), BuilderAttendance::Consumed);
+    for name in [
+        "drone",
+        "swarmling",
+        "hive",
+        "tumor",
+        "brood_nest",
+        "spawning_pit",
+    ] {
+        let def = registry.entity(name).expect("swarm type is registered");
+        assert!(def.repairer.is_none(), "'{name}' must not repair");
+    }
+    for name in ["hive", "tumor", "brood_nest", "spawning_pit"] {
+        assert!(builder.can_build(name), "the drone builds '{name}'");
+        let structure = registry
+            .entity(name)
+            .expect("swarm structure is registered");
+        assert!(
+            structure.build_time.is_some() && !structure.cost.is_empty(),
+            "'{name}' is built and priced like any other structure"
+        );
+    }
+    assert!(
+        drone.morphs.is_empty(),
+        "a drone changes into nothing; it is consumed"
+    );
+}
+
+#[test]
+fn swarmling_grows_into_ravager_inside_cocoon() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    let swarmling = registry
+        .entity("swarmling")
+        .expect("swarmling is registered");
+    let [growth] = swarmling.morphs.as_slice() else {
+        panic!("the swarmling has exactly one change of form");
+    };
+
+    assert_eq!(growth.into_type(), "ravager");
+    assert_eq!(growth.via_type(), Some("cocoon"));
+    assert_eq!(growth.cancel(), MorphCancel::Refundable);
+    assert!(growth.requires().contains(&"spawning_pit".to_string()));
+    assert!(
+        growth
+            .costs()
+            .iter()
+            .any(|cost| matches!(cost, EntityCastCost::Resources(_))),
+        "growing costs the stockpile"
+    );
+
+    // The cocoon is helpless and the ravager is not.
+    let cocoon = registry.entity("cocoon").expect("cocoon is registered");
+    assert!(!cocoon.can_move() && !cocoon.can_attack());
+    let ravager = registry.entity("ravager").expect("ravager is registered");
+    assert!(ravager.can_move() && ravager.can_attack());
+}
+
+#[test]
+fn creep_watches_for_its_spreader_and_power_does_not() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    let creep = registry.field("creep").expect("creep field is registered");
+    let power = registry.field("power").expect("power field is registered");
+
+    assert_eq!(registry.field_def(creep).vision(), FieldVision::Watched);
+    assert_eq!(registry.field_def(power).vision(), FieldVision::Dark);
+    // The tumor leaves the watching to its creep.
+    let tumor = registry.entity("tumor").expect("tumor is registered");
+    assert_eq!(
+        tumor.base_stat(EntityStatId::SIGHT_RANGE),
+        Some(FixedU64::ONE)
+    );
+}
+
+#[test]
+fn conclave_probe_places_sites_and_nexus_projects_power() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    let power = registry.field("power").expect("power field is registered");
+
+    let probe = registry.entity("probe").expect("probe is registered");
+    assert_eq!(
+        probe.builder.as_ref().map(|builder| builder.attendance()),
+        Some(BuilderAttendance::Unattended)
+    );
+    assert!(probe.repairer.is_none(), "the probe must not repair");
+
+    // Both the nexus and the pylon power the ground around them, so the first
+    // gateway needs no pylon before it.
+    for name in ["nexus", "pylon"] {
+        let def = registry
+            .entity(name)
+            .expect("conclave structure is registered");
+        assert!(
+            def.field_sources
+                .iter()
+                .any(|source| { source.field() == power }),
+            "'{name}' projects power"
+        );
+    }
+
+    // A powered structure needs power under its whole footprint, not just its
+    // anchor.
+    for name in ["gateway", "photon_cannon"] {
+        let def = registry
+            .entity(name)
+            .expect("conclave structure is registered");
+        assert!(
+            def.field_placement.iter().any(|rule| matches!(
+                rule,
+                FieldPlacement::Requires { field, coverage: FieldCoverage::Footprint, .. }
+                    if *field == power
+            )),
+            "'{name}' needs power under its whole footprint"
+        );
+    }
+
+    // A pylon that comes to stand burns away creep nothing sustains around it.
+    let creep = registry.field("creep").expect("creep field is registered");
+    let pylon = registry.entity("pylon").expect("pylon is registered");
+    assert!(pylon.on_stand.iter().any(|act| matches!(
+        act,
+        StandingAct::Field { field, action: FieldAction::Clear, .. } if *field == creep
+    )));
 }
 
 #[test]
@@ -283,8 +450,8 @@ fn only_melee_and_siege_exclude_air() {
     let air = registry.layer(map::AIR).expect("air layer is registered");
 
     // Every weapon declares its layers; what stays deliberate per type is what
-    // it leaves out. Only the axe, the shell and the wagon's flat gun cannot
-    // answer what flies.
+    // it leaves out. Only the melee blades, the shell and the wagon's flat gun
+    // cannot answer what flies.
     let grounded: Vec<&str> = registry
         .entities()
         .filter(|def| def.can_attack())
@@ -292,7 +459,17 @@ fn only_melee_and_siege_exclude_air() {
         .map(|def| def.name.as_str())
         .collect();
 
-    assert_eq!(grounded, ["grunt", "mortar", "war_wagon"]);
+    assert_eq!(
+        grounded,
+        [
+            "grunt",
+            "mortar",
+            "ravager",
+            "swarmling",
+            "war_wagon",
+            "zealot"
+        ]
+    );
 }
 
 #[test]

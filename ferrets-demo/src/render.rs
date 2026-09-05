@@ -22,7 +22,7 @@ use ferrets_math::{
 };
 use ferrets_simulation::{
     components::{
-        build::{BuildComponent, UnderConstructionComponent},
+        build::{BuildComponent, SiteWork, UnderConstructionComponent},
         energy::EnergyComponent,
         entity_info::EntityInfoComponent,
         entity_stats::StatsComponent,
@@ -44,10 +44,11 @@ use ferrets_simulation::{
     entity_def,
     entity_index::EntityIndex,
     events::{EventRecord, SimulationEvent, SpawnCause},
+    fields::FieldGrid,
     impacts::PendingImpacts,
     order::Order,
     selection::Selection,
-    session::{GameSession, local_role::LocalRole, player_slot::PlayerId},
+    session::{GameSession, local_role::LocalRole, player_id::PlayerId},
     simulation_id::SimulationId,
     visibility::{CellVisibility, VisibilityGrid},
 };
@@ -149,6 +150,14 @@ pub struct Directional;
 /// A per-cell fog overlay sprite, darkened by the local team's visibility.
 #[derive(Component)]
 pub struct FogTile {
+    x: u32,
+    y: u32,
+}
+
+/// A per-cell field overlay sprite, tinted by what covers its cell: anyone's
+/// creep, or the viewed player's own power.
+#[derive(Component)]
+pub struct FieldTile {
     x: u32,
     y: u32,
 }
@@ -410,7 +419,7 @@ pub(crate) fn player_color(player: PlayerId) -> Color {
 enum Shape {
     /// The archer — a triangle that points where it faces.
     Triangle,
-    /// The grunt — a diamond.
+    /// Melee fighters — a diamond.
     Diamond,
     /// Siege units (those whose hits burst) — a pentagon.
     Pentagon,
@@ -418,7 +427,7 @@ enum Shape {
     Circle,
     /// Ships — a hull with a triangular bow pointing where it faces.
     Ship,
-    /// Barracks — a hexagon, distinct from the main hall.
+    /// Unit production — a hexagon, distinct from the main hall.
     Hexagon,
     /// The sea fortress — an octagonal wall. What sits on it is drawn from the
     /// guns it mounts, not from the shape.
@@ -442,9 +451,14 @@ enum Shape {
     Octagon,
     /// The watch tower — a square base bearing a lighter lookout platform.
     WatchTower,
-    /// The guard tower — the watch tower's armed upgrade: the lookout gains
-    /// a darker four-point turret.
+    /// Armed towers — the watch tower's silhouette with a darker four-point
+    /// turret on the lookout.
     GuardTower,
+    /// Growths — the creep tumor and the cocoon — a disc bearing a darker core.
+    Pod,
+    /// The pylon — a square base bearing a lighter crystal, a diamond standing
+    /// on its point.
+    Pylon,
     /// Main buildings and resource sources — a square.
     Square,
 }
@@ -452,13 +466,13 @@ enum Shape {
 /// Picks a shape from the entity type name. Add new types here.
 fn shape_for(type_name: &str) -> Shape {
     match type_name {
-        "peasant" | "peon" => Shape::Circle,
-        "grunt" => Shape::Diamond,
+        "peasant" | "peon" | "drone" | "probe" => Shape::Circle,
+        "grunt" | "swarmling" | "ravager" | "zealot" => Shape::Diamond,
         "archer" => Shape::Triangle,
         "mortar" => Shape::Pentagon,
         "medic" | "shaman" => Shape::Cross,
         "ship" => Shape::Ship,
-        "barracks" | "war_camp" => Shape::Hexagon,
+        "barracks" | "war_camp" | "spawning_pit" | "gateway" => Shape::Hexagon,
         "sea_fortress" => Shape::Fortress,
         "gryphon" => Shape::Gryphon { aloft: false },
         "gryphon_aloft" => Shape::Gryphon { aloft: true },
@@ -466,7 +480,9 @@ fn shape_for(type_name: &str) -> Shape {
         "war_wagon" => Shape::WarWagon,
         "siege_works" => Shape::Octagon,
         "watch_tower" => Shape::WatchTower,
-        "guard_tower" => Shape::GuardTower,
+        "guard_tower" | "photon_cannon" => Shape::GuardTower,
+        "tumor" | "cocoon" => Shape::Pod,
+        "pylon" => Shape::Pylon,
         _ => Shape::Square,
     }
 }
@@ -678,6 +694,34 @@ pub fn attach_sprites(
                         Mesh2d(meshes.add(RegularPolygon::new(radius * 0.42, 4))),
                         MeshMaterial2d(materials.add(color.darker(0.1))),
                         Transform::from_translation(Vec3::new(0.0, 0.0, 0.2)),
+                    ));
+                });
+            }
+            Shape::Pod => {
+                // A disc with a darker core: a growth on the ground rather than
+                // a structure standing on it.
+                entity.insert((
+                    Mesh2d(meshes.add(Circle::new(radius))),
+                    MeshMaterial2d(materials.add(color)),
+                ));
+                entity.with_children(|parent| {
+                    parent.spawn((
+                        Mesh2d(meshes.add(Circle::new(radius * 0.45))),
+                        MeshMaterial2d(materials.add(color.darker(0.15))),
+                        Transform::from_translation(Vec3::new(0.0, 0.0, 0.1)),
+                    ));
+                });
+            }
+            Shape::Pylon => {
+                // A square base with a lighter crystal standing on its point,
+                // taller than it is wide.
+                let px = Vec2::new(size.width as f32, size.height as f32) * CELL_PX * 0.85;
+                entity.insert(Sprite::from_color(color, px));
+                entity.with_children(|parent| {
+                    parent.spawn((
+                        Mesh2d(meshes.add(Rhombus::new(radius * 0.7, radius * 1.4))),
+                        MeshMaterial2d(materials.add(color.lighter(0.25))),
+                        Transform::from_translation(Vec3::new(0.0, 0.0, 0.1)),
                     ));
                 });
             }
@@ -1514,10 +1558,22 @@ pub fn spawn_terrain_tiles(
         ));
     }
 
-    // Fog overlay: one darkening tile per cell above the terrain but below
-    // entities (z 0.5), updated each frame from the local team's visibility.
+    // Field overlay between the terrain and the fog (z 0.25), and the fog
+    // overlay above it but below entities (z 0.5): one tile per cell each,
+    // updated every frame from the grids.
     for y in 0..map.height() {
         for x in 0..map.width() {
+            let center = Vec3::new(
+                (x as f32 + 0.5) * CELL_PX,
+                -(y as f32 + 0.5) * CELL_PX,
+                0.25,
+            );
+            commands.spawn((
+                FieldTile { x, y },
+                Sprite::from_color(Color::NONE, Vec2::splat(CELL_PX)),
+                Transform::from_translation(center),
+                InGameUi,
+            ));
             let center = Vec3::new((x as f32 + 0.5) * CELL_PX, -(y as f32 + 0.5) * CELL_PX, 0.5);
             commands.spawn((
                 FogTile { x, y },
@@ -1525,6 +1581,49 @@ pub fn spawn_terrain_tiles(
                 Transform::from_translation(center),
                 InGameUi,
             ));
+        }
+    }
+}
+
+/// The tint a covered cell is drawn in, by field name: creep is shown
+/// whoever's it is, power only where it is the viewed player's own.
+pub(crate) const CREEP_TINT: Color = Color::srgba(0.55, 0.2, 0.65, 0.5);
+pub(crate) const POWER_TINT: Color = Color::srgba(0.25, 0.55, 1.0, 0.28);
+
+/// The player whose own fields this node draws: the local player, or the
+/// side an observer is watching.
+pub(crate) fn viewed_player(
+    session: &GameSession,
+    watch: &ObserverPerspective,
+) -> Option<PlayerId> {
+    session.local_player().or(watch.0)
+}
+
+/// Tints each field tile by what covers its cell.
+pub fn update_field_overlay(
+    session: Res<GameSession>,
+    registry: Res<ContentRegistry>,
+    fields: Res<FieldGrid>,
+    watch: Res<ObserverPerspective>,
+    mut tiles: Query<(&FieldTile, &mut Sprite)>,
+) {
+    let creep = registry.field("creep");
+    let power = registry.field("power");
+    let viewed = viewed_player(&session, &watch);
+    for (tile, mut sprite) in &mut tiles {
+        let cell = CellPos::new(tile.x, tile.y);
+        let color = if creep.is_some_and(|creep| !fields.covered(creep, cell).is_empty()) {
+            CREEP_TINT
+        } else if let (Some(power), Some(player)) = (power, viewed)
+            && fields.covered(power, cell).contains(player)
+        {
+            POWER_TINT
+        } else {
+            Color::NONE
+        };
+        // Write only on change, as the fog does.
+        if sprite.color != color {
+            sprite.color = color;
         }
     }
 }
@@ -1811,7 +1910,10 @@ pub fn draw_work_markers(
             crew += repair.repairers.len();
         }
         if let Some(construction) = construction {
-            crew += construction.builders.len();
+            match &construction.work {
+                SiteWork::Crew { builders } => crew += builders.len(),
+                SiteWork::Unattended { .. } => {}
+            }
         }
 
         // The crew count reads as HUD: its offsets pass through the
@@ -1960,7 +2062,7 @@ pub fn draw_status_bars(
             let time = def
                 .morphs
                 .iter()
-                .find(|transition| transition.into_type() == morph.type_name)
+                .find(|transition| transition.into_type() == morph.into)
                 .map(|transition| match transition.time() {
                     MorphTime::Constant(ticks) => ticks,
                     MorphTime::Stat(id) => stats

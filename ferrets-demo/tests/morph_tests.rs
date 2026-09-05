@@ -31,7 +31,7 @@ use ferrets_simulation::{
 #[test]
 fn taking_off_swaps_occupied_layer() {
     let mut app = utils::demo_map_app(MovementModel::Continuous);
-    let (gryphon, gryphon_id) = spawn::create_entity(
+    let (gryphon, gryphon_id) = utils::create_entity(
         app.world_mut(),
         "gryphon",
         utils::at_cell(CLEAR.0, CLEAR.1),
@@ -65,7 +65,7 @@ fn taking_off_swaps_occupied_layer() {
 #[test]
 fn landing_is_refused_when_ground_is_taken() {
     let mut app = utils::demo_map_app(MovementModel::Continuous);
-    let (gryphon, gryphon_id) = spawn::create_entity(
+    let (gryphon, gryphon_id) = utils::create_entity(
         app.world_mut(),
         "gryphon_aloft",
         utils::at_cell(CLEAR.0, CLEAR.1),
@@ -76,7 +76,7 @@ fn landing_is_refused_when_ground_is_taken() {
     // A farm under it takes the ground its landing form would need: nothing
     // may land on an occupied spot, and what stands there is not crushed to
     // make room.
-    spawn::create_entity(
+    utils::create_entity(
         app.world_mut(),
         "farm",
         utils::at_cell(CLEAR.0, CLEAR.1),
@@ -107,7 +107,7 @@ fn landing_is_refused_when_ground_is_taken() {
 #[test]
 fn changing_form_is_refused_when_riders_would_not_fit() {
     let mut app = utils::demo_map_app(MovementModel::Continuous);
-    let (gryphon, gryphon_id) = spawn::create_entity(
+    let (gryphon, gryphon_id) = utils::create_entity(
         app.world_mut(),
         "gryphon",
         utils::at_cell(CLEAR.0, CLEAR.1),
@@ -119,7 +119,7 @@ fn changing_form_is_refused_when_riders_would_not_fit() {
     // too, so the change is refused rather than spilling anyone. The overload
     // itself is staged directly — boarding would never have admitted a second.
     for offset in [3, 4] {
-        let (_, rider) = spawn::create_entity(
+        let (_, rider) = utils::create_entity(
             app.world_mut(),
             "archer",
             utils::at_cell(CLEAR.0 + offset, CLEAR.1),
@@ -150,7 +150,7 @@ fn changing_into_anything_but_declared_form_is_refused() {
     // type-with-no-transitions case is the command-gate test below. Without
     // this gate any wire-legal command could turn any unit into any
     // registered type.
-    let (gryphon, gryphon_id) = spawn::create_entity(
+    let (gryphon, gryphon_id) = utils::create_entity(
         app.world_mut(),
         "gryphon",
         utils::at_cell(CLEAR.0, CLEAR.1),
@@ -173,7 +173,7 @@ fn changing_into_anything_but_declared_form_is_refused() {
 #[test]
 fn health_carries_its_proportion_not_its_amount() {
     let mut app = utils::demo_map_app(MovementModel::Continuous);
-    let (gryphon, gryphon_id) = spawn::create_entity(
+    let (gryphon, gryphon_id) = utils::create_entity(
         app.world_mut(),
         "gryphon",
         utils::at_cell(CLEAR.0, CLEAR.1),
@@ -192,7 +192,7 @@ fn health_carries_its_proportion_not_its_amount() {
         .entity_mut(gryphon)
         .get_mut::<HealthComponent>()
         .unwrap()
-        .apply_damage(max / 2);
+        .drain(max / 2);
 
     command_morph(&mut app, gryphon_id, "gryphon_aloft");
 
@@ -214,7 +214,7 @@ fn health_carries_its_proportion_not_its_amount() {
 #[test]
 fn order_queue_survives_form_change() {
     let mut app = utils::demo_map_app(MovementModel::Continuous);
-    let (gryphon, gryphon_id) = spawn::create_entity(
+    let (gryphon, gryphon_id) = utils::create_entity(
         app.world_mut(),
         "gryphon",
         utils::at_cell(CLEAR.0, CLEAR.1),
@@ -262,7 +262,7 @@ fn order_queue_survives_form_change() {
 #[test]
 fn ordered_change_takes_forms_morph_time() {
     let mut app = utils::demo_map_app(MovementModel::Continuous);
-    let (gryphon, _) = spawn::create_entity(
+    let (gryphon, _) = utils::create_entity(
         app.world_mut(),
         "gryphon",
         utils::at_cell(CLEAR.0, CLEAR.1),
@@ -303,7 +303,7 @@ fn changed_gryphon_flies_over_what_stopped_it_on_foot() {
     // On the near bank of the river, ordered across it. On foot the fordless
     // stretch is a wall; aloft it is nothing.
     let (gryphon, _) =
-        spawn::create_entity(app.world_mut(), "gryphon", utils::at_cell(44, 12), Some(0))
+        utils::create_entity(app.world_mut(), "gryphon", utils::at_cell(44, 12), Some(0))
             .expect("the gryphon spawns by the river");
     let goal = (52, 12);
 
@@ -353,14 +353,14 @@ fn rider_fires_from_moving_holder() {
     // The holder is what stands on the map, so every range and fog reading is
     // its — and it is moving, so firing must not depend on the holder standing
     // still.
-    let (gryphon, _) = spawn::create_entity(
+    let (gryphon, _) = utils::create_entity(
         app.world_mut(),
         "gryphon_aloft",
         utils::at_cell(CLEAR.0, CLEAR.1),
         Some(0),
     )
     .expect("the gryphon spawns");
-    let (rider, rider_id) = spawn::create_entity(
+    let (rider, rider_id) = utils::create_entity(
         app.world_mut(),
         "archer",
         utils::at_cell(CLEAR.0 + 4, CLEAR.1),
@@ -378,7 +378,7 @@ fn rider_fires_from_moving_holder() {
         .entity_mut(rider)
         .insert(ferrets_simulation::components::hidden::HiddenComponent);
 
-    let (_, victim_id) = spawn::create_entity(
+    let (_, victim_id) = utils::create_entity(
         app.world_mut(),
         "grunt",
         utils::at_cell(CLEAR.0 + 3, CLEAR.1 + 1),
@@ -439,7 +439,7 @@ fn rider_fires_from_moving_holder() {
 fn run_and_checksum() -> Vec<u64> {
     let mut app = utils::demo_map_app(MovementModel::Continuous);
 
-    let (gryphon, _) = spawn::create_entity(
+    let (gryphon, _) = utils::create_entity(
         app.world_mut(),
         "gryphon",
         utils::at_cell(CLEAR.0, CLEAR.1),
@@ -451,7 +451,7 @@ fn run_and_checksum() -> Vec<u64> {
         ("zeppelin", (20, 24)),
         ("grunt", (22, 18)),
     ] {
-        spawn::create_entity(
+        utils::create_entity(
             app.world_mut(),
             type_name,
             utils::at_cell(cell.0, cell.1),
@@ -506,7 +506,7 @@ fn form_change_is_deterministic() {
 #[test]
 fn death_flushes_change_under_way() {
     let mut app = utils::demo_map_app(MovementModel::Continuous);
-    let (gryphon, id) = spawn::create_entity(
+    let (gryphon, id) = utils::create_entity(
         app.world_mut(),
         "gryphon",
         utils::at_cell(CLEAR.0, CLEAR.1),
@@ -544,7 +544,7 @@ fn death_flushes_change_under_way() {
 #[test]
 fn quickened_change_lands_same_tick() {
     let mut app = utils::demo_map_app(MovementModel::Continuous);
-    let (gryphon, _) = spawn::create_entity(
+    let (gryphon, _) = utils::create_entity(
         app.world_mut(),
         "gryphon",
         utils::at_cell(CLEAR.0, CLEAR.1),
@@ -590,7 +590,7 @@ fn morph_command_gates_on_declared_transitions() {
     let mut app = utils::demo_map_app(MovementModel::Continuous);
     // The executor is the wire boundary: a command may name any registered
     // type, and only what the selected entity's own type declares may queue.
-    let (peasant, peasant_id) = spawn::create_entity(
+    let (peasant, peasant_id) = utils::create_entity(
         app.world_mut(),
         "peasant",
         utils::at_cell(CLEAR.0, CLEAR.1),
@@ -623,14 +623,14 @@ fn morph_command_changes_everyone_that_can() {
     let mut app = utils::demo_map_app(MovementModel::Continuous);
     // A mixed selection: the gryphon declares the transition, the peasant
     // does not — the executor changes whoever can and drops the rest.
-    let (gryphon, gryphon_id) = spawn::create_entity(
+    let (gryphon, gryphon_id) = utils::create_entity(
         app.world_mut(),
         "gryphon",
         utils::at_cell(CLEAR.0, CLEAR.1),
         Some(0),
     )
     .expect("the gryphon spawns");
-    let (peasant, peasant_id) = spawn::create_entity(
+    let (peasant, peasant_id) = utils::create_entity(
         app.world_mut(),
         "peasant",
         utils::at_cell(CLEAR.0 + 4, CLEAR.1),
@@ -683,7 +683,7 @@ fn energy_of(app: &bevy::prelude::App, entity: bevy::prelude::Entity) -> FixedU6
 #[test]
 fn take_off_draws_its_energy_cost() {
     let mut app = utils::demo_map_app(MovementModel::Continuous);
-    let (gryphon, _) = spawn::create_entity(
+    let (gryphon, _) = utils::create_entity(
         app.world_mut(),
         "gryphon",
         utils::at_cell(CLEAR.0, CLEAR.1),
@@ -709,7 +709,7 @@ fn take_off_draws_its_energy_cost() {
 #[test]
 fn unpayable_cost_refuses_change() {
     let mut app = utils::demo_map_app(MovementModel::Continuous);
-    let (gryphon, _) = spawn::create_entity(
+    let (gryphon, _) = utils::create_entity(
         app.world_mut(),
         "gryphon",
         utils::at_cell(CLEAR.0, CLEAR.1),
@@ -741,7 +741,7 @@ fn unpayable_cost_refuses_change() {
 #[test]
 fn landing_reserves_its_ground_for_whole_window() {
     let mut app = utils::demo_map_app(MovementModel::Continuous);
-    let (gryphon, _) = spawn::create_entity(
+    let (gryphon, _) = utils::create_entity(
         app.world_mut(),
         "gryphon_aloft",
         utils::at_cell(CLEAR.0, CLEAR.1),
@@ -756,7 +756,7 @@ fn landing_reserves_its_ground_for_whole_window() {
     // Mid-window the ground below is already spoken for: a farm raised on the
     // spot must be refused, or the descent it was promised would fizzle.
     assert!(
-        spawn::create_entity(
+        utils::create_entity(
             app.world_mut(),
             "farm",
             utils::at_cell(CLEAR.0, CLEAR.1),
@@ -782,7 +782,7 @@ fn reservation_holds_under_cell_model() {
     // so the reservation written at the order's start is exactly what must
     // still be standing when the change lands.
     let mut app = utils::demo_map_app(MovementModel::Cell);
-    let (gryphon, _) = spawn::create_entity(
+    let (gryphon, _) = utils::create_entity(
         app.world_mut(),
         "gryphon_aloft",
         utils::at_cell(CLEAR.0, CLEAR.1),
@@ -793,7 +793,7 @@ fn reservation_holds_under_cell_model() {
     order_morph(&mut app, gryphon, "gryphon");
     utils::run_ticks(&mut app, 3);
     assert!(
-        spawn::create_entity(
+        utils::create_entity(
             app.world_mut(),
             "farm",
             utils::at_cell(CLEAR.0, CLEAR.1),
@@ -814,14 +814,14 @@ fn reservation_holds_under_cell_model() {
 #[test]
 fn landing_order_is_refused_when_ground_is_taken_at_start() {
     let mut app = utils::demo_map_app(MovementModel::Continuous);
-    let (gryphon, _) = spawn::create_entity(
+    let (gryphon, _) = utils::create_entity(
         app.world_mut(),
         "gryphon_aloft",
         utils::at_cell(CLEAR.0, CLEAR.1),
         Some(0),
     )
     .expect("the airborne gryphon spawns");
-    spawn::create_entity(
+    utils::create_entity(
         app.world_mut(),
         "farm",
         utils::at_cell(CLEAR.0, CLEAR.1),
@@ -849,7 +849,7 @@ fn landing_order_is_refused_when_ground_is_taken_at_start() {
 #[test]
 fn contested_take_off_fizzles_and_keeps_payment() {
     let mut app = utils::demo_map_app(MovementModel::Continuous);
-    let (gryphon, _) = spawn::create_entity(
+    let (gryphon, _) = utils::create_entity(
         app.world_mut(),
         "gryphon",
         utils::at_cell(CLEAR.0, CLEAR.1),
@@ -861,7 +861,7 @@ fn contested_take_off_fizzles_and_keeps_payment() {
     // taken while the beast is still spreading its wings.
     order_morph(&mut app, gryphon, "gryphon_aloft");
     utils::run_ticks(&mut app, 5);
-    spawn::create_entity(
+    utils::create_entity(
         app.world_mut(),
         "zeppelin",
         utils::at_cell(CLEAR.0, CLEAR.1),
@@ -889,7 +889,7 @@ fn contested_take_off_fizzles_and_keeps_payment() {
 #[test]
 fn upgrade_pays_up_front_and_lands() {
     let mut app = utils::demo_map_app(MovementModel::Continuous);
-    let (tower, _) = spawn::create_entity(
+    let (tower, _) = utils::create_entity(
         app.world_mut(),
         "watch_tower",
         utils::at_cell(CLEAR.0, CLEAR.1),
@@ -916,7 +916,7 @@ fn upgrade_pays_up_front_and_lands() {
 #[test]
 fn cancelled_upgrade_returns_its_money() {
     let mut app = utils::demo_map_app(MovementModel::Continuous);
-    let (tower, _) = spawn::create_entity(
+    let (tower, _) = utils::create_entity(
         app.world_mut(),
         "watch_tower",
         utils::at_cell(CLEAR.0, CLEAR.1),
@@ -961,7 +961,7 @@ fn cancelled_upgrade_returns_its_money() {
 #[test]
 fn committed_change_shrugs_off_cancel() {
     let mut app = utils::demo_map_app(MovementModel::Continuous);
-    let (gryphon, _) = spawn::create_entity(
+    let (gryphon, _) = utils::create_entity(
         app.world_mut(),
         "gryphon",
         utils::at_cell(CLEAR.0, CLEAR.1),
@@ -988,7 +988,7 @@ fn committed_change_shrugs_off_cancel() {
 #[test]
 fn melee_breaks_off_when_its_target_takes_flight() {
     let mut app = utils::demo_map_app(MovementModel::Continuous);
-    let (gryphon, gryphon_id) = spawn::create_entity(
+    let (gryphon, gryphon_id) = utils::create_entity(
         app.world_mut(),
         "gryphon",
         utils::at_cell(CLEAR.0, CLEAR.1),
@@ -1000,7 +1000,7 @@ fn melee_breaks_off_when_its_target_takes_flight() {
     app.world_mut()
         .entity_mut(gryphon)
         .remove::<ferrets_simulation::components::stance::StanceComponent>();
-    let (grunt, _) = spawn::create_entity(
+    let (grunt, _) = utils::create_entity(
         app.world_mut(),
         "grunt",
         utils::at_cell(CLEAR.0 + 2, CLEAR.1),

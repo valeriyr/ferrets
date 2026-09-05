@@ -12,11 +12,10 @@ use crate::{
     components::{
         entity_stats::StatsComponent,
         hidden::HiddenComponent,
-        location::LocationComponent,
         order_queue::OrderQueueComponent,
         stance::{Stance, StanceComponent},
     },
-    entity_def,
+    entity_def::{self, Operation},
     entity_index::EntityIndex,
     order::{AttackTarget, Leash, Order},
     session::GameSession,
@@ -54,6 +53,12 @@ pub fn tick(world: &mut World) {
         if world.entity(entity).contains::<HiddenComponent>() {
             continue;
         }
+        // Only an operating body takes the initiative: a site still going
+        // up and a disabled one stand idle.
+        match entity_def::operation(world, entity) {
+            Operation::Operating => {}
+            Operation::UnderConstruction | Operation::Disabled => continue,
+        }
         let entity_ref = world.entity(entity);
         if entity_ref
             .get::<OrderQueueComponent>()
@@ -74,7 +79,7 @@ pub fn tick(world: &mut World) {
             .get::<StatsComponent>()
             .and_then(|stats| stats.effective_as_u32(EntityStatId::ATTACK_RANGE))
             .expect("attackers have a range stat");
-        let anchor = entity_ref.get::<LocationComponent>().unwrap().position;
+        let anchor = entity_def::position(world, entity);
 
         match stance {
             Stance::StandGround => {

@@ -7,14 +7,19 @@ use ferrets_physics::body;
 
 use crate::{
     components::{
-        entity_info::EntityInfoComponent, entity_stats::StatsComponent,
-        location::LocationComponent, owner::OwnerComponent,
+        build::UnderConstructionComponent, entity_info::EntityInfoComponent,
+        entity_stats::StatsComponent, location::LocationComponent,
+        order_queue::OrderQueueComponent, owner::OwnerComponent,
     },
-    session::player_slot::PlayerId,
+    fields,
+    map::OccupancyClass,
+    order::Order,
+    session::player_id::PlayerId,
     simulation_id::SimulationId,
 };
 use ferrets_content::{
     attack::Weapon,
+    build::BuilderAttendance,
     entity_stats::EntityStatId,
     entity_type_def::{EntityTypeDef, EntityTypeId},
     registry::ContentRegistry,
@@ -61,6 +66,52 @@ pub fn of(world: &World, entity: Entity) -> &EntityTypeDef {
     world
         .resource::<ContentRegistry>()
         .def(type_id(world, entity))
+}
+
+/// How `entity` relates to a site it raises, or `None` when its type cannot
+/// build.
+pub fn builder_attendance(world: &World, entity: Entity) -> Option<BuilderAttendance> {
+    of(world, entity)
+        .builder
+        .as_ref()
+        .map(|builder| builder.attendance())
+}
+
+/// Whether an entity is in a state to carry out its type's work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Operation {
+    /// Stands finished and undisturbed.
+    Operating,
+    /// Still being raised.
+    UnderConstruction,
+    /// Standing, but a field effect switches it off.
+    Disabled,
+}
+
+/// Returns the [`Operation`] `entity` is in. A site still being raised is
+/// [`Operation::UnderConstruction`] whatever the fields say about it.
+pub fn operation(world: &World, entity: Entity) -> Operation {
+    if world
+        .entity(entity)
+        .contains::<UnderConstructionComponent>()
+    {
+        Operation::UnderConstruction
+    } else if fields::disabled(world, entity) {
+        Operation::Disabled
+    } else {
+        Operation::Operating
+    }
+}
+
+/// Every order in `entity`'s queue, front first, sub-orders included. Empty
+/// for an entity with no queue.
+pub fn orders(world: &World, entity: Entity) -> Vec<Order> {
+    world
+        .entity(entity)
+        .get::<OrderQueueComponent>()
+        .map_or_else(Vec::new, |queue| {
+            queue.0.iter().map(|entry| entry.order.clone()).collect()
+        })
 }
 
 /// Returns where `entity` stands.
@@ -138,14 +189,30 @@ pub fn footprint(world: &World, entity: Entity) -> (FixedUVec2, CellSize) {
     (position(world, entity), size)
 }
 
-/// The footprint `entity` stands on as a rect of whole cells, anchored at
-/// its floored position — what a reach measure takes for the thing being
-/// measured against.
+/// The footprint `entity` stands on as a rect of whole cells — what a reach
+/// measure takes for the thing being measured against. A standing form's is
+/// anchored at the cell its position rounds to ([`body::anchor`]), the cells
+/// its footprint is stamped on; a mover's at the cell its position floors
+/// into, the one footprint a walk can plan toward.
 ///
 /// Panics if `entity` is not a simulation entity, or its type declares no location.
 pub fn footprint_rect(world: &World, entity: Entity) -> CellRect {
     let (position, size) = footprint(world, entity);
-    CellRect::new(CellPos::from(position), size)
+    let anchor = match OccupancyClass::of(of(world, entity)) {
+        OccupancyClass::Static => body::anchor(position),
+        OccupancyClass::Claim => CellPos::from(position),
+    };
+    CellRect::new(anchor, size)
+}
+
+/// The cells `entity`'s footprint occupies: anchored at the cell its position
+/// rounds to ([`body::anchor`]), where a standing form is stamped and a
+/// mover's claim lies.
+///
+/// Panics if `entity` is not a simulation entity, or its type declares no location.
+pub fn occupied_rect(world: &World, entity: Entity) -> CellRect {
+    let (position, size) = footprint(world, entity);
+    CellRect::new(body::anchor(position), size)
 }
 
 /// The cells `entity` stands on, per [`body::standing_rect`] — what a reach

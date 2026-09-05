@@ -11,13 +11,18 @@ use crate::{
     entity_buffs::{EntityBuffDef, EntityBuffId},
     entity_stats::{ENTITY_BUILTIN_STATS, EntityStatId},
     entity_type_def::{EntityTypeDef, EntityTypeId},
+    field::{FieldDef, FieldEffectKind, FieldGrowth, FieldId},
     morph::MorphTime,
     player_buffs::{PlayerBuffDef, PlayerBuffId},
     player_stats::{PLAYER_BUILTIN_STATS, PlayerStatId},
     projectile::{Aim, ProjectileDef, ProjectileId},
     repair::RepairCost,
     research::{ResearchDef, ResearchId},
-    skills::{EntityCastCost, EntityCastEffect, PlayerCastEffect, SkillCaster, SkillDef, SkillId},
+    skills::{
+        EntityCastCost, EntityCastEffect, EntityCastTarget, PlayerCastEffect, SkillCaster,
+        SkillDef, SkillId,
+    },
+    stand::StandingAct,
     tags,
     turret::{TurretDef, TurretId, WeaponConduct},
 };
@@ -38,6 +43,8 @@ pub struct ContentRegistry {
     tags: BTreeSet<String>,
     layers: BTreeMap<String, LayerId>,
     terrains: BTreeMap<String, LayerMask>,
+    fields: BTreeMap<String, FieldId>,
+    field_defs: Vec<FieldDef>,
     entity_stats: BTreeMap<String, EntityStatId>,
     player_stats: BTreeMap<String, PlayerStatId>,
     entity_buffs: BTreeMap<String, EntityBuffId>,
@@ -65,6 +72,8 @@ impl Default for ContentRegistry {
             tags: BTreeSet::from([tags::BUILDING.to_string()]),
             layers: BTreeMap::new(),
             terrains: BTreeMap::new(),
+            fields: BTreeMap::new(),
+            field_defs: Vec::new(),
             entity_stats: ENTITY_BUILTIN_STATS
                 .iter()
                 .map(|builtin| (builtin.name.to_string(), builtin.id))
@@ -107,8 +116,9 @@ impl ContentRegistry {
     /// definition has no location, belongs to an unregistered race, references an
     /// unregistered resource kind or tag, carries a skill with an energy cost but no
     /// energy pool, delivers a hit without a damage stat, splashes onto unregistered
-    /// layers, or leaves a corpse type that is unregistered, has no dying phase,
-    /// or defines live-gameplay data.
+    /// layers, leaves a corpse type that is unregistered, has no dying phase,
+    /// or defines live-gameplay data, or projects, reads, or answers to a field
+    /// this registry never minted.
     pub fn register(&mut self, def: EntityTypeDef) {
         assert!(
             !self.defs_by_name.contains_key(&def.name),
@@ -130,6 +140,7 @@ impl ContentRegistry {
         self.validate_build(&def);
         self.validate_harvest(&def);
         self.validate_transport(&def);
+        self.validate_fields(&def);
 
         let id = EntityTypeId::from_index(self.defs.len());
         self.defs_by_name.insert(def.name.clone(), id);
@@ -588,7 +599,11 @@ impl ContentRegistry {
         assert!(!name.is_empty(), "skill name must not be empty");
 
         match &skill.caster {
-            SkillCaster::Entity { costs, effect, .. } => {
+            SkillCaster::Entity {
+                costs,
+                target,
+                effect,
+            } => {
                 for cost in costs {
                     match cost {
                         EntityCastCost::Resources(resources) => {
@@ -613,6 +628,26 @@ impl ContentRegistry {
                         )
                     }
                     EntityCastEffect::Damage(_) | EntityCastEffect::Heal(_) => {}
+                    EntityCastEffect::Field { field, .. } => assert!(
+                        field.index() < self.field_defs.len(),
+                        "skill '{name}' acts on an unregistered field"
+                    ),
+                }
+                // A cell has no pools to buff, damage, or heal; only a field
+                // action lands on one.
+                match (target, effect) {
+                    (EntityCastTarget::Position, EntityCastEffect::Field { .. }) => {}
+                    (
+                        EntityCastTarget::Position,
+                        EntityCastEffect::ApplyBuff(_)
+                        | EntityCastEffect::RemoveBuff(_)
+                        | EntityCastEffect::Damage(_)
+                        | EntityCastEffect::Heal(_),
+                    ) => panic!("skill '{name}' aims at a position but its effect needs an entity"),
+                    (
+                        EntityCastTarget::Caster | EntityCastTarget::Ally | EntityCastTarget::Enemy,
+                        _,
+                    ) => {}
                 }
             }
             SkillCaster::Player { cost, effect } => {
@@ -787,6 +822,61 @@ impl ContentRegistry {
         self.terrains.get(name).copied()
     }
 
+    /// Registers a field kind (creep, power, …) by name and returns its
+    /// assigned [`FieldId`]. Ids are assigned in registration order, so
+    /// identical content registered in the same order resolves to identical
+    /// ids everywhere.
+    ///
+    /// The layers the field covers must be registered first.
+    ///
+    /// Panics if `name` is empty, the field is already registered, or its
+    /// layer mask includes an unregistered layer.
+    pub fn register_field(&mut self, name: impl Into<String>, field: FieldDef) -> FieldId {
+        let name = name.into();
+        assert!(!name.is_empty(), "field name must not be empty");
+        assert!(
+            !self.fields.contains_key(&name),
+            "field '{name}' is already registered"
+        );
+        let unregistered = field.layer() & !self.registered_layers();
+        assert!(
+            unregistered == LayerMask::EMPTY,
+            "field '{name}' covers unregistered layers {unregistered}"
+        );
+
+        let id = FieldId::from_index(self.field_defs.len());
+        self.fields.insert(name, id);
+        self.field_defs.push(field);
+        id
+    }
+
+    /// Returns the [`FieldId`] for the given field name, or `None` if not
+    /// registered.
+    pub fn field(&self, name: &str) -> Option<FieldId> {
+        self.fields.get(name).copied()
+    }
+
+    /// Returns the name the given field is registered under, or `None` if the
+    /// handle did not come from this registry.
+    pub fn field_name(&self, id: FieldId) -> Option<&str> {
+        self.fields
+            .iter()
+            .find(|&(_, &field)| field == id)
+            .map(|(name, _)| name.as_str())
+    }
+
+    /// Returns the field definition for the given handle.
+    ///
+    /// Panics if the handle did not come from this registry.
+    pub fn field_def(&self, id: FieldId) -> &FieldDef {
+        &self.field_defs[id.index()]
+    }
+
+    /// Every registered field handle, in registration order.
+    pub fn field_ids(&self) -> impl Iterator<Item = FieldId> {
+        (0..self.field_defs.len()).map(FieldId::from_index)
+    }
+
     /// Returns the mask of every registered navigation layer.
     pub fn registered_layers(&self) -> LayerMask {
         self.layers
@@ -855,6 +945,32 @@ impl ContentRegistry {
                     def.base_stats.contains_key(&stat),
                     "{owner} reads its time from a stat the type does not carry"
                 );
+            }
+            if let Some(via) = morph.via_type() {
+                assert!(
+                    via != def.name && via != morph.into_type(),
+                    "{owner} wears a form that is one of its own ends"
+                );
+                let interim = self
+                    .entity(via)
+                    .unwrap_or_else(|| panic!("{owner} wears a form that is not registered"));
+                // The interim form stands exactly where the origin stood, so
+                // entering and leaving it moves nothing on the grid.
+                if let (Some(from), Some(worn)) = (def.location, interim.location) {
+                    assert!(
+                        from.size() == worn.size()
+                            && from.occupation() == worn.occupation()
+                            && from.solidity() == worn.solidity(),
+                        "{owner} wears a form whose footprint differs from its own"
+                    );
+                }
+                // The time is read while the interim form is worn.
+                if let MorphTime::Stat(stat) = morph.time() {
+                    assert!(
+                        interim.base_stats.contains_key(&stat),
+                        "{owner} reads its time from a stat the form it wears does not carry"
+                    );
+                }
             }
             for cost in morph.costs() {
                 match cost {
@@ -979,6 +1095,80 @@ impl ContentRegistry {
                         self.skill_name(skill).unwrap_or("<unregistered>"),
                     ),
                 }
+            }
+        }
+    }
+
+    /// Checks that every field the type projects, reads for placement, or
+    /// answers to was minted by this registry, and that every field-effect
+    /// modifier targets a registered entity stat.
+    fn validate_fields(&self, def: &EntityTypeDef) {
+        let known = |field: FieldId| field.index() < self.field_defs.len();
+        for source in &def.field_sources {
+            assert!(
+                known(source.field()),
+                "entity type '{}' projects an unregistered field",
+                def.name
+            );
+            match source.growth() {
+                FieldGrowth::Gradual { initial_radius, .. } => assert!(
+                    initial_radius <= source.radius(),
+                    "entity type '{}' starts a field beyond its radius",
+                    def.name
+                ),
+                FieldGrowth::Instant => {}
+            }
+            if let Some(reach) = source.while_constructing() {
+                assert!(
+                    def.build_time.is_some(),
+                    "entity type '{}' projects a field while constructing but is never constructed",
+                    def.name
+                );
+                assert!(
+                    reach <= source.radius(),
+                    "entity type '{}' projects a field beyond its radius while constructing",
+                    def.name
+                );
+            }
+        }
+        for rule in &def.field_placement {
+            assert!(
+                known(rule.field()),
+                "entity type '{}' reads an unregistered field for placement",
+                def.name
+            );
+        }
+        for act in &def.on_stand {
+            match act {
+                StandingAct::Field { field, .. } => assert!(
+                    known(*field),
+                    "entity type '{}' acts on an unregistered field when it stands",
+                    def.name
+                ),
+            }
+        }
+        for effect in &def.field_effects {
+            assert!(
+                known(effect.field()),
+                "entity type '{}' answers to an unregistered field",
+                def.name
+            );
+            match effect.kind() {
+                FieldEffectKind::Modifiers(modifiers) => {
+                    assert!(
+                        !modifiers.is_empty(),
+                        "entity type '{}' has a field effect with no modifiers",
+                        def.name
+                    );
+                    for modifier in modifiers {
+                        assert!(
+                            modifier.stat.index() < self.entity_stats.len(),
+                            "entity type '{}' has a field effect on an unregistered entity stat",
+                            def.name
+                        );
+                    }
+                }
+                FieldEffectKind::Disabled => {}
             }
         }
     }

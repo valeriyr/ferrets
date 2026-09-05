@@ -44,6 +44,10 @@ pub struct MorphTransition {
     /// because transitions may be circular: two forms can each name the
     /// other, so no registration order resolves both to a handle.
     into: String,
+    /// The form worn while the transition runs, by registered name: entered
+    /// when the transition starts and left when it lands. `None` keeps the
+    /// origin form for the duration.
+    via: Option<String>,
     /// How long the transition takes.
     time: MorphTime,
     /// When the destination footprint is secured.
@@ -62,9 +66,10 @@ pub struct MorphTransition {
 impl MorphTransition {
     /// Creates a new `MorphTransition` with the given data.
     ///
-    /// Panics if `into` is empty or `requires` contains an empty name.
+    /// Panics if `into` or `via` is empty or `requires` contains an empty name.
     pub fn new(
         into: impl Into<String>,
+        via: Option<&str>,
         time: MorphTime,
         placement: MorphPlacement,
         cancel: MorphCancel,
@@ -73,6 +78,11 @@ impl MorphTransition {
     ) -> Self {
         let into = into.into();
         assert!(!into.is_empty(), "into must not be empty");
+        let via = via.map(str::to_string);
+        assert!(
+            via.as_ref().is_none_or(|via| !via.is_empty()),
+            "via must not be empty"
+        );
         let requires: Vec<String> = requires.into_iter().map(Into::into).collect();
         assert!(
             requires.iter().all(|name| !name.is_empty()),
@@ -81,6 +91,7 @@ impl MorphTransition {
 
         Self {
             into,
+            via,
             time,
             placement,
             cancel,
@@ -93,6 +104,12 @@ impl MorphTransition {
     #[inline]
     pub fn into_type(&self) -> &str {
         &self.into
+    }
+
+    /// The form worn while the transition runs, if any.
+    #[inline]
+    pub fn via_type(&self) -> Option<&str> {
+        self.via.as_deref()
     }
 
     /// How long the transition takes.

@@ -19,7 +19,6 @@ use ferrets_simulation::{
     components::resource::{ResourceCarrierComponent, ResourceSourceComponent},
     resources::PlayerResources,
     session::{GameSession, player_slot::PlayerSlot, player_type::PlayerType},
-    spawn,
 };
 
 //
@@ -31,9 +30,9 @@ fn send_to_entity_attacks_hostiles() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
     let (_, attacker_id) =
-        spawn::create_entity(world, "soldier", utils::pos(5, 5), Some(0)).unwrap();
+        utils::create_entity(world, "soldier", utils::pos(5, 5), Some(0)).unwrap();
     let (enemy, enemy_id) =
-        spawn::create_entity(world, "soldier", utils::pos(7, 5), Some(1)).unwrap();
+        utils::create_entity(world, "soldier", utils::pos(7, 5), Some(1)).unwrap();
 
     utils::select(&mut app, attacker_id);
     utils::push_command(
@@ -54,8 +53,8 @@ fn send_to_entity_falls_through_to_follow_for_uncarryable_kinds() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
     let (worker, worker_id) =
-        spawn::create_entity(world, "worker", utils::pos(5, 5), Some(0)).unwrap();
-    let (tree, tree_id) = spawn::create_entity(world, "tree", utils::pos(10, 5), None).unwrap();
+        utils::create_entity(world, "worker", utils::pos(5, 5), Some(0)).unwrap();
+    let (tree, tree_id) = utils::create_entity(world, "tree", utils::pos(10, 5), None).unwrap();
     world
         .get_mut::<ResourceSourceComponent>(tree)
         .unwrap()

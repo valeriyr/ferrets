@@ -11,18 +11,23 @@ pub use crate::layer_id::LayerId;
 
 /// Stores per-layer navigation data for each position in the game map.
 ///
-/// Occupancy lives on two planes: the **static** plane (terrain and standing
-/// footprints — what long-range planning honors) and the **claim** plane
-/// (cells units hold while resting or crossing — honored by movement, ignored
-/// by everything that must not see units).
+/// Occupancy lives on three planes: the **terrain** plane (what the ground
+/// itself refuses, fixed at map build), the **occupancy** plane (standing
+/// footprints), and the **claim** plane (cells units hold while resting or
+/// crossing). Terrain and occupancy together are the **static** plane
+/// long-range planning honors; claims are honored by movement and ignored by
+/// everything that must not see units.
 #[derive(Debug, Clone)]
 pub struct NavGrid {
     width: u32,
     height: u32,
     /// Mask of all registered layers.
     registered: LayerMask,
-    /// `occupancy[y * width + x]` — the set of layers statically occupied at
-    /// that cell.
+    /// `terrain[y * width + x]` — the set of layers the cell's terrain leaves
+    /// impassable.
+    terrain: Vec<LayerMask>,
+    /// `occupancy[y * width + x]` — the set of layers a standing footprint
+    /// occupies at that cell.
     occupancy: Vec<LayerMask>,
     /// `claims[y * width + x]` — the set of layers a unit holds at that cell.
     claims: Vec<LayerMask>,
@@ -35,6 +40,7 @@ impl NavGrid {
             width,
             height,
             registered: LayerMask::EMPTY,
+            terrain: vec![LayerMask::EMPTY; width as usize * height as usize],
             occupancy: vec![LayerMask::EMPTY; width as usize * height as usize],
             claims: vec![LayerMask::EMPTY; width as usize * height as usize],
         }
@@ -65,13 +71,27 @@ impl NavGrid {
         self.registered |= layer;
     }
 
+    /// Sets the layers a position's terrain leaves impassable, replacing any
+    /// earlier terrain there.
+    ///
+    /// Out-of-bounds positions are silently ignored.
+    pub fn set_terrain_blocked(&mut self, mask: impl Into<LayerMask>, pos: CellPos) {
+        let mask = mask.into();
+
+        self.assert_registered(mask);
+
+        let Some(i) = self.index(pos) else { return };
+
+        self.terrain[i] = mask;
+    }
+
     /// Sets whether a position is occupied on the given layer.
     pub fn set_occupied(&mut self, layer: LayerId, pos: CellPos, occupied: bool) {
         self.set_occupied_by(layer, pos, occupied);
     }
 
-    /// Sets whether a position is statically occupied on all layers matched
-    /// by `mask`.
+    /// Sets whether a standing footprint occupies a position on all layers
+    /// matched by `mask`; terrain is untouched either way.
     ///
     /// Out-of-bounds positions are silently ignored.
     pub fn set_occupied_by(&mut self, mask: impl Into<LayerMask>, pos: CellPos, occupied: bool) {
@@ -130,7 +150,9 @@ impl NavGrid {
         self.assert_registered(mask);
 
         self.index(pos)
-            .map(|i| (self.occupancy[i] | self.claims[i]) & mask != LayerMask::EMPTY)
+            .map(|i| {
+                (self.terrain[i] | self.occupancy[i] | self.claims[i]) & mask != LayerMask::EMPTY
+            })
             .unwrap_or(true)
     }
 
@@ -142,8 +164,8 @@ impl NavGrid {
         !self.is_occupied_by(mask, pos)
     }
 
-    /// Clears every unit claim on every layer, leaving static occupancy
-    /// untouched — for rebuilding the claim plane from current positions.
+    /// Clears every unit claim on every layer, leaving terrain and standing
+    /// occupancy untouched — for rebuilding the claim plane from current positions.
     pub fn clear_claims(&mut self) {
         self.claims.fill(LayerMask::EMPTY);
     }
@@ -162,8 +184,8 @@ impl NavGrid {
             .unwrap_or(false)
     }
 
-    /// Returns `true` if the position is statically occupied on **any** layer
-    /// in `mask`, ignoring unit claims.
+    /// Returns `true` if the position is statically occupied — by terrain or
+    /// a standing footprint — on **any** layer in `mask`, ignoring unit claims.
     ///
     /// Out-of-bounds positions always return `true`.
     pub fn is_statically_occupied_by(&self, mask: impl Into<LayerMask>, pos: CellPos) -> bool {
@@ -172,8 +194,22 @@ impl NavGrid {
         self.assert_registered(mask);
 
         self.index(pos)
-            .map(|i| self.occupancy[i] & mask != LayerMask::EMPTY)
+            .map(|i| (self.terrain[i] | self.occupancy[i]) & mask != LayerMask::EMPTY)
             .unwrap_or(true)
+    }
+
+    /// Returns `true` if the position's terrain passes **all** layers in
+    /// `mask`, whatever stands or rests on it.
+    ///
+    /// Out-of-bounds positions always return `false`.
+    pub fn is_terrain_passable_by(&self, mask: impl Into<LayerMask>, pos: CellPos) -> bool {
+        let mask = mask.into();
+
+        self.assert_registered(mask);
+
+        self.index(pos)
+            .map(|i| self.terrain[i] & mask == LayerMask::EMPTY)
+            .unwrap_or(false)
     }
 
     /// Returns `true` if the position is statically free on **all** layers in
@@ -233,8 +269,8 @@ impl NavGrid {
         true
     }
 
-    /// Returns `true` if the shape's footprint anchored at `pos` is clear of
-    /// standing occupancy and unit claims alike.
+    /// Returns `true` if the shape's footprint anchored at `pos` is clear on
+    /// every plane: terrain, standing occupancy and unit claims alike.
     pub fn fits(&self, pos: CellPos, shape: MoverShape) -> bool {
         self.is_footprint_passable_by(shape.mask, pos, shape.size)
     }

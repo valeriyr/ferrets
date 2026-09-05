@@ -14,6 +14,8 @@ use ferrets_simulation::{
             UnderHarvestComponent,
         },
     },
+    entity_def,
+    order::Order,
     resources::PlayerResources,
     simulation_id::SimulationId,
     spawn,
@@ -24,7 +26,7 @@ fn collect_harvests_until_source_depletes() {
     let mut app = utils::orders_app();
     let (worker, worker_id) = utils::create_owned(&mut app, "worker", 5, 5, 0);
     let (mine, mine_id) =
-        spawn::create_entity(app.world_mut(), "mine", utils::pos(9, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "mine", utils::pos(9, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(mine)
         .unwrap()
@@ -62,7 +64,7 @@ fn visible_harvest_marks_carrier() {
     let mut app = utils::orders_app();
     let (lumberjack, lumberjack_id) = utils::create_owned(&mut app, "lumberjack", 5, 5, 0);
     let (tree, tree_id) =
-        spawn::create_entity(app.world_mut(), "tree", utils::pos(9, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "tree", utils::pos(9, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(tree)
         .unwrap()
@@ -106,7 +108,7 @@ fn hidden_harvest_marks_carrier_inside_source() {
     let mut app = utils::orders_app();
     let (worker, worker_id) = utils::create_owned(&mut app, "worker", 5, 5, 0);
     let (mine, mine_id) =
-        spawn::create_entity(app.world_mut(), "mine", utils::pos(9, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "mine", utils::pos(9, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(mine)
         .unwrap()
@@ -138,7 +140,7 @@ fn source_emptied_mid_trip_lets_carrier_out() {
     let mut app = utils::orders_app();
     let (worker, worker_id) = utils::create_owned(&mut app, "worker", 5, 5, 0);
     let (geyser, geyser_id) =
-        spawn::create_entity(app.world_mut(), "geyser", utils::pos(9, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "geyser", utils::pos(9, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(geyser)
         .unwrap()
@@ -180,7 +182,7 @@ fn persistent_source_stays_on_map_when_depleted() {
     let mut app = utils::orders_app();
     let (worker, worker_id) = utils::create_owned(&mut app, "worker", 5, 5, 0);
     let (geyser, geyser_id) =
-        spawn::create_entity(app.world_mut(), "geyser", utils::pos(9, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "geyser", utils::pos(9, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(geyser)
         .unwrap()
@@ -215,7 +217,7 @@ fn boxed_in_cancel_defers_reveal_until_cell_frees() {
     let mut app = utils::orders_app();
     let (worker, worker_id) = utils::create_owned(&mut app, "worker", 5, 5, 0);
     let (mine, mine_id) =
-        spawn::create_entity(app.world_mut(), "mine", utils::pos(7, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "mine", utils::pos(7, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(mine)
         .unwrap()
@@ -251,7 +253,7 @@ fn harvest_range_reaches_source_but_not_drop_off() {
     // Three cells short of the mine, which its harvest_range of 3 already covers.
     let (prospector, prospector_id) = utils::create_owned(&mut app, "prospector", 6, 5, 0);
     let (mine, mine_id) =
-        spawn::create_entity(app.world_mut(), "mine", utils::pos(9, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "mine", utils::pos(9, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(mine)
         .unwrap()
@@ -300,7 +302,7 @@ fn crew_shares_one_source() {
     let (first, first_id) = utils::create_owned(&mut app, "logger", 8, 5, 0);
     let (second, second_id) = utils::create_owned(&mut app, "logger", 10, 5, 0);
     let (tree, tree_id) =
-        spawn::create_entity(app.world_mut(), "tree", utils::pos(9, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "tree", utils::pos(9, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(tree)
         .unwrap()
@@ -321,7 +323,7 @@ fn worked_source_records_crew_until_last_carrier_leaves() {
     let (first, first_id) = utils::create_owned(&mut app, "logger", 8, 5, 0);
     let (second, second_id) = utils::create_owned(&mut app, "logger", 10, 5, 0);
     let (tree, tree_id) =
-        spawn::create_entity(app.world_mut(), "tree", utils::pos(9, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "tree", utils::pos(9, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(tree)
         .unwrap()
@@ -362,7 +364,7 @@ fn carrier_that_works_alone_waits_for_source_another_holds() {
     let (first, first_id) = utils::create_owned(&mut app, "lumberjack", 8, 5, 0);
     let (second, second_id) = utils::create_owned(&mut app, "lumberjack", 10, 5, 0);
     let (tree, tree_id) =
-        spawn::create_entity(app.world_mut(), "tree", utils::pos(9, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "tree", utils::pos(9, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(tree)
         .unwrap()
@@ -516,14 +518,14 @@ fn carrier_switches_to_nearby_source_when_ordered_one_unreachable() {
     // The ordered mine sits inside a boulder ring; another gold source stands
     // in the open beside it.
     let (walled, walled_id) =
-        spawn::create_entity(app.world_mut(), "mine", utils::pos(20, 20), None).unwrap();
+        utils::create_entity(app.world_mut(), "mine", utils::pos(20, 20), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(walled)
         .unwrap()
         .amount = 10;
     wall_in(&mut app, 20, 20, 1);
     let (open, _) =
-        spawn::create_entity(app.world_mut(), "mine", utils::pos(16, 20), None).unwrap();
+        utils::create_entity(app.world_mut(), "mine", utils::pos(16, 20), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(open)
         .unwrap()
@@ -561,7 +563,7 @@ fn carrier_waits_in_place_when_unreachable_source_is_only_one_around() {
     utils::create_owned(&mut app, "depot", 2, 4, 0);
 
     let (walled, walled_id) =
-        spawn::create_entity(app.world_mut(), "mine", utils::pos(20, 20), None).unwrap();
+        utils::create_entity(app.world_mut(), "mine", utils::pos(20, 20), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(walled)
         .unwrap()
@@ -592,7 +594,7 @@ fn waiting_carrier_resumes_when_way_to_source_opens() {
     utils::create_owned(&mut app, "depot", 2, 4, 0);
 
     let (walled, walled_id) =
-        spawn::create_entity(app.world_mut(), "mine", utils::pos(20, 20), None).unwrap();
+        utils::create_entity(app.world_mut(), "mine", utils::pos(20, 20), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(walled)
         .unwrap()
@@ -628,7 +630,7 @@ fn foreign_load_is_wasted_at_first_transfer_not_delivered() {
     let (forager, forager_id) = utils::create_owned(&mut app, "forager", 5, 5, 0);
     utils::create_owned(&mut app, "depot", 2, 4, 0);
     let (tree, tree_id) =
-        spawn::create_entity(app.world_mut(), "tree", utils::pos(9, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "tree", utils::pos(9, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(tree)
         .unwrap()
@@ -670,12 +672,12 @@ fn order_locked_to_wood_does_not_switch_to_gold() {
 
     // One tree holding exactly one load, with a gold mine right beside it.
     let (tree, tree_id) =
-        spawn::create_entity(app.world_mut(), "tree", utils::pos(9, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "tree", utils::pos(9, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(tree)
         .unwrap()
         .amount = 5;
-    let (mine, _) = spawn::create_entity(app.world_mut(), "mine", utils::pos(10, 5), None).unwrap();
+    let (mine, _) = utils::create_entity(app.world_mut(), "mine", utils::pos(10, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(mine)
         .unwrap()
@@ -711,6 +713,36 @@ fn order_locked_to_wood_does_not_switch_to_gold() {
 }
 
 //
+// ─── Whose storage takes a delivery ───────────────────────────────────────────
+//
+
+#[test]
+fn loaded_carrier_sent_to_rival_storage_follows_it_instead_of_delivering() {
+    let mut app = utils::orders_app();
+    let (worker, worker_id) = utils::create_owned(&mut app, "worker", 5, 5, 0);
+    let (_, rival_depot) = utils::create_owned(&mut app, "depot", 14, 14, 1);
+    load_with_gold(&mut app, worker);
+    utils::run_ticks(&mut app, 1);
+
+    utils::send_to(&mut app, worker_id, rival_depot);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+
+    let orders = entity_def::orders(app.world(), worker);
+    assert!(
+        orders
+            .iter()
+            .any(|order| matches!(order, Order::Follow { .. })),
+        "a rival's storage takes nothing in, so the click falls through to following it"
+    );
+    assert!(
+        !orders
+            .iter()
+            .any(|order| matches!(order, Order::Harvest { .. })),
+        "and no delivery is queued"
+    );
+}
+
+//
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 //
 
@@ -738,7 +770,7 @@ fn wall_in(app: &mut App, x: u32, y: u32, size: u32) -> Vec<Entity> {
             }
             let (bx, by) = ((x as i32 + dx) as u32, (y as i32 + dy) as u32);
             let (boulder, _) =
-                spawn::create_entity(app.world_mut(), "boulder", utils::pos(bx, by), None).unwrap();
+                utils::create_entity(app.world_mut(), "boulder", utils::pos(bx, by), None).unwrap();
             walls.push(boulder);
         }
     }

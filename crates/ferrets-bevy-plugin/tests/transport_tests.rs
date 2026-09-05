@@ -654,12 +654,12 @@ fn turret_only_passenger_sits_ride_out() {
     let mut app = utils::transport_app();
     let world = app.world_mut();
     let (bunker, bunker_id) =
-        spawn::create_entity(world, "bunker", utils::pos(10, 10), Some(0)).unwrap();
+        utils::create_entity(world, "bunker", utils::pos(10, 10), Some(0)).unwrap();
     let (rider, rider_id) =
-        spawn::create_entity(world, "gun_rider", utils::pos(9, 10), Some(0)).unwrap();
+        utils::create_entity(world, "gun_rider", utils::pos(9, 10), Some(0)).unwrap();
     // In the gun's reach from the bunker AND from the rider's own boarding cell,
     // so a shot wrongly fired from either place would land.
-    let (foe, _) = spawn::create_entity(world, "civilian", utils::pos(12, 10), Some(2)).unwrap();
+    let (foe, _) = utils::create_entity(world, "civilian", utils::pos(12, 10), Some(2)).unwrap();
 
     utils::select(&mut app, rider_id);
     utils::push_command(

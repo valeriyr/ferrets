@@ -24,6 +24,7 @@ use ferrets_simulation::{
         entity_info::EntityInfoComponent, health::HealthComponent, hidden::HiddenComponent,
         location::LocationComponent, owner::OwnerComponent, rally::RallyPointComponent,
     },
+    fields::FieldGrid,
     map::Map,
     selection::Selection,
     session::GameSession,
@@ -57,6 +58,21 @@ const GHOST: [u8; 4] = [140, 140, 158, 255];
 /// What a cell reads as before the local team has ever seen it — the void the
 /// world draws outside the playable field.
 const VOID: [u8; 4] = [23, 23, 28, 255];
+/// Creep, wherever anyone's covers a cell.
+const CREEP: [u8; 4] = [120, 45, 140, 255];
+/// The tint a cell takes toward power where the viewed player's own covers it.
+const POWER: [u8; 4] = [70, 130, 255, 255];
+
+/// `color` moved `factor` of the way toward `toward`, alpha kept.
+fn mix(color: [u8; 4], toward: [u8; 4], factor: f32) -> [u8; 4] {
+    let blend = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * factor).round() as u8;
+    [
+        blend(color[0], toward[0]),
+        blend(color[1], toward[1]),
+        blend(color[2], toward[2]),
+        color[3],
+    ]
+}
 
 /// How far the diamond look flattens the picture after turning it, matching
 /// the height the camera doubles.
@@ -500,6 +516,7 @@ pub fn refresh_minimap(
     registry: Res<ContentRegistry>,
     selection: Res<Selection>,
     fog: Res<VisibilityGrid>,
+    fields: Res<FieldGrid>,
     watch: Res<render::ObserverPerspective>,
     reveal: Res<FogReveal>,
     ghosts: Res<Ghosts>,
@@ -545,6 +562,26 @@ pub fn refresh_minimap(
 
     let Minimap { base, canvas, .. } = &mut *minimap;
     canvas.restore(base);
+
+    // Fields, over the terrain and under the fog like the tiles they tint:
+    // creep whoever's it is, power where it is the viewed player's own.
+    let viewed = render::viewed_player(&session, &watch);
+    if let Some(creep) = registry.field("creep") {
+        for (cell, mask) in fields.cells(creep) {
+            if !mask.is_empty() {
+                canvas.put(cell.x, cell.y, CREEP);
+            }
+        }
+    }
+    if let (Some(power), Some(player)) = (registry.field("power"), viewed) {
+        for (cell, mask) in fields.cells(power) {
+            if mask.contains(player)
+                && let Some(color) = canvas.get(cell.x, cell.y)
+            {
+                canvas.put(cell.x, cell.y, mix(color, POWER, 0.45));
+            }
+        }
+    }
 
     // Fog. Unexplored cells fall back to the void rather than to dimmed
     // terrain: what has never been seen is not known to be there at all.

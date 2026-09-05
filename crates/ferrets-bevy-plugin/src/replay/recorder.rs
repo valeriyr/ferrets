@@ -6,7 +6,7 @@ use ferrets_simulation::{
     checksum::{self, CHECKSUM_INTERVAL},
     command::PlayerCommand,
     input::InputFrames,
-    session::{GameSession, player_slot::PlayerId},
+    session::{GameSession, player_id::PlayerId},
 };
 
 /// The active recording.

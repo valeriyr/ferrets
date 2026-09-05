@@ -7,7 +7,7 @@
 
 use bevy_ecs::prelude::*;
 
-use crate::session::{GameSession, player_slot::PlayerId};
+use crate::session::{GameSession, player_id::PlayerId};
 
 /// How much of a cell a player currently knows. Ordered least to most known, so
 /// a team's combined knowledge of a cell is the maximum over its members.

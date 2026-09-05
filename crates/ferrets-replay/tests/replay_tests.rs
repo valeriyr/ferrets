@@ -14,11 +14,8 @@ use ferrets_simulation::{
     command::PlayerCommand,
     movement_model::MovementModel,
     session::{
-        ai_vision::AiVision,
-        elimination_scope::EliminationScope,
-        finish_policy::FinishPolicy,
-        player_slot::{PlayerId, PlayerSlot},
-        player_type::PlayerType,
+        ai_vision::AiVision, elimination_scope::EliminationScope, finish_policy::FinishPolicy,
+        player_id::PlayerId, player_slot::PlayerSlot, player_type::PlayerType,
     },
     skirmish::Skirmish,
 };

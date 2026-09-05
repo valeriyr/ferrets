@@ -6,13 +6,12 @@ use bevy_ecs::{entity::Entity, world::World};
 use super::{
     chase::{self, Destination},
     crew,
-    orders::Processing,
+    orders::{self, Processing, Refusal},
 };
 use crate::{
     components::{
         entity_stats::StatsComponent,
         order_queue::{CancelPolicy, OrderQueueComponent, OrderState},
-        owner::OwnerComponent,
         tags::TagsComponent,
         transport::{BoardComponent, BoardedComponent, TransporterComponent},
     },
@@ -25,26 +24,39 @@ use crate::{
 };
 use ferrets_content::{entity_stats::EntityStatId, transport::BoardingPolicy};
 
+/// Whether `entity` may start this Board: its type rides and it operates, the
+/// transporter is there and operating, and it takes this entity aboard (see
+/// `would_board`).
+pub fn can_start(world: &World, entity: Entity, order: &Order) -> Result<(), Refusal> {
+    let target_id = order
+        .board_target()
+        .expect("Board order must have a target");
+    if !rides(world, entity) {
+        return Err(Refusal::Incapable);
+    }
+    orders::requires_operating(world, entity)?;
+    let Some(target) = world
+        .resource::<EntityIndex>()
+        .interactable(world, target_id)
+    else {
+        return Err(Refusal::TargetGone);
+    };
+    orders::target_operating(world, target)?;
+    would_board(world, entity, target)
+}
+
 /// Called once when a Board order becomes the front `New` entry.
 ///
 /// Inserts the driver component and returns `InProcessing`, or `Finished`
-/// immediately when the target will not take this entity aboard — see
-/// [`would_board`].
+/// immediately when the order cannot start — see [`can_start`].
 pub fn prepare(entity: Entity, order: &Order, world: &mut World) -> OrderState {
     let target_id = order
         .board_target()
         .expect("Board order must have a target");
 
-    let Some(target) = world
-        .resource::<EntityIndex>()
-        .interactable(world, target_id)
-    else {
-        return OrderState::Finished;
-    };
-    if !would_board(world, entity, target) {
+    if can_start(world, entity, order).is_err() {
         return OrderState::Finished;
     }
-
     world
         .entity_mut(entity)
         .insert(BoardComponent::new(target_id));
@@ -92,7 +104,7 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
     else {
         return Processing::state(OrderState::Finished);
     };
-    if !would_board(world, entity, target) {
+    if would_board(world, entity, target).is_err() {
         return Processing::state(OrderState::Finished);
     }
 
@@ -158,50 +170,57 @@ pub(super) fn admit(world: &mut World, holder: Entity, passenger: Entity) {
     world.resource_mut::<Selection>().remove(id);
 }
 
-/// Whether sending `entity` to `target` should be read as an intent to board it:
-/// the target takes passengers, this entity is a transportable unit the target's
-/// policy and admission list accept, and there is room aboard for it.
-pub(super) fn would_board(world: &World, entity: Entity, target: Entity) -> bool {
+/// Whether `entity`'s type rides: it carries the cargo_size stat and moves,
+/// since boarding is a walk.
+fn rides(world: &World, entity: Entity) -> bool {
+    let def = entity_def::of(world, entity);
+    def.base_stat(EntityStatId::CARGO_SIZE).is_some() && def.can_move()
+}
+
+/// Whether `target` takes `entity` aboard: this entity rides (else
+/// [`Refusal::Incapable`]), and the target takes passengers its policy and
+/// admission list accept with room aboard for this one (else
+/// [`Refusal::TargetUnfit`]).
+pub(super) fn would_board(world: &World, entity: Entity, target: Entity) -> Result<(), Refusal> {
+    if !rides(world, entity) {
+        return Err(Refusal::Incapable);
+    }
+    let entity_def = entity_def::of(world, entity);
     let target_def = entity_def::of(world, target);
     let Some(transporter) = target_def.transporter.as_ref() else {
-        return false;
+        return Err(Refusal::TargetUnfit);
     };
 
-    let entity_def = entity_def::of(world, entity);
-    // Transportability = carrying the cargo_size stat; boarding is a walk, so a
-    // passenger must also be able to make it.
-    if entity_def.base_stat(EntityStatId::CARGO_SIZE).is_none() || !entity_def.can_move() {
-        return false;
-    }
-
     let allowed = match (
-        world.entity(entity).get::<OwnerComponent>(),
-        world.entity(target).get::<OwnerComponent>(),
+        entity_def::owner(world, entity),
+        entity_def::owner(world, target),
     ) {
         (Some(rider), Some(holder)) => match transporter.boarding() {
-            BoardingPolicy::Own => rider.player() == holder.player(),
-            BoardingPolicy::Allies => world
-                .resource::<GameSession>()
-                .are_allied(rider.player(), holder.player()),
+            BoardingPolicy::Own => rider == holder,
+            BoardingPolicy::Allies => world.resource::<GameSession>().are_allied(rider, holder),
         },
         // A passenger belongs to somebody, and a neutral holder to nobody.
         _ => false,
     };
     if !allowed {
-        return false;
+        return Err(Refusal::TargetUnfit);
     }
 
     let entity_tags = world.entity(entity).get::<TagsComponent>();
     if !transporter.admits(&entity_def.name, |tag| {
         entity_tags.is_some_and(|tags| tags.contains(tag))
     }) {
-        return false;
+        return Err(Refusal::TargetUnfit);
     }
 
     // The capacity is a stat, so a modifier can enlarge or shrink the hold; a
     // hold shrunk below its occupancy keeps everyone aboard and admits nobody.
-    occupied_slots(world, target) + cargo_size(world, entity)
-        <= entity_def::effective_stat_u32(world, target, EntityStatId::CARGO_CAPACITY)
+    if occupied_slots(world, target) + cargo_size(world, entity)
+        > entity_def::effective_stat_u32(world, target, EntityStatId::CARGO_CAPACITY)
+    {
+        return Err(Refusal::TargetUnfit);
+    }
+    Ok(())
 }
 
 /// The earliest tick `holder` may take its next passenger at.

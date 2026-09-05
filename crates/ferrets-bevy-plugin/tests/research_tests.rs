@@ -8,8 +8,11 @@ mod utils;
 use bevy::prelude::App;
 use ferrets_math::FixedU64;
 use ferrets_simulation::{
-    command::PlayerCommand, components::build::UnderConstructionComponent,
-    player_research::PlayerResearch, simulation_id::SimulationId, spawn,
+    command::PlayerCommand,
+    components::build::{SiteWork, UnderConstructionComponent},
+    player_research::PlayerResearch,
+    simulation_id::SimulationId,
+    spawn,
 };
 
 //
@@ -260,7 +263,9 @@ fn under_construction_provider_satisfies_nothing() {
         .entity_mut(lab)
         .insert(UnderConstructionComponent {
             progress: 0,
-            builders: Default::default(),
+            work: SiteWork::Crew {
+                builders: Default::default(),
+            },
         });
 
     // A workshop still going up unlocks nothing.

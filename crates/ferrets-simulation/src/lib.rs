@@ -8,6 +8,7 @@ pub mod control_groups;
 pub mod entity_def;
 pub mod entity_index;
 pub mod events;
+pub mod fields;
 pub mod game_loop;
 pub mod impacts;
 pub mod input;

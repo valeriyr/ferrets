@@ -3,14 +3,14 @@
 mod utils;
 
 use ferrets_geometry::cell_pos::CellPos;
-use ferrets_simulation::{command::PlayerCommand, map::Map, spawn};
+use ferrets_simulation::{command::PlayerCommand, map::Map};
 
 #[test]
 fn passable_entities_never_claim_cells() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
     let (ghost, ghost_id) =
-        spawn::create_entity(world, "ghost", utils::pos(5, 5), Some(0)).unwrap();
+        utils::create_entity(world, "ghost", utils::pos(5, 5), Some(0)).unwrap();
 
     // The ghost stands at (5,5) without claiming the cell, so a solid soldier
     // can be placed right on top of it.
@@ -20,7 +20,7 @@ fn passable_entities_never_claim_cells() {
             .nav_grid()
             .is_occupied_by(utils::GROUND, CellPos::new(5, 5))
     );
-    let (_, _) = spawn::create_entity(world, "soldier", utils::pos(5, 5), Some(0)).unwrap();
+    let (_, _) = utils::create_entity(world, "soldier", utils::pos(5, 5), Some(0)).unwrap();
     assert!(
         world
             .resource::<Map>()

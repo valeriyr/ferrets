@@ -1,26 +1,29 @@
-//! Build order: workers raising construction sites.
+//! Build order: workers raising construction sites, and sites that advance
+//! themselves once a builder that does not join the crew has placed them.
 
 mod utils;
 
 use bevy::prelude::*;
 use ferrets_content::{
-    entity_stats::EntityStatId, entity_type_def::EntityTypeDef, location::Solidity,
-    registry::ContentRegistry, work::WorkPresence,
+    build::BuilderAttendance, entity_stats::EntityStatId, entity_type_def::EntityTypeDef,
+    location::Solidity, registry::ContentRegistry, work::WorkPresence,
 };
 use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
 use ferrets_math::{FixedU64, facing::Facing};
 use ferrets_simulation::{
     command::PlayerCommand,
     components::{
-        build::{BuildComponent, UnderConstructionComponent},
+        build::{BuildComponent, SiteWork, UnderConstructionComponent},
         entity_info::EntityInfoComponent,
         hidden::HiddenComponent,
         location::LocationComponent,
     },
+    entity_def,
+    events::{DeathCause, SimulationEvent},
     map::Map,
     session::{GameSession, player_slot::PlayerSlot, player_type::PlayerType},
     simulation_id::SimulationId,
-    spawn,
+    spawn, supply,
 };
 
 #[test]
@@ -593,6 +596,169 @@ fn raised_site_records_crew_until_last_builder_leaves() {
 }
 
 //
+// ─── Unattended and consumed builders ─────────────────────────────────────────
+//
+
+#[test]
+fn unattended_builder_places_site_and_leaves_it_to_advance_itself() {
+    let mut app = recording_orders_app();
+    let (architect, architect_id) = utils::create_owned(&mut app, "architect", 5, 5, 0);
+    utils::grant_gold(&mut app, 80);
+
+    order_depot(&mut app, architect_id);
+
+    // The architect walks up, pays, and is done: the site stands with nobody on
+    // it, naming its founder.
+    utils::run_ticks(&mut app, 12);
+    {
+        let world = app.world_mut();
+        assert_eq!(utils::count_of_type(world, "depot"), 1);
+        assert_eq!(utils::gold(world), 30);
+        assert_eq!(under_construction(world), 1);
+        assert!(crew_of_site(world).is_empty());
+        assert_eq!(founder_of_site(world), Some(architect_id));
+        assert!(world.get::<HiddenComponent>(architect).is_none());
+        assert!(utils::order_queue_is_empty(world, architect));
+    }
+
+    // The work goes on without it, one tick at a time, and the completion is
+    // announced with the founder as its builder.
+    utils::run_ticks(&mut app, 8);
+    assert_eq!(under_construction(app.world_mut()), 0);
+    assert_eq!(completed_by(&app), vec![architect_id]);
+}
+
+#[test]
+fn unattended_site_outlives_its_founder() {
+    let mut app = recording_orders_app();
+    let (architect, architect_id) = utils::create_owned(&mut app, "architect", 5, 5, 0);
+    utils::grant_gold(&mut app, 80);
+
+    order_depot(&mut app, architect_id);
+    utils::run_ticks(&mut app, 12);
+    assert_eq!(under_construction(app.world_mut()), 1);
+
+    spawn::destroy_entity(app.world_mut(), architect);
+
+    // The founder is gone; the site finishes regardless and still names it.
+    utils::run_ticks(&mut app, 10);
+    assert_eq!(under_construction(app.world_mut()), 0);
+    assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
+    assert_eq!(completed_by(&app), vec![architect_id]);
+}
+
+#[test]
+fn nobody_joins_unattended_site() {
+    let mut app = utils::orders_app();
+    let (_, architect_id) = utils::create_owned(&mut app, "architect", 5, 5, 0);
+    // Already within reach of the site, so its order resolves at once.
+    let (mason, mason_id) = utils::create_owned(&mut app, "mason", 9, 10, 0);
+    utils::grant_gold(&mut app, 80);
+
+    order_depot(&mut app, architect_id);
+    utils::run_ticks(&mut app, 12);
+    let progress_before = site_progress(app.world_mut());
+    // The architect walks four cells at half a cell per tick once the command
+    // lands after the three-tick delay, so the site is raised on the eleventh
+    // tick and has one tick of progress by the twelfth.
+    assert_eq!(progress_before, 1);
+
+    // A crew builder sent to the same site has no work to take up: it finishes
+    // its order and the site keeps its own pace.
+    order_depot(&mut app, mason_id);
+    utils::run_ticks(&mut app, 3);
+    let world = app.world_mut();
+    assert!(crew_of_site(world).is_empty());
+    assert_eq!(site_progress(world), progress_before + 3);
+    assert!(utils::order_queue_is_empty(world, mason));
+}
+
+#[test]
+fn consumed_builder_works_site_hidden_and_is_consumed_when_it_completes() {
+    let mut app = recording_orders_app();
+    let (larva, larva_id) = utils::create_owned(&mut app, "larva", 5, 5, 0);
+    utils::grant_gold(&mut app, 80);
+
+    order_depot(&mut app, larva_id);
+
+    // The larva walks up, pays, and steps inside: its own build order works the
+    // site as a crew of one, and it eats no supply while inside.
+    utils::run_ticks(&mut app, 12);
+    {
+        let world = app.world_mut();
+        assert_eq!(utils::count_of_type(world, "depot"), 1);
+        assert_eq!(utils::gold(world), 30);
+        assert_eq!(under_construction(world), 1);
+        assert!(world.get::<HiddenComponent>(larva).is_some());
+        assert!(!utils::order_queue_is_empty(world, larva));
+        assert_eq!(crew_of_site(world), vec![larva_id]);
+        assert_eq!(supply::used(world, 0), FixedU64::ZERO);
+    }
+    assert!(deaths(&app).is_empty());
+
+    // The site completes and consumes the larva: its death is announced as
+    // consumed rather than as a loss, and the completion names it.
+    utils::run_ticks(&mut app, 6);
+    assert_eq!(under_construction(app.world_mut()), 0);
+    assert_eq!(completed_by(&app), vec![larva_id]);
+    assert_eq!(deaths(&app), vec![(larva_id, DeathCause::Consumed)]);
+    utils::run_ticks(&mut app, 4);
+    utils::assert_despawned(app.world_mut(), larva);
+}
+
+#[test]
+fn cancelling_consumed_builder_brings_it_back_and_refunds_site() {
+    let mut app = recording_orders_app();
+    let (larva, larva_id) = utils::create_owned(&mut app, "larva", 5, 5, 0);
+    utils::grant_gold(&mut app, 80);
+
+    order_depot(&mut app, larva_id);
+    utils::run_ticks(&mut app, 12);
+    assert_eq!(under_construction(app.world_mut()), 1);
+    assert_eq!(supply::used(app.world(), 0), FixedU64::ZERO);
+
+    let site = utils::single_owned_of_type(app.world_mut(), "depot", 0);
+    let site_id = entity_def::simulation_id(app.world(), site);
+    utils::stop_orders(app.world_mut(), larva);
+    // The cancel lands next tick; the abandoned site then dies over its two
+    // ticks and is removed.
+    utils::run_ticks(&mut app, 6);
+
+    // The site is abandoned and refunded; the larva stands beside where it was,
+    // alive and counted again.
+    let world = app.world_mut();
+    assert_eq!(utils::count_of_type(world, "depot"), 0);
+    assert_eq!(utils::gold(world), 80);
+    assert!(world.get::<HiddenComponent>(larva).is_none());
+    assert_eq!(supply::used(world, 0), FixedU64::ONE);
+    assert_eq!(
+        deaths(&app),
+        vec![(site_id, DeathCause::Cancelled)],
+        "the site is the one death, and the builder was not spent"
+    );
+}
+
+#[test]
+fn consumed_builder_survives_placement_that_fails() {
+    let mut app = recording_orders_app();
+    let (larva, larva_id) = utils::create_owned(&mut app, "larva", 5, 5, 0);
+    // A soldier standing in the footprint blocks the site.
+    utils::create_owned(&mut app, "soldier", 10, 10, 0);
+    utils::grant_gold(&mut app, 80);
+
+    order_depot(&mut app, larva_id);
+
+    // Nothing was placed, so nothing was paid and nobody was consumed: the larva
+    // is back on the map beside where the site would have stood.
+    utils::run_ticks(&mut app, 14);
+    let world = app.world_mut();
+    assert_eq!(utils::count_of_type(world, "depot"), 0);
+    assert_eq!(utils::gold(world), 80);
+    assert!(world.get::<HiddenComponent>(larva).is_none());
+    assert!(deaths(&app).is_empty());
+}
+
+//
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 //
 
@@ -630,7 +796,7 @@ fn surveyor_app() -> App {
                 )
                 .with_health(20)
                 .with_stat(EntityStatId::BUILD_RANGE, FixedU64::from_num(3))
-                .with_builder(["depot"], WorkPresence::Present),
+                .with_builder(["depot"], BuilderAttendance::Crew(WorkPresence::Present)),
         );
     }
     utils::register_orders_content(&mut app);
@@ -652,7 +818,55 @@ fn crew_of_site(world: &mut World) -> Vec<SimulationId> {
     world
         .query::<&UnderConstructionComponent>()
         .iter(world)
-        .flat_map(|site| site.builders.iter().copied())
+        .flat_map(|site| match &site.work {
+            SiteWork::Crew { builders } => builders.iter().copied().collect::<Vec<_>>(),
+            SiteWork::Unattended { .. } => Vec::new(),
+        })
+        .collect()
+}
+
+/// The founder of the one unattended site, if the map holds one.
+fn founder_of_site(world: &mut World) -> Option<SimulationId> {
+    world
+        .query::<&UnderConstructionComponent>()
+        .iter(world)
+        .find_map(|site| match site.work {
+            SiteWork::Crew { .. } => None,
+            SiteWork::Unattended { founder } => Some(founder),
+        })
+}
+
+/// The economy content roster with every tick's announcements kept, for the
+/// suite that asserts who a completion names.
+fn recording_orders_app() -> App {
+    let mut app = utils::orders_app();
+    utils::record_announcements(&mut app);
+    app
+}
+
+/// Every death announced so far, as the subject and why.
+fn deaths(app: &App) -> Vec<(SimulationId, DeathCause)> {
+    app.world()
+        .resource::<utils::Announced>()
+        .0
+        .iter()
+        .filter_map(|event| match event {
+            SimulationEvent::EntityDied { entity, cause, .. } => Some((*entity, *cause)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The builder named by every construction completed so far.
+fn completed_by(app: &App) -> Vec<SimulationId> {
+    app.world()
+        .resource::<utils::Announced>()
+        .0
+        .iter()
+        .filter_map(|event| match event {
+            SimulationEvent::ConstructionCompleted { builder, .. } => Some(*builder),
+            _ => None,
+        })
         .collect()
 }
 

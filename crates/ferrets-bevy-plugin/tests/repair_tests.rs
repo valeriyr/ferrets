@@ -19,8 +19,12 @@ use ferrets_math::{FixedU64, facing::Facing};
 use ferrets_simulation::{
     command::PlayerCommand,
     components::{
-        build::UnderConstructionComponent, energy::EnergyComponent, entity_stats::StatsComponent,
-        hidden::HiddenComponent, location::LocationComponent, repair::UnderRepairComponent,
+        build::{SiteWork, UnderConstructionComponent},
+        energy::EnergyComponent,
+        entity_stats::StatsComponent,
+        hidden::HiddenComponent,
+        location::LocationComponent,
+        repair::UnderRepairComponent,
     },
     session::{GameSession, player_slot::PlayerSlot, player_type::PlayerType},
     simulation_id::SimulationId,
@@ -453,7 +457,12 @@ fn repairer_refuses_target_still_under_construction() {
     utils::wound(&mut app, depot, "40");
     app.world_mut()
         .entity_mut(depot)
-        .insert(UnderConstructionComponent::default());
+        .insert(UnderConstructionComponent {
+            progress: 0,
+            work: SiteWork::Crew {
+                builders: Default::default(),
+            },
+        });
     utils::grant_gold(&mut app, 500);
 
     repair(&mut app, worker_id, depot_id);

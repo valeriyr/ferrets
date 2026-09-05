@@ -20,7 +20,7 @@ use ferrets_content::{
     stats::{EntityModifier, PlayerModifier},
 };
 
-use crate::{session::player_slot::PlayerId, stat_store::StatStore};
+use crate::{session::player_id::PlayerId, stat_store::StatStore};
 
 /// One player's stats and the modifiers currently applied to them.
 #[derive(Debug, Clone, Default)]

@@ -12,10 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     map_data::MapData,
     resources::StartingStock,
-    session::{
-        player_slot::{PlayerId, TeamId},
-        player_type::PlayerType,
-    },
+    session::{player_id::PlayerId, player_slot::TeamId, player_type::PlayerType},
 };
 
 /// One authored cast assignment: who occupies one of the map's player seats.

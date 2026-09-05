@@ -5,7 +5,7 @@ use bevy_ecs::{entity::Entity, world::World};
 
 use super::{
     chase::{self, Destination},
-    orders::Processing,
+    orders::{self, Processing, Refusal},
 };
 use crate::{
     components::{
@@ -20,25 +20,34 @@ use crate::{
 /// How close the entity stays to its follow target, in grid cells.
 const FOLLOW_DISTANCE: u32 = 1;
 
-/// Called once when a Follow order becomes the front `New` entry.
-///
-/// Inserts the driver component and returns `InProcessing`, or `Finished`
-/// immediately if the entity cannot move or the target is gone.
-pub fn prepare(entity: Entity, order: &Order, world: &mut World) -> OrderState {
-    if !entity_def::of(world, entity).can_move() {
-        return OrderState::Finished;
-    }
+/// Whether `entity` may start a Follow: its type moves and it operates, and
+/// the target is there.
+pub fn can_start(world: &World, entity: Entity, order: &Order) -> Result<(), Refusal> {
     let target = order
         .follow_target()
         .expect("Follow order must have a target");
+    if !entity_def::of(world, entity).can_move() {
+        return Err(Refusal::Incapable);
+    }
+    orders::requires_operating(world, entity)?;
     if world
         .resource::<EntityIndex>()
         .interactable(world, target)
         .is_none()
     {
+        return Err(Refusal::TargetGone);
+    }
+    Ok(())
+}
+
+/// Called once when a Follow order becomes the front `New` entry.
+///
+/// Inserts the driver component and returns `InProcessing`, or `Finished`
+/// immediately when the order cannot start — see [`can_start`].
+pub fn prepare(entity: Entity, order: &Order, world: &mut World) -> OrderState {
+    if can_start(world, entity, order).is_err() {
         return OrderState::Finished;
     }
-
     world.entity_mut(entity).insert(FollowComponent::default());
     OrderState::InProcessing
 }
