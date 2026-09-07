@@ -33,6 +33,7 @@
 //! | `"board"` | `target`, `flush?` |
 //! | `"train"` | `trainer`, `type_name` |
 //! | `"build"` | `builder`, `type_name`, `x`, `y`, `flush?` |
+//! | `"cancel_build"` | `site` |
 //! | `"load"` | `transport`, `target`, `flush?` |
 //! | `"unload"` | `transport`, `x?`, `y?`, `flush?` |
 //! | `"stop"` | — |

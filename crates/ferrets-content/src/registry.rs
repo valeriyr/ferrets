@@ -8,6 +8,7 @@ use ferrets_pathfinder::{layer_id::LayerId, layer_mask::LayerMask};
 
 use crate::{
     attack::{AttackDef, Delivery, Weapon},
+    build::BuilderAttendance,
     entity_buffs::{EntityBuffDef, EntityBuffId},
     entity_stats::{ENTITY_BUILTIN_STATS, EntityStatId},
     entity_type_def::{EntityTypeDef, EntityTypeId},
@@ -25,6 +26,7 @@ use crate::{
     stand::StandingAct,
     tags,
     turret::{TurretDef, TurretId, WeaponConduct},
+    work::WorkPresence,
 };
 
 /// Stores every [`EntityTypeDef`], indexed by [`EntityTypeId`] and looked up by
@@ -173,6 +175,8 @@ impl ContentRegistry {
             self.validate_bonus_damage_vs(def);
             self.validate_traversable(def);
             self.validate_morphs(def);
+            self.validate_berths(def);
+            self.validate_overbuilds(def);
         }
         for (name, &id) in &self.researches {
             self.validate_requires(
@@ -1730,6 +1734,143 @@ impl ContentRegistry {
                 def.name
             );
         }
+    }
+
+    /// Checks that the berth points a type declares lie inside its footprint, and
+    /// that every attachment its capabilities declare names a berth group the
+    /// jobs it reaches offer: every type a builder raises, at least one source
+    /// of a kind a carrier attaches for, and at least one type a repairer mends.
+    ///
+    /// Runs in [`validate`](Self::validate) rather than at registration, because
+    /// a worker may be registered before the jobs it attaches to.
+    fn validate_berths(&self, def: &EntityTypeDef) {
+        if let Some(berths) = &def.berths {
+            let size = def
+                .location
+                .expect("validated content defines a location")
+                .size();
+            let (width, height) = (
+                FixedU64::from_num(size.width),
+                FixedU64::from_num(size.height),
+            );
+            for (group, berths) in berths.groups() {
+                for point in berths.points() {
+                    assert!(
+                        point.x < width && point.y < height,
+                        "entity type '{}' puts a berth of group '{group}' at ({}, {}), outside its footprint",
+                        def.name,
+                        point.x,
+                        point.y
+                    );
+                }
+            }
+        }
+
+        let offers = |job: &EntityTypeDef, group: &str| {
+            job.berths
+                .as_ref()
+                .is_some_and(|berths| berths.group(group).is_some())
+        };
+
+        if let Some(builder) = &def.builder
+            && let BuilderAttendance::Crew(WorkPresence::Attached(attachment)) =
+                builder.attendance()
+        {
+            for type_name in builder.builds() {
+                assert!(
+                    self.entity(type_name)
+                        .is_some_and(|built| offers(built, attachment.berths())),
+                    "entity type '{}' attaches to berth group '{}' of '{type_name}', which declares no such group",
+                    def.name,
+                    attachment.berths()
+                );
+            }
+        }
+        if let Some(carrier) = &def.resource_carrier {
+            for kind in carrier.kinds() {
+                let data = carrier
+                    .harvest_data(kind)
+                    .expect("a carrier's kinds are the keys of its catalogue");
+                if let WorkPresence::Attached(attachment) = data.presence() {
+                    let offered = self.entities().any(|source| {
+                        source
+                            .resource_source
+                            .as_ref()
+                            .is_some_and(|resource| resource.kind() == kind)
+                            && offers(source, attachment.berths())
+                    });
+                    assert!(
+                        offered,
+                        "entity type '{}' attaches to berth group '{}' of {kind} sources, and no registered {kind} source declares such a group",
+                        def.name,
+                        attachment.berths()
+                    );
+                }
+            }
+        }
+        if let Some(repairer) = &def.repairer
+            && let WorkPresence::Attached(attachment) = repairer.presence()
+        {
+            let offered = self.entities().any(|target| {
+                repairer.repairs().any(|tag| target.tags.contains(tag))
+                    && offers(target, attachment.berths())
+            });
+            assert!(
+                offered,
+                "entity type '{}' attaches to berth group '{}' of what it mends, and no registered type it mends declares such a group",
+                def.name,
+                attachment.berths()
+            );
+        }
+    }
+
+    /// Checks that a type raised over a resource source names a registered
+    /// source of the kind the type itself yields, on the same footprint and the
+    /// same layers, and is constructible.
+    fn validate_overbuilds(&self, def: &EntityTypeDef) {
+        let Some(over) = &def.overbuilds else { return };
+        let source = self.entity(over).unwrap_or_else(|| {
+            panic!(
+                "entity type '{}' overbuilds '{over}', which is not registered",
+                def.name
+            )
+        });
+        let yielded = source.resource_source.as_ref().unwrap_or_else(|| {
+            panic!(
+                "entity type '{}' overbuilds '{over}', which is not a resource source",
+                def.name
+            )
+        });
+        let own = def.resource_source.as_ref().unwrap_or_else(|| {
+            panic!(
+                "entity type '{}' overbuilds '{over}' but is not a resource source itself",
+                def.name
+            )
+        });
+        assert!(
+            own.kind() == yielded.kind(),
+            "entity type '{}' yields {} but overbuilds '{over}', which yields {}",
+            def.name,
+            own.kind(),
+            yielded.kind()
+        );
+        assert!(
+            def.location.map(|location| location.size())
+                == source.location.map(|location| location.size()),
+            "entity type '{}' overbuilds '{over}' on a footprint of another size",
+            def.name
+        );
+        assert!(
+            def.location.map(|location| location.occupation())
+                == source.location.map(|location| location.occupation()),
+            "entity type '{}' overbuilds '{over}', which occupies other layers",
+            def.name
+        );
+        assert!(
+            def.build_time.is_some(),
+            "entity type '{}' overbuilds '{over}' but is not constructible",
+            def.name
+        );
     }
 
     /// Checks that every type in the definition's build catalogue is a

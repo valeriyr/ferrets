@@ -11,6 +11,7 @@ use super::{
     work,
 };
 use crate::{
+    berths,
     components::{
         order_queue::{CancelPolicy, OrderState},
         resource::{
@@ -18,7 +19,7 @@ use crate::{
             ResourceSourceComponent, UnderHarvestComponent,
         },
     },
-    entity_def,
+    entity_def::{self, Operation},
     entity_index::EntityIndex,
     events::DeathCause,
     map::Map,
@@ -30,7 +31,7 @@ use crate::{
 };
 use ferrets_content::{
     entity_stats::EntityStatId,
-    resource::{DepletionPolicy, ResourceCarrierDef},
+    resource::{Banking, DepletionPolicy, ResourceCarrierDef},
     work::WorkPresence,
 };
 
@@ -81,11 +82,16 @@ fn reading(world: &World, entity: Entity, order: &Order) -> Result<Reading, Refu
     orders::target_operating(world, target)?;
 
     let target_def = entity_def::of(world, target);
-    // A source of a kind the carrier works names the order's kind outright.
+    // A source of a kind the carrier works names the order's kind outright —
+    // one that admits this carrier: its owner's, when it has an owner, and
+    // offering the berths the carrier sits in, when it attaches.
     if world.entity(target).contains::<ResourceSourceComponent>()
         && let Some(source) = target_def.resource_source.as_ref()
         && carrier_def.can_carry(source.kind())
     {
+        if !admits(world, target, entity, carrier_def, source.kind()) {
+            return Err(Refusal::TargetUnfit);
+        }
         return Ok(Reading {
             kind: source.kind().to_string(),
             source: Some(target_id),
@@ -109,6 +115,27 @@ fn reading(world: &World, entity: Entity, order: &Order) -> Result<Reading, Refu
         Some(kind) if own && storage.accepts(&kind) => Ok(Reading { kind, source: None }),
         Some(_) | None => Err(Refusal::TargetUnfit),
     }
+}
+
+/// Whether `source` admits `carrier` for `kind`: a source with an owner takes
+/// only that owner's carriers, and a carrier that attaches for the kind needs
+/// the source to offer the berth group it sits in.
+fn admits(
+    world: &World,
+    source: Entity,
+    carrier: Entity,
+    carrier_def: &ResourceCarrierDef,
+    kind: &str,
+) -> bool {
+    let owned_by_another = entity_def::owner(world, source)
+        .is_some_and(|holder| Some(holder) != entity_def::owner(world, carrier));
+    if owned_by_another {
+        return false;
+    }
+    carrier_def
+        .harvest_data(kind)
+        .and_then(|data| data.presence().attachment())
+        .is_none_or(|attachment| berths::offers(world, source, attachment.berths()))
 }
 
 /// Called once when a Harvest order becomes the front `New` entry.
@@ -149,6 +176,12 @@ pub fn cancel_processing(
     OrderState::Finished
 }
 
+/// Whether a Harvest can stand through a soft cancel: never — it drops like any
+/// order a player's next command replaces.
+pub fn survives_soft_cancel() -> bool {
+    false
+}
+
 /// Advance a Harvest order by one tick.
 ///
 /// Each tick the carrier either delivers or harvests:
@@ -164,8 +197,11 @@ pub fn cancel_processing(
 /// - **Harvest** otherwise: walks to the source, takes it up as the carrier's
 ///   declared presence for the kind allows — waiting in place while a source it
 ///   cannot share is worked — and works for the source's harvest time, then
-///   transfers up to a full load. A depleted source is destroyed or left empty
-///   on the map, per its [`DepletionPolicy`].
+///   transfers up to a full load: into its hands when the kind is carried, or
+///   straight into the owner's stockpile when it is banked directly, in which
+///   case the carrier stays at the source and works the next load. The source
+///   loses at most the kind's drain per load; a depleted source is destroyed or
+///   left empty on the map, per its [`DepletionPolicy`].
 ///
 /// The order is locked to one resource kind — the first load or source it
 /// touches — and never drifts to another. A source the carrier cannot reach is
@@ -214,18 +250,6 @@ fn advance(
         return Processing::state(OrderState::InProcessing);
     }
 
-    // A trip whose source vanished mid-work is abandoned: the carrier stops working
-    // and comes back onto the map before anything else happens.
-    if let Some(harvesting_id) = harvest_component.harvesting
-        && world
-            .resource::<EntityIndex>()
-            .interactable(world, harvesting_id)
-            .is_none()
-        && !end_trip(world, entity, harvest_component)
-    {
-        return Processing::state(OrderState::InProcessing);
-    }
-
     let (carried_kind, carried_amount) = {
         let carrier = world
             .entity(entity)
@@ -235,6 +259,16 @@ fn advance(
     };
 
     let source = resolve_source(entity, order, harvest_component, &carrier_def, world);
+
+    // A trip whose source no longer qualifies — vanished mid-work, or drained
+    // while the carrier sat at it — is abandoned: the carrier stops working and
+    // comes back onto the map before anything else happens.
+    if let Some(harvesting_id) = harvest_component.harvesting
+        && source != Some(harvesting_id)
+        && !end_trip(world, entity, harvest_component)
+    {
+        return Processing::state(OrderState::InProcessing);
+    }
 
     // A load of some other kind than the order's counts for nothing here: it
     // is never banked — the first transfer below replaces it — so a
@@ -334,7 +368,7 @@ fn advance(
             let beside = entity_def::footprint_rect(world, source_entity);
             let kind = harvest_component.kind.as_str();
             let replacement = nearest(world, beside, Some(SOURCE_SEARCH_RADIUS), |id, _| {
-                id != source_id && source_matches(world, id, &carrier_def, kind)
+                id != source_id && source_matches(world, id, entity, &carrier_def, kind)
             });
             harvest_component.last_chase = None;
             match replacement {
@@ -356,14 +390,17 @@ fn advance(
             .unwrap();
         (source_def.kind().to_string(), source_def.depletion())
     };
-    let harvest_data = *carrier_def
+    let harvest_data = carrier_def
         .harvest_data(&source_kind)
-        .expect("resolve_source returns carryable kinds");
+        .expect("resolve_source returns carryable kinds")
+        .clone();
 
     // Take up the source, waiting in place while one that cannot be shared is
-    // worked by somebody else.
+    // worked by somebody else, or every berth of it is taken.
     if harvest_component.harvesting != Some(source_id) {
-        if source_excludes(world, source_entity, entity, &source_kind) {
+        if source_excludes(world, source_entity, entity, &source_kind)
+            || berths::shut(world, source_entity, harvest_data.presence())
+        {
             return Processing::state(OrderState::InProcessing);
         }
         begin_trip(
@@ -378,9 +415,15 @@ fn advance(
     harvest_component.progress += 1;
 
     if harvest_component.progress >= harvest_data.harvest_time() {
-        // The carrier must be back on the map before the load can move on.
-        if !end_trip(world, entity, harvest_component) {
-            return Processing::state(OrderState::InProcessing);
+        match harvest_data.banking() {
+            // The carrier must be back on the grid before the load can move on.
+            Banking::Carried => {
+                if !end_trip(world, entity, harvest_component) {
+                    return Processing::state(OrderState::InProcessing);
+                }
+            }
+            // Nothing moves on: the carrier stays at the source.
+            Banking::Direct => {}
         }
 
         let available = world
@@ -390,25 +433,45 @@ fn advance(
             .amount;
         // A load of some other kind is wasted here, not banked: the hands
         // take the new kind and drop whatever they held — sending a
-        // wood-laden worker to gold costs the wood.
-        let kept = if carried_kind.as_deref() == Some(source_kind.as_str()) {
-            carried_amount
-        } else {
-            0
+        // wood-laden worker to gold costs the wood. A carrier that banks where
+        // it stands takes nothing in hand, and whatever it holds stays as it
+        // is.
+        let kept = match harvest_data.banking() {
+            Banking::Carried if carried_kind.as_deref() == Some(source_kind.as_str()) => {
+                carried_amount
+            }
+            Banking::Carried | Banking::Direct => 0,
         };
-        let take = harvest_data.capacity().saturating_sub(kept).min(available);
+        let room = harvest_data.capacity().saturating_sub(kept);
+        // A trip that drains nothing takes a full load whatever is left; one
+        // that drains the source takes no more than the source has.
+        let take = match harvest_data.drain() {
+            0 => room,
+            _ => room.min(available),
+        };
+        let drained = harvest_data.drain().min(take);
 
-        {
-            let mut entity_mut = world.entity_mut(entity);
-            let mut carrier = entity_mut.get_mut::<ResourceCarrierComponent>().unwrap();
-            carrier.kind = Some(source_kind);
-            carrier.amount = kept + take;
+        match harvest_data.banking() {
+            Banking::Carried => {
+                let mut entity_mut = world.entity_mut(entity);
+                let mut carrier = entity_mut.get_mut::<ResourceCarrierComponent>().unwrap();
+                carrier.kind = Some(source_kind);
+                carrier.amount = kept + take;
+            }
+            Banking::Direct => {
+                if let Some(player) = entity_def::owner(world, entity)
+                    && take > 0
+                {
+                    resources::credit_gathered(world, player, &source_kind, take, source_id);
+                }
+                harvest_component.progress = 0;
+            }
         }
 
         let remaining = {
             let mut source_mut = world.entity_mut(source_entity);
             let mut source_resources = source_mut.get_mut::<ResourceSourceComponent>().unwrap();
-            source_resources.amount -= take;
+            source_resources.amount -= drained;
             source_resources.amount
         };
 
@@ -446,33 +509,33 @@ fn shares_sources(world: &World, entity: Entity, kind: &str) -> bool {
 /// Starts a trip on `source`: the carrier takes the source up, joining its crew, and
 /// is at work from now until [`end_trip`].
 ///
-/// Being at work and being off the map are separate facts — a carrier inside a seam is
-/// both — so the mark goes on regardless, and the presence decides only whether the
-/// carrier leaves the map for the duration.
+/// Being at work and being off the grid are separate facts — a carrier inside a seam is
+/// both — so the mark goes on regardless, and the presence decides only where the
+/// carrier stands for the duration.
 fn begin_trip(
     world: &mut World,
     entity: Entity,
     source: Entity,
     harvest: &mut HarvestComponent,
-    presence: WorkPresence,
+    presence: &WorkPresence,
 ) {
     harvest.harvesting = Some(entity_def::simulation_id(world, source));
     harvest.progress = 0;
     crew::join::<UnderHarvestComponent>(world, source, entity);
 
     world.entity_mut(entity).insert(HarvestingComponent);
-    work::enter(world, entity, presence);
+    work::enter(world, entity, presence, source);
 }
 
-/// Ends the trip in progress: the carrier stops working, comes back onto the map if it
-/// was inside the source, and gives the source back up.
+/// Ends the trip in progress: the carrier stops working, comes back onto the grid if it
+/// left it for the source, and gives the source back up.
 ///
-/// Returns `false` when a hidden carrier has no free cell to reappear on. The trip
+/// Returns `false` when a carrier off the grid has no free cell to return to. The trip
 /// stands in that case — it is still at work and still holds its source — and the
 /// caller retries next tick.
 fn end_trip(world: &mut World, entity: Entity, harvest: &mut HarvestComponent) -> bool {
     let footprint = entity_def::footprint_rect(world, entity);
-    if !spawn::reveal_entity_near(world, entity, footprint.origin, footprint.size) {
+    if !spawn::place_back_near(world, entity, footprint.origin, footprint.size) {
         return false;
     }
 
@@ -481,8 +544,8 @@ fn end_trip(world: &mut World, entity: Entity, harvest: &mut HarvestComponent) -
 }
 
 /// Like [`end_trip`], but for the paths that cannot retry: the trip ends either way,
-/// and a carrier with nowhere to reappear stays hidden with the reveal queued for a
-/// later tick.
+/// and a carrier with nowhere to return to stays off the grid with the return queued
+/// for a later tick.
 fn end_trip_or_retry(world: &mut World, entity: Entity, harvest: &mut HarvestComponent) {
     stop_work(world, entity, harvest);
 
@@ -533,22 +596,23 @@ fn resolve_source(
         .into_iter()
         .flatten()
     {
-        if source_matches(world, candidate, carrier_def, kind) {
+        if source_matches(world, candidate, entity, carrier_def, kind) {
             return Some(candidate);
         }
     }
 
     let standing = entity_def::standing_rect(world, entity);
     nearest(world, standing, Some(SOURCE_SEARCH_RADIUS), |id, _| {
-        source_matches(world, id, carrier_def, kind)
+        source_matches(world, id, entity, carrier_def, kind)
     })
 }
 
-/// Whether `id` is a live source of `kind`, with anything left in it, that the
-/// carrier can carry from.
+/// Whether `id` is a live, raised source of `kind`, with anything left in it,
+/// that admits `carrier` and that it can carry from.
 fn source_matches(
     world: &World,
     id: SimulationId,
+    carrier: Entity,
     carrier_def: &ResourceCarrierDef,
     kind: &str,
 ) -> bool {
@@ -558,12 +622,20 @@ fn source_matches(
     let Some(source_def) = entity_def::of(world, source).resource_source.as_ref() else {
         return false;
     };
-    world
-        .entity(source)
-        .get::<ResourceSourceComponent>()
-        .is_some_and(|s| s.amount > 0)
+    let raised = match entity_def::operation(world, source) {
+        // A site still going up already holds the amount of the source it
+        // covers; it becomes a source of its own only once it stands.
+        Operation::UnderConstruction => false,
+        Operation::Operating | Operation::Disabled => true,
+    };
+    raised
+        && world
+            .entity(source)
+            .get::<ResourceSourceComponent>()
+            .is_some_and(|s| s.amount > 0)
         && carrier_def.can_carry(source_def.kind())
         && source_def.kind() == kind
+        && admits(world, source, carrier, carrier_def, kind)
 }
 
 /// Picks the storage to deliver to: the ordered target if it qualifies, otherwise

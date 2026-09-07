@@ -7,9 +7,9 @@ use ferrets_physics::body;
 
 use crate::{
     components::{
-        build::UnderConstructionComponent, entity_info::EntityInfoComponent,
-        entity_stats::StatsComponent, location::LocationComponent,
-        order_queue::OrderQueueComponent, owner::OwnerComponent,
+        attached::AttachedComponent, build::UnderConstructionComponent,
+        entity_info::EntityInfoComponent, entity_stats::StatsComponent, hidden::HiddenComponent,
+        location::LocationComponent, order_queue::OrderQueueComponent, owner::OwnerComponent,
     },
     fields,
     map::OccupancyClass,
@@ -70,11 +70,18 @@ pub fn of(world: &World, entity: Entity) -> &EntityTypeDef {
 
 /// How `entity` relates to a site it raises, or `None` when its type cannot
 /// build.
-pub fn builder_attendance(world: &World, entity: Entity) -> Option<BuilderAttendance> {
+pub fn builder_attendance(world: &World, entity: Entity) -> Option<&BuilderAttendance> {
     of(world, entity)
         .builder
         .as_ref()
         .map(|builder| builder.attendance())
+}
+
+/// Whether `entity` holds its footprint's cells on the navigation grid: it is
+/// neither hidden nor attached to a job.
+pub fn stands_on_grid(world: &World, entity: Entity) -> bool {
+    let entity_ref = world.entity(entity);
+    !entity_ref.contains::<HiddenComponent>() && !entity_ref.contains::<AttachedComponent>()
 }
 
 /// Whether an entity is in a state to carry out its type's work.

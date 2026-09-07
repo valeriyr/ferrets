@@ -18,3 +18,4 @@ ferrets-geometry.workspace = true
 ferrets-math.workspace = true
 ferrets-pathfinder.workspace = true
 ferrets-physics.workspace = true
+ferrets-random.workspace = true

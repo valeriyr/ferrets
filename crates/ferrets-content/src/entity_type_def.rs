@@ -8,6 +8,7 @@ use ferrets_pathfinder::layer_mask::LayerMask;
 
 use crate::{
     attack::{AttackDef, Delivery, Weapon},
+    berths::{BerthGroup, BerthsDef},
     build::{BuilderAttendance, BuilderDef},
     costs::{self, Cost},
     dying::DyingDef,
@@ -150,6 +151,12 @@ pub struct EntityTypeDef {
     pub resource_carrier: Option<ResourceCarrierDef>,
     /// Resource kinds accepted for delivery. `None` means the entity is not a storage.
     pub resource_storage: Option<ResourceStorageDef>,
+    /// The berths attached workers sit in on instances. `None` means no worker
+    /// attaches to instances.
+    pub berths: Option<BerthsDef>,
+    /// The resource source type a site of this type is raised over, by
+    /// registered name. `None` means instances are placed on open ground.
+    pub overbuilds: Option<String>,
 }
 
 impl EntityTypeDef {
@@ -192,6 +199,8 @@ impl EntityTypeDef {
             resource_source: None,
             resource_carrier: None,
             resource_storage: None,
+            berths: None,
+            overbuilds: None,
         }
     }
 
@@ -686,6 +695,32 @@ impl EntityTypeDef {
         accepts: impl IntoIterator<Item = impl Into<String>>,
     ) -> Self {
         self.resource_storage = Some(ResourceStorageDef::new(accepts));
+        self
+    }
+
+    /// Gives instances of this type the berth `groups` attached workers sit
+    /// in.
+    ///
+    /// Panics if `groups` is empty or a group name is empty.
+    pub fn with_berths(
+        mut self,
+        groups: impl IntoIterator<Item = (impl Into<String>, BerthGroup)>,
+    ) -> Self {
+        self.berths = Some(BerthsDef::new(groups));
+        self
+    }
+
+    /// Makes sites of this type rise over a resource source of `type_name`,
+    /// taking its remaining amount.
+    ///
+    /// Panics if `type_name` is empty.
+    pub fn with_overbuilds(mut self, type_name: impl Into<String>) -> Self {
+        let type_name = type_name.into();
+        assert!(
+            !type_name.is_empty(),
+            "overbuilt type name must not be empty"
+        );
+        self.overbuilds = Some(type_name);
         self
     }
 }

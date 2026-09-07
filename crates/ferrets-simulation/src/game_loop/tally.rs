@@ -55,7 +55,8 @@ fn fold(
                 SpawnCause::Placed
                 | SpawnCause::Founded { .. }
                 | SpawnCause::Sandbox
-                | SpawnCause::Remains { .. } => false,
+                | SpawnCause::Remains { .. }
+                | SpawnCause::Uncovered { .. } => false,
             };
             if !produced {
                 return;
@@ -180,7 +181,10 @@ fn fire_behind(
                 Some(holder_cause) => cause = *holder_cause,
                 None => return None,
             },
-            DeathCause::Depleted | DeathCause::Cancelled | DeathCause::Consumed => return None,
+            DeathCause::Depleted
+            | DeathCause::Cancelled
+            | DeathCause::Consumed
+            | DeathCause::Overbuilt => return None,
         }
     }
 }

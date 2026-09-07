@@ -81,6 +81,12 @@ pub fn cancel_processing(
     OrderState::Finished
 }
 
+/// Whether a Guard can stand through a soft cancel: never — it drops like any
+/// order a player's next command replaces.
+pub fn survives_soft_cancel() -> bool {
+    false
+}
+
 /// Advance a Guard order by one tick.
 ///
 /// Each tick:

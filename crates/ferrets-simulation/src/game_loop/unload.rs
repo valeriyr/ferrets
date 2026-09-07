@@ -80,6 +80,12 @@ pub fn cancel_processing(
     OrderState::Finished
 }
 
+/// Whether an Unload can stand through a soft cancel: never — it drops like any
+/// order a player's next command replaces.
+pub fn survives_soft_cancel() -> bool {
+    false
+}
+
 /// Advance an Unload order by one tick.
 ///
 /// With a destination, a mobile transporter first walks into its `unload_range`
@@ -146,7 +152,7 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
         };
 
         let footprint = entity_def::footprint_rect(world, entity);
-        if !spawn::reveal_entity_near(world, passenger, footprint.origin, footprint.size) {
+        if !spawn::place_back_near(world, passenger, footprint.origin, footprint.size) {
             // Boxed in: hold the door and retry next tick.
             world.entity_mut(entity).insert(unload);
             return Processing::state(OrderState::InProcessing);

@@ -25,7 +25,7 @@ use ferrets_content::{
     registry::ContentRegistry,
     repair::{RepairCost, RepairRate},
     research::ResearchDef,
-    resource::{DepletionPolicy, HarvestData},
+    resource::{Banking, DepletionPolicy, HarvestData},
     skills::{EntityCastEffect, EntityCastTarget, SkillCaster, SkillDef},
     stats::{EntityModifier, ModifierOp},
     transport::{BoardingPolicy, PassengerConduct, PassengerFate},
@@ -1519,7 +1519,10 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                     RepairCost::Free,
                     None,
                 )
-                .with_resource_carrier([("crystal", HarvestData::new(5, 2, WorkPresence::Present))])
+                .with_resource_carrier([(
+                    "crystal",
+                    HarvestData::new(5, 5, 2, WorkPresence::Present, Banking::Carried),
+                )])
                 .with_field_effects([unpowered_idles()]),
         );
         registry.register(

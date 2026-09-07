@@ -1,5 +1,6 @@
 //! Deterministic RTS game simulation.
 
+pub mod berths;
 pub mod buffs_store;
 pub mod checksum;
 pub mod command;

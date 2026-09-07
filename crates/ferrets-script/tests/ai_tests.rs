@@ -60,6 +60,7 @@ fn think_returns_commands_as_player_commands() {
                 { kind = "guard", target = 24 },
                 { kind = "stance", stance = "stand_ground" },
                 { kind = "morph", type_name = "gryphon_aloft", flush = false },
+                { kind = "cancel_build", site = 25 },
                 { kind = "stop" },
             }
         end"#,
@@ -137,6 +138,9 @@ fn think_returns_commands_as_player_commands() {
             PlayerCommand::Morph {
                 type_name: "gryphon_aloft".to_string(),
                 flush: false,
+            },
+            PlayerCommand::CancelBuild {
+                site: SimulationId(25),
             },
             PlayerCommand::Stop,
         ]

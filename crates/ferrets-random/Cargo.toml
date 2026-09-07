@@ -1,0 +1,8 @@
+[package]
+name = "ferrets-random"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Deterministic RTS randomness: integer mixing, the same on every peer."

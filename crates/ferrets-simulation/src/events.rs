@@ -29,7 +29,9 @@ pub enum SpawnCause {
     },
     /// Founded as a construction site — announced when the site is raised,
     /// standing but unfinished. [`SimulationEvent::ConstructionCompleted`]
-    /// announces the other end of the work.
+    /// announces the other end of the work. A site raised over a resource
+    /// source is founded like any other; the source it covers dies as
+    /// [`DeathCause::Overbuilt`] in the same tick.
     Founded {
         /// Whoever placed the site.
         builder: SimulationId,
@@ -40,6 +42,13 @@ pub enum SpawnCause {
     Remains {
         /// The entity that died here.
         of: SimulationId,
+    },
+    /// A resource source put back where the entity raised over it died, with
+    /// what that entity had left of it. Paired with [`DeathCause::Overbuilt`],
+    /// which took the source off the map when the site was raised.
+    Uncovered {
+        /// The entity that stood over it.
+        by: SimulationId,
     },
 }
 
@@ -97,6 +106,10 @@ pub enum DeathCause {
     Cancelled,
     /// Consumed by the construction site it founded.
     Consumed,
+    /// A resource source taken off the map by the site raised over it, which
+    /// takes its remaining amount. Paired with [`SpawnCause::Uncovered`],
+    /// which puts the source back when that entity dies with anything left.
+    Overbuilt,
     /// Went down with the carrier holding it.
     PassengerLost {
         /// The carrier it was inside.

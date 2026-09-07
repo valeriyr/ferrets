@@ -52,6 +52,7 @@ crates/
 ├── ferrets-network      Lockstep P2P networking for deterministic multiplayer
 ├── ferrets-pathfinder   Deterministic RTS pathfinding
 ├── ferrets-physics      Contact resolution for continuous-model unit bodies
+├── ferrets-random       Deterministic randomness — integer mixing, the same on every peer
 ├── ferrets-replay       Replay recording and deterministic playback
 ├── ferrets-script       Lua scripting runtime and game content loading
 ├── ferrets-simulation   Deterministic RTS simulation core

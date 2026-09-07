@@ -9,7 +9,7 @@ use ferrets_content::{
     registry::ContentRegistry,
     skills::{EntityCastTarget, SkillCaster, SkillId},
 };
-use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
+use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
 use ferrets_math::{FixedU64, fixed_urect::FixedURect, fixed_uvec2::FixedUVec2};
 use ferrets_physics::body;
 use ferrets_simulation::{
@@ -327,7 +327,7 @@ fn entity_at(
         // An airborne sprite is drawn lifted up the screen; the click meets
         // the unit where the player sees it, so the lift comes back off the
         // cursor before the footprint test.
-        let y = y + render::air_lift(registry, def).y / CELL_PX;
+        let y = y + render::lift(registry, def).y / CELL_PX;
         let inside =
             x >= ox && x < ox + size.width as f32 && y >= oy && y < oy + size.height as f32;
         if inside {
@@ -1079,18 +1079,43 @@ pub fn placement_input(
     let location_def = def.location.expect("validated content defines a location");
     let size = location_def.size();
 
-    // What the raise will judge: the ground, and the fields the type reads.
-    let passable = map.nav_grid().is_footprint_passable_by(
-        location_def.occupation(),
-        CellPos::new(cx, cy),
-        size,
-    ) && fields::allows_placement_in(
-        &fields,
-        &session,
-        session.local_player(),
-        def,
-        CellPos::new(cx, cy),
-    );
+    // What the raise will judge: the ground, and the fields the type reads. A
+    // type raised over a resource source is placed on the source itself — the
+    // ghost snaps to the footprint of a source of that type under the cursor,
+    // and that footprint is the ground, so the grid is not asked about it. Only
+    // a source the player owns or can see snaps.
+    let (anchor, ground) = match def.overbuilds.as_deref() {
+        Some(over) => {
+            let under = sources.iter().find_map(|(info, location, owner)| {
+                let standing = registry
+                    .def(info.type_id())
+                    .location
+                    .expect("validated content defines a location")
+                    .size();
+                let cell = body::anchor(location.position);
+                let seen = owner.is_some_and(|owner| owner.player() == local)
+                    || visibility.is_visible_to(&session, local, cell.x, cell.y);
+                let footprint = CellRect::new(cell, standing);
+                (seen && info.type_name() == over && footprint.contains(CellPos::new(cx, cy)))
+                    .then_some(footprint.origin)
+            });
+            match under {
+                Some(origin) => (origin, true),
+                None => (CellPos::new(cx, cy), false),
+            }
+        }
+        None => (
+            CellPos::new(cx, cy),
+            map.nav_grid().is_footprint_passable_by(
+                location_def.occupation(),
+                CellPos::new(cx, cy),
+                size,
+            ),
+        ),
+    };
+    let (cx, cy) = (anchor.x, anchor.y);
+    let passable = ground
+        && fields::allows_placement_in(&fields, &session, session.local_player(), def, anchor);
 
     // The area each field the type projects would cover, and the areas the
     // standing sources of those fields already cover, so a pylon is placed

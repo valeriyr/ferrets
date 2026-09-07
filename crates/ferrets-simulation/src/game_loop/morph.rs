@@ -20,12 +20,12 @@ use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 
 use super::orders::{self, Processing, Refusal};
 use crate::{
+    berths,
     components::{
         dying::DyingComponent,
         energy::EnergyComponent,
         entity_info::EntityInfoComponent,
         health::HealthComponent,
-        hidden::HiddenComponent,
         location::LocationComponent,
         morph::{MorphComponent, MorphReservation},
         movement::MoveComponent,
@@ -55,8 +55,9 @@ use ferrets_geometry::cell_pos::CellPos;
 use ferrets_physics::body;
 
 /// Whether `entity` may start this Morph: its type declares the transition,
-/// the destination exists and seats whatever is aboard, and it operates.
-/// Requirements, the cost and the ground are settled when the order starts.
+/// the destination exists and seats whatever is aboard, its queue holds
+/// nothing a soft flush would leave, and it operates. Requirements, the cost and the ground are
+/// settled when the order starts.
 pub fn can_start(world: &World, entity: Entity, order: &Order) -> Result<(), Refusal> {
     let Order::Morph { type_name } = order else {
         unreachable!("can_start called with a non-Morph order");
@@ -69,6 +70,13 @@ pub fn can_start(world: &World, entity: Entity, order: &Order) -> Result<(), Ref
     };
     if !cargo_fits(world, entity, type_id) {
         return Err(Refusal::TargetUnfit);
+    }
+    // Work a soft flush would leave in the queue — paid production, a change
+    // already under way — is not something a change of form may run off with,
+    // and neither are the workers seated in its berths: the player finishes or
+    // cancels that work first.
+    if orders::resists_soft_flush(world, entity) || berths::seated(world, entity) {
+        return Err(Refusal::Busy);
     }
     orders::requires_operating(world, entity)
 }
@@ -265,6 +273,13 @@ pub fn cancel_processing(
         }
     }
     OrderState::Finished
+}
+
+/// Whether a Morph can stand through a soft cancel as a kind: no — a change
+/// still queued drops like any other order, and one under way answers by its
+/// own cancel terms in [`cancel_processing`].
+pub fn survives_soft_cancel() -> bool {
+    false
 }
 
 /// Advance a Morph order by one tick.
@@ -502,8 +517,8 @@ fn reoccupy(
     type_id: EntityTypeId,
     landing: Landing,
 ) -> bool {
-    // A hidden entity holds no cells at all, so there is nothing to move.
-    if world.entity(entity).contains::<HiddenComponent>() {
+    // An entity off the grid holds no cells at all, so there is nothing to move.
+    if !entity_def::stands_on_grid(world, entity) {
         return true;
     }
     // Fields judge the destination form where it will stand, like any
@@ -691,9 +706,9 @@ fn reserve(world: &mut World, entity: Entity, type_name: &str) -> Option<MorphCo
     {
         return None;
     }
-    // A hidden entity holds no cells and will land through the same exemption,
-    // so there is nothing to secure.
-    if world.entity(entity).contains::<HiddenComponent>() {
+    // An entity off the grid holds no cells and will land through the same
+    // exemption, so there is nothing to secure.
+    if !entity_def::stands_on_grid(world, entity) {
         return Some(MorphComponent {
             from: entity_def::type_id(world, entity),
             into: type_name.to_string(),

@@ -95,6 +95,12 @@ pub fn cancel_processing(
     }
 }
 
+/// Whether a Research can stand through a soft cancel: always — only a force
+/// cancel takes the work away, refunding it.
+pub fn survives_soft_cancel() -> bool {
+    true
+}
+
 /// Advance a Research order by one tick.
 ///
 /// Each tick the progress grows; when the research time is reached, the

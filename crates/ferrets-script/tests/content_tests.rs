@@ -5,6 +5,7 @@
 
 use ferrets_content::{
     attack::{AttackDef, Delivery, Weapon},
+    build::BuilderAttendance,
     costs,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
@@ -17,6 +18,7 @@ use ferrets_content::{
     player_stats::PlayerStatId,
     repair::{RepairCost, RepairRate},
     research::ResearchDef,
+    resource::Banking,
     skills::{
         EntityCastCost, EntityCastEffect, EntityCastTarget, PlayerCastEffect, SkillCaster, SkillDef,
     },
@@ -25,10 +27,10 @@ use ferrets_content::{
     stats::{EntityModifier, ModifierOp, PlayerModifier},
     transport::{BoardingPolicy, PassengerConduct, PassengerFate},
     turret::{TurretDef, TurretMount, TurretStats, WeaponConduct},
-    work::WorkPresence,
+    work::{Attachment, BerthStance, WorkPresence},
 };
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
-use ferrets_math::{FixedI64, FixedU64};
+use ferrets_math::{FixedI64, FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_pathfinder::{layer_mask::LayerMask, nav_grid::LayerId};
 use ferrets_script::{
     content,
@@ -233,7 +235,7 @@ fn parses_repairer_and_repair_ratio() {
     let worker = registry.entity("worker").expect("worker defined");
     let repairer = worker.repairer.as_ref().expect("worker can repair");
     assert_eq!(repairer.repairs().collect::<Vec<_>>(), ["building"]);
-    assert_eq!(repairer.presence(), WorkPresence::PresentStacking);
+    assert_eq!(*repairer.presence(), WorkPresence::PresentStacking);
     assert_eq!(repairer.cost(), &RepairCost::ProRata);
     assert_eq!(repairer.patience(), Some(200));
     assert!(
@@ -475,7 +477,7 @@ fn parses_medic_paying_energy_at_flat_rate() {
         Some(FixedU64::from_num(2))
     );
     assert_eq!(
-        repairer.presence(),
+        *repairer.presence(),
         WorkPresence::Present,
         "one medic to a patient"
     );
@@ -1403,7 +1405,284 @@ fn unknown_work_presence_errors() {
         panic!("must reject an unknown work presence");
     };
     assert!(
-        matches!(&error, ScriptError::ContentError(m) if m.contains("work presence must be 'hidden', 'present', or 'present_stacking', found 'lurking'")),
+        matches!(&error, ScriptError::ContentError(m) if m.contains("work presence must be 'hidden', 'present', 'present_stacking', or an { attached = ... } table, found 'lurking'")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn attached_presence_reads_berths_and_stance() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_resource("wood")
+        define_resource("gold")
+        define_tag("building")
+
+        define_entity("tree", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            resource_source = { kind = "wood", depletion = "destroy" },
+            berths = { canopy = { points = { { "0.5", "0.5" } } } },
+        })
+        define_entity("lodge", {
+            location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
+            stats = { max_health = 100 },
+            cost = { gold = 10 },
+            build_time = 4,
+            berths = {
+                rim = { points = { { 1, 0 }, { "1.8", "1.0" }, { 1, "1.8" }, { "0.2", 1 } }, slots = 2 },
+                ledge = { points = { { 0, 0 }, { 1, 1 }, { 0, 1 } } },
+            },
+        })
+        define_entity("sprite", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = { max_health = 20, harvest_range = 1, build_range = 1 },
+            resource_carrier = {
+                wood = {
+                    capacity = 5, time = 20, drain = 0, banking = "direct",
+                    presence = { attached = { berths = "canopy", stance = "still" } },
+                },
+            },
+            builder = {
+                builds = { "lodge" },
+                attendance = { attached = { berths = "rim", stance = { roaming = { speed = "0.05", dwell = 10 } } } },
+            },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("content loads");
+
+    let tree = registry.entity("tree").unwrap();
+    let canopy = tree.berths.as_ref().unwrap().group("canopy").unwrap();
+    assert_eq!(
+        canopy.points(),
+        &[FixedUVec2::new(FixedU64::lit("0.5"), FixedU64::lit("0.5"))]
+    );
+    assert_eq!(canopy.slots(), 1);
+    let lodge = registry.entity("lodge").unwrap();
+    let rim = lodge.berths.as_ref().unwrap().group("rim").unwrap();
+    assert_eq!(rim.points().len(), 4);
+    assert_eq!(rim.slots(), 2);
+    let ledge = lodge.berths.as_ref().unwrap().group("ledge").unwrap();
+    assert_eq!(ledge.points().len(), 3);
+    assert_eq!(
+        ledge.slots(),
+        3,
+        "one worker per point unless said otherwise"
+    );
+    // Whole numbers and decimal strings both read as fixed-point.
+    assert_eq!(
+        rim.points()[0],
+        FixedUVec2::new(FixedU64::ONE, FixedU64::ZERO)
+    );
+    assert_eq!(
+        rim.points()[1],
+        FixedUVec2::new(FixedU64::lit("1.8"), FixedU64::ONE)
+    );
+
+    let sprite = registry.entity("sprite").unwrap();
+    let wood = sprite
+        .resource_carrier
+        .as_ref()
+        .unwrap()
+        .harvest_data("wood")
+        .unwrap();
+    assert_eq!(
+        *wood.presence(),
+        WorkPresence::Attached(Attachment::new("canopy", BerthStance::Still))
+    );
+    assert_eq!(wood.drain(), 0);
+    assert_eq!(wood.banking(), Banking::Direct);
+    assert_eq!(
+        *sprite.builder.as_ref().unwrap().attendance(),
+        BuilderAttendance::Crew(WorkPresence::Attached(Attachment::new(
+            "rim",
+            BerthStance::Roaming {
+                speed: FixedU64::lit("0.05"),
+                dwell: 10,
+            }
+        )))
+    );
+}
+
+#[test]
+fn overbuilding_type_reads_its_source() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_resource("gold")
+        define_tag("building")
+
+        define_entity("mine", {
+            location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
+            resource_source = { kind = "gold", depletion = "destroy" },
+        })
+        define_entity("shaft_house", {
+            location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
+            stats = { max_health = 100 },
+            cost = { gold = 10 },
+            build_time = 4,
+            resource_source = { kind = "gold", depletion = "destroy" },
+            overbuilds = "mine",
+            tags = { "building" },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("content loads");
+    assert_eq!(
+        registry
+            .entity("shaft_house")
+            .unwrap()
+            .overbuilds
+            .as_deref(),
+        Some("mine")
+    );
+}
+
+#[test]
+fn orbit_stance_reads_radius_and_period() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_resource("wood")
+
+        define_entity("tree", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            resource_source = { kind = "wood", depletion = "destroy" },
+            berths = { canopy = { points = { { "0.5", "0.5" } } } },
+        })
+        define_entity("sprite", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = { max_health = 20, harvest_range = 1 },
+            resource_carrier = {
+                wood = {
+                    capacity = 5, time = 20,
+                    presence = { attached = { berths = "canopy", stance = { orbit = { radius = "0.3", period = 40 } } } },
+                },
+            },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("content loads");
+    let sprite = registry.entity("sprite").unwrap();
+    let wood = sprite
+        .resource_carrier
+        .as_ref()
+        .unwrap()
+        .harvest_data("wood")
+        .unwrap();
+    assert_eq!(
+        *wood.presence(),
+        WorkPresence::Attached(Attachment::new(
+            "canopy",
+            BerthStance::Orbit {
+                radius: FixedU64::lit("0.3"),
+                period: 40,
+            }
+        ))
+    );
+}
+
+#[test]
+fn circling_stance_reads_speed_and_dwell() {
+    let stance = "{ circling = { speed = \"0.25\", dwell = 8 } }";
+    let source = carrier_content("{ { \"0.5\", \"0.5\" }, { \"0.5\", \"0.9\" } }", stance);
+    let registry = content::load(&engine(), &source).expect("content loads");
+    let sprite = registry.entity("sprite").unwrap();
+    let wood = sprite
+        .resource_carrier
+        .as_ref()
+        .unwrap()
+        .harvest_data("wood")
+        .unwrap();
+    assert_eq!(
+        *wood.presence(),
+        WorkPresence::Attached(Attachment::new(
+            "canopy",
+            BerthStance::Circling {
+                speed: FixedU64::lit("0.25"),
+                dwell: 8,
+            }
+        ))
+    );
+}
+
+#[test]
+fn berth_point_of_float_errors() {
+    let Err(error) = content::load(&engine(), &carrier_content("{ { 0.5, 0.5 } }", "\"still\""))
+    else {
+        panic!("must reject a float berth point");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("berth x must be a non-negative integer or a decimal string, got number")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn berth_point_that_is_not_a_pair_errors() {
+    let Err(error) = content::load(&engine(), &carrier_content("{ { 1, 1, 1 } }", "\"still\""))
+    else {
+        panic!("must reject a berth point that is not a pair");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("berth group 'canopy' points must be {x, y} pairs")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn stance_speed_of_float_errors() {
+    let stance = "{ roaming = { speed = 0.25, dwell = 4 } }";
+    let Err(error) = content::load(
+        &engine(),
+        &carrier_content("{ { 0, 0 }, { 1, 1 } }", stance),
+    ) else {
+        panic!("must reject a float berth-to-berth speed");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("berth-to-berth speed must be a non-negative integer or a decimal string, got number")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn stance_table_of_two_movements_errors() {
+    let stance =
+        "{ roaming = { speed = \"0.25\", dwell = 4 }, orbit = { radius = \"0.3\", period = 8 } }";
+    let Err(error) = content::load(
+        &engine(),
+        &carrier_content("{ { 0, 0 }, { 1, 1 } }", stance),
+    ) else {
+        panic!("must reject a stance table naming two movements");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("a berth stance table must have exactly one of 'circling', 'roaming' or 'orbit'")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn unknown_berth_stance_errors() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_resource("wood")
+
+        define_entity("tree", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            resource_source = { kind = "wood", depletion = "destroy" },
+            berths = { canopy = { points = { { "0.5", "0.5" } } } },
+        })
+        define_entity("sprite", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = { max_health = 20, harvest_range = 1 },
+            resource_carrier = {
+                wood = {
+                    capacity = 5, time = 20,
+                    presence = { attached = { berths = "canopy", stance = "wandering" } },
+                },
+            },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject an unknown berth stance");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("berth stance must be 'still', a { circling = ... } table, a { roaming = ... } table, or an { orbit = ... } table, found 'wandering'")),
         "unexpected error: {error:?}"
     );
 }
@@ -1661,6 +1940,33 @@ fn unknown_field_decay_errors() {
 //
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 //
+
+/// A tree with the given berth `points` and a carrier that sits in them with
+/// the given `stance`, both written as Lua.
+fn carrier_content(points: &str, stance: &str) -> String {
+    format!(
+        r#"
+        local GROUND = define_layer("ground")
+        define_resource("wood")
+
+        define_entity("tree", {{
+            location = {{ occupation = GROUND, size = 1, solidity = "solid" }},
+            resource_source = {{ kind = "wood", depletion = "destroy" }},
+            berths = {{ canopy = {{ points = {points} }} }},
+        }})
+        define_entity("sprite", {{
+            location = {{ occupation = GROUND, size = 1, solidity = "solid" }},
+            stats = {{ max_health = 20, harvest_range = 1 }},
+            resource_carrier = {{
+                wood = {{
+                    capacity = 5, time = 20,
+                    presence = {{ attached = {{ berths = "canopy", stance = {stance} }} }},
+                }},
+            }},
+        }})
+    "#
+    )
+}
 
 /// One self-contained ranged unit (no production catalogue).
 const ARCHER: &str = r#"

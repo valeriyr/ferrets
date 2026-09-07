@@ -1,4 +1,4 @@
-//! Retry step for entities waiting on a free cell to reappear on the map.
+//! Retry step for entities waiting on a free cell to return to the grid.
 
 use bevy_ecs::{entity::Entity, world::World};
 
@@ -8,10 +8,10 @@ use crate::{
     spawn,
 };
 
-/// Retries the reveal of every entity left waiting on a free cell.
+/// Retries the return of every entity left waiting on a free cell.
 ///
 /// Each tick, every entity carrying a [`PendingRevealComponent`] reattempts its
-/// reveal against its stored anchor; on success the entity is back on the map
+/// return against its stored anchor; on success the entity is back on the grid
 /// and the marker is removed. Entities are visited in ascending [`SimulationId`]
 /// order so the outcome stays deterministic across peers.
 pub fn process_pending_reveals(world: &mut World) {
@@ -23,7 +23,7 @@ pub fn process_pending_reveals(world: &mut World) {
     pending.sort_unstable_by_key(|(id, _, _)| *id);
 
     for (_, entity, reveal) in pending {
-        if spawn::reveal_entity_near(world, entity, reveal.around, reveal.around_size) {
+        if spawn::place_back_near(world, entity, reveal.around, reveal.around_size) {
             world.entity_mut(entity).remove::<PendingRevealComponent>();
         }
     }

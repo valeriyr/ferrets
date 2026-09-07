@@ -1,3 +1,4 @@
+mod advance_berths;
 mod advance_sites_without_builder;
 mod auto_engage;
 mod check_game_result;
@@ -27,6 +28,7 @@ mod retire_events;
 mod tick_counter;
 mod tick_orders;
 
+pub use advance_berths::advance_berths;
 pub use advance_sites_without_builder::advance_sites_without_builder;
 pub use auto_engage::auto_engage;
 pub use check_game_result::check_game_result;

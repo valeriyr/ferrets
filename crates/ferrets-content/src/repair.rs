@@ -111,8 +111,8 @@ impl RepairerDef {
 
     /// Where the worker stands while it works.
     #[inline]
-    pub fn presence(&self) -> WorkPresence {
-        self.presence
+    pub fn presence(&self) -> &WorkPresence {
+        &self.presence
     }
 
     /// Whether the entity may mend itself.

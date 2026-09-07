@@ -9,6 +9,7 @@ use ferrets_bevy_plugin::{
 };
 use ferrets_content::{
     attack::{AttackDef, Delivery, Weapon},
+    berths::BerthGroup,
     build::BuilderAttendance,
     costs,
     entity_buffs::{EntityBuffDef, EntityBuffId},
@@ -21,14 +22,14 @@ use ferrets_content::{
     projectile::{Aim, ProjectileDef},
     registry::ContentRegistry,
     research::{ResearchDef, ResearchId},
-    resource::{DepletionPolicy, HarvestData},
+    resource::{Banking, DepletionPolicy, HarvestData},
     skills::{EntityCastCost, PlayerCastEffect, SkillCaster, SkillDef},
     splash::{SplashDef, SplashShape},
     stack_rule::StackRule,
     stats::{EntityModifier, ModifierOp},
     transport::{BoardingPolicy, PassengerConduct, PassengerFate},
     turret::{TurretDef, TurretFire, TurretMount, TurretStats, WeaponConduct},
-    work::WorkPresence,
+    work::{Attachment, BerthStance, WorkPresence},
 };
 use ferrets_geometry::{
     cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize, projection::Projection,
@@ -601,12 +602,26 @@ pub fn morph_app(model: MovementModel) -> App {
                     FixedU64::from_num(360),
                 )
                 .with_health(50)
-                .with_dying(2, None),
+                .with_dying(2, None)
+                .with_morphs([MorphTransition::new(
+                    "shrine",
+                    None,
+                    MorphTime::Constant(10),
+                    MorphPlacement::Reserve,
+                    MorphCancel::Refundable,
+                    Vec::new(),
+                    Vec::<String>::new(),
+                )]),
         );
     }
     app.world_mut().resource::<ContentRegistry>().validate();
     app.world_mut().resource_mut::<GameSession>().start();
     app
+}
+
+/// A berth point from decimal strings, in cells from the footprint's anchor.
+pub fn berth(x: &str, y: &str) -> FixedUVec2 {
+    FixedUVec2::new(fixed(x), fixed(y))
 }
 
 /// Runs exactly `ticks` fixed updates.
@@ -2015,7 +2030,19 @@ pub fn register_orders_content(app: &mut App) {
                 .with_dying(2, None)
                 .with_cost([("gold", 50)])
                 .with_build_time(6)
-                .with_resource_storage(["gold", "wood"]),
+                .with_resource_storage(["gold", "wood"])
+                .with_berths([(
+                    "rim",
+                    BerthGroup::new(
+                        [
+                            berth("0.5", "0.5"),
+                            berth("1.5", "0.5"),
+                            berth("0.5", "1.5"),
+                            berth("1.5", "1.5"),
+                        ],
+                        4,
+                    ),
+                )]),
         );
         registry.register(
             EntityTypeDef::new("worker")
@@ -2035,7 +2062,10 @@ pub fn register_orders_content(app: &mut App) {
                 .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
                 .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
                 .with_builder(["depot"], BuilderAttendance::Crew(WorkPresence::Hidden))
-                .with_resource_carrier([("gold", HarvestData::new(5, 2, WorkPresence::Hidden))]),
+                .with_resource_carrier([(
+                    "gold",
+                    HarvestData::new(5, 5, 2, WorkPresence::Hidden, Banking::Carried),
+                )]),
         );
         // Same catalogue as `worker`, but it works from outside the site — the pair
         // is what makes `WorkPresence` observable.
@@ -2073,6 +2103,30 @@ pub fn register_orders_content(app: &mut App) {
                 .with_builder(
                     ["depot"],
                     BuilderAttendance::Crew(WorkPresence::PresentStacking),
+                ),
+        );
+        // Same catalogue, and it works on the site itself: on the map and open
+        // to attack, but holding no cells.
+        registry.register(
+            EntityTypeDef::new("roofer")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_sight_range(40)
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
+                )
+                .with_health(20)
+                .with_dying(2, None)
+                .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
+                .with_builder(
+                    ["depot"],
+                    BuilderAttendance::Crew(WorkPresence::Attached(Attachment::new(
+                        "rim",
+                        BerthStance::Still,
+                    ))),
                 ),
         );
         // Same catalogue once more, but it only places the site: the depot
@@ -2126,7 +2180,10 @@ pub fn register_orders_content(app: &mut App) {
                 .with_health(20)
                 .with_dying(2, None)
                 .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
-                .with_resource_carrier([("wood", HarvestData::new(5, 2, WorkPresence::Present))]),
+                .with_resource_carrier([(
+                    "wood",
+                    HarvestData::new(5, 5, 2, WorkPresence::Present, Banking::Carried),
+                )]),
         );
         // Works a seam from three cells back, which says nothing about how close it
         // has to get to put the load down.
@@ -2144,7 +2201,10 @@ pub fn register_orders_content(app: &mut App) {
                 .with_health(20)
                 .with_dying(2, None)
                 .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::from_num(3))
-                .with_resource_carrier([("gold", HarvestData::new(5, 2, WorkPresence::Present))]),
+                .with_resource_carrier([(
+                    "gold",
+                    HarvestData::new(5, 5, 2, WorkPresence::Present, Banking::Carried),
+                )]),
         );
         // Same trade as `lumberjack`, but a stand takes as many axes as turn up — and
         // a trip long enough to watch a crew form and break up while it lasts.
@@ -2164,7 +2224,7 @@ pub fn register_orders_content(app: &mut App) {
                 .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
                 .with_resource_carrier([(
                     "wood",
-                    HarvestData::new(5, 8, WorkPresence::PresentStacking),
+                    HarvestData::new(5, 5, 8, WorkPresence::PresentStacking, Banking::Carried),
                 )]),
         );
         registry.register(
@@ -2200,24 +2260,325 @@ pub fn register_orders_content(app: &mut App) {
                 .with_dying(2, None)
                 .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
                 .with_resource_carrier([
-                    ("gold", HarvestData::new(5, 2, WorkPresence::Present)),
-                    ("wood", HarvestData::new(5, 2, WorkPresence::Present)),
+                    (
+                        "gold",
+                        HarvestData::new(5, 5, 2, WorkPresence::Present, Banking::Carried),
+                    ),
+                    (
+                        "wood",
+                        HarvestData::new(5, 5, 2, WorkPresence::Present, Banking::Carried),
+                    ),
                 ]),
         );
+        // Banks where it stands: sits in a tree alone, drawing wood without
+        // felling it, or on a mine with any number of others, draining it.
+        registry.register(
+            EntityTypeDef::new("sylph")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_sight_range(40)
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
+                )
+                .with_health(20)
+                .with_dying(2, None)
+                .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
+                .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
+                .with_builder(["shaft_house", "pump_house"], BuilderAttendance::Unattended)
+                .with_resource_carrier([
+                    (
+                        "wood",
+                        HarvestData::new(
+                            5,
+                            0,
+                            2,
+                            WorkPresence::Attached(Attachment::new("canopy", BerthStance::Still)),
+                            Banking::Direct,
+                        ),
+                    ),
+                    (
+                        "gold",
+                        HarvestData::new(
+                            5,
+                            5,
+                            2,
+                            WorkPresence::Attached(Attachment::new("rim", BerthStance::Still)),
+                            Banking::Direct,
+                        ),
+                    ),
+                ]),
+        );
+        // A sylph that never sits still: two ticks at a berth, then a quarter
+        // of a cell a tick straight across to another free one.
+        registry.register(
+            EntityTypeDef::new("roamer")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_sight_range(40)
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
+                )
+                .with_health(20)
+                .with_dying(2, None)
+                .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
+                .with_resource_carrier([(
+                    "gold",
+                    HarvestData::new(
+                        5,
+                        5,
+                        2,
+                        WorkPresence::Attached(Attachment::new(
+                            "rim",
+                            BerthStance::Roaming {
+                                speed: FixedU64::from_num(0.25),
+                                dwell: 2,
+                            },
+                        )),
+                        Banking::Direct,
+                    ),
+                )]),
+        );
+        // A sylph that walks the rim: two ticks at a berth, then a quarter of a
+        // cell a tick along the loop to the next free one.
+        registry.register(
+            EntityTypeDef::new("circler")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_sight_range(40)
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
+                )
+                .with_health(20)
+                .with_dying(2, None)
+                .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
+                .with_resource_carrier([(
+                    "gold",
+                    HarvestData::new(
+                        5,
+                        5,
+                        2,
+                        WorkPresence::Attached(Attachment::new(
+                            "rim",
+                            BerthStance::Circling {
+                                speed: FixedU64::from_num(0.25),
+                                dwell: 2,
+                            },
+                        )),
+                        Banking::Direct,
+                    ),
+                )]),
+        );
+        // A sylph that hovers: it circles its canopy berth a quarter turn a
+        // tick, a quarter of a cell out.
+        registry.register(
+            EntityTypeDef::new("hoverer")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_sight_range(40)
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
+                )
+                .with_health(20)
+                .with_dying(2, None)
+                .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
+                .with_resource_carrier([(
+                    "wood",
+                    HarvestData::new(
+                        5,
+                        0,
+                        2,
+                        WorkPresence::Attached(Attachment::new(
+                            "canopy",
+                            BerthStance::Orbit {
+                                radius: FixedU64::from_num(0.25),
+                                period: 4,
+                            },
+                        )),
+                        Banking::Direct,
+                    ),
+                )]),
+        );
+        // Banks a load of five while taking two out of the seam.
+        registry.register(
+            EntityTypeDef::new("tapper")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_sight_range(40)
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
+                )
+                .with_health(20)
+                .with_dying(2, None)
+                .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
+                .with_resource_carrier([(
+                    "gold",
+                    HarvestData::new(
+                        5,
+                        2,
+                        2,
+                        WorkPresence::Attached(Attachment::new("rim", BerthStance::Still)),
+                        Banking::Direct,
+                    ),
+                )]),
+        );
+        // A bare seam: nothing sits on it, so an attached carrier is turned
+        // away, and a shaft house may be raised over it.
         registry.register(
             EntityTypeDef::new("mine")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
                 .with_resource_source("gold", DepletionPolicy::Destroy),
         );
+        // A wide seam with three spots — two down its west edge and one at its
+        // south-east, so a loop has a corner to turn and a crossing has a
+        // diagonal — seating two workers.
+        registry.register(
+            EntityTypeDef::new("lode")
+                .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
+                .with_resource_source("gold", DepletionPolicy::Destroy)
+                .with_berths([(
+                    "rim",
+                    BerthGroup::new(
+                        [
+                            berth("0.5", "0.5"),
+                            berth("0.5", "1.5"),
+                            berth("1.5", "1.5"),
+                        ],
+                        2,
+                    ),
+                )]),
+        );
+        // A wide seam with four spots at its corners in loop order — north-west,
+        // north-east, south-east, south-west — all seated, for the way a
+        // circling crew spreads round it.
+        registry.register(
+            EntityTypeDef::new("ring")
+                .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
+                .with_resource_source("gold", DepletionPolicy::Destroy)
+                .with_berths([(
+                    "rim",
+                    BerthGroup::new(
+                        [
+                            berth("0.5", "0.5"),
+                            berth("1.5", "0.5"),
+                            berth("1.5", "1.5"),
+                            berth("0.5", "1.5"),
+                        ],
+                        4,
+                    ),
+                )]),
+        );
+        // A wide seam with two berths on its west edge.
+        registry.register(
+            EntityTypeDef::new("vein")
+                .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
+                .with_resource_source("gold", DepletionPolicy::Destroy)
+                .with_berths([(
+                    "rim",
+                    BerthGroup::new([berth("0.5", "0.5"), berth("0.5", "1.5")], 2),
+                )]),
+        );
+        // Raised over a mine: takes its gold, seats one carrier, and gives the
+        // mine back when it falls with gold still in it.
+        registry.register(
+            EntityTypeDef::new("shaft_house")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_health(100)
+                .with_dying(2, None)
+                .with_cost([("gold", 20)])
+                .with_build_time(20)
+                .with_tags(["building"])
+                .with_resource_source("gold", DepletionPolicy::Destroy)
+                .with_overbuilds("mine")
+                .with_berths([("rim", BerthGroup::new([berth("0.5", "0.5")], 1))])
+                .with_morphs([MorphTransition::new(
+                    "walking_shaft",
+                    None,
+                    MorphTime::Constant(4),
+                    MorphPlacement::Reserve,
+                    MorphCancel::Committed,
+                    Vec::new(),
+                    Vec::<String>::new(),
+                )]),
+        );
+        // The form a shaft house takes when it uproots.
+        registry.register(
+            EntityTypeDef::new("walking_shaft")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
+                )
+                .with_health(100)
+                .with_dying(2, None),
+        );
+        // Raised over a geyser, which stays on the map when emptied: what the
+        // pump house gives back when it falls drained.
+        registry.register(
+            EntityTypeDef::new("pump_house")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_health(100)
+                .with_dying(2, None)
+                .with_cost([("gold", 20)])
+                .with_build_time(20)
+                .with_tags(["building"])
+                .with_resource_source("gold", DepletionPolicy::Destroy)
+                .with_overbuilds("geyser")
+                .with_berths([("rim", BerthGroup::new([berth("0.5", "0.5")], 1))])
+                .with_morphs([MorphTransition::new(
+                    "walking_pump",
+                    None,
+                    MorphTime::Constant(4),
+                    MorphPlacement::Reserve,
+                    MorphCancel::Committed,
+                    Vec::new(),
+                    Vec::<String>::new(),
+                )]),
+        );
+        // The form a pump house takes when it uproots: wider than the house, so
+        // the walk recentres it away from the cell the house was raised over,
+        // and it draws nothing itself.
+        registry.register(
+            EntityTypeDef::new("walking_pump")
+                .with_location(GROUND, CellSize::new(3, 3), Solidity::Solid)
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
+                )
+                .with_health(100)
+                .with_dying(2, None),
+        );
         registry.register(
             EntityTypeDef::new("tree")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-                .with_resource_source("wood", DepletionPolicy::Destroy),
+                .with_resource_source("wood", DepletionPolicy::Destroy)
+                .with_berths([("canopy", BerthGroup::new([berth("0.5", "0.5")], 1))]),
         );
         registry.register(
             EntityTypeDef::new("geyser")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-                .with_resource_source("gold", DepletionPolicy::Persist),
+                .with_resource_source("gold", DepletionPolicy::Persist)
+                .with_berths([("rim", BerthGroup::new([berth("0.5", "0.5")], 1))]),
         );
         registry.register(
             EntityTypeDef::new("ghost")

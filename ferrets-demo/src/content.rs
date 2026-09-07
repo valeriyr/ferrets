@@ -1,5 +1,5 @@
-//! Demo content: four races (human, orc, swarm, conclave) plus neutral resource
-//! sources, authored in Lua and loaded at startup.
+//! Demo content: five races (human, orc, swarm, conclave, elves) plus neutral
+//! resource sources, authored in Lua and loaded at startup.
 //!
 //! Times are in ticks (20 Hz), tuned short so mechanics are quick to test.
 
@@ -28,12 +28,18 @@ pub const CONTENT: &str = r#"
     -- the conclave builds in the power its pylons project.
     define_race("swarm")
     define_race("conclave")
+    -- The elves' buildings walk: all but the moon well uproot into a form that
+    -- fights and roots again where it stops.
+    define_race("elves")
 
     -- Creep covers the ground and recedes ring by ring, half a second a ring,
     -- once nothing sustains it, and whoever spreads it sees every cell of it;
     -- power is there while its pylon stands and gone the tick it falls.
     define_field("creep", { layer = GROUND, decay = { cycle = 10 }, vision = "watched" })
     define_field("power", { layer = GROUND, decay = "instant" })
+
+    -- What a structure that will not stand on creep declares.
+    local NOT_ON_CREEP = { forbids = "creep" }
 
     define_resource("gold")
     define_resource("wood")
@@ -207,10 +213,37 @@ pub const CONTENT: &str = r#"
         location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
         resource_source = { kind = "gold", depletion = "persist" },
     })
+    -- A tree seats one worker in its canopy; a gold mine seats nobody, so a
+    -- worker that sits on its source needs something built over the mine.
     define_entity("tree", {
         location = { occupation = GROUND, size = 1, solidity = "solid" },
         resource_source = { kind = "wood", depletion = "destroy" },
+        berths = { canopy = { points = { { "0.5", "0.5" } } } },
     })
+
+    -- The spots a worker that attaches to a structure sits at: points every
+    -- half cell along the footprint's edge, a fifth of a cell in from it, in
+    -- loop order — so a worker crawling from one to the next goes round the
+    -- walls, in reach of anything that walks up to them. A group seats one
+    -- worker per spot unless it says how many.
+    local function rim(width, height)
+        local points = {}
+        -- Counted in tenths of a cell, so every point is written from whole
+        -- numbers.
+        local inset = 2
+        local w, h = width * 10, height * 10
+        local function decimal(tenths)
+            return math.floor(tenths / 10) .. "." .. tenths % 10
+        end
+        local function point(x, y)
+            points[#points + 1] = { decimal(x), decimal(y) }
+        end
+        for x = 5, w - 5, 5 do point(x, inset) end
+        for y = 5, h - 5, 5 do point(w - inset, y) end
+        for x = w - 5, 5, -5 do point(x, h - inset) end
+        for y = h - 5, 5, -5 do point(inset, y) end
+        return points
+    end
 
     -- The two races differ only in how their workers attend a job, not in what they
     -- charge or how fast they work, so the ways can be compared side by side:
@@ -259,7 +292,9 @@ pub const CONTENT: &str = r#"
         })
     end
 
-    local function main_hall(name, race, trains)
+    -- `berths` is the seating a race's attaching worker needs on the
+    -- structure, or nil for a race whose workers never sit on their sites.
+    local function main_hall(name, race, trains, berths)
         define_entity(name, {
             race = race,
             location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
@@ -273,6 +308,7 @@ pub const CONTENT: &str = r#"
             trainer = { trains },
             resource_storage = { "gold", "wood" },
             tags = { "building" },
+            berths = berths,
         })
     end
 
@@ -290,7 +326,7 @@ pub const CONTENT: &str = r#"
         })
     end
 
-    local function barracks(name, race, trains, researches)
+    local function barracks(name, race, trains, researches, berths)
         define_entity(name, {
             race = race,
             location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
@@ -304,6 +340,7 @@ pub const CONTENT: &str = r#"
             trainer = trains,
             researcher = researches,
             tags = { "building" },
+            berths = berths,
         })
     end
 
@@ -586,13 +623,33 @@ pub const CONTENT: &str = r#"
     })
 
     -- Orc: worker, base, barracks, and a melee unit.
-    -- Peons work one to a job and disappear into what they raise: a site swallows its
-    -- peon until the walls are up, where a repair or a stand only ties one up in the
-    -- open. Nothing they do goes faster for a second pair of hands.
-    worker("peon", "orc", { "great_hall", "war_camp", "pig_farm", "watch_tower", "siege_works" }, {
-        attendance = "hidden", repair_presence = "present", wood_presence = "present",
+    -- Peons work one to a job and climb onto what they raise: a peon works a
+    -- spot on the rim of its site for a second and a half, crawls along the
+    -- wall to the next, and works there, in plain view, open to a raid and in
+    -- nobody's way, until the walls are up; a repair or a stand only ties one
+    -- up in the open. Nothing they do goes faster for a second pair of hands.
+    worker("peon", "orc", { "great_hall", "war_camp", "pig_farm", "watch_tower", "siege_works", "big_rock" }, {
+        attendance = { attached = { berths = "rim", stance = { circling = { speed = "0.1", dwell = 30 } } } },
+        repair_presence = "present",
+        wood_presence = "present",
     })
-    main_hall("great_hall", "orc", "peon")
+    -- The peon crawls round the rim of everything it raises, so every orc
+    -- structure seats it there.
+    main_hall("great_hall", "orc", "peon", { rim = { points = rim(3, 3) } })
+
+    -- The big rock: a monument to nothing. Four cells across, a minute to
+    -- raise, and it does nothing at all once it stands — it is there so a
+    -- gang of peons can be watched crawling round a long job.
+    define_entity("big_rock", {
+        race = "orc",
+        location = { occupation = GROUND, size = { 4, 4 }, solidity = "solid" },
+        stats = { max_health = 2000, sight_range = 2 },
+        dying = { time = 2 },
+        cost = { gold = 50 },
+        build_time = 1200,
+        tags = { "building" },
+        berths = { rim = { points = rim(4, 4) } },
+    })
 
     -- The orc farm is also a shelter, for the workforce alone: peons crawl in
     -- one at a time and sit out a raid unseen — the army stands and fights.
@@ -619,6 +676,7 @@ pub const CONTENT: &str = r#"
             conduct = "shelter",
         },
         tags = { "building" },
+        berths = { rim = { points = rim(2, 2) } },
     })
     -- The orc watch tower: what it can be hit by and where it stands are
     -- different answers, like the grounded gryphon. It is rooted on the ground
@@ -642,6 +700,7 @@ pub const CONTENT: &str = r#"
         cost = { gold = 120, wood = 40 },
         build_time = 70,
         tags = { "building" },
+        berths = { rim = { points = rim(2, 2) } },
         -- The demo's building upgrade: a paid, refundable change in place. The
         -- money is committed up front and comes back in full if the upgrade is
         -- called off — which is what makes starting one cheap to reconsider.
@@ -669,7 +728,7 @@ pub const CONTENT: &str = r#"
         attack = { targets = GROUND | WATER | AIR, projectile = "arrow" },
         tags = { "building" },
     })
-    barracks("war_camp", "orc", { "grunt", "shaman", "zeppelin" }, { "frenzy_ritual" })
+    barracks("war_camp", "orc", { "grunt", "shaman", "zeppelin" }, { "frenzy_ritual" }, { rim = { points = rim(3, 3) } })
 
     -- The orc siege works: the one building that exists to train a single unit,
     -- and gated behind the war camp, so the wagon is a second-thought answer to a
@@ -685,6 +744,7 @@ pub const CONTENT: &str = r#"
         repair_ratio = "0.5",
         trainer = { "war_wagon" },
         tags = { "building" },
+        berths = { rim = { points = rim(3, 3) } },
         requires = { "war_camp" },
     })
 
@@ -979,7 +1039,6 @@ pub const CONTENT: &str = r#"
     -- of the conclave's is built on creep, and a pylon that finishes burns
     -- away creep nothing sustains around it.
     local POWERED = { requires = "power", of = "own", coverage = "footprint" }
-    local NOT_ON_CREEP = { forbids = "creep" }
     local UNPOWERED_IDLES = { field = "power", of = "own", outside = "disabled" }
 
     define_entity("nexus", {
@@ -1091,6 +1150,181 @@ pub const CONTENT: &str = r#"
         attack = { targets = GROUND | WATER },
         cost = { gold = 100 },
         train_time = 60,
+        selection = { priority = 10 },
+    })
+
+    -- ── The Elves ──────────────────────────────────────────────────────────
+    -- Nothing of the elves' is carried home: a wisp hovers in a tree and draws
+    -- wood out of it without felling it, alone, or works the rim of a mine
+    -- the elves have entangled, spot by spot with its fellows, draining it —
+    -- and the take goes straight to the stockpile, so no elf building stores
+    -- anything. A wisp is spent on what it builds, like a drone. Every
+    -- structure but the moon well roots and uproots: rooted it trains or
+    -- shoots at range; uprooted it walks and bites, and trains nothing.
+    -- Nothing of the elves' takes root on creep, neither a wisp's site nor a
+    -- walker settling down.
+    define_entity("wisp", {
+        race = "elves",
+        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        stats = {
+            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1, max_health = 30, sight_range = 4,
+            build_range = 1, harvest_range = 1,
+            supply_cost = 1,
+            cargo_size = 1,
+        },
+        dying = { time = 2 },
+        cost = { gold = 50 },
+        train_time = 40,
+        builder = {
+            builds = { "tree_of_life", "moon_well", "ancient_of_war", "ancient_protector", "entangled_mine" },
+            attendance = "consumed",
+        },
+        tags = { "biological" },
+        -- Gold is drawn from the rim of an entangled mine: a wisp works a spot
+        -- for two seconds, then drifts straight across to another free one of
+        -- its own picking, so a crowd of them never moves as one.
+        -- Wood is drawn from a tree's canopy, the wisp hovering in a slow
+        -- circle inside the crown.
+        resource_carrier = {
+            gold = {
+                capacity = 5, time = 20, banking = "direct",
+                presence = { attached = { berths = "rim", stance = { roaming = { speed = "0.05", dwell = 40 } } } },
+            },
+            wood = {
+                capacity = 5, time = 20, banking = "direct", drain = 0,
+                presence = { attached = { berths = "canopy", stance = { orbit = { radius = "0.3", period = 60 } } } },
+            },
+        },
+    })
+
+    -- Raised over a gold mine, the entangled mine is the mine from then on:
+    -- it takes the gold that was left, seats five wisps round its rim, falls
+    -- when they drain it, and gives the mine back with what remains if it is
+    -- torn down or destroyed first. Only the elves that own it may work it.
+    -- A mine is where it is, so creep under it is no bar, unlike the ancients.
+    define_entity("entangled_mine", {
+        race = "elves",
+        location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
+        stats = { max_health = 600, sight_range = 6 },
+        dying = { time = 2 },
+        cost = { gold = 100 },
+        build_time = 100,
+        tags = { "building" },
+        resource_source = { kind = "gold", depletion = "destroy" },
+        overbuilds = "gold_mine",
+        -- Twelve spots to drift between, five wisps at a time on them.
+        berths = { rim = { points = rim(2, 2), slots = 5 } },
+    })
+
+    -- A rooted form and the walker it uproots into, as one pair: the same
+    -- footprint both ways, so the ground under a settling walker is exactly
+    -- the ground it walked on. Rooting reserves that ground the moment it is
+    -- ordered; uprooting checks nothing, since the cells are already its own.
+    -- Both take two seconds, cost nothing, and can be called off. The walker
+    -- keeps the building tag and the headroom the rooted form gives, and
+    -- bites at what it reaches.
+    local function ancient(name, size, rooted, walker)
+        local uprooted = name .. "_uprooted"
+        define_entity(name, {
+            race = "elves",
+            location = { occupation = GROUND, size = size, solidity = "solid" },
+            stats = rooted.stats,
+            dying = { time = 2 },
+            cost = rooted.cost,
+            build_time = rooted.build_time,
+            trainer = rooted.trainer,
+            attack = rooted.attack,
+            tags = { "building" },
+            field_placement = { NOT_ON_CREEP },
+            morphs = {
+                { into = uprooted, time = 40, placement = "revalidate", cancel = "refundable" },
+            },
+        })
+        define_entity(uprooted, {
+            race = "elves",
+            location = { occupation = GROUND, size = size, solidity = "solid" },
+            stats = walker.stats,
+            dying = { time = 2 },
+            attack = { targets = GROUND },
+            tags = { "building" },
+            selection = { priority = 6 },
+            morphs = {
+                { into = name, time = 40, placement = "reserve", cancel = "refundable" },
+            },
+        })
+    end
+
+    -- The hall: trains wisps rooted; uprooted it lumbers and swats.
+    ancient("tree_of_life", { 3, 3 }, {
+        stats = { max_health = 800, sight_range = 9, supply_provided = 10 },
+        cost = { gold = 400 },
+        build_time = 200,
+        trainer = { "wisp" },
+    }, {
+        stats = {
+            speed = "0.1", turn_rate = 6, pivot_rate = 6, pivot_angle = 90, radius = "1.5", weight = 12,
+            max_health = 800, sight_range = 9, supply_provided = 10,
+            damage = 20, attack_range = 1, acquire_range = 5, attack_period = 30, damage_point = 10,
+        },
+    })
+    -- The moon well feeds the army the way a farm does. It is the one elf
+    -- structure with no legs: a well stays where it was dug.
+    define_entity("moon_well", {
+        race = "elves",
+        location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
+        stats = { max_health = 200, sight_range = 3, supply_provided = 6 },
+        dying = { time = 2 },
+        cost = { gold = 40, wood = 20 },
+        build_time = 60,
+        tags = { "building" },
+        field_placement = { NOT_ON_CREEP },
+    })
+    -- The barracks: huntresses rooted, a heavy bite uprooted.
+    ancient("ancient_of_war", { 3, 3 }, {
+        stats = { max_health = 500, sight_range = 6 },
+        cost = { gold = 200, wood = 100 },
+        build_time = 120,
+        trainer = { "huntress" },
+    }, {
+        stats = {
+            speed = "0.15", turn_rate = 8, pivot_rate = 8, pivot_angle = 90, radius = "1.5", weight = 10,
+            max_health = 500, sight_range = 6,
+            damage = 25, attack_range = 1, acquire_range = 5, attack_period = 25, damage_point = 8,
+        },
+    })
+    -- The tower: rooted it throws at range, over ground and water and into the
+    -- air; uprooted it can only bite at what walks up to it.
+    ancient("ancient_protector", { 2, 2 }, {
+        stats = {
+            max_health = 300, armor = 1, sight_range = 8,
+            damage = 14, attack_range = 6, acquire_range = 7, attack_period = 20, damage_point = 5,
+        },
+        cost = { gold = 120, wood = 40 },
+        build_time = 80,
+        attack = { targets = GROUND | WATER | AIR, projectile = "arrow" },
+    }, {
+        stats = {
+            speed = "0.15", turn_rate = 12, pivot_rate = 12, radius = "1", weight = 6,
+            max_health = 300, armor = 1, sight_range = 8,
+            damage = 14, attack_range = 1, acquire_range = 5, attack_period = 20, damage_point = 5,
+        },
+    })
+
+    define_entity("huntress", {
+        race = "elves",
+        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        stats = {
+            speed = "0.35", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 2, max_health = 55,
+            damage = 9, attack_range = 1, acquire_range = 6, attack_period = 5, damage_point = 2,
+            sight_range = 9,
+            supply_cost = 1,
+            cargo_size = 1,
+        },
+        dying = { time = 2 },
+        tags = { "biological" },
+        attack = { targets = GROUND | WATER },
+        cost = { gold = 90, wood = 10 },
+        train_time = 55,
         selection = { priority = 10 },
     })
 "#;

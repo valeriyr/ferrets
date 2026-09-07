@@ -48,7 +48,8 @@ pub fn can_start(world: &World, entity: Entity, order: &Order) -> Result<(), Ref
             refusal @ (Refusal::UnderConstruction
             | Refusal::Disabled
             | Refusal::NothingToDo
-            | Refusal::TargetGone),
+            | Refusal::TargetGone
+            | Refusal::Busy),
         ) => unreachable!("would_board judges fit only, got {refusal:?}"),
     }
 }
@@ -89,6 +90,12 @@ pub fn cancel_processing(
 ) -> OrderState {
     world.entity_mut(entity).remove::<LoadComponent>();
     OrderState::Finished
+}
+
+/// Whether a Load can stand through a soft cancel: never — it drops like any
+/// order a player's next command replaces.
+pub fn survives_soft_cancel() -> bool {
+    false
 }
 
 /// Advance a Load order by one tick.

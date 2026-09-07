@@ -2433,6 +2433,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrets-random"
+version = "0.1.0"
+
+[[package]]
 name = "ferrets-replay"
 version = "0.1.0"
 dependencies = [
@@ -2466,6 +2470,7 @@ dependencies = [
  "ferrets-math",
  "ferrets-pathfinder",
  "ferrets-physics",
+ "ferrets-random",
  "serde",
  "thiserror 2.0.20",
  "xxhash-rust",

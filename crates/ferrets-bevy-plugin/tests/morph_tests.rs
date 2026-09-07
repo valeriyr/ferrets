@@ -9,16 +9,20 @@ use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_simulation::{
     command::PlayerCommand,
     components::{
+        attached::AttachedComponent,
         energy::EnergyComponent,
         entity_info::EntityInfoComponent,
         health::HealthComponent,
         location::LocationComponent,
         order_queue::{CancelPolicy, OrderQueueComponent},
+        resource::ResourceSourceComponent,
         train::TrainQueueComponent,
     },
+    entity_def,
     map::Map,
     movement_model::MovementModel,
     order::Order,
+    simulation_id::SimulationId,
     spawn,
 };
 
@@ -319,11 +323,10 @@ fn fizzled_change_takes_interim_form_off() {
 //
 
 #[test]
-fn change_waits_for_production_it_would_cancel() {
+fn change_refused_while_production_is_queued() {
     // The unrooted form trains nothing, and a queue entry is paid up front:
-    // the change must not run off with unbuilt units. The order lifecycle is
-    // what guarantees it — a soft flush leaves the Train order working, so
-    // the change waits its turn and inherits an empty queue.
+    // a change of form is refused while any production stands in the queue,
+    // and goes through once the queue has emptied.
     let mut app = utils::morph_app(MovementModel::Cell);
     let (shrine, shrine_id) = utils::create_owned(&mut app, "shrine", 10, 10, 0);
     utils::grant_gold(&mut app, 100);
@@ -336,19 +339,101 @@ fn change_waits_for_production_it_would_cancel() {
         },
     );
     utils::run_ticks(&mut app, utils::APPLY + 2);
-    order_morph(&mut app, shrine, "golem");
+    command_morph(&mut app, shrine_id, "golem");
 
-    // Mid-training: the change is queued behind the work, not through it.
-    utils::run_ticks(&mut app, 5);
-    assert_eq!(type_name_of(&app, shrine), "shrine");
-
-    utils::run_ticks(&mut app, 40);
-    assert_eq!(type_name_of(&app, shrine), "golem");
-    assert_eq!(
-        utils::count_of_type(app.world_mut(), "whelp"),
-        1,
-        "the paid unit was built before its trainer changed form"
+    // Mid-training the command is dropped: nothing is queued behind the work,
+    // and the whelp is built with its trainer unchanged.
+    utils::run_ticks(&mut app, utils::APPLY);
+    assert_eq!(utils::train_queue_len(app.world(), shrine), 1);
+    assert!(
+        !entity_def::orders(app.world(), shrine)
+            .iter()
+            .any(|order| matches!(order, Order::Morph { .. })),
+        "the refused change never reached the queue"
     );
+    utils::run_ticks(&mut app, 40);
+    assert_eq!(type_name_of(&app, shrine), "shrine");
+    assert_eq!(utils::count_of_type(app.world_mut(), "whelp"), 1);
+
+    // Idle, the same command is taken.
+    command_morph(&mut app, shrine_id, "golem");
+    utils::run_ticks(&mut app, utils::APPLY + 10);
+    assert_eq!(type_name_of(&app, shrine), "golem");
+}
+
+//
+// ─── What holds a change back ──────────────────────────────────────────────────
+//
+
+#[test]
+fn change_refused_while_workers_sit_in_berths() {
+    // A berthed building carries workers in its footprint: a change of form
+    // is refused while any of them is seated, and goes through once the last
+    // one leaves. Staged on the orders roster, the only one with a building
+    // workers sit in.
+    let mut app = utils::orders_app();
+    let (house, house_id) = utils::create_owned(&mut app, "shaft_house", 10, 10, 0);
+    // Deep enough that the seam outlasts the test: the sylph draws five out of
+    // it every two ticks.
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(house)
+        .unwrap()
+        .amount = 500;
+    let (sylph, sylph_id) = utils::create_owned(&mut app, "sylph", 8, 10, 0);
+
+    utils::select(&mut app, sylph_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SendToEntity {
+            target: house_id,
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY + 4);
+    assert!(app.world().get::<AttachedComponent>(sylph).is_some());
+
+    command_morph(&mut app, house_id, "walking_shaft");
+    utils::run_ticks(&mut app, utils::APPLY + 6);
+    assert_eq!(type_name_of(&app, house), "shaft_house");
+    assert!(
+        !entity_def::orders(app.world(), house)
+            .iter()
+            .any(|order| matches!(order, Order::Morph { .. })),
+        "the refused change never reached the queue"
+    );
+
+    // The berth given up, the same command is taken.
+    utils::stop_orders(app.world_mut(), sylph);
+    utils::run_ticks(&mut app, 1);
+    command_morph(&mut app, house_id, "walking_shaft");
+    utils::run_ticks(&mut app, utils::APPLY + 6);
+    assert_eq!(type_name_of(&app, house), "walking_shaft");
+}
+
+#[test]
+fn rooting_puts_static_footprint_back() {
+    // The way back: a mover's claim comes off and the building's static
+    // footprint goes on, so long-range planning sees the wall again.
+    let mut app = utils::morph_app(MovementModel::Cell);
+    let (golem, _) = utils::create_owned(&mut app, "golem", 10, 10, 0);
+
+    order_morph(&mut app, golem, "shrine");
+    utils::run_ticks(&mut app, 15);
+
+    assert_eq!(type_name_of(&app, golem), "shrine");
+    let world = app.world();
+    let grid = world.resource::<Map>().nav_grid();
+    for cell in [(10, 10), (11, 10), (10, 11), (11, 11)] {
+        let cell = CellPos::new(cell.0, cell.1);
+        assert!(
+            !grid.is_statically_passable_by(utils::GROUND, cell),
+            "the shrine stands on the static plane at {cell:?}"
+        );
+        assert!(
+            !grid.is_claimed_by(utils::GROUND, cell),
+            "the golem's claim came off at {cell:?}"
+        );
+    }
 }
 
 #[test]
@@ -384,6 +469,19 @@ fn type_name_of(app: &bevy::prelude::App, entity: bevy::prelude::Entity) -> Stri
         .expect("a live entity carries its info")
         .type_name()
         .to_string()
+}
+
+/// Commands a change into `type_name` the way a player does: selects the
+/// entity and issues the morph command, so the executor judges it.
+fn command_morph(app: &mut bevy::prelude::App, entity: SimulationId, type_name: &str) {
+    utils::select(app, entity);
+    utils::push_command(
+        app,
+        PlayerCommand::Morph {
+            type_name: type_name.to_string(),
+            flush: true,
+        },
+    );
 }
 
 /// Pushes a Morph order into `type_name` onto the entity's queue.

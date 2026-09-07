@@ -52,14 +52,14 @@ impl Crew for UnderConstructionComponent {
     fn members(&self) -> Option<&BTreeSet<SimulationId>> {
         match &self.work {
             SiteWork::Crew { builders } => Some(builders),
-            SiteWork::Unattended { .. } => None,
+            SiteWork::Unattended { .. } | SiteWork::Halted => None,
         }
     }
 
     fn members_mut(&mut self) -> Option<&mut BTreeSet<SimulationId>> {
         match &mut self.work {
             SiteWork::Crew { builders } => Some(builders),
-            SiteWork::Unattended { .. } => None,
+            SiteWork::Unattended { .. } | SiteWork::Halted => None,
         }
     }
 }

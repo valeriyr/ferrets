@@ -5,16 +5,19 @@ use ferrets_content::{
     build::BuilderAttendance,
     costs,
     entity_stats::EntityStatId,
+    entity_type_def::EntityTypeDef,
     field::{FieldAction, FieldCoverage, FieldPlacement, FieldVision},
     morph::{MorphCancel, MorphPlacement, MorphTime},
+    registry::ContentRegistry,
+    resource::Banking,
     skills::{EntityCastCost, EntityCastTarget, PlayerCastEffect, SkillCaster},
     stand::StandingAct,
     targeting,
-    work::WorkPresence,
+    work::{Attachment, BerthStance, WorkPresence},
 };
 use ferrets_demo::{content::CONTENT, map};
 use ferrets_geometry::cell_pos::CellPos;
-use ferrets_math::FixedU64;
+use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_script::{content, engine::lua::LuaEngine};
 use ferrets_simulation::map::Map;
 
@@ -34,6 +37,7 @@ fn content_loads_and_validates() {
         "medic",
         "peon",
         "great_hall",
+        "big_rock",
         "pig_farm",
         "war_camp",
         "grunt",
@@ -57,11 +61,22 @@ fn content_loads_and_validates() {
         "gateway",
         "photon_cannon",
         "zealot",
+        "wisp",
+        "huntress",
+        "tree_of_life",
+        "tree_of_life_uprooted",
+        "moon_well",
+        "ancient_of_war",
+        "ancient_of_war_uprooted",
+        "ancient_protector",
+        "ancient_protector_uprooted",
+        "entangled_mine",
     ] {
         assert!(registry.entity(name).is_some(), "missing entity '{name}'");
     }
     assert!(registry.has_race("human") && registry.has_race("orc"));
     assert!(registry.has_race("swarm") && registry.has_race("conclave"));
+    assert!(registry.has_race("elves"));
     assert!(registry.field("creep").is_some() && registry.field("power").is_some());
     assert!(
         registry.has_layer(map::GROUND)
@@ -104,22 +119,32 @@ fn worker_presences_cover_every_variant_and_differ_by_race() {
             .resource_carrier
             .as_ref()
             .expect("workers carry resources");
-        let BuilderAttendance::Crew(building) =
-            def.builder.as_ref().expect("workers build").attendance()
+        let BuilderAttendance::Crew(building) = def
+            .builder
+            .as_ref()
+            .expect("workers build")
+            .attendance()
+            .clone()
         else {
             panic!("the old races' workers attend their sites");
         };
         vec![
             building,
-            def.repairer.as_ref().expect("workers mend").presence(),
+            def.repairer
+                .as_ref()
+                .expect("workers mend")
+                .presence()
+                .clone(),
             carrier
                 .harvest_data("wood")
                 .expect("workers chop")
-                .presence(),
+                .presence()
+                .clone(),
             carrier
                 .harvest_data("gold")
                 .expect("workers mine")
-                .presence(),
+                .presence()
+                .clone(),
         ]
     };
 
@@ -138,6 +163,11 @@ fn worker_presences_cover_every_variant_and_differ_by_race() {
             "no demo worker declares {variant:?}, so it cannot be tried in the game"
         );
     }
+    assert!(
+        peon.iter()
+            .any(|presence| matches!(presence, WorkPresence::Attached(_))),
+        "the peon attaches to its site"
+    );
     assert_ne!(
         peasant, peon,
         "the two races are meant to attend their work differently"
@@ -148,11 +178,157 @@ fn worker_presences_cover_every_variant_and_differ_by_race() {
         registry
             .entity(name)
             .and_then(|def| def.builder.as_ref())
-            .map(|builder| builder.attendance())
+            .map(|builder| builder.attendance().clone())
             .expect("the worker builds")
     };
     assert_eq!(builds_as("probe"), BuilderAttendance::Unattended);
     assert_eq!(builds_as("drone"), BuilderAttendance::Consumed);
+}
+
+#[test]
+fn wisp_banks_where_it_sits_and_elves_store_nothing() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    let wisp = registry.entity("wisp").expect("wisp is registered");
+    let carrier = wisp.resource_carrier.as_ref().expect("the wisp carries");
+
+    // Alone in a tree it never fells, with any number of others on a mine it
+    // drains — and the take goes straight to the stockpile either way.
+    let wood = carrier.harvest_data("wood").expect("the wisp draws wood");
+    assert_eq!(
+        *wood.presence(),
+        WorkPresence::Attached(Attachment::new(
+            "canopy",
+            BerthStance::Orbit {
+                radius: FixedU64::lit("0.3"),
+                period: 60,
+            }
+        ))
+    );
+    assert_eq!(wood.banking(), Banking::Direct);
+    assert_eq!(wood.drain(), 0);
+    let gold = carrier.harvest_data("gold").expect("the wisp draws gold");
+    assert_eq!(
+        *gold.presence(),
+        WorkPresence::Attached(Attachment::new(
+            "rim",
+            BerthStance::Roaming {
+                speed: FixedU64::lit("0.05"),
+                dwell: 40,
+            }
+        ))
+    );
+    assert_eq!(gold.banking(), Banking::Direct);
+    assert_eq!(gold.drain(), gold.capacity());
+
+    // The tree seats one wisp in its canopy; a plain gold mine seats nobody,
+    // so gold takes the entangled mine, raised over it: twelve spots round the
+    // rim, three a side every half cell, and five wisps at a time on them.
+    let tree = registry.entity("tree").expect("tree is registered");
+    let canopy = tree.berths.as_ref().unwrap().group("canopy").unwrap();
+    assert_eq!((canopy.points().len(), canopy.slots()), (1, 1));
+    assert!(registry.entity("gold_mine").unwrap().berths.is_none());
+    let entangled = registry
+        .entity("entangled_mine")
+        .expect("entangled mine is registered");
+    assert_eq!(entangled.overbuilds.as_deref(), Some("gold_mine"));
+    let rim = entangled.berths.as_ref().unwrap().group("rim").unwrap();
+    assert_eq!((rim.points().len(), rim.slots()), (12, 5));
+    // Loop order from the north-west, a fifth of a cell in from the edge.
+    assert_eq!(
+        rim.points()[..3].to_vec(),
+        vec![
+            berth("0.5", "0.2"),
+            berth("1.0", "0.2"),
+            berth("1.5", "0.2"),
+        ]
+    );
+    assert_eq!(rim.points()[3], berth("1.8", "0.5"));
+    assert!(entangled.resource_source.is_some() && entangled.resource_storage.is_none());
+
+    // So nothing of the elves' stores anything, and the wisp is spent on what
+    // it builds.
+    for name in [
+        "tree_of_life",
+        "moon_well",
+        "ancient_of_war",
+        "ancient_protector",
+        "entangled_mine",
+    ] {
+        let def = registry.entity(name).expect("elf structure is registered");
+        assert!(def.resource_storage.is_none(), "'{name}' must not store");
+    }
+    assert_eq!(
+        *wisp.builder.as_ref().expect("the wisp builds").attendance(),
+        BuilderAttendance::Consumed
+    );
+}
+
+#[test]
+fn elf_structures_root_and_uproot_as_pairs() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+
+    // The moon well is the one that stays dug in.
+    let well = registry
+        .entity("moon_well")
+        .expect("moon well is registered");
+    assert!(well.morphs.is_empty() && !well.can_move());
+    assert!(registry.entity("moon_well_uprooted").is_none());
+
+    for name in ["tree_of_life", "ancient_of_war", "ancient_protector"] {
+        let rooted = registry.entity(name).expect("rooted form is registered");
+        let uprooted_name = format!("{name}_uprooted");
+        let uprooted = registry
+            .entity(&uprooted_name)
+            .expect("uprooted form is registered");
+
+        // Each names the other; uprooting checks nothing, rooting reserves.
+        let [uproot] = rooted.morphs.as_slice() else {
+            panic!("'{name}' has exactly one change of form");
+        };
+        assert_eq!(uproot.into_type(), uprooted_name);
+        assert_eq!(uproot.placement(), MorphPlacement::Revalidate);
+        let [root] = uprooted.morphs.as_slice() else {
+            panic!("'{uprooted_name}' has exactly one change of form");
+        };
+        assert_eq!(root.into_type(), name);
+        assert_eq!(root.placement(), MorphPlacement::Reserve);
+
+        // Same footprint both ways; only the walker moves and bites, only
+        // the rooted form produces, and both count as buildings.
+        assert_eq!(
+            rooted.location.unwrap().size(),
+            uprooted.location.unwrap().size()
+        );
+        assert!(!rooted.can_move() && uprooted.can_move());
+        assert!(uprooted.attack.is_some(), "'{uprooted_name}' bites");
+        assert!(
+            uprooted.trainer.is_none() && uprooted.researcher.is_none(),
+            "'{uprooted_name}' produces nothing"
+        );
+        assert!(rooted.tags.contains("building") && uprooted.tags.contains("building"));
+        assert_eq!(
+            rooted.base_stat(EntityStatId::SUPPLY_PROVIDED),
+            uprooted.base_stat(EntityStatId::SUPPLY_PROVIDED),
+            "'{name}' feeds the army walking or rooted"
+        );
+        // Nothing of the elves' takes root on creep.
+        assert!(
+            forbids_creep(&registry, rooted),
+            "'{name}' takes no root on creep"
+        );
+    }
+
+    // The moon well never moves, so its own rule is the only one it has; the
+    // entangled mine is the one elf structure raised on creep, over a mine the
+    // swarm has covered.
+    let moon_well = registry
+        .entity("moon_well")
+        .expect("moon well is registered");
+    assert!(moon_well.morphs.is_empty() && forbids_creep(&registry, moon_well));
+    let entangled = registry
+        .entity("entangled_mine")
+        .expect("entangled mine is registered");
+    assert!(!forbids_creep(&registry, entangled));
 }
 
 #[test]
@@ -163,7 +339,7 @@ fn swarm_structures_are_built_by_drone_they_consume() {
 
     // A drone is consumed by its site, and nothing of the swarm's mends: a hurt
     // structure stays hurt. Structures keep ordinary build terms.
-    assert_eq!(builder.attendance(), BuilderAttendance::Consumed);
+    assert_eq!(*builder.attendance(), BuilderAttendance::Consumed);
     for name in [
         "drone",
         "swarmling",
@@ -243,7 +419,10 @@ fn conclave_probe_places_sites_and_nexus_projects_power() {
 
     let probe = registry.entity("probe").expect("probe is registered");
     assert_eq!(
-        probe.builder.as_ref().map(|builder| builder.attendance()),
+        probe
+            .builder
+            .as_ref()
+            .map(|builder| builder.attendance().clone()),
         Some(BuilderAttendance::Unattended)
     );
     assert!(probe.repairer.is_none(), "the probe must not repair");
@@ -450,8 +629,8 @@ fn only_melee_and_siege_exclude_air() {
     let air = registry.layer(map::AIR).expect("air layer is registered");
 
     // Every weapon declares its layers; what stays deliberate per type is what
-    // it leaves out. Only the melee blades, the shell and the wagon's flat gun
-    // cannot answer what flies.
+    // it leaves out. Only the melee blades and bites, the shell and the wagon's
+    // flat gun cannot answer what flies.
     let grounded: Vec<&str> = registry
         .entities()
         .filter(|def| def.can_attack())
@@ -462,10 +641,14 @@ fn only_melee_and_siege_exclude_air() {
     assert_eq!(
         grounded,
         [
+            "ancient_of_war_uprooted",
+            "ancient_protector_uprooted",
             "grunt",
+            "huntress",
             "mortar",
             "ravager",
             "swarmling",
+            "tree_of_life_uprooted",
             "war_wagon",
             "zealot"
         ]
@@ -681,4 +864,21 @@ fn tower_upgrade_is_paid_and_refundable() {
         upgraded.tags.contains("building"),
         "an upgraded tower must still count as a standing base"
     );
+}
+
+//
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+//
+
+/// A berth point from decimal strings, in cells from the footprint's anchor.
+fn berth(x: &str, y: &str) -> FixedUVec2 {
+    FixedUVec2::new(FixedU64::lit(x), FixedU64::lit(y))
+}
+
+/// Whether `def` refuses to stand on creep.
+fn forbids_creep(registry: &ContentRegistry, def: &EntityTypeDef) -> bool {
+    let creep = registry.field("creep").expect("creep field is registered");
+    def.field_placement.iter().any(
+        |placement| matches!(placement, FieldPlacement::Forbids { field, .. } if *field == creep),
+    )
 }

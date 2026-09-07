@@ -14,6 +14,7 @@ use super::{
     work,
 };
 use crate::{
+    berths,
     components::{
         build::UnderConstructionComponent,
         energy::EnergyComponent,
@@ -30,12 +31,12 @@ use crate::{
     resources::{self, PlayerResources},
     session::GameSession,
     simulation_id::SimulationId,
-    spawn,
 };
 use ferrets_content::{
     costs::Cost,
     entity_stats::EntityStatId,
     repair::{RepairCost, RepairRate, RepairerDef},
+    work::WorkPresence,
 };
 
 /// The fractional cost carried between ticks, by resource kind.
@@ -119,6 +120,12 @@ pub fn cancel_processing(
     OrderState::Finished
 }
 
+/// Whether a Repair can stand through a soft cancel: never — it drops like any
+/// order a player's next command replaces.
+pub fn survives_soft_cancel() -> bool {
+    false
+}
+
 /// Advance a Repair order by one tick.
 ///
 /// Walk to within the mender's `repair_range` of the target (suspending on a
@@ -168,13 +175,28 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
         }
         chase::face(world, entity, target_position, target_size);
 
-        // Stepping inside the job frees the cell the worker was holding. Done on
-        // arrival, so it happens exactly once — and only for a worker whose presence
-        // says so, never because something else left it off the map.
-        if repairer_of(world, entity).presence().is_hidden() {
-            spawn::hide_entity(world, entity);
-            repair.inside_job = true;
+        // Stepping inside the job, or onto it, frees the cells the worker was
+        // holding. Done on arrival, so it happens exactly once — and only for a
+        // worker whose presence says so, never because something else left it
+        // off the grid.
+        let presence = repairer_of(world, entity).presence().clone();
+        if let Some(attachment) = presence.attachment() {
+            if !berths::offers(world, target, attachment.berths()) {
+                return finish(world, entity, target_id);
+            }
+            // A worker that sits in the job's berths has nowhere to sit when the
+            // job wears a form without its group — a change of form while it
+            // walked — and waits while every berth of the group is taken.
+            if berths::shut(world, target, &presence) {
+                world.entity_mut(entity).insert(repair);
+                return Processing::state(OrderState::InProcessing);
+            }
         }
+        work::enter(world, entity, &presence, target);
+        repair.inside_job = match presence {
+            WorkPresence::Hidden | WorkPresence::Attached(_) => true,
+            WorkPresence::Present | WorkPresence::PresentStacking => false,
+        };
     }
 
     let max_health = effective(world, target, EntityStatId::MAX_HEALTH);
@@ -241,9 +263,11 @@ fn accepts(world: &World, entity: Entity, target: Entity) -> bool {
     )
 }
 
-/// Whether `entity` is shut out of mending `target` by the crew already on it.
+/// Whether `entity` is shut out of mending `target`: by the crew already on it,
+/// or for want of a berth to sit in.
 fn job_excludes(world: &World, target: Entity, entity: Entity) -> bool {
     crew::excludes::<UnderRepairComponent>(world, target, entity, shares_jobs)
+        || berths::shut(world, target, repairer_of(world, entity).presence())
 }
 
 /// Drops out of the crew on `target`, taking [`UnderRepairComponent`] with it as the

@@ -87,6 +87,77 @@ impl Facing {
         self.difference(other).unsigned_abs()
     }
 
+    /// The unit offset along this bearing, on a sixteen-sided circle: exact on
+    /// the sixteen vertices, one every quarter of a quarter turn, and read
+    /// straight along the edge between two of them. North is `(0, -1)`, east
+    /// `(1, 0)`.
+    pub fn unit(self) -> FixedVec2 {
+        /// The vertices, clockwise from north.
+        const VERTICES: [(FixedI64, FixedI64); 16] = [
+            (FixedI64::ZERO, FixedI64::lit("-1")),
+            (
+                FixedI64::lit("0.38268343236"),
+                FixedI64::lit("-0.92387953251"),
+            ),
+            (
+                FixedI64::lit("0.70710678118"),
+                FixedI64::lit("-0.70710678118"),
+            ),
+            (
+                FixedI64::lit("0.92387953251"),
+                FixedI64::lit("-0.38268343236"),
+            ),
+            (FixedI64::lit("1"), FixedI64::ZERO),
+            (
+                FixedI64::lit("0.92387953251"),
+                FixedI64::lit("0.38268343236"),
+            ),
+            (
+                FixedI64::lit("0.70710678118"),
+                FixedI64::lit("0.70710678118"),
+            ),
+            (
+                FixedI64::lit("0.38268343236"),
+                FixedI64::lit("0.92387953251"),
+            ),
+            (FixedI64::ZERO, FixedI64::lit("1")),
+            (
+                FixedI64::lit("-0.38268343236"),
+                FixedI64::lit("0.92387953251"),
+            ),
+            (
+                FixedI64::lit("-0.70710678118"),
+                FixedI64::lit("0.70710678118"),
+            ),
+            (
+                FixedI64::lit("-0.92387953251"),
+                FixedI64::lit("0.38268343236"),
+            ),
+            (FixedI64::lit("-1"), FixedI64::ZERO),
+            (
+                FixedI64::lit("-0.92387953251"),
+                FixedI64::lit("-0.38268343236"),
+            ),
+            (
+                FixedI64::lit("-0.70710678118"),
+                FixedI64::lit("-0.70710678118"),
+            ),
+            (
+                FixedI64::lit("-0.38268343236"),
+                FixedI64::lit("-0.92387953251"),
+            ),
+        ];
+        /// Angle units along one edge of the sixteen-gon.
+        const PER_EDGE: u32 = PER_TURN / 16;
+
+        let bits = self.0 as u32;
+        let edge = (bits / PER_EDGE) as usize;
+        let (ax, ay) = VERTICES[edge];
+        let (bx, by) = VERTICES[(edge + 1) % VERTICES.len()];
+        let fraction = FixedI64::from_num(bits % PER_EDGE) / FixedI64::from_num(PER_EDGE);
+        FixedVec2::new(ax + (bx - ax) * fraction, ay + (by - ay) * fraction)
+    }
+
     /// This bearing turned toward `target` by at most `most` units, the short way
     /// round; `target` itself once it is within reach.
     pub fn turn_toward(self, target: Self, most: u32) -> Self {

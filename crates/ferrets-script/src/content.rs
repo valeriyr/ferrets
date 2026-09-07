@@ -1,20 +1,18 @@
 //! Loading game content from a script into a [`ContentRegistry`].
 
 use ferrets_content::{
-    build::BuilderAttendance,
     field::{FieldAction, FieldAffiliation, FieldCoverage, FieldVision},
     location::Solidity,
     morph::{MorphCancel, MorphPlacement},
     projectile::Aim,
     registry::ContentRegistry,
-    resource::DepletionPolicy,
+    resource::{Banking, DepletionPolicy},
     skills::EntityCastTarget,
     splash::SplashShape,
     stack_rule::StackRule,
     stats::ModifierOp,
     transport::{BoardingPolicy, PassengerConduct, PassengerFate},
     turret::{TurretFire, WeaponConduct},
-    work::WorkPresence,
 };
 use ferrets_math::FixedU64;
 
@@ -66,11 +64,15 @@ fn alternatives(items: &[&str]) -> String {
 }
 
 /// Resolves a keyword `value` to the option it names among `options`.
-fn keyword<T: Copy>(what: &str, value: &str, options: &[(&str, T)]) -> crate::Result<T> {
+pub(crate) fn keyword<T: Clone>(
+    what: &str,
+    value: &str,
+    options: &[(&str, T)],
+) -> crate::Result<T> {
     options
         .iter()
         .find(|(name, _)| *name == value)
-        .map(|&(_, option)| option)
+        .map(|(_, option)| option.clone())
         .ok_or_else(|| {
             let names: Vec<String> = options.iter().map(|(name, _)| quoted(name)).collect();
             let names: Vec<&str> = names.iter().map(String::as_str).collect();
@@ -129,35 +131,12 @@ pub(crate) fn weapon_conduct(value: &str) -> crate::Result<WeaponConduct> {
     )
 }
 
-/// Maps a work presence name to its enum.
-pub(crate) fn work_presence(value: &str) -> crate::Result<WorkPresence> {
+/// Maps a banking name to its enum.
+pub(crate) fn banking(value: &str) -> crate::Result<Banking> {
     keyword(
-        "work presence",
+        "banking",
         value,
-        &[
-            ("hidden", WorkPresence::Hidden),
-            ("present", WorkPresence::Present),
-            ("present_stacking", WorkPresence::PresentStacking),
-        ],
-    )
-}
-
-/// Maps a builder-attendance name to its enum: a work presence the builder
-/// keeps as crew, or a way of not staying.
-pub(crate) fn builder_attendance(value: &str) -> crate::Result<BuilderAttendance> {
-    keyword(
-        "builder attendance",
-        value,
-        &[
-            ("hidden", BuilderAttendance::Crew(WorkPresence::Hidden)),
-            ("present", BuilderAttendance::Crew(WorkPresence::Present)),
-            (
-                "present_stacking",
-                BuilderAttendance::Crew(WorkPresence::PresentStacking),
-            ),
-            ("unattended", BuilderAttendance::Unattended),
-            ("consumed", BuilderAttendance::Consumed),
-        ],
+        &[("carried", Banking::Carried), ("direct", Banking::Direct)],
     )
 }
 

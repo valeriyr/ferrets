@@ -98,6 +98,12 @@ pub fn cancel_processing(
     }
 }
 
+/// Whether a Train can stand through a soft cancel: always — only a force
+/// cancel takes production away, refunding it.
+pub fn survives_soft_cancel() -> bool {
+    true
+}
+
 /// Advance a Train order by one tick.
 ///
 /// Each tick the front queue entry progresses. When its train time is reached, the

@@ -85,6 +85,12 @@ pub fn cancel_processing(
     OrderState::Finished
 }
 
+/// Whether a Board can stand through a soft cancel: never — it drops like any
+/// order a player's next command replaces.
+pub fn survives_soft_cancel() -> bool {
+    false
+}
+
 /// Advance a Board order by one tick.
 ///
 /// Walk to within the transporter's `load_range` (suspending on a chase move),

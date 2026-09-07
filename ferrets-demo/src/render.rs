@@ -22,6 +22,7 @@ use ferrets_math::{
 };
 use ferrets_simulation::{
     components::{
+        attached::AttachedComponent,
         build::{BuildComponent, SiteWork, UnderConstructionComponent},
         energy::EnergyComponent,
         entity_info::EntityInfoComponent,
@@ -169,6 +170,8 @@ enum GhostShape {
     Rect { extent: Vec2 },
     /// A regular polygon of `sides` — the hexagon barracks and octagon fortress.
     Polygon { sides: u32, circumradius: f32 },
+    /// A circle inside the footprint — the round buildings.
+    Circle { circumradius: f32 },
 }
 
 /// The last-seen appearance of a scouted enemy building, kept so it can be drawn
@@ -358,26 +361,55 @@ pub(crate) fn world_point(position: FixedUVec2) -> Vec3 {
 /// and how far its shadow sits below it.
 const AIR_LIFT_PX: f32 = CELL_PX * 0.9;
 
-/// The draw offset for a type: airborne things are lifted up the screen and
-/// drawn over everything on the ground.
+/// Whether a type flies: it occupies the air *alone*. Something that holds
+/// the air on top of a surface — a fortress tall enough to wall the sky —
+/// stands on that surface and casts no flight shadow.
+fn airborne(registry: &ContentRegistry, def: &EntityTypeDef) -> bool {
+    match (registry.layer(map::AIR), def.location) {
+        (Some(air), Some(location)) => location.occupation() == *air,
+        _ => false,
+    }
+}
+
+/// Where in the stack a type is drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DrawLayer {
+    /// Lifted up the screen and drawn over everything on the ground.
+    Air,
+    /// Drawn over what stands on the ground — a worker sitting in a tree shows
+    /// on the tree, not behind it.
+    Walking,
+    /// Drawn where it stands, under everything that moves.
+    Standing,
+}
+
+impl DrawLayer {
+    /// The layer a type of `def` is drawn in.
+    fn of(registry: &ContentRegistry, def: &EntityTypeDef) -> Self {
+        match (airborne(registry, def), def.can_move()) {
+            (true, _) => DrawLayer::Air,
+            (false, true) => DrawLayer::Walking,
+            (false, false) => DrawLayer::Standing,
+        }
+    }
+
+    /// The draw offset of the layer.
+    fn offset(self) -> Vec3 {
+        match self {
+            DrawLayer::Air => Vec3::new(0.0, AIR_LIFT_PX, 1.0),
+            DrawLayer::Walking => Vec3::new(0.0, 0.0, 0.5),
+            DrawLayer::Standing => Vec3::ZERO,
+        }
+    }
+}
+
+/// The draw offset for a type, by the layer it is drawn in.
 ///
 /// Altitude is presentation only — the simulation knows nothing about it, and a
 /// flier's position is the cell it is over. The lift is what makes an air unit
 /// crossing a lake or a keep read as passing above it rather than through it.
-///
-/// Airborne means occupying the air *alone*: something that holds the air on
-/// top of a surface — a fortress tall enough to wall the sky — stands on that
-/// surface and casts no flight shadow.
-pub(crate) fn air_lift(registry: &ContentRegistry, def: &EntityTypeDef) -> Vec3 {
-    let airborne = match (registry.layer(map::AIR), def.location) {
-        (Some(air), Some(location)) => location.occupation() == *air,
-        _ => false,
-    };
-    if airborne {
-        Vec3::new(0.0, AIR_LIFT_PX, 1.0)
-    } else {
-        Vec3::ZERO
-    }
+pub(crate) fn lift(registry: &ContentRegistry, def: &EntityTypeDef) -> Vec3 {
+    DrawLayer::of(registry, def).offset()
 }
 
 pub(crate) fn color_for(
@@ -423,7 +455,7 @@ enum Shape {
     Diamond,
     /// Siege units (those whose hits burst) — a pentagon.
     Pentagon,
-    /// Workers — a circle.
+    /// Workers, and the big rock — a circle.
     Circle,
     /// Ships — a hull with a triangular bow pointing where it faces.
     Ship,
@@ -459,6 +491,9 @@ enum Shape {
     /// The pylon — a square base bearing a lighter crystal, a diamond standing
     /// on its point.
     Pylon,
+    /// The entangled mine — a mine's square bound by a ring of the owner's
+    /// roots, with a darker shaft at its heart.
+    EntangledMine,
     /// Main buildings and resource sources — a square.
     Square,
 }
@@ -466,8 +501,8 @@ enum Shape {
 /// Picks a shape from the entity type name. Add new types here.
 fn shape_for(type_name: &str) -> Shape {
     match type_name {
-        "peasant" | "peon" | "drone" | "probe" => Shape::Circle,
-        "grunt" | "swarmling" | "ravager" | "zealot" => Shape::Diamond,
+        "peasant" | "peon" | "drone" | "probe" | "wisp" => Shape::Circle,
+        "grunt" | "swarmling" | "ravager" | "zealot" | "huntress" => Shape::Diamond,
         "archer" => Shape::Triangle,
         "mortar" => Shape::Pentagon,
         "medic" | "shaman" => Shape::Cross,
@@ -483,8 +518,25 @@ fn shape_for(type_name: &str) -> Shape {
         "guard_tower" | "photon_cannon" => Shape::GuardTower,
         "tumor" | "cocoon" => Shape::Pod,
         "pylon" => Shape::Pylon,
+        // The elves' ancients wear the shapes of the buildings they stand in
+        // for, rooted or walking; the roots an uprooted one carries are added
+        // apart from the shape (see `uprooted`).
+        "ancient_of_war" | "ancient_of_war_uprooted" => Shape::Hexagon,
+        "ancient_protector" | "ancient_protector_uprooted" => Shape::GuardTower,
+        "entangled_mine" => Shape::EntangledMine,
+        "big_rock" => Shape::Circle,
         _ => Shape::Square,
     }
+}
+
+/// Whether the type is one of the elves' ancients on the move: it keeps its
+/// building's shape and carries its roots along, four darker squares at the
+/// corners.
+fn uprooted(type_name: &str) -> bool {
+    matches!(
+        type_name,
+        "tree_of_life_uprooted" | "ancient_of_war_uprooted" | "ancient_protector_uprooted"
+    )
 }
 
 /// Attaches a placeholder shape to any simulation entity that lacks one.
@@ -512,7 +564,7 @@ pub fn attach_sprites(
     for (entity, info, location, owner, turret) in &query {
         let def = registry.def(info.type_id());
         let size = def.location.unwrap().size();
-        let center = world_center(location.position, size) + air_lift(&registry, def);
+        let center = world_center(location.position, size) + lift(&registry, def);
         let color = color_for(owner, def.resource_source.as_ref(), &session);
         let radius = size.width.min(size.height) as f32 * CELL_PX * 0.45;
 
@@ -725,10 +777,49 @@ pub fn attach_sprites(
                     ));
                 });
             }
+            Shape::EntangledMine => {
+                // A mine, in a mine's colour, bound by a ring of the owner's
+                // roots round its middle — nothing like the corner roots a
+                // walking ancient carries — with a darker shaft at its heart.
+                let px = Vec2::new(size.width as f32, size.height as f32) * CELL_PX * 0.85;
+                let grip = owner.map_or(color.darker(0.2), |owner| player_color(owner.player()));
+                entity.insert(Sprite::from_color(color, px));
+                entity.with_children(|parent| {
+                    parent.spawn((
+                        Mesh2d(meshes.add(Annulus::new(radius * 0.62, radius * 0.8))),
+                        MeshMaterial2d(materials.add(grip)),
+                        Transform::from_translation(Vec3::new(0.0, 0.0, 0.1)),
+                    ));
+                    parent.spawn((
+                        Mesh2d(meshes.add(Circle::new(radius * 0.3))),
+                        MeshMaterial2d(materials.add(color.darker(0.3))),
+                        Transform::from_translation(Vec3::new(0.0, 0.0, 0.1)),
+                    ));
+                });
+            }
             Shape::Square => {
                 let px = Vec2::new(size.width as f32, size.height as f32) * CELL_PX * 0.85;
                 entity.insert(Sprite::from_color(color, px));
             }
+        }
+        // An ancient on the move carries its roots: four darker squares at the
+        // corners of its footprint, which is what tells a walker from a stand
+        // that wears the same shape.
+        if uprooted(info.type_name()) {
+            let px = Vec2::new(size.width as f32, size.height as f32) * CELL_PX * 0.85;
+            let root = Vec2::splat(px.x * 0.22);
+            entity.with_children(|parent| {
+                for (dx, dy) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
+                    parent.spawn((
+                        Sprite::from_color(color.darker(0.15), root),
+                        Transform::from_translation(Vec3::new(
+                            dx * px.x * 0.45,
+                            dy * px.y * 0.45,
+                            0.1,
+                        )),
+                    ));
+                }
+            });
         }
         // Every gun the body carries, drawn where it is mounted: a disc, lighter
         // than the body, round because a shape with a front of its own would be
@@ -861,21 +952,24 @@ pub fn record_prev(
 /// lifted if it flies. Only entities the sprite attachment accepted carry a
 /// [`PrevPos`], and it takes none without a footprint.
 fn draw_anchor(registry: &ContentRegistry, def: &EntityTypeDef, position: FixedUVec2) -> Vec3 {
-    world_center(position, def.location.unwrap().size()) + air_lift(registry, def)
+    world_center(position, def.location.unwrap().size()) + lift(registry, def)
 }
 
-/// Snaps a reappearing entity's drawing — where it interpolates from, and the
-/// look it is drawn at — to how it reappeared.
+/// Snaps a set-down entity's drawing — where it interpolates from, and the
+/// look it is drawn at — to where it was set down: one reappearing from off
+/// the map, one stepping onto its job, and one stepping back off it.
 ///
-/// Coming back onto the map is a discontinuity, not motion: the entity is set
-/// down at a cell chosen for it, facing whatever it faces now, and easing into
-/// either slides or swings it into place instead. A distance rule cannot tell
-/// the two apart — stepping out of a mine puts a worker beside the cell it went
-/// in by, well under any threshold a real step has to clear — so the reveal
-/// itself is the signal.
+/// Each is a discontinuity, not motion: the entity is set down at a cell
+/// chosen for it, facing whatever it faces now, and easing into either slides
+/// or swings it into place instead. A distance rule cannot tell the two apart
+/// — stepping out of a mine puts a worker beside the cell it went in by, well
+/// under any threshold a real step has to clear — so the set-down itself is
+/// the signal.
 pub fn snap_revealed(
     registry: Res<ContentRegistry>,
     mut revealed: RemovedComponents<HiddenComponent>,
+    mut detached: RemovedComponents<AttachedComponent>,
+    attached: Query<Entity, Added<AttachedComponent>>,
     mut query: Query<(
         &EntityInfoComponent,
         &LocationComponent,
@@ -887,7 +981,12 @@ pub fn snap_revealed(
         Option<(&TurretsComponent, &mut PrevBearings, &mut DrawnBearings)>,
     )>,
 ) {
-    for entity in revealed.read() {
+    let set_down: Vec<Entity> = revealed
+        .read()
+        .chain(detached.read())
+        .chain(attached.iter())
+        .collect();
+    for entity in set_down {
         let Ok((
             info,
             location,
@@ -966,7 +1065,7 @@ pub fn interpolate_sprites(
     {
         let def = registry.def(info.type_id());
         let size = def.location.unwrap().size();
-        let curr = world_center(location.position, size) + air_lift(&registry, def);
+        let curr = world_center(location.position, size) + lift(&registry, def);
         // Snap rather than slide across teleports/reveals.
         transform.translation = if prev.0.distance(curr) > 1.5 * CELL_PX {
             curr
@@ -1029,12 +1128,11 @@ pub fn draw_air_shadows(
             continue;
         }
         let def = registry.def(info.type_id());
-        let lift = air_lift(&registry, def);
-        if lift == Vec3::ZERO {
+        if !airborne(&registry, def) {
             continue;
         }
         let size = def.location.unwrap().size();
-        let ground = transform.translation.truncate() - Vec2::new(0.0, lift.y);
+        let ground = transform.translation.truncate() - Vec2::new(0.0, AIR_LIFT_PX);
         gizmos.circle_2d(
             ground,
             size.width.min(size.height) as f32 * CELL_PX * 0.3,
@@ -1715,6 +1813,9 @@ pub fn draw_ghosts(
                     let color = Color::srgba(0.55, 0.55, 0.62, 0.6);
                     match &ghost.shape {
                         GhostShape::Rect { extent } => gizmos.rect_2d(iso, *extent, color),
+                        GhostShape::Circle { circumradius } => {
+                            gizmos.circle_2d(iso, *circumradius, color);
+                        }
                         GhostShape::Polygon {
                             sides,
                             circumradius,
@@ -1747,7 +1848,23 @@ fn ghost_shape(type_name: &str, size: CellSize) -> GhostShape {
             sides: 8,
             circumradius,
         },
-        _ => GhostShape::Rect {
+        Shape::Circle | Shape::Pod => GhostShape::Circle { circumradius },
+        // Everything else is ghosted by its footprint: the shapes that are
+        // squares outright, and the ones whose outline is a square with
+        // something drawn on top of it.
+        Shape::Square
+        | Shape::Triangle
+        | Shape::Diamond
+        | Shape::Pentagon
+        | Shape::Ship
+        | Shape::Cross
+        | Shape::Gryphon { .. }
+        | Shape::Zeppelin
+        | Shape::WarWagon
+        | Shape::WatchTower
+        | Shape::GuardTower
+        | Shape::Pylon
+        | Shape::EntangledMine => GhostShape::Rect {
             extent: Vec2::new(size.width as f32, size.height as f32) * CELL_PX * 0.85,
         },
     }
@@ -1759,6 +1876,8 @@ fn ghost_shape(type_name: &str, size: CellSize) -> GhostShape {
 const BUILD_WORK_COLOR: Color = Color::srgb(0.35, 0.55, 1.0);
 const HARVEST_WORK_COLOR: Color = Color::srgb(0.85, 0.7, 0.2);
 const REPAIR_WORK_COLOR: Color = Color::srgb(0.9, 0.5, 0.9);
+/// The ring around a site its crew left standing, waiting for a builder.
+const HALTED_SITE_COLOR: Color = Color::srgb(0.6, 0.6, 0.65);
 const TRAIN_WORK_COLOR: Color = Color::srgb(0.3, 0.9, 0.9);
 // Matches the HUD's research-button teal, so the bar and the button that
 // started it read as the same work.
@@ -1868,8 +1987,9 @@ pub fn draw_work_links(
 /// Marks the jobs themselves: a ring in the verb's color around a source being
 /// worked or an entity being mended, and a dot per crew member above it, so a
 /// stacked crew is countable at a glance (run in `Update`). An unfinished site
-/// shows its crew dots too; its own state is the translucent shape (see
-/// [`tint_under_construction`]) and the progress bar (see [`draw_status_bars`]).
+/// shows its crew dots too, and a grey ring while it stands halted; its own
+/// state is the translucent shape (see [`tint_under_construction`]) and the
+/// progress bar (see [`draw_status_bars`]).
 pub fn draw_work_markers(
     mut gizmos: Gizmos,
     registry: Res<ContentRegistry>,
@@ -1912,6 +2032,9 @@ pub fn draw_work_markers(
         if let Some(construction) = construction {
             match &construction.work {
                 SiteWork::Crew { builders } => crew += builders.len(),
+                SiteWork::Halted => {
+                    gizmos.circle_2d(center, radius + 4.0, HALTED_SITE_COLOR);
+                }
                 SiteWork::Unattended { .. } => {}
             }
         }

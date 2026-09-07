@@ -57,6 +57,12 @@ pub fn cancel_processing(
     OrderState::Finished
 }
 
+/// Whether a Patrol can stand through a soft cancel: never — it drops like any
+/// order a player's next command replaces.
+pub fn survives_soft_cancel() -> bool {
+    false
+}
+
 /// Advance a Patrol order by one tick: suspend into the next attack-move leg,
 /// alternating between the order's target and the recorded home endpoint.
 /// Engaging and resuming live entirely in the leg; the patrol itself never

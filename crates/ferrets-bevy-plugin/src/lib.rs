@@ -456,7 +456,14 @@ impl Plugin for SimulationPlugin {
                     // Sites no builder works put in their tick right after
                     // the crews put in theirs, so every construction completes
                     // at the same point of the tick.
-                    (systems::tick_orders, systems::advance_sites_without_builder).chain(),
+                    // Attached workers move about their berths once the orders
+                    // that seat them have run.
+                    (
+                        systems::tick_orders,
+                        systems::advance_sites_without_builder,
+                        systems::advance_berths,
+                    )
+                        .chain(),
                     // The two fights that run outside the order lifecycle, right
                     // after it, so their shots join this tick's impacts on the
                     // same schedule as ordered attacks: a garrisoned passenger

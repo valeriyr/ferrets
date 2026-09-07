@@ -32,7 +32,7 @@ use ferrets_simulation::{
     entity_def::{self, Operation},
     entity_index::EntityIndex,
     fields::{self, FieldGrid},
-    game_loop::orders,
+    game_loop::{morph, orders},
     order::Order,
     player_research::PlayerResearch,
     player_skills::PlayerSkills,
@@ -143,6 +143,10 @@ pub struct MorphButton {
     /// The type the button changes into.
     type_name: String,
 }
+
+/// A command-card button that tears down the primary's unfinished site.
+#[derive(Component)]
+pub struct CancelBuildButton;
 
 /// A command-card button that casts a skill on the selection.
 #[derive(Component)]
@@ -974,15 +978,19 @@ fn card_button(label: &str, base: Color) -> impl Bundle {
 
 /// Rebuilds the command card whenever the primary selection changes — a train
 /// button per unit the selected producer can build, a build button per building
-/// the selected worker can construct, or nothing when the primary does neither
-/// — and whenever the primary's own type is rewritten: a gryphon that takes
-/// off must swap its take-off button for the landing one on the spot.
+/// the selected worker can construct, a cancel button on a site still going
+/// up, or nothing when the primary does none of that — and whenever the
+/// primary's own type is rewritten or its site finishes: a gryphon that takes
+/// off must swap its take-off button for the landing one on the spot, and a
+/// finished building loses its cancel button.
 pub fn update_command_card(
     session: Res<GameSession>,
     primary: Res<Primary>,
     registry: Res<ContentRegistry>,
     changed: Query<&EntityInfoComponent, Changed<EntityInfoComponent>>,
     entities: Query<&EntityInfoComponent>,
+    sites: Query<(&EntityInfoComponent, &OwnerComponent), With<UnderConstructionComponent>>,
+    mut finished: RemovedComponents<UnderConstructionComponent>,
     card: Query<Entity, With<CommandCard>>,
     buttons: Query<
         Entity,
@@ -994,6 +1002,7 @@ pub fn update_command_card(
             With<UnloadButton>,
             With<LoadButton>,
             With<MorphButton>,
+            With<CancelBuildButton>,
         )>,
     >,
     mut commands: Commands,
@@ -1009,7 +1018,12 @@ pub fn update_command_card(
     let primary_type_changed = primary
         .0
         .is_some_and(|id| changed.iter().any(|info| info.id() == id));
-    if !primary.is_changed() && !primary_type_changed {
+    let primary_site_finished = primary.0.is_some_and(|id| {
+        finished
+            .read()
+            .any(|entity| entities.get(entity).is_ok_and(|info| info.id() == id))
+    });
+    if !primary.is_changed() && !primary_type_changed && !primary_site_finished {
         return;
     }
     let Ok(card) = card.single() else {
@@ -1056,6 +1070,11 @@ pub fn update_command_card(
         })
         .unwrap_or_default();
     let transports = def.is_some_and(|def| def.can_transport());
+    let own_site = session.local_player().is_some_and(|local| {
+        sites
+            .iter()
+            .any(|(info, owner)| info.id() == id && owner.player() == local)
+    });
     let morphs: Vec<String> = def
         .map(|def| {
             def.morphs
@@ -1096,6 +1115,9 @@ pub fn update_command_card(
                 card_button(&pretty_name(&name), SKILL_NORMAL),
                 MorphButton { type_name: name },
             ));
+        }
+        if own_site {
+            parent.spawn((CancelBuildButton, card_button("Cancel", BUTTON_NORMAL)));
         }
         if transports {
             parent.spawn((LoadButton, card_button("Load", BUTTON_NORMAL)));
@@ -1196,6 +1218,29 @@ pub fn morph_card_input(
     }
 }
 
+/// Tears down the primary's own unfinished site when the cancel button is clicked;
+/// the executor refunds the price and releases whoever was working it.
+pub fn cancel_build_card_input(
+    mut buttons: Query<
+        (&Interaction, &mut BackgroundColor),
+        (With<CancelBuildButton>, Changed<Interaction>),
+    >,
+    primary: Res<Primary>,
+    mut pending: ResMut<PendingInput>,
+) {
+    for (interaction, mut color) in &mut buttons {
+        match interaction {
+            Interaction::Pressed => {
+                if let Some(site) = primary.0 {
+                    pending.push(PlayerCommand::CancelBuild { site });
+                }
+            }
+            Interaction::Hovered => *color = BackgroundColor(BUTTON_HOVERED),
+            Interaction::None => *color = BackgroundColor(BUTTON_NORMAL),
+        }
+    }
+}
+
 /// Starts the button's research on the primary researcher when clicked. The
 /// executor holds every gate (requirements, completion, the one-per-topic
 /// rule), so a click that slips past the greyed-out tint is still refused.
@@ -1229,12 +1274,15 @@ enum CardAction {
     Skill(SkillId),
     /// Casts the skill as the player.
     PlayerSkill(SkillId),
+    /// Changes the selection into the type.
+    Morph(String),
 }
 
 /// Recolors the gated card buttons from what the executor would currently
-/// allow: a train, build, research or skill the primary entity may not start
-/// now (see [`orders::can_start`]), or whose requirements are unmet, greys
-/// out, as does a research that is done or already under way.
+/// allow: a train, build, research, skill or change of form the primary
+/// entity may not start now (see [`orders::can_start`]), or whose
+/// requirements are unmet, greys out, as does a research that is done or
+/// already under way.
 pub fn update_card_availability(world: &mut World) {
     // A watcher has no card to recolor — update_command_card despawned it.
     let Some(player) = world.resource::<GameSession>().local_player() else {
@@ -1246,6 +1294,24 @@ pub fn update_card_availability(world: &mut World) {
         .and_then(|id| world.resource::<EntityIndex>().interactable(world, id));
     let starts = |world: &World, order: Order| {
         primary.is_some_and(|entity| orders::can_start(world, entity, &order).is_ok())
+    };
+    // A change of form is commanded for the whole selection — the player's own
+    // entities in it, as the executor reads it — so the button stands as long
+    // as one of them would take it, requirements and all.
+    let any_changes_into = |world: &World, type_name: &str| {
+        let order = Order::Morph {
+            type_name: type_name.to_string(),
+        };
+        world
+            .resource::<Selection>()
+            .get(player)
+            .iter()
+            .filter_map(|&id| world.resource::<EntityIndex>().interactable(world, id))
+            .filter(|&entity| entity_def::owner(world, entity) == Some(player))
+            .any(|entity| {
+                morph::requirements_met(world, player, entity, type_name)
+                    && orders::can_start(world, entity, &order).is_ok()
+            })
     };
     let operating = |world: &World| {
         primary.is_some_and(|entity| {
@@ -1262,8 +1328,11 @@ pub fn update_card_availability(world: &mut World) {
         Option<&ResearchButton>,
         Option<&SkillButton>,
         Option<&PlayerSkillButton>,
+        Option<&MorphButton>,
     )>();
-    for (entity, interaction, train, build, research, skill, player_skill) in query.iter(world) {
+    for (entity, interaction, train, build, research, skill, player_skill, morph_button) in
+        query.iter(world)
+    {
         let action = if let Some(button) = train {
             CardAction::Train(button.type_name.clone())
         } else if let Some(button) = build {
@@ -1274,6 +1343,8 @@ pub fn update_card_availability(world: &mut World) {
             CardAction::Skill(button.skill)
         } else if let Some(button) = player_skill {
             CardAction::PlayerSkill(button.skill)
+        } else if let Some(button) = morph_button {
+            CardAction::Morph(button.type_name.clone())
         } else {
             continue;
         };
@@ -1339,6 +1410,11 @@ pub fn update_card_availability(world: &mut World) {
             ),
             CardAction::PlayerSkill(skill) => (
                 skill_requirements_met(world, *skill),
+                SKILL_NORMAL,
+                SKILL_HOVERED,
+            ),
+            CardAction::Morph(type_name) => (
+                any_changes_into(world, type_name),
                 SKILL_NORMAL,
                 SKILL_HOVERED,
             ),

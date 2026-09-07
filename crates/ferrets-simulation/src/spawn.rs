@@ -5,13 +5,18 @@ use std::collections::BTreeMap;
 use bevy_ecs::{component::Component, entity::Entity, world::EntityWorldMut, world::World};
 use ferrets_content::{
     entity_stats::EntityStatId, entity_type_def::EntityTypeId, location::LocationDef,
-    registry::ContentRegistry, transport::PassengerFate,
+    registry::ContentRegistry, resource::DepletionPolicy, transport::PassengerFate,
+    work::Attachment,
 };
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::{FixedU64, facing::Facing, fixed_uvec2::FixedUVec2};
+use ferrets_physics::body;
 
 use crate::{
+    berths,
     components::{
+        attached::AttachedComponent,
+        build::OverbuiltComponent,
         dying::{CorpseComponent, DiedComponent, DyingComponent},
         energy::EnergyComponent,
         entity_info::EntityInfoComponent,
@@ -250,34 +255,23 @@ pub(crate) fn spawn_corpse_entity(
 /// Takes an entity off the map: frees its footprint and marks it hidden.
 ///
 /// A hidden entity cannot be selected or targeted and holds no cells. Bring it
-/// back with [`reveal_entity_near`] or [`reveal_entity_near_or_retry`].
+/// back with [`place_back_near`] or [`place_back_near_or_retry`].
 ///
 /// Safe to call on an entity that is already hidden — one stuck waiting on a free
-/// cell can be hidden again by whatever it does next.
+/// cell can be hidden again by whatever it does next — and on one attached to
+/// a job, which holds no cells to free.
 pub(crate) fn hide_entity(world: &mut World, entity: Entity) {
-    // An entity that is already off the map holds no cells to free. Freeing them
-    // again would clear whatever moved onto them while it was away — and the marker
-    // below carries nothing, so setting it twice costs nothing either.
     if !world.entity(entity).contains::<HiddenComponent>() {
         let announced = SimulationEvent::EntityHidden {
             entity: entity_def::simulation_id(world, entity),
         };
         world.resource_mut::<EventRecord>().emit(announced);
-
-        let location = *world
-            .entity(entity)
-            .get::<LocationComponent>()
-            .expect("only entities with LocationComponent can be hidden");
-        let def = entity_def::of(world, entity);
-        let location_def = def
-            .location
-            .expect("only entities with LocationDef can be hidden");
-        let class = OccupancyClass::of(def);
-        world
-            .resource_mut::<Map>()
-            .displace_entity(&location, &location_def, class);
+        lift_footprint(world, entity);
     }
-    // Hiding is the inverse of a pending reveal: drop any stale retry so a new hide
+    if let Some(attached) = world.entity_mut(entity).take::<AttachedComponent>() {
+        berths::vacate(world, &attached);
+    }
+    // Hiding is the inverse of a pending return: drop any stale retry so a new hide
     // is not undone by `process_pending_reveals` on a later tick. This is the part
     // that still matters for an entity that was already hidden — it is off the map
     // for a new reason now, and comes back where that reason says rather than where
@@ -288,25 +282,127 @@ pub(crate) fn hide_entity(world: &mut World, entity: Entity) {
         .insert(HiddenComponent);
 }
 
-/// Puts a hidden entity back on the map on the nearest free cell around the
-/// footprint at `around`/`around_size`.
+/// Seats an entity in a berth of `job`'s group named by `attachment`: it frees
+/// the cells it held, puts its middle on the free berth nearest to where it
+/// stood, and holds no cells from there on while staying on the map. Bring it back onto
+/// the grid with [`place_back_near`] or [`place_back_near_or_retry`].
+///
+/// Panics for a hidden entity, which has nothing to stand on, and when the
+/// group has no free berth: a caller attaches only where [`berths::shut`]
+/// found room.
+pub(crate) fn attach_entity(
+    world: &mut World,
+    entity: Entity,
+    job: Entity,
+    attachment: &Attachment,
+) {
+    assert!(
+        !world.entity(entity).contains::<HiddenComponent>(),
+        "only an entity on the map attaches to a job"
+    );
+    lift_footprint(world, entity);
+    // A worker already seated elsewhere gives that berth up first.
+    if let Some(attached) = world.entity_mut(entity).take::<AttachedComponent>() {
+        berths::vacate(world, &attached);
+    }
+
+    let standing = entity_def::standing_rect(world, entity);
+    let (seat, point) = berths::nearest_free_seat(world, job, attachment.berths(), standing)
+        .expect("a worker attaches only to a job with a free berth in its group");
+    let id = entity_def::simulation_id(world, entity);
+    let job_id = entity_def::simulation_id(world, job);
+    berths::occupy(world, job, attachment.berths(), seat, id);
+
+    let position = berths::position_centred_on(world, entity, point);
+    let mut entity_mut = world.entity_mut(entity);
+    entity_mut
+        .get_mut::<LocationComponent>()
+        .expect("only entities with LocationComponent can attach")
+        .position = position;
+    entity_mut
+        .remove::<PendingRevealComponent>()
+        .insert(AttachedComponent {
+            job: job_id,
+            berths: attachment.berths().to_string(),
+            seat,
+            stance: attachment.stance(),
+            sitting: berths::sit_down(attachment.stance(), id),
+            hops: 0,
+        });
+}
+
+/// Frees the footprint an entity holds on the grid. An entity already off the
+/// grid — hidden, or attached to a job — holds nothing to free.
+///
+/// The entity is otherwise untouched, so a caller that lifts a footprint to
+/// test the ground under it puts it back with [`restore_footprint`] or takes
+/// the entity off the map itself.
+pub(crate) fn lift_footprint(world: &mut World, entity: Entity) {
+    if !entity_def::stands_on_grid(world, entity) {
+        return;
+    }
+    let location = *world
+        .entity(entity)
+        .get::<LocationComponent>()
+        .expect("only entities with LocationComponent hold a footprint");
+    let def = entity_def::of(world, entity);
+    let location_def = def
+        .location
+        .expect("only entities with LocationDef hold a footprint");
+    let class = OccupancyClass::of(def);
+    world
+        .resource_mut::<Map>()
+        .displace_entity(&location, &location_def, class);
+}
+
+/// Stamps back the footprint [`lift_footprint`] took off an entity that
+/// otherwise stands on the grid.
+pub(crate) fn restore_footprint(world: &mut World, entity: Entity) {
+    if !entity_def::stands_on_grid(world, entity) {
+        return;
+    }
+    let location = *world
+        .entity(entity)
+        .get::<LocationComponent>()
+        .expect("only entities with LocationComponent hold a footprint");
+    let def = entity_def::of(world, entity);
+    let location_def = def
+        .location
+        .expect("only entities with LocationDef hold a footprint");
+    let class = OccupancyClass::of(def);
+    world
+        .resource_mut::<Map>()
+        .place_entity(&location, &location_def, class);
+}
+
+/// Puts an entity that is off the grid back on it, on the nearest free cell:
+/// a hidden one around the footprint at `around`/`around_size`, the job it
+/// went into; an attached one around the cell of the berth it sits at.
 ///
 /// Returns `false` when no free cell exists within the search radius — the
-/// entity stays hidden, and the caller is expected to retry. Returns `true`
-/// for entities that are not hidden.
-pub(crate) fn reveal_entity_near(
+/// entity stays off the grid, and the caller is expected to retry. Returns
+/// `true` for an entity already standing on the grid.
+pub(crate) fn place_back_near(
     world: &mut World,
     entity: Entity,
     around: CellPos,
     around_size: CellSize,
 ) -> bool {
-    if !world.entity(entity).contains::<HiddenComponent>() {
+    if entity_def::stands_on_grid(world, entity) {
         return true;
     }
+    let (around, around_size) = if world.entity(entity).contains::<AttachedComponent>() {
+        (
+            body::anchor(entity_def::position(world, entity)),
+            CellSize::new(1, 1),
+        )
+    } else {
+        (around, around_size)
+    };
 
     let location_def = entity_def::of(world, entity)
         .location
-        .expect("only entities with LocationDef can be revealed");
+        .expect("only entities with LocationDef can be placed back");
     let Some(cell) =
         world
             .resource::<Map>()
@@ -315,25 +411,25 @@ pub(crate) fn reveal_entity_near(
         return false;
     };
 
-    place_hidden_at(world, entity, cell, &location_def);
+    place_back_at(world, entity, cell, &location_def);
     true
 }
 
-/// Like [`reveal_entity_near`], but for callers that cannot retry themselves
+/// Like [`place_back_near`], but for callers that cannot retry themselves
 /// (order cancellation and other paths that finish in the same tick).
 ///
-/// Reveals immediately when a cell is free. Otherwise the entity stays hidden
-/// and is tagged with [`PendingRevealComponent`], so
+/// Places the entity immediately when a cell is free. Otherwise it stays off
+/// the grid and is tagged with [`PendingRevealComponent`], so
 /// [`game_loop::pending_reveal::process_pending_reveals`] keeps retrying every
 /// tick until a cell opens — rather than forcing it onto an occupied cell and
 /// corrupting the nav grid.
-pub(crate) fn reveal_entity_near_or_retry(
+pub(crate) fn place_back_near_or_retry(
     world: &mut World,
     entity: Entity,
     around: CellPos,
     around_size: CellSize,
 ) {
-    if reveal_entity_near(world, entity, around, around_size) {
+    if place_back_near(world, entity, around, around_size) {
         return;
     }
 
@@ -343,18 +439,23 @@ pub(crate) fn reveal_entity_near_or_retry(
     });
 }
 
-/// Puts a hidden entity back on the map at `cell`, announcing the return.
+/// Puts an entity that is off the grid back on it at `cell`, announcing the
+/// return of one that was hidden.
 ///
-/// The one point every reveal path ends at.
-fn place_hidden_at(world: &mut World, entity: Entity, cell: CellPos, location_def: &LocationDef) {
+/// The one point every return to the grid ends at.
+fn place_back_at(world: &mut World, entity: Entity, cell: CellPos, location_def: &LocationDef) {
     let class = OccupancyClass::of(entity_def::of(world, entity));
+    if let Some(attached) = world.entity_mut(entity).take::<AttachedComponent>() {
+        berths::vacate(world, &attached);
+    }
     let mut entity_mut = world.entity_mut(entity);
 
+    let was_hidden = entity_mut.contains::<HiddenComponent>();
     entity_mut.remove::<HiddenComponent>();
 
     let mut location = entity_mut
         .get_mut::<LocationComponent>()
-        .expect("only entities with LocationComponent can be revealed");
+        .expect("only entities with LocationComponent can be placed back");
     location.position = FixedUVec2::from(cell);
 
     let location = *location;
@@ -362,10 +463,89 @@ fn place_hidden_at(world: &mut World, entity: Entity, cell: CellPos, location_de
         .resource_mut::<Map>()
         .place_entity(&location, location_def, class);
 
-    let announced = SimulationEvent::EntityRevealed {
-        entity: entity_def::simulation_id(world, entity),
+    if was_hidden {
+        let announced = SimulationEvent::EntityRevealed {
+            entity: entity_def::simulation_id(world, entity),
+        };
+        world.resource_mut::<EventRecord>().emit(announced);
+    }
+}
+
+/// Takes `source` off the map under the `site` raised over it, handing the
+/// site what the source had left: the source's footprint is already the
+/// site's, so it leaves without freeing anything, and the site remembers what
+/// to put back. The source dies as overbuilt. [`uncover_source`] is the other
+/// half.
+pub(crate) fn cover_source(world: &mut World, source: Entity, site: Entity) {
+    let amount = world
+        .entity(source)
+        .get::<ResourceSourceComponent>()
+        .expect("a source under a site is a resource source")
+        .amount;
+    let uncovers = entity_def::type_id(world, source);
+    let anchor = body::anchor(entity_def::position(world, source));
+    world.entity_mut(source).insert(HiddenComponent);
+    despawn_entity(world, source, DeathCause::Overbuilt);
+
+    let mut site_mut = world.entity_mut(site);
+    site_mut
+        .get_mut::<ResourceSourceComponent>()
+        .expect("a type raised over a source is a resource source")
+        .amount = amount;
+    site_mut.insert(OverbuiltComponent { uncovers, anchor });
+}
+
+/// Puts back the resource source `entity` was raised over, on the cells it was
+/// covered on and with what it had left, announcing the return; nothing for an
+/// entity raised on open ground. One drained dry comes back empty or not at
+/// all, as the source type's own depletion says.
+///
+/// A caller uncovers once the entity's own footprint is off the grid. When
+/// those cells are no longer free even so — something walked onto ground the
+/// cover never claimed — the source does not come back at all, the way blocked
+/// ground leaves no remains (see [`spawn_corpse_entity`]).
+///
+/// A cover that wears a form which is no resource source holds nothing, so what
+/// it gives back is an empty source or none at all, as if it had been drained.
+pub(crate) fn uncover_source(world: &mut World, entity: Entity) {
+    let Some(overbuilt) = world.entity(entity).get::<OverbuiltComponent>().copied() else {
+        return;
     };
-    world.resource_mut::<EventRecord>().emit(announced);
+    let amount = world
+        .entity(entity)
+        .get::<ResourceSourceComponent>()
+        .map_or(0, |source| source.amount);
+    let (type_name, depletion) = {
+        let def = world.resource::<ContentRegistry>().def(overbuilt.uncovers);
+        (
+            def.name.clone(),
+            def.resource_source
+                .as_ref()
+                .expect("an overbuilt type is a resource source")
+                .depletion(),
+        )
+    };
+    if amount == 0 {
+        match depletion {
+            DepletionPolicy::Persist => {}
+            DepletionPolicy::Destroy => return,
+        }
+    }
+    let by = entity_def::simulation_id(world, entity);
+    if let Some((source, _)) = spawn_entity(
+        world,
+        &type_name,
+        FixedUVec2::from(overbuilt.anchor),
+        None,
+        SpawnCause::Uncovered { by },
+        FieldReach::Full,
+    ) {
+        world
+            .entity_mut(source)
+            .get_mut::<ResourceSourceComponent>()
+            .expect("an overbuilt type is a resource source")
+            .amount = amount;
+    }
 }
 
 /// Starts the dying phase for an alive entity.
@@ -507,7 +687,7 @@ fn settle_passengers(world: &mut World, entity: Entity) {
                 despawn_entity(world, passenger, DeathCause::PassengerLost { holder })
             }
             PassengerFate::Eject => {
-                if !reveal_entity_near(world, passenger, around, around_size) {
+                if !place_back_near(world, passenger, around, around_size) {
                     despawn_entity(world, passenger, DeathCause::PassengerLost { holder });
                 }
             }

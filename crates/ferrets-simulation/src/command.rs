@@ -118,6 +118,9 @@ pub enum PlayerCommand {
         position: FixedUVec2,
         flush: bool,
     },
+    /// Tears down the unfinished `site` the issuing player owns, refunding its
+    /// cost; whoever was working it is released.
+    CancelBuild { site: SimulationId },
     /// Issues a repair order against `target` to every selected entity that can
     /// mend it.
     /// `flush` cancels existing orders before issuing this one; `false` appends.

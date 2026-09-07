@@ -2,6 +2,7 @@
 //! and the registry that holds them.
 
 pub mod attack;
+pub mod berths;
 pub mod build;
 pub mod costs;
 pub mod dying;

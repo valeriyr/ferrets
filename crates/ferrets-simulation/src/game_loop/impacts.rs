@@ -60,7 +60,10 @@ pub(super) fn deliver(
         return;
     };
     let target_id = target.and_then(|target| target_id(world, target));
-    let impact = aimed_at;
+    // A shot at an entity is aimed at the cell of its footprint nearest the
+    // weapon — the edge the range was measured to — not at the corner its
+    // position names; a shot at bare ground goes where it was sent.
+    let impact = target.map_or(aimed_at, |target| aim_cell(world, origin, target));
 
     let delivery = fired_from
         .weapon(
@@ -143,7 +146,7 @@ pub fn process_impacts(world: &mut World) {
         let target = shot
             .target
             .and_then(|id| world.resource::<EntityIndex>().alive(id));
-        let impact = target.map_or(shot.impact, |target| position_of(world, target));
+        let impact = target.map_or(shot.impact, |target| aim_cell(world, shot.origin, target));
         land(
             world,
             &def,
@@ -399,13 +402,17 @@ fn flight_ticks(distance: FixedU64, speed: FixedU64) -> u32 {
     (distance / speed).ceil().to_num::<u32>().max(1)
 }
 
-/// The entity's current position.
-fn position_of(world: &World, entity: Entity) -> FixedUVec2 {
-    world
-        .entity(entity)
-        .get::<LocationComponent>()
-        .map(|location| location.position)
-        .unwrap_or_default()
+/// The cell of `target`'s footprint nearest to a shot released from `origin`:
+/// where the shot is aimed, and where a following one lands — the same edge
+/// the range was measured to. Ties go to the first cell in row-major order.
+fn aim_cell(world: &World, origin: FixedUVec2, target: Entity) -> FixedUVec2 {
+    let projection = world.resource::<Map>().projection();
+    let from = CellPos::from(origin);
+    let cell = entity_def::footprint_rect(world, target)
+        .cells()
+        .min_by_key(|&cell| projection.metric(from, cell))
+        .expect("a footprint has at least one cell");
+    FixedUVec2::from(cell)
 }
 
 /// The entity's simulation id, if it carries one.

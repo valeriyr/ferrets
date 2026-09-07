@@ -5,17 +5,24 @@ mod utils;
 use std::collections::BTreeSet;
 
 use bevy::prelude::*;
+use ferrets_geometry::cell_pos::CellPos;
+use ferrets_math::fixed_uvec2::FixedUVec2;
+use ferrets_physics::body;
 use ferrets_simulation::{
     command::{PlayerCommand, SelectMode},
     components::{
+        attached::AttachedComponent,
         hidden::HiddenComponent,
+        order_queue::{CancelPolicy, OrderQueueComponent},
         resource::{
             HarvestingComponent, ResourceCarrierComponent, ResourceSourceComponent,
             UnderHarvestComponent,
         },
     },
     entity_def,
-    order::Order,
+    entity_index::EntityIndex,
+    map::Map,
+    order::{AttackTarget, Order},
     resources::PlayerResources,
     simulation_id::SimulationId,
     spawn,
@@ -743,8 +750,739 @@ fn loaded_carrier_sent_to_rival_storage_follows_it_instead_of_delivering() {
 }
 
 //
+// ─── Banking where the carrier stands ─────────────────────────────────────────
+//
+
+#[test]
+fn attached_carrier_sits_in_tree_and_banks_wood_without_felling_it() {
+    let mut app = utils::orders_app();
+    let (sylph, sylph_id) = utils::create_owned(&mut app, "sylph", 7, 5, 0);
+    let (tree, tree_id) =
+        utils::create_entity(app.world_mut(), "tree", utils::pos(8, 5), None).unwrap();
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(tree)
+        .unwrap()
+        .amount = 20;
+    // No storage anywhere: nothing is ever walked back.
+
+    utils::select(&mut app, sylph_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SendToEntity {
+            target: tree_id,
+            flush: true,
+        },
+    );
+    // The order lands on the third tick and the sylph, already in reach, takes
+    // the tree up: on the tree's own cell, at work, on the map.
+    utils::run_ticks(&mut app, utils::APPLY);
+    assert!(app.world().get::<AttachedComponent>(sylph).is_some());
+    assert!(app.world().get::<HiddenComponent>(sylph).is_none());
+    assert!(app.world().get::<HarvestingComponent>(sylph).is_some());
+    assert_eq!(utils::cell_of(app.world(), sylph), CellPos::new(8, 5));
+    let grid = app.world().resource::<Map>().nav_grid();
+    assert!(
+        !grid.is_claimed_by(utils::GROUND, CellPos::new(7, 5)),
+        "the cell it stood on is free"
+    );
+
+    // Two ticks a load, five wood a load, straight into the stockpile — and
+    // the tree loses nothing, so the carrier never leaves it.
+    utils::run_ticks(&mut app, 2);
+    assert_eq!(utils::wood(app.world()), 5);
+    utils::run_ticks(&mut app, 6);
+    assert_eq!(utils::wood(app.world()), 20);
+    assert_eq!(
+        app.world()
+            .get::<ResourceSourceComponent>(tree)
+            .unwrap()
+            .amount,
+        20
+    );
+    assert!(app.world().get::<AttachedComponent>(sylph).is_some());
+    assert_eq!(
+        app.world()
+            .get::<ResourceCarrierComponent>(sylph)
+            .unwrap()
+            .amount,
+        0,
+        "nothing is ever in its hands"
+    );
+}
+
+#[test]
+fn attached_carriers_fill_berths_of_one_vein_and_drain_it_together() {
+    let mut app = utils::orders_app();
+    let (first, first_id) = utils::create_owned(&mut app, "sylph", 7, 5, 0);
+    let (second, second_id) = utils::create_owned(&mut app, "sylph", 7, 6, 0);
+    let (vein, vein_id) =
+        utils::create_entity(app.world_mut(), "vein", utils::pos(8, 5), None).unwrap();
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(vein)
+        .unwrap()
+        .amount = 12;
+
+    send_both_to(&mut app, first_id, second_id, vein_id);
+    utils::run_ticks(&mut app, utils::APPLY);
+    assert_eq!(
+        crew_of(&app, vein),
+        Some(BTreeSet::from([first_id, second_id])),
+        "both sit on the vein at once"
+    );
+    // Each with its middle on the rim berth nearest to where it stood, the
+    // two west points (8.5, 5.5) and (8.5, 6.5) — positions name the corner,
+    // half a cell up and left of the middle.
+    assert_eq!(utils::position_of(app.world(), first), point("8.0", "5.0"));
+    assert_eq!(utils::position_of(app.world(), second), point("8.0", "6.0"));
+
+    // First load, two ticks in: 5 + 5 banked, 2 left in the vein. Second
+    // load: the lower id takes the 2, the other finds nothing and stops.
+    utils::run_ticks(&mut app, 2);
+    assert_eq!(utils::gold(app.world()), 10);
+    assert_eq!(
+        app.world()
+            .get::<ResourceSourceComponent>(vein)
+            .unwrap()
+            .amount,
+        2
+    );
+    utils::run_ticks(&mut app, 2);
+    assert_eq!(utils::gold(app.world()), 12);
+
+    // The empty vein goes, and both carriers step back onto the grid beside
+    // where it stood with nothing left to do.
+    utils::run_ticks(&mut app, 4);
+    utils::assert_despawned(app.world_mut(), vein);
+    for carrier in [first, second] {
+        assert!(app.world().get::<AttachedComponent>(carrier).is_none());
+        assert!(utils::order_queue_is_empty(app.world_mut(), carrier));
+    }
+    assert_ne!(
+        utils::cell_of(app.world(), first),
+        utils::cell_of(app.world(), second),
+        "each takes a cell of its own"
+    );
+}
+
+#[test]
+fn attached_carrier_waits_for_free_berth() {
+    // Two berths on the vein, three carriers: the third stands by until a
+    // berth frees, then takes it.
+    let mut app = utils::orders_app();
+    let (first, first_id) = utils::create_owned(&mut app, "sylph", 7, 5, 0);
+    let (_, second_id) = utils::create_owned(&mut app, "sylph", 7, 6, 0);
+    let (third, third_id) = utils::create_owned(&mut app, "sylph", 7, 7, 0);
+    let (vein, vein_id) =
+        utils::create_entity(app.world_mut(), "vein", utils::pos(8, 5), None).unwrap();
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(vein)
+        .unwrap()
+        .amount = 1000;
+
+    send_both_to(&mut app, first_id, second_id, vein_id);
+    utils::select(&mut app, third_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SendToEntity {
+            target: vein_id,
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY + 2);
+    assert!(app.world().get::<AttachedComponent>(third).is_none());
+    assert!(
+        app.world().get::<HarvestingComponent>(third).is_none(),
+        "the third waits in place, not at work"
+    );
+    assert!(!utils::order_queue_is_empty(app.world_mut(), third));
+    assert_eq!(
+        crew_of(&app, vein),
+        Some(BTreeSet::from([first_id, second_id]))
+    );
+
+    // The first is called off; its berth is the third's on the next tick.
+    utils::stop_orders(app.world_mut(), first);
+    utils::run_ticks(&mut app, 2);
+    assert!(app.world().get::<AttachedComponent>(third).is_some());
+    assert_eq!(utils::cell_of(app.world(), third), CellPos::new(8, 5));
+    assert_eq!(
+        crew_of(&app, vein),
+        Some(BTreeSet::from([second_id, third_id]))
+    );
+}
+
+#[test]
+fn berth_group_seats_no_more_than_its_slots() {
+    // The lode has three spots but seats two: the third carrier waits though
+    // a spot stands free.
+    let mut app = utils::orders_app();
+    let (_, first_id) = utils::create_owned(&mut app, "sylph", 7, 5, 0);
+    let (_, second_id) = utils::create_owned(&mut app, "sylph", 7, 6, 0);
+    let (third, third_id) = utils::create_owned(&mut app, "sylph", 7, 7, 0);
+    let (lode, lode_id) =
+        utils::create_entity(app.world_mut(), "lode", utils::pos(8, 5), None).unwrap();
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(lode)
+        .unwrap()
+        .amount = 1000;
+
+    send_both_to(&mut app, first_id, second_id, lode_id);
+    utils::select(&mut app, third_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SendToEntity {
+            target: lode_id,
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY + 2);
+    assert_eq!(
+        crew_of(&app, lode),
+        Some(BTreeSet::from([first_id, second_id]))
+    );
+    assert!(app.world().get::<AttachedComponent>(third).is_none());
+    assert!(!utils::order_queue_is_empty(app.world_mut(), third));
+}
+
+#[test]
+fn attached_carrier_turned_away_by_source_without_its_berths() {
+    // The mine offers no berths at all, so a carrier that sits in a "rim"
+    // has no way to work it: the order is refused before it starts. Pushed
+    // straight onto the queue, so the refusal is the harvest's own and not a
+    // smart send reading the mine some other way.
+    let mut app = utils::orders_app();
+    let (sylph, _) = utils::create_owned(&mut app, "sylph", 7, 5, 0);
+    let (mine, mine_id) =
+        utils::create_entity(app.world_mut(), "mine", utils::pos(8, 5), None).unwrap();
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(mine)
+        .unwrap()
+        .amount = 20;
+
+    app.world_mut()
+        .get_mut::<OrderQueueComponent>(sylph)
+        .unwrap()
+        .push(
+            Order::Harvest { target: mine_id },
+            Some(CancelPolicy::Force),
+        );
+    utils::run_ticks(&mut app, 2);
+    assert!(utils::order_queue_is_empty(app.world_mut(), sylph));
+    assert!(app.world().get::<AttachedComponent>(sylph).is_none());
+    assert_eq!(utils::gold(app.world()), 0);
+}
+
+#[test]
+fn roaming_carrier_crosses_straight_to_berth_of_its_own_pick() {
+    let mut app = utils::orders_app();
+    let (roamer, roamer_id) = utils::create_owned(&mut app, "roamer", 7, 5, 0);
+    let (lode, lode_id) =
+        utils::create_entity(app.world_mut(), "lode", utils::pos(8, 5), None).unwrap();
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(lode)
+        .unwrap()
+        .amount = 1000;
+
+    utils::select(&mut app, roamer_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SendToEntity {
+            target: lode_id,
+            flush: true,
+        },
+    );
+    // Seated on the third tick with its middle on the nearest berth, (8.5, 5.5)
+    // — a position names the footprint's corner, so it reads half a cell up
+    // and left of that. Its stay starts one tick along — the first simulation
+    // id's mix, 1364076727, is odd, against a two-tick dwell — so that same
+    // tick its two ticks are up; of the two free berths its mix picks the
+    // second, the south-east one at (9.5, 6.5), and it sets off straight
+    // across the diagonal: one cell of ground under the isometric metric, a
+    // quarter a tick, so a quarter of the way on the fourth tick and there on
+    // the seventh.
+    utils::run_ticks(&mut app, utils::APPLY);
+    assert_eq!(utils::position_of(app.world(), roamer), point("8.0", "5.0"));
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(
+        utils::position_of(app.world(), roamer),
+        point("8.25", "5.25")
+    );
+    utils::run_ticks(&mut app, 3);
+    assert_eq!(utils::position_of(app.world(), roamer), point("9.0", "6.0"));
+    assert!(
+        app.world().get::<HarvestingComponent>(roamer).is_some(),
+        "moving between the berths never interrupts the work"
+    );
+}
+
+#[test]
+fn circling_carrier_walks_loop_to_next_berth() {
+    let mut app = utils::orders_app();
+    let (circler, circler_id) = utils::create_owned(&mut app, "circler", 7, 5, 0);
+    let (lode, lode_id) =
+        utils::create_entity(app.world_mut(), "lode", utils::pos(8, 5), None).unwrap();
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(lode)
+        .unwrap()
+        .amount = 1000;
+
+    utils::select(&mut app, circler_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SendToEntity {
+            target: lode_id,
+            flush: true,
+        },
+    );
+    // Seated at (8.5, 5.5) on the third tick, its stay one tick along (the
+    // first id's mix, 1364076727, is odd), so it sets off that tick — and the
+    // odd mix also sends it backward round the loop, to the south-east spot
+    // (9.5, 6.5) along the diagonal closing leg: one cell of ground under the
+    // isometric metric, a quarter a tick, a quarter of the way on the fourth
+    // tick and there on the seventh. Two full ticks there, and its second
+    // hop's mix, 920564995, is odd too: backward again, one cell west to
+    // (8.5, 6.5), a quarter of the way on the tenth tick, there on the
+    // thirteenth.
+    utils::run_ticks(&mut app, utils::APPLY);
+    assert_eq!(
+        utils::position_of(app.world(), circler),
+        point("8.0", "5.0")
+    );
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(
+        utils::position_of(app.world(), circler),
+        point("8.25", "5.25")
+    );
+    utils::run_ticks(&mut app, 3);
+    assert_eq!(
+        utils::position_of(app.world(), circler),
+        point("9.0", "6.0")
+    );
+    utils::run_ticks(&mut app, 3);
+    assert_eq!(
+        utils::position_of(app.world(), circler),
+        point("8.75", "6.0")
+    );
+    utils::run_ticks(&mut app, 3);
+    assert_eq!(
+        utils::position_of(app.world(), circler),
+        point("8.0", "6.0")
+    );
+}
+
+#[test]
+fn orbiting_carrier_circles_its_berth_without_leaving_it() {
+    let mut app = utils::orders_app();
+    let (hoverer, hoverer_id) = utils::create_owned(&mut app, "hoverer", 7, 5, 0);
+    let (tree, tree_id) =
+        utils::create_entity(app.world_mut(), "tree", utils::pos(8, 5), None).unwrap();
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(tree)
+        .unwrap()
+        .amount = 20;
+
+    utils::select(&mut app, hoverer_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SendToEntity {
+            target: tree_id,
+            flush: true,
+        },
+    );
+    // Seated with its middle on the canopy, (8.5, 5.5), on the third tick —
+    // read half a cell up and left, where the footprint's corner is. Its
+    // circuit starts three quarter turns round — the first simulation id's
+    // mix, 1364076727, is 3 past a multiple of four — and turns another
+    // quarter that tick, so its middle is north of the berth by the
+    // quarter-cell radius, then east, south and west on the ticks after, and
+    // always rounds to the tree's cell.
+    utils::run_ticks(&mut app, utils::APPLY);
+    assert_eq!(
+        utils::position_of(app.world(), hoverer),
+        point("8.0", "4.75")
+    );
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(
+        utils::position_of(app.world(), hoverer),
+        point("8.25", "5.0")
+    );
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(
+        utils::position_of(app.world(), hoverer),
+        point("8.0", "5.25")
+    );
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(
+        utils::position_of(app.world(), hoverer),
+        point("7.75", "5.0")
+    );
+    assert_eq!(
+        body::anchor(utils::position_of(app.world(), hoverer)),
+        CellPos::new(8, 5)
+    );
+    // Two ticks a load, five wood a load, banked as it hovers: on the fourth
+    // tick and the sixth.
+    assert_eq!(utils::wood(app.world()), 10);
+    assert!(app.world().get::<HarvestingComponent>(hoverer).is_some());
+}
+
+#[test]
+fn circling_crew_spreads_round_loop() {
+    // Two circlers sit down next to each other, at the north-west and
+    // north-east spots nearest their approaches. Each, when it moves on,
+    // skips the spot beside its neighbour for the one farthest from it.
+    let mut app = utils::orders_app();
+    let (first, first_id) = utils::create_owned(&mut app, "circler", 7, 5, 0);
+    let (second, second_id) = utils::create_owned(&mut app, "circler", 10, 5, 0);
+    let (ring, ring_id) =
+        utils::create_entity(app.world_mut(), "ring", utils::pos(8, 5), None).unwrap();
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(ring)
+        .unwrap()
+        .amount = 1000;
+
+    send_both_to(&mut app, first_id, second_id, ring_id);
+    utils::run_ticks(&mut app, utils::APPLY);
+    assert_eq!(utils::position_of(app.world(), first), point("8.0", "5.0"));
+    assert_eq!(utils::position_of(app.world(), second), point("9.0", "5.0"));
+
+    // The first's stay is a tick along already and its mix is odd, so it
+    // leaves that tick backward round the loop: the south-west spot, one leg
+    // away and two steps from its neighbour, reached on the seventh tick. The
+    // second's mix, 821347078, is even: it leaves on the fourth tick forward,
+    // and of the free spots — the north-west the first vacated and the
+    // south-east — both a step from the first's new spot, takes the nearer
+    // ahead, the south-east, reached on the eighth.
+    utils::run_ticks(&mut app, 4);
+    assert_eq!(utils::position_of(app.world(), first), point("8.0", "6.0"));
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(utils::position_of(app.world(), second), point("9.0", "6.0"));
+}
+
+#[test]
+fn roaming_carriers_never_share_berth() {
+    let mut app = utils::orders_app();
+    let (first, first_id) = utils::create_owned(&mut app, "roamer", 7, 5, 0);
+    let (second, second_id) = utils::create_owned(&mut app, "roamer", 7, 6, 0);
+    let (vein, vein_id) =
+        utils::create_entity(app.world_mut(), "vein", utils::pos(8, 5), None).unwrap();
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(vein)
+        .unwrap()
+        .amount = 1000;
+
+    send_both_to(&mut app, first_id, second_id, vein_id);
+    // Both berths taken, so neither ever finds a free one to cross to.
+    for _ in 0..4 {
+        utils::run_ticks(&mut app, 4);
+        let (a, b) = (
+            utils::cell_of(app.world(), first),
+            utils::cell_of(app.world(), second),
+        );
+        assert_ne!(a, b, "two carriers in one berth");
+        assert!([CellPos::new(8, 5), CellPos::new(8, 6)].contains(&a));
+        assert!([CellPos::new(8, 5), CellPos::new(8, 6)].contains(&b));
+    }
+}
+
+#[test]
+fn attached_carrier_can_be_killed_at_work() {
+    let mut app = utils::orders_app();
+    let (sylph, sylph_id) = utils::create_owned(&mut app, "sylph", 7, 5, 0);
+    let (tree, tree_id) =
+        utils::create_entity(app.world_mut(), "tree", utils::pos(8, 5), None).unwrap();
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(tree)
+        .unwrap()
+        .amount = 20;
+    let (_, soldier_id) = utils::create_owned(&mut app, "soldier", 9, 7, 1);
+
+    utils::select(&mut app, sylph_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SendToEntity {
+            target: tree_id,
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY);
+    assert!(app.world().get::<AttachedComponent>(sylph).is_some());
+
+    // The soldier is not the local player's, so its order is pushed straight
+    // onto its queue: attack the sylph where it sits.
+    let soldier = app
+        .world()
+        .resource::<EntityIndex>()
+        .alive(soldier_id)
+        .unwrap();
+    app.world_mut()
+        .get_mut::<OrderQueueComponent>(soldier)
+        .unwrap()
+        .push(
+            Order::Attack {
+                target: AttackTarget::Entity(sylph_id),
+                leash: None,
+            },
+            Some(CancelPolicy::Force),
+        );
+    // Twenty ticks: the soldier's walk into range, then two hits of ten on a
+    // twenty-health carrier.
+    utils::run_ticks(&mut app, 20);
+    utils::assert_despawned(app.world_mut(), sylph);
+    assert_eq!(crew_of(&app, tree), None, "the tree is nobody's job now");
+}
+
+#[test]
+fn attached_carrier_is_walked_through_and_never_pushed_under_continuous_model() {
+    // Holding no cells means holding no body either: a walker crossing the
+    // cell the carrier left, and the cell it sits on, meets nothing.
+    let mut app = utils::continuous_orders_app();
+    let (sylph, sylph_id) = utils::create_owned(&mut app, "sylph", 7, 5, 0);
+    let (tree, tree_id) =
+        utils::create_entity(app.world_mut(), "tree", utils::pos(8, 5), None).unwrap();
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(tree)
+        .unwrap()
+        .amount = 20;
+    let (soldier, soldier_id) = utils::create_owned(&mut app, "soldier", 3, 5, 0);
+
+    utils::select(&mut app, sylph_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SendToEntity {
+            target: tree_id,
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY);
+    assert!(app.world().get::<AttachedComponent>(sylph).is_some());
+    let seat = utils::position_of(app.world(), sylph);
+
+    // The soldier is sent onto the cell the sylph left, right beside the tree.
+    utils::select(&mut app, soldier_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Move {
+            target: utils::pos(7, 5),
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, 30);
+    assert_eq!(utils::cell_of(app.world(), soldier), CellPos::new(7, 5));
+    assert!(utils::order_queue_is_empty(app.world_mut(), soldier));
+    assert_eq!(
+        utils::position_of(app.world(), sylph),
+        seat,
+        "nothing shoulders an attached carrier aside"
+    );
+}
+
+#[test]
+fn stopped_attached_carrier_steps_back_beside_source() {
+    let mut app = utils::orders_app();
+    let (sylph, sylph_id) = utils::create_owned(&mut app, "sylph", 7, 5, 0);
+    let (tree, tree_id) =
+        utils::create_entity(app.world_mut(), "tree", utils::pos(8, 5), None).unwrap();
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(tree)
+        .unwrap()
+        .amount = 20;
+
+    utils::select(&mut app, sylph_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SendToEntity {
+            target: tree_id,
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY);
+    assert!(app.world().get::<AttachedComponent>(sylph).is_some());
+
+    utils::stop_orders(app.world_mut(), sylph);
+    utils::run_ticks(&mut app, 1);
+    assert!(app.world().get::<AttachedComponent>(sylph).is_none());
+    assert!(app.world().get::<HarvestingComponent>(sylph).is_none());
+    utils::assert_adjacent_to_footprint(app.world_mut(), sylph, tree);
+    let cell = utils::cell_of(app.world(), sylph);
+    let grid = app.world().resource::<Map>().nav_grid();
+    assert!(grid.is_claimed_by(utils::GROUND, cell));
+}
+
+#[test]
+fn direct_carrier_steps_back_when_source_runs_dry() {
+    let mut app = utils::orders_app();
+    let (sylph, sylph_id) = utils::create_owned(&mut app, "sylph", 8, 5, 0);
+    // A geyser holds its ground when emptied, so the drained source is still
+    // standing there when the carrier looks for its next one.
+    let (geyser, geyser_id) =
+        utils::create_entity(app.world_mut(), "geyser", utils::pos(9, 5), None).unwrap();
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(geyser)
+        .unwrap()
+        .amount = 3;
+
+    utils::select(&mut app, sylph_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SendToEntity {
+            target: geyser_id,
+            flush: true,
+        },
+    );
+    // Three ticks for the command, then two of drawing — the tick it sits down
+    // is the first of them: the whole three arrive at once, since a drain of
+    // five takes all there is.
+    utils::run_ticks(&mut app, utils::APPLY + 3);
+    assert_eq!(utils::gold(app.world_mut()), 3);
+    assert_eq!(
+        app.world()
+            .get::<ResourceSourceComponent>(geyser)
+            .unwrap()
+            .amount,
+        0
+    );
+
+    // With nothing left to draw and no other seam near, the trip ends on the
+    // next tick: the carrier is back on the grid and the geyser is nobody's job.
+    utils::run_ticks(&mut app, 1);
+    assert!(app.world().get::<AttachedComponent>(sylph).is_none());
+    assert!(app.world().get::<HarvestingComponent>(sylph).is_none());
+    assert_eq!(crew_of(&app, geyser), None);
+    assert!(utils::order_queue_is_empty(app.world_mut(), sylph));
+    // Back on the grid, holding a cell of its own again.
+    let cell = utils::cell_of(app.world(), sylph);
+    assert!(
+        app.world()
+            .resource::<Map>()
+            .nav_grid()
+            .is_claimed_by(utils::GROUND, cell)
+    );
+}
+
+#[test]
+fn direct_carrier_leaves_dry_source_behind_when_it_moves_on() {
+    let mut app = utils::orders_app();
+    let (sylph, sylph_id) = utils::create_owned(&mut app, "sylph", 8, 5, 0);
+    // Two geysers: the near one runs dry and holds its ground, so the carrier
+    // has to give it up before it can take the far one.
+    let (near, near_id) =
+        utils::create_entity(app.world_mut(), "geyser", utils::pos(9, 5), None).unwrap();
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(near)
+        .unwrap()
+        .amount = 3;
+    let (far, _) =
+        utils::create_entity(app.world_mut(), "geyser", utils::pos(12, 5), None).unwrap();
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(far)
+        .unwrap()
+        .amount = 10;
+
+    utils::select(&mut app, sylph_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SendToEntity {
+            target: near_id,
+            flush: true,
+        },
+    );
+    // Three ticks for the command, two to draw the near geyser dry, one to step
+    // back onto the grid, one to take up the walk, and the rest of the nine for
+    // the cells to the far geyser at half a cell a tick.
+    utils::run_ticks(&mut app, utils::APPLY + 9);
+    assert_eq!(
+        crew_of(&app, near),
+        None,
+        "the emptied geyser is nobody's job once the carrier moves on"
+    );
+    assert_eq!(crew_of(&app, far), Some(BTreeSet::from([sylph_id])));
+    assert!(app.world().get::<AttachedComponent>(sylph).is_some());
+}
+
+#[test]
+fn drain_takes_less_from_source_than_carrier_banks() {
+    let mut app = utils::orders_app();
+    let (_, tapper_id) = utils::create_owned(&mut app, "tapper", 8, 5, 0);
+    let (vein, vein_id) =
+        utils::create_entity(app.world_mut(), "vein", utils::pos(9, 5), None).unwrap();
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(vein)
+        .unwrap()
+        .amount = 10;
+
+    utils::select(&mut app, tapper_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SendToEntity {
+            target: vein_id,
+            flush: true,
+        },
+    );
+    // Every draw banks what the seam holds up to a load of five and takes two
+    // out of it: from ten, that is 5 + 5 + 5 + 4 + 2 banked over five draws,
+    // and the seam is empty.
+    utils::run_ticks(&mut app, utils::APPLY + 12);
+    assert_eq!(utils::gold(app.world_mut()), 21);
+    assert_eq!(utils::count_of_type(app.world_mut(), "vein"), 0);
+}
+
+//
+// ─── Berths given up ──────────────────────────────────────────────────────────
+//
+
+#[test]
+fn carrier_killed_in_berth_gives_it_back() {
+    let mut app = utils::orders_app();
+    let (first, first_id) = utils::create_owned(&mut app, "sylph", 7, 5, 0);
+    let (tree, tree_id) =
+        utils::create_entity(app.world_mut(), "tree", utils::pos(8, 5), None).unwrap();
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(tree)
+        .unwrap()
+        .amount = 20;
+
+    utils::select(&mut app, first_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SendToEntity {
+            target: tree_id,
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY);
+    assert!(app.world().get::<AttachedComponent>(first).is_some());
+
+    // Boxed in, so the berth is the only place it holds when it dies.
+    utils::set_all_cells_statically_occupied(app.world_mut(), true);
+    spawn::destroy_entity(app.world_mut(), first);
+    // Two ticks of dying, then the body is cleared on the next.
+    utils::run_ticks(&mut app, 3);
+    utils::assert_despawned(app.world_mut(), first);
+    utils::set_all_cells_statically_occupied(app.world_mut(), false);
+
+    // The canopy seats one: the seat the dead carrier held is free for the next.
+    let (second, second_id) = utils::create_owned(&mut app, "sylph", 7, 5, 0);
+    utils::select(&mut app, second_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SendToEntity {
+            target: tree_id,
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY + 2);
+    assert!(app.world().get::<AttachedComponent>(second).is_some());
+}
+
+//
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 //
+
+/// A position from decimal strings, in cells.
+fn point(x: &str, y: &str) -> FixedUVec2 {
+    FixedUVec2::new(utils::fixed(x), utils::fixed(y))
+}
 
 /// Fills `carrier`'s hands with a full load of gold, so the next thing its trip
 /// does is look for somewhere to put it.

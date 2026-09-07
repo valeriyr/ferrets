@@ -8,7 +8,7 @@ use bevy_ecs::{
     query::{With, Without},
     world::World,
 };
-use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
+use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
 
 use super::{
     chase::{self, Destination},
@@ -17,6 +17,7 @@ use super::{
     work,
 };
 use crate::{
+    berths,
     components::{
         build::{BuildComponent, SiteWork, UnderConstructionComponent},
         dying::DyingComponent,
@@ -24,6 +25,7 @@ use crate::{
         location::LocationComponent,
         order_queue::{CancelPolicy, OrderState},
         owner::OwnerComponent,
+        resource::ResourceSourceComponent,
     },
     entity_def,
     entity_index::EntityIndex,
@@ -86,9 +88,10 @@ pub fn prepare_suspended(_entity: Entity, _order: &Order, _world: &mut World) ->
 
 /// Called for every Build entry that has a cancel policy.
 ///
-/// Construction stops immediately under both policies. The site itself is only torn
-/// down and refunded by the last builder to leave it, so pulling one worker off a
-/// shared site leaves the rest to finish it.
+/// Construction stops immediately under both policies. The site's fate is the
+/// last builder's to decide as it leaves — torn down and refunded, or left
+/// standing halted — so pulling one worker off a shared site leaves the rest
+/// to finish it.
 pub fn cancel_processing(
     entity: Entity,
     order: &Order,
@@ -117,14 +120,36 @@ pub fn cancel_processing(
             .expect("validated content defines a location")
             .size();
 
+        // The last builder off a site decides its fate by how it attended
+        // it: one that worked inside the site, or was to become it, takes the
+        // site down with it; one that stood on or beside it leaves the site
+        // standing for whoever takes it up next.
         match leave_crew(world, building_id, entity) {
-            Departure::LastOut => abandon_site(world, entity, building_id, type_name),
+            Departure::LastOut => match attendance(world, entity) {
+                BuilderAttendance::Crew(WorkPresence::Hidden) | BuilderAttendance::Consumed => {
+                    abandon_site(world, entity, building_id)
+                }
+                BuilderAttendance::Crew(
+                    WorkPresence::Present
+                    | WorkPresence::PresentStacking
+                    | WorkPresence::Attached(_),
+                ) => halt_site(world, building_id),
+                BuilderAttendance::Unattended => {
+                    unreachable!("an unattended builder is never on a crew")
+                }
+            },
             Departure::OthersRemain | Departure::JobGone => {}
         }
         work::leave(world, entity, CellPos::from(position), size);
     }
 
     OrderState::Finished
+}
+
+/// Whether a Build can stand through a soft cancel: never — it drops like any
+/// order a player's next command replaces.
+pub fn survives_soft_cancel() -> bool {
+    false
 }
 
 /// Advance a Build order by one tick.
@@ -143,7 +168,8 @@ pub fn cancel_processing(
 /// A builder that leaves the site unattended is done the moment the site
 /// stands: the site advances itself from there (see
 /// [`advance_sites_without_builder`]). One consumed by its work is despawned
-/// as the site completes instead of stepping back out.
+/// as the site completes instead of stepping back out. A site whose crew left
+/// it halted is taken up again by the next builder sent to it.
 pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
     let (type_name, position) = order.build_params().expect("Build order must have params");
 
@@ -199,8 +225,12 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
             }
             // Nothing is placed and nothing is paid for — joining is just taking up
             // a position on somebody else's job.
-            join_crew(world, site, entity);
-            enter_site(world, entity);
+            let building = world
+                .resource::<EntityIndex>()
+                .alive(site)
+                .expect("a site is taken up only when found standing this tick");
+            join_site(world, site, entity);
+            enter_site(world, entity, building);
             build_component.building = Some(site);
             world.entity_mut(entity).insert(build_component);
             return Processing::state(OrderState::InProcessing);
@@ -228,7 +258,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
         }
         // Fields gate the placement the same way: judged at the raise, never
         // again for a site already standing.
-        {
+        let overbuilds = {
             let def = world
                 .resource::<ContentRegistry>()
                 .entity(type_name)
@@ -236,12 +266,35 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
             if !fields::allows_placement(world, owner, def, CellPos::from(position)) {
                 return Processing::state(OrderState::Finished);
             }
-        }
+            def.overbuilds.clone()
+        };
+        // A site raised over a resource source needs one of the type under it,
+        // on exactly its footprint; the source's cells then count as the
+        // site's own.
+        let overbuilt = match overbuilds {
+            Some(over) => {
+                let Some(source) = source_under(world, &over, CellRect::new(site_origin, size))
+                else {
+                    return Processing::state(OrderState::Finished);
+                };
+                Some(source)
+            }
+            None => None,
+        };
 
-        // A builder that disappears into its work leaves the map now, which frees any
-        // of the site's cells it was standing on. One that stays in the open blocks
-        // the site the way anything else standing there would.
-        enter_site(world, entity);
+        // A builder that disappears into its work leaves the grid now, which
+        // frees any of the site's cells it was standing on. One that stays in
+        // the open blocks the site the way anything else standing there would;
+        // one that attaches to the site sits in its berths once it stands.
+        match attendance(world, entity) {
+            BuilderAttendance::Crew(WorkPresence::Hidden) | BuilderAttendance::Consumed => {
+                spawn::hide_entity(world, entity);
+            }
+            BuilderAttendance::Crew(
+                WorkPresence::Present | WorkPresence::PresentStacking | WorkPresence::Attached(_),
+            )
+            | BuilderAttendance::Unattended => {}
+        }
 
         let builder = entity_def::simulation_id(world, entity);
         let work = match attendance(world, entity) {
@@ -250,6 +303,11 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
             },
             BuilderAttendance::Unattended => SiteWork::Unattended { founder: builder },
         };
+        // The source's footprint comes off the grid so the site can take its
+        // cells; a site refused anyway puts it straight back.
+        if let Some(source) = overbuilt {
+            spawn::lift_footprint(world, source);
+        }
         let placed = spawn::spawn_entity(
             world,
             type_name,
@@ -261,9 +319,15 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
         let Some((building, building_sim_id)) = placed else {
             // Site blocked — give up, and bring back a builder that had already
             // stepped inside.
+            if let Some(source) = overbuilt {
+                spawn::restore_footprint(world, source);
+            }
             work::leave(world, entity, site_origin, size);
             return Processing::state(OrderState::Finished);
         };
+        if let Some(source) = overbuilt {
+            spawn::cover_source(world, source, building);
+        }
 
         world
             .entity_mut(building)
@@ -271,6 +335,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
                 progress: 0,
                 work: work.clone(),
             });
+        enter_site(world, entity, building);
         if let Some(player) = owner {
             resources::charge(
                 world,
@@ -287,6 +352,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
             SiteWork::Unattended { .. } => {
                 return Processing::state(OrderState::Finished);
             }
+            SiteWork::Halted => unreachable!("a site is never raised halted"),
         }
         build_component.building = Some(building_sim_id);
         world.entity_mut(entity).insert(build_component);
@@ -319,7 +385,8 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
 }
 
 /// Advances every unattended site by one tick, completing the ones that reach
-/// their build time. A site a crew works is left to its crew.
+/// their build time. A site a crew works is left to its crew, and a halted one
+/// waits.
 ///
 /// Sites are visited in ascending simulation-id order.
 pub fn advance_sites_without_builder(world: &mut World) {
@@ -327,7 +394,7 @@ pub fn advance_sites_without_builder(world: &mut World) {
         .query_filtered::<(Entity, &EntityInfoComponent, &UnderConstructionComponent), Without<DyingComponent>>()
         .iter(world)
         .filter_map(|(building, info, site)| match site.work {
-            SiteWork::Crew { .. } => None,
+            SiteWork::Crew { .. } | SiteWork::Halted => None,
             SiteWork::Unattended { founder } => Some((info.id(), building, founder)),
         })
         .collect();
@@ -362,9 +429,28 @@ fn complete_site(world: &mut World, building: Entity, builder: SimulationId) {
     world.resource_mut::<EventRecord>().emit(announced);
 }
 
+/// Tears down the unfinished `site` for `player` and refunds what it cost.
+/// Whoever is working it finds the site gone on its next tick and steps off.
+///
+/// Nothing happens for a site that is not the player's, is finished, or is
+/// already gone.
+pub fn cancel_site(world: &mut World, player: PlayerId, site: SimulationId) {
+    let Some(building) = world.resource::<EntityIndex>().interactable(world, site) else {
+        return;
+    };
+    if entity_def::owner(world, building) != Some(player)
+        || !world
+            .entity(building)
+            .contains::<UnderConstructionComponent>()
+    {
+        return;
+    }
+    tear_down_site(world, building, site);
+}
+
 /// Destroys an unfinished site and refunds what it cost, called by the last builder
-/// to walk away from it.
-fn abandon_site(world: &mut World, entity: Entity, site: SimulationId, type_name: &str) {
+/// to walk away from a site its attendance does not leave standing.
+fn abandon_site(world: &mut World, entity: Entity, site: SimulationId) {
     let building = world
         .resource::<EntityIndex>()
         .alive(site)
@@ -375,16 +461,45 @@ fn abandon_site(world: &mut World, entity: Entity, site: SimulationId, type_name
             .contains::<UnderConstructionComponent>(),
         "the last builder leaves a site still under construction"
     );
+    debug_assert_eq!(
+        entity_def::owner(world, building),
+        entity_def::owner(world, entity),
+        "a builder works only its owner's sites"
+    );
+    tear_down_site(world, building, site);
+}
 
-    let cost = world
-        .resource::<ContentRegistry>()
-        .entity(type_name)
-        .expect("type checked in prepare")
-        .cost
-        .clone();
+/// Leaves the unfinished `site` standing without a crew, its progress kept,
+/// called by the last builder to walk away from a site its attendance leaves
+/// standing.
+fn halt_site(world: &mut World, site: SimulationId) {
+    let building = world
+        .resource::<EntityIndex>()
+        .alive(site)
+        .expect("the last builder leaves a site that still stands");
+    let mut building_mut = world.entity_mut(building);
+    let mut marker = building_mut
+        .get_mut::<UnderConstructionComponent>()
+        .expect("the last builder leaves a site still under construction");
+    match &marker.work {
+        SiteWork::Crew { builders } => {
+            debug_assert!(builders.is_empty(), "the last builder out leaves no crew");
+            marker.work = SiteWork::Halted;
+        }
+        SiteWork::Unattended { .. } | SiteWork::Halted => {
+            unreachable!("only a crewed site is left halted")
+        }
+    }
+}
+
+/// Removes the unfinished `building` from the map and refunds its owner what
+/// it cost.
+fn tear_down_site(world: &mut World, building: Entity, site: SimulationId) {
+    let owner = entity_def::owner(world, building);
+    let cost = entity_def::of(world, building).cost.clone();
 
     spawn::despawn_entity(world, building, DeathCause::Cancelled);
-    if let Some(player) = entity_def::owner(world, entity) {
+    if let Some(player) = owner {
         resources::refund(world, player, cost, SpendCause::Construction { site });
     }
 }
@@ -421,27 +536,62 @@ fn site_under_way_at(
         .min()
 }
 
-/// Whether `entity` is shut out of `site`: by the crew already on it, or
-/// because the site takes no crew.
+/// Whether `entity` is shut out of `site`: by the crew already on it, because
+/// the site takes no crew, or for want of a berth to sit in. A halted site
+/// shuts nobody out by its crew.
 fn site_excludes(world: &World, site: SimulationId, entity: Entity) -> bool {
-    match world.resource::<EntityIndex>().alive(site) {
-        Some(building) => {
+    let Some(building) = world.resource::<EntityIndex>().alive(site) else {
+        return false;
+    };
+    let Some(marker) = world.entity(building).get::<UnderConstructionComponent>() else {
+        return false;
+    };
+    let crewed_out = match &marker.work {
+        SiteWork::Halted => false,
+        SiteWork::Crew { .. } | SiteWork::Unattended { .. } => {
             crew::excludes::<UnderConstructionComponent>(world, building, entity, shares_sites)
         }
-        None => false,
-    }
+    };
+    crewed_out
+        || match attendance(world, entity) {
+            BuilderAttendance::Crew(presence) => berths::shut(world, building, &presence),
+            BuilderAttendance::Unattended | BuilderAttendance::Consumed => false,
+        }
 }
 
-/// Joins the crew on `site`.
+/// Takes up `site`: joins the crew on it, or becomes the crew of a halted one.
 ///
 /// The site's marker is the construction itself, raised with the first builder — so a
 /// newcomer joins what is there and never marks anything.
-fn join_crew(world: &mut World, site: SimulationId, entity: Entity) {
+fn join_site(world: &mut World, site: SimulationId, entity: Entity) {
     let building = world
         .resource::<EntityIndex>()
         .alive(site)
-        .expect("a crew is joined on a site found standing this tick");
-    crew::join_existing::<UnderConstructionComponent>(world, building, entity);
+        .expect("a site is taken up only when found standing this tick");
+    let work = world
+        .entity(building)
+        .get::<UnderConstructionComponent>()
+        .expect("a site is taken up only when found under way this tick")
+        .work
+        .clone();
+    match work {
+        SiteWork::Crew { .. } => {
+            crew::join_existing::<UnderConstructionComponent>(world, building, entity);
+        }
+        SiteWork::Halted => {
+            let builder = entity_def::simulation_id(world, entity);
+            world
+                .entity_mut(building)
+                .get_mut::<UnderConstructionComponent>()
+                .expect("checked above")
+                .work = SiteWork::Crew {
+                builders: BTreeSet::from([builder]),
+            };
+        }
+        SiteWork::Unattended { .. } => {
+            unreachable!("an unattended site shuts every builder out")
+        }
+    }
 }
 
 /// Drops out of the crew on `site` — the last builder off an unfinished site is
@@ -465,17 +615,38 @@ fn shares_sites(world: &World, entity: Entity) -> bool {
     }
 }
 
-/// Puts the builder where its attendance has it stand as it takes up a site:
+/// Puts the builder where its attendance has it stand as it takes up `site`:
 /// a crew builder as its presence says, one consumed by the site hidden inside
-/// it, which frees any of the site's cells it was standing on. One that leaves
-/// the site unattended stays exactly where it walked to.
-fn enter_site(world: &mut World, entity: Entity) {
+/// it. One that leaves the site unattended stays exactly where it walked to.
+///
+/// Safe to call on a builder already hidden for a site it just raised.
+fn enter_site(world: &mut World, entity: Entity, site: Entity) {
     let presence = match attendance(world, entity) {
         BuilderAttendance::Crew(presence) => presence,
         BuilderAttendance::Consumed => WorkPresence::Hidden,
         BuilderAttendance::Unattended => return,
     };
-    work::enter(world, entity, presence);
+    work::enter(world, entity, &presence, site);
+}
+
+/// The resource source of type `over` standing exactly on `footprint`, if one
+/// does.
+fn source_under(world: &mut World, over: &str, footprint: CellRect) -> Option<Entity> {
+    let mut query = world.query_filtered::<(Entity, &EntityInfoComponent), (
+        With<ResourceSourceComponent>,
+        With<LocationComponent>,
+        Without<DyingComponent>,
+    )>();
+    // The lowest id wins, so a shared outcome never rests on query order.
+    query
+        .iter(world)
+        .filter(|(entity, info)| {
+            info.type_name() == over
+                && entity_def::stands_on_grid(world, *entity)
+                && entity_def::footprint_rect(world, *entity) == footprint
+        })
+        .min_by_key(|(_, info)| info.id())
+        .map(|(entity, _)| entity)
 }
 
 /// Ends a crew builder's order on a site that has completed: one that attends
@@ -508,4 +679,5 @@ fn leave_finished_site(
 fn attendance(world: &World, entity: Entity) -> BuilderAttendance {
     entity_def::builder_attendance(world, entity)
         .expect("a build order only starts on an entity that can build")
+        .clone()
 }

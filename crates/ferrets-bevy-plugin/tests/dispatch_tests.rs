@@ -9,7 +9,7 @@ use ferrets_content::{
     location::Solidity,
     registry::ContentRegistry,
     repair::{RepairCost, RepairRate},
-    resource::HarvestData,
+    resource::{Banking, HarvestData},
     work::WorkPresence,
 };
 use ferrets_geometry::cell_size::CellSize;
@@ -183,7 +183,10 @@ fn repair_dispatch_app() -> App {
                 )
                 .with_health(20)
                 .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
-                .with_resource_carrier([("gold", HarvestData::new(5, 2, WorkPresence::Present))])
+                .with_resource_carrier([(
+                    "gold",
+                    HarvestData::new(5, 5, 2, WorkPresence::Present, Banking::Carried),
+                )])
                 .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
                 .with_stat(EntityStatId::REPAIR_RANGE, FixedU64::ONE)
                 .with_repairer(

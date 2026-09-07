@@ -7,7 +7,7 @@ use bevy::prelude::*;
 use ferrets_bevy_plugin::{SimulationPlugin, ai::AiPlugin};
 use ferrets_content::registry::ContentRegistry;
 use ferrets_demo::{
-    ai::{conclave_ai, human_ai, install_demo_ai, orc_ai, swarm_ai},
+    ai::{conclave_ai, elves_ai, human_ai, install_demo_ai, orc_ai, swarm_ai},
     content::CONTENT,
     map, setup,
 };
@@ -37,7 +37,7 @@ fn ai_scripts_load() {
     let registry = content::load(&LuaEngine, CONTENT).expect("demo content");
     let content = ContentView::from_registry(&registry);
 
-    for script in [human_ai(), orc_ai(), swarm_ai(), conclave_ai()] {
+    for script in [human_ai(), orc_ai(), swarm_ai(), conclave_ai(), elves_ai()] {
         let runtime = LuaEngine.load_ai(&script, &content).expect("demo ai loads");
         assert_eq!(runtime.period(), 20);
     }
@@ -110,6 +110,60 @@ fn field_races_ai_build_economy_and_army() {
     assert!(count_owned(world, 2, "photon_cannon") >= 1);
     assert!(count_owned(world, 2, "zealot") >= 1);
     assert_eq!(count_owned(world, 2, "probe"), 5);
+}
+
+#[test]
+fn elves_ai_builds_economy_and_army() {
+    let slots = vec![
+        PlayerSlot::occupied(0, PlayerType::Human, Some("human"), None),
+        PlayerSlot::occupied(
+            1,
+            PlayerType::Ai {
+                vision: AiVision::Filtered,
+            },
+            Some("elves"),
+            Some(1),
+        ),
+        PlayerSlot::free(2),
+        PlayerSlot::free(3),
+    ];
+    let mut app = App::new();
+    app.add_plugins(SimulationPlugin::new(
+        GameSession::configured(
+            LocalRole::Player(0),
+            slots,
+            map::NAME,
+            Authority::Host {
+                ai_hosting: AiHosting::Replicated,
+            },
+            DropPolicy::Automatic,
+            FinishPolicy::Endless,
+        ),
+        map::build(),
+    ));
+    app.add_plugins(AiPlugin);
+    {
+        let world = app.world_mut();
+        *world.resource_mut::<ContentRegistry>() =
+            content::load(&LuaEngine, CONTENT).expect("demo content");
+        setup::spawn_demo_scene(world);
+        install_demo_ai(world);
+    }
+
+    for _ in 0..7000 {
+        app.world_mut().run_schedule(FixedUpdate);
+    }
+
+    let world = app.world_mut();
+    // The mine was entangled first; wisps drifting round its rim and one in a tree
+    // paid for the ancient the huntresses come from and a well for headroom,
+    // each a wisp spent; the worker line is kept topped up behind them, with
+    // nothing ever stored.
+    assert!(count_owned(world, 1, "entangled_mine") >= 1);
+    assert!(count_owned(world, 1, "ancient_of_war") >= 1);
+    assert!(count_owned(world, 1, "moon_well") >= 1);
+    assert!(count_owned(world, 1, "huntress") >= 1);
+    assert!(count_owned(world, 1, "wisp") >= 3);
 }
 
 #[test]

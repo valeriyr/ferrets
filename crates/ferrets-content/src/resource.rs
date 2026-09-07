@@ -47,35 +47,65 @@ impl ResourceSourceDef {
     }
 }
 
-/// How a carrier harvests one resource kind.
+/// Where a harvested load ends up.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Banking {
+    /// The carrier loads what it harvested and walks it to a storage of its
+    /// owner that accepts the kind.
+    Carried,
+    /// What is harvested is credited to the owner's stockpile at the source,
+    /// and the carrier keeps working the source without a trip anywhere.
+    Direct,
+}
+
+/// How a carrier harvests one resource kind.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HarvestData {
-    /// How much of the kind can be carried at once.
+    /// How much of the kind one trip yields.
     capacity: u32,
+    /// The most one trip takes out of the source. Zero leaves the source
+    /// untouched however much is harvested from it.
+    drain: u32,
     /// Ticks one harvest trip takes.
     harvest_time: u32,
     /// How the carrier attends the source during a trip.
     presence: WorkPresence,
+    /// Where the yield of a trip ends up.
+    banking: Banking,
 }
 
 impl HarvestData {
     /// Creates a new `HarvestData` with the given data.
     ///
     /// Panics if `capacity` or `harvest_time` is `0`.
-    pub fn new(capacity: u32, harvest_time: u32, presence: WorkPresence) -> Self {
+    pub fn new(
+        capacity: u32,
+        drain: u32,
+        harvest_time: u32,
+        presence: WorkPresence,
+        banking: Banking,
+    ) -> Self {
         assert!(capacity > 0, "capacity must be greater than 0");
         assert!(harvest_time > 0, "harvest_time must be greater than 0");
         Self {
             capacity,
+            drain,
             harvest_time,
             presence,
+            banking,
         }
     }
 
-    /// Returns how much of the kind can be carried at once.
+    /// Returns how much of the kind one trip yields.
     #[inline]
     pub fn capacity(&self) -> u32 {
         self.capacity
+    }
+
+    /// Returns the most one trip takes out of the source.
+    #[inline]
+    pub fn drain(&self) -> u32 {
+        self.drain
     }
 
     /// Returns the duration of one harvest trip in ticks.
@@ -86,8 +116,14 @@ impl HarvestData {
 
     /// Returns how the carrier attends the source during a trip.
     #[inline]
-    pub fn presence(&self) -> WorkPresence {
-        self.presence
+    pub fn presence(&self) -> &WorkPresence {
+        &self.presence
+    }
+
+    /// Returns where the yield of a trip ends up.
+    #[inline]
+    pub fn banking(&self) -> Banking {
+        self.banking
     }
 }
 

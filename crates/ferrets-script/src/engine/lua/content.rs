@@ -6,6 +6,8 @@ use std::{cell::RefCell, rc::Rc};
 
 use ferrets_content::{
     attack::{Delivery, Weapon},
+    berths::BerthGroup,
+    build::BuilderAttendance,
     costs::Cost,
     entity_buffs::EntityBuffDef,
     entity_stats::EntityStatId,
@@ -20,14 +22,15 @@ use ferrets_content::{
     registry::ContentRegistry,
     repair::{RepairCost, RepairRate},
     research::ResearchDef,
-    resource::HarvestData,
+    resource::{Banking, HarvestData},
     skills::{EntityCastCost, EntityCastEffect, PlayerCastEffect, SkillCaster, SkillDef},
     splash::SplashDef,
     stand::StandingAct,
     stats::{EntityModifier, ModifierOp, PlayerModifier},
     turret::{TurretDef, TurretMount, TurretStats, WeaponConduct},
+    work::{Attachment, BerthStance, WorkPresence},
 };
-use ferrets_math::{FixedI64, FixedU64};
+use ferrets_math::{FixedI64, FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_pathfinder::layer_mask::LayerMask;
 use mlua::{Lua, Table, Value};
 
@@ -271,19 +274,19 @@ fn build_entity(
     }
     if let Some(builder) = optional::<Table>(table, "builder")? {
         let builds = required::<Vec<String>>(&builder, "builds")?;
-        let attendance = required::<String>(&builder, "attendance")?;
-        def = def.with_builder(builds, content::builder_attendance(&attendance)?);
+        let attendance = required::<Value>(&builder, "attendance")?;
+        def = def.with_builder(builds, builder_attendance(&attendance)?);
     }
     if let Some(repairer) = optional::<Table>(table, "repairer")? {
         let repairs = required::<Vec<String>>(&repairer, "repairs")?;
-        let presence = required::<String>(&repairer, "presence")?;
+        let presence = required::<Value>(&repairer, "presence")?;
         // Off unless declared, and an omitted patience waits indefinitely.
         let self_repair = optional::<bool>(&repairer, "self_repair")?.unwrap_or(false);
         let patience = optional::<u32>(&repairer, "patience")?;
         def = def.with_repairer(
             repairs,
             parse_repair_rate(&repairer)?,
-            content::work_presence(&presence)?,
+            work_presence(&presence)?,
             self_repair,
             parse_repair_cost(&repairer)?,
             patience,
@@ -302,6 +305,12 @@ fn build_entity(
     }
     if let Some(storage) = optional::<Vec<String>>(table, "resource_storage")? {
         def = def.with_resource_storage(storage);
+    }
+    if let Some(berths) = optional::<Table>(table, "berths")? {
+        def = def.with_berths(berth_groups(&berths)?);
+    }
+    if let Some(over) = optional::<String>(table, "overbuilds")? {
+        def = def.with_overbuilds(over);
     }
     if let Some(tags) = optional::<Vec<String>>(table, "tags")? {
         def = def.with_tags(tags);
@@ -578,14 +587,7 @@ fn parse_stats(
 /// Reads one stat value: a non-negative integer, or a decimal string for a
 /// fractional value (floats are rejected at the determinism boundary).
 fn stat_value(name: &str, value: Value) -> crate::Result<FixedU64> {
-    match value {
-        Value::Integer(n) if n >= 0 => Ok(FixedU64::from_num(n)),
-        Value::String(s) => content::fixed(&s.to_string_lossy()),
-        other => Err(ScriptError::ContentError(format!(
-            "stat '{name}' must be a non-negative integer or a decimal string, got {}",
-            other.type_name()
-        ))),
-    }
+    fixed_value(&format!("stat '{name}'"), &value)
 }
 
 /// Reads `location.size`: an integer `n` means an `n×n` footprint; a `{w, h}`
@@ -617,19 +619,209 @@ fn pairs<V: mlua::FromLua>(table: &Table, field: &str) -> crate::Result<Vec<(Str
     Ok(entries)
 }
 
-/// Reads a `resource_carrier` map: each kind maps to `{capacity, time, presence}`.
+/// Reads a `resource_carrier` map: each kind maps to `{capacity, time,
+/// presence, drain, banking}`. `drain` defaults to the capacity and `banking`
+/// to `carried`.
 fn harvest_kinds(carrier: &Table) -> crate::Result<Vec<(String, HarvestData)>> {
     let mut carries = Vec::new();
     for pair in carrier.clone().pairs::<String, Table>() {
         let (kind, data) = pair.map_err(|error| field_error("resource_carrier", error))?;
+        let capacity = required::<u32>(&data, "capacity")?;
+        let banking = match optional::<String>(&data, "banking")? {
+            Some(name) => content::banking(&name)?,
+            None => Banking::Carried,
+        };
         let harvest = HarvestData::new(
-            required::<u32>(&data, "capacity")?,
+            capacity,
+            optional::<u32>(&data, "drain")?.unwrap_or(capacity),
             required::<u32>(&data, "time")?,
-            content::work_presence(&required::<String>(&data, "presence")?)?,
+            work_presence(&required::<Value>(&data, "presence")?)?,
+            banking,
         );
         carries.push((kind, harvest));
     }
     Ok(carries)
+}
+
+/// Reads a `berths` map: each group name maps to `{ points, slots }` — the
+/// `{x, y}` points inside the footprint, in cells from its anchor as whole
+/// numbers or decimal strings, and how many workers sit at once, defaulting to
+/// one per point.
+fn berth_groups(berths: &Table) -> crate::Result<Vec<(String, BerthGroup)>> {
+    let mut groups = Vec::new();
+    for (name, group) in pairs::<Table>(berths, "berths")? {
+        let points = required::<Vec<Vec<Value>>>(&group, "points")?
+            .into_iter()
+            .map(|point| match point.as_slice() {
+                [x, y] => Ok(FixedUVec2::new(
+                    fixed_value("berth x", x)?,
+                    fixed_value("berth y", y)?,
+                )),
+                _ => Err(ScriptError::ContentError(format!(
+                    "berth group '{name}' points must be {{x, y}} pairs"
+                ))),
+            })
+            .collect::<crate::Result<Vec<_>>>()?;
+        let slots = optional::<usize>(&group, "slots")?.unwrap_or(points.len());
+        groups.push((name, BerthGroup::new(points, slots)));
+    }
+    Ok(groups)
+}
+
+/// Reads a non-negative fixed-point value: a whole number, or a decimal string
+/// (floats are rejected at the determinism boundary).
+fn fixed_value(what: &str, value: &Value) -> crate::Result<FixedU64> {
+    match value {
+        Value::Integer(n) if *n >= 0 => Ok(FixedU64::from_num(*n)),
+        Value::String(s) => content::fixed(&s.to_string_lossy()),
+        other => Err(ScriptError::ContentError(format!(
+            "{what} must be a non-negative integer or a decimal string, got {}",
+            other.type_name()
+        ))),
+    }
+}
+
+/// Reads a setting written either as one of `options`' keywords or as a table
+/// `read` converts, naming both forms when it is neither.
+fn keyword_or_table<T: Clone>(
+    what: &str,
+    value: &Value,
+    options: &[(&str, T)],
+    tables: &[&str],
+    read: impl FnOnce(&Table) -> crate::Result<T>,
+) -> crate::Result<T> {
+    match value {
+        Value::Table(table) => read(table),
+        Value::String(name) => {
+            let name = name.to_string_lossy();
+            options
+                .iter()
+                .find(|(keyword, _)| *keyword == name)
+                .map(|(_, option)| option.clone())
+                .ok_or_else(|| {
+                    keyword_or_table_error(what, options, tables, &content::quoted(&name))
+                })
+        }
+        other => Err(keyword_or_table_error(what, options, tables, &found(other))),
+    }
+}
+
+/// The error for a value that is neither a keyword of `options` nor one of the
+/// `tables` forms.
+fn keyword_or_table_error<T>(
+    what: &str,
+    options: &[(&str, T)],
+    tables: &[&str],
+    found: &str,
+) -> ScriptError {
+    let keywords: Vec<String> = options
+        .iter()
+        .map(|(name, _)| content::quoted(name))
+        .collect();
+    let mut expected: Vec<&str> = keywords.iter().map(String::as_str).collect();
+    expected.extend_from_slice(tables);
+    content::unexpected(what, &expected, found)
+}
+
+/// Reads a work presence: a keyword for one that stands or hides, or
+/// `{ attached = { berths, stance } }` for one that sits in a job's berths.
+fn work_presence(value: &Value) -> crate::Result<WorkPresence> {
+    keyword_or_table(
+        "work presence",
+        value,
+        &[
+            ("hidden", WorkPresence::Hidden),
+            ("present", WorkPresence::Present),
+            ("present_stacking", WorkPresence::PresentStacking),
+        ],
+        &["an { attached = ... } table"],
+        |table| Ok(WorkPresence::Attached(attachment(table)?)),
+    )
+}
+
+/// Reads the `attached` table of a presence: the berth group name and the
+/// stance.
+fn attachment(table: &Table) -> crate::Result<Attachment> {
+    let attached = required::<Table>(table, "attached")?;
+    let berths = required::<String>(&attached, "berths")?;
+    let stance = berth_stance(&required::<Value>(&attached, "stance")?)?;
+    Ok(Attachment::new(berths, stance))
+}
+
+/// Reads a berth stance: `"still"`, `{ circling = { speed, dwell } }`,
+/// `{ roaming = { speed, dwell } }`, or `{ orbit = { radius, period } }`.
+fn berth_stance(value: &Value) -> crate::Result<BerthStance> {
+    keyword_or_table(
+        "berth stance",
+        value,
+        &[("still", BerthStance::Still)],
+        &[
+            "a { circling = ... } table",
+            "a { roaming = ... } table",
+            "an { orbit = ... } table",
+        ],
+        moving_berth_stance,
+    )
+}
+
+/// Reads the table of a stance that keeps a worker on the move: exactly one of
+/// `circling`, `roaming` or `orbit`.
+fn moving_berth_stance(table: &Table) -> crate::Result<BerthStance> {
+    let circling = optional::<Table>(table, "circling")?;
+    let roaming = optional::<Table>(table, "roaming")?;
+    let orbit = optional::<Table>(table, "orbit")?;
+    match (circling, roaming, orbit) {
+        (Some(circling), None, None) => {
+            let (speed, dwell) = berth_hopping(&circling)?;
+            Ok(BerthStance::Circling { speed, dwell })
+        }
+        (None, Some(roaming), None) => {
+            let (speed, dwell) = berth_hopping(&roaming)?;
+            Ok(BerthStance::Roaming { speed, dwell })
+        }
+        (None, None, Some(orbit)) => Ok(BerthStance::Orbit {
+            radius: fixed_value("orbit radius", &required::<Value>(&orbit, "radius")?)?,
+            period: required::<u32>(&orbit, "period")?,
+        }),
+        _ => Err(ScriptError::ContentError(
+            "a berth stance table must have exactly one of 'circling', 'roaming' or 'orbit'"
+                .to_string(),
+        )),
+    }
+}
+
+/// Reads the `speed` and `dwell` of a stance that moves between berths.
+fn berth_hopping(table: &Table) -> crate::Result<(FixedU64, u32)> {
+    Ok((
+        fixed_value("berth-to-berth speed", &required::<Value>(table, "speed")?)?,
+        required::<u32>(table, "dwell")?,
+    ))
+}
+
+/// Reads a builder attendance: a keyword for a way of staying or not staying,
+/// or `{ attached = { berths, stance } }` for a crew builder that sits in the
+/// site's berths.
+fn builder_attendance(value: &Value) -> crate::Result<BuilderAttendance> {
+    keyword_or_table(
+        "builder attendance",
+        value,
+        &[
+            ("hidden", BuilderAttendance::Crew(WorkPresence::Hidden)),
+            ("present", BuilderAttendance::Crew(WorkPresence::Present)),
+            (
+                "present_stacking",
+                BuilderAttendance::Crew(WorkPresence::PresentStacking),
+            ),
+            ("unattended", BuilderAttendance::Unattended),
+            ("consumed", BuilderAttendance::Consumed),
+        ],
+        &["an { attached = ... } table"],
+        |table| {
+            Ok(BuilderAttendance::Crew(WorkPresence::Attached(attachment(
+                table,
+            )?)))
+        },
+    )
 }
 
 /// A required table field.

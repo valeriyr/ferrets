@@ -3,7 +3,7 @@
 use crate::work::WorkPresence;
 
 /// How a builder relates to a site it raises.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BuilderAttendance {
     /// Joins the site's crew: its build order stays on the site and advances
     /// the progress one tick per tick, standing as the presence says.
@@ -59,7 +59,7 @@ impl BuilderDef {
 
     /// How the builder relates to a site it raises.
     #[inline]
-    pub fn attendance(&self) -> BuilderAttendance {
-        self.attendance
+    pub fn attendance(&self) -> &BuilderAttendance {
+        &self.attendance
     }
 }

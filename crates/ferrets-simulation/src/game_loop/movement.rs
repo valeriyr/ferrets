@@ -26,7 +26,6 @@ use super::{
 };
 use crate::{
     components::{
-        hidden::HiddenComponent,
         location::LocationComponent,
         movement::MoveComponent,
         order_queue::{CancelPolicy, OrderQueueComponent, OrderState},
@@ -183,6 +182,12 @@ pub fn cancel_processing(
             OrderState::Finished
         }
     }
+}
+
+/// Whether a Move can stand through a soft cancel: never — it drops like any
+/// order a player's next command replaces.
+pub fn survives_soft_cancel() -> bool {
+    false
 }
 
 /// Advance a Move order by one tick under the session's movement model.
@@ -1255,8 +1260,8 @@ fn swap_crossings(
 /// simulation id wins.
 fn claimant_at(world: &mut World, mask: LayerMask, cell: CellPos) -> Option<Entity> {
     for (_, candidate) in world.resource::<EntityIndex>().alive_entries() {
-        // Hidden entities hold no cells and their position is stale.
-        if world.entity(candidate).contains::<HiddenComponent>() {
+        // An entity off the grid holds no cells.
+        if !entity_def::stands_on_grid(world, candidate) {
             continue;
         }
         let Some(location) = world.entity(candidate).get::<LocationComponent>() else {
@@ -1307,8 +1312,8 @@ fn resting_ally_within(
         if candidate == entity {
             continue;
         }
-        // Hidden entities hold no cells and their position is stale.
-        if world.entity(candidate).contains::<HiddenComponent>() {
+        // An entity off the grid holds no cells.
+        if !entity_def::stands_on_grid(world, candidate) {
             continue;
         }
         let Some(location) = world.entity(candidate).get::<LocationComponent>() else {

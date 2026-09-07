@@ -703,6 +703,115 @@ const CONCLAVE_AI: &str = r#"
     })
 "#;
 
+/// The elf brain: an entangled mine over the nearest gold mine first, wisps
+/// drifting round its rim and sitting in the trees, and wisps spent on the
+/// ancient of war the huntresses come from, a moon well whenever headroom runs
+/// dry, then a protector; huntresses muster and march as a wave. Nothing
+/// uproots: the walking forms are the player's to try.
+const ELVES_AI: &str = r#"
+    define_ai("elves", {
+        period = 20,
+        vision = "filtered",
+        think = function(state, view)
+            local commands = {}
+            local budget = budget_of(view)
+            local groups = muster(view)
+            local trees = group(groups, "tree_of_life")
+            local wisps = group(groups, "wisp")
+            local mines = group(groups, "entangled_mine")
+            local ancients = group(groups, "ancient_of_war")
+            local wells = group(groups, "moon_well")
+            local protectors = group(groups, "ancient_protector")
+            local huntresses = group(groups, "huntress")
+            local tree = trees[1]
+
+            keep_workers(commands, budget, tree, trees, wisps, "wisp")
+
+            -- The entangled mine comes first, over the gold mine nearest the
+            -- hall: without it no wisp draws gold at all. It is placed on the
+            -- mine's own cells rather than at a ring offset, with the same
+            -- deadline discipline build_next keeps.
+            local builder_id = nil
+            local wanted = nil
+            if #mines == 0 then
+                local seam = tree and nearest(tree, view.neutral_entities, function(e)
+                    return e.type_name == "gold_mine" and (e.resource_amount or 0) > 0
+                end)
+                local in_flight = false
+                for _, e in ipairs(view.my_entities) do
+                    if e.under_construction then in_flight = true end
+                end
+                if seam ~= nil and not in_flight
+                    and (state.build_deadline == nil or view.tick >= state.build_deadline)
+                    and afford(budget, "entangled_mine") then
+                    local builder = nil
+                    for _, w in ipairs(wisps) do
+                        if w.idle and not w.hidden then builder = w break end
+                    end
+                    builder = builder or wisps[1]
+                    if builder ~= nil then
+                        commands[#commands + 1] = {
+                            kind = "build", builder = builder.id,
+                            type_name = "entangled_mine", x = seam.x, y = seam.y,
+                        }
+                        state.build_deadline = view.tick + 200
+                        builder_id = builder.id
+                    end
+                end
+                reserve(budget, "entangled_mine")
+            else
+                -- The ancient of war, a well whenever headroom runs dry, and
+                -- once the army is fed a protector. Each costs the wisp that
+                -- becomes it, which the worker line replaces.
+                if #ancients == 0 then
+                    wanted = "ancient_of_war"
+                elseif budget.supply < 2 then
+                    wanted = "moon_well"
+                elseif #protectors == 0 then
+                    wanted = "ancient_protector"
+                end
+                builder_id = build_next(commands, state, view, wisps, tree, wanted, budget)
+            end
+
+            -- Idle wisps sit on the entangled mine while it has room, one in a
+            -- tree whenever anything wants wood.
+            local need_wood = (wanted ~= nil and budget.wood < cost_of(wanted, "wood"))
+                or (#ancients > 0 and budget.wood < cost_of("huntress", "wood"))
+            for _, w in ipairs(wisps) do
+                if w.idle and not w.hidden and w.id ~= builder_id then
+                    local target = nil
+                    if need_wood then
+                        target = nearest(w, view.neutral_entities, function(e)
+                            return e.type_name == "tree" and (e.resource_amount or 0) > 0
+                        end)
+                        need_wood = false
+                    end
+                    if target == nil then
+                        target = nearest(w, mines, function(m)
+                            return not m.under_construction and (m.resource_amount or 0) > 0
+                        end)
+                    end
+                    if target ~= nil then
+                        commands[#commands + 1] = { kind = "select", id = w.id }
+                        commands[#commands + 1] = { kind = "send", target = target.id }
+                    end
+                end
+            end
+
+            -- The pending structure holds its price back from the army.
+            reserve(budget, wanted)
+
+            for _, a in ipairs(ancients) do
+                if train_from(commands, budget, a, "huntress") then break end
+            end
+
+            attack_wave(commands, view, huntresses, {}, tree)
+
+            return commands
+        end,
+    })
+"#;
+
 /// The human brain's full source: the shared chassis plus its `define_ai`.
 pub fn human_ai() -> String {
     format!("{COMMON_AI}\n{HUMAN_AI}")
@@ -723,6 +832,11 @@ pub fn conclave_ai() -> String {
     format!("{COMMON_AI}\n{CONCLAVE_AI}")
 }
 
+/// The elf brain's full source: the shared chassis plus its `define_ai`.
+pub fn elves_ai() -> String {
+    format!("{COMMON_AI}\n{ELVES_AI}")
+}
+
 /// The brain source a race's AI slots load, or `None` for a race with no
 /// demo brain — its slots idle on unmanned input.
 fn race_brain(race: &str) -> Option<String> {
@@ -731,6 +845,7 @@ fn race_brain(race: &str) -> Option<String> {
         "orc" => Some(orc_ai()),
         "swarm" => Some(swarm_ai()),
         "conclave" => Some(conclave_ai()),
+        "elves" => Some(elves_ai()),
         _ => None,
     }
 }

@@ -7,25 +7,31 @@ use std::collections::BTreeSet;
 
 use bevy::prelude::*;
 use ferrets_content::{
+    berths::BerthGroup,
     costs,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     location::Solidity,
+    morph::{MorphCancel, MorphPlacement, MorphTime, MorphTransition},
     registry::ContentRegistry,
     repair::{RepairCost, RepairRate},
-    work::WorkPresence,
+    work::{Attachment, BerthStance, WorkPresence},
 };
 use ferrets_math::{FixedU64, facing::Facing};
 use ferrets_simulation::{
     command::PlayerCommand,
     components::{
+        attached::AttachedComponent,
         build::{SiteWork, UnderConstructionComponent},
         energy::EnergyComponent,
         entity_stats::StatsComponent,
         hidden::HiddenComponent,
         location::LocationComponent,
+        order_queue::{CancelPolicy, OrderQueueComponent},
         repair::UnderRepairComponent,
     },
+    entity_def,
+    order::Order,
     session::{GameSession, player_slot::PlayerSlot, player_type::PlayerType},
     simulation_id::SimulationId,
     spawn,
@@ -746,6 +752,91 @@ fn mender_faces_patient_rather_than_corner_its_position_names() {
     );
 }
 
+#[test]
+fn attached_menders_wait_for_free_berth() {
+    let mut app = app();
+    let (forge, forge_id) = utils::create_owned(&mut app, "forge", 10, 10, 0);
+    let (first, first_id) = utils::create_owned(&mut app, "fitter", 8, 10, 0);
+    let (second, second_id) = utils::create_owned(&mut app, "fitter", 8, 12, 0);
+    utils::wound(&mut app, forge, "40");
+    utils::grant_gold(&mut app, 500);
+
+    // Both orders are issued in the same tick, so both pass the berth check at
+    // issue; the seat is taken on arrival.
+    repair(&mut app, first_id, forge_id);
+    repair(&mut app, second_id, forge_id);
+    // Three ticks for the commands, two to close on the forge, and the third is
+    // the tick the seat is taken and the first five points go on: 60 + 5.
+    utils::run_ticks(&mut app, utils::APPLY + 3);
+
+    assert!(
+        app.world().get::<AttachedComponent>(first).is_some(),
+        "the lower id takes the one seat"
+    );
+    assert!(
+        app.world().get::<AttachedComponent>(second).is_none(),
+        "the other waits in the open"
+    );
+    assert_eq!(utils::current_health(&app, forge), FixedU64::from_num(65));
+
+    // Thirty-five points to go, and only the seated mender working: at five a
+    // tick, six ticks leave it five short.
+    utils::run_ticks(&mut app, 6);
+    assert_eq!(utils::current_health(&app, forge), FixedU64::from_num(95));
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(utils::current_health(&app, forge), FixedU64::from_num(100));
+
+    // The tick after, with nothing left to mend, both let go — the one that sat
+    // down and the one that never got a berth.
+    utils::run_ticks(&mut app, 1);
+    assert!(utils::order_queue_is_empty(app.world_mut(), first));
+    assert!(utils::order_queue_is_empty(app.world_mut(), second));
+    assert_eq!(crew_of(&app, forge), None);
+}
+
+#[test]
+fn attached_mender_gives_up_job_that_loses_its_berths() {
+    let mut app = app();
+    let (forge, forge_id) = utils::create_owned(&mut app, "forge", 10, 10, 0);
+    let (fitter, fitter_id) = utils::create_owned(&mut app, "fitter", 16, 10, 0);
+    utils::wound(&mut app, forge, "40");
+    utils::grant_gold(&mut app, 500);
+
+    repair(&mut app, fitter_id, forge_id);
+    // Three ticks for the command, and two of the walk: the order stands and
+    // the mender is on its way, four cells out.
+    utils::run_ticks(&mut app, utils::APPLY + 2);
+    assert!(!utils::order_queue_is_empty(app.world_mut(), fitter));
+
+    // Now the forge shuts itself up into a form that seats nobody, while the
+    // mender is still walking.
+    app.world_mut()
+        .entity_mut(forge)
+        .get_mut::<OrderQueueComponent>()
+        .unwrap()
+        .push(
+            Order::Morph {
+                type_name: "shuttered_forge".into(),
+            },
+            Some(CancelPolicy::Force),
+        );
+    // One tick to take the change up, one to make it, then eight for the four
+    // cells left at half a cell a tick.
+    utils::run_ticks(&mut app, 10);
+
+    assert_eq!(
+        entity_def::of(app.world(), forge).name,
+        "shuttered_forge",
+        "the forge wears the form with no berths"
+    );
+    assert!(app.world().get::<AttachedComponent>(fitter).is_none());
+    assert!(
+        utils::order_queue_is_empty(app.world_mut(), fitter),
+        "a mender with nowhere to sit gives the job up rather than waiting"
+    );
+    assert_eq!(crew_of(&app, forge), None);
+}
+
 //
 // ─── Helpers ────────────────────────────────────────────────────────────────
 //
@@ -824,10 +915,32 @@ fn app() -> App {
                 ),
         );
 
+        // Seats one mender at a time, in the middle of its footprint, and can
+        // be shut up into a form that seats nobody.
+        registry.register(
+            building("forge", None)
+                .with_berths([("rim", BerthGroup::new([utils::berth("1.0", "1.0")], 1))])
+                .with_morphs([MorphTransition::new(
+                    "shuttered_forge",
+                    None,
+                    MorphTime::Constant(1),
+                    MorphPlacement::Reserve,
+                    MorphCancel::Committed,
+                    Vec::new(),
+                    Vec::<String>::new(),
+                )]),
+        );
+        registry.register(building("shuttered_forge", None));
         registry.register(repairer(
             "worker",
             WorkPresence::PresentStacking,
             Some(5),
+            RepairCost::ProRata,
+        ));
+        registry.register(repairer(
+            "fitter",
+            WorkPresence::Attached(Attachment::new("rim", BerthStance::Still)),
+            None,
             RepairCost::ProRata,
         ));
         registry.register(repairer(

@@ -7,9 +7,10 @@ use ferrets_physics::body;
 
 use super::orders::{Processing, Refusal};
 use crate::{
+    berths,
     components::{
+        attached::AttachedComponent,
         dying::{DiedComponent, DyingComponent},
-        hidden::HiddenComponent,
         location::LocationComponent,
         order_queue::{CancelPolicy, OrderState},
     },
@@ -49,11 +50,18 @@ pub fn cancel_processing(
     OrderState::InProcessing
 }
 
+/// Whether a Die can stand through a soft cancel: always — dying cannot be
+/// called off.
+pub fn survives_soft_cancel() -> bool {
+    true
+}
+
 /// Advance a Die order by one tick.
 ///
 /// Counts down the dying timer. When it expires, [`DyingComponent`] is replaced
-/// with [`DiedComponent`], the configured corpse (if any) is left behind, and
-/// the order finishes.
+/// with [`DiedComponent`], the source the entity was raised over (if any) is
+/// put back, the configured corpse (if any) is left behind, and the order
+/// finishes.
 pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing {
     {
         let mut entity_mut = world.entity_mut(entity);
@@ -71,16 +79,26 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
     }
 
     free_footprint(entity, world);
+    give_up_berth(entity, world);
+    spawn::uncover_source(world, entity);
     leave_corpse(entity, world);
     Processing::state(OrderState::Finished)
+}
+
+/// Frees the berth the entity has held through its dying phase — one it died
+/// in with no free cell to step back onto — so the job seats somebody else.
+fn give_up_berth(entity: Entity, world: &mut World) {
+    if let Some(attached) = world.entity_mut(entity).take::<AttachedComponent>() {
+        berths::vacate(world, &attached);
+    }
 }
 
 /// Frees the footprint the entity has held through its dying phase, so the
 /// remains it leaves behind (or anyone else) can take the cells.
 ///
-/// Hidden entities are off the map and hold nothing.
+/// An entity off the grid — hidden, or attached to a job — holds nothing.
 fn free_footprint(entity: Entity, world: &mut World) {
-    if world.entity(entity).contains::<HiddenComponent>() {
+    if !entity_def::stands_on_grid(world, entity) {
         return;
     }
 

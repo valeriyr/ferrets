@@ -9,10 +9,7 @@ use ferrets_pathfinder::layer_mask::LayerMask;
 use ferrets_physics::{body, body::Body, contact, terrain};
 
 use crate::{
-    components::{
-        hidden::HiddenComponent, location::LocationComponent, morph::MorphComponent,
-        movement::MoveComponent,
-    },
+    components::{location::LocationComponent, morph::MorphComponent, movement::MoveComponent},
     entity_def,
     entity_index::EntityIndex,
     map::Map,
@@ -33,7 +30,7 @@ pub fn resolve(world: &mut World) {
     let mut entities: Vec<Entity> = Vec::new();
     let mut bodies: Vec<Body> = Vec::new();
     for (_, entity) in world.resource::<EntityIndex>().alive_entries() {
-        if world.entity(entity).contains::<HiddenComponent>() {
+        if !entity_def::stands_on_grid(world, entity) {
             continue;
         }
         let Some(location) = world.entity(entity).get::<LocationComponent>() else {

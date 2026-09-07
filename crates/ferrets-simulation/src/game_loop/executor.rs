@@ -8,7 +8,7 @@ use bevy_ecs::{entity::Entity, world::World};
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::{FixedU64, fixed_urect::FixedURect, fixed_uvec2::FixedUVec2};
 
-use super::{morph, orders, stats};
+use super::{build, morph, orders, stats};
 use crate::{
     command::{PlayerCommand, SelectMode, SkillCasterRef, SkillTarget},
     components::{
@@ -272,6 +272,7 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
                 CancelPolicy::from_bool(*flush),
             );
         }
+        PlayerCommand::CancelBuild { site } => build::cancel_site(world, player, *site),
         PlayerCommand::Repair { target, flush } => {
             if interactable_entity(world, player, *target).is_none() {
                 return;

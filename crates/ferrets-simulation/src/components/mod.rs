@@ -3,8 +3,10 @@
 //! Each component covers a single concern. Not all entities carry all components —
 //! optional behaviors (movement, combat, …) are expressed by component presence.
 
+pub mod attached;
 pub mod attack;
 pub mod attack_move;
+pub mod berths;
 pub mod build;
 pub mod chase;
 pub mod dying;

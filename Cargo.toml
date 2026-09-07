@@ -15,6 +15,7 @@ members = [
     "crates/ferrets-network",
     "crates/ferrets-pathfinder",
     "crates/ferrets-physics",
+    "crates/ferrets-random",
     "crates/ferrets-replay",
     "crates/ferrets-script",
     "crates/ferrets-simulation",
@@ -40,6 +41,7 @@ ferrets-math = { path = "crates/ferrets-math" }
 ferrets-network = { path = "crates/ferrets-network" }
 ferrets-pathfinder = { path = "crates/ferrets-pathfinder" }
 ferrets-physics = { path = "crates/ferrets-physics" }
+ferrets-random = { path = "crates/ferrets-random" }
 ferrets-replay = { path = "crates/ferrets-replay" }
 ferrets-script = { path = "crates/ferrets-script" }
 ferrets-simulation = { path = "crates/ferrets-simulation" }

@@ -10,8 +10,8 @@
 //!   `Finished` and `Suspended` transitions.
 //!
 //! Each order type module (`movement`, `attack`, …) implements `can_start`,
-//! `prepare`, `prepare_suspended`, `cancel_processing`, and `process`, plus an
-//! optional `watch`. `can_start` is the one start check for its order, run
+//! `prepare`, `prepare_suspended`, `cancel_processing`, `survives_soft_cancel`,
+//! and `process`, plus an optional `watch`. `can_start` is the one start check for its order, run
 //! before the order is pushed and again by `prepare` when it reaches the
 //! front.
 //! Each module owns its driver component lifecycle — inserting and removing the
@@ -50,6 +50,9 @@ pub enum Refusal {
     TargetGone,
     /// The target exists but is not one this order takes.
     TargetUnfit,
+    /// The entity's queue holds work a soft flush would leave in place, or
+    /// workers sit in its berths.
+    Busy,
 }
 
 /// What an order does while its entity is disabled.
@@ -132,6 +135,44 @@ pub fn can_start(world: &World, entity: Entity, order: &Order) -> Result<(), Ref
         Order::Load { .. } => load::can_start(world, entity, order),
         Order::Unload { .. } => unload::can_start(world, entity, order),
         Order::Die => die::can_start(world, entity, order),
+    }
+}
+
+/// Whether `entity`'s queue holds an order of a kind a soft cancel can leave
+/// in place — paid production, a change of form, a death — so a command that
+/// must find the entity idle is refused.
+pub(super) fn resists_soft_flush(world: &World, entity: Entity) -> bool {
+    world
+        .entity(entity)
+        .get::<OrderQueueComponent>()
+        .is_some_and(|queue| {
+            queue
+                .0
+                .iter()
+                .any(|entry| survives_soft_cancel(&entry.order))
+        })
+}
+
+/// Whether orders of this kind can stand through a soft cancel — the answer
+/// the kind's own module gives, the one its `cancel_processing` acts on.
+fn survives_soft_cancel(order: &Order) -> bool {
+    match order {
+        Order::Move { .. } => movement::survives_soft_cancel(),
+        Order::Attack { .. } => attack::survives_soft_cancel(),
+        Order::AttackMove { .. } => attack_move::survives_soft_cancel(),
+        Order::Patrol { .. } => patrol::survives_soft_cancel(),
+        Order::Guard { .. } => guard::survives_soft_cancel(),
+        Order::Follow { .. } => follow::survives_soft_cancel(),
+        Order::Train => train::survives_soft_cancel(),
+        Order::Research { .. } => research::survives_soft_cancel(),
+        Order::Morph { .. } => morph::survives_soft_cancel(),
+        Order::Build { .. } => build::survives_soft_cancel(),
+        Order::Harvest { .. } => harvest::survives_soft_cancel(),
+        Order::Repair { .. } => repair::survives_soft_cancel(),
+        Order::Board { .. } => board::survives_soft_cancel(),
+        Order::Load { .. } => load::survives_soft_cancel(),
+        Order::Unload { .. } => unload::survives_soft_cancel(),
+        Order::Die => die::survives_soft_cancel(),
     }
 }
 

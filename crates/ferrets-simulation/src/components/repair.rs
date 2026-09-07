@@ -21,10 +21,11 @@ pub struct UnderRepairComponent {
 pub struct RepairComponent {
     /// What is being mended.
     pub target: SimulationId,
-    /// Set once a worker that mends from inside its job has stepped into this one —
-    /// the only case with no walk left to run, since such a worker holds no cell and
-    /// cannot be asked to move. One that mends from the open closes on its target
-    /// every tick instead, because a patient can walk away from the hands mending it.
+    /// Set once a worker whose presence takes it off the grid has taken up this
+    /// job — hidden inside it, or seated in one of its berths. Such a worker
+    /// holds no cell and has no walk left to run. One that mends from the open
+    /// closes on its target every tick instead, since a patient can walk away
+    /// from the hands mending it.
     pub inside_job: bool,
     /// The last chase round toward the target; identical rounds accumulate
     /// until the chase gives up (see [`ChaseState`]).

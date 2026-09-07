@@ -139,6 +139,32 @@ fn blast_scales_bonus_and_subtracts_armor_in_full() {
 //
 
 #[test]
+fn shot_at_footprint_is_aimed_at_its_nearest_cell() {
+    // The keep's position names its north-west corner, (5, 5). A shell from
+    // the south-east is aimed at the cell of the footprint nearest the gun,
+    // its south-east corner (7, 7) — the edge the range was measured to — and
+    // lands there, not across the keep on the corner the position names.
+    let mut app = app();
+    let (_, sieger) = utils::create_entity(app.world_mut(), "sieger", utils::pos(11, 11), Some(0))
+        .expect("sieger spawns");
+    let (keep, keep_id) = utils::create_entity(app.world_mut(), "keep", utils::pos(5, 5), Some(1))
+        .expect("keep spawns");
+
+    utils::attack(&mut app, sieger, keep_id);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    let shots = app.world().resource::<PendingImpacts>();
+    let [shot] = shots.in_flight() else {
+        panic!("one shell is in the air");
+    };
+    assert_eq!(shot.impact, utils::pos(7, 7));
+
+    // Four cells at half a cell a tick: eight ticks of flight, and 20 off the
+    // keep when it lands.
+    utils::run_ticks(&mut app, 8);
+    assert_eq!(utils::health(&app, keep), 280);
+}
+
+#[test]
 fn cell_aimed_shot_misses_target_that_moves_away() {
     // The shell is sent to the cell the target stood on. The target walks off before
     // it lands, so nothing is there to take the hit.
@@ -322,6 +348,12 @@ fn app() -> App {
                     4,
                     2,
                 ),
+        );
+        // A wide, stout target, for where a shot at a footprint is aimed.
+        registry.register(
+            EntityTypeDef::new("keep")
+                .with_location(utils::GROUND, CellSize::new(3, 3), Solidity::Solid)
+                .with_health(300),
         );
         let lob = registry.register_projectile(
             "lob",

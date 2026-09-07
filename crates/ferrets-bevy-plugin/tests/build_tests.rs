@@ -13,14 +13,18 @@ use ferrets_math::{FixedU64, facing::Facing};
 use ferrets_simulation::{
     command::PlayerCommand,
     components::{
+        attached::AttachedComponent,
         build::{BuildComponent, SiteWork, UnderConstructionComponent},
         entity_info::EntityInfoComponent,
         hidden::HiddenComponent,
         location::LocationComponent,
+        order_queue::{CancelPolicy, OrderQueueComponent},
     },
     entity_def,
+    entity_index::EntityIndex,
     events::{DeathCause, SimulationEvent},
     map::Map,
+    order::{AttackTarget, Order},
     session::{GameSession, player_slot::PlayerSlot, player_type::PlayerType},
     simulation_id::SimulationId,
     spawn, supply,
@@ -586,13 +590,284 @@ fn raised_site_records_crew_until_last_builder_leaves() {
         "one builder leaving does not empty the site"
     );
 
-    // The last builder out empties the crew and tears the site down, which then sees
-    // out its dying phase like anything else destroyed.
+    // The last builder out empties the crew and, having worked in the open, leaves
+    // the site standing halted rather than tearing it down.
     utils::stop_orders(app.world_mut(), second);
     utils::run_ticks(&mut app, 1);
     assert!(crew_of_site(app.world_mut()).is_empty());
+    assert_eq!(site_work(app.world_mut()), Some(SiteWork::Halted));
     utils::run_ticks(&mut app, 3);
+    assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
+}
+
+//
+// ─── Sites left standing ───────────────────────────────────────────────────────
+//
+
+#[test]
+fn open_builder_ordered_away_leaves_site_halted_with_its_progress() {
+    // A builder that stood beside its site leaves it standing when it goes,
+    // work and payment intact: nothing is refunded, and the ticks it put in
+    // are still there for whoever takes the site up next.
+    let mut app = utils::orders_app();
+    let (mason, mason_id) = utils::create_owned(&mut app, "mason", 9, 10, 0);
+    utils::grant_gold(&mut app, 80);
+
+    order_depot(&mut app, mason_id);
+    // The order lands on tick 3 and the site goes up; two more ticks of work follow.
+    utils::run_ticks(&mut app, utils::APPLY + 2);
+    assert_eq!(site_progress(app.world_mut()), 2);
+    assert_eq!(utils::gold(app.world_mut()), 30);
+
+    utils::stop_orders(app.world_mut(), mason);
+    utils::run_ticks(&mut app, 4);
+    assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
+    assert_eq!(site_work(app.world_mut()), Some(SiteWork::Halted));
+    assert_eq!(
+        site_progress(app.world_mut()),
+        2,
+        "a halted site keeps its work"
+    );
+    assert_eq!(
+        utils::gold(app.world_mut()),
+        30,
+        "nothing is refunded for a standing site"
+    );
+    assert!(utils::order_queue_is_empty(app.world_mut(), mason));
+}
+
+#[test]
+fn halted_site_is_taken_up_by_next_builder_and_finished() {
+    let mut app = utils::orders_app();
+    let (mason, mason_id) = utils::create_owned(&mut app, "mason", 9, 10, 0);
+    let (_, carpenter_id) = utils::create_owned(&mut app, "carpenter", 12, 11, 0);
+    utils::grant_gold(&mut app, 80);
+
+    order_depot(&mut app, mason_id);
+    utils::run_ticks(&mut app, utils::APPLY + 2);
+    utils::stop_orders(app.world_mut(), mason);
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(site_work(app.world_mut()), Some(SiteWork::Halted));
+
+    // The carpenter takes the halted site up as a crew of one — nobody is paid
+    // again — and its four remaining ticks of work finish it.
+    order_depot(&mut app, carpenter_id);
+    utils::run_ticks(&mut app, utils::APPLY);
+    assert_eq!(crew_of_site(app.world_mut()), vec![carpenter_id]);
+    assert_eq!(utils::gold(app.world_mut()), 30);
+    utils::run_ticks(&mut app, 4);
+    assert_eq!(under_construction(app.world_mut()), 0);
+    assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
+}
+
+#[test]
+fn attached_builder_stands_on_site_holding_no_cells() {
+    let mut app = utils::orders_app();
+    let (roofer, roofer_id) = utils::create_owned(&mut app, "roofer", 9, 10, 0);
+    utils::grant_gold(&mut app, 80);
+
+    order_depot(&mut app, roofer_id);
+    utils::run_ticks(&mut app, utils::APPLY);
+
+    // On the site — its footprint cell nearest to where the roofer stood — and
+    // on the map: visible to targeting, never hidden.
+    assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
+    assert!(app.world().get::<AttachedComponent>(roofer).is_some());
+    assert!(app.world().get::<HiddenComponent>(roofer).is_none());
+    assert_eq!(utils::cell_of(app.world(), roofer), CellPos::new(10, 10));
+    assert!(
+        app.world()
+            .resource::<EntityIndex>()
+            .interactable(app.world(), roofer_id)
+            .is_some(),
+        "an attached builder can be targeted"
+    );
+    // The cell it left is nobody's now.
+    let grid = app.world().resource::<Map>().nav_grid();
+    assert!(!grid.is_claimed_by(utils::GROUND, CellPos::new(9, 10)));
+
+    // Six ticks of work later it steps back out onto a free cell beside the depot.
+    utils::run_ticks(&mut app, 6);
+    assert_eq!(under_construction(app.world_mut()), 0);
+    assert!(app.world().get::<AttachedComponent>(roofer).is_none());
+    let depot = depot(app.world_mut());
+    utils::assert_adjacent_to_footprint(app.world_mut(), roofer, depot);
+    let cell = utils::cell_of(app.world(), roofer);
+    let grid = app.world().resource::<Map>().nav_grid();
+    assert!(
+        grid.is_claimed_by(utils::GROUND, cell),
+        "back on the grid, it holds its cell"
+    );
+}
+
+#[test]
+fn attached_builders_take_distinct_berths_of_site() {
+    let mut app = utils::orders_app();
+    let (first, first_id) = utils::create_owned(&mut app, "roofer", 9, 10, 0);
+    let (second, second_id) = utils::create_owned(&mut app, "roofer", 12, 12, 0);
+    utils::grant_gold(&mut app, 80);
+
+    order_depot(&mut app, first_id);
+    order_depot(&mut app, second_id);
+    utils::run_ticks(&mut app, utils::APPLY + 2);
+    assert_eq!(crew_of_site(app.world_mut()), vec![first_id, second_id]);
+    // Each in the rim berth nearest to where it arrived: the north-west cell
+    // for the first, the south-east one for the second.
+    assert_eq!(utils::cell_of(app.world(), first), CellPos::new(10, 10));
+    assert_eq!(utils::cell_of(app.world(), second), CellPos::new(11, 11));
+}
+
+#[test]
+fn attached_builder_shot_dead_on_its_site_leaves_it_halted() {
+    // The roofer sits on the depot's south-east berth, in the open; an enemy
+    // soldier standing beside it cuts it down while it works, and the site
+    // stands halted with the work put in so far.
+    let mut app = recording_orders_app();
+    let (roofer, roofer_id) = utils::create_owned(&mut app, "roofer", 12, 11, 0);
+    let (_, soldier_id) = utils::create_owned(&mut app, "soldier", 12, 12, 1);
+    utils::grant_gold(&mut app, 80);
+
+    let soldier = app
+        .world()
+        .resource::<EntityIndex>()
+        .alive(soldier_id)
+        .unwrap();
+    app.world_mut()
+        .get_mut::<OrderQueueComponent>(soldier)
+        .unwrap()
+        .push(
+            Order::Attack {
+                target: AttackTarget::Entity(roofer_id),
+                leash: None,
+            },
+            Some(CancelPolicy::Force),
+        );
+    order_depot(&mut app, roofer_id);
+
+    // The build lands on the third tick and the roofer takes the berth at
+    // (11.5, 11.5), a step from the soldier. Twenty health, ten a hit, a hit
+    // two ticks into each four-tick swing: struck on the third tick and the
+    // seventh, dead on the seventh — after that tick's work, since hits land
+    // once the orders have run — with four ticks of work put in.
+    utils::run_ticks(&mut app, 7);
+    assert!(
+        deaths(&app)
+            .iter()
+            .any(|&(id, cause)| id == roofer_id && matches!(cause, DeathCause::Killed { .. })),
+        "the roofer was killed on its site"
+    );
+    utils::run_ticks(&mut app, 3);
+    utils::assert_despawned(app.world_mut(), roofer);
+    assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
+    assert_eq!(site_work(app.world_mut()), Some(SiteWork::Halted));
+    assert_eq!(site_progress(app.world_mut()), 4);
+}
+
+#[test]
+fn attached_builder_killed_at_work_leaves_site_halted() {
+    let mut app = utils::orders_app();
+    let (roofer, roofer_id) = utils::create_owned(&mut app, "roofer", 9, 10, 0);
+    utils::grant_gold(&mut app, 80);
+
+    order_depot(&mut app, roofer_id);
+    utils::run_ticks(&mut app, utils::APPLY + 2);
+    assert_eq!(site_progress(app.world_mut()), 2);
+
+    spawn::destroy_entity(app.world_mut(), roofer);
+    utils::run_ticks(&mut app, 4);
+    utils::assert_despawned(app.world_mut(), roofer);
+    assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
+    assert_eq!(site_work(app.world_mut()), Some(SiteWork::Halted));
+    assert_eq!(site_progress(app.world_mut()), 2);
+}
+
+//
+// ─── Cancelling a site ─────────────────────────────────────────────────────────
+//
+
+#[test]
+fn cancel_build_tears_down_site_and_refunds_it() {
+    let mut app = utils::orders_app();
+    let (mason, mason_id) = utils::create_owned(&mut app, "mason", 9, 10, 0);
+    utils::grant_gold(&mut app, 80);
+
+    order_depot(&mut app, mason_id);
+    utils::run_ticks(&mut app, utils::APPLY + 2);
+    let depot = depot(app.world_mut());
+    let site = entity_def::simulation_id(app.world(), depot);
+
+    utils::push_command(&mut app, PlayerCommand::CancelBuild { site });
+    // The command lands on the third tick; the site dies over its two-tick dying
+    // phase, and the mason's order ends on the next tick, its site gone.
+    utils::run_ticks(&mut app, utils::APPLY + 3);
     assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 0);
+    assert_eq!(
+        utils::gold(app.world_mut()),
+        80,
+        "the whole price comes back"
+    );
+    assert!(utils::order_queue_is_empty(app.world_mut(), mason));
+}
+
+#[test]
+fn cancel_build_brings_hidden_builder_back_out() {
+    let mut app = utils::orders_app();
+    let (worker, worker_id) = utils::create_owned(&mut app, "worker", 9, 10, 0);
+    utils::grant_gold(&mut app, 80);
+
+    order_depot(&mut app, worker_id);
+    utils::run_ticks(&mut app, utils::APPLY + 2);
+    assert!(app.world().get::<HiddenComponent>(worker).is_some());
+    let depot = depot(app.world_mut());
+    let site = entity_def::simulation_id(app.world(), depot);
+
+    utils::push_command(&mut app, PlayerCommand::CancelBuild { site });
+    utils::run_ticks(&mut app, utils::APPLY + 3);
+    assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 0);
+    assert!(app.world().get::<HiddenComponent>(worker).is_none());
+    assert!(utils::order_queue_is_empty(app.world_mut(), worker));
+}
+
+#[test]
+fn cancel_build_ignores_rival_site() {
+    let mut app = utils::orders_app();
+    // A site of the other player's, raised straight onto the map.
+    let (depot, site) = utils::create_owned(&mut app, "depot", 14, 14, 1);
+    app.world_mut()
+        .entity_mut(depot)
+        .insert(UnderConstructionComponent {
+            progress: 4,
+            work: SiteWork::Halted,
+        });
+
+    utils::push_command(&mut app, PlayerCommand::CancelBuild { site });
+    utils::run_ticks(&mut app, utils::APPLY + 3);
+    assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
+    assert_eq!(
+        app.world()
+            .get::<UnderConstructionComponent>(depot)
+            .map(|site| site.progress),
+        Some(4),
+        "a player cancels only its own sites"
+    );
+}
+
+#[test]
+fn cancel_build_ignores_finished_building() {
+    let mut app = utils::orders_app();
+    let (_, mason_id) = utils::create_owned(&mut app, "mason", 9, 10, 0);
+    utils::grant_gold(&mut app, 80);
+
+    order_depot(&mut app, mason_id);
+    utils::run_ticks(&mut app, utils::APPLY + 6);
+    assert_eq!(under_construction(app.world_mut()), 0);
+    let depot = depot(app.world_mut());
+    let site = entity_def::simulation_id(app.world(), depot);
+
+    utils::push_command(&mut app, PlayerCommand::CancelBuild { site });
+    utils::run_ticks(&mut app, utils::APPLY + 3);
+    assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
+    assert_eq!(utils::gold(app.world_mut()), 30);
 }
 
 //
@@ -820,9 +1095,23 @@ fn crew_of_site(world: &mut World) -> Vec<SimulationId> {
         .iter(world)
         .flat_map(|site| match &site.work {
             SiteWork::Crew { builders } => builders.iter().copied().collect::<Vec<_>>(),
-            SiteWork::Unattended { .. } => Vec::new(),
+            SiteWork::Unattended { .. } | SiteWork::Halted => Vec::new(),
         })
         .collect()
+}
+
+/// How the one site on the map is worked, if the map holds one.
+fn site_work(world: &mut World) -> Option<SiteWork> {
+    world
+        .query::<&UnderConstructionComponent>()
+        .iter(world)
+        .map(|site| site.work.clone())
+        .next()
+}
+
+/// The one depot on the map.
+fn depot(world: &mut World) -> Entity {
+    utils::single_owned_of_type(world, "depot", 0)
 }
 
 /// The founder of the one unattended site, if the map holds one.
@@ -831,7 +1120,7 @@ fn founder_of_site(world: &mut World) -> Option<SimulationId> {
         .query::<&UnderConstructionComponent>()
         .iter(world)
         .find_map(|site| match site.work {
-            SiteWork::Crew { .. } => None,
+            SiteWork::Crew { .. } | SiteWork::Halted => None,
             SiteWork::Unattended { founder } => Some(founder),
         })
 }

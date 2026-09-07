@@ -237,3 +237,28 @@ fn bearing(x: i32, y: i32) -> u16 {
 fn exactly(degrees: u32) -> Facing {
     Facing::from_bits(facing::units_of_degrees(utils::uscalar(degrees)) as u16)
 }
+
+//
+// ─── Unit offsets ─────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn cardinal_bearings_give_exact_unit_offsets() {
+    assert_eq!(Facing::NORTH.unit(), utils::vec2(0, -1));
+    assert_eq!(Facing::EAST.unit(), utils::vec2(1, 0));
+    assert_eq!(Facing::SOUTH.unit(), utils::vec2(0, 1));
+    assert_eq!(Facing::WEST.unit(), utils::vec2(-1, 0));
+}
+
+#[test]
+fn bearing_between_vertices_reads_along_edge() {
+    // Half way from north to the first vertex east of it (an eighth of a
+    // quarter turn along): the midpoint of the edge between (0, -1) and
+    // (0.38268343236, -0.92387953251).
+    let unit = Facing::from_bits((facing::PER_TURN / 32) as u16).unit();
+    assert_eq!(unit.x, FixedI64::lit("0.38268343236") / 2);
+    assert_eq!(
+        unit.y,
+        FixedI64::lit("-1") + (FixedI64::lit("-0.92387953251") - FixedI64::lit("-1")) / 2
+    );
+}

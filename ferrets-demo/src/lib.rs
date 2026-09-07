@@ -170,6 +170,7 @@ pub fn run() {
                 hud::build_card_input,
                 hud::research_card_input,
                 hud::morph_card_input,
+                hud::cancel_build_card_input,
                 hud::skill_card_input,
                 hud::player_skill_card_input,
                 hud::load_card_input,

@@ -7,6 +7,7 @@ mod utils;
 
 use ferrets_content::{
     attack::{Delivery, Weapon},
+    berths::BerthGroup,
     build::BuilderAttendance,
     costs::{self, Cost},
     entity_buffs::EntityBuffDef,
@@ -24,7 +25,7 @@ use ferrets_content::{
     registry::ContentRegistry,
     repair::{RepairCost, RepairRate},
     research::{ResearchDef, ResearcherDef},
-    resource::{DepletionPolicy, HarvestData},
+    resource::{Banking, DepletionPolicy, HarvestData},
     skills::{
         EntityCastCost, EntityCastEffect, EntityCastTarget, PlayerCastEffect, SkillCaster, SkillDef,
     },
@@ -34,10 +35,10 @@ use ferrets_content::{
     tags,
     transport::{BoardingPolicy, PassengerConduct, PassengerFate},
     turret::{TurretDef, TurretMount, TurretStats, WeaponConduct},
-    work::WorkPresence,
+    work::{Attachment, BerthStance, WorkPresence},
 };
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
-use ferrets_math::{FixedI64, FixedU64};
+use ferrets_math::{FixedI64, FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_pathfinder::{layer_id::LayerId, layer_mask::LayerMask};
 use utils::GROUND;
 
@@ -119,7 +120,10 @@ fn register_accepts_registered_kinds() {
             .with_cost([("gold", 10)])
             .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
             .with_resource_source("gold", DepletionPolicy::Destroy)
-            .with_resource_carrier([("gold", HarvestData::new(5, 2, WorkPresence::Hidden))])
+            .with_resource_carrier([(
+                "gold",
+                HarvestData::new(5, 5, 2, WorkPresence::Hidden, Banking::Carried),
+            )])
             .with_resource_storage(["gold"]),
     );
 }
@@ -141,10 +145,10 @@ fn register_rejects_unknown_source_kind() {
 #[test]
 #[should_panic(expected = "unregistered resource kind 'wood' in its resource carrier")]
 fn register_rejects_unknown_carrier_kind() {
-    gold_registry_with(
-        utils::standing("worker", GROUND)
-            .with_resource_carrier([("wood", HarvestData::new(5, 2, WorkPresence::Present))]),
-    );
+    gold_registry_with(utils::standing("worker", GROUND).with_resource_carrier([(
+        "wood",
+        HarvestData::new(5, 5, 2, WorkPresence::Present, Banking::Carried),
+    )]));
 }
 
 #[test]
@@ -180,6 +184,261 @@ fn validate_accepts_registered_production_catalogues() {
             .with_builder(["depot"], BuilderAttendance::Crew(WorkPresence::Hidden)),
     );
 
+    registry.validate();
+}
+
+//
+// ─── Berths and overbuilding ──────────────────────────────────────────────────
+//
+
+#[test]
+fn validate_accepts_attachments_offered_by_their_jobs() {
+    let mut registry = utils::ground_registry();
+    registry.register_resource("gold");
+    registry.register(
+        utils::sized("depot", GROUND, CellSize::new(2, 2))
+            .with_build_time(6)
+            .with_berths([(
+                "rim",
+                BerthGroup::new([point("0.5", "0.5"), point("1.5", "1.5")], 2),
+            )]),
+    );
+    registry.register(
+        utils::sized("vein", GROUND, CellSize::new(2, 2))
+            .with_resource_source("gold", DepletionPolicy::Destroy)
+            .with_berths([("rim", BerthGroup::new([point("0.5", "0.5")], 1))]),
+    );
+    registry.register(
+        utils::standing("sprite", GROUND)
+            .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
+            .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
+            .with_builder(
+                ["depot"],
+                BuilderAttendance::Crew(WorkPresence::Attached(Attachment::new(
+                    "rim",
+                    BerthStance::Still,
+                ))),
+            )
+            .with_resource_carrier([(
+                "gold",
+                HarvestData::new(
+                    5,
+                    5,
+                    2,
+                    WorkPresence::Attached(Attachment::new(
+                        "rim",
+                        BerthStance::Roaming {
+                            speed: FixedU64::lit("0.25"),
+                            dwell: 2,
+                        },
+                    )),
+                    Banking::Direct,
+                ),
+            )]),
+    );
+
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'depot' puts a berth of group 'rim' at (2, 0.5), outside its footprint"
+)]
+fn validate_rejects_berth_outside_footprint() {
+    let mut registry = utils::ground_registry();
+    registry.register(
+        utils::sized("depot", GROUND, CellSize::new(2, 2))
+            .with_berths([("rim", BerthGroup::new([point("2", "0.5")], 1))]),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'sprite' attaches to berth group 'rim' of 'depot', which declares no such group"
+)]
+fn validate_rejects_builder_attaching_to_group_its_site_lacks() {
+    let mut registry = utils::ground_registry();
+    registry.register(utils::sized("depot", GROUND, CellSize::new(2, 2)).with_build_time(6));
+    registry.register(
+        utils::standing("sprite", GROUND)
+            .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
+            .with_builder(
+                ["depot"],
+                BuilderAttendance::Crew(WorkPresence::Attached(Attachment::new(
+                    "rim",
+                    BerthStance::Still,
+                ))),
+            ),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'sprite' attaches to berth group 'canopy' of gold sources, and no registered gold source declares such a group"
+)]
+fn validate_rejects_carrier_attaching_to_group_no_source_offers() {
+    let mut registry = utils::ground_registry();
+    registry.register_resource("gold");
+    registry.register(
+        utils::standing("mine", GROUND).with_resource_source("gold", DepletionPolicy::Destroy),
+    );
+    registry.register(
+        utils::standing("sprite", GROUND)
+            .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
+            .with_resource_carrier([(
+                "gold",
+                HarvestData::new(
+                    5,
+                    5,
+                    2,
+                    WorkPresence::Attached(Attachment::new("canopy", BerthStance::Still)),
+                    Banking::Direct,
+                ),
+            )]),
+    );
+    registry.validate();
+}
+
+#[test]
+fn validate_accepts_overbuilding_of_matching_source() {
+    let mut registry = utils::ground_registry();
+    registry.register_resource("gold");
+    registry.register(
+        utils::sized("mine", GROUND, CellSize::new(2, 2))
+            .with_resource_source("gold", DepletionPolicy::Destroy),
+    );
+    registry.register(
+        utils::sized("shaft_house", GROUND, CellSize::new(2, 2))
+            .with_build_time(6)
+            .with_resource_source("gold", DepletionPolicy::Destroy)
+            .with_overbuilds("mine"),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'shaft_house' overbuilds 'mine' on a footprint of another size"
+)]
+fn validate_rejects_overbuilding_source_of_another_size() {
+    let mut registry = utils::ground_registry();
+    registry.register_resource("gold");
+    registry.register(
+        utils::standing("mine", GROUND).with_resource_source("gold", DepletionPolicy::Destroy),
+    );
+    registry.register(
+        utils::sized("shaft_house", GROUND, CellSize::new(2, 2))
+            .with_build_time(6)
+            .with_resource_source("gold", DepletionPolicy::Destroy)
+            .with_overbuilds("mine"),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'shaft_house' overbuilds 'mine' but is not a resource source itself"
+)]
+fn validate_rejects_overbuilding_by_type_that_is_not_source_itself() {
+    let mut registry = utils::ground_registry();
+    registry.register_resource("gold");
+    registry.register(
+        utils::standing("mine", GROUND).with_resource_source("gold", DepletionPolicy::Destroy),
+    );
+    registry.register(
+        utils::standing("shaft_house", GROUND)
+            .with_build_time(6)
+            .with_overbuilds("mine"),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(expected = "entity type 'shaft_house' overbuilds 'seam', which is not registered")]
+fn validate_rejects_overbuilding_unregistered_type() {
+    let mut registry = utils::ground_registry();
+    registry.register_resource("gold");
+    registry.register(
+        utils::standing("shaft_house", GROUND)
+            .with_build_time(6)
+            .with_resource_source("gold", DepletionPolicy::Destroy)
+            .with_overbuilds("seam"),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'shaft_house' overbuilds 'boulder', which is not a resource source"
+)]
+fn validate_rejects_overbuilding_type_that_is_no_source() {
+    let mut registry = utils::ground_registry();
+    registry.register_resource("gold");
+    registry.register(utils::standing("boulder", GROUND));
+    registry.register(
+        utils::standing("shaft_house", GROUND)
+            .with_build_time(6)
+            .with_resource_source("gold", DepletionPolicy::Destroy)
+            .with_overbuilds("boulder"),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'shaft_house' yields wood but overbuilds 'mine', which yields gold"
+)]
+fn validate_rejects_overbuilding_source_of_another_kind() {
+    let mut registry = utils::ground_registry();
+    registry.register_resource("gold");
+    registry.register_resource("wood");
+    registry.register(
+        utils::standing("mine", GROUND).with_resource_source("gold", DepletionPolicy::Destroy),
+    );
+    registry.register(
+        utils::standing("shaft_house", GROUND)
+            .with_build_time(6)
+            .with_resource_source("wood", DepletionPolicy::Destroy)
+            .with_overbuilds("mine"),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'shaft_house' overbuilds 'mine', which occupies other layers"
+)]
+fn validate_rejects_overbuilding_source_on_other_layers() {
+    let mut registry = utils::ground_registry();
+    registry.register_resource("gold");
+    let air = registry.register_layer("air");
+    registry.register(
+        utils::standing("mine", GROUND).with_resource_source("gold", DepletionPolicy::Destroy),
+    );
+    registry.register(
+        utils::standing("shaft_house", air)
+            .with_build_time(6)
+            .with_resource_source("gold", DepletionPolicy::Destroy)
+            .with_overbuilds("mine"),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(expected = "entity type 'shaft_house' overbuilds 'mine' but is not constructible")]
+fn validate_rejects_overbuilding_by_type_nothing_builds() {
+    let mut registry = utils::ground_registry();
+    registry.register_resource("gold");
+    registry.register(
+        utils::standing("mine", GROUND).with_resource_source("gold", DepletionPolicy::Destroy),
+    );
+    registry.register(
+        utils::standing("shaft_house", GROUND)
+            .with_resource_source("gold", DepletionPolicy::Destroy)
+            .with_overbuilds("mine"),
+    );
     registry.validate();
 }
 
@@ -880,10 +1139,10 @@ fn register_rejects_build_range_without_capability() {
 #[test]
 #[should_panic(expected = "can carry resources but is missing harvest_range")]
 fn register_rejects_carrier_without_reach() {
-    gold_registry_with(
-        utils::standing("worker", GROUND)
-            .with_resource_carrier([("gold", HarvestData::new(5, 2, WorkPresence::Present))]),
-    );
+    gold_registry_with(utils::standing("worker", GROUND).with_resource_carrier([(
+        "gold",
+        HarvestData::new(5, 5, 2, WorkPresence::Present, Banking::Carried),
+    )]));
 }
 
 #[test]
@@ -2266,6 +2525,14 @@ fn register_rejects_cast_on_foreign_field() {
 //
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 //
+
+/// A berth point from decimal strings, in cells from the footprint's anchor.
+fn point(x: &str, y: &str) -> FixedUVec2 {
+    FixedUVec2::new(
+        x.parse().expect("a decimal string"),
+        y.parse().expect("a decimal string"),
+    )
+}
 
 /// Registers `def` into a registry that already knows the "gold" resource kind.
 fn gold_registry_with(def: EntityTypeDef) {

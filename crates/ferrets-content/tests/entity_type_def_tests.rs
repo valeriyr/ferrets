@@ -4,16 +4,17 @@
 mod utils;
 
 use ferrets_content::{
+    berths::{BerthGroup, BerthsDef},
     build::BuilderAttendance,
     dying::DyingDef,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     location::Solidity,
-    resource::{DepletionPolicy, HarvestData},
-    work::WorkPresence,
+    resource::{Banking, DepletionPolicy, HarvestData},
+    work::{Attachment, BerthStance, WorkPresence},
 };
 use ferrets_geometry::cell_size::CellSize;
-use ferrets_math::FixedU64;
+use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_pathfinder::layer_mask::LayerMask;
 use utils::GROUND;
 
@@ -41,7 +42,10 @@ fn fully_loaded_definition_is_valid() {
         .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
         .with_builder(["depot"], BuilderAttendance::Crew(WorkPresence::Hidden))
         .with_resource_source("gold", DepletionPolicy::Destroy)
-        .with_resource_carrier([("gold", HarvestData::new(5, 2, WorkPresence::Hidden))])
+        .with_resource_carrier([(
+            "gold",
+            HarvestData::new(5, 5, 2, WorkPresence::Hidden, Banking::Carried),
+        )])
         .with_resource_storage(["gold"]);
 
     assert_eq!(def.name, "factotum");
@@ -156,13 +160,13 @@ fn empty_source_kind_panics() {
 #[test]
 #[should_panic(expected = "harvest_time must be greater than 0")]
 fn zero_harvest_time_panics() {
-    HarvestData::new(5, 0, WorkPresence::Present);
+    HarvestData::new(5, 5, 0, WorkPresence::Present, Banking::Carried);
 }
 
 #[test]
 #[should_panic(expected = "capacity must be greater than 0")]
 fn zero_carry_capacity_panics() {
-    HarvestData::new(0, 2, WorkPresence::Present);
+    HarvestData::new(0, 0, 2, WorkPresence::Present, Banking::Carried);
 }
 
 #[test]
@@ -174,7 +178,10 @@ fn empty_carries_list_panics() {
 #[test]
 #[should_panic(expected = "carried resource kinds must not be empty")]
 fn empty_carry_kind_panics() {
-    footman().with_resource_carrier([("", HarvestData::new(5, 2, WorkPresence::Present))]);
+    footman().with_resource_carrier([(
+        "",
+        HarvestData::new(5, 5, 2, WorkPresence::Present, Banking::Carried),
+    )]);
 }
 
 #[test]
@@ -187,6 +194,82 @@ fn empty_storage_accepts_panics() {
 #[should_panic(expected = "accepted resource kinds must not be empty")]
 fn empty_storage_kind_panics() {
     footman().with_resource_storage(["gold", ""]);
+}
+
+//
+// ─── Berths ───────────────────────────────────────────────────────────────────
+//
+
+#[test]
+#[should_panic(expected = "a berth group must have at least one point")]
+fn berth_group_without_points_panics() {
+    BerthGroup::new(Vec::<FixedUVec2>::new(), 1);
+}
+
+#[test]
+#[should_panic(expected = "a berth group must seat at least one worker")]
+fn berth_group_without_slots_panics() {
+    BerthGroup::new([middle()], 0);
+}
+
+#[test]
+#[should_panic(expected = "a berth group cannot seat more workers than it has points")]
+fn berth_group_seating_more_than_its_points_panics() {
+    BerthGroup::new([middle()], 2);
+}
+
+#[test]
+#[should_panic(expected = "berth groups must not be empty")]
+fn berths_without_groups_panics() {
+    BerthsDef::new(Vec::<(String, BerthGroup)>::new());
+}
+
+#[test]
+#[should_panic(expected = "berth group names must not be empty")]
+fn empty_berth_group_name_panics() {
+    BerthsDef::new([("", BerthGroup::new([middle()], 1))]);
+}
+
+#[test]
+#[should_panic(expected = "berths must not be empty")]
+fn attachment_without_group_panics() {
+    Attachment::new("", BerthStance::Still);
+}
+
+#[test]
+#[should_panic(expected = "a berth-to-berth speed must be greater than 0")]
+fn attachment_moving_at_no_speed_panics() {
+    Attachment::new(
+        "rim",
+        BerthStance::Roaming {
+            speed: FixedU64::ZERO,
+            dwell: 4,
+        },
+    );
+}
+
+#[test]
+#[should_panic(expected = "an orbit radius must be greater than 0")]
+fn attachment_orbiting_at_no_distance_panics() {
+    Attachment::new(
+        "rim",
+        BerthStance::Orbit {
+            radius: FixedU64::ZERO,
+            period: 4,
+        },
+    );
+}
+
+#[test]
+#[should_panic(expected = "an orbit period must be greater than 0")]
+fn attachment_orbiting_in_no_time_panics() {
+    Attachment::new(
+        "rim",
+        BerthStance::Orbit {
+            radius: FixedU64::ONE,
+            period: 0,
+        },
+    );
 }
 
 //
@@ -223,6 +306,11 @@ fn empty_bonus_key_panics() {
 //
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 //
+
+/// The middle of a one-cell footprint, as a berth point.
+fn middle() -> FixedUVec2 {
+    FixedUVec2::new(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
+}
 
 fn footman() -> EntityTypeDef {
     utils::standing("footman", GROUND)
