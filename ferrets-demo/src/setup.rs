@@ -111,6 +111,7 @@ fn spawn_base(world: &mut World, player: PlayerId, race: &str, (x, y): (u32, u32
         "swarm" => ("hive", "drone"),
         "conclave" => ("nexus", "probe"),
         "elves" => ("tree_of_life", "wisp"),
+        "terran" => ("command_center", "scv"),
         _ => ("great_hall", "peon"),
     };
     let mut place = |type_name: &str, x: u32, y: u32| {

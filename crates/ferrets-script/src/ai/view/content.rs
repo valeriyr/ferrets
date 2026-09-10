@@ -6,9 +6,49 @@ use ferrets_content::{
     entity_type_def::EntityTypeDef,
     morph::MorphTime,
     registry::ContentRegistry,
+    requirement::Requirement,
     research::ResearchId,
     skills::{EntityCastCost, EntityCastTarget, SkillCaster, SkillId},
 };
+
+/// One requirement as a script reads it: the kind of thing wanted, and its
+/// name.
+pub struct RequirementView {
+    /// `"entity_type"`, `"tag"`, `"research"`, or `"annexed"`.
+    pub kind: String,
+    /// The registered name it asks for.
+    pub name: String,
+}
+
+/// The entries of `requires` as a script reads them, or `None` when it holds
+/// none.
+fn requirements(
+    requires: &[Requirement],
+    registry: &ContentRegistry,
+) -> Option<Vec<RequirementView>> {
+    let views: Vec<RequirementView> = requires
+        .iter()
+        .map(|entry| {
+            let (kind, name): (&str, String) = match entry {
+                Requirement::EntityType(name) => ("entity_type", name.clone()),
+                Requirement::Tag(name) => ("tag", name.clone()),
+                Requirement::Research(research) => (
+                    "research",
+                    registry
+                        .research_name(*research)
+                        .expect("a requirement's research id was minted by this registry")
+                        .to_string(),
+                ),
+                Requirement::Annexed(name) => ("annexed", name.clone()),
+            };
+            RequirementView {
+                kind: kind.to_string(),
+                name,
+            }
+        })
+        .collect();
+    (!views.is_empty()).then_some(views)
+}
 
 /// The static content catalogue a script can consult.
 pub struct ContentView {
@@ -43,7 +83,7 @@ impl ContentView {
                             .map(|(kind, amount)| (kind.clone(), *amount))
                             .collect(),
                         time: def.research_time,
-                        requires: (!def.requires.is_empty()).then(|| def.requires.clone()),
+                        requires: requirements(&def.requires, registry),
                     }
                 })
                 .collect(),
@@ -70,7 +110,7 @@ impl ContentView {
                         id,
                         caster: caster.to_string(),
                         target: target.map(str::to_string),
-                        requires: (!def.requires.is_empty()).then(|| def.requires.clone()),
+                        requires: requirements(&def.requires, registry),
                     }
                 })
                 .collect(),
@@ -89,8 +129,8 @@ pub struct SkillContentView {
     /// Who an entity cast acts on: `"caster"`, `"ally"`, or `"enemy"`. `None`
     /// for a player cast, which lands on the casting player.
     pub target: Option<String>,
-    /// Requirements for casting. `None` when always available.
-    pub requires: Option<Vec<String>>,
+    /// What must hold for a cast. `None` when nothing must.
+    pub requires: Option<Vec<RequirementView>>,
 }
 
 /// The fields of one research definition a script can consult.
@@ -103,8 +143,8 @@ pub struct ResearchContentView {
     pub cost: Vec<(String, u32)>,
     /// Ticks a researcher works to complete the research.
     pub time: u32,
-    /// Requirements for starting the research. `None` when always available.
-    pub requires: Option<Vec<String>>,
+    /// What must hold to start it. `None` when nothing must.
+    pub requires: Option<Vec<RequirementView>>,
 }
 
 /// The fields of one entity type definition a script can consult.
@@ -120,8 +160,8 @@ pub struct EntityContentView {
     pub researches: Option<Vec<String>>,
     /// Castable skills by name. `None` when instances have none.
     pub skills: Option<Vec<String>>,
-    /// Requirements for producing an instance. `None` when always available.
-    pub requires: Option<Vec<String>>,
+    /// What must hold to produce one. `None` when nothing must.
+    pub requires: Option<Vec<RequirementView>>,
     /// Constructible types. `None` when instances cannot build.
     pub builds: Option<Vec<String>>,
     /// Footprint width and height in cells.
@@ -185,7 +225,7 @@ impl EntityContentView {
                     .filter_map(|&id| registry.skill_name(id).map(str::to_string))
                     .collect()
             }),
-            requires: (!def.requires.is_empty()).then(|| def.requires.clone()),
+            requires: requirements(&def.requires, registry),
             builds: def
                 .builder
                 .as_ref()

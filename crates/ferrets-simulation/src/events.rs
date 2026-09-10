@@ -115,6 +115,9 @@ pub enum DeathCause {
         /// The carrier it was inside.
         holder: SimulationId,
     },
+    /// Nothing sustained it any longer: a pool that ran out with no one to
+    /// blame, or a bond it cannot stand without.
+    Decayed,
 }
 
 /// Something the simulation announced.
@@ -240,6 +243,22 @@ pub enum SimulationEvent {
         target: SimulationId,
         /// What was cast.
         skill: SkillId,
+    },
+    /// An entity passed from one player to another, the entity itself
+    /// unchanged.
+    EntityCaptured {
+        /// The entity that changed hands.
+        entity: SimulationId,
+        /// What it is.
+        entity_type: EntityTypeId,
+        /// Whose it was, absent for an unowned one.
+        from: Option<PlayerId>,
+        /// Whose it now is.
+        to: PlayerId,
+        /// What took it.
+        by: SimulationId,
+        /// Where it stands.
+        position: FixedUVec2,
     },
     /// A player's own skill went off — one with no caster and no target, which
     /// applies to the player itself.

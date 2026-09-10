@@ -8,10 +8,12 @@ use ferrets_simulation::{
     components::{
         health::HealthComponent,
         location::LocationComponent,
+        owner::OwnerComponent,
         turret::{TurretState, TurretsComponent},
     },
     entity_index::EntityIndex,
     resources::PlayerResources,
+    session::player_id::PlayerId,
     simulation_id::SimulationId,
 };
 
@@ -76,6 +78,22 @@ fn changing_health_changes_checksum() {
 }
 
 #[test]
+fn changing_owner_changes_checksum() {
+    // Whose an entity is decides what it may be told to do next, and a capture
+    // moves it while the entity stands still — so it must show here rather
+    // than through whatever it changes later.
+    // Both worlds own the entity, so only the player it is owned BY can tell
+    // them apart: an entity that merely gained an owner would move the digest
+    // by the presence of the component alone.
+    let mut mine = world(100, 30, 5);
+    own(&mut mine, 0);
+    let mut theirs = world(100, 30, 5);
+    own(&mut theirs, 1);
+
+    assert_ne!(state_checksum(&mine), state_checksum(&theirs));
+}
+
+#[test]
 fn changing_resources_changes_checksum() {
     assert_ne!(
         state_checksum(&world(100, 30, 5)),
@@ -104,6 +122,15 @@ fn world(gold: u32, hp: u32, x: u32) -> World {
     resources.add(0, "gold", gold);
     world.insert_resource(resources);
     world
+}
+
+/// Hands the world's one entity to `player`.
+fn own(world: &mut World, player: PlayerId) {
+    let entity = world
+        .resource::<EntityIndex>()
+        .alive(SimulationId(1))
+        .expect("the world holds one alive entity");
+    world.entity_mut(entity).insert(OwnerComponent::new(player));
 }
 
 /// Fits the world's one entity with a gun trained on `bearing`.

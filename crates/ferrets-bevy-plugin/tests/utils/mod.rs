@@ -8,6 +8,7 @@ use ferrets_bevy_plugin::{
     replay,
 };
 use ferrets_content::{
+    annex::{AloneConduct, AnnexClaim, AnnexLife, AnnexWork},
     attack::{AttackDef, Delivery, Weapon},
     berths::BerthGroup,
     build::BuilderAttendance,
@@ -21,15 +22,16 @@ use ferrets_content::{
     player_buffs::PlayerBuffDef,
     projectile::{Aim, ProjectileDef},
     registry::ContentRegistry,
+    requirement::Requirement,
     research::{ResearchDef, ResearchId},
-    resource::{Banking, DepletionPolicy, HarvestData},
+    resource::{Banking, DepletionPolicy, HarvestData, Sources},
     skills::{EntityCastCost, PlayerCastEffect, SkillCaster, SkillDef},
     splash::{SplashDef, SplashShape},
     stack_rule::StackRule,
     stats::{EntityModifier, ModifierOp},
     transport::{BoardingPolicy, PassengerConduct, PassengerFate},
     turret::{TurretDef, TurretFire, TurretMount, TurretStats, WeaponConduct},
-    work::{Attachment, BerthStance, WorkPresence},
+    work::{Attachment, BerthStance, CrewLimit, WorkPresence},
 };
 use ferrets_geometry::{
     cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize, projection::Projection,
@@ -473,7 +475,7 @@ pub fn morph_app(model: MovementModel) -> App {
                         MorphPlacement::Reserve,
                         MorphCancel::Refundable,
                         Vec::new(),
-                        Vec::<String>::new(),
+                        Vec::new(),
                     ),
                     MorphTransition::new(
                         "husk",
@@ -482,7 +484,7 @@ pub fn morph_app(model: MovementModel) -> App {
                         MorphPlacement::Revalidate,
                         MorphCancel::Committed,
                         vec![EntityCastCost::Health(FixedU64::from_num(10))],
-                        Vec::<String>::new(),
+                        Vec::new(),
                     ),
                     MorphTransition::new(
                         "wisp",
@@ -491,7 +493,7 @@ pub fn morph_app(model: MovementModel) -> App {
                         MorphPlacement::Revalidate,
                         MorphCancel::Forfeit,
                         Vec::new(),
-                        Vec::<String>::new(),
+                        Vec::new(),
                     ),
                     // Worn as a chrysalis on the way, paid, and refunded if
                     // the change ends early.
@@ -502,7 +504,7 @@ pub fn morph_app(model: MovementModel) -> App {
                         MorphPlacement::Revalidate,
                         MorphCancel::Refundable,
                         vec![EntityCastCost::Resources(costs::cost([("gold", 10)]))],
-                        Vec::<String>::new(),
+                        Vec::new(),
                     ),
                 ]),
         );
@@ -568,7 +570,7 @@ pub fn morph_app(model: MovementModel) -> App {
                     MorphPlacement::Revalidate,
                     MorphCancel::Forfeit,
                     Vec::new(),
-                    Vec::<String>::new(),
+                    Vec::new(),
                 )]),
         );
         registry.register(
@@ -588,7 +590,7 @@ pub fn morph_app(model: MovementModel) -> App {
                     MorphPlacement::Reserve,
                     MorphCancel::Refundable,
                     Vec::new(),
-                    Vec::<String>::new(),
+                    Vec::new(),
                 )]),
         );
         registry.register(
@@ -610,7 +612,7 @@ pub fn morph_app(model: MovementModel) -> App {
                     MorphPlacement::Reserve,
                     MorphCancel::Refundable,
                     Vec::new(),
-                    Vec::<String>::new(),
+                    Vec::new(),
                 )]),
         );
     }
@@ -1493,7 +1495,12 @@ pub fn supply_app() -> App {
                 .with_health(20)
                 .with_dying(2, None)
                 .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
-                .with_builder(["camp"], BuilderAttendance::Crew(WorkPresence::Present)),
+                .with_builder(
+                    ["camp"],
+                    BuilderAttendance::Crew(WorkPresence::Present {
+                        crew: CrewLimit::ONE,
+                    }),
+                ),
         );
     }
     app.world_mut().resource::<ContentRegistry>().validate();
@@ -1585,12 +1592,17 @@ pub fn research_app() -> App {
                 costs::cost([("gold", 30)]),
                 10,
                 Some(sharp_blades),
-                Vec::<String>::new(),
+                Vec::new(),
             ),
         );
         let tactics = registry.register_research(
             "tactics",
-            ResearchDef::new(costs::cost([("gold", 20)]), 10, None, ["smithing"]),
+            ResearchDef::new(
+                costs::cost([("gold", 20)]),
+                10,
+                None,
+                [Requirement::Research(smithing)],
+            ),
         );
         let soldier = |name: &str| {
             EntityTypeDef::new(name)
@@ -1609,8 +1621,9 @@ pub fn research_app() -> App {
                 .with_train_time(5)
         };
         registry.register(soldier("pikeman"));
-        registry.register(soldier("halberdier").with_requires(["smithing"]));
-        registry.register(soldier("knight").with_requires(["workshop"]));
+        registry.register(soldier("halberdier").with_requires([Requirement::Research(smithing)]));
+        registry
+            .register(soldier("knight").with_requires([Requirement::Tag("workshop".to_string())]));
         registry.register(
             EntityTypeDef::new("lab")
                 .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
@@ -1625,6 +1638,314 @@ pub fn research_app() -> App {
                 .with_health(100)
                 .with_dying(2, None)
                 .with_trainer(["pikeman", "halberdier", "knight"]),
+        );
+    }
+    app.world_mut().resource::<ContentRegistry>().validate();
+    app.world_mut().resource_mut::<GameSession>().start();
+    app
+}
+
+/// App with the annex roster — a `keep` that raises the annexes its two docks
+/// take and lifts off into `keep_aloft`, a `tower` whose dock is on its other
+/// side (so two primaries can offer one cell), and the annexes themselves: the
+/// `lookout` that researches and stands idle with no primary, the `beacon`
+/// razed the moment it loses one, the `mast` that keeps working while it
+/// fades, the `spire` bound to its owner alone and the `mooring` its allies
+/// share. A `sentry` may only be trained by a keep with a lookout docked.
+///
+/// Players 0 and 2 are allied; player 1 is the rival, session started.
+pub fn annex_app() -> App {
+    let mut app = make_app(vec![
+        PlayerSlot::occupied(0, PlayerType::Human, None, Some(0)),
+        PlayerSlot::occupied(1, PlayerType::Human, None, Some(1)),
+        PlayerSlot::occupied(2, PlayerType::Human, None, Some(0)),
+    ]);
+    // The air layer the lifted-off form lives on, over the same ground.
+    {
+        let mut grid = NavGrid::new(32, 32);
+        grid.add_layer(GROUND);
+        grid.add_layer(AIR);
+        map::install_map(
+            app.world_mut(),
+            Map::new(
+                "test",
+                Projection::Isometric,
+                MovementModel::Cell,
+                grid,
+                vec![],
+                &[MoverShape::point(GROUND), MoverShape::point(AIR)],
+            ),
+        );
+    }
+    {
+        let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
+        registry.register_resource("gold");
+        assert_eq!(registry.register_layer(AIR_LAYER), AIR);
+        let signals = registry.register_research(
+            "signals",
+            ResearchDef::new(costs::cost([("gold", 10)]), 20, None, Vec::new()),
+        );
+        let annexes = [
+            "lookout",
+            "watchpost",
+            "beacon",
+            "mast",
+            "spire",
+            "mooring",
+            "hub",
+        ];
+        registry.register(
+            EntityTypeDef::new("keep")
+                .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
+                .with_health(200)
+                .with_sight_range(8)
+                .with_dying(2, None)
+                .with_tags(["building"])
+                .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
+                .with_builder(
+                    annexes,
+                    BuilderAttendance::Crew(WorkPresence::Present {
+                        crew: CrewLimit::ONE,
+                    }),
+                )
+                // Two docks, so which one an annex fills is recorded and not
+                // merely counted: east of the keep, and south of it.
+                .with_docks([(CellPos::new(2, 0), annexes), (CellPos::new(0, 2), annexes)])
+                .with_trainer(["sentry", "runner"])
+                .with_morphs([MorphTransition::new(
+                    "keep_aloft",
+                    None,
+                    MorphTime::Constant(4),
+                    MorphPlacement::Revalidate,
+                    MorphCancel::Committed,
+                    Vec::new(),
+                    Vec::new(),
+                )]),
+        );
+        registry.register(
+            EntityTypeDef::new("keep_aloft")
+                .with_location(AIR, CellSize::new(2, 2), Solidity::Solid)
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
+                )
+                .with_health(200)
+                .with_sight_range(8)
+                .with_dying(2, None)
+                .with_tags(["building"])
+                .with_morphs([MorphTransition::new(
+                    "keep",
+                    None,
+                    MorphTime::Constant(4),
+                    MorphPlacement::Reserve,
+                    MorphCancel::Committed,
+                    Vec::new(),
+                    Vec::new(),
+                )]),
+        );
+        // Its dock is below it, so a tower two cells up offers the same cell a
+        // keep two cells to the left does.
+        registry.register(
+            EntityTypeDef::new("tower")
+                .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
+                .with_health(150)
+                .with_sight_range(8)
+                .with_dying(2, None)
+                .with_tags(["building"])
+                .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
+                .with_builder(
+                    ["lookout"],
+                    BuilderAttendance::Crew(WorkPresence::Present {
+                        crew: CrewLimit::ONE,
+                    }),
+                )
+                .with_docks([(CellPos::new(0, 2), ["lookout"])]),
+        );
+        registry.register(
+            EntityTypeDef::new("lookout")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_health(40)
+                .with_sight_range(6)
+                .with_dying(2, None)
+                .with_tags(["building"])
+                .with_cost([("gold", 10)])
+                .with_build_time(4)
+                .with_researcher([signals])
+                .with_annex(
+                    AloneConduct::Standing {
+                        work: AnnexWork::Idles,
+                        life: AnnexLife::Endures,
+                    },
+                    AnnexClaim::Seized,
+                ),
+        );
+        // Twelve ticks to raise, where every other annex takes four. Command
+        // latency is three, so a test that has to watch a site part-raised —
+        // held behind a queue, or halted by a lift-off — needs one whose work
+        // outlasts the commands it sends.
+        registry.register(
+            EntityTypeDef::new("watchpost")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_health(40)
+                .with_dying(2, None)
+                .with_tags(["building"])
+                .with_cost([("gold", 10)])
+                .with_build_time(12)
+                .with_annex(
+                    AloneConduct::Standing {
+                        work: AnnexWork::Idles,
+                        life: AnnexLife::Endures,
+                    },
+                    AnnexClaim::Seized,
+                ),
+        );
+        registry.register(
+            EntityTypeDef::new("beacon")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_health(30)
+                .with_dying(2, None)
+                .with_tags(["building"])
+                .with_cost([("gold", 10)])
+                .with_build_time(4)
+                .with_annex(AloneConduct::Razed, AnnexClaim::Bound),
+        );
+        // Ten health and two a tick: five ticks alone and it is gone. The
+        // drain is declared at zero for the fade to raise.
+        registry.register(
+            EntityTypeDef::new("mast")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_health(10)
+                .with_stat(EntityStatId::HEALTH_DRAIN, FixedU64::ZERO)
+                .with_dying(2, None)
+                .with_tags(["building"])
+                .with_cost([("gold", 10)])
+                .with_build_time(4)
+                .with_annex(
+                    AloneConduct::Standing {
+                        work: AnnexWork::Works,
+                        life: AnnexLife::Fades {
+                            per_tick: FixedU64::from_num(2),
+                        },
+                    },
+                    AnnexClaim::Seized,
+                ),
+        );
+        // Bound to whoever raised it: a rival's building docks with it never,
+        // an ally's without taking it, and it stands either way.
+        registry.register(
+            EntityTypeDef::new("spire")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_health(60)
+                .with_dying(2, None)
+                .with_tags(["building"])
+                .with_cost([("gold", 10)])
+                .with_build_time(4)
+                .with_annex(
+                    AloneConduct::Standing {
+                        work: AnnexWork::Works,
+                        life: AnnexLife::Endures,
+                    },
+                    AnnexClaim::Bound,
+                ),
+        );
+        // The same, but its own side's buildings are welcome: an ally's keep
+        // docks with it, and it stays whose it was.
+        registry.register(
+            EntityTypeDef::new("mooring")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_health(60)
+                .with_dying(2, None)
+                .with_tags(["building"])
+                .with_cost([("gold", 10)])
+                .with_build_time(4)
+                .with_annex(
+                    AloneConduct::Standing {
+                        work: AnnexWork::Works,
+                        life: AnnexLife::Endures,
+                    },
+                    AnnexClaim::Allied,
+                ),
+        );
+        // An annex that is a primary in its own turn: it stands in a keep's
+        // dock and offers one of its own, so a chain of seized annexes can be
+        // handed over at once.
+        registry.register(
+            EntityTypeDef::new("hub")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_health(60)
+                .with_dying(2, None)
+                .with_tags(["building"])
+                .with_cost([("gold", 10)])
+                .with_build_time(4)
+                .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
+                .with_builder(
+                    ["relay"],
+                    BuilderAttendance::Crew(WorkPresence::Present {
+                        crew: CrewLimit::ONE,
+                    }),
+                )
+                .with_docks([(CellPos::new(1, 0), ["relay"])])
+                .with_annex(
+                    AloneConduct::Standing {
+                        work: AnnexWork::Works,
+                        life: AnnexLife::Endures,
+                    },
+                    AnnexClaim::Seized,
+                ),
+        );
+        registry.register(
+            EntityTypeDef::new("relay")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_health(60)
+                .with_dying(2, None)
+                .with_tags(["building"])
+                .with_cost([("gold", 10)])
+                .with_build_time(4)
+                .with_annex(
+                    AloneConduct::Standing {
+                        work: AnnexWork::Works,
+                        life: AnnexLife::Endures,
+                    },
+                    AnnexClaim::Seized,
+                ),
+        );
+        // A plain unit the keep trains, asking nothing of its docks.
+        registry.register(
+            EntityTypeDef::new("runner")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
+                )
+                .with_health(20)
+                .with_dying(2, None)
+                .with_cost([("gold", 10)])
+                // Shorter than the lookout's build time, so a unit that trained
+                // alongside the annex instead of behind it would be out while
+                // the annex was still going up.
+                .with_train_time(2),
+        );
+        registry.register(
+            EntityTypeDef::new("sentry")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
+                )
+                .with_health(30)
+                .with_dying(2, None)
+                .with_cost([("gold", 10)])
+                .with_train_time(4)
+                .with_requires([Requirement::Annexed("lookout".to_string())]),
         );
     }
     app.world_mut().resource::<ContentRegistry>().validate();
@@ -2061,10 +2382,24 @@ pub fn register_orders_content(app: &mut App) {
                 .with_train_time(2)
                 .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
                 .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
-                .with_builder(["depot"], BuilderAttendance::Crew(WorkPresence::Hidden))
+                .with_builder(
+                    ["depot"],
+                    BuilderAttendance::Crew(WorkPresence::Hidden {
+                        crew: CrewLimit::ONE,
+                    }),
+                )
                 .with_resource_carrier([(
                     "gold",
-                    HarvestData::new(5, 5, 2, WorkPresence::Hidden, Banking::Carried),
+                    HarvestData::new(
+                        5,
+                        5,
+                        2,
+                        WorkPresence::Hidden {
+                            crew: CrewLimit::ONE,
+                        },
+                        Banking::Carried,
+                        Sources::Any,
+                    ),
                 )]),
         );
         // Same catalogue as `worker`, but it works from outside the site — the pair
@@ -2083,7 +2418,12 @@ pub fn register_orders_content(app: &mut App) {
                 .with_health(20)
                 .with_dying(2, None)
                 .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
-                .with_builder(["depot"], BuilderAttendance::Crew(WorkPresence::Present)),
+                .with_builder(
+                    ["depot"],
+                    BuilderAttendance::Crew(WorkPresence::Present {
+                        crew: CrewLimit::ONE,
+                    }),
+                ),
         );
         // Same catalogue again, and any number of them can crowd one site.
         registry.register(
@@ -2102,7 +2442,9 @@ pub fn register_orders_content(app: &mut App) {
                 .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
                 .with_builder(
                     ["depot"],
-                    BuilderAttendance::Crew(WorkPresence::PresentStacking),
+                    BuilderAttendance::Crew(WorkPresence::Present {
+                        crew: CrewLimit::Unlimited,
+                    }),
                 ),
         );
         // Same catalogue, and it works on the site itself: on the map and open
@@ -2182,7 +2524,16 @@ pub fn register_orders_content(app: &mut App) {
                 .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
                 .with_resource_carrier([(
                     "wood",
-                    HarvestData::new(5, 5, 2, WorkPresence::Present, Banking::Carried),
+                    HarvestData::new(
+                        5,
+                        5,
+                        2,
+                        WorkPresence::Present {
+                            crew: CrewLimit::ONE,
+                        },
+                        Banking::Carried,
+                        Sources::Any,
+                    ),
                 )]),
         );
         // Works a seam from three cells back, which says nothing about how close it
@@ -2203,7 +2554,16 @@ pub fn register_orders_content(app: &mut App) {
                 .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::from_num(3))
                 .with_resource_carrier([(
                     "gold",
-                    HarvestData::new(5, 5, 2, WorkPresence::Present, Banking::Carried),
+                    HarvestData::new(
+                        5,
+                        5,
+                        2,
+                        WorkPresence::Present {
+                            crew: CrewLimit::ONE,
+                        },
+                        Banking::Carried,
+                        Sources::Any,
+                    ),
                 )]),
         );
         // Same trade as `lumberjack`, but a stand takes as many axes as turn up — and
@@ -2224,7 +2584,16 @@ pub fn register_orders_content(app: &mut App) {
                 .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
                 .with_resource_carrier([(
                     "wood",
-                    HarvestData::new(5, 5, 8, WorkPresence::PresentStacking, Banking::Carried),
+                    HarvestData::new(
+                        5,
+                        5,
+                        8,
+                        WorkPresence::Present {
+                            crew: CrewLimit::Unlimited,
+                        },
+                        Banking::Carried,
+                        Sources::Any,
+                    ),
                 )]),
         );
         registry.register(
@@ -2262,11 +2631,29 @@ pub fn register_orders_content(app: &mut App) {
                 .with_resource_carrier([
                     (
                         "gold",
-                        HarvestData::new(5, 5, 2, WorkPresence::Present, Banking::Carried),
+                        HarvestData::new(
+                            5,
+                            5,
+                            2,
+                            WorkPresence::Present {
+                                crew: CrewLimit::ONE,
+                            },
+                            Banking::Carried,
+                            Sources::Any,
+                        ),
                     ),
                     (
                         "wood",
-                        HarvestData::new(5, 5, 2, WorkPresence::Present, Banking::Carried),
+                        HarvestData::new(
+                            5,
+                            5,
+                            2,
+                            WorkPresence::Present {
+                                crew: CrewLimit::ONE,
+                            },
+                            Banking::Carried,
+                            Sources::Any,
+                        ),
                     ),
                 ]),
         );
@@ -2297,6 +2684,7 @@ pub fn register_orders_content(app: &mut App) {
                             2,
                             WorkPresence::Attached(Attachment::new("canopy", BerthStance::Still)),
                             Banking::Direct,
+                            Sources::Any,
                         ),
                     ),
                     (
@@ -2307,6 +2695,7 @@ pub fn register_orders_content(app: &mut App) {
                             2,
                             WorkPresence::Attached(Attachment::new("rim", BerthStance::Still)),
                             Banking::Direct,
+                            Sources::Any,
                         ),
                     ),
                 ]),
@@ -2341,6 +2730,7 @@ pub fn register_orders_content(app: &mut App) {
                             },
                         )),
                         Banking::Direct,
+                        Sources::Any,
                     ),
                 )]),
         );
@@ -2374,6 +2764,7 @@ pub fn register_orders_content(app: &mut App) {
                             },
                         )),
                         Banking::Direct,
+                        Sources::Any,
                     ),
                 )]),
         );
@@ -2407,6 +2798,7 @@ pub fn register_orders_content(app: &mut App) {
                             },
                         )),
                         Banking::Direct,
+                        Sources::Any,
                     ),
                 )]),
         );
@@ -2433,6 +2825,98 @@ pub fn register_orders_content(app: &mut App) {
                         2,
                         WorkPresence::Attached(Attachment::new("rim", BerthStance::Still)),
                         Banking::Direct,
+                        Sources::Any,
+                    ),
+                )]),
+        );
+        // Two diggers at a time work one seam, each of them inside it: the
+        // count is the carrier's, and no seat is involved.
+        registry.register(
+            EntityTypeDef::new("paired_digger")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_sight_range(40)
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
+                )
+                .with_health(20)
+                .with_dying(2, None)
+                .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
+                .with_resource_carrier([(
+                    "gold",
+                    HarvestData::new(
+                        5,
+                        5,
+                        20,
+                        WorkPresence::Hidden {
+                            crew: CrewLimit::limit(2),
+                        },
+                        Banking::Carried,
+                        Sources::Any,
+                    ),
+                )]),
+        );
+        // `paired_digger`'s twin but for the crew it allows: one. The pair is
+        // what makes a crew of mixed terms observable, and the same twenty-tick
+        // trip keeps both of them on the seam while it is asked about.
+        registry.register(
+            EntityTypeDef::new("lone_digger")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_sight_range(40)
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
+                )
+                .with_health(20)
+                .with_dying(2, None)
+                .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
+                .with_resource_carrier([(
+                    "gold",
+                    HarvestData::new(
+                        5,
+                        5,
+                        20,
+                        WorkPresence::Hidden {
+                            crew: CrewLimit::ONE,
+                        },
+                        Banking::Carried,
+                        Sources::Any,
+                    ),
+                )]),
+        );
+        // Works gold out of a geyser and nothing else, however much a bare
+        // seam holds.
+        registry.register(
+            EntityTypeDef::new("geyser_tapper")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_sight_range(40)
+                .with_movement(
+                    FixedU64::from_num(0.5),
+                    FixedU64::from_num(0.5),
+                    FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
+                )
+                .with_health(20)
+                .with_dying(2, None)
+                .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
+                .with_resource_carrier([(
+                    "gold",
+                    HarvestData::new(
+                        5,
+                        5,
+                        20,
+                        WorkPresence::Hidden {
+                            crew: CrewLimit::ONE,
+                        },
+                        Banking::Carried,
+                        Sources::only(["geyser"]),
                     ),
                 )]),
         );
@@ -2512,7 +2996,7 @@ pub fn register_orders_content(app: &mut App) {
                     MorphPlacement::Reserve,
                     MorphCancel::Committed,
                     Vec::new(),
-                    Vec::<String>::new(),
+                    Vec::new(),
                 )]),
         );
         // The form a shaft house takes when it uproots.
@@ -2527,7 +3011,18 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(360),
                 )
                 .with_health(100)
-                .with_dying(2, None),
+                .with_dying(2, None)
+                // Back to standing, as an uprooted ancient roots again: the
+                // ground it settles on is reserved when the change starts.
+                .with_morphs([MorphTransition::new(
+                    "shaft_house",
+                    None,
+                    MorphTime::Constant(4),
+                    MorphPlacement::Reserve,
+                    MorphCancel::Committed,
+                    Vec::new(),
+                    Vec::new(),
+                )]),
         );
         // Raised over a geyser, which stays on the map when emptied: what the
         // pump house gives back when it falls drained.
@@ -2549,7 +3044,7 @@ pub fn register_orders_content(app: &mut App) {
                     MorphPlacement::Reserve,
                     MorphCancel::Committed,
                     Vec::new(),
-                    Vec::<String>::new(),
+                    Vec::new(),
                 )]),
         );
         // The form a pump house takes when it uproots: wider than the house, so

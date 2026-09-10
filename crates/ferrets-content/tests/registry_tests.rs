@@ -6,6 +6,7 @@
 mod utils;
 
 use ferrets_content::{
+    annex::{AloneConduct, AnnexClaim, AnnexLife, AnnexWork},
     attack::{Delivery, Weapon},
     berths::BerthGroup,
     build::BuilderAttendance,
@@ -24,8 +25,9 @@ use ferrets_content::{
     player_stats::PlayerStatId,
     registry::ContentRegistry,
     repair::{RepairCost, RepairRate},
+    requirement::Requirement,
     research::{ResearchDef, ResearcherDef},
-    resource::{Banking, DepletionPolicy, HarvestData},
+    resource::{Banking, DepletionPolicy, HarvestData, Sources},
     skills::{
         EntityCastCost, EntityCastEffect, EntityCastTarget, PlayerCastEffect, SkillCaster, SkillDef,
     },
@@ -35,7 +37,7 @@ use ferrets_content::{
     tags,
     transport::{BoardingPolicy, PassengerConduct, PassengerFate},
     turret::{TurretDef, TurretMount, TurretStats, WeaponConduct},
-    work::{Attachment, BerthStance, WorkPresence},
+    work::{Attachment, BerthStance, CrewLimit, WorkPresence},
 };
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::{FixedI64, FixedU64, fixed_uvec2::FixedUVec2};
@@ -122,7 +124,16 @@ fn register_accepts_registered_kinds() {
             .with_resource_source("gold", DepletionPolicy::Destroy)
             .with_resource_carrier([(
                 "gold",
-                HarvestData::new(5, 5, 2, WorkPresence::Hidden, Banking::Carried),
+                HarvestData::new(
+                    5,
+                    5,
+                    2,
+                    WorkPresence::Hidden {
+                        crew: CrewLimit::ONE,
+                    },
+                    Banking::Carried,
+                    Sources::Any,
+                ),
             )])
             .with_resource_storage(["gold"]),
     );
@@ -147,7 +158,16 @@ fn register_rejects_unknown_source_kind() {
 fn register_rejects_unknown_carrier_kind() {
     gold_registry_with(utils::standing("worker", GROUND).with_resource_carrier([(
         "wood",
-        HarvestData::new(5, 5, 2, WorkPresence::Present, Banking::Carried),
+        HarvestData::new(
+            5,
+            5,
+            2,
+            WorkPresence::Present {
+                crew: CrewLimit::ONE,
+            },
+            Banking::Carried,
+            Sources::Any,
+        ),
     )]));
 }
 
@@ -181,7 +201,12 @@ fn validate_accepts_registered_production_catalogues() {
     registry.register(
         utils::standing("worker", GROUND)
             .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
-            .with_builder(["depot"], BuilderAttendance::Crew(WorkPresence::Hidden)),
+            .with_builder(
+                ["depot"],
+                BuilderAttendance::Crew(WorkPresence::Hidden {
+                    crew: CrewLimit::ONE,
+                }),
+            ),
     );
 
     registry.validate();
@@ -233,6 +258,7 @@ fn validate_accepts_attachments_offered_by_their_jobs() {
                         },
                     )),
                     Banking::Direct,
+                    Sources::Any,
                 ),
             )]),
     );
@@ -276,7 +302,7 @@ fn validate_rejects_builder_attaching_to_group_its_site_lacks() {
 
 #[test]
 #[should_panic(
-    expected = "entity type 'sprite' attaches to berth group 'canopy' of gold sources, and no registered gold source declares such a group"
+    expected = "entity type 'sprite' attaches to berth group 'canopy' of gold sources, and no gold source it may work declares such a group"
 )]
 fn validate_rejects_carrier_attaching_to_group_no_source_offers() {
     let mut registry = utils::ground_registry();
@@ -295,6 +321,7 @@ fn validate_rejects_carrier_attaching_to_group_no_source_offers() {
                     2,
                     WorkPresence::Attached(Attachment::new("canopy", BerthStance::Still)),
                     Banking::Direct,
+                    Sources::Any,
                 ),
             )]),
     );
@@ -457,7 +484,12 @@ fn validate_accepts_production_cycle() {
         utils::standing("worker", GROUND)
             .with_train_time(4)
             .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
-            .with_builder(["town_hall"], BuilderAttendance::Crew(WorkPresence::Hidden)),
+            .with_builder(
+                ["town_hall"],
+                BuilderAttendance::Crew(WorkPresence::Hidden {
+                    crew: CrewLimit::ONE,
+                }),
+            ),
     );
 
     registry.validate();
@@ -497,7 +529,12 @@ fn validate_rejects_unknown_built_type() {
     registry.register(
         utils::standing("worker", GROUND)
             .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
-            .with_builder(["nexus"], BuilderAttendance::Crew(WorkPresence::Hidden)),
+            .with_builder(
+                ["nexus"],
+                BuilderAttendance::Crew(WorkPresence::Hidden {
+                    crew: CrewLimit::ONE,
+                }),
+            ),
     );
     registry.validate();
 }
@@ -514,7 +551,12 @@ fn validate_rejects_unconstructible_built_type() {
     registry.register(
         utils::standing("worker", GROUND)
             .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
-            .with_builder(["statue"], BuilderAttendance::Crew(WorkPresence::Hidden)),
+            .with_builder(
+                ["statue"],
+                BuilderAttendance::Crew(WorkPresence::Hidden {
+                    crew: CrewLimit::ONE,
+                }),
+            ),
     );
     registry.validate();
 }
@@ -1121,10 +1163,12 @@ fn register_rejects_repair_speed_without_capability() {
 #[should_panic(expected = "can build but is missing build_range")]
 fn register_rejects_builder_without_reach() {
     let mut registry = utils::ground_registry();
-    registry.register(
-        utils::standing("worker", GROUND)
-            .with_builder(["depot"], BuilderAttendance::Crew(WorkPresence::Hidden)),
-    );
+    registry.register(utils::standing("worker", GROUND).with_builder(
+        ["depot"],
+        BuilderAttendance::Crew(WorkPresence::Hidden {
+            crew: CrewLimit::ONE,
+        }),
+    ));
 }
 
 #[test]
@@ -1141,7 +1185,16 @@ fn register_rejects_build_range_without_capability() {
 fn register_rejects_carrier_without_reach() {
     gold_registry_with(utils::standing("worker", GROUND).with_resource_carrier([(
         "gold",
-        HarvestData::new(5, 5, 2, WorkPresence::Present, Banking::Carried),
+        HarvestData::new(
+            5,
+            5,
+            2,
+            WorkPresence::Present {
+                crew: CrewLimit::ONE,
+            },
+            Banking::Carried,
+            Sources::Any,
+        ),
     )]));
 }
 
@@ -1451,7 +1504,9 @@ fn register_rejects_repairer_without_rate() {
             .with_repairer(
                 ["building"],
                 RepairRate::Production,
-                WorkPresence::Present,
+                WorkPresence::Present {
+                    crew: CrewLimit::ONE,
+                },
                 false,
                 RepairCost::Free,
                 None,
@@ -1470,7 +1525,9 @@ fn register_rejects_repairer_without_reach() {
             .with_repairer(
                 ["building"],
                 RepairRate::Production,
-                WorkPresence::Present,
+                WorkPresence::Present {
+                    crew: CrewLimit::ONE,
+                },
                 false,
                 RepairCost::Free,
                 None,
@@ -1492,7 +1549,9 @@ fn register_rejects_repairer_mending_unknown_tag() {
             .with_repairer(
                 ["mechanical"],
                 RepairRate::Production,
-                WorkPresence::Present,
+                WorkPresence::Present {
+                    crew: CrewLimit::ONE,
+                },
                 false,
                 RepairCost::Free,
                 None,
@@ -1512,7 +1571,9 @@ fn register_rejects_pro_rata_repair_without_factor() {
             .with_repairer(
                 ["building"],
                 RepairRate::Production,
-                WorkPresence::Present,
+                WorkPresence::Present {
+                    crew: CrewLimit::ONE,
+                },
                 false,
                 RepairCost::ProRata,
                 None,
@@ -1533,7 +1594,9 @@ fn register_rejects_energy_paid_repair_without_pool() {
             .with_repairer(
                 ["biological"],
                 RepairRate::PerTick(FixedU64::ONE),
-                WorkPresence::Present,
+                WorkPresence::Present {
+                    crew: CrewLimit::ONE,
+                },
                 false,
                 RepairCost::Energy(FixedU64::from_num(0.5)),
                 None,
@@ -1547,7 +1610,9 @@ fn repairer_rejects_non_positive_flat_rate() {
     EntityTypeDef::new("medic").with_repairer(
         ["biological"],
         RepairRate::PerTick(FixedU64::ZERO),
-        WorkPresence::Present,
+        WorkPresence::Present {
+            crew: CrewLimit::ONE,
+        },
         false,
         RepairCost::Free,
         None,
@@ -1577,16 +1642,11 @@ fn register_research_assigns_ids_and_resolves_names() {
 
     let smithing = registry.register_research(
         "smithing",
-        ResearchDef::new(
-            costs::cost([("gold", 30)]),
-            10,
-            Some(buff),
-            Vec::<String>::new(),
-        ),
+        ResearchDef::new(costs::cost([("gold", 30)]), 10, Some(buff), Vec::new()),
     );
     let tactics = registry.register_research(
         "tactics",
-        ResearchDef::new(Cost::new(), 5, None, ["smithing"]),
+        ResearchDef::new(Cost::new(), 5, None, [Requirement::Research(smithing)]),
     );
 
     assert!(registry.has_research("smithing"));
@@ -1596,8 +1656,10 @@ fn register_research_assigns_ids_and_resolves_names() {
     assert_eq!(registry.research_def(tactics).unwrap().buff, None);
 
     // Re-registering a name keeps the first definition and returns its id.
-    let again =
-        registry.register_research("smithing", ResearchDef::new(Cost::new(), 99, None, ["x"]));
+    let again = registry.register_research(
+        "smithing",
+        ResearchDef::new(Cost::new(), 99, None, Vec::new()),
+    );
     assert_eq!(again, smithing);
     assert_eq!(registry.research_def(smithing).unwrap().research_time, 10);
 }
@@ -1606,7 +1668,7 @@ fn register_research_assigns_ids_and_resolves_names() {
 #[should_panic(expected = "research name must not be empty")]
 fn register_research_rejects_empty_name() {
     utils::ground_registry()
-        .register_research("", ResearchDef::new(Cost::new(), 10, None, ["worker"]));
+        .register_research("", ResearchDef::new(Cost::new(), 10, None, Vec::new()));
 }
 
 #[test]
@@ -1614,7 +1676,7 @@ fn register_research_rejects_empty_name() {
 fn register_research_rejects_unknown_cost_kind() {
     utils::ground_registry().register_research(
         "smithing",
-        ResearchDef::new(costs::cost([("gold", 30)]), 10, None, Vec::<String>::new()),
+        ResearchDef::new(costs::cost([("gold", 30)]), 10, None, Vec::new()),
     );
 }
 
@@ -1626,20 +1688,14 @@ fn register_research_rejects_unregistered_buff() {
     let buff = haste_buff(&mut foreign);
     utils::ground_registry().register_research(
         "smithing",
-        ResearchDef::new(Cost::new(), 10, Some(buff), Vec::<String>::new()),
+        ResearchDef::new(Cost::new(), 10, Some(buff), Vec::new()),
     );
 }
 
 #[test]
 #[should_panic(expected = "research_time must be greater than 0")]
 fn research_def_rejects_zero_time() {
-    ResearchDef::new(Cost::new(), 0, None, Vec::<String>::new());
-}
-
-#[test]
-#[should_panic(expected = "requirement names must not be empty")]
-fn research_def_rejects_empty_requirement_name() {
-    ResearchDef::new(Cost::new(), 10, None, [""]);
+    ResearchDef::new(Cost::new(), 0, None, Vec::new());
 }
 
 #[test]
@@ -1652,30 +1708,451 @@ fn researcher_def_rejects_empty_catalogue() {
 #[should_panic(expected = "entity type 'lab' hosts an unregistered research")]
 fn register_rejects_unregistered_hosted_research() {
     let mut foreign = ContentRegistry::default();
-    let research =
-        foreign.register_research("smithing", ResearchDef::new(Cost::new(), 10, None, ["x"]));
+    let research = foreign.register_research(
+        "smithing",
+        ResearchDef::new(Cost::new(), 10, None, Vec::new()),
+    );
     utils::ground_registry().register(utils::standing("lab", GROUND).with_researcher([research]));
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'keep' offers docks but raises its sites as a hidden builder"
+)]
+fn validate_rejects_primary_that_goes_inside_its_annex_site() {
+    let mut registry = utils::ground_registry();
+    registry.register(
+        EntityTypeDef::new("keep")
+            .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
+            .with_health(100)
+            .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
+            .with_builder(
+                ["lookout"],
+                BuilderAttendance::Crew(WorkPresence::Hidden {
+                    crew: CrewLimit::ONE,
+                }),
+            )
+            .with_docks([(CellPos::new(2, 0), ["lookout"])]),
+    );
+    registry.register(
+        EntityTypeDef::new("lookout")
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+            .with_health(10)
+            .with_build_time(4)
+            .with_annex(
+                AloneConduct::Standing {
+                    work: AnnexWork::Works,
+                    life: AnnexLife::Endures,
+                },
+                AnnexClaim::Bound,
+            ),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(expected = "annex 'mast' fades but does not carry the health_drain stat")]
+fn validate_rejects_fading_annex_without_drain_stat() {
+    let mut registry = utils::ground_registry();
+    registry.register_tag("building");
+    registry.register(
+        EntityTypeDef::new("keep")
+            .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
+            .with_health(100)
+            .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
+            .with_builder(
+                ["mast"],
+                BuilderAttendance::Crew(WorkPresence::Present {
+                    crew: CrewLimit::ONE,
+                }),
+            )
+            .with_docks([(CellPos::new(2, 0), ["mast"])]),
+    );
+    registry.register(
+        EntityTypeDef::new("mast")
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+            .with_health(10)
+            .with_build_time(4)
+            .with_annex(
+                AloneConduct::Standing {
+                    work: AnnexWork::Works,
+                    life: AnnexLife::Fades {
+                        per_tick: FixedU64::from_num(2),
+                    },
+                },
+                AnnexClaim::Bound,
+            ),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(expected = "entity type 'miner' declares a crew limit of nobody")]
+fn validate_rejects_crew_limit_of_nobody() {
+    let mut registry = utils::ground_registry();
+    registry.register_resource("gold");
+    registry.register(
+        utils::standing("seam", GROUND).with_resource_source("gold", DepletionPolicy::Destroy),
+    );
+    registry.register(
+        utils::standing("miner", GROUND)
+            .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
+            .with_resource_carrier([(
+                "gold",
+                HarvestData::new(
+                    5,
+                    5,
+                    2,
+                    // Written past the constructor that would have refused it.
+                    WorkPresence::Hidden {
+                        crew: CrewLimit::Limit(0),
+                    },
+                    Banking::Carried,
+                    Sources::Any,
+                ),
+            )]),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(expected = "entity type 'miner' harvests gold from no source at all")]
+fn validate_rejects_harvest_source_list_that_names_nobody() {
+    let mut registry = utils::ground_registry();
+    registry.register_resource("gold");
+    registry.register(
+        utils::standing("seam", GROUND).with_resource_source("gold", DepletionPolicy::Destroy),
+    );
+    registry.register(
+        utils::standing("miner", GROUND)
+            .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
+            .with_resource_carrier([(
+                "gold",
+                HarvestData::new(
+                    5,
+                    5,
+                    2,
+                    WorkPresence::Hidden {
+                        crew: CrewLimit::ONE,
+                    },
+                    Banking::Carried,
+                    // Written past the constructor that would have refused it.
+                    Sources::Only(Vec::new()),
+                ),
+            )]),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(expected = "entity type 'keep' docks 'ghost', which is not registered")]
+fn validate_rejects_dock_taking_unregistered_type() {
+    let mut registry = utils::ground_registry();
+    // The builder catalogue is sound, so `validate_builds` has nothing to say
+    // and the dock's own unregistered name is what is left to catch.
+    registry.register(
+        utils::sized("keep", GROUND, CellSize::new(2, 2))
+            .with_health(100)
+            .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
+            .with_builder(
+                ["lookout"],
+                BuilderAttendance::Crew(WorkPresence::Present {
+                    crew: CrewLimit::ONE,
+                }),
+            )
+            .with_docks([(CellPos::new(2, 0), ["ghost"])]),
+    );
+    registry.register(annex("lookout", CellSize::ONE));
+    registry.validate();
+}
+
+#[test]
+#[should_panic(expected = "annex 'lookout' carries the speed stat")]
+fn validate_rejects_annex_that_moves() {
+    let mut registry = utils::ground_registry();
+    registry.register(primary(["lookout"]));
+    registry.register(annex("lookout", CellSize::ONE).with_movement(
+        FixedU64::from_num(0.5),
+        FixedU64::from_num(0.5),
+        FixedU64::ONE,
+        FixedU64::from_num(360),
+        FixedU64::from_num(360),
+    ));
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'miner' harvests gold from 'refinery', which is not registered"
+)]
+fn validate_rejects_harvest_source_that_is_not_registered() {
+    let mut registry = utils::ground_registry();
+    registry.register_resource("gold");
+    registry.register(
+        utils::standing("miner", GROUND)
+            .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
+            .with_resource_carrier([(
+                "gold",
+                HarvestData::new(
+                    5,
+                    5,
+                    2,
+                    WorkPresence::Hidden {
+                        crew: CrewLimit::ONE,
+                    },
+                    Banking::Carried,
+                    Sources::only(["refinery"]),
+                ),
+            )]),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'miner' harvests gold from 'grove', which is no gold source"
+)]
+fn validate_rejects_harvest_source_of_another_kind() {
+    let mut registry = utils::ground_registry();
+    registry.register_resource("gold");
+    registry.register_resource("wood");
+    registry.register(
+        utils::standing("grove", GROUND).with_resource_source("wood", DepletionPolicy::Destroy),
+    );
+    registry.register(
+        utils::standing("miner", GROUND)
+            .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
+            .with_resource_carrier([(
+                "gold",
+                HarvestData::new(
+                    5,
+                    5,
+                    2,
+                    WorkPresence::Hidden {
+                        crew: CrewLimit::ONE,
+                    },
+                    Banking::Carried,
+                    Sources::only(["grove"]),
+                ),
+            )]),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(expected = "entity type 'keep' docks 'runner', which is not an annex")]
+fn validate_rejects_dock_that_takes_type_that_is_no_annex() {
+    let mut registry = utils::ground_registry();
+    registry.register(primary(["runner"]));
+    registry.register(
+        utils::standing("runner", GROUND)
+            .with_health(10)
+            .with_build_time(4),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(expected = "entity type 'keep' offers a dock at (0, 0), inside its own footprint")]
+fn validate_rejects_dock_inside_its_primarys_own_footprint() {
+    let mut registry = utils::ground_registry();
+    registry.register(
+        utils::sized("keep", GROUND, CellSize::new(2, 2))
+            .with_health(100)
+            .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
+            .with_builder(
+                ["lookout"],
+                BuilderAttendance::Crew(WorkPresence::Present {
+                    crew: CrewLimit::ONE,
+                }),
+            )
+            .with_docks([(CellPos::new(0, 0), ["lookout"])]),
+    );
+    registry.register(annex("lookout", CellSize::ONE));
+    registry.validate();
+}
+
+#[test]
+#[should_panic(expected = "entity type 'keep' docks 'lookout' but cannot raise it")]
+fn validate_rejects_dock_whose_primary_cannot_raise_what_it_takes() {
+    let mut registry = utils::ground_registry();
+    registry.register(
+        utils::sized("keep", GROUND, CellSize::new(2, 2))
+            .with_health(100)
+            .with_docks([(CellPos::new(2, 0), ["lookout"])]),
+    );
+    registry.register(annex("lookout", CellSize::ONE));
+    registry.validate();
+}
+
+#[test]
+#[should_panic(expected = "entity type 'keep' offers two docks at (2, 0)")]
+fn validate_rejects_two_docks_on_one_cell() {
+    let mut registry = utils::ground_registry();
+    registry.register(
+        utils::sized("keep", GROUND, CellSize::new(2, 2))
+            .with_health(100)
+            .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
+            .with_builder(
+                ["lookout"],
+                BuilderAttendance::Crew(WorkPresence::Present {
+                    crew: CrewLimit::ONE,
+                }),
+            )
+            .with_docks([
+                (CellPos::new(2, 0), ["lookout"]),
+                (CellPos::new(2, 0), ["lookout"]),
+            ]),
+    );
+    registry.register(annex("lookout", CellSize::ONE));
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'keep' docks 'beacon' at (3, 0), over the ground 'lookout' stands on"
+)]
+fn validate_rejects_docks_whose_annexes_would_stand_on_each_other() {
+    let mut registry = utils::ground_registry();
+    registry.register(
+        utils::sized("keep", GROUND, CellSize::new(2, 2))
+            .with_health(100)
+            .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
+            .with_builder(
+                ["lookout", "beacon"],
+                BuilderAttendance::Crew(WorkPresence::Present {
+                    crew: CrewLimit::ONE,
+                }),
+            )
+            // A two-cell lookout at (2, 0) covers (3, 0) too, which is where
+            // the beacon is told to stand.
+            .with_docks([
+                (CellPos::new(2, 0), ["lookout"]),
+                (CellPos::new(3, 0), ["beacon"]),
+            ]),
+    );
+    registry.register(annex("lookout", CellSize::new(2, 1)));
+    registry.register(annex("beacon", CellSize::ONE));
+    registry.validate();
+}
+
+#[test]
+#[should_panic(expected = "annex 'lookout' does not claim the cells it stands on")]
+fn validate_rejects_annex_that_does_not_claim_its_cells() {
+    let mut registry = utils::ground_registry();
+    registry.register(primary(["lookout"]));
+    registry.register(
+        EntityTypeDef::new("lookout")
+            .with_location(GROUND, CellSize::ONE, Solidity::Passable)
+            .with_health(10)
+            .with_build_time(4)
+            .with_annex(standing_annex(), AnnexClaim::Bound),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(expected = "annex 'lookout' has no health pool")]
+fn validate_rejects_annex_without_health() {
+    let mut registry = utils::ground_registry();
+    registry.register(primary(["lookout"]));
+    registry.register(
+        utils::standing("lookout", GROUND)
+            .with_build_time(4)
+            .with_annex(standing_annex(), AnnexClaim::Bound),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(expected = "annex 'lookout' is not constructible")]
+fn validate_rejects_annex_that_cannot_be_built() {
+    let mut registry = utils::ground_registry();
+    // No primary: one that raises it would have to declare it constructible,
+    // and registered ahead of the annex it would be `validate_builds` that
+    // spoke first.
+    registry.register(
+        utils::standing("lookout", GROUND)
+            .with_health(10)
+            .with_annex(standing_annex(), AnnexClaim::Bound),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(expected = "annex 'lookout' fits no registered dock")]
+fn validate_rejects_annex_no_dock_takes() {
+    let mut registry = utils::ground_registry();
+    registry.register(annex("lookout", CellSize::ONE));
+    registry.validate();
+}
+
+#[test]
+#[should_panic(expected = "entity type 'walking_keep' offers docks but carries the speed stat")]
+fn validate_rejects_docks_on_type_that_moves() {
+    let mut registry = utils::ground_registry();
+    registry.register(
+        EntityTypeDef::new("walking_keep")
+            .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
+            .with_movement(
+                FixedU64::from_num(0.5),
+                FixedU64::from_num(0.5),
+                FixedU64::ONE,
+                FixedU64::from_num(360),
+                FixedU64::from_num(360),
+            )
+            .with_health(100)
+            .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
+            .with_builder(
+                ["lookout"],
+                BuilderAttendance::Crew(WorkPresence::Present {
+                    crew: CrewLimit::ONE,
+                }),
+            )
+            .with_docks([(CellPos::new(2, 0), ["lookout"])]),
+    );
+    registry.register(
+        EntityTypeDef::new("lookout")
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+            .with_health(10)
+            .with_build_time(4)
+            .with_annex(
+                AloneConduct::Standing {
+                    work: AnnexWork::Works,
+                    life: AnnexLife::Endures,
+                },
+                AnnexClaim::Bound,
+            ),
+    );
+    registry.validate();
 }
 
 //
 // ─── Requirements ─────────────────────────────────────────────────────────────
 //
 
-// Requirement lists are forward references, checked by `validate()` against the
-// complete registry: each entry must name exactly one of an entity type, a tag,
-// or a research.
+// A requirement names its own kind. An entity or annex name is a forward
+// reference, checked by `validate()` against the complete registry; a research
+// is a handle the content resolved when it was read.
 
 #[test]
 fn validate_accepts_type_tag_and_research_requirements() {
     let mut registry = utils::ground_registry();
-    let smithing =
-        registry.register_research("smithing", ResearchDef::new(Cost::new(), 10, None, ["lab"]));
+    let smithing = registry.register_research(
+        "smithing",
+        ResearchDef::new(
+            Cost::new(),
+            10,
+            None,
+            [Requirement::EntityType("lab".to_string())],
+        ),
+    );
     // The knight's requirements name a type registered after it, the reserved
     // "building" tag, and a research.
     registry.register(utils::standing("knight", GROUND).with_requires([
-        "lab",
-        tags::BUILDING,
-        "smithing",
+        Requirement::EntityType("lab".to_string()),
+        Requirement::Tag(tags::BUILDING.to_string()),
+        Requirement::Research(smithing),
     ]));
     registry.register(utils::standing("lab", GROUND).with_researcher([smithing]));
     registry.validate();
@@ -1683,55 +2160,62 @@ fn validate_accepts_type_tag_and_research_requirements() {
 
 #[test]
 #[should_panic(
-    expected = "entity type 'knight' requires 'chapel', which is not a registered entity type, tag, or research"
+    expected = "entity type 'knight' requires the entity type 'chapel', which is not registered"
 )]
 fn validate_rejects_unknown_requirement() {
     let mut registry = utils::ground_registry();
-    registry.register(utils::standing("knight", GROUND).with_requires(["chapel"]));
+    registry.register(
+        utils::standing("knight", GROUND)
+            .with_requires([Requirement::EntityType("chapel".to_string())]),
+    );
     registry.validate();
 }
 
 #[test]
 #[should_panic(
-    expected = "entity type 'knight' requires 'forge', which names both a research and an entity type or tag"
+    expected = "entity type 'knight' requires the tag 'forge', which is also a registered entity type"
 )]
 fn validate_rejects_ambiguous_requirement() {
     let mut registry = utils::ground_registry();
-    registry.register_research(
-        "forge",
-        ResearchDef::new(Cost::new(), 10, None, Vec::<String>::new()),
-    );
+    registry.register_tag("forge");
     registry.register(EntityTypeDef::new("forge").with_location(
         GROUND,
         CellSize::ONE,
         Solidity::Solid,
     ));
-    registry.register(utils::standing("knight", GROUND).with_requires(["forge"]));
-    registry.validate();
-}
-
-#[test]
-#[should_panic(
-    expected = "research 'smithing' requires 'chapel', which is not a registered entity type, tag, or research"
-)]
-fn validate_rejects_unknown_research_requirement() {
-    let mut registry = utils::ground_registry();
-    registry.register_research(
-        "smithing",
-        ResearchDef::new(Cost::new(), 10, None, ["chapel"]),
+    registry.register(
+        utils::standing("knight", GROUND).with_requires([Requirement::Tag("forge".to_string())]),
     );
     registry.validate();
 }
 
 #[test]
 #[should_panic(
-    expected = "skill 'war_cry' requires 'chapel', which is not a registered entity type, tag, or research"
+    expected = "research 'smithing' requires the entity type 'chapel', which is not registered"
+)]
+fn validate_rejects_unknown_research_requirement() {
+    let mut registry = utils::ground_registry();
+    registry.register_research(
+        "smithing",
+        ResearchDef::new(
+            Cost::new(),
+            10,
+            None,
+            [Requirement::EntityType("chapel".to_string())],
+        ),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "skill 'war_cry' requires the entity type 'chapel', which is not registered"
 )]
 fn validate_rejects_unknown_skill_requirement() {
     let mut registry = utils::ground_registry();
     let haste = haste_buff(&mut registry);
     let mut skill = player_cast(haste);
-    skill.requires = vec!["chapel".to_string()];
+    skill.requires = vec![Requirement::EntityType("chapel".to_string())];
     registry.register_skill("war_cry", skill);
     registry.validate();
 }
@@ -1740,12 +2224,12 @@ fn validate_rejects_unknown_skill_requirement() {
 fn validate_accepts_research_requirement_on_skill() {
     let mut registry = utils::ground_registry();
     let haste = haste_buff(&mut registry);
-    registry.register_research(
+    let war_drums = registry.register_research(
         "war_drums",
-        ResearchDef::new(Cost::new(), 10, None, Vec::<String>::new()),
+        ResearchDef::new(Cost::new(), 10, None, Vec::new()),
     );
     let mut skill = player_cast(haste);
-    skill.requires = vec!["war_drums".to_string()];
+    skill.requires = vec![Requirement::Research(war_drums)];
     registry.register_skill("war_cry", skill);
     registry.validate();
 }
@@ -1922,8 +2406,8 @@ fn validate_accepts_transition_with_even_footprint_difference() {
 
 #[test]
 #[should_panic(
-    expected = "entity type 'walker' morphing into 'flier' requires 'jet_pack', which is \
-                not a registered entity type, tag, or research"
+    expected = "entity type 'walker' morphing into 'flier' requires the entity type \
+                'jet_pack', which is not registered"
 )]
 fn validate_rejects_transition_with_unresolved_requirement() {
     let mut registry = utils::ground_registry();
@@ -1943,7 +2427,7 @@ fn validate_rejects_transition_with_unresolved_requirement() {
                 MorphPlacement::Revalidate,
                 MorphCancel::Committed,
                 Vec::new(),
-                ["jet_pack"],
+                [Requirement::EntityType("jet_pack".to_string())],
             )]),
     );
     registry.register(utils::standing("flier", GROUND).with_movement(
@@ -1981,7 +2465,7 @@ fn validate_rejects_transition_timed_by_undeclared_stat() {
                 MorphPlacement::Revalidate,
                 MorphCancel::Committed,
                 Vec::new(),
-                Vec::<String>::new(),
+                Vec::new(),
             )]),
     );
     registry.register(utils::standing("flier", GROUND).with_movement(
@@ -2018,7 +2502,7 @@ fn validate_rejects_transition_with_energy_cost_but_no_energy_pool() {
                 MorphPlacement::Revalidate,
                 MorphCancel::Committed,
                 vec![EntityCastCost::Energy(FixedU64::from_num(20))],
-                Vec::<String>::new(),
+                Vec::new(),
             )]),
     );
     registry.register(utils::standing("flier", GROUND).with_movement(
@@ -2055,7 +2539,7 @@ fn validate_rejects_transition_with_unregistered_resource_cost() {
                 MorphPlacement::Revalidate,
                 MorphCancel::Committed,
                 vec![EntityCastCost::Resources(costs::cost([("gold", 50)]))],
-                Vec::<String>::new(),
+                Vec::new(),
             )]),
     );
     registry.register(utils::standing("flier", GROUND).with_movement(
@@ -2136,7 +2620,7 @@ fn validate_accepts_transition_with_payable_costs() {
                     EntityCastCost::Resources(costs::cost([("gold", 50)])),
                     EntityCastCost::Energy(FixedU64::from_num(20)),
                 ],
-                Vec::<String>::new(),
+                Vec::new(),
             )]),
     );
     registry.register(utils::standing("flier", GROUND).with_movement(
@@ -2461,6 +2945,55 @@ fn register_rejects_field_effect_with_no_modifiers() {
 }
 
 #[test]
+#[should_panic(expected = "skill 'scan' watches for no time at all")]
+fn register_rejects_watch_that_lasts_no_time() {
+    let mut registry = utils::ground_registry();
+    registry.register_skill(
+        "scan",
+        SkillDef {
+            cooldown: 1,
+            caster: SkillCaster::Entity {
+                costs: Vec::new(),
+                target: EntityCastTarget::Position,
+                effect: EntityCastEffect::Watch {
+                    radius: 3,
+                    duration: 0,
+                },
+            },
+            requires: Vec::new(),
+        },
+    );
+}
+
+#[test]
+#[should_panic(expected = "player-cast skill 'haste' requires something of an acting entity")]
+fn register_rejects_player_cast_asking_something_of_actor() {
+    let mut registry = utils::ground_registry();
+    let buff = haste_buff(&mut registry);
+    let mut skill = player_cast(buff);
+    // No entity casts it, so there is nothing for a docked annex to be asked
+    // of — and the scope is read off the requirement itself, so the name it
+    // carries never has to resolve.
+    skill.requires = vec![Requirement::Annexed("lookout".to_string())];
+    registry.register_skill("haste", skill);
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'marine' requires 'runner' docked, which is not a registered annex"
+)]
+fn validate_rejects_annexed_requirement_naming_type_that_is_no_annex() {
+    let mut registry = utils::ground_registry();
+    registry.register(utils::standing("runner", GROUND).with_health(10));
+    registry.register(
+        utils::standing("marine", GROUND)
+            .with_health(10)
+            .with_requires([Requirement::Annexed("runner".to_string())]),
+    );
+    registry.validate();
+}
+
+#[test]
 fn register_accepts_position_cast_with_field_effect() {
     let mut registry = utils::ground_registry();
     let creep = creep_field(&mut registry);
@@ -2526,6 +3059,37 @@ fn register_rejects_cast_on_foreign_field() {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 //
 
+/// A 2x2 primary that raises the `annexes` it docks at (2, 0), standing on the
+/// site to do it.
+fn primary(annexes: [&str; 1]) -> EntityTypeDef {
+    utils::sized("keep", GROUND, CellSize::new(2, 2))
+        .with_health(100)
+        .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
+        .with_builder(
+            annexes,
+            BuilderAttendance::Crew(WorkPresence::Present {
+                crew: CrewLimit::ONE,
+            }),
+        )
+        .with_docks([(CellPos::new(2, 0), annexes)])
+}
+
+/// A constructible annex of `size` that endures alone and is bound to its owner.
+fn annex(name: &str, size: CellSize) -> EntityTypeDef {
+    utils::sized(name, GROUND, size)
+        .with_health(10)
+        .with_build_time(4)
+        .with_annex(standing_annex(), AnnexClaim::Bound)
+}
+
+/// Standing alone, working, and not fading.
+fn standing_annex() -> AloneConduct {
+    AloneConduct::Standing {
+        work: AnnexWork::Works,
+        life: AnnexLife::Endures,
+    }
+}
+
 /// A berth point from decimal strings, in cells from the footprint's anchor.
 fn point(x: &str, y: &str) -> FixedUVec2 {
     FixedUVec2::new(
@@ -2579,7 +3143,7 @@ fn morph_through(via: &str, into: &str) -> MorphTransition {
         MorphPlacement::Revalidate,
         MorphCancel::Committed,
         Vec::new(),
-        Vec::<String>::new(),
+        Vec::new(),
     )
 }
 
@@ -2592,7 +3156,7 @@ fn morph_into(into: &str) -> MorphTransition {
         MorphPlacement::Revalidate,
         MorphCancel::Committed,
         Vec::new(),
-        Vec::<String>::new(),
+        Vec::new(),
     )
 }
 

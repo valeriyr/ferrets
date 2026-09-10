@@ -15,7 +15,7 @@ use ferrets_content::{
     location::Solidity,
     repair::{RepairCost, RepairRate},
     skills::{EntityCastEffect, EntityCastTarget, SkillCaster, SkillDef},
-    work::WorkPresence,
+    work::{CrewLimit, WorkPresence},
 };
 use ferrets_geometry::cell_size::CellSize;
 use ferrets_math::FixedU64;
@@ -341,6 +341,43 @@ fn cancelled_entity_is_neither_loss_nor_kill() {
     let soldier = type_id(&app, "soldier");
     let statistics = app.world().resource::<Statistics>();
     assert_eq!(statistics.player(0).lost(soldier), 0);
+    assert_eq!(statistics.player(1).killed(soldier), 0);
+}
+
+#[test]
+fn decayed_entity_is_neither_loss_nor_kill() {
+    let mut app = utils::orders_app();
+    let world = app.world_mut();
+    let (entity, _) = utils::create_entity(world, "soldier", utils::pos(4, 4), Some(0)).unwrap();
+
+    // Withering off the ground that sustained it, or standing with no primary
+    // on terms that raze it: nobody took it and nobody is credited.
+    spawn::despawn_entity(world, entity, DeathCause::Decayed);
+    utils::run_ticks(&mut app, 1);
+
+    let soldier = type_id(&app, "soldier");
+    let statistics = app.world().resource::<Statistics>();
+    assert_eq!(statistics.player(0).lost(soldier), 0);
+    assert_eq!(statistics.player(1).killed(soldier), 0);
+}
+
+#[test]
+fn captured_entity_moves_no_tally() {
+    let mut app = utils::orders_app();
+    let world = app.world_mut();
+    let (entity, _) = utils::create_entity(world, "soldier", utils::pos(4, 4), Some(0)).unwrap();
+    let (_, taker) = utils::create_entity(world, "soldier", utils::pos(6, 4), Some(1)).unwrap();
+
+    spawn::change_owner(world, entity, 1, taker);
+    utils::run_ticks(&mut app, 1);
+
+    let soldier = type_id(&app, "soldier");
+    let statistics = app.world().resource::<Statistics>();
+    // A capture makes nothing and unmakes nothing: what changed hands was
+    // already on the map, so the tallies of both players stand where they were.
+    assert_eq!(statistics.player(0).lost(soldier), 0);
+    assert_eq!(statistics.player(0).produced(soldier), 0);
+    assert_eq!(statistics.player(1).produced(soldier), 0);
     assert_eq!(statistics.player(1).killed(soldier), 0);
 }
 
@@ -1082,7 +1119,9 @@ fn repair_app() -> App {
                 .with_repairer(
                     ["building"],
                     RepairRate::PerTick(FixedU64::from_num(5)),
-                    WorkPresence::Present,
+                    WorkPresence::Present {
+                        crew: CrewLimit::ONE,
+                    },
                     false,
                     RepairCost::ProRata,
                     None,

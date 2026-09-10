@@ -147,10 +147,13 @@ fn fold(
         SimulationEvent::PlayerSkillCast { player, .. } => statistics.record_skill_cast(*player),
         // Neither a form change nor going off the map and back is a thing a
         // tally counts: the entity was already counted when it was made, and a
-        // form that switches back and forth would count every switch.
+        // form that switches back and forth would count every switch. A
+        // capture makes nothing and unmakes nothing either — the same building
+        // stands where it stood, under another flag.
         SimulationEvent::EntityMorphed { .. }
         | SimulationEvent::EntityHidden { .. }
-        | SimulationEvent::EntityRevealed { .. } => {}
+        | SimulationEvent::EntityRevealed { .. }
+        | SimulationEvent::EntityCaptured { .. } => {}
     }
 }
 
@@ -184,7 +187,8 @@ fn fire_behind(
             DeathCause::Depleted
             | DeathCause::Cancelled
             | DeathCause::Consumed
-            | DeathCause::Overbuilt => return None,
+            | DeathCause::Overbuilt
+            | DeathCause::Decayed => return None,
         }
     }
 }

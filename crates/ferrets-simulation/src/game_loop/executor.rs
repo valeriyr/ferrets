@@ -44,6 +44,7 @@ use crate::{
     spawn::{self, FieldReach},
     supply,
     visibility::VisibilityGrid,
+    watches::{Watch, Watches},
 };
 use ferrets_content::{
     costs::Cost,
@@ -495,7 +496,7 @@ fn train_entity(world: &mut World, player: PlayerId, trainer: SimulationId, type
             (
                 def.cost.clone(),
                 supply::allows(world, player, def),
-                requirements::met(world, player, &def.requires),
+                requirements::met(world, player, Some(entity), &def.requires),
             )
         })
     else {
@@ -573,7 +574,7 @@ fn start_research(
     else {
         return;
     };
-    if !requirements::met(world, player, &requires) {
+    if !requirements::met(world, player, Some(entity), &requires) {
         return;
     }
     if !world
@@ -812,8 +813,13 @@ fn use_skill(
         return;
     }
     // Requirements answer to the issuing player whoever casts: an entity's
-    // skill unlocks with its owner's research, and locks again with it.
-    if !requirements::met(world, player, &def.requires) {
+    // skill unlocks with its owner's research, and locks again with it. An
+    // annex entry is asked of the caster, so a player cast can hold none.
+    let casting = match caster {
+        SkillCasterRef::Entity(id) => find_owned_interactable(world, player, id),
+        SkillCasterRef::Player => None,
+    };
+    if !requirements::met(world, player, casting, &def.requires) {
         return;
     }
     match (caster, def.caster) {
@@ -912,7 +918,7 @@ fn use_skill_as_entity(
     // Only an operating caster casts.
     match entity_def::operation(world, caster) {
         Operation::Operating => {}
-        Operation::UnderConstruction | Operation::Disabled => return,
+        Operation::UnderConstruction | Operation::Disabled(_) => return,
     }
 
     // Resolve and validate the aim.
@@ -981,22 +987,41 @@ fn apply_skill_effect(
     aim: CastAim,
     effect: EntityCastEffect,
 ) {
-    if let EntityCastEffect::Field {
-        field,
-        radius,
-        action,
-    } = effect
-    {
-        let center = match aim {
-            CastAim::Cell(cell) => cell,
-            CastAim::Entity(target) => CellPos::from(entity_def::position(world, target)),
-        };
-        super::fields::apply_action(world, player, field, center, radius, action);
-        return;
+    // The two effects that act on a patch of ground rather than on a thing:
+    // both read the aim as a cell, whether it was aimed there or at something
+    // standing there.
+    match effect {
+        EntityCastEffect::Field {
+            field,
+            radius,
+            action,
+        } => {
+            let center = aimed_cell(world, aim);
+            super::fields::apply_action(world, player, field, center, radius, action);
+            return;
+        }
+        EntityCastEffect::Watch { radius, duration } => {
+            let center = aimed_cell(world, aim);
+            let caster_id = entity_def::simulation_id(world, caster);
+            world.resource_mut::<Watches>().add(Watch {
+                player,
+                caster: caster_id,
+                center,
+                radius,
+                remaining: duration,
+            });
+            return;
+        }
+        EntityCastEffect::ApplyBuff(_)
+        | EntityCastEffect::RemoveBuff(_)
+        | EntityCastEffect::Damage(_)
+        | EntityCastEffect::Heal(_) => {}
     }
     let target = match aim {
         CastAim::Entity(target) => target,
-        CastAim::Cell(_) => unreachable!("registration pairs a cell aim with a field effect only"),
+        CastAim::Cell(_) => {
+            unreachable!("registration pairs a cell aim with a field or watch effect only")
+        }
     };
     match effect {
         EntityCastEffect::ApplyBuff(id) => super::stats::apply_entity_buff(world, target, id),
@@ -1018,6 +1043,17 @@ fn apply_skill_effect(
                 health.heal(amount, max);
             }
         }
-        EntityCastEffect::Field { .. } => unreachable!("handled above"),
+        EntityCastEffect::Field { .. } | EntityCastEffect::Watch { .. } => {
+            unreachable!("handled above")
+        }
+    }
+}
+
+/// The cell a cast acts on: the one it was aimed at, or the one its target
+/// stands in.
+fn aimed_cell(world: &World, aim: CastAim) -> CellPos {
+    match aim {
+        CastAim::Cell(cell) => cell,
+        CastAim::Entity(target) => CellPos::from(entity_def::position(world, target)),
     }
 }

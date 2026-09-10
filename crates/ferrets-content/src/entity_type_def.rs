@@ -1,12 +1,13 @@
 //! Definition of a single entity type — the content-level blueprint for spawning.
 
-use ferrets_geometry::cell_size::CellSize;
+use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use std::collections::{BTreeMap, BTreeSet};
 
 use ferrets_math::FixedU64;
 use ferrets_pathfinder::layer_mask::LayerMask;
 
 use crate::{
+    annex::{AloneConduct, AnnexClaim, AnnexDef, DockDef},
     attack::{AttackDef, Delivery, Weapon},
     berths::{BerthGroup, BerthsDef},
     build::{BuilderAttendance, BuilderDef},
@@ -17,6 +18,7 @@ use crate::{
     location::{LocationDef, Solidity},
     morph::MorphTransition,
     repair::{RepairCost, RepairRate, RepairerDef},
+    requirement::Requirement,
     research::{ResearchId, ResearcherDef},
     resource::{
         DepletionPolicy, HarvestData, ResourceCarrierDef, ResourceSourceDef, ResourceStorageDef,
@@ -66,10 +68,9 @@ pub struct EntityTypeDef {
     /// Content-declared classification tags (e.g. `building`). Each must be a
     /// registered tag.
     pub tags: BTreeSet<String>,
-    /// Requirements for producing an instance — each entry names an entity
-    /// type, a tag, or a research, and all must hold (see
-    /// [`requirements::met`](crate::requirements::met)).
-    pub requires: Vec<String>,
+    /// Requirements for producing an instance: each entry is asked of the
+    /// producing player or of the producer itself, and all must hold.
+    pub requires: Vec<Requirement>,
 
     /// Base value of every stat this type carries, seeded into each instance's
     /// [`StatsComponent`](crate::components::entity_stats::StatsComponent) at spawn. The
@@ -157,6 +158,12 @@ pub struct EntityTypeDef {
     /// The resource source type a site of this type is raised over, by
     /// registered name. `None` means instances are placed on open ground.
     pub overbuilds: Option<String>,
+    /// The docks instances offer annexes, each naming where an annex stands
+    /// and which annexes it takes. Empty means instances take no annex.
+    pub docks: Vec<DockDef>,
+    /// Annex properties, held by a type that stands in another's dock. `None`
+    /// means instances dock with nothing.
+    pub annex: Option<AnnexDef>,
 }
 
 impl EntityTypeDef {
@@ -201,6 +208,8 @@ impl EntityTypeDef {
             resource_storage: None,
             berths: None,
             overbuilds: None,
+            docks: Vec::new(),
+            annex: None,
         }
     }
 
@@ -296,14 +305,8 @@ impl EntityTypeDef {
     }
 
     /// Adds production requirements to this type (see [`requires`](Self::requires)).
-    ///
-    /// Panics if any requirement name is empty.
-    pub fn with_requires(mut self, requires: impl IntoIterator<Item = impl Into<String>>) -> Self {
-        for name in requires {
-            let name = name.into();
-            assert!(!name.is_empty(), "requirement names must not be empty");
-            self.requires.push(name);
-        }
+    pub fn with_requires(mut self, requires: impl IntoIterator<Item = Requirement>) -> Self {
+        self.requires.extend(requires);
         self
     }
 
@@ -721,6 +724,33 @@ impl EntityTypeDef {
             "overbuilt type name must not be empty"
         );
         self.overbuilds = Some(type_name);
+        self
+    }
+
+    /// Adds docks instances offer annexes: where each annex's anchor sits, in
+    /// cells from this footprint's own origin, and the annex types that dock
+    /// takes.
+    ///
+    /// Panics if a dock takes nothing, or an accepted name is empty.
+    pub fn with_docks<A, S>(mut self, docks: impl IntoIterator<Item = (CellPos, A)>) -> Self
+    where
+        A: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.docks.extend(
+            docks
+                .into_iter()
+                .map(|(at, accepts)| DockDef::new(at, accepts)),
+        );
+        self
+    }
+
+    /// Makes this type an annex: what it does with no primary docked, and who
+    /// may dock with it.
+    ///
+    /// Panics if a fading life loses no health per tick.
+    pub fn with_annex(mut self, alone: AloneConduct, claim: AnnexClaim) -> Self {
+        self.annex = Some(AnnexDef::new(alone, claim));
         self
     }
 }

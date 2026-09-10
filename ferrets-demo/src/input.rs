@@ -164,10 +164,10 @@ pub enum TargetedOrder {
     /// reads a click on a damaged one as repairing, so climbing into it needs
     /// its own verb.
     Board,
-    /// Armed from the command card — the primary transporter fetches the
+    /// Armed from the command card — the leading transporter fetches the
     /// clicked unit aboard.
     Load,
-    /// Armed from the command card — unload the primary transporter at the
+    /// Armed from the command card — unload the leading transporter at the
     /// clicked position.
     Unload,
     /// `Q` — shell the clicked cell. Only weapons that send their shots to a cell
@@ -570,9 +570,9 @@ pub fn issue_orders_at(
     }
 }
 
-/// The local player's primary selected entity — the one hotkeys and panels act on.
+/// The local player's leading selected entity — the one hotkeys and panels act on.
 #[derive(Resource, Default, PartialEq, Eq)]
-pub struct Primary(pub Option<SimulationId>);
+pub struct Leading(pub Option<SimulationId>);
 
 /// The entities a spectator selected to look at: display-only, local to this
 /// node, and touching no synced state — a spectator's clicks never become
@@ -682,15 +682,15 @@ pub fn inspect_input(
     }
 }
 
-/// Recomputes [`Primary`] as the selection's highest-selection-priority entity,
+/// Recomputes [`Leading`] as the selection's highest-selection-priority entity,
 /// ties broken by lowest [`SimulationId`], so a mixed selection leads with its
 /// most significant unit (a caster over line infantry).
-pub fn track_primary(
+pub fn track_leading(
     session: Res<GameSession>,
     selection: Res<Selection>,
     registry: Res<ContentRegistry>,
     entities: Query<&EntityInfoComponent>,
-    mut primary: ResMut<Primary>,
+    mut leading: ResMut<Leading>,
 ) {
     let Some(local) = session.local_player() else {
         return;
@@ -710,7 +710,7 @@ pub fn track_primary(
         .map(|(_, id)| id);
     // Only touch the resource when it actually changes, so command-card rebuilds
     // (which key off change detection) fire on real selection changes, not every frame.
-    primary.set_if_neq(Primary(next));
+    leading.set_if_neq(Leading(next));
 }
 
 /// `F`/`R`/`G` arm a combat order for the current selection; the next
@@ -757,7 +757,7 @@ pub fn targeting_input(
     registry: Res<ContentRegistry>,
     session: Res<GameSession>,
     selection: Res<Selection>,
-    primary: Res<Primary>,
+    leading: Res<Leading>,
     mut mode: ResMut<InputMode>,
     mut pending: ResMut<PendingInput>,
     interactions: Query<&Interaction>,
@@ -841,7 +841,7 @@ pub fn targeting_input(
             let Some(target) = entity_at(cursor, &registry, &entities) else {
                 return;
             };
-            if let Some(transport) = primary.0 {
+            if let Some(transport) = leading.0 {
                 pending.push(PlayerCommand::Load {
                     transport,
                     target,
@@ -850,7 +850,7 @@ pub fn targeting_input(
             }
         }
         TargetedOrder::Unload => {
-            if let Some(transport) = primary.0 {
+            if let Some(transport) = leading.0 {
                 pending.push(PlayerCommand::Unload {
                     transport,
                     at: Some(world_to_pos(cursor)),
@@ -893,17 +893,17 @@ pub fn targeting_input(
     *mode = InputMode::Normal;
 }
 
-/// `X` cycles the selection's stance, starting from the primary entity's.
+/// `X` cycles the selection's stance, starting from the leading entity's.
 pub fn stance_input(
     keys: Res<ButtonInput<KeyCode>>,
-    primary: Res<Primary>,
+    leading: Res<Leading>,
     mut pending: ResMut<PendingInput>,
     stances: Query<(&EntityInfoComponent, &StanceComponent)>,
 ) {
     if !keys.just_pressed(KeyCode::KeyX) {
         return;
     }
-    let Some(id) = primary.0 else {
+    let Some(id) = leading.0 else {
         return;
     };
     let Some((_, StanceComponent(current))) = stances.iter().find(|(info, _)| info.id() == id)
@@ -1027,7 +1027,7 @@ pub fn placement_input(
     mut mode: ResMut<InputMode>,
     mut pending: ResMut<PendingInput>,
     mut gizmos: Gizmos,
-    primary: Res<Primary>,
+    leading: Res<Leading>,
     map: Res<Map>,
     registry: Res<ContentRegistry>,
     session: Res<GameSession>,
@@ -1171,7 +1171,7 @@ pub fn placement_input(
     gizmos.rect_2d(Isometry2d::from_translation(center), extent, color);
 
     if mouse.just_pressed(MouseButton::Left)
-        && let Some(builder) = primary.0
+        && let Some(builder) = leading.0
     {
         pending.push(PlayerCommand::BuildEntity {
             builder,

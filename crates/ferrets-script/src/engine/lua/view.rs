@@ -3,7 +3,7 @@
 use mlua::{Lua, Table, Value};
 
 use crate::ai::view::{
-    content::{ContentView, EntityContentView},
+    content::{ContentView, EntityContentView, RequirementView},
     game::{EntityView, GameView},
 };
 
@@ -106,7 +106,7 @@ pub(super) fn content_table(lua: &Lua, content: &ContentView) -> mlua::Result<Ta
         entry.set("time", research.time)?;
         entry.set(
             "requires",
-            optional_strings(lua, research.requires.as_deref())?,
+            optional_requirements(lua, research.requires.as_deref())?,
         )?;
         researches.set(research.name.as_str(), entry)?;
     }
@@ -119,7 +119,7 @@ pub(super) fn content_table(lua: &Lua, content: &ContentView) -> mlua::Result<Ta
         entry.set("target", skill.target.as_deref())?;
         entry.set(
             "requires",
-            optional_strings(lua, skill.requires.as_deref())?,
+            optional_requirements(lua, skill.requires.as_deref())?,
         )?;
         skills.set(skill.name.as_str(), entry)?;
     }
@@ -142,7 +142,7 @@ fn entity_content_table(lua: &Lua, entity: &EntityContentView) -> mlua::Result<T
     table.set("skills", optional_strings(lua, entity.skills.as_deref())?)?;
     table.set(
         "requires",
-        optional_strings(lua, entity.requires.as_deref())?,
+        optional_requirements(lua, entity.requires.as_deref())?,
     )?;
     table.set("builds", optional_strings(lua, entity.builds.as_deref())?)?;
 
@@ -197,6 +197,22 @@ fn strings_table(lua: &Lua, strings: &[String]) -> mlua::Result<Table> {
         array.set(index + 1, value.as_str())?;
     }
     Ok(array)
+}
+
+/// The requirement list as a script reads it: an array of
+/// `{ kind = ..., name = ... }` tables, or nil when there are none.
+fn optional_requirements(lua: &Lua, requires: Option<&[RequirementView]>) -> mlua::Result<Value> {
+    let Some(requires) = requires else {
+        return Ok(Value::Nil);
+    };
+    let table = lua.create_table()?;
+    for (index, entry) in requires.iter().enumerate() {
+        let view = lua.create_table()?;
+        view.set("kind", entry.kind.as_str())?;
+        view.set("name", entry.name.as_str())?;
+        table.set(index + 1, view)?;
+    }
+    Ok(Value::Table(table))
 }
 
 /// Like [`strings_table`], mapping `None` to `nil`.

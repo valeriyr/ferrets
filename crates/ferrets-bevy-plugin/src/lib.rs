@@ -48,7 +48,8 @@
 //! process_dying      — exclusive system; advance Die orders, despawn entities that
 //!                      finished dying
 //! recompute_visibility — exclusive system; refresh each player's fog of war from
-//!                      owned entities' sight, before acquisition/AI read it
+//!                      owned entities' sight, the fields they cover and the
+//!                      watches they hold, before acquisition/AI read it
 //! recompute_entity_stats — exclusive system; fold each entity's buffs and its owner's
 //!                      player-level buffs and modifiers into effective stats, the
 //!                      once-per-tick snapshot consumers read
@@ -64,6 +65,14 @@
 //!                          sub-order (attack-move/guard scanning mid-walk)
 //!                        process phase: advance InProcessing front order, remove driver
 //!                          components on finish, push chase sub-orders on suspend
+//! advance_sites_without_builder — exclusive system; put in a tick on each site
+//!                      no builder attends
+//! advance_berths     — exclusive system; move seated workers between the berths
+//!                      their stance walks them round
+//! advance_annexes    — exclusive system; re-derive which primary each annex
+//!                      stands with, apply what its terms do to one left
+//!                      standing alone, and hand over the annexes a claim
+//!                      gives away
 //! process_impacts    — exclusive system; land shots whose flight time has elapsed,
 //!                      where the same-tick delivery path lands its damage
 //! process_pending_reveals — exclusive system; retry reappearing entities that finished
@@ -71,6 +80,8 @@
 //! process_entity_buffs — exclusive system; age entities' timed buffs (expiries
 //!                      land next tick)
 //! process_player_buffs — exclusive system; age players' timed buffs likewise
+//! age_watches        — take a tick off each watch over the map, dropping those
+//!                      that have run out
 //! process_entity_skills — exclusive system; age entity-skill cooldowns by one tick
 //! process_player_skills — exclusive system; age player-skill cooldowns
 //! process_energy_regen — exclusive system; refill energy pools toward max_energy
@@ -458,10 +469,14 @@ impl Plugin for SimulationPlugin {
                     // at the same point of the tick.
                     // Attached workers move about their berths once the orders
                     // that seat them have run.
+                    // Annexes are re-bound right after, so a primary that has
+                    // just landed, been raised or lifted off is answered for
+                    // in the tick it did so.
                     (
                         systems::tick_orders,
                         systems::advance_sites_without_builder,
                         systems::advance_berths,
+                        systems::advance_annexes,
                     )
                         .chain(),
                     // The two fights that run outside the order lifecycle, right
@@ -482,8 +497,12 @@ impl Plugin for SimulationPlugin {
                     systems::process_pending_reveals,
                     // Age timed buffs; expiries land in the next tick's
                     // recompute snapshots.
-                    systems::process_entity_buffs,
-                    systems::process_player_buffs,
+                    (
+                        systems::process_entity_buffs,
+                        systems::process_player_buffs,
+                        systems::age_watches,
+                    )
+                        .chain(),
                     // Skill cooldowns tick down and the per-entity pools refill,
                     // after every source of damage and spending this tick has been
                     // applied.

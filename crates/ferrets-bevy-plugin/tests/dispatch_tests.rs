@@ -9,8 +9,8 @@ use ferrets_content::{
     location::Solidity,
     registry::ContentRegistry,
     repair::{RepairCost, RepairRate},
-    resource::{Banking, HarvestData},
-    work::WorkPresence,
+    resource::{Banking, HarvestData, Sources},
+    work::{CrewLimit, WorkPresence},
 };
 use ferrets_geometry::cell_size::CellSize;
 use ferrets_math::FixedU64;
@@ -185,14 +185,25 @@ fn repair_dispatch_app() -> App {
                 .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
                 .with_resource_carrier([(
                     "gold",
-                    HarvestData::new(5, 5, 2, WorkPresence::Present, Banking::Carried),
+                    HarvestData::new(
+                        5,
+                        5,
+                        2,
+                        WorkPresence::Present {
+                            crew: CrewLimit::ONE,
+                        },
+                        Banking::Carried,
+                        Sources::Any,
+                    ),
                 )])
                 .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
                 .with_stat(EntityStatId::REPAIR_RANGE, FixedU64::ONE)
                 .with_repairer(
                     ["building"],
                     RepairRate::PerTick(FixedU64::from_num(5)),
-                    WorkPresence::Present,
+                    WorkPresence::Present {
+                        crew: CrewLimit::ONE,
+                    },
                     false,
                     RepairCost::Free,
                     None,

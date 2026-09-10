@@ -4,6 +4,7 @@
 //! [`engine`] picks the binding the suite runs against.
 
 use ferrets_content::{
+    annex::{AloneConduct, AnnexClaim, AnnexLife, AnnexWork},
     attack::{AttackDef, Delivery, Weapon},
     build::BuilderAttendance,
     costs,
@@ -17,8 +18,9 @@ use ferrets_content::{
     morph::{MorphCancel, MorphPlacement, MorphTime},
     player_stats::PlayerStatId,
     repair::{RepairCost, RepairRate},
+    requirement::Requirement,
     research::ResearchDef,
-    resource::Banking,
+    resource::{Banking, Sources},
     skills::{
         EntityCastCost, EntityCastEffect, EntityCastTarget, PlayerCastEffect, SkillCaster, SkillDef,
     },
@@ -27,7 +29,7 @@ use ferrets_content::{
     stats::{EntityModifier, ModifierOp, PlayerModifier},
     transport::{BoardingPolicy, PassengerConduct, PassengerFate},
     turret::{TurretDef, TurretMount, TurretStats, WeaponConduct},
-    work::{Attachment, BerthStance, WorkPresence},
+    work::{Attachment, BerthStance, CrewLimit, WorkPresence},
 };
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::{FixedI64, FixedU64, fixed_uvec2::FixedUVec2};
@@ -221,7 +223,7 @@ fn parses_repairer_and_repair_ratio() {
             repairer = {
                 repairs = { "building" },
                 rate = { mode = "production" },
-                presence = "present_stacking",
+                presence = { present = { crew = "any" } },
                 cost = { mode = "pro_rata" },
                 patience = 200,
             },
@@ -235,7 +237,12 @@ fn parses_repairer_and_repair_ratio() {
     let worker = registry.entity("worker").expect("worker defined");
     let repairer = worker.repairer.as_ref().expect("worker can repair");
     assert_eq!(repairer.repairs().collect::<Vec<_>>(), ["building"]);
-    assert_eq!(*repairer.presence(), WorkPresence::PresentStacking);
+    assert_eq!(
+        *repairer.presence(),
+        WorkPresence::Present {
+            crew: CrewLimit::Unlimited,
+        }
+    );
     assert_eq!(repairer.cost(), &RepairCost::ProRata);
     assert_eq!(repairer.patience(), Some(200));
     assert!(
@@ -414,7 +421,7 @@ fn parses_flat_per_tick_repair_cost() {
             repairer = {
                 repairs = { "building" },
                 rate = { mode = "production" },
-                presence = "present",
+                presence = { present = { crew = 1 } },
                 self_repair = true,
                 cost = { mode = "per_tick", resources = { gold = 2 } },
             },
@@ -455,7 +462,7 @@ fn parses_medic_paying_energy_at_flat_rate() {
             repairer = {
                 repairs = { "biological" },
                 rate = { mode = "per_tick", health = "1.0" },
-                presence = "present",
+                presence = { present = { crew = 1 } },
                 cost = { mode = "energy", per_health = "0.5" },
             },
         })
@@ -478,7 +485,9 @@ fn parses_medic_paying_energy_at_flat_rate() {
     );
     assert_eq!(
         *repairer.presence(),
-        WorkPresence::Present,
+        WorkPresence::Present {
+            crew: CrewLimit::ONE
+        },
         "one medic to a patient"
     );
 }
@@ -550,7 +559,7 @@ fn parses_skill_requirements() {
             cooldown = 5,
             target = "caster",
             effect = { apply_buff = "haste" },
-            requires = { "arcana" },
+            requires = { { research = "arcana" } },
         })
         define_entity("mage", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
@@ -561,17 +570,15 @@ fn parses_skill_requirements() {
     let registry = content::load(&engine(), source).expect("load content");
 
     let war_secret = registry.skill("war_secret").expect("skill defined");
+    let arcana = registry.research("arcana").expect("research defined");
     assert_eq!(
         registry.skill_def(war_secret).unwrap().requires,
-        vec!["arcana".to_string()]
+        vec![Requirement::Research(arcana)]
     );
 }
 
 #[test]
-#[should_panic(
-    expected = "skill 'war_secret' requires 'arcana', which is not a registered entity type, tag, or research"
-)]
-fn undeclared_skill_requirement_panics_on_load() {
+fn requirement_naming_undeclared_research_is_rejected() {
     let source = r#"
         define_player_buff("haste", {
             stack = "refresh",
@@ -583,10 +590,101 @@ fn undeclared_skill_requirement_panics_on_load() {
             caster = "player",
             cooldown = 5,
             effect = { remove_buff = "haste" },
-            requires = { "arcana" },
+            requires = { { research = "arcana" } },
         })
     "#;
-    let _ = content::load(&engine(), source);
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject a research nothing declared");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("research 'arcana' is not defined")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn requirement_naming_no_kind_is_rejected() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_entity("mortar", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = { max_health = 10 },
+            requires = { { forge = "blacksmith" } },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject an entry naming no kind");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains(
+            "a requirement must name exactly one of entity_type, tag, research, or annexed"
+        )),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn requirement_naming_two_kinds_is_rejected() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_tag("workshop")
+        define_entity("mortar", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = { max_health = 10 },
+            requires = { { entity_type = "blacksmith", tag = "workshop" } },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject an entry naming two kinds");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains(
+            "a requirement must name exactly one of entity_type, tag, research, or annexed"
+        )),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn requirement_naming_two_kinds_reports_shape_before_lookup() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_entity("mortar", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = { max_health = 10 },
+            requires = { { entity_type = "blacksmith", research = "arcana" } },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject an entry naming two kinds");
+    };
+    // The shape is judged first, so the entry reads as the shape error it is
+    // and not as the failed lookup of a research it should never have asked for.
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains(
+            "a requirement must name exactly one of entity_type, tag, research, or annexed"
+        )),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn requirement_that_is_bare_name_is_rejected() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_entity("mortar", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = { max_health = 10 },
+            requires = { "blacksmith" },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject a bare name");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("a requirement must be")),
+        "unexpected error: {error:?}"
+    );
 }
 
 #[test]
@@ -1026,7 +1124,7 @@ fn parses_research_with_buff_and_requirements() {
             cost = { gold = 30 },
             time = 200,
             buff = "sharp_blades",
-            requires = { "lab" },
+            requires = { { entity_type = "lab" } },
         })
         define_research("tactics", {
             time = 100,
@@ -1043,13 +1141,13 @@ fn parses_research_with_buff_and_requirements() {
         costs::cost([("gold", 30)]),
         200,
         registry.player_buff("sharp_blades"),
-        ["lab"],
+        [Requirement::EntityType("lab".to_string())],
     );
     assert_eq!(registry.research_def(smithing), Some(&expected));
 
     // An omitted cost is free, an omitted buff a pure unlock.
     let tactics = registry.research("tactics").expect("tactics registered");
-    let expected = ResearchDef::new(costs::Cost::new(), 100, None, Vec::<String>::new());
+    let expected = ResearchDef::new(costs::Cost::new(), 100, None, Vec::new());
     assert_eq!(registry.research_def(tactics), Some(&expected));
 
     let lab = registry.entity("lab").expect("lab registered");
@@ -1067,14 +1165,14 @@ fn loads_declared_requirements_onto_entities() {
         })
         define_entity("mortar", {
             location = { occupation = ground, size = 1, solidity = "solid" },
-            requires = { "blacksmith" },
+            requires = { { entity_type = "blacksmith" } },
         })
     "#;
     let registry = content::load(&engine(), source).expect("load content");
 
     assert_eq!(
         registry.entity("mortar").unwrap().requires,
-        vec!["blacksmith".to_string()]
+        vec![Requirement::EntityType("blacksmith".to_string())]
     );
 }
 
@@ -1115,14 +1213,14 @@ fn researcher_with_unknown_research_errors() {
 
 #[test]
 #[should_panic(
-    expected = "entity type 'mortar' requires 'blacksmith', which is not a registered entity type, tag, or research"
+    expected = "entity type 'mortar' requires the entity type 'blacksmith', which is not registered"
 )]
 fn undeclared_requirement_panics_on_load() {
     let source = r#"
         local ground = define_layer("ground")
         define_entity("mortar", {
             location = { occupation = ground, size = 1, solidity = "solid" },
-            requires = { "blacksmith" },
+            requires = { { entity_type = "blacksmith" } },
         })
     "#;
     let _ = content::load(&engine(), source);
@@ -1320,7 +1418,7 @@ fn repairer_without_rate_errors() {
         define_entity("worker", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
             stats = { max_health = 20, repair_speed = "1.0", repair_range = 1 },
-            repairer = { repairs = { "building" }, presence = "present" },
+            repairer = { repairs = { "building" }, presence = { present = { crew = 1 } } },
         })
     "#;
     let Err(error) = content::load(&engine(), source) else {
@@ -1346,7 +1444,7 @@ fn repairer_without_cost_errors() {
             repairer = {
                 repairs = { "building" },
                 rate = { mode = "production" },
-                presence = "present",
+                presence = { present = { crew = 1 } },
             },
         })
     "#;
@@ -1371,7 +1469,7 @@ fn unknown_repair_rate_mode_errors() {
             repairer = {
                 repairs = { "biological" },
                 rate = { mode = "instant" },
-                presence = "present",
+                presence = { present = { crew = 1 } },
             },
         })
     "#;
@@ -1405,9 +1503,183 @@ fn unknown_work_presence_errors() {
         panic!("must reject an unknown work presence");
     };
     assert!(
-        matches!(&error, ScriptError::ContentError(m) if m.contains("work presence must be 'hidden', 'present', 'present_stacking', or an { attached = ... } table, found 'lurking'")),
+        matches!(&error, ScriptError::ContentError(m) if m.contains("work presence must be a { hidden = ... } table, a { present = ... } table, or an { attached = ... } table, found 'lurking'")),
         "unexpected error: {error:?}"
     );
+}
+
+#[test]
+fn docks_and_annex_read_their_terms() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_resource("gold")
+        define_tag("building")
+
+        define_entity("barracks", {
+            location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
+            stats = { max_health = 100, build_range = 1 },
+            tags = { "building" },
+            builder = { builds = { "tech_lab" }, attendance = { present = { crew = 1 } } },
+            docks = { { at = { 2, 0 }, accepts = { "tech_lab" } } },
+        })
+        define_entity("tech_lab", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = { max_health = 40, health_drain = "2" },
+            tags = { "building" },
+            cost = { gold = 25 },
+            build_time = 10,
+            annex = { alone = { work = "idles", life = { fades = "2" } }, claim = "seized" },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("content loads");
+
+    let barracks = registry.entity("barracks").expect("barracks defined");
+    let dock = barracks.docks.first().expect("it offers one dock");
+    assert_eq!(dock.at(), CellPos::new(2, 0));
+    assert!(dock.accepts("tech_lab") && !dock.accepts("barracks"));
+
+    let annex = registry
+        .entity("tech_lab")
+        .expect("tech_lab defined")
+        .annex
+        .expect("it is an annex");
+    assert_eq!(
+        annex.alone(),
+        AloneConduct::Standing {
+            work: AnnexWork::Idles,
+            life: AnnexLife::Fades {
+                per_tick: FixedU64::lit("2")
+            },
+        }
+    );
+    assert_eq!(annex.claim(), AnnexClaim::Seized);
+}
+
+#[test]
+fn watch_effect_reads_its_radius_and_duration() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+
+        define_skill("scan", {
+            cooldown = 10,
+            caster = "entity",
+            target = "position",
+            effect = { watch = { radius = 6, duration = 40 } },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("content loads");
+    let skill = registry
+        .skill("scan")
+        .and_then(|id| registry.skill_def(id))
+        .expect("scan defined");
+    let SkillCaster::Entity { effect, .. } = &skill.caster else {
+        panic!("scan is cast by an entity");
+    };
+    assert_eq!(
+        *effect,
+        EntityCastEffect::Watch {
+            radius: 6,
+            duration: 40
+        }
+    );
+}
+
+#[test]
+fn presence_table_reads_crew_limit_and_harvest_reads_its_sources() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_resource("gold")
+
+        define_entity("seam", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            resource_source = { kind = "gold", depletion = "destroy" },
+        })
+        define_entity("refinery", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = { max_health = 100 },
+            resource_source = { kind = "gold", depletion = "persist" },
+        })
+        define_entity("tapper", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = { max_health = 20, harvest_range = 1 },
+            resource_carrier = {
+                gold = {
+                    capacity = 5, time = 20,
+                    presence = { hidden = { crew = 3 } },
+                    sources = { "refinery" },
+                },
+            },
+        })
+        define_entity("gang", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = { max_health = 20, harvest_range = 1 },
+            resource_carrier = {
+                gold = { capacity = 5, time = 20, presence = { present = { crew = "any" } } },
+            },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("content loads");
+
+    // Three at a time, off the map while they work, and only out of a refinery.
+    let gold = registry
+        .entity("tapper")
+        .unwrap()
+        .resource_carrier
+        .as_ref()
+        .unwrap()
+        .harvest_data("gold")
+        .unwrap()
+        .clone();
+    assert_eq!(
+        gold.presence(),
+        &WorkPresence::Hidden {
+            crew: CrewLimit::limit(3)
+        }
+    );
+    assert_eq!(gold.sources(), &Sources::only(["refinery"]));
+    assert!(!gold.admits_source("seam"));
+
+    // A crew of "any", and no source named, which takes every gold source.
+    let gang = registry
+        .entity("gang")
+        .unwrap()
+        .resource_carrier
+        .as_ref()
+        .unwrap()
+        .harvest_data("gold")
+        .unwrap()
+        .clone();
+    assert_eq!(
+        gang.presence(),
+        &WorkPresence::Present {
+            crew: CrewLimit::Unlimited
+        }
+    );
+    assert!(gang.admits_source("seam") && gang.admits_source("refinery"));
+}
+
+#[test]
+#[should_panic(expected = "a crew limit must admit at least one worker")]
+fn crew_limit_of_zero_panics() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_resource("gold")
+
+        define_entity("seam", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            resource_source = { kind = "gold", depletion = "destroy" },
+        })
+        define_entity("tapper", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = { max_health = 20, harvest_range = 1 },
+            resource_carrier = {
+                gold = { capacity = 5, time = 20, presence = { hidden = { crew = 0 } } },
+            },
+        })
+    "#;
+    // A crew of nobody is a value invariant, so it is the constructor that
+    // refuses it rather than the reader.
+    let _ = content::load(&engine(), source);
 }
 
 #[test]
@@ -2006,10 +2278,10 @@ const BASE: &str = r#"
         dying = { time = 2 },
         cost = { gold = 50 },
         train_time = 40,
-        builder = { builds = { "town_hall" }, attendance = "hidden" },
+        builder = { builds = { "town_hall" }, attendance = { hidden = { crew = 1 } } },
         resource_carrier = {
-            gold = { capacity = 5, time = 20, presence = "hidden" },
-            wood = { capacity = 5, time = 20, presence = "present" },
+            gold = { capacity = 5, time = 20, presence = { hidden = { crew = 1 } } },
+            wood = { capacity = 5, time = 20, presence = { present = { crew = 1 } } },
         },
     })
 
@@ -2119,7 +2391,7 @@ fn morph_transitions_round_trip() {
                   placement = "revalidate",
                   cancel = "committed",
                   cost = { energy = "20" },
-                  requires = { "winged" } },
+                  requires = { { tag = "winged" } } },
                 { into = "statue",
                   via = "chrysalis",
                   time = 40,
@@ -2159,7 +2431,7 @@ fn morph_transitions_round_trip() {
         first.costs(),
         [EntityCastCost::Energy(FixedU64::from_num(20))]
     );
-    assert_eq!(first.requires(), ["winged"]);
+    assert_eq!(first.requires(), [Requirement::Tag("winged".to_string())]);
 
     assert_eq!(second.into_type(), "statue");
     assert_eq!(second.time(), MorphTime::Constant(40));

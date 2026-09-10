@@ -5,6 +5,7 @@ use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use std::{cell::RefCell, rc::Rc};
 
 use ferrets_content::{
+    annex::{AloneConduct, AnnexClaim, AnnexLife},
     attack::{Delivery, Weapon},
     berths::BerthGroup,
     build::BuilderAttendance,
@@ -21,14 +22,15 @@ use ferrets_content::{
     projectile::ProjectileDef,
     registry::ContentRegistry,
     repair::{RepairCost, RepairRate},
-    research::ResearchDef,
-    resource::{Banking, HarvestData},
+    requirement::Requirement,
+    research::{ResearchDef, ResearchId},
+    resource::{Banking, HarvestData, Sources},
     skills::{EntityCastCost, EntityCastEffect, PlayerCastEffect, SkillCaster, SkillDef},
     splash::SplashDef,
     stand::StandingAct,
     stats::{EntityModifier, ModifierOp, PlayerModifier},
     turret::{TurretDef, TurretMount, TurretStats, WeaponConduct},
-    work::{Attachment, BerthStance, WorkPresence},
+    work::{Attachment, BerthStance, CrewLimit, WorkPresence},
 };
 use ferrets_math::{FixedI64, FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_pathfinder::layer_mask::LayerMask;
@@ -269,7 +271,8 @@ fn build_entity(
             .collect::<crate::Result<Vec<_>>>()?;
         def = def.with_researcher(ids);
     }
-    if let Some(requires) = optional::<Vec<String>>(table, "requires")? {
+    let requires = parse_requires(table, registry)?;
+    if !requires.is_empty() {
         def = def.with_requires(requires);
     }
     if let Some(builder) = optional::<Table>(table, "builder")? {
@@ -311,6 +314,13 @@ fn build_entity(
     }
     if let Some(over) = optional::<String>(table, "overbuilds")? {
         def = def.with_overbuilds(over);
+    }
+    if let Some(docks) = optional::<Vec<Table>>(table, "docks")? {
+        def = def.with_docks(parse_docks(docks)?);
+    }
+    if let Some(annex) = optional::<Table>(table, "annex")? {
+        let (alone, claim) = parse_annex(&annex)?;
+        def = def.with_annex(alone, claim);
     }
     if let Some(tags) = optional::<Vec<String>>(table, "tags")? {
         def = def.with_tags(tags);
@@ -620,8 +630,8 @@ fn pairs<V: mlua::FromLua>(table: &Table, field: &str) -> crate::Result<Vec<(Str
 }
 
 /// Reads a `resource_carrier` map: each kind maps to `{capacity, time,
-/// presence, drain, banking}`. `drain` defaults to the capacity and `banking`
-/// to `carried`.
+/// presence, drain, banking, sources}`. `drain` defaults to the capacity,
+/// `banking` to `carried`, and `sources` to any source of the kind.
 fn harvest_kinds(carrier: &Table) -> crate::Result<Vec<(String, HarvestData)>> {
     let mut carries = Vec::new();
     for pair in carrier.clone().pairs::<String, Table>() {
@@ -637,6 +647,10 @@ fn harvest_kinds(carrier: &Table) -> crate::Result<Vec<(String, HarvestData)>> {
             required::<u32>(&data, "time")?,
             work_presence(&required::<Value>(&data, "presence")?)?,
             banking,
+            match optional::<Vec<String>>(&data, "sources")? {
+                Some(names) => Sources::only(names),
+                None => Sources::Any,
+            },
         );
         carries.push((kind, harvest));
     }
@@ -723,28 +737,63 @@ fn keyword_or_table_error<T>(
     content::unexpected(what, &expected, found)
 }
 
-/// Reads a work presence: a keyword for one that stands or hides, or
-/// `{ attached = { berths, stance } }` for one that sits in a job's berths.
+/// Reads a work presence: `{ hidden = { crew } }` or `{ present = { crew } }`
+/// for one that stands or hides on its own, `{ attached = { berths, stance } }`
+/// for one that sits in a job's berths.
 fn work_presence(value: &Value) -> crate::Result<WorkPresence> {
-    keyword_or_table(
-        "work presence",
-        value,
-        &[
-            ("hidden", WorkPresence::Hidden),
-            ("present", WorkPresence::Present),
-            ("present_stacking", WorkPresence::PresentStacking),
-        ],
-        &["an { attached = ... } table"],
-        |table| Ok(WorkPresence::Attached(attachment(table)?)),
-    )
+    match value {
+        Value::Table(table) => work_presence_table(table),
+        other => Err(content::unexpected(
+            "work presence",
+            &[
+                "a { hidden = ... } table",
+                "a { present = ... } table",
+                "an { attached = ... } table",
+            ],
+            &found(other),
+        )),
+    }
 }
 
-/// Reads the `attached` table of a presence: the berth group name and the
-/// stance.
-fn attachment(table: &Table) -> crate::Result<Attachment> {
-    let attached = required::<Table>(table, "attached")?;
-    let berths = required::<String>(&attached, "berths")?;
-    let stance = berth_stance(&required::<Value>(&attached, "stance")?)?;
+/// Reads the table form of a presence: exactly one of `hidden`, `present` or
+/// `attached`.
+fn work_presence_table(table: &Table) -> crate::Result<WorkPresence> {
+    let hidden = optional::<Table>(table, "hidden")?;
+    let present = optional::<Table>(table, "present")?;
+    let attached = optional::<Table>(table, "attached")?;
+    match (hidden, present, attached) {
+        (Some(hidden), None, None) => Ok(WorkPresence::Hidden {
+            crew: crew_limit(&hidden)?,
+        }),
+        (None, Some(present), None) => Ok(WorkPresence::Present {
+            crew: crew_limit(&present)?,
+        }),
+        (None, None, Some(attached)) => Ok(WorkPresence::Attached(attachment(&attached)?)),
+        _ => Err(ScriptError::ContentError(
+            "a work presence table must have exactly one of 'hidden', 'present' or 'attached'"
+                .to_string(),
+        )),
+    }
+}
+
+/// Reads the `crew` of a presence: how many workers may work one job at once,
+/// as a count or `"any"`.
+fn crew_limit(table: &Table) -> crate::Result<CrewLimit> {
+    match required::<Value>(table, "crew")? {
+        Value::String(any) if any == "any" => Ok(CrewLimit::Unlimited),
+        Value::Integer(at_once) if at_once >= 0 => Ok(CrewLimit::limit(at_once as usize)),
+        other => Err(content::unexpected(
+            "crew limit",
+            &["a count", &content::quoted("any")],
+            &found(&other),
+        )),
+    }
+}
+
+/// Reads the berth group name and the stance of an `attached` presence.
+fn attachment(attached: &Table) -> crate::Result<Attachment> {
+    let berths = required::<String>(attached, "berths")?;
+    let stance = berth_stance(&required::<Value>(attached, "stance")?)?;
     Ok(Attachment::new(berths, stance))
 }
 
@@ -798,29 +847,23 @@ fn berth_hopping(table: &Table) -> crate::Result<(FixedU64, u32)> {
     ))
 }
 
-/// Reads a builder attendance: a keyword for a way of staying or not staying,
-/// or `{ attached = { berths, stance } }` for a crew builder that sits in the
-/// site's berths.
+/// Reads a builder attendance: a keyword for one with no presence of its own,
+/// or the table form of a [`work_presence`] for one that declares where it
+/// stands.
 fn builder_attendance(value: &Value) -> crate::Result<BuilderAttendance> {
     keyword_or_table(
         "builder attendance",
         value,
         &[
-            ("hidden", BuilderAttendance::Crew(WorkPresence::Hidden)),
-            ("present", BuilderAttendance::Crew(WorkPresence::Present)),
-            (
-                "present_stacking",
-                BuilderAttendance::Crew(WorkPresence::PresentStacking),
-            ),
             ("unattended", BuilderAttendance::Unattended),
             ("consumed", BuilderAttendance::Consumed),
         ],
-        &["an { attached = ... } table"],
-        |table| {
-            Ok(BuilderAttendance::Crew(WorkPresence::Attached(attachment(
-                table,
-            )?)))
-        },
+        &[
+            "a { hidden = ... } table",
+            "a { present = ... } table",
+            "an { attached = ... } table",
+        ],
+        |table| Ok(BuilderAttendance::Crew(work_presence_table(table)?)),
     )
 }
 
@@ -906,7 +949,7 @@ fn parse_skill(table: &Table, registry: &ContentRegistry) -> crate::Result<Skill
             ));
         }
     };
-    let requires = optional::<Vec<String>>(table, "requires")?.unwrap_or_default();
+    let requires = parse_requires(table, registry)?;
     Ok(SkillDef {
         cooldown,
         caster,
@@ -930,7 +973,7 @@ fn parse_research(table: &Table, registry: &ContentRegistry) -> crate::Result<Re
         })?),
         None => None,
     };
-    let requires = optional::<Vec<String>>(table, "requires")?.unwrap_or_default();
+    let requires = parse_requires(table, registry)?;
     Ok(ResearchDef::new(cost, time, buff, requires))
 }
 
@@ -998,7 +1041,7 @@ fn parse_morphs(
             Some(cost) => parse_entity_cast_cost(&cost)?,
             None => Vec::new(),
         };
-        let requires = optional::<Vec<String>>(&entry, "requires")?.unwrap_or_default();
+        let requires = parse_requires(&entry, registry)?;
         transitions.push(MorphTransition::new(
             into,
             via.as_deref(),
@@ -1046,9 +1089,14 @@ fn parse_entity_effect(
             radius: required::<u32>(&field, "radius")?,
             action: content::field_action(&required::<String>(&field, "action")?)?,
         })
+    } else if let Some(watch) = optional::<Table>(table, "watch")? {
+        Ok(EntityCastEffect::Watch {
+            radius: required::<u32>(&watch, "radius")?,
+            duration: required::<u32>(&watch, "duration")?,
+        })
     } else {
         Err(ScriptError::ContentError(
-            "skill effect must be one of apply_buff, remove_buff, damage, heal, or field"
+            "skill effect must be one of apply_buff, remove_buff, damage, heal, field, or watch"
                 .to_string(),
         ))
     }
@@ -1181,6 +1229,122 @@ fn parse_on_stand(acts: &[Table], registry: &ContentRegistry) -> crate::Result<V
             }
         })
         .collect()
+}
+
+/// Reads the `docks` list: each entry the cell offset `at` its annex stands
+/// on and the annex types it `accepts`.
+fn parse_docks(docks: Vec<Table>) -> crate::Result<Vec<(CellPos, Vec<String>)>> {
+    let mut out = Vec::with_capacity(docks.len());
+    for dock in docks {
+        let at = required::<Table>(&dock, "at")?;
+        let at = CellPos::new(
+            at.get::<u32>(1)
+                .map_err(|error| field_error("dock x", error))?,
+            at.get::<u32>(2)
+                .map_err(|error| field_error("dock y", error))?,
+        );
+        out.push((at, required::<Vec<String>>(&dock, "accepts")?));
+    }
+    Ok(out)
+}
+
+/// Reads an `annex` table: what it does `alone`, and who may `claim` it.
+fn parse_annex(table: &Table) -> crate::Result<(AloneConduct, AnnexClaim)> {
+    let alone = parse_annex_alone(required::<Value>(table, "alone")?)?;
+    let claim = content::annex_claim(&required::<String>(table, "claim")?)?;
+    Ok((alone, claim))
+}
+
+/// Reads what an annex with no primary does: `"razed"`, or a table naming its
+/// `work` and its `life`.
+fn parse_annex_alone(value: Value) -> crate::Result<AloneConduct> {
+    match &value {
+        Value::String(name) if name == "razed" => Ok(AloneConduct::Razed),
+        Value::Table(standing) => Ok(AloneConduct::Standing {
+            work: content::annex_work(&required::<String>(standing, "work")?)?,
+            life: parse_annex_life(required::<Value>(standing, "life")?)?,
+        }),
+        other => Err(content::unexpected(
+            "what an annex does alone",
+            &[
+                &content::quoted("razed"),
+                "a { work = ..., life = ... } table",
+            ],
+            &found(other),
+        )),
+    }
+}
+
+/// Reads what time does to an annex with no primary: `"endures"`, or
+/// `{ fades = health per tick }`.
+fn parse_annex_life(value: Value) -> crate::Result<AnnexLife> {
+    match &value {
+        Value::String(name) if name == "endures" => Ok(AnnexLife::Endures),
+        Value::Table(fading) => Ok(AnnexLife::Fades {
+            per_tick: content::fixed(&required::<String>(fading, "fades")?)?,
+        }),
+        other => Err(content::unexpected(
+            "an annex life",
+            &[&content::quoted("endures"), "a { fades = ... } table"],
+            &found(other),
+        )),
+    }
+}
+
+/// Reads a `requires` list: each entry a table naming exactly one kind —
+/// `{ entity_type = "armory" }`, `{ tag = "workshop" }`,
+/// `{ research = "smithing" }` or `{ annexed = "tech_lab" }`.
+fn parse_requires(table: &Table, registry: &ContentRegistry) -> crate::Result<Vec<Requirement>> {
+    let Some(entries) = optional::<Vec<Value>>(table, "requires")? else {
+        return Ok(Vec::new());
+    };
+    entries
+        .into_iter()
+        .map(|entry| match &entry {
+            Value::Table(entry) => parse_requirement(entry, registry),
+            other => Err(content::unexpected(
+                "a requirement",
+                &[
+                    "an { entity_type = ... } table",
+                    "a { tag = ... } table",
+                    "a { research = ... } table",
+                    "an { annexed = ... } table",
+                ],
+                &found(other),
+            )),
+        })
+        .collect()
+}
+
+/// Reads one requirement entry, which names exactly one kind.
+fn parse_requirement(entry: &Table, registry: &ContentRegistry) -> crate::Result<Requirement> {
+    // The shape is judged before any name is resolved, so an entry naming two
+    // kinds reads as the shape error it is rather than as a failed lookup.
+    match (
+        optional::<String>(entry, "entity_type")?,
+        optional::<String>(entry, "tag")?,
+        optional::<String>(entry, "research")?,
+        optional::<String>(entry, "annexed")?,
+    ) {
+        (Some(name), None, None, None) => Ok(Requirement::EntityType(name)),
+        (None, Some(name), None, None) => Ok(Requirement::Tag(name)),
+        (None, None, Some(name), None) => {
+            Ok(Requirement::Research(research_by_name(&name, registry)?))
+        }
+        (None, None, None, Some(name)) => Ok(Requirement::Annexed(name)),
+        // Every other shape names none of the four kinds, or more than one.
+        _ => Err(ScriptError::ContentError(
+            "a requirement must name exactly one of entity_type, tag, research, or annexed"
+                .to_string(),
+        )),
+    }
+}
+
+/// Resolves a research by the name content gave it.
+fn research_by_name(name: &str, registry: &ContentRegistry) -> crate::Result<ResearchId> {
+    registry
+        .research(name)
+        .ok_or_else(|| ScriptError::ContentError(format!("research '{name}' is not defined")))
 }
 
 /// Reads the `field_placement` list: each entry either `requires` a field

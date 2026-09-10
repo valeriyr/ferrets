@@ -22,6 +22,7 @@ use ferrets_math::{
 };
 use ferrets_simulation::{
     components::{
+        annex::{AnnexComponent, Docking},
         attached::AttachedComponent,
         build::{BuildComponent, SiteWork, UnderConstructionComponent},
         energy::EnergyComponent,
@@ -52,6 +53,7 @@ use ferrets_simulation::{
     session::{GameSession, local_role::LocalRole, player_id::PlayerId},
     simulation_id::SimulationId,
     visibility::{CellVisibility, VisibilityGrid},
+    watches::Watches,
 };
 
 use crate::{map, scenario::CurrentScenario, states::InGameUi};
@@ -494,6 +496,20 @@ enum Shape {
     /// The entangled mine — a mine's square bound by a ring of the owner's
     /// roots, with a darker shaft at its heart.
     EntangledMine,
+    /// The comsat station — a base bearing a lighter dish.
+    Dish,
+    /// The tech lab — a base bearing a darker vent bar across it.
+    Lab,
+    /// The refinery — a base bearing a holding tank, with the shaft head at
+    /// its heart and a pipe over one corner.
+    Refinery,
+    /// The tank — a hull with a barrel down its nose, which is what makes a
+    /// gun that only fires ahead readable; planted, it wears a ring and a
+    /// brace on each flank, and no barrel at all.
+    Tank {
+        /// Whether this is the planted form.
+        sieged: bool,
+    },
     /// Main buildings and resource sources — a square.
     Square,
 }
@@ -501,19 +517,20 @@ enum Shape {
 /// Picks a shape from the entity type name. Add new types here.
 fn shape_for(type_name: &str) -> Shape {
     match type_name {
-        "peasant" | "peon" | "drone" | "probe" | "wisp" => Shape::Circle,
+        "peasant" | "peon" | "drone" | "probe" | "wisp" | "scv" => Shape::Circle,
         "grunt" | "swarmling" | "ravager" | "zealot" | "huntress" => Shape::Diamond,
-        "archer" => Shape::Triangle,
+        "archer" | "marine" => Shape::Triangle,
         "mortar" => Shape::Pentagon,
         "medic" | "shaman" => Shape::Cross,
         "ship" => Shape::Ship,
-        "barracks" | "war_camp" | "spawning_pit" | "gateway" => Shape::Hexagon,
+        "training_camp" | "war_camp" | "spawning_pit" | "gateway" | "barracks"
+        | "barracks_aloft" => Shape::Hexagon,
         "sea_fortress" => Shape::Fortress,
         "gryphon" => Shape::Gryphon { aloft: false },
         "gryphon_aloft" => Shape::Gryphon { aloft: true },
         "zeppelin" => Shape::Zeppelin,
         "war_wagon" => Shape::WarWagon,
-        "siege_works" => Shape::Octagon,
+        "siege_works" | "factory" | "factory_aloft" => Shape::Octagon,
         "watch_tower" => Shape::WatchTower,
         "guard_tower" | "photon_cannon" => Shape::GuardTower,
         "tumor" | "cocoon" => Shape::Pod,
@@ -524,6 +541,13 @@ fn shape_for(type_name: &str) -> Shape {
         "ancient_of_war" | "ancient_of_war_uprooted" => Shape::Hexagon,
         "ancient_protector" | "ancient_protector_uprooted" => Shape::GuardTower,
         "entangled_mine" => Shape::EntangledMine,
+        // The terran annexes and the tank. A lifted-off structure keeps its
+        // grounded shape: the lift and its shadow are what say it is flying.
+        "comsat_station" => Shape::Dish,
+        "tech_lab" => Shape::Lab,
+        "refinery" => Shape::Refinery,
+        "tank" => Shape::Tank { sieged: false },
+        "siege_tank" => Shape::Tank { sieged: true },
         "big_rock" => Shape::Circle,
         _ => Shape::Square,
     }
@@ -797,6 +821,109 @@ pub fn attach_sprites(
                     ));
                 });
             }
+            Shape::Dish => {
+                // A base with a lighter dish on it, and the mast fixed at
+                // its top: the station has no speed, so it is drawn square to
+                // the map and nothing about it may assert a heading.
+                let px = Vec2::new(size.width as f32, size.height as f32) * CELL_PX * 0.85;
+                entity.insert(Sprite::from_color(color, px));
+                entity.with_children(|parent| {
+                    parent.spawn((
+                        Mesh2d(meshes.add(Circle::new(radius * 0.5))),
+                        MeshMaterial2d(materials.add(color.lighter(0.3))),
+                        Transform::from_translation(Vec3::new(0.0, 0.0, 0.1)),
+                    ));
+                    parent.spawn((
+                        Sprite::from_color(color.darker(0.25), Vec2::new(radius * 0.16, radius)),
+                        Transform::from_translation(Vec3::new(0.0, radius * 0.45, 0.2)),
+                    ));
+                });
+            }
+            Shape::Refinery => {
+                // A holding tank on the base, with the shaft head at its
+                // heart in the same darker ring an entangled mine wears: the
+                // seam is still down there, and the gold comes up through
+                // this.
+                let px = Vec2::new(size.width as f32, size.height as f32) * CELL_PX * 0.85;
+                let pipe = owner.map_or(color.darker(0.25), |owner| player_color(owner.player()));
+                entity.insert(Sprite::from_color(color, px));
+                entity.with_children(|parent| {
+                    parent.spawn((
+                        Mesh2d(meshes.add(Circle::new(radius * 0.62))),
+                        MeshMaterial2d(materials.add(color.lighter(0.2))),
+                        Transform::from_translation(Vec3::new(0.0, 0.0, 0.1)),
+                    ));
+                    parent.spawn((
+                        Mesh2d(meshes.add(Annulus::new(radius * 0.26, radius * 0.38))),
+                        MeshMaterial2d(materials.add(color.darker(0.35))),
+                        Transform::from_translation(Vec3::new(0.0, 0.0, 0.2)),
+                    ));
+                    // The pipe the load leaves by, over one corner of the
+                    // base, in the colour of whoever draws through it: every
+                    // other part is the seam's own gold, which would leave a
+                    // rival's refinery reading as unclaimed ground.
+                    parent.spawn((
+                        Sprite::from_color(pipe, Vec2::new(radius * 0.9, radius * 0.18)),
+                        Transform::from_translation(Vec3::new(radius * 0.45, -radius * 0.6, 0.2)),
+                    ));
+                });
+            }
+            Shape::Lab => {
+                // A base with a darker vent bar across it.
+                let px = Vec2::new(size.width as f32, size.height as f32) * CELL_PX * 0.85;
+                entity.insert(Sprite::from_color(color, px));
+                entity.with_children(|parent| {
+                    parent.spawn((
+                        Sprite::from_color(
+                            color.darker(0.3),
+                            Vec2::new(radius * 1.1, radius * 0.3),
+                        ),
+                        Transform::from_translation(Vec3::new(0.0, 0.0, 0.1)),
+                    ));
+                });
+            }
+            Shape::Tank { sieged } => {
+                // Rolling, the hull is square to its heading and the barrel
+                // runs out of its nose: where the barrel points is where the
+                // gun can fire.
+                //
+                // Planted, it draws no barrel. A form with no speed is drawn
+                // square to the map whatever its look, so a barrel would
+                // assert a heading the sieged gun does not have — it traverses
+                // and answers whatever comes into reach from any side. What
+                // says "planted" instead is the brace on each flank and the
+                // ring its gun turns in.
+                let hull = Vec2::new(radius * 1.1, radius * 1.2);
+                entity.insert(Sprite::from_color(color, hull));
+                entity.with_children(|parent| {
+                    if sieged {
+                        parent.spawn((
+                            Mesh2d(meshes.add(Annulus::new(radius * 0.34, radius * 0.46))),
+                            MeshMaterial2d(materials.add(color.lighter(0.2))),
+                            Transform::from_translation(Vec3::new(0.0, 0.0, 0.1)),
+                        ));
+                        for flank in [-1.0, 1.0] {
+                            parent.spawn((
+                                Sprite::from_color(
+                                    color.darker(0.3),
+                                    Vec2::new(radius * 0.3, radius * 0.9),
+                                ),
+                                Transform::from_translation(Vec3::new(
+                                    flank * radius * 0.7,
+                                    0.0,
+                                    0.1,
+                                )),
+                            ));
+                        }
+                    } else {
+                        let barrel = Vec2::new(radius * 0.22, radius);
+                        parent.spawn((
+                            Sprite::from_color(color.lighter(0.2), barrel),
+                            Transform::from_translation(Vec3::new(0.0, barrel.y * 0.55, 0.1)),
+                        ));
+                    }
+                });
+            }
             Shape::Square => {
                 let px = Vec2::new(size.width as f32, size.height as f32) * CELL_PX * 0.85;
                 entity.insert(Sprite::from_color(color, px));
@@ -867,16 +994,22 @@ pub fn attach_sprites(
     }
 }
 
-/// Strips the render components of any entity whose type was rewritten, so
-/// [`attach_sprites`] rebuilds the new form's shape — a gryphon that lands
-/// must stop wearing its flight silhouette.
+/// Strips the render components of any entity whose type was rewritten or whose
+/// owner changed, so [`attach_sprites`] rebuilds it — a gryphon that lands must
+/// stop wearing its flight silhouette, and a seized annex must stop wearing the
+/// colour of the player who lost it.
 ///
 /// `Changed` also fires the tick a component is added, but a freshly spawned
-/// entity is not yet [`Renderable`], so only real type rewrites pass the
-/// filter.
+/// entity is not yet [`Renderable`], so only real rewrites pass the filter.
 pub fn refresh_changed_sprites(
     mut commands: Commands,
-    query: Query<Entity, (Changed<EntityInfoComponent>, With<Renderable>)>,
+    query: Query<
+        Entity,
+        (
+            Or<(Changed<EntityInfoComponent>, Changed<OwnerComponent>)>,
+            With<Renderable>,
+        ),
+    >,
 ) {
     for entity in &query {
         commands
@@ -1864,7 +1997,11 @@ fn ghost_shape(type_name: &str, size: CellSize) -> GhostShape {
         | Shape::WatchTower
         | Shape::GuardTower
         | Shape::Pylon
-        | Shape::EntangledMine => GhostShape::Rect {
+        | Shape::EntangledMine
+        | Shape::Dish
+        | Shape::Lab
+        | Shape::Refinery
+        | Shape::Tank { .. } => GhostShape::Rect {
             extent: Vec2::new(size.width as f32, size.height as f32) * CELL_PX * 0.85,
         },
     }
@@ -1888,6 +2025,12 @@ const PASSENGER_COLOR: Color = Color::srgb(0.95, 0.85, 0.35);
 const MORPH_WORK_COLOR: Color = Color::srgb(0.85, 0.55, 0.25);
 /// A repairer that cannot pay for this tick's work.
 const STALLED_WORK_COLOR: Color = Color::srgb(1.0, 0.3, 0.25);
+
+/// The patch a watch is holding open.
+const WATCH_PATCH_COLOR: Color = Color::srgb(0.55, 0.85, 1.0);
+
+/// The coupling between an annex and the primary it stands with.
+const ANNEX_BOND_COLOR: Color = Color::srgb(1.0, 0.62, 0.18);
 
 /// Draws a line from every visible worker to the job it is actively on — a site
 /// being raised, a source being worked, or a patient being mended — so who is
@@ -1981,6 +2124,97 @@ pub fn draw_work_links(
         let start = transform.translation.truncate();
         gizmos.line_2d(start, end, color);
         gizmos.circle_2d(end, CELL_PX * 0.18, color);
+    }
+}
+
+/// Rings each patch of map a watch is holding open, for as long as it holds
+/// (run in `Update`).
+///
+/// Without it a scan cast over ground already in sight leaves no mark at all,
+/// and a scan is the one skill whose whole effect is what it lets the caster
+/// see. Only the watches this node is on the side of are drawn: another
+/// player's reveal is not the viewer's to know about.
+pub fn draw_watch_patches(
+    mut gizmos: Gizmos,
+    session: Res<GameSession>,
+    watch: Res<ObserverPerspective>,
+    watches: Res<Watches>,
+) {
+    for held in watches.in_force() {
+        let shown = match (session.local_player(), watch.0) {
+            (Some(_), _) => allied_with_local(&session, held.player),
+            (None, Some(player)) => session.are_allied(player, held.player),
+            (None, None) => true,
+        };
+        if !shown {
+            continue;
+        }
+        let center = world_center(FixedUVec2::from(held.center), CellSize::ONE).truncate();
+        // Half a cell beyond the radius, so the ring encloses the outermost
+        // cells the sweep reveals instead of cutting through their centres:
+        // the reveal runs from the patch's whole 1x1 footprint, as reach does.
+        gizmos.circle_2d(
+            center,
+            (held.radius as f32 + 0.5) * CELL_PX,
+            WATCH_PATCH_COLOR,
+        );
+    }
+}
+
+/// Draws which primary an annex stands with (run in `Update`): docked, a
+/// coupling to the primary whose dock it holds, with a plug at its own end;
+/// alone, the same plug in the halted color inside a halted ring.
+///
+/// The two states read apart at a glance in one vocabulary: a lab bound to its
+/// factory is tied to it, and one a lift-off left behind is unplugged and
+/// ringed. A coupling needs both ends on screen, so an annex whose primary is
+/// under fog draws its plug alone. An annex still going up draws neither: the
+/// site's own markers have it until it stands.
+pub fn draw_annex_bonds(
+    mut gizmos: Gizmos,
+    registry: Res<ContentRegistry>,
+    // Anchored on the interpolated transforms, so the coupling glides with the
+    // buildings it ties together rather than stepping behind them.
+    annexes: Query<
+        (
+            &EntityInfoComponent,
+            &AnnexComponent,
+            &Transform,
+            &Visibility,
+        ),
+        (
+            Without<HiddenComponent>,
+            Without<UnderConstructionComponent>,
+        ),
+    >,
+    primaries: Query<(&EntityInfoComponent, &Transform, &Visibility), Without<HiddenComponent>>,
+) {
+    for (info, annex, transform, visibility) in &annexes {
+        if matches!(visibility, Visibility::Hidden) {
+            continue;
+        }
+        let start = transform.translation.truncate();
+        let plug = CELL_PX * 0.18;
+        match annex.docked_to {
+            Docking::Primary(primary_id) => {
+                gizmos.circle_2d(start, plug, ANNEX_BOND_COLOR);
+                if let Some(end) = primaries
+                    .iter()
+                    .find(|(primary, _, visible)| {
+                        primary.id() == primary_id && !matches!(visible, Visibility::Hidden)
+                    })
+                    .map(|(_, transform, _)| transform.translation.truncate())
+                {
+                    gizmos.line_2d(start, end, ANNEX_BOND_COLOR);
+                }
+            }
+            Docking::Alone => {
+                let size = registry.def(info.type_id()).location.unwrap().size();
+                let radius = size.width.max(size.height) as f32 * CELL_PX * 0.55;
+                gizmos.circle_2d(start, plug, HALTED_SITE_COLOR);
+                gizmos.circle_2d(start, radius + 4.0, HALTED_SITE_COLOR);
+            }
+        }
     }
 }
 

@@ -46,7 +46,7 @@ pub fn tick(world: &mut World) {
         // A frozen entity does not run.
         match entity_def::operation(world, entity) {
             Operation::Operating => {}
-            Operation::UnderConstruction | Operation::Disabled => continue,
+            Operation::UnderConstruction | Operation::Disabled(_) => continue,
         }
         // Commanded entities stay commanded: only an empty queue flees.
         if entity_ref

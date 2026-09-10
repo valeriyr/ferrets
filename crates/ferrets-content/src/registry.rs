@@ -3,10 +3,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use bevy_ecs::prelude::*;
+use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect};
 use ferrets_math::FixedU64;
 use ferrets_pathfinder::{layer_id::LayerId, layer_mask::LayerMask};
 
 use crate::{
+    annex::{AloneConduct, AnnexLife},
     attack::{AttackDef, Delivery, Weapon},
     build::BuilderAttendance,
     entity_buffs::{EntityBuffDef, EntityBuffId},
@@ -18,7 +20,9 @@ use crate::{
     player_stats::{PLAYER_BUILTIN_STATS, PlayerStatId},
     projectile::{Aim, ProjectileDef, ProjectileId},
     repair::RepairCost,
+    requirement::{Requirement, Scope},
     research::{ResearchDef, ResearchId},
+    resource::Sources,
     skills::{
         EntityCastCost, EntityCastEffect, EntityCastTarget, PlayerCastEffect, SkillCaster,
         SkillDef, SkillId,
@@ -26,7 +30,7 @@ use crate::{
     stand::StandingAct,
     tags,
     turret::{TurretDef, TurretId, WeaponConduct},
-    work::WorkPresence,
+    work::{Crewing, WorkPresence},
 };
 
 /// Stores every [`EntityTypeDef`], indexed by [`EntityTypeId`] and looked up by
@@ -149,23 +153,18 @@ impl ContentRegistry {
         self.defs.push(def);
     }
 
-    /// Validates the production catalogues of all registered types. Call once
-    /// after every type has been registered.
+    /// Validates every name a registered type, research or skill points at,
+    /// and every declaration a type makes about itself. Call once after
+    /// everything has been registered.
     ///
     /// These references (trained and built types) may form cycles, so they cannot
     /// be checked at registration time; this pass checks them against the complete
     /// registry, in any registration order.
     ///
-    /// Panics if any type trains a type that is not a registered trainable type,
-    /// builds a type that is not a registered constructible type, carries a
-    /// requirement (on the type itself, a research, or a skill) that does not
-    /// resolve to exactly one of: a registered entity type or tag, or a
-    /// registered research, deals bonus damage to a name that is neither a
-    /// registered entity type nor a registered tag, moves on a combination of
-    /// layers no registered terrain passes, or offers a morph transition whose
-    /// destination is unregistered or an odd footprint span away, whose
-    /// requirements do not resolve, or whose costs draw from a pool the type does
-    /// not have.
+    /// Panics, naming the offending type and reference, when any name a
+    /// registered type points at does not resolve against the complete
+    /// registry, or when a declaration cannot be carried out by the type that
+    /// makes it. Each `validate_*` below states the terms it enforces.
     pub fn validate(&self) {
         for def in &self.defs {
             self.validate_trains(def);
@@ -175,8 +174,12 @@ impl ContentRegistry {
             self.validate_bonus_damage_vs(def);
             self.validate_traversable(def);
             self.validate_morphs(def);
+            self.validate_crews(def);
             self.validate_berths(def);
+            self.validate_harvest_sources(def);
             self.validate_overbuilds(def);
+            self.validate_docks(def);
+            self.validate_annex(def);
         }
         for (name, &id) in &self.researches {
             self.validate_requires(
@@ -636,11 +639,17 @@ impl ContentRegistry {
                         field.index() < self.field_defs.len(),
                         "skill '{name}' acts on an unregistered field"
                     ),
+                    EntityCastEffect::Watch { duration, .. } => {
+                        assert!(*duration > 0, "skill '{name}' watches for no time at all")
+                    }
                 }
                 // A cell has no pools to buff, damage, or heal; only a field
-                // action lands on one.
+                // action and a watch land on one.
                 match (target, effect) {
-                    (EntityCastTarget::Position, EntityCastEffect::Field { .. }) => {}
+                    (
+                        EntityCastTarget::Position,
+                        EntityCastEffect::Field { .. } | EntityCastEffect::Watch { .. },
+                    ) => {}
                     (
                         EntityCastTarget::Position,
                         EntityCastEffect::ApplyBuff(_)
@@ -669,6 +678,15 @@ impl ContentRegistry {
                         )
                     }
                 }
+                // A player cast has no acting entity, so there is nothing for
+                // an actor-scoped requirement to be asked of.
+                assert!(
+                    skill
+                        .requires
+                        .iter()
+                        .all(|entry| matches!(entry.scope(), Scope::Player)),
+                    "player-cast skill '{name}' requires something of an acting entity"
+                );
             }
         }
 
@@ -1193,23 +1211,43 @@ impl ContentRegistry {
     }
 
     /// Checks that every requirement entry resolves to exactly one vocabulary:
-    /// a research, or an entity type or tag (the two entity readings share
-    /// their meaning, so a name serving both is fine; a name that is both a
-    /// research and an entity term would leave content ambiguous).
-    fn validate_requires(&self, owner: &str, requires: &[String]) {
-        for name in requires {
-            let research = self.researches.contains_key(name);
-            let entity_term = self.defs_by_name.contains_key(name) || self.tags.contains(name);
-            assert!(
-                research || entity_term,
-                "{owner} requires '{name}', which is not a registered entity type, tag, \
-                 or research"
-            );
-            assert!(
-                !(research && entity_term),
-                "{owner} requires '{name}', which names both a research and an entity \
-                 type or tag"
-            );
+    /// the kind it names, and that no name serves as both an entity type and a
+    /// tag.
+    fn validate_requires(&self, owner: &str, requires: &[Requirement]) {
+        for entry in requires {
+            match entry {
+                Requirement::EntityType(name) => {
+                    assert!(
+                        self.defs_by_name.contains_key(name),
+                        "{owner} requires the entity type '{name}', which is not registered"
+                    );
+                    assert!(
+                        !self.tags.contains(name),
+                        "{owner} requires the entity type '{name}', which is also a registered tag"
+                    );
+                }
+                Requirement::Tag(name) => {
+                    assert!(
+                        self.tags.contains(name),
+                        "{owner} requires the tag '{name}', which is not registered"
+                    );
+                    assert!(
+                        !self.defs_by_name.contains_key(name),
+                        "{owner} requires the tag '{name}', which is also a registered entity type"
+                    );
+                }
+                Requirement::Research(research) => assert!(
+                    research.index() < self.research_defs.len(),
+                    "{owner} requires a research this registry never minted"
+                ),
+                Requirement::Annexed(name) => {
+                    let annex = self.entity(name).is_some_and(|def| def.annex.is_some());
+                    assert!(
+                        annex,
+                        "{owner} requires '{name}' docked, which is not a registered annex"
+                    );
+                }
+            }
         }
     }
 
@@ -1736,6 +1774,40 @@ impl ContentRegistry {
         }
     }
 
+    /// Checks that no presence the definition declares admits nobody.
+    fn validate_crews(&self, def: &EntityTypeDef) {
+        let mut presences: Vec<&WorkPresence> = Vec::new();
+        if let Some(builder) = &def.builder
+            && let BuilderAttendance::Crew(presence) = builder.attendance()
+        {
+            presences.push(presence);
+        }
+        if let Some(repairer) = &def.repairer {
+            presences.push(repairer.presence());
+        }
+        if let Some(carrier) = &def.resource_carrier {
+            for kind in carrier.kinds() {
+                presences.push(
+                    carrier
+                        .harvest_data(kind)
+                        .expect("a carrier's kinds are the keys of its catalogue")
+                        .presence(),
+                );
+            }
+        }
+        for presence in presences {
+            let admits_nobody = match presence.crewing() {
+                Crewing::Counted(at_once) => at_once.admits_nobody(),
+                Crewing::Seated => false,
+            };
+            assert!(
+                !admits_nobody,
+                "entity type '{}' declares a crew limit of nobody",
+                def.name
+            );
+        }
+    }
+
     /// Checks that the berth points a type declares lie inside its footprint, and
     /// that every attachment its capabilities declare names a berth group the
     /// jobs it reaches offer: every type a builder raises, at least one source
@@ -1792,16 +1864,20 @@ impl ContentRegistry {
                     .harvest_data(kind)
                     .expect("a carrier's kinds are the keys of its catalogue");
                 if let WorkPresence::Attached(attachment) = data.presence() {
+                    // Only the sources the carrier's kind admits count: a group
+                    // offered by a seam it may not work is a group it can never
+                    // sit in.
                     let offered = self.entities().any(|source| {
                         source
                             .resource_source
                             .as_ref()
                             .is_some_and(|resource| resource.kind() == kind)
+                            && data.admits_source(&source.name)
                             && offers(source, attachment.berths())
                     });
                     assert!(
                         offered,
-                        "entity type '{}' attaches to berth group '{}' of {kind} sources, and no registered {kind} source declares such a group",
+                        "entity type '{}' attaches to berth group '{}' of {kind} sources, and no {kind} source it may work declares such a group",
                         def.name,
                         attachment.berths()
                     );
@@ -1822,6 +1898,199 @@ impl ContentRegistry {
                 attachment.berths()
             );
         }
+    }
+
+    /// Checks that every source a carrier's kind restricts itself to is a
+    /// registered source of that kind.
+    fn validate_harvest_sources(&self, def: &EntityTypeDef) {
+        let Some(carrier) = &def.resource_carrier else {
+            return;
+        };
+        for kind in carrier.kinds() {
+            let data = carrier
+                .harvest_data(kind)
+                .expect("a carrier's kinds are the keys of its catalogue");
+            match data.sources() {
+                Sources::Any => {}
+                Sources::Only(names) => {
+                    assert!(
+                        !names.is_empty(),
+                        "entity type '{}' harvests {kind} from no source at all",
+                        def.name
+                    );
+                    for type_name in names {
+                        let source = self.entity(type_name).unwrap_or_else(|| {
+                            panic!(
+                                "entity type '{}' harvests {kind} from '{type_name}', which is not registered",
+                                def.name
+                            )
+                        });
+                        assert!(
+                            source
+                                .resource_source
+                                .as_ref()
+                                .is_some_and(|resource| resource.kind() == kind),
+                            "entity type '{}' harvests {kind} from '{type_name}', which is no {kind} source",
+                            def.name
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// Checks that a type's docks stand clear of its own footprint and of each
+    /// other, take registered annexes, and belong to a primary that stands
+    /// still, can raise what it takes and attends the work from where it stands.
+    fn validate_docks(&self, def: &EntityTypeDef) {
+        let size = def
+            .location
+            .expect("validated content defines a location")
+            .size();
+        // The bond is derived from where the primary stands, so a dock holds
+        // still only if its primary does: a moving primary's anchor jumps a
+        // whole cell whenever its position crosses a boundary.
+        assert!(
+            def.docks.is_empty() || def.base_stat(EntityStatId::SPEED).is_none(),
+            "entity type '{}' offers docks but carries the speed stat",
+            def.name
+        );
+
+        // A primary raises its annex from where it stands, so it may attend the
+        // site or leave it to itself — but it cannot go inside the work, be
+        // consumed by it, or sit in its berths: each would take the primary off
+        // the dock it is filling.
+        // A type with no builder at all is answered for per dock below.
+        if let Some(builder) = &def.builder
+            && !def.docks.is_empty()
+        {
+            let attends = builder.attendance();
+            assert!(
+                matches!(
+                    attends,
+                    BuilderAttendance::Crew(WorkPresence::Present { .. })
+                        | BuilderAttendance::Unattended
+                ),
+                "entity type '{}' offers docks but raises its sites as {}",
+                def.name,
+                match attends {
+                    BuilderAttendance::Crew(WorkPresence::Hidden { .. }) => "a hidden builder",
+                    BuilderAttendance::Crew(WorkPresence::Attached(_)) => "an attached builder",
+                    BuilderAttendance::Consumed => "a builder consumed by its work",
+                    BuilderAttendance::Crew(WorkPresence::Present { .. })
+                    | BuilderAttendance::Unattended => unreachable!("admitted above"),
+                }
+            );
+        }
+
+        let mut anchors: BTreeSet<CellPos> = BTreeSet::new();
+        // Whatever stands in one dock must leave every other dock free to be
+        // filled, so the footprints an annex could take are compared and not
+        // only the cells their anchors sit on. The types one dock accepts are
+        // alternatives, so only different docks are held against each other.
+        let mut taken: Vec<(CellRect, &str)> = Vec::new();
+        for dock in &def.docks {
+            assert!(
+                anchors.insert(dock.at()),
+                "entity type '{}' offers two docks at ({}, {})",
+                def.name,
+                dock.at().x,
+                dock.at().y
+            );
+            let at = dock.at();
+            assert!(
+                at.x >= size.width || at.y >= size.height,
+                "entity type '{}' offers a dock at ({}, {}), inside its own footprint",
+                def.name,
+                at.x,
+                at.y
+            );
+
+            let mut this_dock: Vec<(CellRect, &str)> = Vec::new();
+            for type_name in dock.accepted_types() {
+                let annex = self.entity(type_name).unwrap_or_else(|| {
+                    panic!(
+                        "entity type '{}' docks '{type_name}', which is not registered",
+                        def.name
+                    )
+                });
+                assert!(
+                    annex.annex.is_some(),
+                    "entity type '{}' docks '{type_name}', which is not an annex",
+                    def.name
+                );
+                let annex_size = annex
+                    .location
+                    .expect("validated content defines a location")
+                    .size();
+                let rect = CellRect::new(dock.at(), annex_size);
+                if let Some((_, other)) = taken
+                    .iter()
+                    .find(|&&(standing, _)| standing.intersects(rect))
+                {
+                    panic!(
+                        "entity type '{}' docks '{type_name}' at ({}, {}), over the ground '{other}' stands on",
+                        def.name,
+                        dock.at().x,
+                        dock.at().y
+                    );
+                }
+                this_dock.push((rect, type_name));
+
+                assert!(
+                    def.builder
+                        .as_ref()
+                        .is_some_and(|builder| builder.can_build(type_name)),
+                    "entity type '{}' docks '{type_name}' but cannot raise it",
+                    def.name
+                );
+            }
+            taken.extend(this_dock);
+        }
+    }
+
+    /// Checks that an annex is a constructible building that holds the cells it
+    /// stands on, carries the stat any fade it declares moves, and fits some
+    /// registered dock.
+    fn validate_annex(&self, def: &EntityTypeDef) {
+        let Some(annex) = def.annex else { return };
+        assert!(
+            def.build_time.is_some(),
+            "annex '{}' is not constructible",
+            def.name
+        );
+        // A modifier moves only a stat its type carries, so a fade the
+        // type never declared would drain nothing at all.
+        if let AloneConduct::Standing {
+            life: AnnexLife::Fades { .. },
+            ..
+        } = annex.alone()
+        {
+            assert!(
+                def.base_stat(EntityStatId::HEALTH_DRAIN).is_some(),
+                "annex '{}' fades but does not carry the health_drain stat",
+                def.name
+            );
+        }
+        assert!(
+            def.base_stat(EntityStatId::SPEED).is_none(),
+            "annex '{}' carries the speed stat",
+            def.name
+        );
+        assert!(
+            def.location
+                .expect("validated content defines a location")
+                .solidity()
+                .claims_cells(),
+            "annex '{}' does not claim the cells it stands on",
+            def.name
+        );
+        assert!(def.has_health(), "annex '{}' has no health pool", def.name);
+        let docked = self
+            .defs
+            .iter()
+            .any(|primary| primary.docks.iter().any(|dock| dock.accepts(&def.name)));
+        assert!(docked, "annex '{}' fits no registered dock", def.name);
     }
 
     /// Checks that a type raised over a resource source names a registered

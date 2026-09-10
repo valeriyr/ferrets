@@ -194,8 +194,8 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
         }
         work::enter(world, entity, &presence, target);
         repair.inside_job = match presence {
-            WorkPresence::Hidden | WorkPresence::Attached(_) => true,
-            WorkPresence::Present | WorkPresence::PresentStacking => false,
+            WorkPresence::Hidden { .. } | WorkPresence::Attached(_) => true,
+            WorkPresence::Present { .. } => false,
         };
     }
 
@@ -248,9 +248,13 @@ fn accepts(world: &World, entity: Entity, target: Entity) -> bool {
     if !target_def.has_health() || !repairer.mends(&target_def.tags) {
         return false;
     }
-    // Only a production-paced mender needs the target to be something production
-    // knows a duration for.
-    if repairer.rate() == RepairRate::Production && !target_def.is_production_repairable() {
+    // Only a production-paced mender needs the target to be something
+    // production knows a duration for, and only a pro-rata bill needs it to
+    // have a price: either missing, and the work would be done for nothing.
+    if matches!(repairer.rate(), RepairRate::Production) && !target_def.is_production_repairable() {
+        return false;
+    }
+    if matches!(repairer.cost(), RepairCost::ProRata) && target_def.cost.is_empty() {
         return false;
     }
     // Mending an enemy is never the intent, and a neutral belongs to nobody.
@@ -266,8 +270,9 @@ fn accepts(world: &World, entity: Entity, target: Entity) -> bool {
 /// Whether `entity` is shut out of mending `target`: by the crew already on it,
 /// or for want of a berth to sit in.
 fn job_excludes(world: &World, target: Entity, entity: Entity) -> bool {
-    crew::excludes::<UnderRepairComponent>(world, target, entity, shares_jobs)
-        || berths::shut(world, target, repairer_of(world, entity).presence())
+    crew::excludes::<UnderRepairComponent>(world, target, entity, |world, worker| {
+        repairer_of(world, worker).presence().crewing()
+    }) || berths::shut(world, target, repairer_of(world, entity).presence())
 }
 
 /// Drops out of the crew on `target`, taking [`UnderRepairComponent`] with it as the
@@ -279,14 +284,6 @@ fn leave_crew(world: &mut World, target: SimulationId, entity: Entity) {
         return;
     };
     crew::leave_and_unmark::<UnderRepairComponent>(world, target, entity);
-}
-
-/// Whether an entity's repair capability lets several workers share one job.
-fn shares_jobs(world: &World, entity: Entity) -> bool {
-    entity_def::of(world, entity)
-        .repairer
-        .as_ref()
-        .is_some_and(|repairer| repairer.presence().stacks())
 }
 
 /// The health one tick of `entity`'s work restores on `target`, capped by what the

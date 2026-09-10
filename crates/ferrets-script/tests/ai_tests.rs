@@ -3,16 +3,20 @@
 //! malformed scripts and results surface as errors rather than panics.
 
 use ferrets_content::{
+    annex::{AloneConduct, AnnexClaim, AnnexLife, AnnexWork},
+    build::BuilderAttendance,
     costs,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     location::Solidity,
     player_buffs::PlayerBuffDef,
     registry::ContentRegistry,
+    requirement::Requirement,
     research::{ResearchDef, ResearchId},
     skills::{EntityCastEffect, EntityCastTarget, PlayerCastEffect, SkillCaster, SkillDef},
     stack_rule::StackRule,
     stats::{EntityModifier, ModifierOp},
+    work::{CrewLimit, WorkPresence},
 };
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::{FixedI64, FixedU64, fixed_urect::FixedURect, fixed_uvec2::FixedUVec2};
@@ -273,7 +277,10 @@ fn scripts_read_skill_catalogue() {
             local focus = content.skills.battle_focus
             if focus.caster ~= "entity" then error("wrong caster") end
             if focus.target ~= "caster" then error("wrong target") end
-            if focus.requires[1] ~= "smithing" then error("wrong requires") end
+            local wanted = focus.requires[1]
+            if wanted.kind ~= "research" or wanted.name ~= "smithing" then
+                error("wrong requires")
+            end
             local drums = content.skills.war_drums
             if drums.caster ~= "player" then error("wrong drums caster") end
             if drums.target ~= nil then error("drums take no target") end
@@ -290,13 +297,38 @@ fn scripts_read_skill_catalogue() {
 }
 
 #[test]
+fn scripts_read_every_requirement_kind() {
+    let source = ai_script(
+        r#"function(state, view)
+            local hub = content.entities.hub
+            local wanted = {}
+            for _, entry in ipairs(hub.requires) do
+                wanted[entry.kind] = entry.name
+            end
+            if wanted.entity_type ~= "lab" then error("wrong entity_type") end
+            if wanted.tag ~= "workshop" then error("wrong tag") end
+            if wanted.research ~= "smithing" then error("wrong research") end
+            if wanted.annexed ~= "relay" then error("wrong annexed") end
+            return {}
+        end"#,
+    );
+    let (content, _) = research_content();
+    let mut runtime = load_ai(&source, &content).expect("load ai");
+
+    assert!(runtime.think(&empty_view()).is_ok());
+}
+
+#[test]
 fn scripts_read_research_catalogue_and_state() {
     let source = ai_script(
         r#"function(state, view)
             local smithing = content.researches.smithing
             if smithing.cost.gold ~= 30 then error("wrong cost") end
             if smithing.time ~= 200 then error("wrong time") end
-            if smithing.requires[1] ~= "lab" then error("wrong requires") end
+            local wanted = smithing.requires[1]
+            if wanted.kind ~= "entity_type" or wanted.name ~= "lab" then
+                error("wrong requires")
+            end
             if view.researched[1] ~= "smithing" then error("wrong researched") end
             if view.researching[1] ~= "tactics" then error("wrong researching") end
             return {}
@@ -793,11 +825,16 @@ fn research_content() -> (ContentView, ResearchId) {
     registry.register_resource("gold");
     let smithing = registry.register_research(
         "smithing",
-        ResearchDef::new(costs::cost([("gold", 30)]), 200, None, ["lab"]),
+        ResearchDef::new(
+            costs::cost([("gold", 30)]),
+            200,
+            None,
+            [Requirement::EntityType("lab".to_string())],
+        ),
     );
     registry.register_research(
         "tactics",
-        ResearchDef::new(costs::Cost::new(), 100, None, Vec::<String>::new()),
+        ResearchDef::new(costs::Cost::new(), 100, None, Vec::new()),
     );
     let battle_focus = registry.register_skill(
         "battle_focus",
@@ -808,7 +845,7 @@ fn research_content() -> (ContentView, ResearchId) {
                 target: EntityCastTarget::Caster,
                 effect: EntityCastEffect::Damage(FixedU64::ONE),
             },
-            requires: vec!["smithing".to_string()],
+            requires: vec![Requirement::Research(smithing)],
         },
     );
     let second_wind = registry.register_skill(
@@ -853,6 +890,43 @@ fn research_content() -> (ContentView, ResearchId) {
             .with_researcher([smithing])
             .with_energy(50, FixedU64::ONE)
             .with_skills([battle_focus, second_wind]),
+    );
+    // A primary offering one dock and the annex that stands in it, so a
+    // requirement list may name an annex the registry will accept — and one
+    // list naming all four kinds, which is what a script reads them off.
+    registry.register_tag("workshop");
+    registry.register(
+        EntityTypeDef::new("relay")
+            .with_location(LayerId::new(1), CellSize::ONE, Solidity::Solid)
+            .with_health(10)
+            .with_cost([("gold", 10)])
+            .with_build_time(4)
+            .with_annex(
+                AloneConduct::Standing {
+                    work: AnnexWork::Idles,
+                    life: AnnexLife::Endures,
+                },
+                AnnexClaim::Bound,
+            ),
+    );
+    registry.register(
+        EntityTypeDef::new("hub")
+            .with_location(LayerId::new(1), CellSize::ONE, Solidity::Solid)
+            .with_health(20)
+            .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
+            .with_builder(
+                ["relay"],
+                BuilderAttendance::Crew(WorkPresence::Present {
+                    crew: CrewLimit::ONE,
+                }),
+            )
+            .with_docks([(CellPos::new(1, 0), ["relay"])])
+            .with_requires([
+                Requirement::EntityType("lab".to_string()),
+                Requirement::Tag("workshop".to_string()),
+                Requirement::Research(smithing),
+                Requirement::Annexed("relay".to_string()),
+            ]),
     );
     registry.validate();
     (ContentView::from_registry(&registry), smithing)

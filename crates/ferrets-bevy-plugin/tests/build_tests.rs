@@ -5,8 +5,12 @@ mod utils;
 
 use bevy::prelude::*;
 use ferrets_content::{
-    build::BuilderAttendance, entity_stats::EntityStatId, entity_type_def::EntityTypeDef,
-    location::Solidity, registry::ContentRegistry, work::WorkPresence,
+    build::BuilderAttendance,
+    entity_stats::EntityStatId,
+    entity_type_def::EntityTypeDef,
+    location::Solidity,
+    registry::ContentRegistry,
+    work::{CrewLimit, WorkPresence},
 };
 use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
 use ferrets_math::{FixedU64, facing::Facing};
@@ -661,6 +665,37 @@ fn halted_site_is_taken_up_by_next_builder_and_finished() {
 }
 
 #[test]
+fn builder_that_leaves_sites_to_themselves_takes_up_halted_one_on_its_own_terms() {
+    let mut app = utils::orders_app();
+    let (mason, mason_id) = utils::create_owned(&mut app, "mason", 9, 10, 0);
+    let (architect, architect_id) = utils::create_owned(&mut app, "architect", 12, 11, 0);
+    utils::grant_gold(&mut app, 80);
+
+    order_depot(&mut app, mason_id);
+    utils::run_ticks(&mut app, utils::APPLY + 2);
+    utils::stop_orders(app.world_mut(), mason);
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(site_work(app.world_mut()), Some(SiteWork::Halted));
+
+    // The architect leaves a site it raises to itself, so it leaves this one to
+    // itself too rather than joining a crew it is not built to be on — and its
+    // order is done the moment it has taken the site up.
+    order_depot(&mut app, architect_id);
+    utils::run_ticks(&mut app, utils::APPLY);
+    assert!(matches!(
+        site_work(app.world_mut()),
+        Some(SiteWork::Unattended { .. })
+    ));
+    assert!(utils::order_queue_is_empty(app.world_mut(), architect));
+    assert_eq!(utils::gold(app.world_mut()), 30, "nobody paid twice");
+
+    // It advances itself from there: four ticks were still owed.
+    utils::run_ticks(&mut app, 4);
+    assert_eq!(under_construction(app.world_mut()), 0);
+    assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
+}
+
+#[test]
 fn attached_builder_stands_on_site_holding_no_cells() {
     let mut app = utils::orders_app();
     let (roofer, roofer_id) = utils::create_owned(&mut app, "roofer", 9, 10, 0);
@@ -1071,7 +1106,12 @@ fn surveyor_app() -> App {
                 )
                 .with_health(20)
                 .with_stat(EntityStatId::BUILD_RANGE, FixedU64::from_num(3))
-                .with_builder(["depot"], BuilderAttendance::Crew(WorkPresence::Present)),
+                .with_builder(
+                    ["depot"],
+                    BuilderAttendance::Crew(WorkPresence::Present {
+                        crew: CrewLimit::ONE,
+                    }),
+                ),
         );
     }
     utils::register_orders_content(&mut app);

@@ -31,6 +31,8 @@ pub const CONTENT: &str = r#"
     -- The elves' buildings walk: all but the moon well uproot into a form that
     -- fights and roots again where it stops.
     define_race("elves")
+    -- The terrans' production buildings fly, and leave their annexes behind.
+    define_race("terran")
 
     -- Creep covers the ground and recedes ring by ring, half a second a ring,
     -- once nothing sustains it, and whoever spreads it sees every cell of it;
@@ -47,6 +49,9 @@ pub const CONTENT: &str = r#"
     -- Marks the living, which is what a medic will treat and a worker will not.
     -- "building" is pre-registered by the engine.
     define_tag("biological")
+    -- Marks what an SCV may patch up besides a wall: in the demo, its own
+    -- tanks.
+    define_tag("mechanical")
 
     -- Projectile kinds. Each is registered by name so the renderer can draw an
     -- arrow differently from a cannonball, and so several weapons can share one.
@@ -55,6 +60,35 @@ pub const CONTENT: &str = r#"
     define_projectile("arrow", { speed = "1.0", aim = "entity" })
     define_projectile("cannonball", { speed = "0.5", aim = "entity" })
     define_projectile("shell", { speed = "0.2", aim = "position" })
+
+    -- Upgrades: a research that completes applies a permanent player buff, so
+    -- every unit the player owns — standing or yet to be trained — carries it
+    -- through the ordinary recompute. Iron weapons is the human weapon upgrade,
+    -- researched at the blacksmith; the frenzy ritual quickens every orc
+    -- attack, researched at the war camp once a pig farm stands.
+    define_player_buff("iron_weapons", {
+        stack = "ignore",
+        entity_modifiers = {
+            { entity_stat = "damage", op = "flat", value = "2" },
+        },
+    })
+    define_research("iron_weapons", {
+        cost = { gold = 100, wood = 50 },
+        time = 200,
+        buff = "iron_weapons",
+    })
+    define_player_buff("frenzy_ritual", {
+        stack = "ignore",
+        entity_modifiers = {
+            { entity_stat = "attack_period", op = "percent", value = "-0.25" },
+        },
+    })
+    define_research("frenzy_ritual", {
+        cost = { gold = 150 },
+        time = 240,
+        buff = "frenzy_ritual",
+        requires = { { entity_type = "pig_farm" } },
+    })
 
     -- The archer's self-buff: a burst of speed and damage that reverts on expiry.
     -- Five seconds at 20 Hz, long enough to watch it work and then wear off.
@@ -86,15 +120,15 @@ pub const CONTENT: &str = r#"
         target = "ally",
         effect = { heal = "15" },
     })
-    -- Blood rite unlocks with the frenzy ritual (defined below): the button
-    -- sits greyed on every grunt until the war camp finishes the research.
+    -- Blood rite unlocks with the frenzy ritual: the button sits greyed on
+    -- every grunt until the war camp finishes the research.
     define_skill("blood_rite", {
         caster = "entity",
         cooldown = 160,
         cost = { health = "8", resources = { gold = 10 } },
         target = "caster",
         effect = { apply_buff = "frenzy" },
-        requires = { "frenzy_ritual" },
+        requires = { { research = "frenzy_ritual" } },
     })
 
     -- A player-level rallying call: every unit the caster owns moves half again
@@ -113,35 +147,6 @@ pub const CONTENT: &str = r#"
         cooldown = 300,
         cost = { resources = { gold = 50 } },
         effect = { apply_buff = "war_drums" },
-    })
-
-    -- Upgrades: a research that completes applies a permanent player buff, so
-    -- every unit the player owns — standing or yet to be trained — carries it
-    -- through the ordinary recompute. Iron weapons is the human weapon upgrade,
-    -- researched at the blacksmith; the frenzy ritual quickens every orc
-    -- attack, researched at the war camp once a pig farm stands.
-    define_player_buff("iron_weapons", {
-        stack = "ignore",
-        entity_modifiers = {
-            { entity_stat = "damage", op = "flat", value = "2" },
-        },
-    })
-    define_research("iron_weapons", {
-        cost = { gold = 100, wood = 50 },
-        time = 200,
-        buff = "iron_weapons",
-    })
-    define_player_buff("frenzy_ritual", {
-        stack = "ignore",
-        entity_modifiers = {
-            { entity_stat = "attack_period", op = "percent", value = "-0.25" },
-        },
-    })
-    define_research("frenzy_ritual", {
-        cost = { gold = 150 },
-        time = 240,
-        buff = "frenzy_ritual",
-        requires = { "pig_farm" },
     })
 
     -- The lake boss: a raceless water fortress spawning free ships. Ships are
@@ -286,7 +291,7 @@ pub const CONTENT: &str = r#"
             -- A mine shaft holds one worker whoever sinks it; chopping happens in the
             -- open, and how many axes one stand takes is the race's own business.
             resource_carrier = {
-                gold = { capacity = 5, time = 20, presence = "hidden" },
+                gold = { capacity = 5, time = 20, presence = { hidden = { crew = 1 } } },
                 wood = { capacity = 5, time = 20, presence = work.wood_presence },
             },
         })
@@ -326,7 +331,7 @@ pub const CONTENT: &str = r#"
         })
     end
 
-    local function barracks(name, race, trains, researches, berths)
+    local function camp(name, race, trains, researches, berths)
         define_entity(name, {
             race = race,
             location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
@@ -334,7 +339,7 @@ pub const CONTENT: &str = r#"
             dying = { time = 2 },
             cost = { gold = 200, wood = 100 },
             build_time = 120,
-            -- Mends in half the time it took to raise: a barracks is quicker to
+            -- Mends in half the time it took to raise: a camp is quicker to
             -- patch up than to put up.
             repair_ratio = "0.5",
             trainer = trains,
@@ -344,18 +349,18 @@ pub const CONTENT: &str = r#"
         })
     end
 
-    -- Human: worker, base, barracks, and a ranged unit.
+    -- Human: worker, base, training camp, and a ranged unit.
     -- Peasants work in the open and swarm: any number of them can share a site, a
     -- repair or a stand of trees, each adding its own tick of work, so a gang of
     -- them raises a building in a fraction of the time one would take.
-    worker("peasant", "human", { "town_hall", "barracks", "farm", "blacksmith", "bunker" }, {
-        attendance = "present_stacking",
-        repair_presence = "present_stacking",
-        wood_presence = "present_stacking",
+    worker("peasant", "human", { "town_hall", "training_camp", "farm", "blacksmith", "bunker" }, {
+        attendance = { present = { crew = "any" } },
+        repair_presence = { present = { crew = "any" } },
+        wood_presence = { present = { crew = "any" } },
     })
     main_hall("town_hall", "human", "peasant")
     farm("farm", "human")
-    barracks("barracks", "human", { "archer", "mortar", "medic", "gryphon" })
+    camp("training_camp", "human", { "archer", "mortar", "medic", "gryphon" })
 
     -- The human garrison: the living step inside and the armed among them fire
     -- their own weapons out, untouchable until the walls come down — and when
@@ -454,7 +459,7 @@ pub const CONTENT: &str = r#"
             repairs = { "biological" },
             rate = { mode = "per_tick", health = "1.0" },
             -- Stays on the map beside its patient, and works alone.
-            presence = "present",
+            presence = { present = { crew = 1 } },
             cost = { mode = "energy", per_health = "0.5" },
             -- Never gives up: out of energy it waits at the patient and resumes as
             -- the pool refills.
@@ -501,7 +506,7 @@ pub const CONTENT: &str = r#"
         train_time = 90,
         selection = { priority = 10 },
         -- Siege needs the forge: no mortars until a blacksmith stands.
-        requires = { "blacksmith" },
+        requires = { { entity_type = "blacksmith" } },
     })
 
     -- The human gryphon: one unit in two forms, and the demo's only thing that
@@ -622,7 +627,7 @@ pub const CONTENT: &str = r#"
         selection = { priority = 10 },
     })
 
-    -- Orc: worker, base, barracks, and a melee unit.
+    -- Orc: worker, base, war camp, and a melee unit.
     -- Peons work one to a job and climb onto what they raise: a peon works a
     -- spot on the rim of its site for a second and a half, crawls along the
     -- wall to the next, and works there, in plain view, open to a raid and in
@@ -630,8 +635,8 @@ pub const CONTENT: &str = r#"
     -- up in the open. Nothing they do goes faster for a second pair of hands.
     worker("peon", "orc", { "great_hall", "war_camp", "pig_farm", "watch_tower", "siege_works", "big_rock" }, {
         attendance = { attached = { berths = "rim", stance = { circling = { speed = "0.1", dwell = 30 } } } },
-        repair_presence = "present",
-        wood_presence = "present",
+        repair_presence = { present = { crew = 1 } },
+        wood_presence = { present = { crew = 1 } },
     })
     -- The peon crawls round the rim of everything it raises, so every orc
     -- structure seats it there.
@@ -728,11 +733,11 @@ pub const CONTENT: &str = r#"
         attack = { targets = GROUND | WATER | AIR, projectile = "arrow" },
         tags = { "building" },
     })
-    barracks("war_camp", "orc", { "grunt", "shaman", "zeppelin" }, { "frenzy_ritual" }, { rim = { points = rim(3, 3) } })
+    camp("war_camp", "orc", { "grunt", "shaman", "zeppelin" }, { "frenzy_ritual" }, { rim = { points = rim(3, 3) } })
 
     -- The orc siege works: the one building that exists to train a single unit,
     -- and gated behind the war camp, so the wagon is a second-thought answer to a
-    -- dug-in enemy rather than an opening move. Not a barracks: it trains no
+    -- dug-in enemy rather than an opening move. Not a camp: it trains no
     -- infantry and hosts no research, and its own walls are thinner than one.
     define_entity("siege_works", {
         race = "orc",
@@ -745,7 +750,7 @@ pub const CONTENT: &str = r#"
         trainer = { "war_wagon" },
         tags = { "building" },
         berths = { rim = { points = rim(3, 3) } },
-        requires = { "war_camp" },
+        requires = { { entity_type = "war_camp" } },
     })
 
     define_turret("siege_cannon", {
@@ -855,7 +860,7 @@ pub const CONTENT: &str = r#"
         -- Support trails combat units in a mixed selection, like the medic.
         selection = { priority = 5 },
         -- A completed research as a requirement: shamans answer the ritual.
-        requires = { "frenzy_ritual" },
+        requires = { { research = "frenzy_ritual" } },
     })
 
     -- ── The Swarm ──────────────────────────────────────────────────────────
@@ -911,8 +916,8 @@ pub const CONTENT: &str = r#"
         tags = { "biological" },
         skills = { "spew_creep" },
         resource_carrier = {
-            gold = { capacity = 5, time = 20, presence = "hidden" },
-            wood = { capacity = 5, time = 20, presence = "hidden" },
+            gold = { capacity = 5, time = 20, presence = { hidden = { crew = 1 } } },
+            wood = { capacity = 5, time = 20, presence = { hidden = { crew = 1 } } },
         },
     })
 
@@ -992,7 +997,7 @@ pub const CONTENT: &str = r#"
               placement = "revalidate",
               cancel = "refundable",
               cost = { resources = { gold = 25, wood = 25 } },
-              requires = { "spawning_pit" } },
+              requires = { { entity_type = "spawning_pit" } } },
         },
     })
 
@@ -1081,8 +1086,8 @@ pub const CONTENT: &str = r#"
         tags = { "biological" },
         skills = { "purge_creep" },
         resource_carrier = {
-            gold = { capacity = 5, time = 20, presence = "hidden" },
-            wood = { capacity = 5, time = 20, presence = "present" },
+            gold = { capacity = 5, time = 20, presence = { hidden = { crew = 1 } } },
+            wood = { capacity = 5, time = 20, presence = { present = { crew = 1 } } },
         },
     })
 
@@ -1279,7 +1284,7 @@ pub const CONTENT: &str = r#"
         tags = { "building" },
         field_placement = { NOT_ON_CREEP },
     })
-    -- The barracks: huntresses rooted, a heavy bite uprooted.
+    -- The war ancient: huntresses rooted, a heavy bite uprooted.
     ancient("ancient_of_war", { 3, 3 }, {
         stats = { max_health = 500, sight_range = 6 },
         cost = { gold = 200, wood = 100 },
@@ -1326,6 +1331,332 @@ pub const CONTENT: &str = r#"
         cost = { gold = 90, wood = 10 },
         train_time = 55,
         selection = { priority = 10 },
+    })
+
+    -- ── The Terrans ─────────────────────────────────────────────────────────
+    -- The race that takes its buildings with it. The command center, the
+    -- barracks and the factory lift off into the air layer and set down again
+    -- wherever the ground is clear, leaving whatever was docked beside them
+    -- behind — and an abandoned annex answers to whoever lands next to it.
+    --
+    -- The SCV attends each job in its own way: it sits on the site it raises,
+    -- stands next to the tree it cuts, crowds a repair with its fellows, and
+    -- disappears into a refinery to load up.
+    --
+    -- The scanner sweep: sight over a patch of map for nine seconds, cast at
+    -- any cell whether or not it can be seen, and outliving the station that
+    -- cast it. It leaves no field and no unit behind — only the watch itself.
+    define_skill("scanner_sweep", {
+        caster = "entity",
+        cooldown = 200,
+        cost = { energy = "50" },
+        target = "position",
+        effect = { watch = { radius = 6, duration = 180 } },
+    })
+
+    -- Siege mechanics, researched in the tech lab and unlocking nothing but
+    -- the tank's other form.
+    define_research("siege_tech", {
+        cost = { gold = 100, wood = 50 },
+        time = 160,
+    })
+
+    -- One at a time to a job, and on the job itself while it builds: the SCV
+    -- takes the single berth of whatever it is raising, works a tree from the
+    -- next cell over, and crowds around a repair with every other SCV sent to
+    -- it.
+    define_entity("scv", {
+        race = "terran",
+        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        stats = {
+            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1, max_health = 40, sight_range = 4,
+            repair_speed = "1.0", repair_cost_factor = "0.25", repair_range = 1,
+            build_range = 1, harvest_range = 1,
+            supply_cost = 1,
+            cargo_size = 1,
+        },
+        dying = { time = 2 },
+        cost = { gold = 50 },
+        train_time = 40,
+        builder = {
+            builds = { "command_center", "barracks", "factory", "supply_depot", "refinery" },
+            attendance = { attached = { berths = "rim", stance = { roaming = { speed = "0.08", dwell = 30 } } } },
+        },
+        repairer = {
+            repairs = { "building", "mechanical" },
+            rate = { mode = "production" },
+            presence = { present = { crew = "any" } },
+            cost = { mode = "pro_rata" },
+            patience = 200,
+        },
+        tags = { "biological" },
+        -- Gold is worked from inside a refinery and nowhere else: one SCV at a
+        -- time disappears into it, and a bare seam is not a source it may
+        -- work. Wood is cut from the next cell over, one axe to a tree.
+        resource_carrier = {
+            gold = { capacity = 5, time = 20, presence = { hidden = { crew = 1 } }, sources = { "refinery" } },
+            wood = { capacity = 5, time = 20, presence = { present = { crew = 1 } } },
+        },
+    })
+
+    -- The flying structures are pairs, as the elves' ancients are: the
+    -- grounded form works, the airborne one only flies. Lift-off revalidates
+    -- (nothing contests the sky) and landing reserves the ground it is coming
+    -- down on, so the spot cannot be built over mid-descent.
+    local LIFTS = { time = 40, placement = "revalidate", cancel = "committed" }
+    local LANDS = { time = 40, placement = "reserve", cancel = "committed" }
+
+    define_entity("command_center", {
+        race = "terran",
+        location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
+        stats = { max_health = 800, sight_range = 9, supply_provided = 10, build_range = 1 },
+        dying = { time = 2 },
+        cost = { gold = 400 },
+        build_time = 200,
+        trainer = { "scv" },
+        resource_storage = { "gold", "wood" },
+        -- It raises its own annex, standing where it stands while the work is
+        -- done: the dock is the next cell over, so there is nowhere to walk.
+        builder = { builds = { "comsat_station" }, attendance = { present = { crew = 1 } } },
+        docks = { { at = { 3, 0 }, accepts = { "comsat_station" } } },
+        berths = { rim = { points = rim(3, 3), slots = 1 } },
+        tags = { "building" },
+        morphs = {
+            { into = "command_center_aloft", time = LIFTS.time, placement = LIFTS.placement, cancel = LIFTS.cancel },
+        },
+    })
+    -- Aloft it trains nothing, stores nothing, docks nothing and defends
+    -- itself with nothing: a building in transit, and the easiest target on
+    -- the map.
+    define_entity("command_center_aloft", {
+        race = "terran",
+        location = { occupation = AIR, size = { 3, 3 }, solidity = "solid" },
+        stats = {
+            speed = "0.12", turn_rate = 6, pivot_rate = 6, pivot_angle = 90, radius = "1.5", weight = 12,
+            max_health = 800, sight_range = 9, supply_provided = 10,
+        },
+        dying = { time = 2 },
+        tags = { "building" },
+        selection = { priority = 6 },
+        morphs = {
+            { into = "command_center", time = LANDS.time, placement = LANDS.placement, cancel = LANDS.cancel },
+        },
+    })
+
+    -- Infantry come from a hall of their own. It flies like the other two, but
+    -- it offers no dock, so it leaves nothing behind when it goes.
+    define_entity("barracks", {
+        race = "terran",
+        location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
+        stats = { max_health = 500, sight_range = 6 },
+        dying = { time = 2 },
+        cost = { gold = 150 },
+        build_time = 100,
+        repair_ratio = "0.5",
+        trainer = { "marine" },
+        berths = { rim = { points = rim(3, 3), slots = 1 } },
+        tags = { "building" },
+        morphs = {
+            { into = "barracks_aloft", time = LIFTS.time, placement = LIFTS.placement, cancel = LIFTS.cancel },
+        },
+    })
+    define_entity("barracks_aloft", {
+        race = "terran",
+        location = { occupation = AIR, size = { 3, 3 }, solidity = "solid" },
+        stats = {
+            speed = "0.15", turn_rate = 6, pivot_rate = 6, pivot_angle = 90, radius = "1.5", weight = 10,
+            max_health = 500, sight_range = 6,
+        },
+        dying = { time = 2 },
+        tags = { "building" },
+        selection = { priority = 6 },
+        morphs = {
+            { into = "barracks", time = LANDS.time, placement = LANDS.placement, cancel = LANDS.cancel },
+        },
+    })
+
+    define_entity("factory", {
+        race = "terran",
+        location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
+        stats = { max_health = 500, sight_range = 6, build_range = 1 },
+        dying = { time = 2 },
+        cost = { gold = 200, wood = 100 },
+        build_time = 120,
+        repair_ratio = "0.5",
+        trainer = { "tank" },
+        builder = { builds = { "tech_lab" }, attendance = { present = { crew = 1 } } },
+        docks = { { at = { 3, 0 }, accepts = { "tech_lab" } } },
+        berths = { rim = { points = rim(3, 3), slots = 1 } },
+        tags = { "building" },
+        morphs = {
+            { into = "factory_aloft", time = LIFTS.time, placement = LIFTS.placement, cancel = LIFTS.cancel },
+        },
+    })
+    define_entity("factory_aloft", {
+        race = "terran",
+        location = { occupation = AIR, size = { 3, 3 }, solidity = "solid" },
+        stats = {
+            speed = "0.15", turn_rate = 6, pivot_rate = 6, pivot_angle = 90, radius = "1.5", weight = 10,
+            max_health = 500, sight_range = 6,
+        },
+        dying = { time = 2 },
+        tags = { "building" },
+        selection = { priority = 6 },
+        morphs = {
+            { into = "factory", time = LANDS.time, placement = LANDS.placement, cancel = LANDS.cancel },
+        },
+    })
+
+    -- The comsat station: an annex with a pool of its own, and the only
+    -- building in the demo that casts. Without a command center beside it it
+    -- stands switched off, waiting; land any player's command center next to
+    -- it and it is theirs.
+    define_entity("comsat_station", {
+        race = "terran",
+        location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
+        stats = {
+            max_health = 250, sight_range = 6,
+            -- Two hundred to a pool that refills slowly: four sweeps held in
+            -- reserve, and a wait between them.
+            max_energy = 200, energy_regen = "0.2",
+        },
+        dying = { time = 2 },
+        cost = { gold = 50, wood = 50 },
+        build_time = 80,
+        skills = { "scanner_sweep" },
+        tags = { "building" },
+        annex = { alone = { work = "idles", life = "endures" }, claim = "seized" },
+    })
+
+    -- The tech lab: the annex that researches. It keeps its footing without a
+    -- primary — a lab is a lab — but does nothing at all until a factory
+    -- stands beside it again.
+    define_entity("tech_lab", {
+        race = "terran",
+        location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
+        stats = { max_health = 300, sight_range = 5 },
+        dying = { time = 2 },
+        cost = { gold = 50, wood = 25 },
+        build_time = 80,
+        researcher = { "siege_tech" },
+        tags = { "building" },
+        annex = { alone = { work = "idles", life = "endures" }, claim = "seized" },
+    })
+
+    define_entity("supply_depot", {
+        race = "terran",
+        location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
+        stats = { max_health = 200, sight_range = 3, supply_provided = 6 },
+        dying = { time = 2 },
+        cost = { gold = 40, wood = 20 },
+        build_time = 60,
+        tags = { "building" },
+        berths = { rim = { points = rim(2, 2), slots = 1 } },
+    })
+
+    -- Raised over a gold mine and mined in its place: an SCV walks inside and
+    -- comes out loaded, and the mine is handed back with whatever is left if
+    -- the refinery falls.
+    define_entity("refinery", {
+        race = "terran",
+        location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
+        stats = { max_health = 500, sight_range = 4 },
+        dying = { time = 2 },
+        cost = { gold = 75 },
+        build_time = 90,
+        tags = { "building" },
+        resource_source = { kind = "gold", depletion = "persist" },
+        overbuilds = "gold_mine",
+        -- The `rim` is where an SCV stands to *raise* it. Working the gold
+        -- needs no seat: the SCV goes inside, and it is the only gold source
+        -- an SCV may work at all.
+        berths = { rim = { points = rim(2, 2), slots = 1 } },
+    })
+
+    define_entity("marine", {
+        race = "terran",
+        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        stats = {
+            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 2, max_health = 45,
+            damage = 6, attack_range = 4, acquire_range = 7, attack_period = 8, damage_point = 3,
+            sight_range = 8,
+            supply_cost = 1,
+            cargo_size = 1,
+        },
+        dying = { time = 2 },
+        tags = { "biological" },
+        -- A rifle: the shot lands the tick it is fired, with nothing to
+        -- outrun and nothing to dodge.
+        attack = { targets = GROUND | WATER | AIR },
+        cost = { gold = 60 },
+        train_time = 45,
+    })
+
+    -- The tank: the demo's other 2x2 gun, and the counterpart to the orc
+    -- war wagon. The wagon carries a turret, so its gun bears while the hull
+    -- keeps its heading; the tank's gun is the hull's own, in an arc of twenty
+    -- degrees, so it must come about to answer anything — and a tank caught
+    -- broadside holds its fire until it has.
+    --
+    -- Sieged it plants itself: it gives up its engine for twice the reach and
+    -- twice the shell, and the change is the ancients' rooting — reserving the
+    -- ground going down, revalidating it coming back up. Only a factory with
+    -- a tech lab builds one, and only siege mechanics let it dig in.
+    local function tank(name, extra)
+        local def = {
+            race = "terran",
+            location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
+            dying = { time = 2 },
+            tags = { "mechanical" },
+            selection = { priority = 10 },
+        }
+        for key, value in pairs(extra) do def[key] = value end
+        define_entity(name, def)
+    end
+    tank("tank", {
+        stats = {
+            speed = "0.18", turn_rate = 9, pivot_rate = 12, pivot_angle = 90,
+            radius = "1", weight = 6, max_health = 160, armor = 1, sight_range = 9,
+            damage = 20, attack_range = 6, acquire_range = 8, attack_period = 26, damage_point = 10,
+            -- The gun is the hull: it comes about at the hull's own pace, and
+            -- fires only through a narrow arc ahead of it.
+            attack_arc = 20,
+            supply_cost = 2,
+        },
+        attack = { targets = GROUND | WATER },
+        cost = { gold = 150, wood = 100 },
+        train_time = 100,
+        requires = { { annexed = "tech_lab" } },
+        morphs = {
+            { into = "siege_tank", time = 60, placement = "reserve", cancel = "committed",
+              requires = { { research = "siege_tech" } } },
+        },
+    })
+    tank("siege_tank", {
+        stats = {
+            max_health = 160, armor = 1, sight_range = 11,
+            -- Planted, the gun traverses: no arc, so it answers whatever comes
+            -- into its reach from any side.
+            -- Its reach outruns its eyes on purpose: planted, it shells
+            -- ground it cannot see, and wants something of its own out front
+            -- to spot for it.
+            damage = 40, attack_range = 12, acquire_range = 13, attack_period = 40, damage_point = 16,
+            supply_cost = 2,
+        },
+        attack = {
+            targets = GROUND | WATER,
+            -- A ring of blast around the hit: half of it one cell out, a
+            -- quarter two, and it does not spare its own.
+            splash = {
+                shape = "circular",
+                bands = { {1, "0.5"}, {2, "0.25"} },
+                layers = GROUND | WATER,
+                friendly_fire = true,
+            },
+        },
+        morphs = {
+            { into = "tank", time = 60, placement = "revalidate", cancel = "committed" },
+        },
     })
 "#;
 

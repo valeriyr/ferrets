@@ -8,6 +8,7 @@ use ferrets_content::{
     entity_type_def::EntityTypeDef,
     location::Solidity,
     registry::ContentRegistry,
+    requirement::Requirement,
     research::ResearchDef,
     skills::{EntityCastCost, EntityCastEffect, EntityCastTarget, SkillCaster, SkillDef, SkillId},
     stats::ModifierOp,
@@ -295,14 +296,12 @@ fn app() -> App {
             "last_rite",
             costed(vec![EntityCastCost::Health(FixedU64::from_num(50))]),
         );
-        registry.register_research(
-            "arcana",
-            ResearchDef::new(Cost::new(), 5, None, Vec::<String>::new()),
-        );
+        let arcana = registry
+            .register_research("arcana", ResearchDef::new(Cost::new(), 5, None, Vec::new()));
         let war_secret = registry.register_skill(
             "war_secret",
             SkillDef {
-                requires: vec!["arcana".to_string()],
+                requires: vec![Requirement::Research(arcana)],
                 ..costed(Vec::new())
             },
         );

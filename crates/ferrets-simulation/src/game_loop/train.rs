@@ -29,7 +29,7 @@ pub fn can_start(world: &World, entity: Entity, _order: &Order) -> Result<(), Re
     if entity_def::of(world, entity).trainer.is_none() {
         return Err(Refusal::Incapable);
     }
-    orders::requires_raised(world, entity)
+    orders::requires_not_idle(world, entity)
 }
 
 /// Called once when a Train order becomes the front `New` entry.

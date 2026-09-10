@@ -131,6 +131,32 @@ const COMMON_AI: &str = r#"
         end
     end
 
+    -- Whether an annex standing in the candidate structure's dock would have
+    -- room at `(x, y)`. `annex` names the dock's offset and what stands in it,
+    -- or is nil for a structure that docks nothing.
+    --
+    -- The hall is the one building certain to stand beside a candidate cell, so
+    -- it is what the annex is held against: a dock on the far side of a
+    -- structure sited to the hall's left points back at the hall, and the gap
+    -- between them is narrower than the annex needs.
+    local function fits_annex(view, hall, x, y, annex)
+        if annex == nil then return true end
+        local annex_size = content.entities[annex.type_name].size
+        local hall_size = content.entities[hall.type_name].size
+        local annex_x = x + annex.dx
+        local annex_y = y + annex.dy
+        if annex_x < 0 or annex_y < 0
+            or annex_x + annex_size.w > view.map.width
+            or annex_y + annex_size.h > view.map.height then
+            return false
+        end
+        -- Clear of the hall on one axis or the other.
+        return annex_x >= hall.x + hall_size.w
+            or hall.x >= annex_x + annex_size.w
+            or annex_y >= hall.y + hall_size.h
+            or hall.y >= annex_y + annex_size.h
+    end
+
     -- Puts up `wanted` (one structure at a time) at ring offsets around the
     -- hall. In flight means a site is visibly going up, or a builder was sent
     -- recently and may still be walking — a deadline, not a builder watch,
@@ -138,7 +164,7 @@ const COMMON_AI: &str = r#"
     -- An invalid placement is a silent no-op that leaves no site behind, so
     -- when the deadline lapses the offset ring advances to the next candidate.
     -- Returns the chosen builder's id.
-    local function build_next(commands, state, view, workers, hall, wanted, budget)
+    local function build_next(commands, state, view, workers, hall, wanted, budget, annex)
         for _, e in ipairs(view.my_entities) do
             if e.under_construction then return nil end
         end
@@ -161,8 +187,11 @@ const COMMON_AI: &str = r#"
             state.build_offset = (state.build_offset or 1) % #OFFSETS + 1
             local x = hall.x + offset[1]
             local y = hall.y + offset[2]
+            -- Three cells for the widest structure, and two more beyond it so
+            -- there is room on the far side for whatever it docks.
             if x >= 0 and y >= 0
-                and x + 3 <= view.map.width and y + 3 <= view.map.height then
+                and x + 5 <= view.map.width and y + 5 <= view.map.height
+                and fits_annex(view, hall, x, y, annex) then
                 commands[#commands + 1] = {
                     kind = "build", builder = builder.id,
                     type_name = wanted, x = x, y = y,
@@ -319,7 +348,7 @@ const COMMON_AI: &str = r#"
     end
 "#;
 
-/// The human brain: peasant economy, barracks, then the blacksmith for the
+/// The human brain: peasant economy, training camps, then the blacksmith for the
 /// iron weapons upgrade and the mortars it unlocks, then a bunker a pair of
 /// archers mans for base defense; a medic walks with every few archers,
 /// archers burn energy on battle focus when a foe is in reach, and war drums
@@ -334,7 +363,7 @@ const HUMAN_AI: &str = r#"
             local groups = muster(view)
             local halls = group(groups, "town_hall")
             local workers = group(groups, "peasant")
-            local barracks = group(groups, "barracks")
+            local camps = group(groups, "training_camp")
             local smithies = group(groups, "blacksmith")
             local bunkers = group(groups, "bunker")
             local archers = group(groups, "archer")
@@ -344,13 +373,13 @@ const HUMAN_AI: &str = r#"
 
             keep_workers(commands, budget, hall, halls, workers, "peasant")
 
-            -- The barracks, then the forge that unlocks mortars and hosts the
+            -- The camps, then the forge that unlocks mortars and hosts the
             -- weapon upgrade — a one-time purchase farms would otherwise
             -- always outbid — then a farm whenever headroom runs dry, and
             -- once the army production is fed, the bunker the defense mans.
             local wanted = nil
-            if #barracks == 0 then
-                wanted = "barracks"
+            if #camps == 0 then
+                wanted = "training_camp"
             elseif #smithies == 0 then
                 wanted = "blacksmith"
             elseif budget.supply < 2 then
@@ -372,13 +401,13 @@ const HUMAN_AI: &str = r#"
 
             -- Army mix: a medic per four archers, a pair of mortars once the
             -- forge stands (they require it), archers otherwise.
-            for _, b in ipairs(barracks) do
+            for _, b in ipairs(camps) do
                 local trained = "archer"
-                if (#medics + count_queued(barracks, "medic")) * 4
-                    < #archers + count_queued(barracks, "archer") then
+                if (#medics + count_queued(camps, "medic")) * 4
+                    < #archers + count_queued(camps, "archer") then
                     trained = "medic"
                 elseif any_standing(smithies)
-                    and #mortars + count_queued(barracks, "mortar") < 2 then
+                    and #mortars + count_queued(camps, "mortar") < 2 then
                     trained = "mortar"
                 end
                 if train_from(commands, budget, b, trained) then break end
@@ -812,6 +841,178 @@ const ELVES_AI: &str = r#"
     })
 "#;
 
+/// The terran brain: a refinery over the nearest seam — without one no SCV
+/// draws gold at all — then a barracks for marines, depots for headroom, a
+/// factory, and a tech lab docked to it so the factory may train tanks;
+/// a comsat station on the command center, and marines with a tank per few of
+/// them marching as a wave. It builds its annexes from the buildings that hold
+/// their docks, and never lifts off: the flying forms are the player's to try.
+const TERRAN_AI: &str = r#"
+    define_ai("terran", {
+        period = 20,
+        vision = "filtered",
+        think = function(state, view)
+            local commands = {}
+            local budget = budget_of(view)
+            local groups = muster(view)
+            local centers = group(groups, "command_center")
+            local scvs = group(groups, "scv")
+            local barracks = group(groups, "barracks")
+            local factories = group(groups, "factory")
+            local labs = group(groups, "tech_lab")
+            local comsats = group(groups, "comsat_station")
+            local depots = group(groups, "supply_depot")
+            local refineries = group(groups, "refinery")
+            local marines = group(groups, "marine")
+            local tanks = group(groups, "tank")
+            local center = centers[1]
+
+            keep_workers(commands, budget, center, centers, scvs, "scv")
+
+            -- Where each terran primary offers its dock, and what stands
+            -- there. The content declares it and the annex must be founded on
+            -- that cell exactly; the AI view carries no docks, so the brain
+            -- states it again — and siting a primary has to honour it too, or
+            -- the annex has nowhere to go.
+            local DOCKS = {
+                factory = { dx = 3, dy = 0, type_name = "tech_lab" },
+                command_center = { dx = 3, dy = 0, type_name = "comsat_station" },
+            }
+
+            -- An annex is raised by the building whose dock it stands in, so
+            -- the command names that building as the builder and the dock's
+            -- own cell as the spot.
+            local function dock(commands, primary, annex)
+                if primary == nil or primary.under_construction then return false end
+                if not afford(budget, annex.type_name) then return false end
+                commands[#commands + 1] = {
+                    kind = "build", builder = primary.id,
+                    type_name = annex.type_name,
+                    x = primary.x + annex.dx, y = primary.y + annex.dy,
+                }
+                pay(budget, annex.type_name)
+                return true
+            end
+
+            -- The refinery goes over the gold seam nearest the base and is
+            -- mined in its place. The SCV's gold entry names the refinery as
+            -- its only source, so until one stands there is no gold to be had
+            -- and wood is the whole economy.
+            local wanted = nil
+            local builder_id = nil
+            if #refineries == 0 then
+                local seam = center and nearest(center, view.neutral_entities, function(e)
+                    return e.type_name == "gold_mine" and (e.resource_amount or 0) > 0
+                end)
+                local in_flight = false
+                for _, e in ipairs(view.my_entities) do
+                    if e.under_construction then in_flight = true end
+                end
+                if seam ~= nil and not in_flight
+                    and (state.build_deadline == nil or view.tick >= state.build_deadline)
+                    and afford(budget, "refinery") then
+                    local builder = nil
+                    for _, w in ipairs(scvs) do
+                        if w.idle and not w.hidden then builder = w break end
+                    end
+                    builder = builder or scvs[1]
+                    if builder ~= nil then
+                        commands[#commands + 1] = {
+                            kind = "build", builder = builder.id,
+                            type_name = "refinery", x = seam.x, y = seam.y,
+                        }
+                        state.build_deadline = view.tick + 200
+                        builder_id = builder.id
+                    end
+                end
+                reserve(budget, "refinery")
+                -- Headroom is still worth having while the gold is off: a
+                -- refinery lost late must not stop the base growing.
+                if budget.supply < 2 then
+                    wanted = "supply_depot"
+                    builder_id = build_next(commands, state, view, scvs, center,
+                        wanted, budget, DOCKS[wanted]) or builder_id
+                end
+            else
+                if #barracks == 0 then
+                    wanted = "barracks"
+                elseif budget.supply < 2 then
+                    wanted = "supply_depot"
+                elseif #factories == 0 then
+                    wanted = "factory"
+                end
+                builder_id = build_next(commands, state, view, scvs, center,
+                    wanted, budget, wanted and DOCKS[wanted])
+            end
+
+            -- The annexes, once the buildings that hold them stand: the lab
+            -- first, since the tanks wait on it, then the station.
+            if #labs == 0 and #factories > 0 then
+                dock(commands, factories[1], DOCKS.factory)
+            elseif #comsats == 0 and #labs > 0 then
+                dock(commands, center, DOCKS.command_center)
+            end
+
+            -- Idle SCVs work the refinery, one at a time and inside it, and a
+            -- bare seam is not a source they may work at all — so until the
+            -- refinery stands there is only wood to fetch.
+            local need_wood = (wanted ~= nil and budget.wood < cost_of(wanted, "wood"))
+                or (#labs == 0 and budget.wood < cost_of("tech_lab", "wood"))
+                or (#comsats == 0 and #labs > 0
+                    and budget.wood < cost_of("comsat_station", "wood"))
+                -- Tanks cost wood where no other race's army does, so once the
+                -- lab that gates them stands, an axe stays on wood for them.
+                or (#labs > 0 and budget.wood < cost_of("tank", "wood"))
+                or #refineries == 0
+            for _, w in ipairs(scvs) do
+                if w.idle and not w.hidden and w.id ~= builder_id then
+                    local target = nil
+                    if need_wood then
+                        target = nearest(w, view.neutral_entities, function(e)
+                            return e.type_name == "tree" and (e.resource_amount or 0) > 0
+                        end)
+                        -- Once a refinery stands one axe is enough; before it
+                        -- does there is no gold to work, so the rest cut too.
+                        if #refineries > 0 then need_wood = false end
+                    end
+                    if target == nil then
+                        target = nearest(w, refineries, function(r)
+                            return not r.under_construction and (r.resource_amount or 0) > 0
+                        end)
+                    end
+                    if target ~= nil then
+                        commands[#commands + 1] = { kind = "select", id = w.id }
+                        commands[#commands + 1] = { kind = "send", target = target.id }
+                    end
+                end
+            end
+
+            -- The pending structure holds its price back from the army. Siege
+            -- mechanics are left to a player: this brain never plants a tank,
+            -- and a research it would not use is a research it should not
+            -- hold gold for.
+            reserve(budget, wanted)
+
+            -- Marines from the barracks, and a tank per three of them from the
+            -- factory — which may only train one with a lab docked to it.
+            for _, b in ipairs(barracks) do
+                if train_from(commands, budget, b, "marine") then break end
+            end
+            if any_standing(labs)
+                and (#tanks + count_queued(factories, "tank")) * 3 < #marines
+            then
+                for _, f in ipairs(factories) do
+                    if train_from(commands, budget, f, "tank") then break end
+                end
+            end
+
+            attack_wave(commands, view, marines, tanks, center)
+
+            return commands
+        end,
+    })
+"#;
+
 /// The human brain's full source: the shared chassis plus its `define_ai`.
 pub fn human_ai() -> String {
     format!("{COMMON_AI}\n{HUMAN_AI}")
@@ -837,6 +1038,11 @@ pub fn elves_ai() -> String {
     format!("{COMMON_AI}\n{ELVES_AI}")
 }
 
+/// The terran brain's full source: the shared chassis plus its `define_ai`.
+pub fn terran_ai() -> String {
+    format!("{COMMON_AI}\n{TERRAN_AI}")
+}
+
 /// The brain source a race's AI slots load, or `None` for a race with no
 /// demo brain — its slots idle on unmanned input.
 fn race_brain(race: &str) -> Option<String> {
@@ -846,6 +1052,7 @@ fn race_brain(race: &str) -> Option<String> {
         "swarm" => Some(swarm_ai()),
         "conclave" => Some(conclave_ai()),
         "elves" => Some(elves_ai()),
+        "terran" => Some(terran_ai()),
         _ => None,
     }
 }

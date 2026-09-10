@@ -24,13 +24,14 @@ use ferrets_content::{
     morph::{MorphCancel, MorphPlacement, MorphTime, MorphTransition},
     registry::ContentRegistry,
     repair::{RepairCost, RepairRate},
+    requirement::Requirement,
     research::ResearchDef,
-    resource::{Banking, DepletionPolicy, HarvestData},
+    resource::{Banking, DepletionPolicy, HarvestData, Sources},
     skills::{EntityCastEffect, EntityCastTarget, SkillCaster, SkillDef},
     stats::{EntityModifier, ModifierOp},
     transport::{BoardingPolicy, PassengerConduct, PassengerFate},
     turret::{TurretDef, TurretMount, TurretStats, WeaponConduct},
-    work::WorkPresence,
+    work::{CrewLimit, WorkPresence},
 };
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize, projection::Projection};
 use ferrets_math::FixedU64;
@@ -41,7 +42,8 @@ use ferrets_simulation::{
     components::{
         research::ResearchComponent, resource::ResourceSourceComponent, train::TrainComponent,
     },
-    entity_def::{self, Operation},
+    entity_def::{self, Operation, Switch},
+    events::{DeathCause, SimulationEvent},
     fields::{self, FieldGrid},
     map_data::MapData,
     order::Order,
@@ -410,6 +412,36 @@ fn outside_effect_drains_health_each_tick() {
 }
 
 #[test]
+fn withering_off_field_kills_what_runs_dry() {
+    let mut app = field_app();
+    utils::place(&mut app, "hive", 10, 10, 0);
+    let exposed = utils::create_owned(&mut app, "larva", 20, 20, 0).0;
+    utils::record_announcements(&mut app);
+
+    // Twenty health, one a tick off the creep: the nineteenth tick leaves one
+    // and the twentieth empties the pool.
+    utils::run_ticks(&mut app, 19);
+    assert_eq!(utils::current_health(&app, exposed), FixedU64::ONE);
+    utils::run_ticks(&mut app, 1);
+    assert!(
+        app.world()
+            .resource::<utils::Announced>()
+            .0
+            .iter()
+            .any(|event| matches!(
+                event,
+                SimulationEvent::EntityDied {
+                    cause: DeathCause::Decayed,
+                    ..
+                }
+            )),
+        "a pool drained dry dies with nobody to blame"
+    );
+    utils::run_ticks(&mut app, 3);
+    utils::assert_despawned(app.world_mut(), exposed);
+}
+
+#[test]
 fn disabled_trainer_queues_commands_and_holds_queue_until_powered_again() {
     let mut app = field_app();
     let pylon = utils::create_owned(&mut app, "pylon", 10, 10, 0).0;
@@ -482,7 +514,12 @@ fn disabled_prerequisite_still_satisfies_requirements() {
     utils::create_owned(&mut app, "gateway", 12, 10, 0);
     utils::run_ticks(&mut app, 1);
 
-    assert!(requirements::met(app.world(), 0, &["gateway".to_string()]));
+    assert!(requirements::met(
+        app.world(),
+        0,
+        None,
+        &[Requirement::EntityType("gateway".to_string())],
+    ));
 }
 
 //
@@ -681,7 +718,12 @@ fn building_probe_losing_power_finishes_its_site() {
     utils::run_ticks(&mut app, utils::APPLY + 2);
     assert_eq!(utils::count_of_type(app.world_mut(), "gateway"), 1);
     assert!(
-        !requirements::met(app.world(), 0, &["gateway".to_string()]),
+        !requirements::met(
+            app.world(),
+            0,
+            None,
+            &[Requirement::EntityType("gateway".to_string())],
+        ),
         "the site is still going up"
     );
 
@@ -689,7 +731,12 @@ fn building_probe_losing_power_finishes_its_site() {
     utils::run_ticks(&mut app, 6);
 
     assert!(
-        requirements::met(app.world(), 0, &["gateway".to_string()]),
+        requirements::met(
+            app.world(),
+            0,
+            None,
+            &[Requirement::EntityType("gateway".to_string())],
+        ),
         "the frozen probe raised it to the end"
     );
 }
@@ -729,7 +776,12 @@ fn build_under_way_completes_while_queued_build_is_swept() {
     utils::run_ticks(&mut app, 6);
     assert!(utils::order_queue_is_empty(app.world_mut(), probe));
     assert_eq!(utils::count_of_type(app.world_mut(), "gateway"), 1);
-    assert!(requirements::met(app.world(), 0, &["gateway".to_string()]));
+    assert!(requirements::met(
+        app.world(),
+        0,
+        None,
+        &[Requirement::EntityType("gateway".to_string())],
+    ));
 }
 
 #[test]
@@ -922,7 +974,7 @@ fn probe_mends_disabled_gateway() {
     utils::run_ticks(&mut app, 1);
     assert_eq!(
         entity_def::operation(app.world(), gateway),
-        Operation::Disabled,
+        Operation::Disabled(Switch::Field),
         "the gateway stands past the pylon's reach"
     );
     utils::wound(&mut app, gateway, "40");
@@ -1312,7 +1364,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                     MorphPlacement::Revalidate,
                     MorphCancel::Refundable,
                     Vec::new(),
-                    Vec::<String>::new(),
+                    Vec::new(),
                 )]),
         );
         registry.register(building("pupa", 1, 2));
@@ -1335,7 +1387,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
             MorphPlacement::Revalidate,
             MorphCancel::Forfeit,
             Vec::new(),
-            Vec::<String>::new(),
+            Vec::new(),
         )]));
         // Creep effects: a zergling twice as fast on anyone's creep, a larva
         // that withers off it.
@@ -1412,7 +1464,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                     MorphPlacement::Revalidate,
                     MorphCancel::Forfeit,
                     Vec::new(),
-                    Vec::<String>::new(),
+                    Vec::new(),
                 )])
                 .with_field_effects([unpowered_idles()]),
         );
@@ -1425,7 +1477,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 costs::cost(Vec::<(String, u32)>::new()),
                 10,
                 None,
-                Vec::<String>::new(),
+                Vec::new(),
             ),
         );
         registry.register(
@@ -1509,19 +1561,32 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
                 .with_builder(
                     ["pylon", "gateway", "cannon"],
-                    BuilderAttendance::Crew(WorkPresence::Present),
+                    BuilderAttendance::Crew(WorkPresence::Present {
+                        crew: CrewLimit::ONE,
+                    }),
                 )
                 .with_repairer(
                     ["structure"],
                     RepairRate::PerTick(FixedU64::from_num(5)),
-                    WorkPresence::Present,
+                    WorkPresence::Present {
+                        crew: CrewLimit::ONE,
+                    },
                     false,
                     RepairCost::Free,
                     None,
                 )
                 .with_resource_carrier([(
                     "crystal",
-                    HarvestData::new(5, 5, 2, WorkPresence::Present, Banking::Carried),
+                    HarvestData::new(
+                        5,
+                        5,
+                        2,
+                        WorkPresence::Present {
+                            crew: CrewLimit::ONE,
+                        },
+                        Banking::Carried,
+                        Sources::Any,
+                    ),
                 )])
                 .with_field_effects([unpowered_idles()]),
         );
@@ -1572,7 +1637,9 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 .with_stat(EntityStatId::BUILD_RANGE, FixedU64::from_num(3))
                 .with_builder(
                     ["spore", "bunker", "gateway", "pylon", "hive", "nest"],
-                    BuilderAttendance::Crew(WorkPresence::Present),
+                    BuilderAttendance::Crew(WorkPresence::Present {
+                        crew: CrewLimit::ONE,
+                    }),
                 ),
         );
     }

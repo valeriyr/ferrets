@@ -9,11 +9,12 @@ use ferrets_content::{
     field::{FieldAction, FieldCoverage, FieldPlacement, FieldVision},
     morph::{MorphCancel, MorphPlacement, MorphTime},
     registry::ContentRegistry,
-    resource::Banking,
+    requirement::Requirement,
+    resource::{Banking, Sources},
     skills::{EntityCastCost, EntityCastTarget, PlayerCastEffect, SkillCaster},
     stand::StandingAct,
     targeting,
-    work::{Attachment, BerthStance, WorkPresence},
+    work::{Attachment, BerthStance, CrewLimit, WorkPresence},
 };
 use ferrets_demo::{content::CONTENT, map};
 use ferrets_geometry::cell_pos::CellPos;
@@ -31,7 +32,7 @@ fn content_loads_and_validates() {
         "peasant",
         "town_hall",
         "farm",
-        "barracks",
+        "training_camp",
         "archer",
         "mortar",
         "medic",
@@ -71,13 +72,29 @@ fn content_loads_and_validates() {
         "ancient_protector",
         "ancient_protector_uprooted",
         "entangled_mine",
+        "scv",
+        "command_center",
+        "command_center_aloft",
+        "barracks",
+        "barracks_aloft",
+        "factory",
+        "factory_aloft",
+        "comsat_station",
+        "tech_lab",
+        "supply_depot",
+        "refinery",
+        "marine",
+        "tank",
+        "siege_tank",
     ] {
         assert!(registry.entity(name).is_some(), "missing entity '{name}'");
     }
     assert!(registry.has_race("human") && registry.has_race("orc"));
     assert!(registry.has_race("swarm") && registry.has_race("conclave"));
-    assert!(registry.has_race("elves"));
+    assert!(registry.has_race("elves") && registry.has_race("terran"));
     assert!(registry.field("creep").is_some() && registry.field("power").is_some());
+    assert!(registry.research("siege_tech").is_some());
+    assert!(registry.skill("scanner_sweep").is_some());
     assert!(
         registry.has_layer(map::GROUND)
             && registry.has_layer(map::WATER)
@@ -90,7 +107,7 @@ fn content_loads_and_validates() {
 fn farms_provide_supply_and_units_carry_supply_cost() {
     let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
 
-    for name in ["farm", "pig_farm"] {
+    for name in ["farm", "pig_farm", "supply_depot"] {
         let farm = registry.entity(name).expect("farm is registered");
         assert!(
             farm.base_stat(EntityStatId::SUPPLY_PROVIDED)
@@ -99,7 +116,9 @@ fn farms_provide_supply_and_units_carry_supply_cost() {
         );
     }
 
-    for name in ["peasant", "archer", "peon", "grunt", "shaman", "ship"] {
+    for name in [
+        "peasant", "archer", "peon", "grunt", "shaman", "ship", "scv", "marine", "tank",
+    ] {
         let unit = registry.entity(name).expect("unit is registered");
         assert!(
             unit.base_stat(EntityStatId::SUPPLY_COST)
@@ -110,7 +129,7 @@ fn farms_provide_supply_and_units_carry_supply_cost() {
 }
 
 #[test]
-fn worker_presences_cover_every_variant_and_differ_by_race() {
+fn worker_presences_are_all_reachable_in_play_and_differ_by_race() {
     let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
 
     let presences = |name: &str| {
@@ -151,12 +170,20 @@ fn worker_presences_cover_every_variant_and_differ_by_race() {
     let peasant = presences("peasant");
     let peon = presences("peon");
 
-    // Every variant has to be reachable in play, or one of them can only ever be
-    // exercised by the test suite.
+    // Each of these has to be reachable in play, or it can only ever be
+    // exercised by the test suite. They are the presences demo content
+    // declares, not the whole space `CrewLimit` opened up: no demo worker
+    // names a finite crew above one.
     for variant in [
-        WorkPresence::Hidden,
-        WorkPresence::Present,
-        WorkPresence::PresentStacking,
+        WorkPresence::Hidden {
+            crew: CrewLimit::ONE,
+        },
+        WorkPresence::Present {
+            crew: CrewLimit::ONE,
+        },
+        WorkPresence::Present {
+            crew: CrewLimit::Unlimited,
+        },
     ] {
         assert!(
             peasant.contains(&variant) || peon.contains(&variant),
@@ -380,7 +407,11 @@ fn swarmling_grows_into_ravager_inside_cocoon() {
     assert_eq!(growth.into_type(), "ravager");
     assert_eq!(growth.via_type(), Some("cocoon"));
     assert_eq!(growth.cancel(), MorphCancel::Refundable);
-    assert!(growth.requires().contains(&"spawning_pit".to_string()));
+    assert!(
+        growth
+            .requires()
+            .contains(&Requirement::EntityType("spawning_pit".to_string()))
+    );
     assert!(
         growth
             .costs()
@@ -559,7 +590,13 @@ fn fliers_live_on_air_alone() {
     let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
     let air = registry.layer(map::AIR).expect("air layer is registered");
 
-    for flier in ["gryphon_aloft", "zeppelin"] {
+    for flier in [
+        "gryphon_aloft",
+        "zeppelin",
+        "command_center_aloft",
+        "barracks_aloft",
+        "factory_aloft",
+    ] {
         let occupation = registry
             .entity(flier)
             .and_then(|def| def.location.as_ref())
@@ -629,8 +666,8 @@ fn only_melee_and_siege_exclude_air() {
     let air = registry.layer(map::AIR).expect("air layer is registered");
 
     // Every weapon declares its layers; what stays deliberate per type is what
-    // it leaves out. Only the melee blades and bites, the shell and the wagon's
-    // flat gun cannot answer what flies.
+    // it leaves out. Only the melee blades and bites, the shells and the flat
+    // guns of the wagon and the tank cannot answer what flies.
     let grounded: Vec<&str> = registry
         .entities()
         .filter(|def| def.can_attack())
@@ -647,7 +684,9 @@ fn only_melee_and_siege_exclude_air() {
             "huntress",
             "mortar",
             "ravager",
+            "siege_tank",
             "swarmling",
+            "tank",
             "tree_of_life_uprooted",
             "war_wagon",
             "zealot"
@@ -864,6 +903,75 @@ fn tower_upgrade_is_paid_and_refundable() {
         upgraded.tags.contains("building"),
         "an upgraded tower must still count as a standing base"
     );
+}
+
+//
+// ─── Terrans ──────────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn terran_gold_comes_through_refinery_alone() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    let scv = registry.entity("scv").expect("scv defined");
+    let gold = scv
+        .resource_carrier
+        .as_ref()
+        .expect("an scv carries")
+        .harvest_data("gold")
+        .expect("it carries gold");
+
+    // One scv at a time, inside the building while it works.
+    assert_eq!(
+        gold.presence(),
+        &WorkPresence::Hidden {
+            crew: CrewLimit::ONE
+        }
+    );
+    // And a refinery is the only source it may work: a bare seam is one the
+    // scv turns down, however much gold is in it.
+    assert_eq!(gold.sources(), &Sources::only(["refinery"]));
+    assert!(gold.admits_source("refinery"));
+    assert!(!gold.admits_source("gold_mine"));
+
+    // The refinery seats builders and nobody else.
+    let refinery = registry.entity("refinery").expect("refinery defined");
+    let berths = refinery.berths.as_ref().expect("the refinery seats");
+    assert_eq!(berths.group("rim").map(|group| group.slots()), Some(1));
+    assert!(berths.group("shaft").is_none());
+}
+
+#[test]
+fn every_terran_production_building_flies_but_depot() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    for (grounded, aloft) in [
+        ("command_center", "command_center_aloft"),
+        ("barracks", "barracks_aloft"),
+        ("factory", "factory_aloft"),
+    ] {
+        let down = registry.entity(grounded).expect("grounded form defined");
+        let up = registry.entity(aloft).expect("aloft form defined");
+        assert_eq!(
+            down.morphs.first().map(|change| change.into_type()),
+            Some(aloft)
+        );
+        assert_eq!(
+            up.morphs.first().map(|change| change.into_type()),
+            Some(grounded)
+        );
+        // Aloft it trains nothing and docks nothing: a building in transit.
+        assert!(up.trainer.is_none());
+        assert!(up.docks.is_empty());
+        // That it is airborne is `fliers_live_on_air_alone`'s to say; here it
+        // only has to be able to leave the ground at all.
+        assert!(up.can_move(), "and it moves");
+    }
+
+    // The depot is the exception the name promises: it stays on the ground.
+    let depot = registry
+        .entity("supply_depot")
+        .expect("supply_depot defined");
+    assert!(depot.morphs.is_empty());
+    assert!(!depot.can_move());
 }
 
 //

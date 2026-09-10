@@ -433,8 +433,8 @@ pub fn play_cues(world: &mut World) {
 /// A cast is heard at whoever made it and, in its own voice, at whatever it was
 /// applied to. A self-cast is one place and so one sound.
 ///
-/// The milestone cues — a research finishing, a construction completing — are
-/// appended only when they belong to `local` (see [`own_milestone`]).
+/// A milestone cue is appended only when it belongs to `local` (see
+/// [`own_milestone`]).
 fn cues_for(
     world: &World,
     local: LocalRole,
@@ -488,6 +488,13 @@ fn cues_for(
         SimulationEvent::PlayerSkillCast { player, .. } => {
             if own_milestone(local, Some(*player)) {
                 out.push((Cue::Cast, None));
+            }
+        }
+        // Taking an annex is a gain like finishing a building, heard where it
+        // happens.
+        SimulationEvent::EntityCaptured { to, position, .. } => {
+            if own_milestone(local, Some(*to)) {
+                out.push((Cue::Completed, Some(*position)));
             }
         }
         SimulationEvent::EntityDied { .. }

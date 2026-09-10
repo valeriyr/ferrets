@@ -262,7 +262,7 @@ pub fn game_view(world: &World, player: PlayerId, race: &str, vision: AiVision) 
         if hidden && owner != Some(player) {
             continue;
         }
-        let disabled = matches!(entity_def::operation(world, entity), Operation::Disabled);
+        let disabled = matches!(entity_def::operation(world, entity), Operation::Disabled(_));
         let view = entity_view(&entity_ref, id, hidden, disabled);
         match owner {
             // Own and allied entities are always seen; enemy and neutral ones

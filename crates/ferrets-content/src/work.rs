@@ -32,6 +32,53 @@ pub enum BerthStance {
     },
 }
 
+/// What decides how many workers may work one job at once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Crewing {
+    /// The presence's own limit.
+    Counted(CrewLimit),
+    /// The berths of the job the worker sits in, one worker to a slot.
+    Seated,
+}
+
+/// How many workers may work one job at once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CrewLimit {
+    /// At most this many, whatever the job.
+    Limit(usize),
+    /// Any number at all.
+    Unlimited,
+}
+
+impl CrewLimit {
+    /// One worker at a time.
+    pub const ONE: Self = CrewLimit::Limit(1);
+
+    /// A limit of `at_once` workers.
+    ///
+    /// Panics if `at_once` is `0`.
+    pub fn limit(at_once: usize) -> Self {
+        assert!(at_once > 0, "a crew limit must admit at least one worker");
+        CrewLimit::Limit(at_once)
+    }
+
+    /// Whether a crew of `workers` exceeds the limit.
+    pub fn exceeded_by(&self, workers: usize) -> bool {
+        match self {
+            CrewLimit::Limit(at_once) => workers > *at_once,
+            CrewLimit::Unlimited => false,
+        }
+    }
+
+    /// Whether the limit admits nobody at all.
+    pub fn admits_nobody(&self) -> bool {
+        match self {
+            CrewLimit::Limit(at_once) => *at_once == 0,
+            CrewLimit::Unlimited => false,
+        }
+    }
+}
+
 /// How a worker attaches to a job: which of the job's berth groups it sits in,
 /// and how it sits there.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -82,22 +129,22 @@ impl Attachment {
     }
 }
 
-/// Where a worker stands while it attends a job, and whether others may join it.
+/// Where a worker stands while it attends a job, and how many may attend it.
 ///
-/// Declared per capability rather than per entity: one worker can reasonably
-/// disappear into a job it does alone and stand out in the open beside another its
-/// fellows crowd around, so a single setting per entity could not express both.
+/// Every worker on a job contributes its own rate and pays its own way, so
+/// massing workers buys speed without buying it cheaper.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkPresence {
-    /// Taken off the map for the duration, so the work site is left clear. One
-    /// worker at a time.
-    Hidden,
-    /// Standing beside the work, where it can be shot at. One worker at a time.
-    Present,
-    /// Standing beside the work, with any number of others alongside it. Each one
-    /// contributes its own rate and pays its own way, so massing workers buys speed
-    /// without buying it cheaper.
-    PresentStacking,
+    /// Taken off the map for the duration, so the work site is left clear.
+    Hidden {
+        /// How many workers may work one job at once.
+        crew: CrewLimit,
+    },
+    /// Standing beside the work, where it can be shot at.
+    Present {
+        /// How many workers may work one job at once.
+        crew: CrewLimit,
+    },
     /// Sitting in one of the job's berths, where it can be shot at, holding no
     /// cells: nothing is blocked by it and nothing pushes it. As many workers at
     /// a time as the berth group has slots, each contributing its own rate and
@@ -111,16 +158,18 @@ impl WorkPresence {
     pub fn attachment(&self) -> Option<&Attachment> {
         match self {
             WorkPresence::Attached(attachment) => Some(attachment),
-            WorkPresence::Hidden | WorkPresence::Present | WorkPresence::PresentStacking => None,
+            WorkPresence::Hidden { .. } | WorkPresence::Present { .. } => None,
         }
     }
 
-    /// Whether several workers may share one job.
+    /// What decides how many workers of this presence may work one job at once.
     #[inline]
-    pub fn stacks(&self) -> bool {
-        matches!(
-            self,
-            WorkPresence::PresentStacking | WorkPresence::Attached(_)
-        )
+    pub fn crewing(&self) -> Crewing {
+        match self {
+            WorkPresence::Hidden { crew } | WorkPresence::Present { crew } => {
+                Crewing::Counted(*crew)
+            }
+            WorkPresence::Attached(_) => Crewing::Seated,
+        }
     }
 }

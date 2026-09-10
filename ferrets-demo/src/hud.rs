@@ -13,6 +13,7 @@ use ferrets_content::{
 use ferrets_math::fixed_uvec2::FixedUVec2;
 use ferrets_physics::body;
 use ferrets_simulation::{
+    annex,
     command::{PlayerCommand, SelectMode, SkillCasterRef},
     components::{
         build::UnderConstructionComponent,
@@ -49,7 +50,7 @@ use ferrets_simulation::{
 };
 
 use crate::{
-    input::{InputMode, Primary, TargetedOrder},
+    input::{InputMode, Leading, TargetedOrder},
     states::{GameState, InGameUi},
     time::SpeedStep,
 };
@@ -111,25 +112,25 @@ pub struct ReplayNote;
 #[derive(Component)]
 pub struct LeaveButton;
 
-/// The command-card container; train buttons for the primary producer are its children.
+/// The command-card container; train buttons for the leading producer are its children.
 #[derive(Component)]
 pub struct CommandCard;
 
-/// A command-card button that queues an entity type on the primary producer.
+/// A command-card button that queues an entity type on the leading producer.
 #[derive(Component)]
 pub struct TrainButton {
     /// The entity type this button queues.
     type_name: String,
 }
 
-/// A command-card button that starts placing a building with the primary builder.
+/// A command-card button that starts placing a building with the leading builder.
 #[derive(Component)]
 pub struct BuildButton {
     /// The building type this button starts placing.
     type_name: String,
 }
 
-/// A command-card button that starts a research on the primary researcher.
+/// A command-card button that starts a research on the leading researcher.
 #[derive(Component)]
 pub struct ResearchButton {
     /// The research this button starts.
@@ -144,7 +145,7 @@ pub struct MorphButton {
     type_name: String,
 }
 
-/// A command-card button that tears down the primary's unfinished site.
+/// A command-card button that tears down the leading entity's unfinished site.
 #[derive(Component)]
 pub struct CancelBuildButton;
 
@@ -162,7 +163,7 @@ pub struct SkillButton {
     skill: SkillId,
 }
 
-/// A command-card button that unloads the primary transporter's passengers.
+/// A command-card button that unloads the leading transporter's passengers.
 #[derive(Component)]
 pub struct UnloadButton {
     /// `false` unloads in place; `true` arms a click that names the
@@ -170,7 +171,7 @@ pub struct UnloadButton {
     at_point: bool,
 }
 
-/// A command-card button that arms a click naming the unit the primary
+/// A command-card button that arms a click naming the unit the leading
 /// transporter fetches aboard.
 #[derive(Component)]
 pub struct LoadButton;
@@ -976,16 +977,16 @@ fn card_button(label: &str, base: Color) -> impl Bundle {
     )
 }
 
-/// Rebuilds the command card whenever the primary selection changes — a train
+/// Rebuilds the command card whenever the leading selection changes — a train
 /// button per unit the selected producer can build, a build button per building
 /// the selected worker can construct, a cancel button on a site still going
-/// up, or nothing when the primary does none of that — and whenever the
-/// primary's own type is rewritten or its site finishes: a gryphon that takes
+/// up, or nothing when the leading entity does none of that — and whenever the
+/// leading entity's own type is rewritten or its site finishes: a gryphon that takes
 /// off must swap its take-off button for the landing one on the spot, and a
 /// finished building loses its cancel button.
 pub fn update_command_card(
     session: Res<GameSession>,
-    primary: Res<Primary>,
+    leading: Res<Leading>,
     registry: Res<ContentRegistry>,
     changed: Query<&EntityInfoComponent, Changed<EntityInfoComponent>>,
     entities: Query<&EntityInfoComponent>,
@@ -1015,15 +1016,15 @@ pub fn update_command_card(
         }
         return;
     }
-    let primary_type_changed = primary
+    let leading_type_changed = leading
         .0
         .is_some_and(|id| changed.iter().any(|info| info.id() == id));
-    let primary_site_finished = primary.0.is_some_and(|id| {
+    let leading_site_finished = leading.0.is_some_and(|id| {
         finished
             .read()
             .any(|entity| entities.get(entity).is_ok_and(|info| info.id() == id))
     });
-    if !primary.is_changed() && !primary_type_changed && !primary_site_finished {
+    if !leading.is_changed() && !leading_type_changed && !leading_site_finished {
         return;
     }
     let Ok(card) = card.single() else {
@@ -1032,7 +1033,7 @@ pub fn update_command_card(
     for button in &buttons {
         commands.entity(button).despawn();
     }
-    let Some(id) = primary.0 else {
+    let Some(id) = leading.0 else {
         return;
     };
     let def = entities
@@ -1133,16 +1134,16 @@ pub fn update_command_card(
     });
 }
 
-/// Trains the button's unit on the primary producer when a train button is clicked.
+/// Trains the button's unit on the leading producer when a train button is clicked.
 pub fn command_card_input(
     mut buttons: Query<(&Interaction, &TrainButton, &mut BackgroundColor), Changed<Interaction>>,
-    primary: Res<Primary>,
+    leading: Res<Leading>,
     mut pending: ResMut<PendingInput>,
 ) {
     for (interaction, button, mut color) in &mut buttons {
         match interaction {
             Interaction::Pressed => {
-                if let Some(trainer) = primary.0 {
+                if let Some(trainer) = leading.0 {
                     pending.push(PlayerCommand::TrainEntity {
                         trainer,
                         type_name: button.type_name.clone(),
@@ -1158,21 +1159,21 @@ pub fn command_card_input(
 /// Arms the fetch-aboard click when the load button is clicked.
 pub fn load_card_input(
     mut buttons: Query<&Interaction, (With<LoadButton>, Changed<Interaction>)>,
-    primary: Res<Primary>,
+    leading: Res<Leading>,
     mut mode: ResMut<InputMode>,
 ) {
     for interaction in &mut buttons {
-        if matches!(interaction, Interaction::Pressed) && primary.0.is_some() {
+        if matches!(interaction, Interaction::Pressed) && leading.0.is_some() {
             *mode = InputMode::Targeting(TargetedOrder::Load);
         }
     }
 }
 
-/// Unloads the primary transporter when an unload button is clicked: in place,
+/// Unloads the leading transporter when an unload button is clicked: in place,
 /// or — for the at-point button — by arming a click that names the destination.
 pub fn unload_card_input(
     mut buttons: Query<(&Interaction, &UnloadButton), Changed<Interaction>>,
-    primary: Res<Primary>,
+    leading: Res<Leading>,
     mut mode: ResMut<InputMode>,
     mut pending: ResMut<PendingInput>,
 ) {
@@ -1180,7 +1181,7 @@ pub fn unload_card_input(
         if !matches!(interaction, Interaction::Pressed) {
             continue;
         }
-        let Some(transport) = primary.0 else {
+        let Some(transport) = leading.0 else {
             continue;
         };
         if button.at_point {
@@ -1197,7 +1198,7 @@ pub fn unload_card_input(
 
 /// Changes the selection into the button's type when clicked.
 ///
-/// The whole selection is commanded, not just the primary, because a mixed
+/// The whole selection is commanded, not just the leading entity, because a mixed
 /// selection reads naturally as "everyone that can, change" — the executor
 /// drops whoever cannot.
 pub fn morph_card_input(
@@ -1218,20 +1219,20 @@ pub fn morph_card_input(
     }
 }
 
-/// Tears down the primary's own unfinished site when the cancel button is clicked;
+/// Tears down the leading entity's own unfinished site when the cancel button is clicked;
 /// the executor refunds the price and releases whoever was working it.
 pub fn cancel_build_card_input(
     mut buttons: Query<
         (&Interaction, &mut BackgroundColor),
         (With<CancelBuildButton>, Changed<Interaction>),
     >,
-    primary: Res<Primary>,
+    leading: Res<Leading>,
     mut pending: ResMut<PendingInput>,
 ) {
     for (interaction, mut color) in &mut buttons {
         match interaction {
             Interaction::Pressed => {
-                if let Some(site) = primary.0 {
+                if let Some(site) = leading.0 {
                     pending.push(PlayerCommand::CancelBuild { site });
                 }
             }
@@ -1241,17 +1242,17 @@ pub fn cancel_build_card_input(
     }
 }
 
-/// Starts the button's research on the primary researcher when clicked. The
+/// Starts the button's research on the leading researcher when clicked. The
 /// executor holds every gate (requirements, completion, the one-per-topic
 /// rule), so a click that slips past the greyed-out tint is still refused.
 pub fn research_card_input(
     mut buttons: Query<(&Interaction, &ResearchButton), Changed<Interaction>>,
-    primary: Res<Primary>,
+    leading: Res<Leading>,
     mut pending: ResMut<PendingInput>,
 ) {
     for (interaction, button) in &mut buttons {
         if matches!(interaction, Interaction::Pressed)
-            && let Some(researcher) = primary.0
+            && let Some(researcher) = leading.0
         {
             pending.push(PlayerCommand::StartResearch {
                 researcher,
@@ -1270,7 +1271,7 @@ enum CardAction {
     Build(String),
     /// Starts the research.
     Research(ResearchId),
-    /// Casts the skill from the primary entity.
+    /// Casts the skill from the leading entity.
     Skill(SkillId),
     /// Casts the skill as the player.
     PlayerSkill(SkillId),
@@ -1279,7 +1280,7 @@ enum CardAction {
 }
 
 /// Recolors the gated card buttons from what the executor would currently
-/// allow: a train, build, research, skill or change of form the primary
+/// allow: a train, build, research, skill or change of form the leading
 /// entity may not start now (see [`orders::can_start`]), or whose
 /// requirements are unmet, greys out, as does a research that is done or
 /// already under way.
@@ -1288,12 +1289,12 @@ pub fn update_card_availability(world: &mut World) {
     let Some(player) = world.resource::<GameSession>().local_player() else {
         return;
     };
-    let primary = world
-        .resource::<Primary>()
+    let leading = world
+        .resource::<Leading>()
         .0
         .and_then(|id| world.resource::<EntityIndex>().interactable(world, id));
     let starts = |world: &World, order: Order| {
-        primary.is_some_and(|entity| orders::can_start(world, entity, &order).is_ok())
+        leading.is_some_and(|entity| orders::can_start(world, entity, &order).is_ok())
     };
     // A change of form is commanded for the whole selection — the player's own
     // entities in it, as the executor reads it — so the button stands as long
@@ -1314,7 +1315,7 @@ pub fn update_card_availability(world: &mut World) {
             })
     };
     let operating = |world: &World| {
-        primary.is_some_and(|entity| {
+        leading.is_some_and(|entity| {
             matches!(entity_def::operation(world, entity), Operation::Operating)
         })
     };
@@ -1357,14 +1358,14 @@ pub fn update_card_availability(world: &mut World) {
                 .resource::<ContentRegistry>()
                 .entity(type_name)
                 .map(|def| def.requires.clone())
-                .is_none_or(|requires| requirements::met(world, player, &requires))
+                .is_none_or(|requires| requirements::met(world, player, leading, &requires))
         };
         let skill_requirements_met = |world: &mut World, skill: SkillId| {
             world
                 .resource::<ContentRegistry>()
                 .skill_def(skill)
                 .map(|def| def.requires.clone())
-                .is_none_or(|requires| requirements::met(world, player, &requires))
+                .is_none_or(|requires| requirements::met(world, player, leading, &requires))
         };
         let (available, normal, hovered) = match &action {
             CardAction::Train(type_name) => (
@@ -1394,7 +1395,9 @@ pub fn update_card_availability(world: &mut World) {
                         .resource::<ContentRegistry>()
                         .research_def(*research)
                         .map(|def| def.requires.clone())
-                        .is_none_or(|requires| requirements::met(world, player, &requires))
+                        .is_none_or(|requires| {
+                            requirements::met(world, player, leading, &requires)
+                        })
                     && starts(
                         world,
                         Order::Research {
@@ -1445,18 +1448,69 @@ fn research_under_way(world: &mut World, player: PlayerId, research: ResearchId)
 
 /// Starts placing the button's building when a build button is clicked; the
 /// existing placement flow then handles the ghost and the confirming click.
-pub fn build_card_input(
-    mut buttons: Query<(&Interaction, &BuildButton, &mut BackgroundColor), Changed<Interaction>>,
-    mut mode: ResMut<InputMode>,
-) {
-    for (interaction, button, mut color) in &mut buttons {
+///
+/// An annex is the exception: it stands in a dock of the building that raises
+/// it and nowhere else, so the click sends the command at that dock's cell
+/// instead of arming a placement.
+pub fn build_card_input(world: &mut World) {
+    let mut clicked: Vec<(Entity, Interaction, String)> = Vec::new();
+    let mut query =
+        world.query_filtered::<(Entity, &Interaction, &BuildButton), Changed<Interaction>>();
+    for (entity, interaction, button) in query.iter(world) {
+        clicked.push((entity, *interaction, button.type_name.clone()));
+    }
+
+    for (entity, interaction, type_name) in clicked {
         match interaction {
             Interaction::Pressed => {
-                *mode = InputMode::PlacingBuild(button.type_name.clone());
+                let annex = world
+                    .resource::<ContentRegistry>()
+                    .entity(&type_name)
+                    .is_some_and(|def| def.annex.is_some());
+                // The building that raises it is whatever the card is
+                // showing, which is the selection's leading entity.
+                let selected = world
+                    .resource::<Leading>()
+                    .0
+                    .and_then(|id| world.resource::<EntityIndex>().interactable(world, id));
+                match (annex, selected) {
+                    (true, Some(selected)) => {
+                        let builder = entity_def::simulation_id(world, selected);
+                        // A builder may list an annex without offering a dock
+                        // that takes it, and there is nowhere to send the
+                        // order then.
+                        if let Some(at) = annex::dock_anchor_for(world, selected, &type_name) {
+                            world
+                                .resource_mut::<PendingInput>()
+                                .push(PlayerCommand::BuildEntity {
+                                    builder,
+                                    type_name,
+                                    position: FixedUVec2::from(at),
+                                    // As every other build click does: a
+                                    // pending one is replaced rather than
+                                    // piling a second order on the primary,
+                                    // and a soft flush leaves its training be.
+                                    flush: true,
+                                });
+                        }
+                    }
+                    // The card outlived the entity it was drawn for.
+                    (true, None) => {}
+                    (false, _) => {
+                        *world.resource_mut::<InputMode>() = InputMode::PlacingBuild(type_name);
+                    }
+                }
             }
-            Interaction::Hovered => *color = BackgroundColor(BUILD_HOVERED),
-            Interaction::None => *color = BackgroundColor(BUILD_NORMAL),
+            Interaction::Hovered => set_background(world, entity, BUILD_HOVERED),
+            Interaction::None => set_background(world, entity, BUILD_NORMAL),
         }
+    }
+}
+
+/// Paints one button's background.
+fn set_background(world: &mut World, button: Entity, color: Color) {
+    if let Some(mut background) = world.entity_mut(button).get_mut::<BackgroundColor>() {
+        *background = BackgroundColor(color);
     }
 }
 
@@ -1560,16 +1614,16 @@ pub fn update_player_skill_cooldown(
     }
 }
 
-/// Shows the primary selected entity's skill cooldowns on its command-card
+/// Shows the leading selected entity's skill cooldowns on its command-card
 /// buttons, the same way the player skill button shows its own.
 pub fn update_skill_cooldowns(
     registry: Res<ContentRegistry>,
-    primary: Res<Primary>,
+    leading: Res<Leading>,
     entities: Query<(&EntityInfoComponent, &SkillsComponent)>,
     buttons: Query<(&SkillButton, &Children)>,
     mut texts: Query<&mut Text>,
 ) {
-    let Some(id) = primary.0 else {
+    let Some(id) = leading.0 else {
         return;
     };
     let Some(skills) = entities

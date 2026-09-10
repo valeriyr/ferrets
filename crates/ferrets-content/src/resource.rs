@@ -58,6 +58,40 @@ pub enum Banking {
     Direct,
 }
 
+/// Which sources a carrier may make a trip to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Sources {
+    /// Any source of the kind.
+    Any,
+    /// Only these source types, by registered name.
+    Only(Vec<String>),
+}
+
+impl Sources {
+    /// Only the named source types.
+    ///
+    /// Panics if `names` is empty or holds an empty name.
+    pub fn only(names: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        let names: Vec<String> = names.into_iter().map(Into::into).collect();
+
+        assert!(!names.is_empty(), "a source list must name a source");
+        assert!(
+            names.iter().all(|name| !name.is_empty()),
+            "source names must not be empty"
+        );
+
+        Sources::Only(names)
+    }
+
+    /// Whether a trip may be made to a source of `type_name`.
+    pub fn admits(&self, type_name: &str) -> bool {
+        match self {
+            Sources::Any => true,
+            Sources::Only(names) => names.iter().any(|name| name == type_name),
+        }
+    }
+}
+
 /// How a carrier harvests one resource kind.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HarvestData {
@@ -72,6 +106,8 @@ pub struct HarvestData {
     presence: WorkPresence,
     /// Where the yield of a trip ends up.
     banking: Banking,
+    /// The source types a trip may be made to.
+    sources: Sources,
 }
 
 impl HarvestData {
@@ -84,6 +120,7 @@ impl HarvestData {
         harvest_time: u32,
         presence: WorkPresence,
         banking: Banking,
+        sources: Sources,
     ) -> Self {
         assert!(capacity > 0, "capacity must be greater than 0");
         assert!(harvest_time > 0, "harvest_time must be greater than 0");
@@ -93,6 +130,7 @@ impl HarvestData {
             harvest_time,
             presence,
             banking,
+            sources,
         }
     }
 
@@ -124,6 +162,18 @@ impl HarvestData {
     #[inline]
     pub fn banking(&self) -> Banking {
         self.banking
+    }
+
+    /// The source types a trip may be made to.
+    #[inline]
+    pub fn sources(&self) -> &Sources {
+        &self.sources
+    }
+
+    /// Whether a trip may be made to a source of `type_name`.
+    #[inline]
+    pub fn admits_source(&self, type_name: &str) -> bool {
+        self.sources.admits(type_name)
     }
 }
 

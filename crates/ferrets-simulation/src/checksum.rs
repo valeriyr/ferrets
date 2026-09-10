@@ -21,7 +21,7 @@ use xxhash_rust::xxh64::Xxh64;
 use crate::{
     components::{
         entity_info::EntityInfoComponent, health::HealthComponent, location::LocationComponent,
-        turret::TurretsComponent,
+        owner::OwnerComponent, turret::TurretsComponent,
     },
     entity_index::EntityIndex,
     resources::PlayerResources,
@@ -92,8 +92,8 @@ impl Checksum {
 pub fn state_checksum(world: &World) -> u64 {
     let mut hasher = Checksum::new();
 
-    // Entities in id order: type, position, facing, and health are the state most
-    // likely to diverge. Alive then dying, each sorted by SimulationId.
+    // Entities in id order: type, position, facing, health and owner are the
+    // state most likely to diverge. Alive then dying, each sorted by SimulationId.
     //
     // The type is folded because it is no longer immortal — a form change swaps
     // it, and with it the unit's layer, footprint and capabilities. Without this
@@ -118,6 +118,13 @@ pub fn state_checksum(world: &World) -> u64 {
         }
         if let Some(health) = entity.get::<HealthComponent>() {
             hasher.write_fixed_u64(health.current());
+        }
+        // Whose an entity is can change while it stands: an annex follows the
+        // primary that docks with it. A peer that handed a building over while
+        // another did not would otherwise be caught only by whatever drift
+        // followed from it.
+        if let Some(owner) = entity.get::<OwnerComponent>() {
+            hasher.write_u8(owner.player());
         }
         // A gun's own bearing decides what it may fire at through its arc, and a
         // weapon that fights while its body walks decides it every tick without

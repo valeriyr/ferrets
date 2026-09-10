@@ -15,7 +15,7 @@ use ferrets_content::{
     registry::ContentRegistry,
     skills::{EntityCastEffect, EntityCastTarget, SkillCaster, SkillDef},
     stand::StandingAct,
-    work::WorkPresence,
+    work::{CrewLimit, WorkPresence},
 };
 use ferrets_geometry::cell_size::CellSize;
 use ferrets_math::FixedU64;
@@ -242,7 +242,7 @@ fn stand_app() -> App {
                 MorphPlacement::Revalidate,
                 MorphCancel::Forfeit,
                 Vec::new(),
-                Vec::<String>::new(),
+                Vec::new(),
             )
         };
         registry.register(
@@ -279,7 +279,12 @@ fn stand_app() -> App {
             mover("drone")
                 .with_sight_range(4)
                 .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
-                .with_builder(["cleanser"], BuilderAttendance::Crew(WorkPresence::Present)),
+                .with_builder(
+                    ["cleanser"],
+                    BuilderAttendance::Crew(WorkPresence::Present {
+                        crew: CrewLimit::ONE,
+                    }),
+                ),
         );
     }
     app.world_mut().resource::<ContentRegistry>().validate();

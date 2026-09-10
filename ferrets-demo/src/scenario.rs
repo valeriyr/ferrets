@@ -35,25 +35,25 @@ use crate::{ai, settings::Settings, setup, states::GameState};
 /// overall outcome, evaluated on the integer view every `period` ticks inside
 /// the deterministic tick loop.
 ///
-/// Win by fielding a barracks and three archers; lose if every unit is gone.
+/// Win by fielding a training camp and three archers; lose if every unit is gone.
 const SCRIPT: &str = r#"
     define_scenario("build_army", {
         period = 10,
         objectives = {
-            { id = "barracks", label = "Build a barracks" },
+            { id = "camp", label = "Build a training camp" },
             { id = "archers", label = "Train 3 archers" },
         },
         check = function(state, view)
-            local barracks, archers = 0, 0
+            local camps, archers = 0, 0
             for _, entity in ipairs(view.my_entities) do
-                if entity.type_name == "barracks" and not entity.under_construction then
-                    barracks = barracks + 1
+                if entity.type_name == "training_camp" and not entity.under_construction then
+                    camps = camps + 1
                 elseif entity.type_name == "archer" then
                     archers = archers + 1
                 end
             end
 
-            local built = barracks >= 1
+            local built = camps >= 1
             local trained = archers >= 3
 
             local outcome = "ongoing"
@@ -65,7 +65,7 @@ const SCRIPT: &str = r#"
             end
 
             return {
-                objectives = { barracks = built, archers = trained },
+                objectives = { camp = built, archers = trained },
                 outcome = outcome,
             }
         end,
@@ -89,7 +89,7 @@ pub struct CurrentScenario(pub Scenario);
 
 /// The built-in mission definition.
 ///
-/// The starting stockpile is enough to build the barracks (200 gold, 100 wood)
+/// The starting stockpile is enough to build the camp (200 gold, 100 wood)
 /// and train three archers (240 gold) without harvesting, so the objective is
 /// the point rather than the economy.
 pub fn builtin_mission(projection: Projection, movement_model: MovementModel) -> Scenario {

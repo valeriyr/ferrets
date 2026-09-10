@@ -5,17 +5,20 @@ use bevy_ecs::{entity::Entity, world::World};
 use ferrets_math::FixedU64;
 
 use crate::{
+    annex,
     components::{
         build::UnderConstructionComponent, energy::EnergyComponent, entity_buffs::BuffsComponent,
         entity_skills::SkillsComponent, entity_stats::StatsComponent, health::HealthComponent,
     },
     entity_def,
     entity_index::EntityIndex,
+    events::DeathCause,
     fields,
     player_buffs::PlayerBuffs,
     player_skills::PlayerSkills,
     player_stats::PlayerStats,
     session::{GameSession, player_id::PlayerId},
+    spawn,
 };
 use ferrets_content::{
     entity_buffs::EntityBuffId,
@@ -81,6 +84,7 @@ pub fn recompute_entity_stats(world: &mut World) {
             modifiers.extend_from_slice(&owner_modifiers[owner as usize]);
         }
         modifiers.extend(fields::modifiers(world, entity));
+        modifiers.extend(annex::modifiers(world, entity));
         folds.push((entity, modifiers));
     }
 
@@ -187,7 +191,7 @@ pub fn process_energy_regen(world: &mut World) {
 ///
 /// Runs over the alive index, so the dying are already excluded; entities still
 /// under construction are skipped too. A pool also settles back under a ceiling
-/// a debuff has lowered.
+/// a debuff has lowered, and one a drain runs dry dies of it.
 pub fn process_health_flow(world: &mut World) {
     for (_, entity) in world.resource::<EntityIndex>().alive_entries() {
         let entity_ref = world.entity(entity);
@@ -216,9 +220,19 @@ pub fn process_health_flow(world: &mut World) {
         let drain = stats
             .effective(EntityStatId::HEALTH_DRAIN)
             .unwrap_or(FixedU64::ZERO);
-        if let Some(mut health) = world.entity_mut(entity).get_mut::<HealthComponent>() {
-            health.heal(regen, max);
-            health.drain(drain);
+        let emptied = match world.entity_mut(entity).get_mut::<HealthComponent>() {
+            Some(mut health) => {
+                health.heal(regen, max);
+                health.drain(drain);
+                health.is_dead()
+            }
+            None => unreachable!("the pool read a moment ago is still the entity's own"),
+        };
+        // A pool this pass ran dry dies of it, with nobody to blame: a
+        // structure withering off the field that sustains it. A pool that was
+        // already empty is left where the opening rule left it.
+        if emptied {
+            spawn::despawn_entity(world, entity, DeathCause::Decayed);
         }
     }
 }

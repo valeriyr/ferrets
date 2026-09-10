@@ -68,6 +68,7 @@ pub enum Race {
     Swarm,
     Conclave,
     Elves,
+    Terran,
 }
 
 impl Race {
@@ -78,6 +79,7 @@ impl Race {
             Race::Swarm => "swarm",
             Race::Conclave => "conclave",
             Race::Elves => "elves",
+            Race::Terran => "terran",
         }
     }
 
@@ -88,6 +90,7 @@ impl Race {
             Race::Swarm => "Swarm",
             Race::Conclave => "Conclave",
             Race::Elves => "Elves",
+            Race::Terran => "Terrans",
         }
     }
 
@@ -97,7 +100,8 @@ impl Race {
             Race::Orc => Race::Swarm,
             Race::Swarm => Race::Conclave,
             Race::Conclave => Race::Elves,
-            Race::Elves => Race::Human,
+            Race::Elves => Race::Terran,
+            Race::Terran => Race::Human,
         }
     }
 
@@ -107,6 +111,7 @@ impl Race {
             Some("swarm") => Race::Swarm,
             Some("conclave") => Race::Conclave,
             Some("elves") => Race::Elves,
+            Some("terran") => Race::Terran,
             _ => Race::Human,
         }
     }

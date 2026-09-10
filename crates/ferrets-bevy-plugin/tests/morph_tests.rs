@@ -232,7 +232,7 @@ fn interim_form_is_worn_until_change_lands() {
 }
 
 #[test]
-fn interim_form_keeps_position_and_holds_cell_mover_stood_on() {
+fn interim_form_settles_onto_cell_mover_stood_on() {
     let mut app = utils::morph_app(MovementModel::Continuous);
     let (whelp, _) = utils::create_owned(&mut app, "whelp", 10, 10, 0);
     utils::grant_gold(&mut app, 10);
@@ -250,8 +250,8 @@ fn interim_form_keeps_position_and_holds_cell_mover_stood_on() {
     assert_eq!(type_name_of(&app, whelp), "chrysalis");
     assert_eq!(
         utils::position_of(app.world(), whelp),
-        utils::part_way("10.6", "10.3"),
-        "the chrysalis stands exactly where the whelp stood"
+        FixedUVec2::from(CellPos::new(11, 10)),
+        "the chrysalis settles onto the cell it holds, not the fraction the whelp walked on"
     );
     let map = app.world().resource::<Map>();
     assert!(
@@ -455,6 +455,73 @@ fn change_dropping_paid_queue_panics() {
 
     order_morph(&mut app, shrine, "golem");
     utils::run_ticks(&mut app, 15);
+}
+
+//
+// ─── Where the new form stands ────────────────────────────────────────────────
+//
+
+#[test]
+fn rooting_off_lattice_settles_position_onto_its_cells() {
+    let mut app = utils::continuous_orders_app();
+    let (shaft, shaft_id) = utils::create_owned(&mut app, "walking_shaft", 10, 10, 0);
+
+    // Where a continuous mover really stands: part way across a cell, which is
+    // legal for a claim and impossible for a footprint. Which way the
+    // quantisation goes is pinned by
+    // `interim_form_settles_onto_cell_mover_stood_on`; what this pins is that
+    // a form which stands still does not keep the fraction at all.
+    app.world_mut()
+        .get_mut::<LocationComponent>(shaft)
+        .unwrap()
+        .position = FixedUVec2::new(utils::fixed("10.4"), utils::fixed("10.0"));
+
+    command_morph(&mut app, shaft_id, "shaft_house");
+    utils::run_ticks(&mut app, utils::APPLY + 5);
+    assert_eq!(
+        app.world()
+            .get::<EntityInfoComponent>(shaft)
+            .unwrap()
+            .type_name(),
+        "shaft_house",
+        "it rooted"
+    );
+
+    // The cells it holds round to ten, and the position settles onto them
+    // from 10.4: nothing is left drawing or measuring the building off the
+    // cells it stands on.
+    assert_eq!(
+        entity_def::occupied_rect(app.world(), shaft).origin,
+        CellPos::new(10, 10)
+    );
+    assert_eq!(
+        entity_def::position(app.world(), shaft),
+        FixedUVec2::new(utils::fixed("10.0"), utils::fixed("10.0"))
+    );
+}
+
+#[test]
+fn change_between_cells_keeps_position_of_form_that_moves() {
+    let mut app = utils::morph_app(MovementModel::Continuous);
+    let (whelp, _) = utils::create_owned(&mut app, "whelp", 10, 10, 0);
+    app.world_mut()
+        .get_mut::<LocationComponent>(whelp)
+        .unwrap()
+        .position = utils::part_way("10.6", "10.3");
+    utils::run_ticks(&mut app, 1);
+
+    // Ten ticks of changing, and both forms claim a single cell, so nothing
+    // recentres either.
+    order_morph(&mut app, whelp, "wisp");
+    utils::run_ticks(&mut app, 11);
+    assert_eq!(type_name_of(&app, whelp), "wisp", "it changed");
+
+    // A claim is wherever the mover is, so the fraction it was walking on
+    // survives the change.
+    assert_eq!(
+        utils::position_of(app.world(), whelp),
+        utils::part_way("10.6", "10.3")
+    );
 }
 
 //

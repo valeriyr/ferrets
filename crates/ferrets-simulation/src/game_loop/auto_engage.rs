@@ -57,7 +57,7 @@ pub fn tick(world: &mut World) {
         // up and a disabled one stand idle.
         match entity_def::operation(world, entity) {
             Operation::Operating => {}
-            Operation::UnderConstruction | Operation::Disabled => continue,
+            Operation::UnderConstruction | Operation::Disabled(_) => continue,
         }
         let entity_ref = world.entity(entity);
         if entity_ref

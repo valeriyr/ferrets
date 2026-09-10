@@ -17,9 +17,9 @@ use ferrets_content::work::WorkPresence;
 /// its own account.
 pub(super) fn enter(world: &mut World, entity: Entity, presence: &WorkPresence, job: Entity) {
     match presence {
-        WorkPresence::Hidden => spawn::hide_entity(world, entity),
+        WorkPresence::Hidden { .. } => spawn::hide_entity(world, entity),
         WorkPresence::Attached(attachment) => spawn::attach_entity(world, entity, job, attachment),
-        WorkPresence::Present | WorkPresence::PresentStacking => {}
+        WorkPresence::Present { .. } => {}
     }
 }
 

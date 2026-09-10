@@ -1,6 +1,7 @@
 //! Loading game content from a script into a [`ContentRegistry`].
 
 use ferrets_content::{
+    annex::{AnnexClaim, AnnexWork},
     field::{FieldAction, FieldAffiliation, FieldCoverage, FieldVision},
     location::Solidity,
     morph::{MorphCancel, MorphPlacement},
@@ -282,6 +283,30 @@ pub(crate) fn field_action(value: &str) -> crate::Result<FieldAction> {
         "field action",
         value,
         &[("cover", FieldAction::Cover), ("clear", FieldAction::Clear)],
+    )
+}
+
+/// Maps an annex-work name to its enum: whether an annex with no primary
+/// carries out its work.
+pub(crate) fn annex_work(value: &str) -> crate::Result<AnnexWork> {
+    keyword(
+        "annex work",
+        value,
+        &[("idles", AnnexWork::Idles), ("works", AnnexWork::Works)],
+    )
+}
+
+/// Maps an annex-claim name to its enum: who may dock with an annex, and what
+/// docking does to whose it is.
+pub(crate) fn annex_claim(value: &str) -> crate::Result<AnnexClaim> {
+    keyword(
+        "annex claim",
+        value,
+        &[
+            ("bound", AnnexClaim::Bound),
+            ("allied", AnnexClaim::Allied),
+            ("seized", AnnexClaim::Seized),
+        ],
     )
 }
 

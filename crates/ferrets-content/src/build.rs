@@ -1,6 +1,6 @@
 //! Content-defined construction-catalogue property struct.
 
-use crate::work::WorkPresence;
+use crate::work::{CrewLimit, Crewing, WorkPresence};
 
 /// How a builder relates to a site it raises.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -16,6 +16,31 @@ pub enum BuilderAttendance {
     /// when the site completes instead of stepping back out, and a build order
     /// that ends early brings it back onto the map.
     Consumed,
+}
+
+impl BuilderAttendance {
+    /// What decides how many builders of this attendance may raise one site at
+    /// once.
+    pub fn crewing(&self) -> Crewing {
+        match self {
+            BuilderAttendance::Crew(presence) => presence.crewing(),
+            BuilderAttendance::Unattended | BuilderAttendance::Consumed => {
+                Crewing::Counted(CrewLimit::ONE)
+            }
+        }
+    }
+
+    /// How the builder stands on a site it raises, or `None` when it does not
+    /// stand there at all.
+    pub fn presence(&self) -> Option<WorkPresence> {
+        match self {
+            BuilderAttendance::Crew(presence) => Some(presence.clone()),
+            BuilderAttendance::Consumed => Some(WorkPresence::Hidden {
+                crew: CrewLimit::ONE,
+            }),
+            BuilderAttendance::Unattended => None,
+        }
+    }
 }
 
 /// Content-defined construction catalogue: which entity types this entity can

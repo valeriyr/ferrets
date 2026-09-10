@@ -15,7 +15,7 @@ use ferrets_content::{
     morph::{MorphCancel, MorphPlacement, MorphTime, MorphTransition},
     registry::ContentRegistry,
     repair::{RepairCost, RepairRate},
-    work::{Attachment, BerthStance, WorkPresence},
+    work::{Attachment, BerthStance, CrewLimit, WorkPresence},
 };
 use ferrets_math::{FixedU64, facing::Facing};
 use ferrets_simulation::{
@@ -270,6 +270,31 @@ fn spent_medic_waits_at_patient_and_resumes_once_it_can_pay() {
 //
 // ─── Cost ───────────────────────────────────────────────────────────────────
 //
+
+#[test]
+fn pro_rata_mender_turns_down_target_with_no_price() {
+    let mut app = app();
+    let (shed, shed_id) = utils::create_owned(&mut app, "free_shed", 10, 10, 0);
+    utils::wound(&mut app, shed, "40");
+    let (_, worker_id) = utils::create_owned(&mut app, "worker", 8, 10, 0);
+    utils::grant_gold(&mut app, 500);
+
+    utils::select(&mut app, worker_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Repair {
+            target: shed_id,
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY + 6);
+
+    // A share of no price is no price, so the work would be free: the mender
+    // turns the job down instead of doing it for nothing.
+    assert!(app.world().get::<UnderRepairComponent>(shed).is_none());
+    assert_eq!(utils::health(&app, shed), 60, "100 less the 40-point hole");
+    assert_eq!(utils::gold(app.world()), 500);
+}
 
 #[test]
 fn full_repair_bills_cost_factor_share_of_price() {
@@ -908,7 +933,9 @@ fn app() -> App {
                 .with_repairer(
                     ["flesh"],
                     RepairRate::PerTick(FixedU64::from_num(5)),
-                    WorkPresence::Present,
+                    WorkPresence::Present {
+                        crew: CrewLimit::ONE,
+                    },
                     false,
                     RepairCost::Free,
                     None,
@@ -927,13 +954,23 @@ fn app() -> App {
                     MorphPlacement::Reserve,
                     MorphCancel::Committed,
                     Vec::new(),
-                    Vec::<String>::new(),
+                    Vec::new(),
                 )]),
         );
         registry.register(building("shuttered_forge", None));
+        // Raised for nothing, so a pro-rata bill would be a share of nothing.
+        registry.register(
+            EntityTypeDef::new("free_shed")
+                .with_location(utils::GROUND, CellSize::new(2, 2), Solidity::Solid)
+                .with_health(100)
+                .with_build_time(20)
+                .with_tags(["building"]),
+        );
         registry.register(repairer(
             "worker",
-            WorkPresence::PresentStacking,
+            WorkPresence::Present {
+                crew: CrewLimit::Unlimited,
+            },
             Some(5),
             RepairCost::ProRata,
         ));
@@ -945,20 +982,26 @@ fn app() -> App {
         ));
         registry.register(repairer(
             "loner",
-            WorkPresence::Present,
+            WorkPresence::Present {
+                crew: CrewLimit::ONE,
+            },
             Some(5),
             RepairCost::ProRata,
         ));
         registry.register(repairer(
             "mole",
-            WorkPresence::Hidden,
+            WorkPresence::Hidden {
+                crew: CrewLimit::ONE,
+            },
             Some(5),
             RepairCost::ProRata,
         ));
         // No patience limit: it waits at the job however long it takes.
         registry.register(repairer(
             "stoic",
-            WorkPresence::PresentStacking,
+            WorkPresence::Present {
+                crew: CrewLimit::Unlimited,
+            },
             None,
             RepairCost::ProRata,
         ));
@@ -981,7 +1024,9 @@ fn app() -> App {
                 .with_repairer(
                     ["building"],
                     RepairRate::PerTick(FixedU64::from_num(5)),
-                    WorkPresence::Present,
+                    WorkPresence::Present {
+                        crew: CrewLimit::ONE,
+                    },
                     false,
                     RepairCost::Energy(FixedU64::from_num(0.5)),
                     None,
@@ -991,7 +1036,9 @@ fn app() -> App {
         // target's price.
         registry.register(repairer(
             "hauler",
-            WorkPresence::PresentStacking,
+            WorkPresence::Present {
+                crew: CrewLimit::Unlimited,
+            },
             Some(5),
             RepairCost::PerTick(costs::cost([("gold", 1)])),
         ));

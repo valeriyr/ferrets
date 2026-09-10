@@ -1,8 +1,9 @@
 //! Per-tick fog of war recompute: re-stamps each player's visible cells from
-//! the sight of their owned entities and the fields they cover.
+//! the sight of their owned entities, the fields they cover, and the watches
+//! they hold over patches of the map.
 
 use bevy_ecs::{prelude::*, world::World};
-use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, projection};
+use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize, projection};
 
 use crate::{
     components::{
@@ -14,6 +15,7 @@ use crate::{
     map::Map,
     session::player_id::PlayerId,
     visibility::VisibilityGrid,
+    watches::Watches,
 };
 use ferrets_content::{entity_stats::EntityStatId, field::FieldVision, registry::ContentRegistry};
 
@@ -21,10 +23,12 @@ use ferrets_content::{entity_stats::EntityStatId, field::FieldVision, registry::
 ///
 /// Last tick's visible cells demote to explored (sticky), then every owned,
 /// on-map entity reveals every cell within its `sight_range` of the cells it
-/// occupies for its player, and every cell of a field that grants vision is
-/// revealed to each player covering it. The result is a pure function of
-/// entity footprints, the (static) sight stat, this tick's field coverage, and
-/// team membership, so it is identical on every node.
+/// occupies for its player, every cell of a field that grants vision is
+/// revealed to each player covering it, and every watch still in force this
+/// tick reveals the patch it holds to the player who cast it. The result is a
+/// pure function of entity footprints, the (static) sight stat, this tick's
+/// field coverage, the watches in force, and team membership, so it is
+/// identical on every node.
 pub fn recompute_visibility(world: &mut World) {
     // Owned, on-map sight sources: (player, occupied cells, sight radius). Sight
     // is read from the effective stat store; an unset sight sees only the cells
@@ -50,7 +54,7 @@ pub fn recompute_visibility(world: &mut World) {
     // Cells a watching field covers. Coverage is a per-cell owner set, so the
     // fold below is commutative too. A world with no field grid has no fields
     // to watch through.
-    let watched: Vec<(PlayerId, CellPos)> = match (
+    let field_cells: Vec<(PlayerId, CellPos)> = match (
         world.get_resource::<FieldGrid>(),
         world.get_resource::<ContentRegistry>(),
     ) {
@@ -82,12 +86,36 @@ pub fn recompute_visibility(world: &mut World) {
             .collect()
     };
 
+    // The patches watches hold. Everything the store holds is in force: a
+    // watch is dropped by the pass that takes its last tick off it.
+    let watched_patches: Vec<(PlayerId, CellPos, u32)> = world
+        .resource::<Watches>()
+        .in_force()
+        .iter()
+        .map(|watch| (watch.player, watch.center, watch.radius))
+        .collect();
+    let watch_cells: Vec<(PlayerId, CellPos)> = {
+        let map = world.resource::<Map>();
+        watched_patches
+            .into_iter()
+            .flat_map(|(player, center, radius)| {
+                projection::circle_cells(CellRect::new(center, CellSize::new(1, 1)), radius)
+                    .into_iter()
+                    .filter(|&cell| map.contains(cell))
+                    .map(move |cell| (player, cell))
+            })
+            .collect()
+    };
+
     let mut grid = world.resource_mut::<VisibilityGrid>();
     grid.age();
     for (player, cell) in revealed {
         grid.reveal(player, cell.x, cell.y);
     }
-    for (player, cell) in watched {
+    for (player, cell) in field_cells {
+        grid.reveal(player, cell.x, cell.y);
+    }
+    for (player, cell) in watch_cells {
         grid.reveal(player, cell.x, cell.y);
     }
 }

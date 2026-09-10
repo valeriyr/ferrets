@@ -6,6 +6,7 @@ use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_physics::body;
 
 use crate::{
+    annex,
     components::{
         attached::AttachedComponent, build::UnderConstructionComponent,
         entity_info::EntityInfoComponent, entity_stats::StatsComponent, hidden::HiddenComponent,
@@ -18,11 +19,13 @@ use crate::{
     simulation_id::SimulationId,
 };
 use ferrets_content::{
+    annex::AnnexDef,
     attack::Weapon,
     build::BuilderAttendance,
     entity_stats::EntityStatId,
     entity_type_def::{EntityTypeDef, EntityTypeId},
     registry::ContentRegistry,
+    resource::HarvestData,
     targeting,
     turret::TurretStats,
 };
@@ -77,11 +80,34 @@ pub fn builder_attendance(world: &World, entity: Entity) -> Option<&BuilderAtten
         .map(|builder| builder.attendance())
 }
 
+/// The annex terms `entity`'s type declares, or `None` when it is no annex.
+pub fn annex_def(world: &World, entity: Entity) -> Option<AnnexDef> {
+    of(world, entity).annex
+}
+
+/// How `entity` makes a trip for `kind`, or `None` when its type does not
+/// carry it.
+pub fn harvest_data<'w>(world: &'w World, entity: Entity, kind: &str) -> Option<&'w HarvestData> {
+    of(world, entity)
+        .resource_carrier
+        .as_ref()
+        .and_then(|carrier| carrier.harvest_data(kind))
+}
+
 /// Whether `entity` holds its footprint's cells on the navigation grid: it is
 /// neither hidden nor attached to a job.
 pub fn stands_on_grid(world: &World, entity: Entity) -> bool {
     let entity_ref = world.entity(entity);
     !entity_ref.contains::<HiddenComponent>() && !entity_ref.contains::<AttachedComponent>()
+}
+
+/// What switched a standing entity off.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Switch {
+    /// A field effect over the ground it stands on.
+    Field,
+    /// It is an annex with no primary, on terms that stop it working.
+    Alone,
 }
 
 /// Whether an entity is in a state to carry out its type's work.
@@ -91,12 +117,13 @@ pub enum Operation {
     Operating,
     /// Still being raised.
     UnderConstruction,
-    /// Standing, but a field effect switches it off.
-    Disabled,
+    /// Standing, but switched off.
+    Disabled(Switch),
 }
 
 /// Returns the [`Operation`] `entity` is in. A site still being raised is
-/// [`Operation::UnderConstruction`] whatever the fields say about it.
+/// [`Operation::UnderConstruction`] whatever the fields say about it or the
+/// dock it stands in.
 pub fn operation(world: &World, entity: Entity) -> Operation {
     if world
         .entity(entity)
@@ -104,7 +131,9 @@ pub fn operation(world: &World, entity: Entity) -> Operation {
     {
         Operation::UnderConstruction
     } else if fields::disabled(world, entity) {
-        Operation::Disabled
+        Operation::Disabled(Switch::Field)
+    } else if annex::idles_alone(world, entity) {
+        Operation::Disabled(Switch::Alone)
     } else {
         Operation::Operating
     }

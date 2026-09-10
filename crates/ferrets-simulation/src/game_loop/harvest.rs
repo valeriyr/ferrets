@@ -118,8 +118,9 @@ fn reading(world: &World, entity: Entity, order: &Order) -> Result<Reading, Refu
 }
 
 /// Whether `source` admits `carrier` for `kind`: a source with an owner takes
-/// only that owner's carriers, and a carrier that attaches for the kind needs
-/// the source to offer the berth group it sits in.
+/// only that owner's carriers, the carrier's kind must list the source's type,
+/// and a carrier that attaches for the kind needs the source to offer the berth
+/// group it sits in.
 fn admits(
     world: &World,
     source: Entity,
@@ -132,10 +133,14 @@ fn admits(
     if owned_by_another {
         return false;
     }
-    carrier_def
-        .harvest_data(kind)
-        .and_then(|data| data.presence().attachment())
-        .is_none_or(|attachment| berths::offers(world, source, attachment.berths()))
+    let Some(data) = carrier_def.harvest_data(kind) else {
+        return false;
+    };
+    data.admits_source(&entity_def::of(world, source).name)
+        && data
+            .presence()
+            .attachment()
+            .is_none_or(|attachment| berths::offers(world, source, attachment.berths()))
 }
 
 /// Called once when a Harvest order becomes the front `New` entry.
@@ -492,18 +497,11 @@ fn advance(
 /// on it.
 fn source_excludes(world: &World, source: Entity, entity: Entity, kind: &str) -> bool {
     crew::excludes::<UnderHarvestComponent>(world, source, entity, |world, carrier| {
-        shares_sources(world, carrier, kind)
+        entity_def::harvest_data(world, carrier, kind)
+            .expect("every carrier on a source began a trip for the kind it yields")
+            .presence()
+            .crewing()
     })
-}
-
-/// Whether an entity's carrying capability lets several workers share one source
-/// of `kind`.
-fn shares_sources(world: &World, entity: Entity, kind: &str) -> bool {
-    entity_def::of(world, entity)
-        .resource_carrier
-        .as_ref()
-        .and_then(|carrier| carrier.harvest_data(kind))
-        .is_some_and(|data| data.presence().stacks())
 }
 
 /// Starts a trip on `source`: the carrier takes the source up, joining its crew, and
@@ -626,7 +624,7 @@ fn source_matches(
         // A site still going up already holds the amount of the source it
         // covers; it becomes a source of its own only once it stands.
         Operation::UnderConstruction => false,
-        Operation::Operating | Operation::Disabled => true,
+        Operation::Operating | Operation::Disabled(_) => true,
     };
     raised
         && world

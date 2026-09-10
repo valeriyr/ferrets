@@ -31,7 +31,7 @@ pub fn can_start(world: &World, entity: Entity, order: &Order) -> Result<(), Ref
     {
         return Err(Refusal::Incapable);
     }
-    orders::requires_raised(world, entity)
+    orders::requires_not_idle(world, entity)
 }
 
 /// Called once when a Research order becomes the front `New` entry.

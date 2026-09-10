@@ -24,7 +24,8 @@ pub enum SiteWork {
     /// No build order is on the site; it advances itself one tick per tick,
     /// and takes no crew.
     Unattended {
-        /// The builder that placed the site.
+        /// The builder the site advances on behalf of: the one that placed it,
+        /// or the one that has since taken it up.
         founder: SimulationId,
     },
     /// No build order is on the site and it does not advance: its crew left
@@ -44,6 +45,22 @@ pub struct UnderConstructionComponent {
     pub progress: u32,
     /// How the progress is advanced, and by whom the site was placed.
     pub work: SiteWork,
+}
+
+impl UnderConstructionComponent {
+    /// Steps the work for the `tender` offering to advance the site: a halted
+    /// site is taken up as that tender's own, an unattended one whose tender
+    /// has gone is halted again, and a site with a crew on it is being worked
+    /// by that crew already.
+    pub fn tend(&mut self, tender: Option<SimulationId>) {
+        match (&self.work, tender) {
+            (SiteWork::Halted, Some(founder)) => self.work = SiteWork::Unattended { founder },
+            (SiteWork::Unattended { .. }, None) => self.work = SiteWork::Halted,
+            (SiteWork::Crew { .. }, _)
+            | (SiteWork::Halted, None)
+            | (SiteWork::Unattended { .. }, Some(_)) => {}
+        }
+    }
 }
 
 /// Per-entity in-flight construction state.

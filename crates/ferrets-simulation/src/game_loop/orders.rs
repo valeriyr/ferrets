@@ -29,7 +29,7 @@ use crate::{
         build::BuildComponent,
         order_queue::{CancelPolicy, OrderQueueComponent, OrderState},
     },
-    entity_def::{self, Operation},
+    entity_def::{self, Operation, Switch},
     map::Map,
     movement_model::MovementModel,
     order::Order,
@@ -42,7 +42,8 @@ pub enum Refusal {
     Incapable,
     /// The entity is still being raised.
     UnderConstruction,
-    /// A field switches the entity off.
+    /// The entity is switched off: a field it needs is gone, or it is an
+    /// annex standing with no primary on terms that stop it working.
     Disabled,
     /// The order has no work in it: nobody aboard, nothing to mend.
     NothingToDo,
@@ -176,22 +177,27 @@ fn survives_soft_cancel(order: &Order) -> bool {
     }
 }
 
+/// The refusal an entity's state hands new work when it is idle rather than
+/// merely switched off: an annex idling with no primary takes none, while a
+/// building a field switched off queues it and waits.
+pub(super) fn requires_not_idle(world: &World, entity: Entity) -> Result<(), Refusal> {
+    match entity_def::operation(world, entity) {
+        Operation::Operating => Ok(()),
+        // An annex with nothing docked takes no new work at all; a building a
+        // field switched off queues it and waits, which that design intends.
+        Operation::Disabled(Switch::Alone) => Err(Refusal::Disabled),
+        Operation::Disabled(Switch::Field) => Ok(()),
+        Operation::UnderConstruction => Err(Refusal::UnderConstruction),
+    }
+}
+
 /// The refusal an entity's [`Operation`] hands an order that only an operating
 /// entity may run.
 pub(super) fn requires_operating(world: &World, entity: Entity) -> Result<(), Refusal> {
     match entity_def::operation(world, entity) {
         Operation::Operating => Ok(()),
         Operation::UnderConstruction => Err(Refusal::UnderConstruction),
-        Operation::Disabled => Err(Refusal::Disabled),
-    }
-}
-
-/// The refusal an entity's [`Operation`] hands an order that a disabled
-/// entity may still queue and wait with.
-pub(super) fn requires_raised(world: &World, entity: Entity) -> Result<(), Refusal> {
-    match entity_def::operation(world, entity) {
-        Operation::Operating | Operation::Disabled => Ok(()),
-        Operation::UnderConstruction => Err(Refusal::UnderConstruction),
+        Operation::Disabled(_) => Err(Refusal::Disabled),
     }
 }
 
@@ -200,7 +206,7 @@ pub(super) fn requires_raised(world: &World, entity: Entity) -> Result<(), Refus
 pub(super) fn target_operating(world: &World, target: Entity) -> Result<(), Refusal> {
     match entity_def::operation(world, target) {
         Operation::Operating => Ok(()),
-        Operation::UnderConstruction | Operation::Disabled => Err(Refusal::TargetUnfit),
+        Operation::UnderConstruction | Operation::Disabled(_) => Err(Refusal::TargetUnfit),
     }
 }
 
@@ -405,7 +411,7 @@ fn dispatch_watch(
 /// After this call the front entry (if any) is always `InProcessing`.
 pub fn prepare_tick(entity: Entity, queue: &mut OrderQueueComponent, world: &mut World) {
     match entity_def::operation(world, entity) {
-        Operation::Disabled => {
+        Operation::Disabled(_) => {
             for entry in &mut queue.0 {
                 match disabled_conduct(world, entity, &entry.order, entry.state) {
                     DisabledConduct::Cancels => entry.cancel = Some(CancelPolicy::Force),
@@ -523,8 +529,8 @@ pub fn process_tick(entity: Entity, queue: &mut OrderQueueComponent, world: &mut
         entity_def::operation(world, entity),
         disabled_conduct(world, entity, &front.order, front.state),
     ) {
-        (Operation::Disabled, DisabledConduct::Holds) => return,
-        (Operation::Disabled, DisabledConduct::Completes | DisabledConduct::Cancels)
+        (Operation::Disabled(_), DisabledConduct::Holds) => return,
+        (Operation::Disabled(_), DisabledConduct::Completes | DisabledConduct::Cancels)
         | (Operation::Operating | Operation::UnderConstruction, _) => {}
     }
     // An order pushed onto this queue after its prepare ran — by another

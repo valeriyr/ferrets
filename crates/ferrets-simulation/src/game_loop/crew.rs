@@ -13,6 +13,8 @@ use bevy_ecs::{
     world::World,
 };
 
+use ferrets_content::work::Crewing;
+
 use crate::{
     components::{
         build::{SiteWork, UnderConstructionComponent},
@@ -168,20 +170,23 @@ pub(super) fn leave_and_unmark<C: Crew>(world: &mut World, job: Entity, member: 
     }
 }
 
-/// Whether the crew on `job` shuts `newcomer` out of it, given what `shares` says
-/// about a worker's willingness to share this kind of job.
+/// Whether the crew on `job` shuts `newcomer` out of it, given what `crewing`
+/// says about how many workers of a kind may work this job at once.
 ///
-/// A job is exclusive when either side declines to share it, so a lone worker turns
-/// every newcomer away and a stacking crew still yields to one that works alone.
+/// Every worker's own limit is read against the crew the newcomer would make,
+/// so the strictest worker on the job decides: one that works alone turns every
+/// newcomer away, and a crew of any size still yields to one that works alone.
+/// A worker the job's berths count declares no limit here and is left to them.
+///
 /// A job that takes no crew shuts everyone out; a job no longer carrying the
-/// component shuts nobody out. What being
-/// shut out means for the newcomer's order — waiting in place for the crew to
-/// clear, or giving the job up — is the caller's to decide.
+/// component shuts nobody out. What being shut out means for the newcomer's
+/// order — waiting in place for the crew to clear, or giving the job up — is
+/// the caller's to decide.
 pub(super) fn excludes<C: Crew>(
     world: &World,
     job: Entity,
     newcomer: Entity,
-    shares: impl Fn(&World, Entity) -> bool,
+    crewing: impl Fn(&World, Entity) -> Crewing,
 ) -> bool {
     let Some(crew) = world.entity(job).get::<C>() else {
         return false;
@@ -189,11 +194,19 @@ pub(super) fn excludes<C: Crew>(
     let Some(members) = crew.members() else {
         return true;
     };
-    let newcomer_shares = shares(world, newcomer);
-
-    members
+    let others: Vec<Entity> = members
         .iter()
         .filter_map(|&id| world.resource::<EntityIndex>().alive(id))
         .filter(|&other| other != newcomer)
-        .any(|other| !newcomer_shares || !shares(world, other))
+        .collect();
+
+    // Everyone's own limit is read against the crew the newcomer would make, so
+    // the strictest worker on the job decides.
+    let crewed = others.len() + 1;
+    let over = |worker: Entity| match crewing(world, worker) {
+        Crewing::Counted(at_once) => at_once.exceeded_by(crewed),
+        // A seated worker is counted by the job's berths, not here.
+        Crewing::Seated => false,
+    };
+    over(newcomer) || others.iter().copied().any(over)
 }

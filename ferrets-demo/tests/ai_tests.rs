@@ -7,7 +7,7 @@ use bevy::prelude::*;
 use ferrets_bevy_plugin::{SimulationPlugin, ai::AiPlugin};
 use ferrets_content::registry::ContentRegistry;
 use ferrets_demo::{
-    ai::{conclave_ai, elves_ai, human_ai, install_demo_ai, orc_ai, swarm_ai},
+    ai::{conclave_ai, elves_ai, human_ai, install_demo_ai, orc_ai, swarm_ai, terran_ai},
     content::CONTENT,
     map, setup,
 };
@@ -37,7 +37,14 @@ fn ai_scripts_load() {
     let registry = content::load(&LuaEngine, CONTENT).expect("demo content");
     let content = ContentView::from_registry(&registry);
 
-    for script in [human_ai(), orc_ai(), swarm_ai(), conclave_ai(), elves_ai()] {
+    for script in [
+        human_ai(),
+        orc_ai(),
+        swarm_ai(),
+        conclave_ai(),
+        elves_ai(),
+        terran_ai(),
+    ] {
         let runtime = LuaEngine.load_ai(&script, &content).expect("demo ai loads");
         assert_eq!(runtime.period(), 20);
     }
@@ -167,6 +174,65 @@ fn elves_ai_builds_economy_and_army() {
 }
 
 #[test]
+fn terran_ai_builds_economy_and_army() {
+    let slots = vec![
+        PlayerSlot::occupied(0, PlayerType::Human, Some("human"), None),
+        PlayerSlot::occupied(
+            1,
+            PlayerType::Ai {
+                vision: AiVision::Filtered,
+            },
+            Some("terran"),
+            Some(1),
+        ),
+        PlayerSlot::free(2),
+        PlayerSlot::free(3),
+    ];
+    let mut app = App::new();
+    app.add_plugins(SimulationPlugin::new(
+        GameSession::configured(
+            LocalRole::Player(0),
+            slots,
+            map::NAME,
+            Authority::Host {
+                ai_hosting: AiHosting::Replicated,
+            },
+            DropPolicy::Automatic,
+            FinishPolicy::Endless,
+        ),
+        map::build(),
+    ));
+    app.add_plugins(AiPlugin);
+    {
+        let world = app.world_mut();
+        *world.resource_mut::<ContentRegistry>() =
+            content::load(&LuaEngine, CONTENT).expect("demo content");
+        setup::spawn_demo_scene(world);
+        install_demo_ai(world);
+    }
+
+    for _ in 0..7000 {
+        app.world_mut().run_schedule(FixedUpdate);
+    }
+
+    let world = app.world_mut();
+    // The refinery went up over the nearest seam first — without it no SCV
+    // draws gold at all — and the SCVs worked it; the barracks followed
+    // for marines, then the factory with a tech lab docked to it — which is
+    // what would let a tank be trained — and the station on the command
+    // center. Whether it gets as far as a tank is not asserted; that the lab
+    // docked to the factory unlocks one is `annex_tests`' to say.
+    assert!(count_owned(world, 1, "refinery") >= 1);
+    assert!(count_owned(world, 1, "barracks") >= 1);
+    assert!(count_owned(world, 1, "factory") >= 1);
+    assert!(count_owned(world, 1, "tech_lab") >= 1);
+    assert!(count_owned(world, 1, "comsat_station") >= 1);
+    assert!(count_owned(world, 1, "marine") >= 1);
+    // The brain's own worker cap, reached and held: MAX_WORKERS is five.
+    assert_eq!(count_owned(world, 1, "scv"), 5);
+}
+
+#[test]
 fn ai_builds_economy_and_army() {
     let slots = vec![
         // An idle human, so the allied AIs have something to march on — the
@@ -226,7 +292,7 @@ fn ai_builds_economy_and_army() {
     assert_eq!(world.resource::<GameSession>().tick(), 7000);
     assert_eq!(count_owned(world, 1, "peasant"), 5);
     assert_eq!(count_owned(world, 2, "peon"), 5);
-    assert!(count_owned(world, 1, "barracks") >= 1);
+    assert!(count_owned(world, 1, "training_camp") >= 1);
     assert!(count_owned(world, 2, "war_camp") >= 1);
     assert!(count_owned(world, 1, "blacksmith") >= 1);
     assert!(count_owned(world, 1, "archer") >= 1);
@@ -398,7 +464,7 @@ fn ai_economy_runs_under_continuous_movement() {
     let world = app.world_mut();
     assert_eq!(count_owned(world, 1, "peasant"), 5);
     assert_eq!(count_owned(world, 2, "peon"), 5);
-    assert!(count_owned(world, 1, "barracks") >= 1);
+    assert!(count_owned(world, 1, "training_camp") >= 1);
     assert!(count_owned(world, 2, "war_camp") >= 1);
     assert!(count_owned(world, 1, "archer") >= 1);
 }

@@ -11,6 +11,7 @@ use ferrets_content::{
     entity_type_def::EntityTypeDef,
     location::Solidity,
     registry::ContentRegistry,
+    skills::{EntityCastEffect, EntityCastTarget, SkillCaster, SkillDef},
 };
 use ferrets_geometry::cell_size::CellSize;
 use ferrets_math::FixedU64;
@@ -24,6 +25,7 @@ use ferrets_simulation::{
         player_type::PlayerType,
     },
     visibility::{CellVisibility, VisibilityGrid},
+    watches::Watches,
 };
 
 //
@@ -344,6 +346,96 @@ fn rally_refuses_fogged_entity_target() {
 }
 
 //
+// ─── Watches ─────────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn watch_reveals_patch_no_entity_can_see() {
+    let mut app = fog_app(vec![PlayerSlot::occupied(0, PlayerType::Human, None, None)]);
+    let (_, station) =
+        utils::create_entity(app.world_mut(), "station", utils::pos(2, 2), Some(0)).unwrap();
+    utils::run_ticks(&mut app, utils::APPLY);
+    assert!(!visible(&app, 0, 20, 20), "the far cell starts dark");
+
+    sweep_at(&mut app, station, 20, 20);
+    utils::run_ticks(&mut app, utils::APPLY);
+    // Radius two around the aim, and nothing outside it.
+    assert!(visible(&app, 0, 20, 20));
+    assert!(visible(&app, 0, 20, 22));
+    assert!(!visible(&app, 0, 20, 23));
+}
+
+#[test]
+fn watch_lapses_exactly_when_its_duration_runs_out() {
+    let mut app = fog_app(vec![PlayerSlot::occupied(0, PlayerType::Human, None, None)]);
+    let (_, station) =
+        utils::create_entity(app.world_mut(), "station", utils::pos(2, 2), Some(0)).unwrap();
+    utils::run_ticks(&mut app, utils::APPLY);
+
+    sweep_at(&mut app, station, 20, 20);
+    // The cast lands on the third tick and holds for five: the fifth tick
+    // after it is the last one the patch is in sight.
+    utils::run_ticks(&mut app, utils::APPLY + 4);
+    assert!(visible(&app, 0, 20, 20), "the fifth tick still sees it");
+    utils::run_ticks(&mut app, 1);
+    assert!(!visible(&app, 0, 20, 20), "the sixth does not");
+    assert_eq!(
+        app.world().resource::<VisibilityGrid>().get(0, 20, 20),
+        CellVisibility::Explored,
+        "what it saw stays remembered"
+    );
+}
+
+#[test]
+fn watch_outlives_caster_and_is_shared_with_allies() {
+    let mut app = fog_app(vec![
+        PlayerSlot::occupied(0, PlayerType::Human, None, Some(0)),
+        PlayerSlot::occupied(1, PlayerType::Human, None, Some(0)),
+    ]);
+    let (station_entity, station) =
+        utils::create_entity(app.world_mut(), "station", utils::pos(2, 2), Some(0)).unwrap();
+    utils::run_ticks(&mut app, utils::APPLY);
+
+    sweep_at(&mut app, station, 20, 20);
+    utils::run_ticks(&mut app, utils::APPLY);
+    assert!(visible(&app, 0, 20, 20));
+    assert!(visible(&app, 1, 20, 20), "an ally reads the same patch");
+
+    // The station goes; the sight it left does not go with it.
+    ferrets_simulation::spawn::despawn_entity(
+        app.world_mut(),
+        station_entity,
+        ferrets_simulation::events::DeathCause::Depleted,
+    );
+    utils::run_ticks(&mut app, 1);
+    assert!(visible(&app, 0, 20, 20), "the watch stands on its own");
+}
+
+#[test]
+fn run_out_watch_leaves_store() {
+    let mut app = fog_app(vec![PlayerSlot::occupied(0, PlayerType::Human, None, None)]);
+    let (_, station) =
+        utils::create_entity(app.world_mut(), "station", utils::pos(2, 2), Some(0)).unwrap();
+    utils::run_ticks(&mut app, utils::APPLY);
+
+    sweep_at(&mut app, station, 20, 20);
+    utils::run_ticks(&mut app, utils::APPLY);
+    assert_eq!(
+        app.world().resource::<Watches>().in_force().len(),
+        1,
+        "the sweep is in force"
+    );
+
+    // Five ticks of duration, and the tick that takes the last one off it
+    // drops it: what the store holds is what is in force.
+    utils::run_ticks(&mut app, 5);
+    assert!(
+        app.world().resource::<Watches>().in_force().is_empty(),
+        "nothing is left in the store"
+    );
+}
+
+//
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 //
 
@@ -415,6 +507,30 @@ fn run_ticks_commanding(
         }
         world.run_schedule(FixedUpdate);
     }
+}
+
+/// Casts the station's sweep at `(x, y)`.
+fn sweep_at(
+    app: &mut App,
+    caster: ferrets_simulation::simulation_id::SimulationId,
+    x: u32,
+    y: u32,
+) {
+    let skill = app
+        .world()
+        .resource::<ContentRegistry>()
+        .skill("sweep")
+        .expect("the fixture registers the sweep");
+    utils::push_command(
+        app,
+        PlayerCommand::UseSkill {
+            skill,
+            caster: ferrets_simulation::command::SkillCasterRef::Entity(caster),
+            target: Some(ferrets_simulation::command::SkillTarget::Position(
+                utils::pos(x, y),
+            )),
+        },
+    );
 }
 
 /// Whether the local-team vision of `player` covers `(x, y)`.
@@ -500,6 +616,32 @@ fn fog_app(slots: Vec<PlayerSlot>) -> App {
                 .with_health(50)
                 .with_dying(1, None)
                 .with_trainer(["scout"]),
+        );
+        // A station that watches a patch of map from afar: the sight it leaves
+        // behind belongs to no entity, so it lasts its stated ticks whatever
+        // becomes of the caster.
+        let sweep = registry.register_skill(
+            "sweep",
+            SkillDef {
+                cooldown: 4,
+                caster: SkillCaster::Entity {
+                    costs: Vec::new(),
+                    target: EntityCastTarget::Position,
+                    effect: EntityCastEffect::Watch {
+                        radius: 2,
+                        duration: 5,
+                    },
+                },
+                requires: Vec::new(),
+            },
+        );
+        registry.register(
+            EntityTypeDef::new("station")
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_health(50)
+                .with_dying(1, None)
+                .with_sight_range(2)
+                .with_skills([sweep]),
         );
     }
     app.world_mut().resource::<ContentRegistry>().validate();

@@ -65,7 +65,7 @@ pub fn run() {
         .init_resource::<view::WorldView>()
         .init_resource::<input::DragStart>()
         .init_resource::<input::InputMode>()
-        .init_resource::<input::Primary>()
+        .init_resource::<input::Leading>()
         .init_resource::<input::Inspected>()
         .init_resource::<input::LastClick>()
         .init_resource::<input::LastRecall>()
@@ -158,7 +158,7 @@ pub fn run() {
         .add_systems(
             Update,
             (
-                input::track_primary,
+                input::track_leading,
                 input::selection_input,
                 input::order_input,
                 input::stance_input,
@@ -254,6 +254,8 @@ pub fn run() {
                     render::draw_facing,
                     render::draw_rally,
                     render::draw_work_links,
+                    render::draw_annex_bonds,
+                    render::draw_watch_patches,
                     render::draw_work_markers,
                     render::draw_status_bars,
                     render::tint_under_construction,

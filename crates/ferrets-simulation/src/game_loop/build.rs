@@ -17,7 +17,7 @@ use super::{
     work,
 };
 use crate::{
-    berths,
+    annex, berths,
     components::{
         build::{BuildComponent, SiteWork, UnderConstructionComponent},
         dying::DyingComponent,
@@ -126,13 +126,10 @@ pub fn cancel_processing(
         // standing for whoever takes it up next.
         match leave_crew(world, building_id, entity) {
             Departure::LastOut => match attendance(world, entity) {
-                BuilderAttendance::Crew(WorkPresence::Hidden) | BuilderAttendance::Consumed => {
-                    abandon_site(world, entity, building_id)
-                }
+                BuilderAttendance::Crew(WorkPresence::Hidden { .. })
+                | BuilderAttendance::Consumed => abandon_site(world, entity, building_id),
                 BuilderAttendance::Crew(
-                    WorkPresence::Present
-                    | WorkPresence::PresentStacking
-                    | WorkPresence::Attached(_),
+                    WorkPresence::Present { .. } | WorkPresence::Attached(_),
                 ) => halt_site(world, building_id),
                 BuilderAttendance::Unattended => {
                     unreachable!("an unattended builder is never on a crew")
@@ -188,7 +185,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
             type_def.cost.clone(),
         )
     };
-    let site_origin = CellPos::from(position);
+    let site_anchor = CellPos::from(position);
     let size = building_location_def.size();
 
     let Some(building_id) = build_component.building else {
@@ -219,7 +216,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
 
         // Work already under way here is joined rather than started again: the site
         // holds the cells, so a second placement could only ever fail.
-        if let Some(site) = site_under_way_at(world, type_name, site_origin, owner) {
+        if let Some(site) = site_under_way_at(world, type_name, site_anchor, owner) {
             if site_excludes(world, site, entity) {
                 return Processing::state(OrderState::Finished);
             }
@@ -229,8 +226,14 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
                 .resource::<EntityIndex>()
                 .alive(site)
                 .expect("a site is taken up only when found standing this tick");
-            join_site(world, site, entity);
+            let taken = join_site(world, site, entity);
             enter_site(world, entity, building);
+            // A builder that leaves the site to itself is done the moment it
+            // has taken it up, exactly as it is done the moment it raises one.
+            match taken {
+                Taken::OnCrew => {}
+                Taken::LeftToItself => return Processing::state(OrderState::Finished),
+            }
             build_component.building = Some(site);
             world.entity_mut(entity).insert(build_component);
             return Processing::state(OrderState::InProcessing);
@@ -246,7 +249,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
             }
             // Requirements gate the placement: a site already standing keeps
             // its crew even when its requirement falls.
-            if !requirements::met(world, player, &def.requires) {
+            if !requirements::met(world, player, Some(entity), &def.requires) {
                 return Processing::state(OrderState::Finished);
             }
             if !world
@@ -256,24 +259,27 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
                 return Processing::state(OrderState::Finished);
             }
         }
-        // Fields gate the placement the same way: judged at the raise, never
-        // again for a site already standing.
+        // Fields and docks gate the placement the same way: judged at the
+        // raise, never again for a site already standing.
         let overbuilds = {
             let def = world
                 .resource::<ContentRegistry>()
                 .entity(type_name)
                 .expect("type checked in prepare");
-            if !fields::allows_placement(world, owner, def, CellPos::from(position)) {
+            if !fields::allows_placement(world, owner, def, site_anchor)
+                || !annex::allows_placement(world, entity, def, site_anchor)
+            {
                 return Processing::state(OrderState::Finished);
             }
             def.overbuilds.clone()
         };
+
         // A site raised over a resource source needs one of the type under it,
         // on exactly its footprint; the source's cells then count as the
         // site's own.
         let overbuilt = match overbuilds {
             Some(over) => {
-                let Some(source) = source_under(world, &over, CellRect::new(site_origin, size))
+                let Some(source) = source_under(world, &over, CellRect::new(site_anchor, size))
                 else {
                     return Processing::state(OrderState::Finished);
                 };
@@ -287,22 +293,15 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
         // the open blocks the site the way anything else standing there would;
         // one that attaches to the site sits in its berths once it stands.
         match attendance(world, entity) {
-            BuilderAttendance::Crew(WorkPresence::Hidden) | BuilderAttendance::Consumed => {
+            BuilderAttendance::Crew(WorkPresence::Hidden { .. }) | BuilderAttendance::Consumed => {
                 spawn::hide_entity(world, entity);
             }
-            BuilderAttendance::Crew(
-                WorkPresence::Present | WorkPresence::PresentStacking | WorkPresence::Attached(_),
-            )
+            BuilderAttendance::Crew(WorkPresence::Present { .. } | WorkPresence::Attached(_))
             | BuilderAttendance::Unattended => {}
         }
 
         let builder = entity_def::simulation_id(world, entity);
-        let work = match attendance(world, entity) {
-            BuilderAttendance::Crew(_) | BuilderAttendance::Consumed => SiteWork::Crew {
-                builders: BTreeSet::from([builder]),
-            },
-            BuilderAttendance::Unattended => SiteWork::Unattended { founder: builder },
-        };
+        let work = founding_work(world, entity, builder);
         // The source's footprint comes off the grid so the site can take its
         // cells; a site refused anyway puts it straight back.
         if let Some(source) = overbuilt {
@@ -322,7 +321,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
             if let Some(source) = overbuilt {
                 spawn::restore_footprint(world, source);
             }
-            work::leave(world, entity, site_origin, size);
+            work::leave(world, entity, site_anchor, size);
             return Processing::state(OrderState::Finished);
         };
         if let Some(source) = overbuilt {
@@ -364,20 +363,20 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
     // is its death.
     let Some(building) = world.resource::<EntityIndex>().alive(building_id) else {
         // The building was destroyed mid-construction.
-        work::leave(world, entity, site_origin, size);
+        work::leave(world, entity, site_anchor, size);
         return Processing::state(OrderState::Finished);
     };
 
     // Another builder on the same site may have finished it first.
     let mut building_mut = world.entity_mut(building);
     let Some(mut progress) = building_mut.get_mut::<UnderConstructionComponent>() else {
-        return leave_finished_site(world, entity, site_origin, size);
+        return leave_finished_site(world, entity, site_anchor, size);
     };
     progress.progress += 1;
 
     if progress.progress >= build_time {
         complete_site(world, building, entity_def::simulation_id(world, entity));
-        return leave_finished_site(world, entity, site_origin, size);
+        return leave_finished_site(world, entity, site_anchor, size);
     }
 
     world.entity_mut(entity).insert(build_component);
@@ -549,21 +548,33 @@ fn site_excludes(world: &World, site: SimulationId, entity: Entity) -> bool {
     let crewed_out = match &marker.work {
         SiteWork::Halted => false,
         SiteWork::Crew { .. } | SiteWork::Unattended { .. } => {
-            crew::excludes::<UnderConstructionComponent>(world, building, entity, shares_sites)
+            crew::excludes::<UnderConstructionComponent>(
+                world,
+                building,
+                entity,
+                |world, builder| attendance(world, builder).crewing(),
+            )
         }
     };
     crewed_out
-        || match attendance(world, entity) {
-            BuilderAttendance::Crew(presence) => berths::shut(world, building, &presence),
-            BuilderAttendance::Unattended | BuilderAttendance::Consumed => false,
-        }
+        || attendance(world, entity)
+            .presence()
+            .is_some_and(|presence| berths::shut(world, building, &presence))
 }
 
 /// Takes up `site`: joins the crew on it, or becomes the crew of a halted one.
 ///
 /// The site's marker is the construction itself, raised with the first builder — so a
 /// newcomer joins what is there and never marks anything.
-fn join_site(world: &mut World, site: SimulationId, entity: Entity) {
+/// Whether a builder that has taken a site up stays with it.
+enum Taken {
+    /// It is on the site's crew, and its order carries on.
+    OnCrew,
+    /// It left the site to itself, and its order is done.
+    LeftToItself,
+}
+
+fn join_site(world: &mut World, site: SimulationId, entity: Entity) -> Taken {
     let building = world
         .resource::<EntityIndex>()
         .alive(site)
@@ -577,20 +588,40 @@ fn join_site(world: &mut World, site: SimulationId, entity: Entity) {
     match work {
         SiteWork::Crew { .. } => {
             crew::join_existing::<UnderConstructionComponent>(world, building, entity);
+            Taken::OnCrew
         }
+        // A halted site is taken up on the taker's own terms, the same terms it
+        // would have been raised on: a builder that stays joins its crew, and
+        // one that leaves a site to itself leaves this one to itself too.
         SiteWork::Halted => {
             let builder = entity_def::simulation_id(world, entity);
+            let taken = founding_work(world, entity, builder);
+            let on_crew = matches!(taken, SiteWork::Crew { .. });
             world
                 .entity_mut(building)
                 .get_mut::<UnderConstructionComponent>()
                 .expect("checked above")
-                .work = SiteWork::Crew {
-                builders: BTreeSet::from([builder]),
-            };
+                .work = taken;
+            match on_crew {
+                true => Taken::OnCrew,
+                false => Taken::LeftToItself,
+            }
         }
         SiteWork::Unattended { .. } => {
             unreachable!("an unattended site shuts every builder out")
         }
+    }
+}
+
+/// What a site becomes when a builder of `entity`'s attendance raises or takes
+/// it up: a crew of one for a builder that stays with it, and unattended for
+/// one that leaves it to itself.
+fn founding_work(world: &World, entity: Entity, builder: SimulationId) -> SiteWork {
+    match attendance(world, entity) {
+        BuilderAttendance::Crew(_) | BuilderAttendance::Consumed => SiteWork::Crew {
+            builders: BTreeSet::from([builder]),
+        },
+        BuilderAttendance::Unattended => SiteWork::Unattended { founder: builder },
     }
 }
 
@@ -607,26 +638,15 @@ fn leave_crew(world: &mut World, site: SimulationId, entity: Entity) -> Departur
     }
 }
 
-/// Whether an entity's build capability lets several builders share one site.
-fn shares_sites(world: &World, entity: Entity) -> bool {
-    match attendance(world, entity) {
-        BuilderAttendance::Crew(presence) => presence.stacks(),
-        BuilderAttendance::Unattended | BuilderAttendance::Consumed => false,
-    }
-}
-
 /// Puts the builder where its attendance has it stand as it takes up `site`:
 /// a crew builder as its presence says, one consumed by the site hidden inside
 /// it. One that leaves the site unattended stays exactly where it walked to.
 ///
 /// Safe to call on a builder already hidden for a site it just raised.
 fn enter_site(world: &mut World, entity: Entity, site: Entity) {
-    let presence = match attendance(world, entity) {
-        BuilderAttendance::Crew(presence) => presence,
-        BuilderAttendance::Consumed => WorkPresence::Hidden,
-        BuilderAttendance::Unattended => return,
-    };
-    work::enter(world, entity, &presence, site);
+    if let Some(presence) = attendance(world, entity).presence() {
+        work::enter(world, entity, &presence, site);
+    }
 }
 
 /// The resource source of type `over` standing exactly on `footprint`, if one

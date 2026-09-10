@@ -1,7 +1,7 @@
 //! Content-defined in-place transitions: what an entity can become, and on
 //! what terms.
 
-use crate::{entity_stats::EntityStatId, skills::EntityCastCost};
+use crate::{entity_stats::EntityStatId, requirement::Requirement, skills::EntityCastCost};
 
 /// How long a transition takes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,13 +60,13 @@ pub struct MorphTransition {
     /// Requirements gating the transition, read the same way as a type's own
     /// [`requires`](crate::entity_type_def::EntityTypeDef::requires) list.
     /// Empty means always available.
-    requires: Vec<String>,
+    requires: Vec<Requirement>,
 }
 
 impl MorphTransition {
     /// Creates a new `MorphTransition` with the given data.
     ///
-    /// Panics if `into` or `via` is empty or `requires` contains an empty name.
+    /// Panics if `into` or `via` is empty.
     pub fn new(
         into: impl Into<String>,
         via: Option<&str>,
@@ -74,7 +74,7 @@ impl MorphTransition {
         placement: MorphPlacement,
         cancel: MorphCancel,
         costs: Vec<EntityCastCost>,
-        requires: impl IntoIterator<Item = impl Into<String>>,
+        requires: impl IntoIterator<Item = Requirement>,
     ) -> Self {
         let into = into.into();
         assert!(!into.is_empty(), "into must not be empty");
@@ -83,11 +83,7 @@ impl MorphTransition {
             via.as_ref().is_none_or(|via| !via.is_empty()),
             "via must not be empty"
         );
-        let requires: Vec<String> = requires.into_iter().map(Into::into).collect();
-        assert!(
-            requires.iter().all(|name| !name.is_empty()),
-            "required names must not be empty"
-        );
+        let requires: Vec<Requirement> = requires.into_iter().collect();
 
         Self {
             into,
@@ -138,7 +134,7 @@ impl MorphTransition {
 
     /// Requirements gating the transition.
     #[inline]
-    pub fn requires(&self) -> &[String] {
+    pub fn requires(&self) -> &[Requirement] {
         &self.requires
     }
 }

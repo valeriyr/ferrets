@@ -12,6 +12,7 @@ use ferrets_simulation::{
     session::GameSession,
     spawn::{self, FieldReach},
     visibility::VisibilityGrid,
+    watches::Watches,
 };
 
 /// Builds the described map in the world: installs the live grid and spawns
@@ -66,12 +67,13 @@ pub fn instantiate_map(world: &mut World, data: &MapData) {
     }
 }
 
-/// Installs `map` together with the visibility and field grids sized to it.
-/// The three are always replaced as one.
+/// Installs `map` together with the visibility and field grids sized to it and
+/// the watches the fog reads beside them. All four are always replaced as one.
 pub fn install_map(world: &mut World, map: Map) {
     let (width, height) = (map.width(), map.height());
     world.insert_resource(map);
     let player_count = world.resource::<GameSession>().slots().len();
     world.insert_resource(VisibilityGrid::new(player_count, width, height));
     world.insert_resource(FieldGrid::new(width, height));
+    world.insert_resource(Watches::default());
 }

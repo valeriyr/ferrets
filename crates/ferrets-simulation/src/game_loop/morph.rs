@@ -74,7 +74,9 @@ pub fn can_start(world: &World, entity: Entity, order: &Order) -> Result<(), Ref
     // Work a soft flush would leave in the queue — paid production, a change
     // already under way — is not something a change of form may run off with,
     // and neither are the workers seated in its berths: the player finishes or
-    // cancels that work first.
+    // cancels that work first. What a docked annex is doing is the annex's own
+    // business: it keeps its queue, and its terms for standing alone say
+    // whether the work carries on or waits for the next primary.
     if orders::resists_soft_flush(world, entity) || berths::seated(world, entity) {
         return Err(Refusal::Busy);
     }
@@ -84,8 +86,9 @@ pub fn can_start(world: &World, entity: Entity, order: &Order) -> Result<(), Ref
 /// Whether `player` meets the requirements of `entity`'s transition into
 /// `type_name`. A transition the type does not declare has none to meet.
 pub fn requirements_met(world: &World, player: PlayerId, entity: Entity, type_name: &str) -> bool {
-    transition_into(world, entity, type_name)
-        .is_none_or(|transition| requirements::met(world, player, transition.requires()))
+    transition_into(world, entity, type_name).is_none_or(|transition| {
+        requirements::met(world, player, Some(entity), transition.requires())
+    })
 }
 
 /// Called once when a Morph order becomes the front `New` entry.
@@ -113,7 +116,7 @@ pub fn prepare(entity: Entity, order: &Order, world: &mut World) -> OrderState {
     let Some(player) = entity_def::owner(world, entity) else {
         return OrderState::Finished;
     };
-    if !requirements::met(world, player, transition.requires())
+    if !requirements::met(world, player, Some(entity), transition.requires())
         || !cast_cost::can_pay(world, entity, player, transition.costs())
     {
         return OrderState::Finished;
@@ -392,8 +395,9 @@ fn land(world: &mut World, entity: Entity, type_name: &str, landing: Landing) ->
     }
 
     // The footprint is anchored at its origin, so a size change recentres it:
-    // growing from the same corner would shift the unit's middle sideways.
-    let anchor = recentred(position, from, to);
+    // growing from the same corner would shift the unit's middle sideways. A
+    // form that stands still then settles onto the cells it holds.
+    let anchor = settled(world, type_id, position, from, to);
     if !reoccupy(world, entity, position, anchor, from, to, type_id, landing) {
         return false;
     }
@@ -677,6 +681,25 @@ fn recentred(position: FixedUVec2, from: LocationDef, to: LocationDef) -> FixedU
     )
 }
 
+/// Where a form settles: the [`recentred`] anchor, on the lattice when the
+/// destination stands still.
+fn settled(
+    world: &World,
+    type_id: EntityTypeId,
+    position: FixedUVec2,
+    from: LocationDef,
+    to: LocationDef,
+) -> FixedUVec2 {
+    let anchor = recentred(position, from, to);
+    match OccupancyClass::of(world.resource::<ContentRegistry>().def(type_id)) {
+        // A standing footprint holds the cells its anchor rounds to, so a form
+        // left between them would be drawn — and would reach — off its own
+        // cells.
+        OccupancyClass::Static => FixedUVec2::from(body::anchor(anchor)),
+        OccupancyClass::Claim => anchor,
+    }
+}
+
 /// How full a pool is, as a fraction of its maximum, or `None` when there is no
 /// pool to carry over.
 fn filled_fraction(current: Option<FixedU64>, maximum: Option<FixedU64>) -> Option<FixedU64> {
@@ -697,7 +720,7 @@ fn filled_fraction(current: Option<FixedU64>, maximum: Option<FixedU64>) -> Opti
 /// reservation records exactly what it took, and releasing it gives back
 /// exactly that.
 fn reserve(world: &mut World, entity: Entity, type_name: &str) -> Option<MorphComponent> {
-    let (_, to) = destination(world, type_name)?;
+    let (type_id, to) = destination(world, type_name)?;
     let from = entity_def::of(world, entity).location?;
     let position = world.entity(entity).get::<LocationComponent>()?.position;
     // A mover between cells has no settled footprint to reserve around.
@@ -722,7 +745,7 @@ fn reserve(world: &mut World, entity: Entity, type_name: &str) -> Option<MorphCo
         .get::<LocationComponent>()
         .map(|location| location.facing)
         .unwrap_or(spawn::DEFAULT_FACING);
-    let anchor = recentred(position, from, to);
+    let anchor = settled(world, type_id, position, from, to);
     let standing = LocationComponent::new(position, facing);
     let placed = LocationComponent::new(anchor, facing);
     let old_class = OccupancyClass::of(entity_def::of(world, entity));

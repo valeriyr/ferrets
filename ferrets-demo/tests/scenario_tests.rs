@@ -1,5 +1,5 @@
 //! The shipped story mission: its script loads against the real demo content
-//! and resolves to victory once a barracks and three archers are fielded,
+//! and resolves to victory once a training camp and three archers are fielded,
 //! defeat once everything is gone.
 
 use ferrets_demo::{content::CONTENT, scenario::builtin_mission};
@@ -16,12 +16,12 @@ use ferrets_script::{
 use ferrets_simulation::movement_model::MovementModel;
 
 #[test]
-fn mission_wins_with_barracks_and_three_archers() {
+fn mission_wins_with_camp_and_three_archers() {
     let mut runtime = load_mission();
 
     let status = runtime
         .evaluate(&view_with(vec![
-            entity("barracks", false),
+            entity("training_camp", false),
             entity("archer", false),
             entity("archer", false),
             entity("archer", false),
@@ -39,7 +39,7 @@ fn mission_is_ongoing_before_army_is_ready() {
     let status = runtime
         .evaluate(&view_with(vec![
             entity("town_hall", false),
-            entity("barracks", false),
+            entity("training_camp", false),
             entity("archer", false),
         ]))
         .expect("evaluate");

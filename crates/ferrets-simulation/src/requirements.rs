@@ -5,9 +5,10 @@
 //! dies and regained when one is rebuilt needs no bookkeeping — the next check
 //! sees the current truth.
 
-use bevy_ecs::world::World;
+use bevy_ecs::{entity::Entity, world::World};
 
 use crate::{
+    annex,
     components::{
         build::UnderConstructionComponent, entity_info::EntityInfoComponent, tags::TagsComponent,
     },
@@ -16,33 +17,48 @@ use crate::{
     player_research::PlayerResearch,
     session::player_id::PlayerId,
 };
-use ferrets_content::registry::ContentRegistry;
+use ferrets_content::requirement::Requirement;
 
-/// Whether `player` currently meets every entry in `requires`.
+/// Whether `player`, acting through `actor`, currently meets every entry in
+/// `requires`. `actor` is `None` for an act with no acting entity behind it,
+/// which no actor-scoped entry can hold for.
 ///
-/// An entry naming a research holds when the player has completed it. Any
-/// other entry holds when the player has a standing entity whose type name
-/// equals the entry or whose tags contain it — standing meaning alive and not
-/// under construction; a dying entity no longer counts. An empty list always
-/// holds.
-pub fn met(world: &World, player: PlayerId, requires: &[String]) -> bool {
+/// A research entry holds when the player has completed it. An entity or tag
+/// entry holds when the player has a standing entity of that type, or carrying
+/// that tag — standing meaning alive and not under construction; a dying
+/// entity no longer counts. An annex entry holds when `actor` has a standing
+/// annex of that type docked. An empty list always holds.
+pub fn met(
+    world: &World,
+    player: PlayerId,
+    actor: Option<Entity>,
+    requires: &[Requirement],
+) -> bool {
     if requires.is_empty() {
         return true;
     }
 
-    let registry = world.resource::<ContentRegistry>();
-    let research = world.resource::<PlayerResearch>();
-
-    // Settle research entries first; what remains needs the entity pass.
-    let mut unmet: Vec<&str> = Vec::new();
-    for name in requires {
-        match registry.research(name) {
-            Some(id) => {
-                if !research.is_completed(player, id) {
+    // What can be settled without looking at what stands on the map, first;
+    // the names that remain need the pass over the player's entities.
+    let mut unmet: Vec<&Requirement> = Vec::new();
+    for entry in requires {
+        match entry {
+            Requirement::Research(research) => {
+                if !world
+                    .resource::<PlayerResearch>()
+                    .is_completed(player, *research)
+                {
                     return false;
                 }
             }
-            None => unmet.push(name),
+            Requirement::Annexed(type_name) => {
+                let docked =
+                    actor.is_some_and(|actor| annex::has_standing_annex(world, actor, type_name));
+                if !docked {
+                    return false;
+                }
+            }
+            Requirement::EntityType(_) | Requirement::Tag(_) => unmet.push(entry),
         }
     }
     if unmet.is_empty() {
@@ -64,8 +80,12 @@ pub fn met(world: &World, player: PlayerId, requires: &[String]) -> bool {
             .expect("simulation entity must have EntityInfoComponent")
             .type_name();
         let tags = entity_ref.get::<TagsComponent>();
-        unmet.retain(|name| {
-            *name != type_name && !tags.is_some_and(|component| component.contains(name))
+        unmet.retain(|entry| match entry {
+            Requirement::EntityType(name) => name != type_name,
+            Requirement::Tag(tag) => !tags.is_some_and(|component| component.contains(tag)),
+            Requirement::Research(_) | Requirement::Annexed(_) => {
+                unreachable!("settled before the pass over what stands")
+            }
         });
         if unmet.is_empty() {
             return true;

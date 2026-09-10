@@ -1476,6 +1476,151 @@ fn carrier_killed_in_berth_gives_it_back() {
 }
 
 //
+// ─── How many may work one source ─────────────────────────────────────────────
+//
+
+#[test]
+fn hidden_crew_of_two_admits_two_and_leaves_third_waiting() {
+    let mut app = utils::orders_app();
+    let (first, first_id) = utils::create_owned(&mut app, "paired_digger", 8, 5, 0);
+    let (second, second_id) = utils::create_owned(&mut app, "paired_digger", 10, 5, 0);
+    let (third, third_id) = utils::create_owned(&mut app, "paired_digger", 9, 6, 0);
+    let (mine, mine_id) =
+        utils::create_entity(app.world_mut(), "mine", utils::pos(9, 5), None).unwrap();
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(mine)
+        .unwrap()
+        .amount = 60;
+    utils::create_owned(&mut app, "depot", 2, 4, 0);
+
+    send_both_to(&mut app, first_id, second_id, mine_id);
+    utils::select(&mut app, third_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SendToEntity {
+            target: mine_id,
+            flush: true,
+        },
+    );
+    // All three stand in reach of the seam, so the crew limit is the only
+    // thing that can keep one out. Three ticks of a twenty-tick trip.
+    utils::run_ticks(&mut app, utils::APPLY + 2);
+
+    // The seam takes the two the carrier's crew limit allows, and both are
+    // inside it while they work.
+    assert_eq!(crew_of(&app, mine).map(|crew| crew.len()), Some(2));
+    assert!(app.world().get::<HarvestingComponent>(first).is_some());
+    assert!(app.world().get::<HarvestingComponent>(second).is_some());
+    assert!(app.world().get::<HiddenComponent>(first).is_some());
+
+    // The third is turned away and waits, rather than joining or giving up:
+    // its order stands, so it takes the seam up when a place frees.
+    assert!(app.world().get::<HarvestingComponent>(third).is_none());
+    assert!(app.world().get::<HiddenComponent>(third).is_none());
+    assert!(!utils::order_queue_is_empty(app.world_mut(), third));
+}
+
+#[test]
+fn carrier_that_works_alone_shuts_out_one_that_would_share() {
+    let mut app = utils::orders_app();
+    let (lone, lone_id) = utils::create_owned(&mut app, "lone_digger", 8, 5, 0);
+    let (paired, paired_id) = utils::create_owned(&mut app, "paired_digger", 10, 5, 0);
+    let (mine, mine_id) =
+        utils::create_entity(app.world_mut(), "mine", utils::pos(9, 5), None).unwrap();
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(mine)
+        .unwrap()
+        .amount = 40;
+    utils::create_owned(&mut app, "depot", 2, 4, 0);
+
+    // The one that works alone takes the seam first.
+    send_to(&mut app, lone_id, mine_id);
+    utils::run_ticks(&mut app, utils::APPLY);
+    assert!(
+        app.world().get::<HarvestingComponent>(lone).is_some(),
+        "the first one down the shaft is working it"
+    );
+
+    // The second one's own terms would admit a crew of two, so only the crew
+    // already on the seam can turn it away: the strictest worker on a job is
+    // the one that decides, whichever of them asked first.
+    send_to(&mut app, paired_id, mine_id);
+    utils::run_ticks(&mut app, utils::APPLY);
+    assert!(
+        app.world().get::<HarvestingComponent>(paired).is_none(),
+        "a crew of one that admits nobody turns away a carrier that would share"
+    );
+    assert_eq!(
+        crew_of(&app, mine),
+        Some(BTreeSet::from([lone_id])),
+        "the seam is still worked by the one that claimed it"
+    );
+    assert!(
+        !utils::order_queue_is_empty(app.world_mut(), paired),
+        "the one turned away holds its order rather than giving up"
+    );
+}
+
+//
+// ─── Which sources a kind will work ───────────────────────────────────────────
+//
+
+#[test]
+fn carrier_turns_down_source_its_kind_does_not_list() {
+    let mut app = utils::orders_app();
+    let (tapper, tapper_id) = utils::create_owned(&mut app, "geyser_tapper", 8, 5, 0);
+    let (mine, mine_id) =
+        utils::create_entity(app.world_mut(), "mine", utils::pos(9, 5), None).unwrap();
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(mine)
+        .unwrap()
+        .amount = 60;
+    utils::create_owned(&mut app, "depot", 2, 4, 0);
+
+    utils::select(&mut app, tapper_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SendToEntity {
+            target: mine_id,
+            flush: true,
+        },
+    );
+    // Standing in reach from the start, so a carrier the seam admitted would
+    // be at work by the tick the order lands.
+    utils::run_ticks(&mut app, utils::APPLY);
+
+    // A bare seam is not a source it lists, so the gold in it is no business
+    // of the tapper's.
+    assert!(app.world().get::<HarvestingComponent>(tapper).is_none());
+    assert!(crew_of(&app, mine).is_none());
+
+    // The click is not swallowed, though: with nothing to work there it reads
+    // as a plain approach, so the tapper holds an order rather than dropping
+    // it, and stands where it already is.
+    assert!(!utils::order_queue_is_empty(app.world_mut(), tapper));
+    assert!(utils::within(app.world_mut(), tapper, mine, 1));
+
+    // A geyser is, and the same order works it.
+    let (geyser, geyser_id) =
+        utils::create_entity(app.world_mut(), "geyser", utils::pos(7, 5), None).unwrap();
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(geyser)
+        .unwrap()
+        .amount = 60;
+    utils::select(&mut app, tapper_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SendToEntity {
+            target: geyser_id,
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY + 4);
+    assert!(app.world().get::<HarvestingComponent>(tapper).is_some());
+    assert_eq!(crew_of(&app, geyser).map(|crew| crew.len()), Some(1));
+}
+
+//
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 //
 
@@ -1517,6 +1662,24 @@ fn wall_in(app: &mut App, x: u32, y: u32, size: u32) -> Vec<Entity> {
 
 /// Selects both carriers and sends the pair to one target, as a player crowding a
 /// source would.
+/// Selects `carrier` alone and sends it to `target`.
+fn send_to(app: &mut App, carrier: SimulationId, target: SimulationId) {
+    utils::push_command(
+        app,
+        PlayerCommand::SelectById {
+            id: carrier,
+            mode: SelectMode::Replace,
+        },
+    );
+    utils::push_command(
+        app,
+        PlayerCommand::SendToEntity {
+            target,
+            flush: true,
+        },
+    );
+}
+
 fn send_both_to(app: &mut App, first: SimulationId, second: SimulationId, target: SimulationId) {
     utils::push_command(
         app,

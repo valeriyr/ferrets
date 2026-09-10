@@ -54,7 +54,7 @@ pub fn process_turrets(world: &mut World) {
         // and a disabled body stand idle.
         match entity_def::operation(world, entity) {
             Operation::Operating => {}
-            Operation::UnderConstruction | Operation::Disabled => continue,
+            Operation::UnderConstruction | Operation::Disabled(_) => continue,
         }
         work_body(world, entity, id);
     }

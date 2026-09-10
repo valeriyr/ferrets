@@ -1,5 +1,6 @@
 //! Deterministic RTS game simulation.
 
+pub mod annex;
 pub mod berths;
 pub mod buffs_store;
 pub mod checksum;
@@ -33,6 +34,7 @@ mod stat_store;
 pub mod statistics;
 pub mod supply;
 pub mod visibility;
+pub mod watches;
 
 /// The full build version, `major.minor.patch`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

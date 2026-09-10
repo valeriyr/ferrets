@@ -13,6 +13,7 @@ use crate::{
     entity_buffs::EntityBuffId,
     field::{FieldAction, FieldId},
     player_buffs::PlayerBuffId,
+    requirement::Requirement,
 };
 
 /// A handle to a registered skill, assigned in registration order.
@@ -100,8 +101,17 @@ pub enum EntityCastEffect {
     Damage(FixedU64),
     /// Restores health, up to the target's maximum.
     Heal(FixedU64),
+    /// Puts a patch of map in the casting player's sight for a while,
+    /// whatever stands there: the aimed cell for a position cast, the cell the
+    /// target's position falls in otherwise.
+    Watch {
+        /// How far from the aim the sight reaches, in cells.
+        radius: u32,
+        /// Ticks it lasts.
+        duration: u32,
+    },
     /// Covers or clears a field around the aim: the aimed cell for a
-    /// position cast, the target's anchor cell otherwise.
+    /// position cast, the cell the target's position falls in otherwise.
     Field {
         /// The field acted on.
         field: FieldId,
@@ -128,8 +138,9 @@ pub struct SkillDef {
     pub cooldown: u32,
     /// How the skill is cast, by whom, and what it does.
     pub caster: SkillCaster,
-    /// Requirements for casting, judged against the issuing player — each
-    /// entry names an entity type, a tag, or a research (see
-    /// [`requirements::met`](crate::requirements::met)).
-    pub requires: Vec<String>,
+    /// Requirements for casting, read the same way as a type's own
+    /// [`requires`](crate::entity_type_def::EntityTypeDef::requires) list: a
+    /// player-scoped entry is asked of the caster's owner, an actor-scoped one
+    /// of the caster.
+    pub requires: Vec<Requirement>,
 }

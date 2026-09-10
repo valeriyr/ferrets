@@ -10,8 +10,8 @@ use ferrets_content::{
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     location::Solidity,
-    resource::{Banking, DepletionPolicy, HarvestData},
-    work::{Attachment, BerthStance, WorkPresence},
+    resource::{Banking, DepletionPolicy, HarvestData, Sources},
+    work::{Attachment, BerthStance, CrewLimit, WorkPresence},
 };
 use ferrets_geometry::cell_size::CellSize;
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
@@ -40,11 +40,25 @@ fn fully_loaded_definition_is_valid() {
         .with_build_time(6)
         .with_trainer(["footman"])
         .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
-        .with_builder(["depot"], BuilderAttendance::Crew(WorkPresence::Hidden))
+        .with_builder(
+            ["depot"],
+            BuilderAttendance::Crew(WorkPresence::Hidden {
+                crew: CrewLimit::ONE,
+            }),
+        )
         .with_resource_source("gold", DepletionPolicy::Destroy)
         .with_resource_carrier([(
             "gold",
-            HarvestData::new(5, 5, 2, WorkPresence::Hidden, Banking::Carried),
+            HarvestData::new(
+                5,
+                5,
+                2,
+                WorkPresence::Hidden {
+                    crew: CrewLimit::ONE,
+                },
+                Banking::Carried,
+                Sources::Any,
+            ),
         )])
         .with_resource_storage(["gold"]);
 
@@ -137,14 +151,21 @@ fn empty_trains_entry_panics() {
 fn empty_builds_list_panics() {
     footman().with_builder(
         Vec::<String>::new(),
-        BuilderAttendance::Crew(WorkPresence::Hidden),
+        BuilderAttendance::Crew(WorkPresence::Hidden {
+            crew: CrewLimit::ONE,
+        }),
     );
 }
 
 #[test]
 #[should_panic(expected = "constructed type names must not be empty")]
 fn empty_builds_entry_panics() {
-    footman().with_builder([""], BuilderAttendance::Crew(WorkPresence::Hidden));
+    footman().with_builder(
+        [""],
+        BuilderAttendance::Crew(WorkPresence::Hidden {
+            crew: CrewLimit::ONE,
+        }),
+    );
 }
 
 //
@@ -160,13 +181,43 @@ fn empty_source_kind_panics() {
 #[test]
 #[should_panic(expected = "harvest_time must be greater than 0")]
 fn zero_harvest_time_panics() {
-    HarvestData::new(5, 5, 0, WorkPresence::Present, Banking::Carried);
+    HarvestData::new(
+        5,
+        5,
+        0,
+        WorkPresence::Present {
+            crew: CrewLimit::ONE,
+        },
+        Banking::Carried,
+        Sources::Any,
+    );
+}
+
+#[test]
+#[should_panic(expected = "a source list must name a source")]
+fn empty_source_list_panics() {
+    Sources::only(Vec::<String>::new());
+}
+
+#[test]
+#[should_panic(expected = "source names must not be empty")]
+fn empty_source_name_panics() {
+    Sources::only(["gold_mine", ""]);
 }
 
 #[test]
 #[should_panic(expected = "capacity must be greater than 0")]
 fn zero_carry_capacity_panics() {
-    HarvestData::new(0, 0, 2, WorkPresence::Present, Banking::Carried);
+    HarvestData::new(
+        0,
+        0,
+        2,
+        WorkPresence::Present {
+            crew: CrewLimit::ONE,
+        },
+        Banking::Carried,
+        Sources::Any,
+    );
 }
 
 #[test]
@@ -180,7 +231,16 @@ fn empty_carries_list_panics() {
 fn empty_carry_kind_panics() {
     footman().with_resource_carrier([(
         "",
-        HarvestData::new(5, 5, 2, WorkPresence::Present, Banking::Carried),
+        HarvestData::new(
+            5,
+            5,
+            2,
+            WorkPresence::Present {
+                crew: CrewLimit::ONE,
+            },
+            Banking::Carried,
+            Sources::Any,
+        ),
     )]);
 }
 

@@ -15,6 +15,7 @@ use ferrets_physics::body;
 use crate::{
     berths,
     components::{
+        annex::{AnnexComponent, DocksComponent},
         attached::AttachedComponent,
         build::OverbuiltComponent,
         dying::{CorpseComponent, DiedComponent, DyingComponent},
@@ -650,6 +651,37 @@ pub fn despawn_entity(world: &mut World, entity: Entity, cause: DeathCause) {
     destroy_entity(world, entity);
 }
 
+/// Hands `entity` to `to`, announcing the capture, with `by` naming what took
+/// it.
+///
+/// The entity keeps everything it holds: its health, its pools, and the orders
+/// in its queue, which carry on for their new owner. It leaves every player's
+/// selection and control groups, the two stores that hold ids.
+///
+/// Panics if `to` already owns it.
+pub fn change_owner(world: &mut World, entity: Entity, to: PlayerId, by: SimulationId) {
+    let from = entity_def::owner(world, entity);
+    assert!(
+        from != Some(to),
+        "an entity is handed only to a player that does not already own it"
+    );
+
+    let id = entity_def::simulation_id(world, entity);
+    world.resource_mut::<Selection>().remove(id);
+    world.resource_mut::<ControlGroups>().remove(id);
+    world.entity_mut(entity).insert(OwnerComponent::new(to));
+
+    let announced = SimulationEvent::EntityCaptured {
+        entity: id,
+        entity_type: entity_def::type_id(world, entity),
+        from,
+        to,
+        by,
+        position: entity_def::position(world, entity),
+    };
+    world.resource_mut::<EventRecord>().emit(announced);
+}
+
 /// Applies a dying transporter's declared passenger fate to everyone aboard.
 ///
 /// Ejection is one placement attempt per passenger, in id order so earlier ids
@@ -768,6 +800,8 @@ pub(crate) fn fit_components(
         transporter,
         source,
         carrier,
+        annex,
+        docks,
         tags,
         skills,
         field_sources,
@@ -783,6 +817,8 @@ pub(crate) fn fit_components(
             def.can_transport(),
             def.resource_source.is_some(),
             def.resource_carrier.is_some(),
+            def.annex.is_some(),
+            !def.docks.is_empty(),
             def.tags.clone(),
             def.skills.clone(),
             def.field_sources.clone(),
@@ -825,6 +861,25 @@ pub(crate) fn fit_components(
     fit_default::<RallyPointComponent>(&mut entity_mut, wants_rally);
     fit_default::<ResourceSourceComponent>(&mut entity_mut, source);
     fit_default::<ResourceCarrierComponent>(&mut entity_mut, carrier);
+    // Which primary an annex stands with is re-derived every tick, so a form
+    // that becomes an annex starts alone and is docked by the next pass.
+    // Standing alone is a state with terms of its own, not an empty one, so it
+    // is fitted by name rather than by default.
+    match (annex, entity_mut.contains::<AnnexComponent>()) {
+        (true, false) => {
+            entity_mut.insert(AnnexComponent::alone());
+        }
+        (false, true) => {
+            entity_mut.remove::<AnnexComponent>();
+        }
+        (true, true) | (false, false) => {}
+    }
+    // Offering docks is a standing fact about a type, so the component that
+    // records what stands in them is fitted with the form rather than by
+    // whatever settles the bonds: a primary with every dock empty still has
+    // one, which is what makes "offers docks" a query rather than a lookup.
+    // A form that stops offering docks drops what stood in them there and then.
+    fit_default::<DocksComponent>(&mut entity_mut, docks);
 
     // A turret remembers where it is trained, which no other component can hold
     // for it: a fight's state is gone the moment the fight ends, and the body of a

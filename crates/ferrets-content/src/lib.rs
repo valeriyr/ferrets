@@ -1,6 +1,7 @@
 //! Content vocabulary — type definitions for everything content declares,
 //! and the registry that holds them.
 
+pub mod annex;
 pub mod attack;
 pub mod berths;
 pub mod build;
@@ -17,6 +18,7 @@ pub mod player_stats;
 pub mod projectile;
 pub mod registry;
 pub mod repair;
+pub mod requirement;
 pub mod research;
 pub mod resource;
 pub mod selection;

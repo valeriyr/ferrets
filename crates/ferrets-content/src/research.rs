@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{costs::Cost, player_buffs::PlayerBuffId};
+use crate::{costs::Cost, player_buffs::PlayerBuffId, requirement::Requirement};
 
 /// A handle to a registered research, assigned in registration order.
 ///
@@ -38,28 +38,23 @@ pub struct ResearchDef {
     /// The player buff applied to the researching player on completion. `None`
     /// means the research is purely an unlock.
     pub buff: Option<PlayerBuffId>,
-    /// Requirements for starting the research — each entry names an entity
-    /// type, a tag, or another research (see
-    /// [`requirements::met`](crate::requirements::met)).
-    pub requires: Vec<String>,
+    /// Requirements for starting the research, read the same way as a type's
+    /// own [`requires`](crate::entity_type_def::EntityTypeDef::requires) list.
+    pub requires: Vec<Requirement>,
 }
 
 impl ResearchDef {
     /// Creates a new `ResearchDef` with the given data.
     ///
-    /// Panics if `research_time` is `0` or a requirement entry is empty.
+    /// Panics if `research_time` is `0`.
     pub fn new(
         cost: Cost,
         research_time: u32,
         buff: Option<PlayerBuffId>,
-        requires: impl IntoIterator<Item = impl Into<String>>,
+        requires: impl IntoIterator<Item = Requirement>,
     ) -> Self {
         assert!(research_time > 0, "research_time must be greater than 0");
-        let requires: Vec<String> = requires.into_iter().map(Into::into).collect();
-        assert!(
-            requires.iter().all(|name| !name.is_empty()),
-            "requirement names must not be empty"
-        );
+        let requires: Vec<Requirement> = requires.into_iter().collect();
 
         Self {
             cost,
