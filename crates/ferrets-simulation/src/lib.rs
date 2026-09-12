@@ -2,6 +2,7 @@
 
 pub mod annex;
 pub mod berths;
+pub mod brood;
 pub mod buffs_store;
 pub mod checksum;
 pub mod command;
@@ -22,6 +23,7 @@ pub mod player_buffs;
 pub mod player_research;
 pub mod player_skills;
 pub mod player_stats;
+pub mod rally;
 pub mod requirements;
 pub mod resources;
 pub mod scenario;

@@ -20,6 +20,7 @@ use ferrets_script::ai::{
 };
 use ferrets_simulation::{
     components::{
+        brood::{BredComponent, BroodComponent},
         build::UnderConstructionComponent,
         energy::EnergyComponent,
         entity_info::EntityInfoComponent,
@@ -390,6 +391,12 @@ fn entity_view(entity: &EntityRef, id: SimulationId, hidden: bool, disabled: boo
             .map_or_else(Vec::new, |transporter| {
                 transporter.passengers.iter().map(|id| id.0).collect()
             }),
+        broodlings: entity
+            .get::<BroodComponent>()
+            .map_or_else(Vec::new, |brood| {
+                brood.broodlings.iter().map(|id| id.0).collect()
+            }),
+        bred_by: entity.get::<BredComponent>().map(|bred| bred.by.0),
     }
 }
 

@@ -98,16 +98,16 @@ pub fn cancel_processing(
     _policy: CancelPolicy,
     entry_state: OrderState,
     world: &mut World,
-) -> OrderState {
+) -> Processing {
     // A queued entry was never prepared: the driver on the entity, if any,
     // belongs to the build under way in front of it.
     match entry_state {
-        OrderState::New => return OrderState::Finished,
+        OrderState::New => return Processing::state(OrderState::Finished),
         OrderState::InProcessing | OrderState::Suspended => {}
         OrderState::Finished => unreachable!("Finished entries never stay in the queue"),
     }
     let Some(build_component) = world.entity_mut(entity).take::<BuildComponent>() else {
-        return OrderState::Finished;
+        return Processing::state(OrderState::Finished);
     };
 
     if let Some(building_id) = build_component.building {
@@ -140,7 +140,7 @@ pub fn cancel_processing(
         work::leave(world, entity, CellPos::from(position), size);
     }
 
-    OrderState::Finished
+    Processing::state(OrderState::Finished)
 }
 
 /// Whether a Build can stand through a soft cancel: never — it drops like any

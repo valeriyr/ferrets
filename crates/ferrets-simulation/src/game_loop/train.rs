@@ -5,10 +5,7 @@ use bevy_ecs::{entity::Entity, world::World};
 use ferrets_geometry::cell_rect::CellRect;
 use ferrets_math::fixed_uvec2::FixedUVec2;
 
-use super::{
-    orders::{self, Processing, Refusal},
-    rally,
-};
+use super::orders::{self, Processing, Refusal};
 use crate::{
     components::{
         order_queue::{CancelPolicy, OrderState},
@@ -18,7 +15,7 @@ use crate::{
     events::{SpawnCause, SpendCause},
     map::Map,
     order::Order,
-    resources,
+    rally, resources,
     spawn::{self, FieldReach},
 };
 use ferrets_content::registry::ContentRegistry;
@@ -63,9 +60,9 @@ pub fn cancel_processing(
     policy: CancelPolicy,
     _entry_state: OrderState,
     world: &mut World,
-) -> OrderState {
+) -> Processing {
     match policy {
-        CancelPolicy::Soft => OrderState::InProcessing,
+        CancelPolicy::Soft => Processing::state(OrderState::InProcessing),
         CancelPolicy::Force => {
             let owner = entity_def::owner(world, entity);
             let queued: Vec<String> = world
@@ -93,7 +90,7 @@ pub fn cancel_processing(
             }
 
             world.entity_mut(entity).remove::<TrainComponent>();
-            OrderState::Finished
+            Processing::state(OrderState::Finished)
         }
     }
 }
@@ -168,19 +165,22 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
                 .find_placement_near(origin, size, &unit_location_def);
 
         // No free cell around the trainer — hold the finished unit and retry.
-        if let Some(cell) = placement {
+        // The unit leaves the queue only once it stands: a spawn the cell
+        // refuses after all holds it the same way.
+        let spawned = placement.and_then(|cell| {
             let owner = entity_def::owner(world, entity);
             let trainer = entity_def::simulation_id(world, entity);
-            if let Some((unit, _)) = spawn::spawn_entity(
+            spawn::spawn_entity(
                 world,
                 &type_name,
                 FixedUVec2::from(cell),
                 owner,
                 SpawnCause::Trained { trainer },
                 FieldReach::Initial,
-            ) {
-                rally::send(world, entity, unit);
-            }
+            )
+        });
+        if let Some((unit, _)) = spawned {
+            rally::owe(world, entity, unit);
 
             let mut entity_mut = world.entity_mut(entity);
             let mut queue = entity_mut.get_mut::<TrainQueueComponent>().unwrap();

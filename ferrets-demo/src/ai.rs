@@ -292,12 +292,13 @@ const COMMON_AI: &str = r#"
         return 0
     end
 
-    -- Changes one idle `unit` into `into` when the budget allows. Returns
-    -- whether the order was placed.
-    local function morph_one(commands, budget, unit, into)
+    -- Orders `unit` to change into `into` when the budget covers it, busy or
+    -- not: a fighter is pulled out of its march to grow. Returns whether the
+    -- order was placed.
+    local function morph_any(commands, budget, unit, into)
         local gold = morph_cost_of(unit.type_name, into, "gold")
         local wood = morph_cost_of(unit.type_name, into, "wood")
-        if unit.idle and not unit.hidden and budget.gold >= gold and budget.wood >= wood then
+        if not unit.hidden and budget.gold >= gold and budget.wood >= wood then
             commands[#commands + 1] = { kind = "select", id = unit.id }
             commands[#commands + 1] = { kind = "morph", type_name = into }
             budget.gold = budget.gold - gold
@@ -305,6 +306,12 @@ const COMMON_AI: &str = r#"
             return true
         end
         return false
+    end
+
+    -- Like morph_any, but leaves a busy unit to its work.
+    local function morph_one(commands, budget, unit, into)
+        if not unit.idle then return false end
+        return morph_any(commands, budget, unit, into)
     end
 
     -- Once the wave is big enough, pushes it out: fighters attack-move onto
@@ -613,10 +620,12 @@ const ORC_AI: &str = r#"
     })
 "#;
 
-/// The swarm brain: drone economy, then drones spent on the spawning pit the
-/// swarmlings come from, a brood nest whenever headroom runs dry, and a tumor
-/// to walk the creep outward; a swarmling in four cocoons into a ravager, and
-/// the swarm musters and marches as a wave.
+/// The swarm brain: larvae grown into drones while the worker line is short
+/// and into an overlord whenever headroom runs dry, then drones spent on the
+/// spawning pit that unlocks the swarmling and a tumor to walk the creep
+/// outward; once the pit stands the hatchery grows into a hive and larvae
+/// into swarmlings, a swarmling in four cocoons into a ravager, and the swarm
+/// musters and marches as a wave.
 const SWARM_AI: &str = r#"
     define_ai("swarm", {
         period = 20,
@@ -625,55 +634,101 @@ const SWARM_AI: &str = r#"
             local commands = {}
             local budget = budget_of(view)
             local groups = muster(view)
+            local hatcheries = group(groups, "hatchery")
+            local hive_cocoons = group(groups, "hive_cocoon")
             local hives = group(groups, "hive")
+            local larvae = group(groups, "larva")
+            local eggs = group(groups, "egg")
             local drones = group(groups, "drone")
             local pits = group(groups, "spawning_pit")
-            local nests = group(groups, "brood_nest")
             local tumors = group(groups, "tumor")
             local swarmlings = group(groups, "swarmling")
             local cocoons = group(groups, "cocoon")
             local ravagers = group(groups, "ravager")
-            local hive = hives[1]
+            local hall = hives[1] or hive_cocoons[1] or hatcheries[1]
 
-            keep_workers(commands, budget, hive, hives, drones, "drone")
+            -- Grows one larva into `into`, a unit that takes `supply`, when
+            -- the budget and the headroom allow; a larva already taken this
+            -- think is passed over. Returns whether the order was placed.
+            local taken = {}
+            local function grow(into, supply)
+                if budget.supply < supply then return false end
+                for _, larva in ipairs(larvae) do
+                    if not taken[larva.id] and morph_one(commands, budget, larva, into) then
+                        taken[larva.id] = true
+                        budget.supply = budget.supply - supply
+                        return true
+                    end
+                end
+                return false
+            end
 
-            -- The pit first, a nest whenever headroom runs dry, and once the
-            -- army is fed a tumor that carries the creep outward. Each costs
-            -- the drone that becomes it, which the worker line replaces.
+            -- Headroom first: with the supply nearly spent and no egg on the
+            -- way, one larva becomes an overlord. Then the worker line: every
+            -- egg is taken to be a drone on the way while drones are short.
+            if budget.supply < 2 and #eggs == 0 then grow("overlord", 0) end
+            if #drones + #eggs < MAX_WORKERS then grow("drone", 1) end
+
+            -- The pit first, and once the army is fed a tumor that carries the
+            -- creep outward. Each costs the drone that becomes it, which the
+            -- worker line replaces.
             local wanted = nil
             if #pits == 0 then
                 wanted = "spawning_pit"
-            elseif budget.supply < 2 then
-                wanted = "brood_nest"
             elseif #tumors == 0 then
                 wanted = "tumor"
             end
             local builder_id =
-                build_next(commands, state, view, drones, hive, wanted, budget)
-            local need_wood = wanted ~= nil and budget.wood < cost_of(wanted, "wood")
-            assign_harvesters(commands, view, drones, need_wood, builder_id)
+                build_next(commands, state, view, drones, hall, wanted, budget)
+            -- Wood is cut for what is next in line: the wanted structure,
+            -- then the hive, then the ravagers the hive unlocks.
+            local wood_wanted = 0
+            if wanted ~= nil then wood_wanted = cost_of(wanted, "wood") end
+            if any_standing(pits) then
+                if #hives == 0 and #hive_cocoons == 0 then
+                    wood_wanted = wood_wanted + morph_cost_of("hatchery", "hive", "wood")
+                else
+                    wood_wanted = wood_wanted + morph_cost_of("swarmling", "ravager", "wood")
+                end
+            end
+            assign_harvesters(commands, view, drones, budget.wood < wood_wanted, builder_id)
 
             -- The pending structure holds its price back from the army.
             reserve(budget, wanted)
 
-            -- One swarmling in four grows into a ravager, cocoons counting
-            -- as ravagers on the way; the growth is refused for free before
-            -- the pit stands.
-            if any_standing(pits)
-                and (#ravagers + #cocoons) * 4 < #swarmlings then
-                for _, s in ipairs(swarmlings) do
-                    if morph_one(commands, budget, s, "ravager") then break end
+            -- The hall grows into a hive once the pit stands, its larvae
+            -- riding the cocoon's berths across; until it can pay, the
+            -- hive's price is held back from the army.
+            if any_standing(pits) and #hives == 0 and #hive_cocoons == 0 then
+                local grown = false
+                for _, hatchery in ipairs(hatcheries) do
+                    if morph_one(commands, budget, hatchery, "hive") then
+                        grown = true
+                        break
+                    end
+                end
+                if not grown then
+                    budget.gold = budget.gold - morph_cost_of("hatchery", "hive", "gold")
+                    budget.wood = budget.wood - morph_cost_of("hatchery", "hive", "wood")
                 end
             end
 
-            for _, pit in ipairs(pits) do
-                if train_from(commands, budget, pit, "swarmling") then break end
+            -- One swarmling in four grows into a ravager, cocoons counting
+            -- as ravagers on the way; the growth is refused for free before
+            -- the hive stands.
+            if any_standing(hives)
+                and (#ravagers + #cocoons) * 4 < #swarmlings then
+                for _, s in ipairs(swarmlings) do
+                    if morph_any(commands, budget, s, "ravager") then break end
+                end
             end
+
+            if any_standing(pits) then grow("swarmling", 1) end
 
             local fighters = {}
             for _, e in ipairs(swarmlings) do fighters[#fighters + 1] = e end
             for _, e in ipairs(ravagers) do fighters[#fighters + 1] = e end
-            attack_wave(commands, view, fighters, {}, hive)
+            attack_wave(commands, view, fighters, {}, hall)
 
             return commands
         end,

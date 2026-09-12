@@ -22,7 +22,6 @@ use crate::{
         dying::DyingComponent,
         entity_info::EntityInfoComponent,
         location::LocationComponent,
-        morph::MorphComponent,
     },
     entity_def,
     entity_index::EntityIndex,
@@ -193,12 +192,12 @@ fn tend_sites(world: &mut World, offers: &[Offer]) {
             .filter(|offer| entity_def::owner(world, offer.primary) == owner)
             .map(|offer| (offer.primary_id, offer.primary))
             .collect();
-        // A primary in the middle of changing form still stands on the ground
-        // its dock covers, so the dock has not gone — but it works nothing,
-        // as a job changing form takes no newcomer.
+        // A primary whose form is changing still stands on the ground its
+        // dock covers, so the dock has not gone — but it works nothing, as a
+        // job changing form takes no newcomer.
         let tender = holders
             .iter()
-            .find(|&&(_, primary)| !world.entity(primary).contains::<MorphComponent>())
+            .find(|&&(_, primary)| !entity_def::changing(world, primary))
             .map(|&(primary_id, _)| primary_id);
 
         match (holders.is_empty(), terms(world, site).alone()) {

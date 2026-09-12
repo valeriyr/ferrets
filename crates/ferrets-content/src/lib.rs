@@ -4,6 +4,7 @@
 pub mod annex;
 pub mod attack;
 pub mod berths;
+pub mod brood;
 pub mod build;
 pub mod costs;
 pub mod dying;
@@ -13,6 +14,7 @@ pub mod entity_type_def;
 pub mod field;
 pub mod location;
 pub mod morph;
+pub mod period;
 pub mod player_buffs;
 pub mod player_stats;
 pub mod projectile;

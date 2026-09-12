@@ -23,7 +23,9 @@ use ferrets_simulation::{
         entity_skills::SkillsComponent,
         entity_stats::StatsComponent,
         health::HealthComponent,
+        hidden::HiddenComponent,
         location::LocationComponent,
+        morph::MorphComponent,
         order_queue::OrderQueueComponent,
         owner::OwnerComponent,
         resource::{ResourceCarrierComponent, ResourceSourceComponent},
@@ -148,6 +150,10 @@ pub struct MorphButton {
 /// A command-card button that tears down the leading entity's unfinished site.
 #[derive(Component)]
 pub struct CancelBuildButton;
+
+/// Replaces the selection with every living broodling the local player has.
+#[derive(Component)]
+pub struct SelectBroodButton;
 
 /// A command-card button that casts a skill on the selection.
 #[derive(Component)]
@@ -564,7 +570,7 @@ pub fn update_help(
     mut text: Query<&mut Text, With<HelpText>>,
 ) {
     let mut message = String::from(
-        "LMB select (Shift add, dbl-click all of type) | RMB move/harvest/attack | F/R/G/T/B/Q orders | X stance | 1-0 groups (Ctrl set)\nMinimap: LMB look (drag pans), RMB order | V reveal | P pause | -/= speed | . step | ] seek | M sound | F1 debug | F2 spawn | F3 layer",
+        "LMB select (Shift add, dbl-click all of type) | RMB move/harvest/attack | A/R/G/T/B/Q orders | X stance | 1-0 groups (Ctrl set)\nMinimap: LMB look (drag pans), RMB order | V reveal | P pause | -/= speed | . step | ] seek | M sound | F1 debug | F2 spawn | F3 layer",
     );
 
     if let Some(local) = session.local_player()
@@ -578,6 +584,14 @@ pub fn update_help(
             message = String::from(
                 "Train: click a command-card button   |   RMB set rally (on self clears)",
             );
+        }
+        if def.breeder.is_some() {
+            message = String::from(
+                "Brood: click to select every larva   |   RMB set rally (on self clears)",
+            );
+        }
+        if !def.morphs.is_empty() {
+            message = String::from("Change: click a command-card button");
         }
         if def.builder.is_some() {
             message =
@@ -977,20 +991,18 @@ fn card_button(label: &str, base: Color) -> impl Bundle {
     )
 }
 
-/// Rebuilds the command card whenever the leading selection changes — a train
-/// button per unit the selected producer can build, a build button per building
-/// the selected worker can construct, a cancel button on a site still going
-/// up, or nothing when the leading entity does none of that — and whenever the
-/// leading entity's own type is rewritten or its site finishes: a gryphon that takes
-/// off must swap its take-off button for the landing one on the spot, and a
-/// finished building loses its cancel button.
+/// Rebuilds the command card whenever what it would show changes: the leading
+/// selection, the leading entity's own type, a site of its finishing, or the
+/// first and last broodling the player has.
 pub fn update_command_card(
     session: Res<GameSession>,
     leading: Res<Leading>,
     registry: Res<ContentRegistry>,
     changed: Query<&EntityInfoComponent, Changed<EntityInfoComponent>>,
-    entities: Query<&EntityInfoComponent>,
+    entities: Query<(&EntityInfoComponent, Option<&MorphComponent>)>,
     sites: Query<(&EntityInfoComponent, &OwnerComponent), With<UnderConstructionComponent>>,
+    broodlings: Broodlings,
+    brood_button: Query<(), With<SelectBroodButton>>,
     mut finished: RemovedComponents<UnderConstructionComponent>,
     card: Query<Entity, With<CommandCard>>,
     buttons: Query<
@@ -1004,6 +1016,7 @@ pub fn update_command_card(
             With<LoadButton>,
             With<MorphButton>,
             With<CancelBuildButton>,
+            With<SelectBroodButton>,
         )>,
     >,
     mut commands: Commands,
@@ -1022,9 +1035,30 @@ pub fn update_command_card(
     let leading_site_finished = leading.0.is_some_and(|id| {
         finished
             .read()
-            .any(|entity| entities.get(entity).is_ok_and(|info| info.id() == id))
+            .any(|entity| entities.get(entity).is_ok_and(|(info, _)| info.id() == id))
     });
-    if !leading.is_changed() && !leading_type_changed && !leading_site_finished {
+    // A hall's card offers the player's whole brood once there is one — a
+    // hall being a breeding form, or one changing form from a breeding form;
+    // the button comes and goes with the first and last broodling of any
+    // kind, and only then — a breeder's timer changes its component every
+    // tick, which is no reason to rebuild.
+    let leading_breeds = leading.0.is_some_and(|id| {
+        entities.iter().any(|(info, morph)| {
+            info.id() == id
+                && (registry.def(info.type_id()).breeder.is_some()
+                    || morph.is_some_and(|morph| registry.def(morph.from).breeder.is_some()))
+        })
+    });
+    let has_brood = leading_breeds
+        && session
+            .local_player()
+            .is_some_and(|local| !own_broodlings(local, &registry, &broodlings).is_empty());
+    let brood_button_stale = has_brood == brood_button.is_empty();
+    if !leading.is_changed()
+        && !leading_type_changed
+        && !leading_site_finished
+        && !brood_button_stale
+    {
         return;
     }
     let Ok(card) = card.single() else {
@@ -1038,8 +1072,8 @@ pub fn update_command_card(
     };
     let def = entities
         .iter()
-        .find(|info| info.id() == id)
-        .map(|info| registry.def(info.type_id()));
+        .find(|(info, _)| info.id() == id)
+        .map(|(info, _)| registry.def(info.type_id()));
     let trains = def
         .and_then(|def| def.trainer.as_ref())
         .map(|trainer| trainer.trains().map(String::from).collect::<Vec<_>>())
@@ -1119,6 +1153,9 @@ pub fn update_command_card(
         }
         if own_site {
             parent.spawn((CancelBuildButton, card_button("Cancel", BUTTON_NORMAL)));
+        }
+        if has_brood {
+            parent.spawn((SelectBroodButton, card_button("Brood", BUTTON_NORMAL)));
         }
         if transports {
             parent.spawn((LoadButton, card_button("Load", BUTTON_NORMAL)));
@@ -1215,6 +1252,70 @@ pub fn morph_card_input(
             }
             Interaction::Hovered => *color = BackgroundColor(BUTTON_HOVERED),
             Interaction::None => *color = BackgroundColor(SKILL_NORMAL),
+        }
+    }
+}
+
+/// The visible entities a brood may be read from: every one wearing a bred
+/// type, or changing form from one.
+type Broodlings<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static EntityInfoComponent,
+        &'static OwnerComponent,
+        Option<&'static MorphComponent>,
+    ),
+    Without<HiddenComponent>,
+>;
+
+/// The ids of every broodling `player` has — seated, set down, or growing in
+/// an egg — in query order, for a command that keeps the order it is given.
+fn own_broodlings(
+    player: PlayerId,
+    registry: &ContentRegistry,
+    broodlings: &Broodlings,
+) -> Vec<SimulationId> {
+    let bred_type = |type_id| registry.def(type_id).broodling.is_some();
+    broodlings
+        .iter()
+        .filter(|(info, owner, morph)| {
+            owner.player() == player
+                && (bred_type(info.type_id()) || morph.is_some_and(|morph| bred_type(morph.from)))
+        })
+        .map(|(info, _, _)| info.id())
+        .collect()
+}
+
+/// Selects every living broodling the local player has, in place of the
+/// selection, when the brood button is clicked.
+pub fn select_brood_card_input(
+    mut buttons: Query<
+        (&Interaction, &mut BackgroundColor),
+        (With<SelectBroodButton>, Changed<Interaction>),
+    >,
+    session: Res<GameSession>,
+    registry: Res<ContentRegistry>,
+    broodlings: Broodlings,
+    mut pending: ResMut<PendingInput>,
+) {
+    for (interaction, mut color) in &mut buttons {
+        match interaction {
+            Interaction::Pressed => {
+                let Some(local) = session.local_player() else {
+                    continue;
+                };
+                let ids = own_broodlings(local, &registry, &broodlings);
+                if ids.is_empty() {
+                    continue;
+                }
+                pending.push(PlayerCommand::SelectByIds {
+                    ids,
+                    mode: SelectMode::Replace,
+                });
+            }
+            Interaction::Hovered => *color = BackgroundColor(BUTTON_HOVERED),
+            Interaction::None => *color = BackgroundColor(BUTTON_NORMAL),
         }
     }
 }

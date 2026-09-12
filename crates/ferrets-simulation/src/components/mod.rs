@@ -8,6 +8,7 @@ pub mod attached;
 pub mod attack;
 pub mod attack_move;
 pub mod berths;
+pub mod brood;
 pub mod build;
 pub mod chase;
 pub mod dying;

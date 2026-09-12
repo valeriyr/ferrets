@@ -15,6 +15,7 @@ use ferrets_simulation::{
         health::HealthComponent,
         location::LocationComponent,
         order_queue::{CancelPolicy, OrderQueueComponent},
+        rally::RallyTarget,
         resource::ResourceSourceComponent,
         train::TrainQueueComponent,
     },
@@ -57,6 +58,49 @@ fn same_layer_growth_lands_under_cell_model() {
     utils::run_ticks(&mut app, 15);
 
     assert_eq!(type_name_of(&app, whelp), "giant");
+}
+
+#[test]
+fn odd_growth_settles_on_lattice_under_cell_model() {
+    // 1x1 -> 2x2 recentres the anchor by half a cell, to 9.5; the cell model
+    // keeps every body on the lattice, so the ogre settles on the nearest
+    // point, 10, and holds cells 10..=11 — at rest, free to move on.
+    let mut app = utils::morph_app(MovementModel::Cell);
+    let (whelp, whelp_id) = utils::create_owned(&mut app, "whelp", 10, 10, 0);
+
+    order_morph(&mut app, whelp, "ogre");
+    utils::run_ticks(&mut app, 15);
+
+    assert_eq!(type_name_of(&app, whelp), "ogre");
+    assert_eq!(utils::position_of(app.world(), whelp), utils::pos(10, 10));
+    utils::select(&mut app, whelp_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Move {
+            target: utils::pos(15, 15),
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY + 4);
+    assert_ne!(utils::position_of(app.world(), whelp), utils::pos(10, 10));
+}
+
+#[test]
+fn odd_growth_keeps_middle_under_continuous_model() {
+    // Continuous bodies rest anywhere: the ogre settles at the recentred
+    // 9.5, its middle exactly where the whelp's was.
+    let mut app = utils::morph_app(MovementModel::Continuous);
+    let (whelp, _) = utils::create_owned(&mut app, "whelp", 10, 10, 0);
+    utils::run_ticks(&mut app, 1);
+
+    order_morph(&mut app, whelp, "ogre");
+    utils::run_ticks(&mut app, 15);
+
+    assert_eq!(type_name_of(&app, whelp), "ogre");
+    assert_eq!(
+        utils::position_of(app.world(), whelp),
+        FixedUVec2::new(FixedU64::from_num(9.5), FixedU64::from_num(9.5))
+    );
 }
 
 #[test]
@@ -113,6 +157,45 @@ fn instant_change_pays_from_old_pools() {
         FixedU64::from_num(10) * (FixedU64::from_num(20) / FixedU64::from_num(30)),
         "the blood price was drawn from the wrong form's pool"
     );
+}
+
+#[test]
+fn zero_time_change_dying_on_refused_landing_dies_for_good() {
+    // The boulder needs 3x3 of ground and every cell but the whelp's own is
+    // blocked, so the landing is refused the tick the change begins; the
+    // transition dies on interruption, and the whelp is gone two ticks of
+    // dying later — with its Die order given, not left dying forever.
+    let mut app = utils::morph_app(MovementModel::Cell);
+    let (whelp, _) = utils::create_owned(&mut app, "whelp", 10, 10, 0);
+    utils::set_all_cells_statically_occupied(app.world_mut(), true);
+
+    order_morph(&mut app, whelp, "boulder");
+    utils::run_ticks(&mut app, 1 + 2 + 1);
+
+    utils::assert_despawned(app.world_mut(), whelp);
+}
+
+#[test]
+fn changed_trainer_is_not_sent_to_its_own_rally_point() {
+    let mut app = utils::morph_app(MovementModel::Cell);
+    let (shrine, shrine_id) = utils::create_owned(&mut app, "shrine", 10, 10, 0);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SetRallyPoint {
+            entity: shrine_id,
+            target: Some(RallyTarget::Position(utils::pos(20, 20))),
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY);
+
+    // The golem can walk, so a rally wrongly owed would carry it off; a
+    // change of form sends nobody, and it stands where it unrooted.
+    order_morph(&mut app, shrine, "golem");
+    utils::run_ticks(&mut app, 11 + 5);
+
+    assert_eq!(type_name_of(&app, shrine), "golem");
+    assert!(entity_def::orders(app.world(), shrine).is_empty());
+    assert_eq!(utils::position_of(app.world(), shrine), utils::pos(10, 10));
 }
 
 #[test]
@@ -364,6 +447,31 @@ fn change_refused_while_production_is_queued() {
 //
 // ─── What holds a change back ──────────────────────────────────────────────────
 //
+
+#[test]
+fn production_refused_while_form_changes() {
+    // The unrooted form trains nothing: a unit queued while the shrine changes
+    // would have no queue to land in, so the trainer is busy for the change.
+    let mut app = utils::morph_app(MovementModel::Cell);
+    let (shrine, shrine_id) = utils::create_owned(&mut app, "shrine", 10, 10, 0);
+    utils::grant_gold(&mut app, 10);
+
+    order_morph(&mut app, shrine, "golem");
+    utils::run_ticks(&mut app, 2);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::TrainEntity {
+            trainer: shrine_id,
+            type_name: "whelp".into(),
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY);
+    assert_eq!(utils::train_queue_len(app.world(), shrine), 0);
+    assert_eq!(utils::gold(app.world()), 10);
+
+    utils::run_ticks(&mut app, 10);
+    assert_eq!(type_name_of(&app, shrine), "golem");
+}
 
 #[test]
 fn change_refused_while_workers_sit_in_berths() {

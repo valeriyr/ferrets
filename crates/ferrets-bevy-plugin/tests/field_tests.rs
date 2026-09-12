@@ -21,7 +21,8 @@ use ferrets_content::{
         FieldVision,
     },
     location::Solidity,
-    morph::{MorphCancel, MorphPlacement, MorphTime, MorphTransition},
+    morph::{MorphCancel, MorphInterrupted, MorphPlacement, MorphReason, MorphTransition},
+    period::Period,
     registry::ContentRegistry,
     repair::{RepairCost, RepairRate},
     requirement::Requirement,
@@ -620,6 +621,37 @@ fn morphing_gateway_losing_power_still_lands() {
     utils::run_ticks(&mut app, 12);
 
     assert_eq!(utils::count_of_type(app.world_mut(), "warpgate"), 1);
+}
+
+#[test]
+fn disabled_changing_gateway_refuses_training() {
+    let mut app = field_app();
+    let pylon = utils::create_owned(&mut app, "pylon", 10, 10, 0).0;
+    let (gateway, gateway_id) = utils::create_owned(&mut app, "gateway", 12, 10, 0);
+    utils::run_ticks(&mut app, 1);
+    utils::select(&mut app, gateway_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Morph {
+            type_name: "warpgate".into(),
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY + 2);
+    utils::deplete(&mut app, pylon);
+    utils::run_ticks(&mut app, 1);
+
+    // Switched off and changing form: the change is what makes it busy, so
+    // the training a switched-off gateway would otherwise queue is refused.
+    utils::push_command(
+        &mut app,
+        PlayerCommand::TrainEntity {
+            trainer: gateway_id,
+            type_name: "zealot".into(),
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    assert_eq!(utils::train_queue_len(app.world(), gateway), 0);
 }
 
 #[test]
@@ -1360,9 +1392,11 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 .with_morphs([MorphTransition::new(
                     "tower",
                     Some("pupa"),
-                    MorphTime::Constant(10),
+                    Period::Constant(10),
                     MorphPlacement::Revalidate,
                     MorphCancel::Refundable,
+                    MorphInterrupted::Reverts,
+                    MorphReason::Change,
                     Vec::new(),
                     Vec::new(),
                 )]),
@@ -1383,9 +1417,11 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
         registry.register(building("lander", 1, 2).with_morphs([MorphTransition::new(
             "bunker",
             None,
-            MorphTime::Constant(1),
+            Period::Constant(1),
             MorphPlacement::Revalidate,
             MorphCancel::Forfeit,
+            MorphInterrupted::Reverts,
+            MorphReason::Change,
             Vec::new(),
             Vec::new(),
         )]));
@@ -1460,9 +1496,11 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 .with_morphs([MorphTransition::new(
                     "warpgate",
                     None,
-                    MorphTime::Constant(10),
+                    Period::Constant(10),
                     MorphPlacement::Revalidate,
                     MorphCancel::Forfeit,
+                    MorphInterrupted::Reverts,
+                    MorphReason::Change,
                     Vec::new(),
                     Vec::new(),
                 )])

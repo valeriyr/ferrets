@@ -108,7 +108,7 @@ pub fn seed_player_stats(world: &mut World) {
 fn spawn_base(world: &mut World, player: PlayerId, race: &str, (x, y): (u32, u32)) {
     let (hall, worker) = match race {
         "human" => ("town_hall", "peasant"),
-        "swarm" => ("hive", "drone"),
+        "swarm" => ("hatchery", "drone"),
         "conclave" => ("nexus", "probe"),
         "elves" => ("tree_of_life", "wisp"),
         "terran" => ("command_center", "scv"),

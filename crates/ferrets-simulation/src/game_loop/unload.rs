@@ -8,7 +8,6 @@ use ferrets_math::fixed_uvec2::FixedUVec2;
 use super::{
     chase::{self, Destination},
     orders::{self, Processing, Refusal},
-    rally,
 };
 use crate::{
     components::{
@@ -21,6 +20,7 @@ use crate::{
     entity_index::EntityIndex,
     map::Map,
     order::Order,
+    rally,
     simulation_id::SimulationId,
     spawn,
 };
@@ -75,9 +75,9 @@ pub fn cancel_processing(
     _policy: CancelPolicy,
     _entry_state: OrderState,
     world: &mut World,
-) -> OrderState {
+) -> Processing {
     world.entity_mut(entity).remove::<UnloadComponent>();
-    OrderState::Finished
+    Processing::state(OrderState::Finished)
 }
 
 /// Whether an Unload can stand through a soft cancel: never — it drops like any
@@ -211,6 +211,6 @@ fn dispatch(world: &mut World, holder: Entity, passenger: Entity, at: Option<Fix
                 );
             }
         }
-        None => rally::send(world, holder, passenger),
+        None => rally::owe(world, holder, passenger),
     }
 }

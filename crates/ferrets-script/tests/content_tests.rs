@@ -6,6 +6,7 @@
 use ferrets_content::{
     annex::{AloneConduct, AnnexClaim, AnnexLife, AnnexWork},
     attack::{AttackDef, Delivery, Weapon},
+    brood::{BroodlingDef, Lingering, OrphanFate},
     build::BuilderAttendance,
     costs,
     entity_stats::EntityStatId,
@@ -15,7 +16,8 @@ use ferrets_content::{
         FieldGrowth, FieldPlacement, FieldSide, FieldSourceDef, FieldVision,
     },
     location::Solidity,
-    morph::{MorphCancel, MorphPlacement, MorphTime},
+    morph::{MorphCancel, MorphInterrupted, MorphPlacement, MorphReason},
+    period::Period,
     player_stats::PlayerStatId,
     repair::{RepairCost, RepairRate},
     requirement::Requirement,
@@ -32,7 +34,7 @@ use ferrets_content::{
     work::{Attachment, BerthStance, CrewLimit, WorkPresence},
 };
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
-use ferrets_math::{FixedI64, FixedU64, fixed_uvec2::FixedUVec2};
+use ferrets_math::{FixedI64, FixedU64, fixed_vec2::FixedVec2};
 use ferrets_pathfinder::{layer_mask::LayerMask, nav_grid::LayerId};
 use ferrets_script::{
     content,
@@ -1726,7 +1728,7 @@ fn attached_presence_reads_berths_and_stance() {
     let canopy = tree.berths.as_ref().unwrap().group("canopy").unwrap();
     assert_eq!(
         canopy.points(),
-        &[FixedUVec2::new(FixedU64::lit("0.5"), FixedU64::lit("0.5"))]
+        &[FixedVec2::new(FixedI64::lit("0.5"), FixedI64::lit("0.5"))]
     );
     assert_eq!(canopy.slots(), 1);
     let lodge = registry.entity("lodge").unwrap();
@@ -1743,11 +1745,11 @@ fn attached_presence_reads_berths_and_stance() {
     // Whole numbers and decimal strings both read as fixed-point.
     assert_eq!(
         rim.points()[0],
-        FixedUVec2::new(FixedU64::ONE, FixedU64::ZERO)
+        FixedVec2::new(FixedI64::ONE, FixedI64::ZERO)
     );
     assert_eq!(
         rim.points()[1],
-        FixedUVec2::new(FixedU64::lit("1.8"), FixedU64::ONE)
+        FixedVec2::new(FixedI64::lit("1.8"), FixedI64::ONE)
     );
 
     let sprite = registry.entity("sprite").unwrap();
@@ -1770,7 +1772,7 @@ fn attached_presence_reads_berths_and_stance() {
             BerthStance::Roaming {
                 speed: FixedU64::lit("0.05"),
                 dwell: 10,
-            }
+            },
         )))
     );
 }
@@ -1844,7 +1846,7 @@ fn orbit_stance_reads_radius_and_period() {
             BerthStance::Orbit {
                 radius: FixedU64::lit("0.3"),
                 period: 40,
-            }
+            },
         ))
     );
 }
@@ -1868,7 +1870,7 @@ fn circling_stance_reads_speed_and_dwell() {
             BerthStance::Circling {
                 speed: FixedU64::lit("0.25"),
                 dwell: 8,
-            }
+            },
         ))
     );
 }
@@ -1880,7 +1882,7 @@ fn berth_point_of_float_errors() {
         panic!("must reject a float berth point");
     };
     assert!(
-        matches!(&error, ScriptError::ContentError(m) if m.contains("berth x must be a non-negative integer or a decimal string, got number")),
+        matches!(&error, ScriptError::ContentError(m) if m.contains("berth x must be an integer or a decimal string, got number")),
         "unexpected error: {error:?}"
     );
 }
@@ -2210,6 +2212,220 @@ fn unknown_field_decay_errors() {
 }
 
 //
+// ─── Breeder, broodling, interruption and reason ─────────────────────────────
+//
+
+#[test]
+fn breeder_and_broodling_round_trip() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_entity_stat("brood_period")
+        define_entity("hatch", {
+            location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
+            stats = { max_health = 300, brood_period = 12 },
+            berths = { brood = { points = { { "0.5", "3.5" }, { "-1", "1.0" } }, slots = 2 } },
+            breeder = { breeds = "grub", period = { stat = "brood_period" }, limit = 2, initial = 1,
+                        orphans = { linger = { reseat = { distance = 3 } } } },
+        })
+        define_entity("grub", {
+            location = { occupation = GROUND, size = 1, solidity = "passable" },
+            stats = { max_health = 25 },
+            broodling = { berths = "brood", stance = "still" },
+        })
+        define_entity("pen", {
+            location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
+            stats = { max_health = 100 },
+            berths = { sty = { points = { { "0.5", "2.5" }, { "1.5", "2.5" }, { "0.5", "-0.5" }, { "1.5", "-0.5" } }, slots = 4 } },
+            breeder = { breeds = "piglet", period = 30, limit = 4, orphans = "perish" },
+        })
+        define_entity("piglet", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = { max_health = 20 },
+            broodling = { berths = "sty", stance = { roaming = { speed = "0.05", dwell = 40 } } },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("content loads");
+
+    let hatch = registry.entity("hatch").expect("hatch is registered");
+    let brood = hatch.breeder.as_ref().expect("the hatch breeds");
+    let brood_period = registry
+        .entity_stat("brood_period")
+        .expect("brood_period is declared");
+    assert_eq!(brood.breeds(), "grub");
+    assert_eq!(brood.period(), Period::Stat(brood_period));
+    assert_eq!(brood.limit(), 2);
+    assert_eq!(brood.initial(), 1);
+    assert_eq!(
+        brood.orphans(),
+        OrphanFate::Linger(Lingering::Reseat { distance: 3 })
+    );
+    // Berth points read either sign.
+    let group = hatch
+        .berths
+        .as_ref()
+        .and_then(|berths| berths.group("brood"))
+        .expect("the hatch offers the brood group");
+    assert_eq!(
+        group.points(),
+        &[
+            FixedVec2::new(FixedI64::lit("0.5"), FixedI64::lit("3.5")),
+            FixedVec2::new(FixedI64::lit("-1"), FixedI64::ONE),
+        ]
+    );
+
+    let grub = registry.entity("grub").expect("grub is registered");
+    assert_eq!(
+        grub.broodling.as_ref().map(BroodlingDef::attachment),
+        Some(&Attachment::new("brood", BerthStance::Still))
+    );
+
+    let pen = registry.entity("pen").expect("pen is registered");
+    let brood = pen.breeder.as_ref().expect("the pen breeds");
+    assert_eq!(brood.period(), Period::Constant(30));
+    assert_eq!(brood.initial(), 0);
+    assert_eq!(brood.orphans(), OrphanFate::Perish);
+    let piglet = registry.entity("piglet").expect("piglet is registered");
+    assert_eq!(
+        piglet.broodling.as_ref().map(BroodlingDef::attachment),
+        Some(&Attachment::new(
+            "sty",
+            BerthStance::Roaming {
+                speed: FixedU64::lit("0.05"),
+                dwell: 40,
+            }
+        ))
+    );
+}
+
+#[test]
+fn unknown_orphan_fate_errors() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_entity("hatch", {
+            location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
+            stats = { max_health = 300 },
+            breeder = { breeds = "grub", period = 12, limit = 1, orphans = "wander" },
+        })
+    "#;
+    let error = content::load(&engine(), source).err().expect("bad fate");
+    assert!(
+        matches!(&error, ScriptError::ContentError(message) if message.contains("orphan fate must be 'perish', 'linger', or a { linger = { reseat = { distance = ... } } } table, found 'wander'")),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn unknown_morph_reason_errors() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_entity("walker", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5" },
+            morphs = {
+                { into = "flier", time = 20, placement = "reserve", cancel = "committed", reason = "growth" },
+            },
+        })
+    "#;
+    let error = content::load(&engine(), source).err().expect("bad reason");
+    assert!(
+        matches!(&error, ScriptError::ContentError(message) if message.contains("morph reason must be 'production' or 'change', found 'growth'")),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn lingering_without_reseat_distance_errors() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_entity("hatch", {
+            location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
+            stats = { max_health = 300 },
+            breeder = { breeds = "grub", period = 12, limit = 1, orphans = { linger = { reseat = {} } } },
+        })
+    "#;
+    let error = content::load(&engine(), source)
+        .err()
+        .expect("bad lingering");
+    assert!(
+        matches!(&error, ScriptError::ContentError(message) if message.contains("distance")),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn brood_period_of_wrong_shape_errors() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_entity("hatch", {
+            location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
+            stats = { max_health = 300 },
+            breeder = { breeds = "grub", period = "soon", limit = 1, orphans = "perish" },
+        })
+    "#;
+    let error = content::load(&engine(), source).err().expect("bad period");
+    assert!(
+        matches!(&error, ScriptError::ContentError(message) if message.contains("brood period")),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn morph_interrupted_and_reason_read_and_default() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_resource("gold")
+        define_entity("walker", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5" },
+            morphs = {
+                { into = "flier", time = 20, placement = "nearby", cancel = "refundable",
+                  interrupted = "dies", reason = "production" },
+                { into = "statue", time = 20, placement = "revalidate", cancel = "committed" },
+            },
+        })
+        define_entity("flier", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5" },
+        })
+        define_entity("statue", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = { max_health = 100 },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("content loads");
+    let walker = registry.entity("walker").expect("walker is registered");
+    let [first, second] = walker.morphs.as_slice() else {
+        panic!("walker declares exactly two transitions");
+    };
+    assert_eq!(first.placement(), MorphPlacement::Nearby);
+    assert_eq!(first.interrupted(), MorphInterrupted::Dies);
+    assert_eq!(first.reason(), MorphReason::Production);
+    assert_eq!(second.interrupted(), MorphInterrupted::Reverts);
+    assert_eq!(second.reason(), MorphReason::Change);
+}
+
+#[test]
+fn unknown_morph_interrupted_errors() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_entity("walker", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5" },
+            morphs = {
+                { into = "flier", time = 20, placement = "reserve", cancel = "committed", interrupted = "vanishes" },
+            },
+        })
+    "#;
+    let error = content::load(&engine(), source)
+        .err()
+        .expect("bad interruption");
+    assert!(
+        matches!(&error, ScriptError::ContentError(message) if message.contains("morph interrupted must be 'reverts' or 'dies', found 'vanishes'")),
+        "{error:?}"
+    );
+}
+
+//
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 //
 
@@ -2424,7 +2640,7 @@ fn morph_transitions_round_trip() {
         .entity_stat("morph_time")
         .expect("morph_time is declared");
     assert_eq!(first.into_type(), "flier");
-    assert_eq!(first.time(), MorphTime::Stat(morph_time));
+    assert_eq!(first.time(), Period::Stat(morph_time));
     assert_eq!(first.placement(), MorphPlacement::Revalidate);
     assert_eq!(first.cancel(), MorphCancel::Committed);
     assert_eq!(
@@ -2434,7 +2650,7 @@ fn morph_transitions_round_trip() {
     assert_eq!(first.requires(), [Requirement::Tag("winged".to_string())]);
 
     assert_eq!(second.into_type(), "statue");
-    assert_eq!(second.time(), MorphTime::Constant(40));
+    assert_eq!(second.time(), Period::Constant(40));
     assert_eq!(second.placement(), MorphPlacement::Reserve);
     assert_eq!(second.cancel(), MorphCancel::Refundable);
     assert_eq!(
@@ -2462,7 +2678,7 @@ fn unknown_morph_placement_errors() {
         panic!("must reject an unknown morph placement");
     };
     assert!(
-        matches!(&error, ScriptError::ContentError(m) if m.contains("morph placement must be 'reserve' or 'revalidate', found 'hover'")),
+        matches!(&error, ScriptError::ContentError(m) if m.contains("morph placement must be 'reserve', 'revalidate', or 'nearby', found 'hover'")),
         "unexpected error: {error:?}"
     );
 }

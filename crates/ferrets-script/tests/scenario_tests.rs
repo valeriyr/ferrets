@@ -334,6 +334,8 @@ fn entity(id: u32, type_name: &str, under_construction: bool) -> EntityView {
         resource_amount: None,
         boarded: None,
         passengers: Vec::new(),
+        broodlings: Vec::new(),
+        bred_by: None,
     }
 }
 

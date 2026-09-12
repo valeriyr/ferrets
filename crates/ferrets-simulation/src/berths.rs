@@ -21,7 +21,6 @@ use crate::{
         dying::DyingComponent,
         entity_info::EntityInfoComponent,
         location::LocationComponent,
-        morph::MorphComponent,
     },
     entity_def,
     entity_index::EntityIndex,
@@ -39,22 +38,33 @@ pub fn offers(world: &World, job: Entity, group: &str) -> bool {
 }
 
 /// Whether `job` shuts a newcomer of `presence` out: the newcomer attaches,
-/// and the group it sits in is not offered or has no free berth, or the job is
-/// changing form. A newcomer that does not attach is never shut out here.
+/// and the group it sits in is not offered or has no free berth, or the job's
+/// form is changing. A newcomer that does not attach is never shut out here.
 pub fn shut(world: &World, job: Entity, presence: &WorkPresence) -> bool {
     match presence.attachment() {
         Some(attachment) => {
             !offers(world, job, attachment.berths())
                 || free_seats(world, job, attachment.berths()).is_empty()
-                || world.entity(job).contains::<MorphComponent>()
+                || entity_def::changing(world, job)
         }
         None => false,
     }
 }
 
-/// Whether anyone sits in a berth of `job`.
-pub fn seated(world: &World, job: Entity) -> bool {
-    world.entity(job).contains::<BerthsComponent>()
+/// Whether anyone sits in a berth of `job` other than the entities in
+/// `except`.
+pub fn seated_by_others(world: &World, job: Entity, except: &[SimulationId]) -> bool {
+    world
+        .entity(job)
+        .get::<BerthsComponent>()
+        .is_some_and(|berths| {
+            berths
+                .seats
+                .values()
+                .flatten()
+                .flatten()
+                .any(|holder| !except.contains(holder))
+        })
 }
 
 /// The free berth of `group` on `job` nearest to `from`, as its index and its
@@ -129,10 +139,17 @@ pub fn vacate(world: &mut World, attached: &AttachedComponent) {
 }
 
 /// The point berth `seat` of `group` on `job` is at — where a worker's
-/// middle sits.
+/// middle sits. A point that would lie off the map is held at the middle of
+/// the map's edge cell.
 fn seat_point(world: &World, job: Entity, group: &str, seat: usize) -> FixedUVec2 {
     let anchor = FixedUVec2::from(body::anchor(entity_def::position(world, job)));
-    anchor + group_points(world, job, group)[seat]
+    let point = unsigned(signed(anchor) + group_points(world, job, group)[seat]);
+    let map = world.resource::<Map>();
+    let half = FixedU64::ONE / 2;
+    FixedUVec2::new(
+        point.x.min(FixedU64::from_num(map.width()) - half),
+        point.y.min(FixedU64::from_num(map.height()) - half),
+    )
 }
 
 /// The position that puts `worker`'s middle on `point`: half the worker's
@@ -464,12 +481,15 @@ fn free_seats(world: &World, job: Entity, group: &str) -> Vec<usize> {
     else {
         return Vec::new();
     };
-    let free = free_points(world, job, group);
-    let seated = berths.points().len() - free.len();
+    let taken = world
+        .entity(job)
+        .get::<BerthsComponent>()
+        .and_then(|seats| seats.seats.get(group));
+    let seated = taken.map_or(0, |seats| seats.iter().flatten().count());
     if seated >= berths.slots() {
         return Vec::new();
     }
-    free
+    free_points(world, job, group)
 }
 
 /// The points of `group` on `job` nobody holds, by index, whatever the group's
@@ -487,11 +507,11 @@ fn free_points(world: &World, job: Entity, group: &str) -> Vec<usize> {
         .collect()
 }
 
-/// The berth points of `group` on `job`, as offsets from the footprint's
-/// anchor.
+/// The berth points of `group` on `job`, as signed offsets from the
+/// footprint's anchor.
 ///
 /// Panics if the job does not offer the group.
-fn group_points<'a>(world: &'a World, job: Entity, group: &str) -> &'a [FixedUVec2] {
+fn group_points<'a>(world: &'a World, job: Entity, group: &str) -> &'a [FixedVec2] {
     entity_def::of(world, job)
         .berths
         .as_ref()

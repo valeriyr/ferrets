@@ -150,8 +150,9 @@ pub enum InputMode {
 /// A combat order armed by hotkey, waiting for its target click.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TargetedOrder {
-    /// `F` — attack-move to the clicked position.
-    AttackMove,
+    /// `A` — attack the clicked entity, whoever owns it, or attack-move to the
+    /// clicked cell when nothing stands under the cursor.
+    Attack,
     /// `R` — patrol between here and the clicked position.
     Patrol,
     /// `G` — guard the clicked entity.
@@ -460,10 +461,11 @@ pub fn selection_input(
 
 /// Right click sends the selection to the entity under the cursor, or moves it
 /// to the clicked cell. Holding Shift appends instead of replacing orders.
-/// When the selection is entirely own stationary producers, the click
-/// re-targets their rally points instead — clicking one of the selected
-/// producers clears them. Anything that can move outranks rally: a mobile
-/// rally-holder answers a right click by moving.
+/// When nothing selected can move, the click re-targets the rally points of
+/// the own stationary producers among the selection instead — whatever else
+/// stands still beside them, a larva say, takes neither an order nor a rally —
+/// and clicking anything in the selection clears them. Anything that can move
+/// outranks rally: a mobile rally-holder answers a right click by moving.
 pub fn order_input(
     mode: Res<InputMode>,
     mouse: Res<ButtonInput<MouseButton>>,
@@ -483,7 +485,11 @@ pub fn order_input(
         ),
         Without<HiddenComponent>,
     >,
-    rally_holders: Query<(&EntityInfoComponent, &OwnerComponent), With<RallyPointComponent>>,
+    holders: Query<(
+        &EntityInfoComponent,
+        &OwnerComponent,
+        Option<&RallyPointComponent>,
+    )>,
 ) {
     if !mouse.just_pressed(MouseButton::Right) || !matches!(*mode, InputMode::Normal) {
         return;
@@ -508,15 +514,15 @@ pub fn order_input(
         &session,
         &selection,
         &registry,
-        &rally_holders,
+        &holders,
         &mut pending,
     );
 }
 
-/// Issues the orders a right click on `world` asks for: re-targeting rally
-/// points when the selection is entirely own stationary producers, sending the
-/// selection to `target` when the click named one, and moving it to the point
-/// otherwise.
+/// Issues the orders a right click on `world` asks for: re-targeting the rally
+/// points of the own stationary producers among the selection when nothing
+/// selected can move, sending the selection to `target` when the click named
+/// one, and moving it to the point otherwise.
 ///
 /// Shared by the cursor and the minimap, so a click means the same thing
 /// wherever it lands. A caller with no way to aim at an entity passes no
@@ -528,31 +534,40 @@ pub fn issue_orders_at(
     session: &GameSession,
     selection: &Selection,
     registry: &ContentRegistry,
-    rally_holders: &Query<(&EntityInfoComponent, &OwnerComponent), With<RallyPointComponent>>,
+    holders: &Query<(
+        &EntityInfoComponent,
+        &OwnerComponent,
+        Option<&RallyPointComponent>,
+    )>,
     pending: &mut PendingInput,
 ) {
-    // Only a selection of stationary producers captures the click; a mixed
-    // selection keeps ordering its units around normally, and anything that
-    // can move is ordered around too — movement outranks rally.
+    // The click sets rally points only when nothing selected can move — a
+    // mixed selection keeps ordering its units around normally, movement
+    // outranking rally — and then only on the own stationary producers in
+    // it: a stationary thing with no rally point takes nothing either way.
     let Some(local) = session.local_player() else {
         return;
     };
     let selected = selection.get(local);
-    let all_producers = !selected.is_empty()
-        && selected.iter().all(|&id| {
-            rally_holders.iter().any(|(info, owner)| {
-                info.id() == id
-                    && owner.player() == local
-                    && !registry.def(info.type_id()).can_move()
-            })
-        });
-    if all_producers {
+    let mut producers = Vec::new();
+    let mut any_moves = false;
+    for &id in selected {
+        let Some((info, owner, rally)) = holders.iter().find(|(info, _, _)| info.id() == id) else {
+            continue;
+        };
+        if registry.def(info.type_id()).can_move() {
+            any_moves = true;
+        } else if rally.is_some() && owner.player() == local {
+            producers.push(id);
+        }
+    }
+    if !any_moves && !producers.is_empty() {
         let target = match target {
             Some(id) if selected.contains(&id) => None,
             Some(id) => Some(RallyTarget::Entity(id)),
             None => Some(RallyTarget::Position(world_to_pos(world))),
         };
-        for &producer in selected {
+        for producer in producers {
             pending.push(PlayerCommand::SetRallyPoint {
                 entity: producer,
                 target,
@@ -713,7 +728,7 @@ pub fn track_leading(
     leading.set_if_neq(Leading(next));
 }
 
-/// `F`/`R`/`G` arm a combat order for the current selection; the next
+/// `A`/`R`/`G`/`T`/`B`/`Q` arm an order for the current selection; the next
 /// left-click supplies its target.
 pub fn order_mode_input(
     keys: Res<ButtonInput<KeyCode>>,
@@ -732,8 +747,8 @@ pub fn order_mode_input(
     if selection.get(local).is_empty() {
         return;
     }
-    let armed = if keys.just_pressed(KeyCode::KeyF) {
-        TargetedOrder::AttackMove
+    let armed = if keys.just_pressed(KeyCode::KeyA) {
+        TargetedOrder::Attack
     } else if keys.just_pressed(KeyCode::KeyR) {
         TargetedOrder::Patrol
     } else if keys.just_pressed(KeyCode::KeyG) {
@@ -797,11 +812,20 @@ pub fn targeting_input(
 
     let flush = !(keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight));
     match armed {
-        TargetedOrder::AttackMove => {
-            pending.push(PlayerCommand::AttackMove {
-                target: world_to_pos(cursor),
-                flush,
-            });
+        TargetedOrder::Attack => {
+            // An entity under the cursor is attacked as named — the executor
+            // honours the order against allies too; an empty cell is attacked
+            // toward, engaging whatever is met on the way.
+            match entity_at(cursor, &registry, &entities) {
+                Some(target) => pending.push(PlayerCommand::Attack {
+                    target: AttackTarget::Entity(target),
+                    flush,
+                }),
+                None => pending.push(PlayerCommand::AttackMove {
+                    target: world_to_pos(cursor),
+                    flush,
+                }),
+            }
         }
         TargetedOrder::Patrol => {
             pending.push(PlayerCommand::Patrol {

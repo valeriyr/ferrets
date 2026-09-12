@@ -51,6 +51,12 @@ pub enum SkillTarget {
 pub enum PlayerCommand {
     /// Selects the given entity, combining with the current selection per `mode`.
     SelectById { id: SimulationId, mode: SelectMode },
+    /// Selects the given entities together, combining with the current
+    /// selection per `mode`; ids the player may not name are left out.
+    SelectByIds {
+        ids: Vec<SimulationId>,
+        mode: SelectMode,
+    },
     /// Selects all entities inside `rect` sharing the selection class `class`
     /// (see [`EntityTypeDef::selection_class`](ferrets_content::entity_type_def::EntityTypeDef::selection_class)),
     /// combining with the current selection per `mode`.

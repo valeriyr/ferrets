@@ -102,10 +102,12 @@ fn field_races_ai_build_economy_and_army() {
 
     let world = app.world_mut();
     // The swarm's structures are drones that changed: the pit the swarmlings
-    // come from, a nest for headroom, a tumor walking the creep out — and the
-    // drone line is kept topped up behind them.
+    // come from, a tumor walking the creep out — with the hatchery grown into
+    // a hive, an overlord grown for headroom and the drone line kept topped
+    // up behind them.
     assert!(count_owned(world, 1, "spawning_pit") >= 1);
-    assert!(count_owned(world, 1, "brood_nest") >= 1);
+    assert!(count_owned(world, 1, "hive") >= 1);
+    assert!(count_owned(world, 1, "overlord") >= 1);
     assert!(count_owned(world, 1, "tumor") >= 1);
     assert!(count_owned(world, 1, "swarmling") >= 1);
     assert!(count_owned(world, 1, "ravager") + count_owned(world, 1, "cocoon") >= 1);

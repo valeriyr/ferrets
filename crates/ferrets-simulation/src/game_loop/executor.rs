@@ -93,6 +93,14 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
                 apply_selection(world, player, vec![*id], *mode);
             }
         }
+        PlayerCommand::SelectByIds { ids, mode } => {
+            let selected: Vec<SimulationId> = ids
+                .iter()
+                .copied()
+                .filter(|&id| interactable_entity(world, player, id).is_some())
+                .collect();
+            apply_selection(world, player, selected, *mode);
+        }
         PlayerCommand::SelectByRect { rect, mode } => {
             let selected = resolve_box_selection(world, player, rect);
             apply_selection(world, player, selected, *mode);

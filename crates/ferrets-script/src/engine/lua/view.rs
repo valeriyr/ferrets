@@ -81,6 +81,12 @@ fn entity_table(lua: &Lua, entity: &EntityView) -> mlua::Result<Table> {
         passengers.set(index + 1, *id)?;
     }
     table.set("passengers", passengers)?;
+    let broodlings = lua.create_table()?;
+    for (index, id) in entity.broodlings.iter().enumerate() {
+        broodlings.set(index + 1, *id)?;
+    }
+    table.set("broodlings", broodlings)?;
+    table.set("bred_by", entity.bred_by)?;
     Ok(table)
 }
 
@@ -174,6 +180,13 @@ fn entity_content_table(lua: &Lua, entity: &EntityContentView) -> mlua::Result<T
             array.set(index + 1, entry)?;
         }
         table.set("morphs", array)?;
+    }
+    if let Some(brood) = &entity.breeder {
+        let entry = lua.create_table()?;
+        entry.set("breeds", brood.breeds.as_str())?;
+        entry.set("limit", brood.limit)?;
+        entry.set("period", brood.period)?;
+        table.set("breeder", entry)?;
     }
     Ok(table)
 }

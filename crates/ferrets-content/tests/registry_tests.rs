@@ -9,6 +9,7 @@ use ferrets_content::{
     annex::{AloneConduct, AnnexClaim, AnnexLife, AnnexWork},
     attack::{Delivery, Weapon},
     berths::BerthGroup,
+    brood::OrphanFate,
     build::BuilderAttendance,
     costs::{self, Cost},
     entity_buffs::EntityBuffDef,
@@ -20,7 +21,8 @@ use ferrets_content::{
         FieldVision,
     },
     location::Solidity,
-    morph::{MorphCancel, MorphPlacement, MorphTime, MorphTransition},
+    morph::{MorphCancel, MorphInterrupted, MorphPlacement, MorphReason, MorphTransition},
+    period::Period,
     player_buffs::{PlayerBuffDef, PlayerBuffId},
     player_stats::PlayerStatId,
     registry::ContentRegistry,
@@ -40,7 +42,7 @@ use ferrets_content::{
     work::{Attachment, BerthStance, CrewLimit, WorkPresence},
 };
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
-use ferrets_math::{FixedI64, FixedU64, fixed_uvec2::FixedUVec2};
+use ferrets_math::{FixedI64, FixedU64, fixed_vec2::FixedVec2};
 use ferrets_pathfinder::{layer_id::LayerId, layer_mask::LayerMask};
 use utils::GROUND;
 
@@ -263,19 +265,6 @@ fn validate_accepts_attachments_offered_by_their_jobs() {
             )]),
     );
 
-    registry.validate();
-}
-
-#[test]
-#[should_panic(
-    expected = "entity type 'depot' puts a berth of group 'rim' at (2, 0.5), outside its footprint"
-)]
-fn validate_rejects_berth_outside_footprint() {
-    let mut registry = utils::ground_registry();
-    registry.register(
-        utils::sized("depot", GROUND, CellSize::new(2, 2))
-            .with_berths([("rim", BerthGroup::new([point("2", "0.5")], 1))]),
-    );
     registry.validate();
 }
 
@@ -2347,10 +2336,9 @@ fn validate_rejects_transition_into_unregistered_type() {
 }
 
 #[test]
-#[should_panic(expected = "odd footprint difference")]
-fn validate_rejects_transition_with_odd_footprint_difference() {
-    // Recentring shifts the anchor by half the size difference per axis: a
-    // 1x1 -> 2x2 transition would land it between lattice points.
+fn validate_accepts_transition_with_odd_footprint_difference() {
+    // 1x1 -> 2x2 recentres by half a cell; the landing settles the anchor
+    // onto the lattice where the model needs it, so nothing is refused here.
     let mut registry = utils::ground_registry();
     registry.register(
         utils::standing("walker", GROUND)
@@ -2423,9 +2411,11 @@ fn validate_rejects_transition_with_unresolved_requirement() {
             .with_morphs([MorphTransition::new(
                 "flier",
                 None,
-                MorphTime::Constant(20),
+                Period::Constant(20),
                 MorphPlacement::Revalidate,
                 MorphCancel::Committed,
+                MorphInterrupted::Reverts,
+                MorphReason::Change,
                 Vec::new(),
                 [Requirement::EntityType("jet_pack".to_string())],
             )]),
@@ -2461,9 +2451,11 @@ fn validate_rejects_transition_timed_by_undeclared_stat() {
             .with_morphs([MorphTransition::new(
                 "flier",
                 None,
-                MorphTime::Stat(stat),
+                Period::Stat(stat),
                 MorphPlacement::Revalidate,
                 MorphCancel::Committed,
+                MorphInterrupted::Reverts,
+                MorphReason::Change,
                 Vec::new(),
                 Vec::new(),
             )]),
@@ -2498,9 +2490,11 @@ fn validate_rejects_transition_with_energy_cost_but_no_energy_pool() {
             .with_morphs([MorphTransition::new(
                 "flier",
                 None,
-                MorphTime::Constant(20),
+                Period::Constant(20),
                 MorphPlacement::Revalidate,
                 MorphCancel::Committed,
+                MorphInterrupted::Reverts,
+                MorphReason::Change,
                 vec![EntityCastCost::Energy(FixedU64::from_num(20))],
                 Vec::new(),
             )]),
@@ -2535,9 +2529,11 @@ fn validate_rejects_transition_with_unregistered_resource_cost() {
             .with_morphs([MorphTransition::new(
                 "flier",
                 None,
-                MorphTime::Constant(20),
+                Period::Constant(20),
                 MorphPlacement::Revalidate,
                 MorphCancel::Committed,
+                MorphInterrupted::Reverts,
+                MorphReason::Change,
                 vec![EntityCastCost::Resources(costs::cost([("gold", 50)]))],
                 Vec::new(),
             )]),
@@ -2613,9 +2609,11 @@ fn validate_accepts_transition_with_payable_costs() {
             .with_morphs([MorphTransition::new(
                 "flier",
                 None,
-                MorphTime::Constant(20),
+                Period::Constant(20),
                 MorphPlacement::Reserve,
                 MorphCancel::Refundable,
+                MorphInterrupted::Reverts,
+                MorphReason::Change,
                 vec![
                     EntityCastCost::Resources(costs::cost([("gold", 50)])),
                     EntityCastCost::Energy(FixedU64::from_num(20)),
@@ -2730,6 +2728,7 @@ fn register_accepts_field_sources_placement_and_effects() {
     let creep = creep_field(&mut registry);
     registry.register(
         utils::standing("hive", GROUND)
+            .with_health(300)
             .with_field_sources([emitter(creep)])
             .with_field_placement([FieldPlacement::Requires {
                 field: creep,
@@ -2741,7 +2740,7 @@ fn register_accepts_field_sources_placement_and_effects() {
                 FieldAffiliation::Anyone,
                 FieldSide::Inside,
                 FieldEffectKind::Modifiers(vec![EntityModifier {
-                    stat: EntityStatId::SPEED,
+                    stat: EntityStatId::MAX_HEALTH,
                     op: ModifierOp::PercentAdd,
                     magnitude: FixedI64::ONE,
                 }]),
@@ -2945,6 +2944,29 @@ fn register_rejects_field_effect_with_no_modifiers() {
 }
 
 #[test]
+#[should_panic(
+    expected = "entity type 'zergling' has a field effect on stat 'health_drain', which the type does not carry"
+)]
+fn register_rejects_field_effect_on_stat_type_lacks() {
+    let mut registry = utils::ground_registry();
+    let creep = creep_field(&mut registry);
+    registry.register(
+        utils::standing("zergling", GROUND)
+            .with_health(35)
+            .with_field_effects([FieldEffect::new(
+                creep,
+                FieldAffiliation::Anyone,
+                FieldSide::Outside,
+                FieldEffectKind::Modifiers(vec![EntityModifier {
+                    stat: EntityStatId::HEALTH_DRAIN,
+                    op: ModifierOp::FlatAdd,
+                    magnitude: FixedI64::from_num(1),
+                }]),
+            )]),
+    );
+}
+
+#[test]
 #[should_panic(expected = "skill 'scan' watches for no time at all")]
 fn register_rejects_watch_that_lasts_no_time() {
     let mut registry = utils::ground_registry();
@@ -3056,6 +3078,145 @@ fn register_rejects_cast_on_foreign_field() {
 }
 
 //
+// ─── Breeder and broodling ───────────────────────────────────────────────────
+//
+
+#[test]
+fn validate_accepts_breeder_and_berthed_broodling() {
+    let mut registry = utils::ground_registry();
+    registry.register(hatch("hatch", 3, 2));
+    registry.register(grub("grub"));
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'hatch' breeding 'grub' names a type that is not registered"
+)]
+fn validate_rejects_brood_of_unregistered_type() {
+    let mut registry = utils::ground_registry();
+    registry.register(hatch("hatch", 3, 2));
+    registry.validate();
+}
+
+#[test]
+#[should_panic(expected = "entity type 'hatch' breeding 'grub' names a type that is no broodling")]
+fn validate_rejects_brood_of_type_that_is_no_broodling() {
+    let mut registry = utils::ground_registry();
+    registry.register(hatch("hatch", 3, 2));
+    registry.register(utils::standing("grub", GROUND).with_health(25));
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'hatch' breeding 'grub' seats it in berth group 'brood', which the breeder does not declare"
+)]
+fn validate_rejects_berthed_broodling_in_group_breeder_lacks() {
+    let mut registry = utils::ground_registry();
+    registry.register(
+        utils::sized("hatch", GROUND, CellSize::new(3, 3))
+            .with_health(300)
+            .with_breeder("grub", Period::Constant(10), 2, 0, OrphanFate::Perish),
+    );
+    registry.register(grub("grub"));
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'hatch' breeding 'grub' keeps up to 3 but berth group 'brood' seats only 2"
+)]
+fn validate_rejects_brood_limit_above_slots() {
+    let mut registry = utils::ground_registry();
+    registry.register(hatch("hatch", 2, 3));
+    registry.register(grub("grub"));
+    registry.validate();
+}
+
+#[test]
+#[should_panic(expected = "entity type 'hatch' breeding 'hatch' breeds its own type")]
+fn validate_rejects_breeder_breeding_its_own_type() {
+    let mut registry = utils::ground_registry();
+    registry.register(
+        hatch("hatch", 3, 2)
+            .with_breeder("hatch", Period::Constant(10), 2, 0, OrphanFate::Perish)
+            .with_broodling(Attachment::new("brood", BerthStance::Still)),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'hatch' breeding 'grub' seats a type wider than one cell in a berth"
+)]
+fn validate_rejects_berthed_broodling_wider_than_one_cell() {
+    let mut registry = utils::ground_registry();
+    registry.register(hatch("hatch", 3, 2));
+    registry.register(
+        utils::sized("grub", GROUND, CellSize::new(2, 2))
+            .with_health(25)
+            .with_broodling(Attachment::new("brood", BerthStance::Still)),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(expected = "entity type 'hatch' breeding 'grub' names a type that can move")]
+fn validate_rejects_bred_type_that_can_move() {
+    let mut registry = utils::ground_registry();
+    registry.register(hatch("hatch", 3, 2));
+    registry.register(grub("grub").with_movement(
+        FixedU64::from_num(0.5),
+        FixedU64::from_num(0.5),
+        FixedU64::ONE,
+        FixedU64::from_num(360),
+        FixedU64::from_num(360),
+    ));
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'hatch' breeding 'grub' reads its period from a stat the type does not carry"
+)]
+fn validate_rejects_brood_period_from_stat_breeder_lacks() {
+    let mut registry = utils::ground_registry();
+    let brood_period = registry.register_entity_stat("brood_period");
+    registry.register(hatch("hatch", 3, 2).with_breeder(
+        "grub",
+        Period::Stat(brood_period),
+        2,
+        0,
+        OrphanFate::Perish,
+    ));
+    registry.register(grub("grub"));
+    registry.validate();
+}
+
+#[test]
+#[should_panic(expected = "entity type 'grub' is a broodling, and no registered type breeds it")]
+fn validate_rejects_broodling_nobody_breeds() {
+    let mut registry = utils::ground_registry();
+    registry.register(grub("grub"));
+    registry.validate();
+}
+
+#[test]
+fn validate_accepts_interim_form_of_other_solidity() {
+    let mut registry = utils::ground_registry();
+    registry.register(
+        EntityTypeDef::new("grub")
+            .with_location(GROUND, CellSize::ONE, Solidity::Passable)
+            .with_health(25)
+            .with_morphs([morph_through("egg", "worker")]),
+    );
+    registry.register(utils::standing("egg", GROUND).with_health(100));
+    registry.register(utils::standing("worker", GROUND).with_health(30));
+    registry.validate();
+}
+
+//
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 //
 
@@ -3091,8 +3252,8 @@ fn standing_annex() -> AloneConduct {
 }
 
 /// A berth point from decimal strings, in cells from the footprint's anchor.
-fn point(x: &str, y: &str) -> FixedUVec2 {
-    FixedUVec2::new(
+fn point(x: &str, y: &str) -> FixedVec2 {
+    FixedVec2::new(
         x.parse().expect("a decimal string"),
         y.parse().expect("a decimal string"),
     )
@@ -3134,14 +3295,43 @@ fn haste_buff(registry: &mut ContentRegistry) -> PlayerBuffId {
     )
 }
 
+/// A 3×3 breeder of `grub`s with a brood group of `slots` seats and a limit of
+/// `limit`.
+fn hatch(name: &str, slots: usize, limit: usize) -> EntityTypeDef {
+    utils::sized(name, GROUND, CellSize::new(3, 3))
+        .with_health(300)
+        .with_berths([(
+            "brood",
+            BerthGroup::new(
+                [
+                    point("0.5", "3.5"),
+                    point("1.5", "3.5"),
+                    point("2.5", "3.5"),
+                ],
+                slots,
+            ),
+        )])
+        .with_breeder("grub", Period::Constant(10), limit, 0, OrphanFate::Perish)
+}
+
+/// A passable one-cell broodling that sits still in the `brood` group.
+fn grub(name: &str) -> EntityTypeDef {
+    EntityTypeDef::new(name)
+        .with_location(GROUND, CellSize::ONE, Solidity::Passable)
+        .with_health(25)
+        .with_broodling(Attachment::new("brood", BerthStance::Still))
+}
+
 /// A free, timed, committed transition into `into` worn as `via` on the way.
 fn morph_through(via: &str, into: &str) -> MorphTransition {
     MorphTransition::new(
         into,
         Some(via),
-        MorphTime::Constant(20),
+        Period::Constant(20),
         MorphPlacement::Revalidate,
         MorphCancel::Committed,
+        MorphInterrupted::Reverts,
+        MorphReason::Change,
         Vec::new(),
         Vec::new(),
     )
@@ -3152,9 +3342,11 @@ fn morph_into(into: &str) -> MorphTransition {
     MorphTransition::new(
         into,
         None,
-        MorphTime::Constant(20),
+        Period::Constant(20),
         MorphPlacement::Revalidate,
         MorphCancel::Committed,
+        MorphInterrupted::Reverts,
+        MorphReason::Change,
         Vec::new(),
         Vec::new(),
     )

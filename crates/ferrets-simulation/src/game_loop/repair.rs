@@ -112,12 +112,12 @@ pub fn cancel_processing(
     _policy: CancelPolicy,
     _entry_state: OrderState,
     world: &mut World,
-) -> OrderState {
+) -> Processing {
     let Some(repair) = world.entity_mut(entity).take::<RepairComponent>() else {
-        return OrderState::Finished;
+        return Processing::state(OrderState::Finished);
     };
     leave_job(world, entity, repair.target);
-    OrderState::Finished
+    Processing::state(OrderState::Finished)
 }
 
 /// Whether a Repair can stand through a soft cancel: never — it drops like any

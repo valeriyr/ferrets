@@ -11,7 +11,7 @@ use std::collections::{HashMap, HashSet};
 
 use bevy::prelude::*;
 use ferrets_content::{
-    entity_stats::EntityStatId, entity_type_def::EntityTypeDef, morph::MorphTime,
+    entity_stats::EntityStatId, entity_type_def::EntityTypeDef, period::Period,
     registry::ContentRegistry, resource::ResourceSourceDef, tags, turret::TurretMount,
 };
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
@@ -24,6 +24,7 @@ use ferrets_simulation::{
     components::{
         annex::{AnnexComponent, Docking},
         attached::AttachedComponent,
+        brood::{BredComponent, BroodComponent},
         build::{BuildComponent, SiteWork, UnderConstructionComponent},
         energy::EnergyComponent,
         entity_info::EntityInfoComponent,
@@ -459,6 +460,8 @@ enum Shape {
     Pentagon,
     /// Workers, and the big rock — a circle.
     Circle,
+    /// Larvae — a small disc with a darker core.
+    Grub,
     /// Ships — a hull with a triangular bow pointing where it faces.
     Ship,
     /// Unit production — a hexagon, distinct from the main hall.
@@ -477,6 +480,12 @@ enum Shape {
     /// The zeppelin — an envelope longer than it is wide, with a gondola
     /// slung amidships and a tail fin across the stern.
     Zeppelin,
+    /// The overlord — a bloated sac wider than it is long, a lighter crown on
+    /// its back and tendrils trailing beneath.
+    Overlord,
+    /// The hive — a dome with a lighter cap and four dark spires over its
+    /// front and flanks.
+    Hive,
     /// The war wagon — a hull between two wheel bars. The wheels are what make
     /// its heading readable on a body whose gun does not share it; the gun itself
     /// is drawn from its mount, like every other.
@@ -529,11 +538,14 @@ fn shape_for(type_name: &str) -> Shape {
         "gryphon" => Shape::Gryphon { aloft: false },
         "gryphon_aloft" => Shape::Gryphon { aloft: true },
         "zeppelin" => Shape::Zeppelin,
+        "overlord" => Shape::Overlord,
+        "hive" => Shape::Hive,
         "war_wagon" => Shape::WarWagon,
         "siege_works" | "factory" | "factory_aloft" => Shape::Octagon,
         "watch_tower" => Shape::WatchTower,
         "guard_tower" | "photon_cannon" => Shape::GuardTower,
-        "tumor" | "cocoon" => Shape::Pod,
+        "tumor" | "cocoon" | "hive_cocoon" | "egg" => Shape::Pod,
+        "larva" => Shape::Grub,
         "pylon" => Shape::Pylon,
         // The elves' ancients wear the shapes of the buildings they stand in
         // for, rooted or walking; the roots an uprooted one carries are added
@@ -719,6 +731,58 @@ pub fn attach_sprites(
                     ));
                 });
             }
+            Shape::Overlord => {
+                // The sac leads with its broad side; the crown sits high on
+                // the back and three tendrils hang off the rear.
+                let tendril = Vec2::new(radius * 0.12, radius * 0.7);
+                entity.insert((
+                    Mesh2d(meshes.add(Ellipse::new(radius * 0.95, radius * 0.7))),
+                    MeshMaterial2d(materials.add(color)),
+                ));
+                entity.with_children(|parent| {
+                    parent.spawn((
+                        Mesh2d(meshes.add(Ellipse::new(radius * 0.45, radius * 0.3))),
+                        MeshMaterial2d(materials.add(color.lighter(0.25))),
+                        Transform::from_translation(Vec3::new(0.0, radius * 0.15, 0.1)),
+                    ));
+                    for lane in [-0.5, 0.0, 0.5] {
+                        parent.spawn((
+                            Sprite::from_color(color.darker(0.2), tendril),
+                            Transform::from_translation(Vec3::new(
+                                radius * lane,
+                                -radius * 0.85,
+                                -0.1,
+                            )),
+                        ));
+                    }
+                });
+            }
+            Shape::Hive => {
+                // The dome fills the footprint, the cap sits high on it and
+                // the spires lean out over the front and the flanks.
+                let spire = Vec2::new(radius * 0.16, radius * 0.5);
+                entity.insert((
+                    Mesh2d(meshes.add(Ellipse::new(radius * 0.95, radius * 0.8))),
+                    MeshMaterial2d(materials.add(color)),
+                ));
+                entity.with_children(|parent| {
+                    parent.spawn((
+                        Mesh2d(meshes.add(Ellipse::new(radius * 0.5, radius * 0.35))),
+                        MeshMaterial2d(materials.add(color.lighter(0.2))),
+                        Transform::from_translation(Vec3::new(0.0, radius * 0.15, 0.1)),
+                    ));
+                    for (lane, lift) in [(-0.6, 0.25), (-0.22, 0.55), (0.22, 0.55), (0.6, 0.25)] {
+                        parent.spawn((
+                            Sprite::from_color(color.darker(0.3), spire),
+                            Transform::from_translation(Vec3::new(
+                                radius * lane,
+                                radius * lift,
+                                0.2,
+                            )),
+                        ));
+                    }
+                });
+            }
             Shape::WarWagon => {
                 // A hull longer than it is wide, with wheels down each flank —
                 // what makes the heading readable on a body whose gun does not
@@ -770,6 +834,21 @@ pub fn attach_sprites(
                         Mesh2d(meshes.add(RegularPolygon::new(radius * 0.42, 4))),
                         MeshMaterial2d(materials.add(color.darker(0.1))),
                         Transform::from_translation(Vec3::new(0.0, 0.0, 0.2)),
+                    ));
+                });
+            }
+            Shape::Grub => {
+                // A small disc with a darker core: a crawler at a building's
+                // foot, half the size of a worker.
+                entity.insert((
+                    Mesh2d(meshes.add(Circle::new(radius * 0.5))),
+                    MeshMaterial2d(materials.add(color)),
+                ));
+                entity.with_children(|parent| {
+                    parent.spawn((
+                        Mesh2d(meshes.add(Circle::new(radius * 0.2))),
+                        MeshMaterial2d(materials.add(color.darker(0.15))),
+                        Transform::from_translation(Vec3::new(0.0, 0.0, 0.1)),
                     ));
                 });
             }
@@ -1981,7 +2060,9 @@ fn ghost_shape(type_name: &str, size: CellSize) -> GhostShape {
             sides: 8,
             circumradius,
         },
-        Shape::Circle | Shape::Pod => GhostShape::Circle { circumradius },
+        Shape::Circle | Shape::Pod | Shape::Grub | Shape::Hive => {
+            GhostShape::Circle { circumradius }
+        }
         // Everything else is ghosted by its footprint: the shapes that are
         // squares outright, and the ones whose outline is a square with
         // something drawn on top of it.
@@ -1993,6 +2074,7 @@ fn ghost_shape(type_name: &str, size: CellSize) -> GhostShape {
         | Shape::Cross
         | Shape::Gryphon { .. }
         | Shape::Zeppelin
+        | Shape::Overlord
         | Shape::WarWagon
         | Shape::WatchTower
         | Shape::GuardTower
@@ -2031,6 +2113,12 @@ const WATCH_PATCH_COLOR: Color = Color::srgb(0.55, 0.85, 1.0);
 
 /// The coupling between an annex and the primary it stands with.
 const ANNEX_BOND_COLOR: Color = Color::srgb(1.0, 0.62, 0.18);
+
+/// The tie between a broodling and the breeder that bred it.
+const BROOD_TIE_COLOR: Color = Color::srgb(0.75, 0.45, 0.95);
+
+/// A breeder's progress toward its next birth.
+const BROOD_WORK_COLOR: Color = Color::srgb(0.75, 0.45, 0.95);
 
 /// Draws a line from every visible worker to the job it is actively on — a site
 /// being raised, a source being worked, or a patient being mended — so who is
@@ -2158,6 +2246,33 @@ pub fn draw_watch_patches(
             (held.radius as f32 + 0.5) * CELL_PX,
             WATCH_PATCH_COLOR,
         );
+    }
+}
+
+/// Draws each visible broodling's tie to its breeder (run in `Update`): a line
+/// from the broodling to the breeder, whether it sits in the breeder's berths
+/// or has stepped out onto the ground to change.
+pub fn draw_brood_ties(
+    mut gizmos: Gizmos,
+    // Anchored on the interpolated transforms, so the tie glides with the
+    // bodies it joins.
+    broodlings: Query<(&BredComponent, &Transform, &Visibility), Without<HiddenComponent>>,
+    breeders: Query<(&EntityInfoComponent, &Transform, &Visibility), Without<HiddenComponent>>,
+) {
+    for (bred, transform, visibility) in &broodlings {
+        if matches!(visibility, Visibility::Hidden) {
+            continue;
+        }
+        let Some(end) = breeders
+            .iter()
+            .find(|(breeder, _, visible)| {
+                breeder.id() == bred.by && !matches!(visible, Visibility::Hidden)
+            })
+            .map(|(_, transform, _)| transform.translation.truncate())
+        else {
+            continue;
+        };
+        gizmos.line_2d(transform.translation.truncate(), end, BROOD_TIE_COLOR);
     }
 }
 
@@ -2297,8 +2412,9 @@ pub fn draw_work_markers(
 
 /// Draws slim bars over entities — energy, then health, then construction
 /// progress while a site goes up, then training progress with a dot per queued
-/// unit, then research progress, then a running form change's progress — for
-/// whichever of those the entity has (run in `Update`). Whatever fog or hiding
+/// unit, then research progress, then a running form change's progress, then
+/// a breeder's progress toward its next birth — for whichever of those the
+/// entity has (run in `Update`). Whatever fog or hiding
 /// keeps off screen stays bare.
 pub fn draw_status_bars(
     mut gizmos: Gizmos,
@@ -2320,6 +2436,7 @@ pub fn draw_status_bars(
             Option<&ResearchComponent>,
             Option<&MorphComponent>,
             Option<&TransporterComponent>,
+            Option<&BroodComponent>,
         ),
         Without<HiddenComponent>,
     >,
@@ -2338,6 +2455,7 @@ pub fn draw_status_bars(
         research,
         morph,
         transporter,
+        brood,
     ) in &query
     {
         if matches!(visibility, Visibility::Hidden) {
@@ -2413,16 +2531,19 @@ pub fn draw_status_bars(
         }
 
         if let Some(morph) = morph {
-            // The change's length under the transition's own terms: a constant
-            // is what it says, a stat reads the changing entity's effective
-            // value — the same reading the simulation ticks against.
-            let time = def
+            // The change's length under the transition's own terms, read from
+            // the form the change started from — the one worn now may be an
+            // interim form that declares none: a constant is what it says, a
+            // stat reads the changing entity's effective value — the same
+            // reading the simulation ticks against.
+            let time = registry
+                .def(morph.from)
                 .morphs
                 .iter()
                 .find(|transition| transition.into_type() == morph.into)
                 .map(|transition| match transition.time() {
-                    MorphTime::Constant(ticks) => ticks,
-                    MorphTime::Stat(id) => stats
+                    Period::Constant(ticks) => ticks,
+                    Period::Stat(id) => stats
                         .and_then(|stats| stats.effective(id))
                         .map_or(0, |time| time.to_num::<u32>()),
                 })
@@ -2430,6 +2551,22 @@ pub fn draw_status_bars(
                 .max(1);
             let fraction = morph.progress as f32 / time as f32;
             bar(&mut gizmos, fraction, MORPH_WORK_COLOR, y);
+            y += 4.0;
+        }
+
+        if let (Some(brood), Some(breeder)) = (brood, def.breeder.as_ref()) {
+            // The wait for the next birth, under the breeding form's own
+            // terms; a brood at its limit holds its progress, and the bar
+            // holds with it.
+            let period = match breeder.period() {
+                Period::Constant(ticks) => ticks,
+                Period::Stat(id) => stats
+                    .and_then(|stats| stats.effective(id))
+                    .map_or(0, |time| time.to_num::<u32>()),
+            }
+            .max(1);
+            let fraction = brood.progress as f32 / period as f32;
+            bar(&mut gizmos, fraction, BROOD_WORK_COLOR, y);
             y += 4.0;
         }
 

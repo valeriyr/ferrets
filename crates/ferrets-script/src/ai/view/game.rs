@@ -67,4 +67,10 @@ pub struct EntityView {
     /// The ids riding inside this entity, in ascending order. Empty when it
     /// carries nobody.
     pub passengers: Vec<u32>,
+    /// The ids of the broodlings this entity counts, in the order they joined
+    /// its brood. Empty when it counts none.
+    pub broodlings: Vec<u32>,
+    /// The breeder that bore this entity and still ties it. `None` when none
+    /// does.
+    pub bred_by: Option<u32>,
 }

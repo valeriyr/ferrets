@@ -1,11 +1,13 @@
 mod advance_annexes;
 mod advance_berths;
+mod advance_brood;
 mod advance_sites_without_builder;
 mod age_watches;
 mod auto_engage;
 mod check_game_result;
 mod collect_statistics;
 mod command_executor;
+mod dispatch_rallies;
 mod flee;
 mod flush_input;
 mod perform_standing_acts;
@@ -32,12 +34,14 @@ mod tick_orders;
 
 pub use advance_annexes::advance_annexes;
 pub use advance_berths::advance_berths;
+pub use advance_brood::advance_brood;
 pub use advance_sites_without_builder::advance_sites_without_builder;
 pub use age_watches::age_watches;
 pub use auto_engage::auto_engage;
 pub use check_game_result::check_game_result;
 pub use collect_statistics::collect_statistics;
 pub use command_executor::command_executor;
+pub use dispatch_rallies::dispatch_rallies;
 pub use flee::flee;
 pub use flush_input::flush_input;
 pub use perform_standing_acts::perform_standing_acts;

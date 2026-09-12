@@ -290,6 +290,57 @@ impl Map {
         )
     }
 
+    /// Returns `true` if every cell in a footprint of `to` at `placed` is free
+    /// but for what `own` marks there: the footprint the same entity holds now,
+    /// on the plane its class selects. A form changing in place may overlap
+    /// its own cells, and those do not stand in its way. With no `own`, or one
+    /// whose solidity marks no cells, this is [`can_place_entity`].
+    ///
+    /// [`can_place_entity`]: Self::can_place_entity
+    pub fn can_place_entity_over_own(
+        &self,
+        placed: &LocationComponent,
+        to: &LocationDef,
+        own: Option<(&LocationComponent, &LocationDef, OccupancyClass)>,
+    ) -> bool {
+        let Some((own_location, own_def, own_class)) =
+            own.filter(|(_, own_def, _)| own_def.solidity().claims_cells())
+        else {
+            return self.can_place_entity(placed, to);
+        };
+        let own_cells = CellRect::new(body::anchor(own_location.position), own_def.size());
+        let mask = to.occupation();
+        // The layers the footprint needs that own marks nothing on.
+        let beyond_own = mask & !own_def.occupation();
+        CellRect::new(body::anchor(placed.position), to.size())
+            .cells()
+            .all(|cell| {
+                if !self.contains(cell) {
+                    return false;
+                }
+                if !own_cells.contains(cell) {
+                    return self.nav_grid.is_passable_by(mask, cell);
+                }
+                // Own marks this cell on its plane and its layers; whatever
+                // else is here is on the other plane, or on a layer own does
+                // not mark, or terrain.
+                let others_on_plane = match own_class {
+                    OccupancyClass::Static => self.nav_grid.is_claimed_by(mask, cell),
+                    OccupancyClass::Claim => self.nav_grid.is_statically_occupied_by(mask, cell),
+                };
+                if others_on_plane || !self.nav_grid.is_terrain_passable_by(mask, cell) {
+                    return false;
+                }
+                beyond_own == LayerMask::EMPTY
+                    || match own_class {
+                        OccupancyClass::Static => {
+                            self.nav_grid.is_statically_passable_by(beyond_own, cell)
+                        }
+                        OccupancyClass::Claim => !self.nav_grid.is_claimed_by(beyond_own, cell),
+                    }
+            })
+    }
+
     /// Finds a free position for an entity with `location_def` properties, scanning
     /// outward from the rectangle of cells at `origin` with the given `size`.
     ///

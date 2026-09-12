@@ -6,7 +6,6 @@ use bevy_ecs::{entity::Entity, world::World};
 use super::{
     board,
     chase::{self, Destination},
-    movement,
     orders::{self, Processing, Refusal},
 };
 use crate::{
@@ -17,7 +16,7 @@ use crate::{
     entity_def,
     entity_index::EntityIndex,
     map::Map,
-    movement_model::MovementModel,
+    movement_model::{self, MovementModel},
     order::Order,
     session::GameSession,
 };
@@ -49,7 +48,9 @@ pub fn can_start(world: &World, entity: Entity, order: &Order) -> Result<(), Ref
             | Refusal::Disabled
             | Refusal::NothingToDo
             | Refusal::TargetGone
-            | Refusal::Busy),
+            | Refusal::Busy
+            | Refusal::NoRoom
+            | Refusal::NoSupply),
         ) => unreachable!("would_board judges fit only, got {refusal:?}"),
     }
 }
@@ -87,9 +88,9 @@ pub fn cancel_processing(
     _policy: CancelPolicy,
     _entry_state: OrderState,
     world: &mut World,
-) -> OrderState {
+) -> Processing {
     world.entity_mut(entity).remove::<LoadComponent>();
-    OrderState::Finished
+    Processing::state(OrderState::Finished)
 }
 
 /// Whether a Load can stand through a soft cancel: never — it drops like any
@@ -146,17 +147,17 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
         return Processing::state(OrderState::InProcessing);
     }
 
-    // The target is going about its own business; stop it, and let a walk cut
-    // down mid-crossing settle onto its claimed cell before it leaves the map —
-    // its cancel runs in its own next prepare.
-    if let Some(mut queue) = world.entity_mut(target).get_mut::<OrderQueueComponent>() {
-        queue.cancel_all(CancelPolicy::Force);
-    }
+    // A target caught between cells finishes its crossing first: it is taken
+    // aboard, and its own business stopped, only once it stands on a cell it
+    // holds — nothing of it is touched while the boarding can still wait.
     if let MovementModel::Cell = world.resource::<Map>().movement_model()
-        && movement::is_mid_crossing(entity_def::position(world, target))
+        && movement_model::is_mid_crossing(entity_def::position(world, target))
     {
         world.entity_mut(entity).insert(load);
         return Processing::state(OrderState::InProcessing);
+    }
+    if let Some(mut queue) = world.entity_mut(target).get_mut::<OrderQueueComponent>() {
+        queue.cancel_all(CancelPolicy::Force);
     }
 
     board::admit(world, entity, target);

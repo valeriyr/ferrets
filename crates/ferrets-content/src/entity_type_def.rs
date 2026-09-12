@@ -10,13 +10,15 @@ use crate::{
     annex::{AloneConduct, AnnexClaim, AnnexDef, DockDef},
     attack::{AttackDef, Delivery, Weapon},
     berths::{BerthGroup, BerthsDef},
+    brood::{BreederDef, BroodlingDef, OrphanFate},
     build::{BuilderAttendance, BuilderDef},
     costs::{self, Cost},
     dying::DyingDef,
     entity_stats::EntityStatId,
     field::{FieldEffect, FieldPlacement, FieldSourceDef},
     location::{LocationDef, Solidity},
-    morph::MorphTransition,
+    morph::{MorphReason, MorphTransition},
+    period::Period,
     repair::{RepairCost, RepairRate, RepairerDef},
     requirement::Requirement,
     research::{ResearchId, ResearcherDef},
@@ -30,7 +32,7 @@ use crate::{
     train::TrainerDef,
     transport::{BoardingPolicy, PassengerConduct, PassengerFate, TransporterDef},
     turret::{TurretFire, TurretMount},
-    work::WorkPresence,
+    work::{Attachment, WorkPresence},
 };
 
 /// Stable handle for a registered entity type, assigned in registration order by
@@ -164,6 +166,12 @@ pub struct EntityTypeDef {
     /// Annex properties, held by a type that stands in another's dock. `None`
     /// means instances dock with nothing.
     pub annex: Option<AnnexDef>,
+    /// What instances breed, and on what terms. `None` means instances breed
+    /// nothing.
+    pub breeder: Option<BreederDef>,
+    /// Broodling properties, held by a type something breeds. `None` means
+    /// nothing breeds instances.
+    pub broodling: Option<BroodlingDef>,
 }
 
 impl EntityTypeDef {
@@ -210,6 +218,8 @@ impl EntityTypeDef {
             overbuilds: None,
             docks: Vec::new(),
             annex: None,
+            breeder: None,
+            broodling: None,
         }
     }
 
@@ -267,6 +277,16 @@ impl EntityTypeDef {
     /// Whether instances can carry passengers.
     pub fn can_transport(&self) -> bool {
         self.transporter.is_some()
+    }
+
+    /// Whether one of the changes of form instances take makes a unit.
+    pub fn produces_by_morph(&self) -> bool {
+        self.morphs
+            .iter()
+            .any(|transition| match transition.reason() {
+                MorphReason::Production => true,
+                MorphReason::Change => false,
+            })
     }
 
     /// Ticks to produce one instance, however it is produced. `None` means nothing
@@ -751,6 +771,29 @@ impl EntityTypeDef {
     /// Panics if a fading life loses no health per tick.
     pub fn with_annex(mut self, alone: AloneConduct, claim: AnnexClaim) -> Self {
         self.annex = Some(AnnexDef::new(alone, claim));
+        self
+    }
+
+    /// Makes instances of this type breed `breeds` on the given terms.
+    ///
+    /// Panics if `breeds` is empty, `limit` is `0`, or `initial` exceeds
+    /// `limit`.
+    pub fn with_breeder(
+        mut self,
+        breeds: impl Into<String>,
+        period: Period,
+        limit: usize,
+        initial: usize,
+        orphans: OrphanFate,
+    ) -> Self {
+        self.breeder = Some(BreederDef::new(breeds, period, limit, initial, orphans));
+        self
+    }
+
+    /// Makes this type a broodling: something breeds instances and seats them
+    /// in its berths as `attachment` says.
+    pub fn with_broodling(mut self, attachment: Attachment) -> Self {
+        self.broodling = Some(BroodlingDef::new(attachment));
         self
     }
 }

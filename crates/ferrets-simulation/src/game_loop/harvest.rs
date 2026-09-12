@@ -174,11 +174,11 @@ pub fn cancel_processing(
     _policy: CancelPolicy,
     _entry_state: OrderState,
     world: &mut World,
-) -> OrderState {
+) -> Processing {
     if let Some(mut harvest_component) = world.entity_mut(entity).take::<HarvestComponent>() {
         end_trip_or_retry(world, entity, &mut harvest_component);
     }
-    OrderState::Finished
+    Processing::state(OrderState::Finished)
 }
 
 /// Whether a Harvest can stand through a soft cancel: never — it drops like any

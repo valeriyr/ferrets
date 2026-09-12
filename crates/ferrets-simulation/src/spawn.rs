@@ -4,8 +4,14 @@ use std::collections::BTreeMap;
 
 use bevy_ecs::{component::Component, entity::Entity, world::EntityWorldMut, world::World};
 use ferrets_content::{
-    entity_stats::EntityStatId, entity_type_def::EntityTypeId, location::LocationDef,
-    registry::ContentRegistry, resource::DepletionPolicy, transport::PassengerFate,
+    brood::{BreederDef, OrphanFate},
+    entity_stats::EntityStatId,
+    entity_type_def::EntityTypeId,
+    location::LocationDef,
+    morph::MorphReason,
+    registry::ContentRegistry,
+    resource::DepletionPolicy,
+    transport::PassengerFate,
     work::Attachment,
 };
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
@@ -13,10 +19,11 @@ use ferrets_math::{FixedU64, facing::Facing, fixed_uvec2::FixedUVec2};
 use ferrets_physics::body;
 
 use crate::{
-    berths,
+    berths, brood,
     components::{
         annex::{AnnexComponent, DocksComponent},
         attached::AttachedComponent,
+        brood::{BredComponent, BroodComponent},
         build::OverbuiltComponent,
         dying::{CorpseComponent, DiedComponent, DyingComponent},
         energy::EnergyComponent,
@@ -27,6 +34,7 @@ use crate::{
         health::HealthComponent,
         hidden::HiddenComponent,
         location::LocationComponent,
+        morph::MorphComponent,
         movement::MoveComponent,
         order_queue::{CancelPolicy, OrderQueueComponent},
         owner::OwnerComponent,
@@ -44,9 +52,8 @@ use crate::{
     entity_def,
     entity_index::EntityIndex,
     events::{DeathCause, EventRecord, SimulationEvent, SpawnCause},
-    game_loop::movement::is_mid_crossing,
     map::{Map, OccupancyClass},
-    movement_model::MovementModel,
+    movement_model::{self, MovementModel},
     order::Order,
     selection::Selection,
     session::player_id::PlayerId,
@@ -55,6 +62,16 @@ use crate::{
 /// Look direction a freshly spawned entity starts with: south, the conventional
 /// resting facing toward the viewer.
 pub(crate) const DEFAULT_FACING: Facing = Facing::SOUTH;
+
+/// Which form a refit puts on an entity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Wearing {
+    /// A form of its own: a fresh entity's, a landed change's, or the origin
+    /// a change returns to.
+    Own,
+    /// An interim form, worn while a change of form runs.
+    Interim,
+}
 
 /// What fitting a type does about the acts it performs on standing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,26 +112,48 @@ pub fn create_entity(
     reach: FieldReach,
 ) -> Option<(Entity, SimulationId)> {
     debug_assert!(
-        !is_mid_crossing(position),
+        !movement_model::is_mid_crossing(position),
         "entities spawn at rest: position must lie exactly on a cell origin"
     );
-    // Only what placing the entity needs; every capability component is fitted
+    let location_def = world
+        .resource::<ContentRegistry>()
+        .entity(type_name)?
+        .location?;
+    let location = LocationComponent::new(position, DEFAULT_FACING);
+    if !world
+        .resource::<Map>()
+        .can_place_entity(&location, &location_def)
+    {
+        return None;
+    }
+
+    let (entity, id) = conjure(world, type_name, location, owner, reach)?;
+    // Stamped from the location the entity now carries, not the one tested
+    // above.
+    restore_footprint(world, entity);
+    Some((entity, id))
+}
+
+/// Brings an entity of the given type into the world at `location`, owned by
+/// `owner`, with everything its type gives an instance — and no footprint on
+/// the grid: the caller stands it on the grid or seats it. Returns `None` if
+/// `type_name` is not registered or has no location.
+fn conjure(
+    world: &mut World,
+    type_name: &str,
+    location: LocationComponent,
+    owner: Option<PlayerId>,
+    reach: FieldReach,
+) -> Option<(Entity, SimulationId)> {
+    // Only what standing the entity needs; every capability component is fitted
     // from the type by `fit_components` below.
-    let (type_id, location_def, base_stats) = {
+    let (type_id, base_stats) = {
         let registry = world.resource::<ContentRegistry>();
         let type_id = registry.type_id(type_name)?;
         let type_def = registry.entity(type_name)?;
-        (type_id, type_def.location?, type_def.base_stats.clone())
+        type_def.location?;
+        (type_id, type_def.base_stats.clone())
     };
-
-    let location = LocationComponent::new(position, DEFAULT_FACING);
-
-    {
-        let map = world.resource::<Map>();
-        if !map.can_place_entity(&location, &location_def) {
-            return None;
-        }
-    }
 
     let id = world.resource_mut::<SimulationIdGenerator>().generate();
 
@@ -141,14 +180,44 @@ pub fn create_entity(
             .entity_mut(entity)
             .insert(EnergyComponent::full(max_energy));
     }
-    fit_components(world, entity, type_id, reach, StandingActs::Rearm);
-
-    let class = OccupancyClass::of(world.resource::<ContentRegistry>().def(type_id));
-    world
-        .resource_mut::<Map>()
-        .place_entity(&location, &location_def, class);
+    fit_components(
+        world,
+        entity,
+        type_id,
+        reach,
+        StandingActs::Rearm,
+        Wearing::Own,
+    );
+    brood::open(world, entity);
     world.resource_mut::<EntityIndex>().insert_alive(id, entity);
 
+    Some((entity, id))
+}
+
+/// Creates an entity of the given type seated in a berth of `job`'s group
+/// named by `attachment`, owned by `owner`, and announces the spawn. The
+/// entity never stands on the grid on its way to the seat.
+///
+/// Returns `None` if `type_name` is not registered or has no location, or the
+/// group has no free berth.
+pub(crate) fn spawn_seated(
+    world: &mut World,
+    type_name: &str,
+    job: Entity,
+    attachment: &Attachment,
+    owner: Option<PlayerId>,
+    cause: SpawnCause,
+) -> Option<(Entity, SimulationId)> {
+    let from = entity_def::footprint_rect(world, job);
+    let (seat, point) = berths::nearest_free_seat(world, job, attachment.berths(), from)?;
+    // Facing the way every fresh entity does; the seat sets the position.
+    let location = LocationComponent::new(point, DEFAULT_FACING);
+    let (entity, id) = conjure(world, type_name, location, owner, FieldReach::Initial)
+        .expect("validated content breeds a registered type with a location");
+    seat_at(world, entity, job, attachment, seat, point);
+    world
+        .resource_mut::<EventRecord>()
+        .emit(SimulationEvent::EntitySpawned { entity: id, cause });
     Some((entity, id))
 }
 
@@ -199,7 +268,7 @@ pub(crate) fn spawn_corpse_entity(
     of: SimulationId,
 ) -> Option<(Entity, SimulationId)> {
     debug_assert!(
-        !is_mid_crossing(position),
+        !movement_model::is_mid_crossing(position),
         "remains spawn at rest: position must lie exactly on a cell origin"
     );
     let (type_id, location_def, dying_def, class) = {
@@ -269,9 +338,7 @@ pub(crate) fn hide_entity(world: &mut World, entity: Entity) {
         world.resource_mut::<EventRecord>().emit(announced);
         lift_footprint(world, entity);
     }
-    if let Some(attached) = world.entity_mut(entity).take::<AttachedComponent>() {
-        berths::vacate(world, &attached);
-    }
+    unseat(world, entity);
     // Hiding is the inverse of a pending return: drop any stale retry so a new hide
     // is not undone by `process_pending_reveals` on a later tick. This is the part
     // that still matters for an entity that was already hidden — it is off the map
@@ -303,13 +370,39 @@ pub(crate) fn attach_entity(
     );
     lift_footprint(world, entity);
     // A worker already seated elsewhere gives that berth up first.
-    if let Some(attached) = world.entity_mut(entity).take::<AttachedComponent>() {
-        berths::vacate(world, &attached);
-    }
+    unseat(world, entity);
+    seat_unseated(world, entity, job, attachment);
+}
 
+/// Seats an entity that holds no cells and no berth — one that has just given
+/// its seat up through [`unseat`] — in the free berth of `job`'s group named
+/// by `attachment` nearest to where it is.
+///
+/// Panics when the group has no free berth: a caller seats only where it
+/// found room.
+pub(crate) fn seat_unseated(
+    world: &mut World,
+    entity: Entity,
+    job: Entity,
+    attachment: &Attachment,
+) {
     let standing = entity_def::standing_rect(world, entity);
     let (seat, point) = berths::nearest_free_seat(world, job, attachment.berths(), standing)
         .expect("a worker attaches only to a job with a free berth in its group");
+    seat_at(world, entity, job, attachment, seat, point);
+}
+
+/// Sits an entity off the grid down in berth `seat` of `job`'s group named by
+/// `attachment`, at `point`: the berth is taken and the entity's middle put on
+/// the point.
+fn seat_at(
+    world: &mut World,
+    entity: Entity,
+    job: Entity,
+    attachment: &Attachment,
+    seat: usize,
+    point: FixedUVec2,
+) {
     let id = entity_def::simulation_id(world, entity);
     let job_id = entity_def::simulation_id(world, job);
     berths::occupy(world, job, attachment.berths(), seat, id);
@@ -330,6 +423,15 @@ pub(crate) fn attach_entity(
             sitting: berths::sit_down(attachment.stance(), id),
             hops: 0,
         });
+}
+
+/// Takes an entity out of the berth it sits in, if any, giving the berth back
+/// to the job. The entity is otherwise untouched, standing where its berth
+/// was with nothing under it.
+pub(crate) fn unseat(world: &mut World, entity: Entity) -> Option<AttachedComponent> {
+    let attached = world.entity_mut(entity).take::<AttachedComponent>()?;
+    berths::vacate(world, &attached);
+    Some(attached)
 }
 
 /// Frees the footprint an entity holds on the grid. An entity already off the
@@ -392,6 +494,27 @@ pub(crate) fn place_back_near(
     if entity_def::stands_on_grid(world, entity) {
         return true;
     }
+    let location_def = entity_def::of(world, entity)
+        .location
+        .expect("only entities with LocationDef can be placed back");
+    let Some(cell) = cell_back_near(world, entity, around, around_size, &location_def) else {
+        return false;
+    };
+    place_back_at(world, entity, cell, &location_def);
+    true
+}
+
+/// The cell [`place_back_near`] would stand `entity` on, or `None` when
+/// nothing within the search radius takes a footprint of `fits`: an attached
+/// entity searches around the cell of the berth it sits at, a hidden one
+/// around the footprint at `around`/`around_size`.
+pub(crate) fn cell_back_near(
+    world: &World,
+    entity: Entity,
+    around: CellPos,
+    around_size: CellSize,
+    fits: &LocationDef,
+) -> Option<CellPos> {
     let (around, around_size) = if world.entity(entity).contains::<AttachedComponent>() {
         (
             body::anchor(entity_def::position(world, entity)),
@@ -400,20 +523,9 @@ pub(crate) fn place_back_near(
     } else {
         (around, around_size)
     };
-
-    let location_def = entity_def::of(world, entity)
-        .location
-        .expect("only entities with LocationDef can be placed back");
-    let Some(cell) =
-        world
-            .resource::<Map>()
-            .find_placement_near(around, around_size, &location_def)
-    else {
-        return false;
-    };
-
-    place_back_at(world, entity, cell, &location_def);
-    true
+    world
+        .resource::<Map>()
+        .find_placement_near(around, around_size, fits)
 }
 
 /// Like [`place_back_near`], but for callers that cannot retry themselves
@@ -440,15 +552,127 @@ pub(crate) fn place_back_near_or_retry(
     });
 }
 
+/// Stands an attached entity on `cell`, giving its berth up.
+///
+/// Panics for an entity that is not attached: only a seated body steps out.
+pub(crate) fn step_out(world: &mut World, entity: Entity, cell: CellPos) {
+    assert!(
+        world.entity(entity).contains::<AttachedComponent>(),
+        "only an attached entity steps out of a berth"
+    );
+    let location_def = entity_def::of(world, entity)
+        .location
+        .expect("only entities with LocationDef stand");
+    place_back_at(world, entity, cell, &location_def);
+}
+
+/// Stands an entity that holds no cells and no berth — one that has just given
+/// its seat up through [`unseat`] — on the nearest free cell around the
+/// footprint at `around`/`around_size`. With no free cell within the search
+/// radius it is hidden instead and tagged with [`PendingRevealComponent`], so
+/// [`game_loop::pending_reveal::process_pending_reveals`] stands it up as soon
+/// as a cell opens.
+pub(crate) fn stand_or_retry(
+    world: &mut World,
+    entity: Entity,
+    around: CellPos,
+    around_size: CellSize,
+) {
+    let location_def = entity_def::of(world, entity)
+        .location
+        .expect("only entities with LocationDef can stand");
+    match cell_back_near(world, entity, around, around_size, &location_def) {
+        Some(cell) => place_back_at(world, entity, cell, &location_def),
+        None => {
+            world.entity_mut(entity).insert((
+                HiddenComponent,
+                PendingRevealComponent {
+                    around,
+                    around_size,
+                },
+            ));
+        }
+    }
+}
+
+/// Aligns `breeder`'s brood with the form it has just taken, `origin` being
+/// the form the change was declared on. Each of the `seated` broodlings is
+/// moved to a seat of the group its attachment names on the new form, nearest
+/// its old berth, or **detached** when that form does not hold it — no such
+/// group, or no seat left — on the breeder's orphan terms.
+pub(crate) fn align_broodlings(
+    world: &mut World,
+    breeder: Entity,
+    seated: &[SimulationId],
+    origin: EntityTypeId,
+) {
+    let Some(fate) = brood::terms_on(world, breeder, origin).map(BreederDef::orphans) else {
+        debug_assert!(
+            seated.is_empty(),
+            "a seated brood was bred on some form's terms"
+        );
+        return;
+    };
+    let of = entity_def::simulation_id(world, breeder);
+    // Every seat is given up first, so the group is laid out afresh for the
+    // form now worn before anyone sits down in it. The tie stays.
+    let unseated: Vec<(Entity, CellPos)> = seated
+        .iter()
+        .map(|&id| {
+            let entity = world
+                .resource::<EntityIndex>()
+                .alive(id)
+                .expect("a counted broodling is alive");
+            let berth = body::anchor(entity_def::position(world, entity));
+            unseat(world, entity).expect("a counted broodling sits in a berth");
+            (entity, berth)
+        })
+        .collect();
+    for (entity, berth) in unseated {
+        // Its own copy of the attachment: the seating below changes the world.
+        let attachment = brood::broodling_attachment(world, entity)
+            .cloned()
+            .expect("a seated broodling's type is a broodling");
+        if brood::holds(world, breeder, entity, &attachment) {
+            seat_unseated(world, entity, breeder, &attachment);
+        } else {
+            detach_broodling(world, breeder, of, entity, berth, fate);
+        }
+    }
+}
+
+/// Seats a bred entity again after a change of form ended early with it back
+/// in its bred form: in a free berth of its breeder's group, back on its
+/// brood — or, when its breeder is gone or has no seat left for it,
+/// **destroyed**. Nothing for an entity nobody bred.
+pub(crate) fn reseat_broodling(world: &mut World, entity: Entity) {
+    let Some(bred) = world.entity(entity).get::<BredComponent>().cloned() else {
+        return;
+    };
+    let id = entity_def::simulation_id(world, entity);
+    let Some(breeder) = world.resource::<EntityIndex>().alive(bred.by) else {
+        despawn_entity(world, entity, DeathCause::Unseated { of: bred.by });
+        return;
+    };
+    // Its own copy of the attachment: the seating below changes the world.
+    let attachment = brood::broodling_attachment(world, entity)
+        .cloned()
+        .expect("a bred entity's type is a broodling");
+    if brood::holds(world, breeder, entity, &attachment) {
+        attach_entity(world, entity, breeder, &attachment);
+        brood::add(world, breeder, id);
+    } else {
+        despawn_entity(world, entity, DeathCause::Unseated { of: bred.by });
+    }
+}
+
 /// Puts an entity that is off the grid back on it at `cell`, announcing the
 /// return of one that was hidden.
 ///
 /// The one point every return to the grid ends at.
 fn place_back_at(world: &mut World, entity: Entity, cell: CellPos, location_def: &LocationDef) {
     let class = OccupancyClass::of(entity_def::of(world, entity));
-    if let Some(attached) = world.entity_mut(entity).take::<AttachedComponent>() {
-        berths::vacate(world, &attached);
-    }
+    unseat(world, entity);
     let mut entity_mut = world.entity_mut(entity);
 
     let was_hidden = entity_mut.contains::<HiddenComponent>();
@@ -583,7 +807,7 @@ pub fn destroy_entity(world: &mut World, entity: Entity) {
     // claim already tracks the cell they round to.
     match world.resource::<Map>().movement_model() {
         MovementModel::Cell => {
-            if is_mid_crossing(location.position)
+            if movement_model::is_mid_crossing(location.position)
                 && let Some(claimed) = world
                     .entity(entity)
                     .get::<MoveComponent>()
@@ -604,6 +828,8 @@ pub fn destroy_entity(world: &mut World, entity: Entity) {
 
     settle_passengers(world, entity);
     leave_holder(world, entity, id);
+    settle_broodlings(world, entity, entity_def::morph_origin(world, entity));
+    leave_brood(world, entity, id);
 
     let dying_time = entity_def::of(world, entity)
         .dying
@@ -727,6 +953,75 @@ fn settle_passengers(world: &mut World, entity: Entity) {
     }
 }
 
+/// Settles every broodling `breeder` counts on the orphan terms it breeds on
+/// with `origin` as the form its change was declared on, taking them off its
+/// brood: perishing ones die in id order, lingering ones are set down by the
+/// berths they sat at, the tie cut either way. Nothing for a breeder that
+/// breeds nothing on either form.
+pub(crate) fn settle_broodlings(world: &mut World, breeder: Entity, origin: EntityTypeId) {
+    let Some(fate) = brood::terms_on(world, breeder, origin).map(BreederDef::orphans) else {
+        return;
+    };
+    let of = entity_def::simulation_id(world, breeder);
+    let Some(broodlings) = world
+        .entity_mut(breeder)
+        .get_mut::<BroodComponent>()
+        .map(|mut brood| std::mem::take(&mut brood.broodlings))
+    else {
+        return;
+    };
+
+    for id in broodlings {
+        let broodling = world
+            .resource::<EntityIndex>()
+            .alive(id)
+            .expect("a counted broodling is alive");
+        world.entity_mut(broodling).remove::<BredComponent>();
+        match fate {
+            OrphanFate::Perish => despawn_entity(world, broodling, DeathCause::Orphaned { of }),
+            OrphanFate::Linger(_) => {
+                // Set down by the berth it sat at, where it was seen.
+                let berth = body::anchor(entity_def::position(world, broodling));
+                let size = entity_def::footprint(world, broodling).1;
+                unseat(world, broodling);
+                stand_or_retry(world, broodling, berth, size);
+            }
+        }
+    }
+}
+
+/// Detaches a broodling that has given its seat up and that the form
+/// `breeder` wears does not hold, on `fate`'s terms: perishing, it dies
+/// **unseated**; lingering, its tie is cut and it is set down by `berth`, the
+/// cell it sat at.
+fn detach_broodling(
+    world: &mut World,
+    breeder: Entity,
+    of: SimulationId,
+    entity: Entity,
+    berth: CellPos,
+    fate: OrphanFate,
+) {
+    match fate {
+        OrphanFate::Perish => despawn_entity(world, entity, DeathCause::Unseated { of }),
+        OrphanFate::Linger(_) => {
+            brood::untie(world, breeder, entity);
+            let size = entity_def::footprint(world, entity).1;
+            stand_or_retry(world, entity, berth, size);
+        }
+    }
+}
+
+/// Takes a dying broodling off its breeder's count.
+fn leave_brood(world: &mut World, entity: Entity, id: SimulationId) {
+    let Some(bred) = world.entity_mut(entity).take::<BredComponent>() else {
+        return;
+    };
+    if let Some(breeder) = world.resource::<EntityIndex>().alive(bred.by) {
+        brood::remove(world, breeder, id);
+    }
+}
+
 /// Takes a dying passenger off its holder's list, freeing the slots it held.
 fn leave_holder(world: &mut World, entity: Entity, id: SimulationId) {
     let Some(boarded) = world.entity_mut(entity).take::<BoardedComponent>() else {
@@ -782,14 +1077,16 @@ pub(crate) fn seed_stats(
 ///
 /// Stance is preserved when present, because a player sets it deliberately;
 /// only an entity that has none is given its type's default. Field sources
-/// reach as far as `reach` says, and the acts on standing are armed or kept
-/// as `acts` says.
+/// reach as far as `reach` says, the acts on standing are armed or kept as
+/// `acts` says, and what a change of form carries through an interim form —
+/// a brood, a rally point — stays or goes as `wearing` says.
 pub(crate) fn fit_components(
     world: &mut World,
     entity: Entity,
     type_id: EntityTypeId,
     reach: FieldReach,
     acts: StandingActs,
+    wearing: Wearing,
 ) {
     let (
         can_attack,
@@ -806,8 +1103,11 @@ pub(crate) fn fit_components(
         skills,
         field_sources,
         acts_on_standing,
+        breeds,
+        breeds_producers,
     ) = {
-        let def = world.resource::<ContentRegistry>().def(type_id);
+        let registry = world.resource::<ContentRegistry>();
+        let def = registry.def(type_id);
         (
             def.can_attack(),
             def.turrets.len(),
@@ -823,11 +1123,30 @@ pub(crate) fn fit_components(
             def.skills.clone(),
             def.field_sources.clone(),
             !def.on_stand.is_empty(),
+            def.breeder.is_some(),
+            def.breeder.as_ref().is_some_and(|breeder| {
+                registry
+                    .entity(breeder.breeds())
+                    .expect("validated content breeds registered types")
+                    .produces_by_morph()
+            }),
         )
     };
-    // A rally point serves the trainer and the holder alike, so it stays while
-    // either role does.
-    let wants_rally = trainer || transporter;
+    // A rally point serves whatever releases units: the trainer, the holder,
+    // the breeder whose broodlings make units by a change of form, and the
+    // form making one that way now.
+    let producing = match wearing {
+        Wearing::Interim => world
+            .entity(entity)
+            .get::<MorphComponent>()
+            .and_then(|morph| entity_def::morph_terms(world, morph))
+            .is_some_and(|transition| match transition.reason() {
+                MorphReason::Production => true,
+                MorphReason::Change => false,
+            }),
+        Wearing::Own => false,
+    };
+    let wants_rally = trainer || transporter || breeds_producers || producing;
     let mut entity_mut = world.entity_mut(entity);
 
     // Armed entities default to defending themselves; unarmed but movable,
@@ -858,7 +1177,6 @@ pub(crate) fn fit_components(
     );
     fit_default::<TrainQueueComponent>(&mut entity_mut, trainer);
     fit_default::<TransporterComponent>(&mut entity_mut, transporter);
-    fit_default::<RallyPointComponent>(&mut entity_mut, wants_rally);
     fit_default::<ResourceSourceComponent>(&mut entity_mut, source);
     fit_default::<ResourceCarrierComponent>(&mut entity_mut, carrier);
     // Which primary an annex stands with is re-derived every tick, so a form
@@ -872,6 +1190,38 @@ pub(crate) fn fit_components(
         (false, true) => {
             entity_mut.remove::<AnnexComponent>();
         }
+        (true, true) | (false, false) => {}
+    }
+    // A rally point is live state — where the player pointed — so it stays
+    // through a form change, including one wearing an interim form that
+    // releases nothing on the way, and goes only with a form that releases
+    // nothing for good.
+    match (wants_rally, entity_mut.contains::<RallyPointComponent>()) {
+        (true, false) => {
+            entity_mut.insert(RallyPointComponent::default());
+        }
+        (false, true) => match wearing {
+            Wearing::Interim => {}
+            Wearing::Own => {
+                entity_mut.remove::<RallyPointComponent>();
+            }
+        },
+        (true, true) | (false, false) => {}
+    }
+    // A brood is live state — the broodlings counted, the ticks toward the
+    // next — so it stays through a form change, including one wearing an
+    // interim form that breeds nothing on the way, and goes only with a form
+    // that breeds nothing for good.
+    match (breeds, entity_mut.contains::<BroodComponent>()) {
+        (true, false) => {
+            entity_mut.insert(BroodComponent::default());
+        }
+        (false, true) => match wearing {
+            Wearing::Interim => {}
+            Wearing::Own => {
+                entity_mut.remove::<BroodComponent>();
+            }
+        },
         (true, true) | (false, false) => {}
     }
     // Offering docks is a standing fact about a type, so the component that

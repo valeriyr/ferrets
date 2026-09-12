@@ -11,6 +11,7 @@ use ferrets_content::{
     annex::{AloneConduct, AnnexClaim, AnnexLife, AnnexWork},
     attack::{AttackDef, Delivery, Weapon},
     berths::BerthGroup,
+    brood::{Lingering, OrphanFate},
     build::BuilderAttendance,
     costs,
     entity_buffs::{EntityBuffDef, EntityBuffId},
@@ -18,7 +19,8 @@ use ferrets_content::{
     entity_type_def::EntityTypeDef,
     field::FieldId,
     location::Solidity,
-    morph::{MorphCancel, MorphPlacement, MorphTime, MorphTransition},
+    morph::{MorphCancel, MorphInterrupted, MorphPlacement, MorphReason, MorphTransition},
+    period::Period,
     player_buffs::PlayerBuffDef,
     projectile::{Aim, ProjectileDef},
     registry::ContentRegistry,
@@ -471,27 +473,55 @@ pub fn morph_app(model: MovementModel) -> App {
                     MorphTransition::new(
                         "giant",
                         None,
-                        MorphTime::Constant(10),
+                        Period::Constant(10),
                         MorphPlacement::Reserve,
                         MorphCancel::Refundable,
+                        MorphInterrupted::Reverts,
+                        MorphReason::Change,
+                        Vec::new(),
+                        Vec::new(),
+                    ),
+                    MorphTransition::new(
+                        "boulder",
+                        None,
+                        Period::Constant(0),
+                        MorphPlacement::Revalidate,
+                        MorphCancel::Committed,
+                        MorphInterrupted::Dies,
+                        MorphReason::Change,
+                        Vec::new(),
+                        Vec::new(),
+                    ),
+                    MorphTransition::new(
+                        "ogre",
+                        None,
+                        Period::Constant(10),
+                        MorphPlacement::Reserve,
+                        MorphCancel::Refundable,
+                        MorphInterrupted::Reverts,
+                        MorphReason::Change,
                         Vec::new(),
                         Vec::new(),
                     ),
                     MorphTransition::new(
                         "husk",
                         None,
-                        MorphTime::Constant(0),
+                        Period::Constant(0),
                         MorphPlacement::Revalidate,
                         MorphCancel::Committed,
+                        MorphInterrupted::Reverts,
+                        MorphReason::Change,
                         vec![EntityCastCost::Health(FixedU64::from_num(10))],
                         Vec::new(),
                     ),
                     MorphTransition::new(
                         "wisp",
                         None,
-                        MorphTime::Constant(10),
+                        Period::Constant(10),
                         MorphPlacement::Revalidate,
                         MorphCancel::Forfeit,
+                        MorphInterrupted::Reverts,
+                        MorphReason::Change,
                         Vec::new(),
                         Vec::new(),
                     ),
@@ -500,9 +530,11 @@ pub fn morph_app(model: MovementModel) -> App {
                     MorphTransition::new(
                         "wyrm",
                         Some("chrysalis"),
-                        MorphTime::Constant(10),
+                        Period::Constant(10),
                         MorphPlacement::Revalidate,
                         MorphCancel::Refundable,
+                        MorphInterrupted::Reverts,
+                        MorphReason::Change,
                         vec![EntityCastCost::Resources(costs::cost([("gold", 10)]))],
                         Vec::new(),
                     ),
@@ -541,6 +573,25 @@ pub fn morph_app(model: MovementModel) -> App {
                 .with_dying(2, None),
         );
         registry.register(
+            EntityTypeDef::new("boulder")
+                .with_location(GROUND, CellSize::new(3, 3), Solidity::Solid)
+                .with_health(100)
+                .with_dying(2, None),
+        );
+        registry.register(
+            EntityTypeDef::new("ogre")
+                .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
+                .with_movement(
+                    FixedU64::from_num(0.3),
+                    FixedU64::ONE,
+                    FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
+                )
+                .with_health(60)
+                .with_dying(2, None),
+        );
+        registry.register(
             EntityTypeDef::new("husk")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
                 .with_movement(
@@ -566,9 +617,11 @@ pub fn morph_app(model: MovementModel) -> App {
                 .with_morphs([MorphTransition::new(
                     "whelp",
                     None,
-                    MorphTime::Constant(10),
+                    Period::Constant(10),
                     MorphPlacement::Revalidate,
                     MorphCancel::Forfeit,
+                    MorphInterrupted::Reverts,
+                    MorphReason::Change,
                     Vec::new(),
                     Vec::new(),
                 )]),
@@ -586,9 +639,11 @@ pub fn morph_app(model: MovementModel) -> App {
                 .with_morphs([MorphTransition::new(
                     "golem",
                     None,
-                    MorphTime::Constant(10),
+                    Period::Constant(10),
                     MorphPlacement::Reserve,
                     MorphCancel::Refundable,
+                    MorphInterrupted::Reverts,
+                    MorphReason::Change,
                     Vec::new(),
                     Vec::new(),
                 )]),
@@ -608,9 +663,11 @@ pub fn morph_app(model: MovementModel) -> App {
                 .with_morphs([MorphTransition::new(
                     "shrine",
                     None,
-                    MorphTime::Constant(10),
+                    Period::Constant(10),
                     MorphPlacement::Reserve,
                     MorphCancel::Refundable,
+                    MorphInterrupted::Reverts,
+                    MorphReason::Change,
                     Vec::new(),
                     Vec::new(),
                 )]),
@@ -621,9 +678,338 @@ pub fn morph_app(model: MovementModel) -> App {
     app
 }
 
+/// The brood group every breeder of [`brood_app`] offers: five points along
+/// the row just below a 3×3 footprint, seating `slots` at once.
+fn brood_berths(slots: usize) -> [(&'static str, BerthGroup); 1] {
+    [(
+        "brood",
+        BerthGroup::new(
+            [
+                berth("0.5", "3.5"),
+                berth("1.0", "3.5"),
+                berth("1.5", "3.5"),
+                berth("2.0", "3.5"),
+                berth("2.5", "3.5"),
+            ],
+            slots,
+        ),
+    )]
+}
+
+/// A 3×3 building of [`brood_app`] with 300 health, providing 3 supply.
+fn brood_building(name: &str) -> EntityTypeDef {
+    EntityTypeDef::new(name)
+        .with_location(GROUND, CellSize::new(3, 3), Solidity::Solid)
+        .with_health(300)
+        .with_stat(EntityStatId::SUPPLY_PROVIDED, FixedU64::from_num(3))
+        .with_dying(2, None)
+        .with_tags(["building"])
+}
+
+/// A 1×1 solid mover of [`brood_app`] with the given health.
+fn brood_mover(name: &str, max_health: u32) -> EntityTypeDef {
+    EntityTypeDef::new(name)
+        .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+        .with_movement(
+            FixedU64::from_num(0.5),
+            FixedU64::from_num(0.5),
+            FixedU64::ONE,
+            FixedU64::from_num(360),
+            FixedU64::from_num(360),
+        )
+        .with_health(max_health)
+        .with_dying(2, None)
+}
+
+/// A free, timed, refundable transition of [`brood_app`] into `into` after
+/// 10 ticks, its ground judged again at the landing.
+fn brood_change(into: &str) -> MorphTransition {
+    MorphTransition::new(
+        into,
+        None,
+        Period::Constant(10),
+        MorphPlacement::Revalidate,
+        MorphCancel::Refundable,
+        MorphInterrupted::Reverts,
+        MorphReason::Change,
+        Vec::new(),
+        Vec::new(),
+    )
+}
+
+/// Creates an app for the brood suite: breeders of a 3×3 footprint with five
+/// brood berths along their southern foot, and what they bear.
+///
+/// - `hatch` seats four, breeds a `grub` every 10 ticks up to three, and its
+///   grubs perish with it; it changes into `great_hatch` (opens with two)
+///   through a `shell` (which seats but breeds nothing), into `bare_hatch`
+///   (no berths) and into `tight_hatch` (two seats, limit two). `ready_hatch` is a hatch owing two
+///   grubs when it stands, built by a `digger` in 20 ticks; `stat_hatch`
+///   reads its period from the `brood_period` stat, 6.
+/// - `grub` is passable, roams, and grows for 10 gold into a
+///   `worker` (1 supply, counted as production) or, in 20 ticks, a `brute`
+///   (2 supply, needs a `den`) inside a solid `egg`, both returning it when the growth ends
+///   early, into a `flit` that dies instead, into a 3×3 `bulk` (or a
+///   `hulk`, which dies when interrupted), or, reserving its ground, into a
+///   3×3 standing `mound`.
+/// - `linger_pen` seats two and breeds `piglet`s, which linger where they
+///   are set down; it changes into `bare_pen` (no berths). `reseat_pen` breeds
+///   piglets it takes in from within three cells, and changes into `roomy_pen`
+///   (the same seats and terms) through a seatless `pen_shell`. The great
+///   hatch changes back into a `hatch`.
+/// - Buildings take two ticks to die, grubs one, movers two.
+///
+/// One human player, session started.
+pub fn brood_app(model: MovementModel) -> App {
+    let mut app = make_app(vec![PlayerSlot::occupied(0, PlayerType::Human, None, None)]);
+    install_map(&mut app, Projection::Isometric, model);
+    {
+        let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
+        registry.register_resource("gold");
+        let brood_period = registry.register_entity_stat("brood_period");
+
+        registry.register(
+            brood_building("hatch")
+                .with_berths(brood_berths(4))
+                .with_breeder("grub", Period::Constant(10), 3, 0, OrphanFate::Perish)
+                .with_morphs([
+                    MorphTransition::new(
+                        "great_hatch",
+                        Some("shell"),
+                        Period::Constant(10),
+                        MorphPlacement::Revalidate,
+                        MorphCancel::Refundable,
+                        MorphInterrupted::Reverts,
+                        MorphReason::Change,
+                        Vec::new(),
+                        Vec::new(),
+                    ),
+                    brood_change("bare_hatch"),
+                    brood_change("tight_hatch"),
+                ]),
+        );
+        registry.register(brood_building("shell").with_berths(brood_berths(4)));
+        registry.register(
+            brood_building("great_hatch")
+                .with_berths(brood_berths(4))
+                .with_breeder("grub", Period::Constant(10), 3, 2, OrphanFate::Perish)
+                .with_morphs([brood_change("hatch")]),
+        );
+        registry.register(brood_building("bare_hatch"));
+        registry.register(
+            brood_building("tight_hatch")
+                .with_berths(brood_berths(2))
+                .with_breeder("grub", Period::Constant(10), 2, 0, OrphanFate::Perish),
+        );
+        registry.register(
+            brood_building("ready_hatch")
+                .with_build_time(20)
+                .with_berths(brood_berths(4))
+                .with_breeder("grub", Period::Constant(10), 3, 2, OrphanFate::Perish),
+        );
+        registry.register(
+            brood_building("stat_hatch")
+                .with_stat(brood_period, FixedU64::from_num(6))
+                .with_berths(brood_berths(4))
+                .with_breeder("grub", Period::Stat(brood_period), 3, 0, OrphanFate::Perish),
+        );
+        registry.register(
+            brood_building("linger_pen")
+                .with_berths(brood_berths(2))
+                .with_breeder(
+                    "piglet",
+                    Period::Constant(10),
+                    2,
+                    0,
+                    OrphanFate::Linger(Lingering::Stay),
+                )
+                .with_morphs([brood_change("bare_pen")]),
+        );
+        registry.register(brood_building("bare_pen"));
+        let reseat = OrphanFate::Linger(Lingering::Reseat { distance: 3 });
+        registry.register(
+            brood_building("reseat_pen")
+                .with_berths(brood_berths(2))
+                .with_breeder("piglet", Period::Constant(10), 2, 0, reseat)
+                .with_morphs([MorphTransition::new(
+                    "roomy_pen",
+                    Some("pen_shell"),
+                    Period::Constant(10),
+                    MorphPlacement::Revalidate,
+                    MorphCancel::Refundable,
+                    MorphInterrupted::Reverts,
+                    MorphReason::Change,
+                    Vec::new(),
+                    Vec::new(),
+                )]),
+        );
+        registry.register(brood_building("pen_shell"));
+        registry.register(
+            brood_building("roomy_pen")
+                .with_berths(brood_berths(2))
+                .with_breeder("piglet", Period::Constant(10), 2, 0, reseat),
+        );
+
+        registry.register(
+            EntityTypeDef::new("grub")
+                .with_location(GROUND, CellSize::ONE, Solidity::Passable)
+                .with_health(25)
+                .with_dying(1, None)
+                .with_selection(1, None)
+                .with_broodling(Attachment::new(
+                    "brood",
+                    BerthStance::Roaming {
+                        speed: FixedU64::from_num(0.1),
+                        dwell: 5,
+                    },
+                ))
+                .with_morphs([
+                    MorphTransition::new(
+                        "worker",
+                        Some("egg"),
+                        Period::Constant(10),
+                        MorphPlacement::Nearby,
+                        MorphCancel::Refundable,
+                        MorphInterrupted::Reverts,
+                        MorphReason::Production,
+                        vec![EntityCastCost::Resources(costs::cost([("gold", 10)]))],
+                        Vec::new(),
+                    ),
+                    MorphTransition::new(
+                        "brute",
+                        Some("egg"),
+                        Period::Constant(20),
+                        MorphPlacement::Nearby,
+                        MorphCancel::Refundable,
+                        MorphInterrupted::Reverts,
+                        MorphReason::Change,
+                        vec![EntityCastCost::Resources(costs::cost([("gold", 10)]))],
+                        [Requirement::EntityType("den".to_string())],
+                    ),
+                    MorphTransition::new(
+                        "mound",
+                        None,
+                        Period::Constant(10),
+                        MorphPlacement::Reserve,
+                        MorphCancel::Refundable,
+                        MorphInterrupted::Reverts,
+                        MorphReason::Change,
+                        vec![EntityCastCost::Resources(costs::cost([("gold", 10)]))],
+                        Vec::new(),
+                    ),
+                    MorphTransition::new(
+                        "flit",
+                        Some("egg"),
+                        Period::Constant(10),
+                        MorphPlacement::Nearby,
+                        MorphCancel::Refundable,
+                        MorphInterrupted::Dies,
+                        MorphReason::Change,
+                        vec![EntityCastCost::Resources(costs::cost([("gold", 10)]))],
+                        Vec::new(),
+                    ),
+                    MorphTransition::new(
+                        "bulk",
+                        Some("egg"),
+                        Period::Constant(10),
+                        MorphPlacement::Nearby,
+                        MorphCancel::Refundable,
+                        MorphInterrupted::Reverts,
+                        MorphReason::Change,
+                        vec![EntityCastCost::Resources(costs::cost([("gold", 10)]))],
+                        Vec::new(),
+                    ),
+                    MorphTransition::new(
+                        "hulk",
+                        Some("egg"),
+                        Period::Constant(10),
+                        MorphPlacement::Nearby,
+                        MorphCancel::Refundable,
+                        MorphInterrupted::Dies,
+                        MorphReason::Change,
+                        vec![EntityCastCost::Resources(costs::cost([("gold", 10)]))],
+                        Vec::new(),
+                    ),
+                ]),
+        );
+        for name in ["bulk", "hulk"] {
+            registry.register(
+                EntityTypeDef::new(name)
+                    .with_location(GROUND, CellSize::new(3, 3), Solidity::Solid)
+                    .with_movement(
+                        FixedU64::from_num(0.3),
+                        FixedU64::ONE,
+                        FixedU64::ONE,
+                        FixedU64::from_num(360),
+                        FixedU64::from_num(360),
+                    )
+                    .with_health(90)
+                    .with_dying(2, None),
+            );
+        }
+        registry.register(
+            EntityTypeDef::new("egg")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_health(100)
+                .with_dying(1, None),
+        );
+        registry.register(
+            brood_mover("worker", 30).with_stat(EntityStatId::SUPPLY_COST, FixedU64::ONE),
+        );
+        registry.register(
+            brood_mover("brute", 60).with_stat(EntityStatId::SUPPLY_COST, FixedU64::from_num(2)),
+        );
+        registry.register(brood_mover("flit", 20));
+        registry.register(
+            EntityTypeDef::new("mound")
+                .with_location(GROUND, CellSize::new(3, 3), Solidity::Solid)
+                .with_health(100)
+                .with_dying(2, None),
+        );
+        registry.register(
+            EntityTypeDef::new("piglet")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_health(20)
+                .with_dying(2, None)
+                .with_broodling(Attachment::new("brood", BerthStance::Still))
+                .with_morphs([MorphTransition::new(
+                    "worker",
+                    None,
+                    Period::Constant(10),
+                    MorphPlacement::Revalidate,
+                    MorphCancel::Refundable,
+                    MorphInterrupted::Reverts,
+                    MorphReason::Change,
+                    vec![EntityCastCost::Resources(costs::cost([("gold", 10)]))],
+                    vec![],
+                )]),
+        );
+        registry.register(
+            EntityTypeDef::new("den")
+                .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
+                .with_health(100)
+                .with_dying(2, None)
+                .with_tags(["building"]),
+        );
+        registry.register(
+            brood_mover("digger", 20)
+                .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
+                .with_builder(
+                    ["ready_hatch"],
+                    BuilderAttendance::Crew(WorkPresence::Hidden {
+                        crew: CrewLimit::ONE,
+                    }),
+                ),
+        );
+    }
+    app.world_mut().resource::<ContentRegistry>().validate();
+    app.world_mut().resource_mut::<GameSession>().start();
+    app
+}
+
 /// A berth point from decimal strings, in cells from the footprint's anchor.
-pub fn berth(x: &str, y: &str) -> FixedUVec2 {
-    FixedUVec2::new(fixed(x), fixed(y))
+pub fn berth(x: &str, y: &str) -> FixedVec2 {
+    FixedVec2::new(signed_fixed(x), signed_fixed(y))
 }
 
 /// Runs exactly `ticks` fixed updates.
@@ -1715,9 +2101,11 @@ pub fn annex_app() -> App {
                 .with_morphs([MorphTransition::new(
                     "keep_aloft",
                     None,
-                    MorphTime::Constant(4),
+                    Period::Constant(4),
                     MorphPlacement::Revalidate,
                     MorphCancel::Committed,
+                    MorphInterrupted::Reverts,
+                    MorphReason::Change,
                     Vec::new(),
                     Vec::new(),
                 )]),
@@ -1739,9 +2127,11 @@ pub fn annex_app() -> App {
                 .with_morphs([MorphTransition::new(
                     "keep",
                     None,
-                    MorphTime::Constant(4),
+                    Period::Constant(4),
                     MorphPlacement::Reserve,
                     MorphCancel::Committed,
+                    MorphInterrupted::Reverts,
+                    MorphReason::Change,
                     Vec::new(),
                     Vec::new(),
                 )]),
@@ -2992,9 +3382,11 @@ pub fn register_orders_content(app: &mut App) {
                 .with_morphs([MorphTransition::new(
                     "walking_shaft",
                     None,
-                    MorphTime::Constant(4),
+                    Period::Constant(4),
                     MorphPlacement::Reserve,
                     MorphCancel::Committed,
+                    MorphInterrupted::Reverts,
+                    MorphReason::Change,
                     Vec::new(),
                     Vec::new(),
                 )]),
@@ -3017,9 +3409,11 @@ pub fn register_orders_content(app: &mut App) {
                 .with_morphs([MorphTransition::new(
                     "shaft_house",
                     None,
-                    MorphTime::Constant(4),
+                    Period::Constant(4),
                     MorphPlacement::Reserve,
                     MorphCancel::Committed,
+                    MorphInterrupted::Reverts,
+                    MorphReason::Change,
                     Vec::new(),
                     Vec::new(),
                 )]),
@@ -3040,9 +3434,11 @@ pub fn register_orders_content(app: &mut App) {
                 .with_morphs([MorphTransition::new(
                     "walking_pump",
                     None,
-                    MorphTime::Constant(4),
+                    Period::Constant(4),
                     MorphPlacement::Reserve,
                     MorphCancel::Committed,
+                    MorphInterrupted::Reverts,
+                    MorphReason::Change,
                     Vec::new(),
                     Vec::new(),
                 )]),

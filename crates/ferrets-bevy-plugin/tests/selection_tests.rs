@@ -3,7 +3,10 @@
 mod utils;
 
 use ferrets_math::fixed_urect::FixedURect;
-use ferrets_simulation::command::{PlayerCommand, SelectMode};
+use ferrets_simulation::{
+    command::{PlayerCommand, SelectMode},
+    simulation_id::SimulationId,
+};
 
 //
 // ─── Combine modes ───────────────────────────────────────────────────────────
@@ -80,6 +83,31 @@ fn remove_mode_subtracts_from_selection() {
     utils::run_ticks(&mut app, utils::APPLY);
 
     assert_eq!(utils::selection(&app), vec![a]);
+}
+
+#[test]
+fn select_by_ids_replaces_selection_with_set() {
+    let mut app = utils::selection_app();
+    let world = app.world_mut();
+    let (_, a) = utils::create_entity(world, "soldier", utils::pos(5, 5), Some(0)).unwrap();
+    let (_, b) = utils::create_entity(world, "soldier", utils::pos(6, 5), Some(0)).unwrap();
+    let (_, c) = utils::create_entity(world, "soldier", utils::pos(7, 5), Some(0)).unwrap();
+    // An enemy far beyond every own unit's sight, and so under fog.
+    let (_, fogged) = utils::create_entity(world, "soldier", utils::pos(25, 25), Some(1)).unwrap();
+    utils::select(&mut app, a);
+
+    // One command for the whole set, ids the player cannot name left out:
+    // the fogged enemy and one that does not exist.
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SelectByIds {
+            ids: vec![b, c, fogged, SimulationId(9999)],
+            mode: SelectMode::Replace,
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY);
+
+    assert_eq!(utils::selection(&app), vec![b, c]);
 }
 
 //

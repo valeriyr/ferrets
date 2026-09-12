@@ -52,9 +52,9 @@ pub fn cancel_processing(
     _policy: CancelPolicy,
     _entry_state: OrderState,
     world: &mut World,
-) -> OrderState {
+) -> Processing {
     world.entity_mut(entity).remove::<PatrolComponent>();
-    OrderState::Finished
+    Processing::state(OrderState::Finished)
 }
 
 /// Whether a Patrol can stand through a soft cancel: never — it drops like any
@@ -72,12 +72,26 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
         .patrol_target()
         .expect("Patrol order must have a target");
 
-    let mut entity_mut = world.entity_mut(entity);
-    let Some(mut driver) = entity_mut.get_mut::<PatrolComponent>() else {
+    let Some((outbound, home)) = world
+        .entity(entity)
+        .get::<PatrolComponent>()
+        .map(|driver| (driver.outbound, driver.home))
+    else {
         return Processing::state(OrderState::Finished);
     };
 
-    let leg_target = if driver.outbound { target } else { driver.home };
-    driver.outbound = !driver.outbound;
-    Processing::suspend(Order::AttackMove { target: leg_target })
+    let leg = Order::AttackMove {
+        target: if outbound { target } else { home },
+    };
+    // The leg turns only once its walk can start: a patroller that cannot
+    // walk right now keeps facing the same way and tries the same leg again.
+    if orders::can_start(world, entity, &leg).is_err() {
+        return Processing::state(OrderState::InProcessing);
+    }
+    world
+        .entity_mut(entity)
+        .get_mut::<PatrolComponent>()
+        .expect("a patroller carries its driver")
+        .outbound = !outbound;
+    Processing::suspend(leg)
 }

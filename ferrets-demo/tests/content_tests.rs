@@ -2,12 +2,15 @@
 //! with each other.
 
 use ferrets_content::{
+    brood::{BroodlingDef, Lingering, OrphanFate},
     build::BuilderAttendance,
     costs,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
-    field::{FieldAction, FieldCoverage, FieldPlacement, FieldVision},
-    morph::{MorphCancel, MorphPlacement, MorphTime},
+    field::{FieldAction, FieldCoverage, FieldEffectKind, FieldPlacement, FieldSide, FieldVision},
+    location::Solidity,
+    morph::{MorphCancel, MorphInterrupted, MorphPlacement, MorphReason},
+    period::Period,
     registry::ContentRegistry,
     requirement::Requirement,
     resource::{Banking, Sources},
@@ -17,8 +20,8 @@ use ferrets_content::{
     work::{Attachment, BerthStance, CrewLimit, WorkPresence},
 };
 use ferrets_demo::{content::CONTENT, map};
-use ferrets_geometry::cell_pos::CellPos;
-use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
+use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
+use ferrets_math::{FixedI64, FixedU64, fixed_vec2::FixedVec2};
 use ferrets_script::{content, engine::lua::LuaEngine};
 use ferrets_simulation::map::Map;
 
@@ -48,10 +51,14 @@ fn content_loads_and_validates() {
         "gryphon",
         "gryphon_aloft",
         "zeppelin",
+        "hatchery",
+        "hive_cocoon",
         "hive",
+        "larva",
+        "egg",
         "drone",
         "tumor",
-        "brood_nest",
+        "overlord",
         "spawning_pit",
         "swarmling",
         "cocoon",
@@ -228,7 +235,7 @@ fn wisp_banks_where_it_sits_and_elves_store_nothing() {
             BerthStance::Orbit {
                 radius: FixedU64::lit("0.3"),
                 period: 60,
-            }
+            },
         ))
     );
     assert_eq!(wood.banking(), Banking::Direct);
@@ -241,7 +248,7 @@ fn wisp_banks_where_it_sits_and_elves_store_nothing() {
             BerthStance::Roaming {
                 speed: FixedU64::lit("0.05"),
                 dwell: 40,
-            }
+            },
         ))
     );
     assert_eq!(gold.banking(), Banking::Direct);
@@ -370,15 +377,17 @@ fn swarm_structures_are_built_by_drone_they_consume() {
     for name in [
         "drone",
         "swarmling",
+        "overlord",
+        "hatchery",
+        "hive_cocoon",
         "hive",
         "tumor",
-        "brood_nest",
         "spawning_pit",
     ] {
         let def = registry.entity(name).expect("swarm type is registered");
         assert!(def.repairer.is_none(), "'{name}' must not repair");
     }
-    for name in ["hive", "tumor", "brood_nest", "spawning_pit"] {
+    for name in ["hatchery", "tumor", "spawning_pit"] {
         assert!(builder.can_build(name), "the drone builds '{name}'");
         let structure = registry
             .entity(name)
@@ -392,6 +401,187 @@ fn swarm_structures_are_built_by_drone_they_consume() {
         drone.morphs.is_empty(),
         "a drone changes into nothing; it is consumed"
     );
+}
+
+#[test]
+fn hatchery_breeds_larvae_that_grow_into_drones_swarmlings_and_overlords() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    let hatchery = registry.entity("hatchery").expect("hatchery is registered");
+    let brood = hatchery.breeder.as_ref().expect("the hatchery breeds");
+    assert_eq!(brood.breeds(), "larva");
+    assert_eq!(brood.period(), Period::Constant(220));
+    assert_eq!(brood.limit(), 3);
+    assert_eq!(brood.initial(), 1);
+    assert_eq!(
+        brood.orphans(),
+        OrphanFate::Linger(Lingering::Reseat { distance: 4 })
+    );
+    assert!(
+        hatchery.trainer.is_none(),
+        "the hatchery trains nothing: its larvae are its production"
+    );
+    // Five points along the hall's southern foot, one row outside the
+    // footprint, four of them seated at once.
+    let group = hatchery
+        .berths
+        .as_ref()
+        .and_then(|berths| berths.group("brood"))
+        .expect("the hatchery offers the brood group");
+    assert_eq!(group.points().len(), 5);
+    assert_eq!(group.slots(), 4);
+    assert!(
+        group
+            .points()
+            .iter()
+            .all(|point| point.y == FixedI64::lit("3.5"))
+    );
+
+    let larva = registry.entity("larva").expect("larva is registered");
+    assert_eq!(
+        larva.location.map(|location| location.solidity()),
+        Some(Solidity::Passable)
+    );
+    assert!(!larva.can_move(), "a larva is never ordered about");
+    // The overlord is the swarm's headroom: a flying two-by-two that needs no
+    // creep, so it takes no supply and withers nowhere.
+    let overlord = registry.entity("overlord").expect("overlord is registered");
+    assert_eq!(
+        overlord.location.map(|location| location.size()),
+        Some(CellSize::new(2, 2))
+    );
+    assert!(overlord.can_move(), "an overlord flies");
+    assert_eq!(
+        overlord.base_stat(EntityStatId::SUPPLY_PROVIDED),
+        Some(FixedU64::from_num(6))
+    );
+    assert!(overlord.base_stat(EntityStatId::SUPPLY_COST).is_none());
+    assert!(overlord.field_effects.is_empty());
+    let attachment = larva
+        .broodling
+        .as_ref()
+        .map(BroodlingDef::attachment)
+        .expect("the larva sits in its hall's berths");
+    assert_eq!(attachment.berths(), "brood");
+    // Off creep a larva loses its whole pool within a second (20 ticks): the
+    // drain has a base to fold into, and the fold empties the pool.
+    assert!(larva.base_stat(EntityStatId::HEALTH_DRAIN).is_some());
+    let max_health = larva
+        .base_stat(EntityStatId::MAX_HEALTH)
+        .expect("a larva has health");
+    let drain = larva
+        .field_effects
+        .iter()
+        .find(|effect| effect.side() == FieldSide::Outside)
+        .and_then(|effect| match effect.kind() {
+            FieldEffectKind::Modifiers(modifiers) => modifiers
+                .iter()
+                .find(|modifier| modifier.stat == EntityStatId::HEALTH_DRAIN)
+                .map(|modifier| modifier.magnitude),
+            FieldEffectKind::Disabled => None,
+        })
+        .expect("a larva drains off creep");
+    // 1.25 a tick over the 20 ticks of a second is the whole pool of 25.
+    assert_eq!(drain, FixedI64::lit("1.25"));
+    assert_eq!(max_health, FixedU64::from_num(25));
+
+    let [drone, swarmling, overlord] = larva.morphs.as_slice() else {
+        panic!("the larva grows into exactly three things");
+    };
+    assert_eq!(drone.into_type(), "drone");
+    assert_eq!(drone.via_type(), Some("egg"));
+    assert_eq!(drone.placement(), MorphPlacement::Nearby);
+    assert_eq!(drone.interrupted(), MorphInterrupted::Reverts);
+    assert_eq!(drone.reason(), MorphReason::Production);
+    assert_eq!(swarmling.into_type(), "swarmling");
+    assert!(
+        swarmling
+            .requires()
+            .contains(&Requirement::EntityType("spawning_pit".to_string()))
+    );
+    // Every growth passes through the egg and counts as production.
+    assert_eq!(overlord.into_type(), "overlord");
+    assert!(larva.morphs.iter().all(|transition| {
+        transition.via_type() == Some("egg") && transition.reason() == MorphReason::Production
+    }));
+    let pit = registry
+        .entity("spawning_pit")
+        .expect("spawning_pit is registered");
+    assert!(pit.trainer.is_none(), "the pit only unlocks the swarmling");
+
+    // The egg stands solid on the ground it is laid on.
+    let egg = registry.entity("egg").expect("egg is registered");
+    assert_eq!(
+        egg.location.map(|location| location.solidity()),
+        Some(Solidity::Solid)
+    );
+    assert!(!egg.can_move() && !egg.can_attack());
+}
+
+#[test]
+fn hatchery_grows_into_hive_inside_cocoon_that_carries_its_brood() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    let hatchery = registry.entity("hatchery").expect("hatchery is registered");
+    let [growth] = hatchery.morphs.as_slice() else {
+        panic!("the hatchery grows into exactly one thing");
+    };
+    assert_eq!(growth.into_type(), "hive");
+    assert_eq!(growth.via_type(), Some("hive_cocoon"));
+    assert_eq!(growth.reason(), MorphReason::Change);
+    assert!(
+        growth
+            .requires()
+            .contains(&Requirement::EntityType("spawning_pit".to_string()))
+    );
+
+    // The cocoon offers the same brood berths, so the larvae ride across in
+    // them, on creep it keeps spreading; it breeds none on the way.
+    let cocoon = registry
+        .entity("hive_cocoon")
+        .expect("hive_cocoon is registered");
+    assert!(
+        cocoon
+            .berths
+            .as_ref()
+            .and_then(|berths| berths.group("brood"))
+            .is_some()
+    );
+    assert!(cocoon.breeder.is_none());
+    assert!(!cocoon.field_sources.is_empty());
+
+    let hive = registry.entity("hive").expect("hive is registered");
+    let brood = hive.breeder.as_ref().expect("the hive breeds");
+    assert_eq!(brood.period(), Period::Constant(180));
+    assert_eq!(brood.initial(), 2);
+    assert_eq!(
+        brood.orphans(),
+        OrphanFate::Linger(Lingering::Reseat { distance: 4 })
+    );
+    assert!(
+        hive.morphs.is_empty() && hive.build_time.is_none() && hive.cost.is_empty(),
+        "the hive is only ever grown from a hatchery"
+    );
+    let drone = registry.entity("drone").expect("drone is registered");
+    let builder = drone.builder.as_ref().expect("the drone builds");
+    assert!(!builder.can_build("hive"));
+
+    // Every swarm structure but the halls stands on creep; the pit withers
+    // off it, the tumor spreads its own, and a hall spreads the creep and
+    // needs none under it.
+    for name in ["tumor", "spawning_pit"] {
+        let def = registry
+            .entity(name)
+            .expect("swarm structure is registered");
+        assert!(!def.field_placement.is_empty(), "'{name}' stands on creep");
+    }
+    let pit = registry
+        .entity("spawning_pit")
+        .expect("spawning_pit is registered");
+    assert!(!pit.field_effects.is_empty(), "the pit withers off creep");
+    for name in ["hatchery", "hive_cocoon", "hive"] {
+        let def = registry.entity(name).expect("swarm hall is registered");
+        assert!(def.field_placement.is_empty(), "'{name}' needs no creep");
+        assert!(!def.field_sources.is_empty(), "'{name}' spreads creep");
+    }
 }
 
 #[test]
@@ -410,7 +600,7 @@ fn swarmling_grows_into_ravager_inside_cocoon() {
     assert!(
         growth
             .requires()
-            .contains(&Requirement::EntityType("spawning_pit".to_string()))
+            .contains(&Requirement::EntityType("hive".to_string()))
     );
     assert!(
         growth
@@ -845,7 +1035,7 @@ fn gryphon_edges_wear_different_terms() {
     assert_eq!(take_off.into_type(), "gryphon_aloft");
     assert_eq!(
         take_off.time(),
-        MorphTime::Stat(morph_time),
+        Period::Stat(morph_time),
         "the take-off window is not the quickenable stat"
     );
     assert_eq!(take_off.placement(), MorphPlacement::Revalidate);
@@ -862,7 +1052,7 @@ fn gryphon_edges_wear_different_terms() {
         panic!("the airborne gryphon declares exactly one transition");
     };
     assert_eq!(landing.into_type(), "gryphon");
-    assert_eq!(landing.time(), MorphTime::Constant(20));
+    assert_eq!(landing.time(), Period::Constant(20));
     assert_eq!(landing.placement(), MorphPlacement::Reserve);
     assert_eq!(landing.cancel(), MorphCancel::Committed);
     assert!(landing.costs().is_empty(), "landing is free");
@@ -881,7 +1071,7 @@ fn tower_upgrade_is_paid_and_refundable() {
         panic!("the watch tower declares exactly one transition");
     };
     assert_eq!(upgrade.into_type(), "guard_tower");
-    assert_eq!(upgrade.time(), MorphTime::Constant(60));
+    assert_eq!(upgrade.time(), Period::Constant(60));
     assert_eq!(upgrade.placement(), MorphPlacement::Reserve);
     assert_eq!(upgrade.cancel(), MorphCancel::Refundable);
     assert_eq!(
@@ -979,8 +1169,8 @@ fn every_terran_production_building_flies_but_depot() {
 //
 
 /// A berth point from decimal strings, in cells from the footprint's anchor.
-fn berth(x: &str, y: &str) -> FixedUVec2 {
-    FixedUVec2::new(FixedU64::lit(x), FixedU64::lit(y))
+fn berth(x: &str, y: &str) -> FixedVec2 {
+    FixedVec2::new(FixedI64::lit(x), FixedI64::lit(y))
 }
 
 /// Whether `def` refuses to stand on creep.

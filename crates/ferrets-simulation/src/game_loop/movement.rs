@@ -33,7 +33,7 @@ use crate::{
     entity_def,
     entity_index::EntityIndex,
     map::Map,
-    movement_model::MovementModel,
+    movement_model::{self, MovementModel},
     order::Order,
     session::GameSession,
 };
@@ -141,7 +141,7 @@ pub fn cancel_processing(
     policy: CancelPolicy,
     entry_state: OrderState,
     world: &mut World,
-) -> OrderState {
+) -> Processing {
     match policy {
         CancelPolicy::Force => {
             // A cell-model walk cut down mid-crossing holds the crossing's
@@ -158,7 +158,7 @@ pub fn cancel_processing(
                     .map(|location| location.position);
                 if let (Some(claimed), Some(position)) = (claimed, position)
                     && let MovementModel::Cell = world.resource::<Map>().movement_model()
-                    && is_mid_crossing(position)
+                    && movement_model::is_mid_crossing(position)
                 {
                     world
                         .entity_mut(entity)
@@ -168,7 +168,7 @@ pub fn cancel_processing(
                 }
             }
             world.entity_mut(entity).remove::<MoveComponent>();
-            OrderState::Finished
+            Processing::state(OrderState::Finished)
         }
         CancelPolicy::Soft => {
             if entry_state == OrderState::InProcessing
@@ -176,10 +176,10 @@ pub fn cancel_processing(
                     world.entity_mut(entity).get_mut::<MoveComponent>()
             {
                 move_component.leave_only_current_target();
-                return OrderState::InProcessing;
+                return Processing::state(OrderState::InProcessing);
             }
             // Order has not started yet — nothing to finish, discard immediately.
-            OrderState::Finished
+            Processing::state(OrderState::Finished)
         }
     }
 }
@@ -608,7 +608,7 @@ fn process_cell(entity: Entity, order: &Order, world: &mut World) -> OrderState 
     let projection = world.resource::<Map>().projection();
 
     // Mid-crossing: position is between the crossing's two cell origins.
-    if is_mid_crossing(position) {
+    if movement_model::is_mid_crossing(position) {
         debug_assert_on_crossing(
             position,
             move_component.moving_from,
@@ -1025,7 +1025,7 @@ fn resolve_blocked_crossing(
 
     if let Some(blocker) = claimant_at(world, shape.mask, next_cell) {
         let blocker_position = entity_def::position(world, blocker);
-        let blocker_at_rest = !is_mid_crossing(blocker_position);
+        let blocker_at_rest = !movement_model::is_mid_crossing(blocker_position);
 
         // Swap: the blocker rests on my next cell and wants mine — the
         // head-on case. Both crossings run at once; no claim bit changes
@@ -1241,7 +1241,7 @@ fn swap_crossings(
             && cell_walk_done(
                 &move_component,
                 projection,
-                CellPos::from(position),
+                CellPos::from(new_pos),
                 shape,
                 target,
                 size,
@@ -1277,7 +1277,7 @@ fn claimant_at(world: &mut World, mask: LayerMask, cell: CellPos) -> Option<Enti
             continue;
         }
 
-        let holds = if is_mid_crossing(candidate_position) {
+        let holds = if movement_model::is_mid_crossing(candidate_position) {
             // A crossing holds its destination *footprint* — step_claim
             // claimed every entered cell, not the anchor alone.
             world
@@ -1413,18 +1413,6 @@ fn yield_target(
         }
     }
     best.map(|(_, cell)| cell)
-}
-
-/// Returns `true` if `position` is between two cell origins (a crossing is in progress).
-///
-/// This infers movement state from the position alone, which is only valid
-/// under the lattice invariant documented on
-/// [`LocationComponent::position`](crate::components::location::LocationComponent):
-/// entities rest exactly on cell origins (integer coordinates), so a
-/// fractional component can mean nothing but a crossing in progress.
-pub fn is_mid_crossing(position: FixedUVec2) -> bool {
-    let cell = CellPos::from(position);
-    position != FixedUVec2::from(cell)
 }
 
 /// Asserts (debug builds) the lattice invariant for a mid-crossing entity: its

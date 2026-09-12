@@ -1,18 +1,18 @@
-//! Content-defined berths: the points of a footprint an attached worker may
+//! Content-defined berths: the points about a footprint an attached worker may
 //! sit at, and how many workers they seat.
 
 use std::collections::BTreeMap;
 
-use ferrets_math::fixed_uvec2::FixedUVec2;
+use ferrets_math::fixed_vec2::FixedVec2;
 
-/// One berth group: the points inside the footprint its workers sit at and
-/// move between, and how many workers it seats at once.
+/// One berth group: the points its workers sit at and move between, and how
+/// many workers it seats at once.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BerthGroup {
-    /// Where a worker's middle sits, as offsets in cells from the footprint's
-    /// anchor; also the spots a moving worker crosses between. Each holds one
-    /// worker at a time.
-    points: Vec<FixedUVec2>,
+    /// Where a worker's middle sits, as signed offsets in cells from the
+    /// footprint's anchor, inside the footprint or around it; also the spots a
+    /// moving worker crosses between. Each holds one worker at a time.
+    points: Vec<FixedVec2>,
     /// How many workers the group seats at once, never more than it has
     /// points.
     slots: usize,
@@ -22,8 +22,8 @@ impl BerthGroup {
     /// Creates a new `BerthGroup` with the given data.
     ///
     /// Panics if `points` is empty, or `slots` is `0` or more than the points.
-    pub fn new(points: impl IntoIterator<Item = FixedUVec2>, slots: usize) -> Self {
-        let points: Vec<FixedUVec2> = points.into_iter().collect();
+    pub fn new(points: impl IntoIterator<Item = FixedVec2>, slots: usize) -> Self {
+        let points: Vec<FixedVec2> = points.into_iter().collect();
         assert!(
             !points.is_empty(),
             "a berth group must have at least one point"
@@ -38,7 +38,7 @@ impl BerthGroup {
 
     /// The points workers sit at.
     #[inline]
-    pub fn points(&self) -> &[FixedUVec2] {
+    pub fn points(&self) -> &[FixedVec2] {
         &self.points
     }
 

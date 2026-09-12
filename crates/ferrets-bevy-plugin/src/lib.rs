@@ -65,10 +65,15 @@
 //!                          sub-order (attack-move/guard scanning mid-walk)
 //!                        process phase: advance InProcessing front order, remove driver
 //!                          components on finish, push chase sub-orders on suspend
+//! dispatch_rallies   — exclusive system; give every unit an order released this
+//!                      tick its holder's rally order
 //! advance_sites_without_builder — exclusive system; put in a tick on each site
 //!                      no builder attends
 //! advance_berths     — exclusive system; move seated workers between the berths
 //!                      their stance walks them round
+//! advance_brood      — exclusive system; take lingering broodlings into each
+//!                      breeder's berths, then deliver the births it owes and
+//!                      the one its timer brings
 //! advance_annexes    — exclusive system; re-derive which primary each annex
 //!                      stands with, apply what its terms do to one left
 //!                      standing alone, and hand over the annexes a claim
@@ -464,18 +469,26 @@ impl Plugin for SimulationPlugin {
                     // changes before orders path against it, never lazily at
                     // query time.
                     systems::refresh_nav_hierarchy,
+                    // Units released by this tick's orders — trained, unloaded,
+                    // hatched — are sent to their holder's rally point once
+                    // every order has run and their queues are back in place.
                     // Sites no builder works put in their tick right after
                     // the crews put in theirs, so every construction completes
                     // at the same point of the tick.
                     // Attached workers move about their berths once the orders
                     // that seat them have run.
+                    // Breeders bear their broodlings once the orders that use
+                    // them up have run, so a seat freed this tick is filled
+                    // this tick.
                     // Annexes are re-bound right after, so a primary that has
                     // just landed, been raised or lifted off is answered for
                     // in the tick it did so.
                     (
                         systems::tick_orders,
+                        systems::dispatch_rallies,
                         systems::advance_sites_without_builder,
                         systems::advance_berths,
+                        systems::advance_brood,
                         systems::advance_annexes,
                     )
                         .chain(),

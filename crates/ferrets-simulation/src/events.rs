@@ -38,6 +38,11 @@ pub enum SpawnCause {
     },
     /// Conjured by the sandbox spawn command, with no production behind it.
     Sandbox,
+    /// Bred by a breeder: a birth its timer brought, or one it owed.
+    Bred {
+        /// The breeder that bore it.
+        by: SimulationId,
+    },
     /// What an entity left behind when it finished dying.
     Remains {
         /// The entity that died here.
@@ -118,6 +123,17 @@ pub enum DeathCause {
     /// Nothing sustained it any longer: a pool that ran out with no one to
     /// blame, or a bond it cannot stand without.
     Decayed,
+    /// A broodling whose breeder died.
+    Orphaned {
+        /// The breeder.
+        of: SimulationId,
+    },
+    /// A broodling with no seat left in its breeder's berths, or no breeder
+    /// left to seat it.
+    Unseated {
+        /// The breeder.
+        of: SimulationId,
+    },
 }
 
 /// Something the simulation announced.
@@ -219,8 +235,14 @@ pub enum SimulationEvent {
     EntityMorphed {
         /// The entity that changed.
         entity: SimulationId,
-        /// What it was; what it now is, the entity itself says.
+        /// The form that declared the transition, which the entity wore
+        /// before it began.
         from: EntityTypeId,
+        /// The form the entity wears from this landing on: the interim form,
+        /// the destination, or `from` again when the change ended early.
+        to: EntityTypeId,
+        /// The interim form the transition passes through, if it has one.
+        interim: Option<EntityTypeId>,
     },
     /// An entity went off the map without dying — inside a carrier, a mine, or
     /// whatever else swallows it — and is still there to come back.

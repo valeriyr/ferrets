@@ -1,4 +1,4 @@
-//! 2D camera: spawn, WASD/arrow pan, and scroll-wheel zoom.
+//! 2D camera: spawn, arrow-key pan, and scroll-wheel zoom.
 
 use bevy::{input::mouse::AccumulatedMouseScroll, prelude::*};
 use ferrets_simulation::{map::Map, session::GameSession};
@@ -60,7 +60,7 @@ pub fn frame_local_player(
     transform.translation.y = -y * CELL_PX;
 }
 
-/// Pans the camera with WASD/arrows and zooms with the scroll wheel, keeping the
+/// Pans the camera with the arrow keys and zooms with the scroll wheel, keeping the
 /// view centered within the map bounds.
 pub fn pan_zoom(
     time: Res<Time>,
@@ -74,21 +74,21 @@ pub fn pan_zoom(
     };
 
     let mut dir = Vec2::ZERO;
-    if keys.pressed(KeyCode::KeyW) || keys.pressed(KeyCode::ArrowUp) {
+    if keys.pressed(KeyCode::ArrowUp) {
         dir.y += 1.0;
     }
-    if keys.pressed(KeyCode::KeyS) || keys.pressed(KeyCode::ArrowDown) {
+    if keys.pressed(KeyCode::ArrowDown) {
         dir.y -= 1.0;
     }
-    if keys.pressed(KeyCode::KeyA) || keys.pressed(KeyCode::ArrowLeft) {
+    if keys.pressed(KeyCode::ArrowLeft) {
         dir.x -= 1.0;
     }
-    if keys.pressed(KeyCode::KeyD) || keys.pressed(KeyCode::ArrowRight) {
+    if keys.pressed(KeyCode::ArrowRight) {
         dir.x += 1.0;
     }
     if dir != Vec2::ZERO {
         // Pan in screen directions: the shift converts through the camera's
-        // own orientation and scale, so W always moves the view up whatever
+        // own orientation and scale, so Up always moves the view up whatever
         // the look.
         let step = dir.normalize() * PAN_SPEED * time.delta_secs();
         let local = Vec3::new(step.x * transform.scale.x, step.y * transform.scale.y, 0.0);

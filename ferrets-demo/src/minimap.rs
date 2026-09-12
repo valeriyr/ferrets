@@ -767,7 +767,11 @@ pub fn order_input(
     minimap: Option<Res<Minimap>>,
     mut pending: ResMut<PendingInput>,
     node: Query<&RelativeCursorPosition, With<MinimapNode>>,
-    rally_holders: Query<(&EntityInfoComponent, &OwnerComponent), With<RallyPointComponent>>,
+    holders: Query<(
+        &EntityInfoComponent,
+        &OwnerComponent,
+        Option<&RallyPointComponent>,
+    )>,
 ) {
     // An armed order or placement wants a cell the player can actually see;
     // the minimap is too coarse to aim one.
@@ -788,7 +792,7 @@ pub fn order_input(
         &session,
         &selection,
         &registry,
-        &rally_holders,
+        &holders,
         &mut pending,
     );
 }

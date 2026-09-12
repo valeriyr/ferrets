@@ -7,9 +7,7 @@ use ferrets_physics::body;
 
 use super::orders::{Processing, Refusal};
 use crate::{
-    berths,
     components::{
-        attached::AttachedComponent,
         dying::{DiedComponent, DyingComponent},
         location::LocationComponent,
         order_queue::{CancelPolicy, OrderState},
@@ -46,8 +44,8 @@ pub fn cancel_processing(
     _policy: CancelPolicy,
     _entry_state: OrderState,
     _world: &mut World,
-) -> OrderState {
-    OrderState::InProcessing
+) -> Processing {
+    Processing::state(OrderState::InProcessing)
 }
 
 /// Whether a Die can stand through a soft cancel: always — dying cannot be
@@ -79,18 +77,12 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
     }
 
     free_footprint(entity, world);
-    give_up_berth(entity, world);
+    // The berth the entity held through its dying phase — one it died in with
+    // no free cell to step back onto — goes back to the job.
+    spawn::unseat(world, entity);
     spawn::uncover_source(world, entity);
     leave_corpse(entity, world);
     Processing::state(OrderState::Finished)
-}
-
-/// Frees the berth the entity has held through its dying phase — one it died
-/// in with no free cell to step back onto — so the job seats somebody else.
-fn give_up_berth(entity: Entity, world: &mut World) {
-    if let Some(attached) = world.entity_mut(entity).take::<AttachedComponent>() {
-        berths::vacate(world, &attached);
-    }
 }
 
 /// Frees the footprint the entity has held through its dying phase, so the

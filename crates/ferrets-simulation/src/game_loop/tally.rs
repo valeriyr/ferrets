@@ -5,6 +5,7 @@
 use std::collections::BTreeMap;
 
 use bevy_ecs::{change_detection::Mut, world::World};
+use ferrets_content::{morph::MorphReason, registry::ContentRegistry};
 
 use crate::{
     entity_def,
@@ -55,6 +56,7 @@ fn fold(
                 SpawnCause::Placed
                 | SpawnCause::Founded { .. }
                 | SpawnCause::Sandbox
+                | SpawnCause::Bred { .. }
                 | SpawnCause::Remains { .. }
                 | SpawnCause::Uncovered { .. } => false,
             };
@@ -145,13 +147,36 @@ fn fold(
             }
         }
         SimulationEvent::PlayerSkillCast { player, .. } => statistics.record_skill_cast(*player),
-        // Neither a form change nor going off the map and back is a thing a
-        // tally counts: the entity was already counted when it was made, and a
-        // form that switches back and forth would count every switch. A
-        // capture makes nothing and unmakes nothing either — the same building
-        // stands where it stood, under another flag.
-        SimulationEvent::EntityMorphed { .. }
-        | SimulationEvent::EntityHidden { .. }
+        SimulationEvent::EntityMorphed {
+            entity, from, to, ..
+        } => {
+            // A change of form counts as production only where the transition
+            // declared on the form it started from says so.
+            let Some(changed) = world.resource::<EntityIndex>().any(*entity) else {
+                return;
+            };
+            let registry = world.resource::<ContentRegistry>();
+            let produced = registry
+                .def(*from)
+                .morphs
+                .iter()
+                .find(|transition| transition.into_type() == registry.def(*to).name)
+                .is_some_and(|transition| match transition.reason() {
+                    MorphReason::Production => true,
+                    MorphReason::Change => false,
+                });
+            if !produced {
+                return;
+            }
+            if let Some(player) = entity_def::owner(world, changed) {
+                statistics.record_produced(player, *to);
+            }
+        }
+        // Going off the map and back is not a thing a tally counts: the entity
+        // was already counted when it was made. A capture makes nothing and
+        // unmakes nothing either — the same building stands where it stood,
+        // under another flag.
+        SimulationEvent::EntityHidden { .. }
         | SimulationEvent::EntityRevealed { .. }
         | SimulationEvent::EntityCaptured { .. } => {}
     }
@@ -180,15 +205,18 @@ fn fire_behind(
     loop {
         match cause {
             DeathCause::Killed { by_owner, .. } => return Some(by_owner),
-            DeathCause::PassengerLost { holder } => match deaths.get(&holder) {
-                Some(holder_cause) => cause = *holder_cause,
-                None => return None,
-            },
+            DeathCause::PassengerLost { holder } | DeathCause::Orphaned { of: holder } => {
+                match deaths.get(&holder) {
+                    Some(holder_cause) => cause = *holder_cause,
+                    None => return None,
+                }
+            }
             DeathCause::Depleted
             | DeathCause::Cancelled
             | DeathCause::Consumed
             | DeathCause::Overbuilt
-            | DeathCause::Decayed => return None,
+            | DeathCause::Decayed
+            | DeathCause::Unseated { .. } => return None,
         }
     }
 }

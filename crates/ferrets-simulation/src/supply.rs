@@ -6,13 +6,14 @@
 //! that already govern it, and effective stats are read at their current value
 //! rather than cached against modifier changes.
 
-use bevy_ecs::world::World;
+use bevy_ecs::{entity::Entity, world::World};
 use ferrets_math::FixedU64;
 
 use crate::{
     components::{
         build::{BuildComponent, UnderConstructionComponent},
         entity_stats::StatsComponent,
+        morph::MorphComponent,
         train::TrainQueueComponent,
     },
     entity_def,
@@ -55,6 +56,44 @@ pub fn allows(world: &World, player: PlayerId, def: &EntityTypeDef) -> bool {
     used.saturating_add(cost) <= provided
 }
 
+/// Whether `player`'s supply admits `entity` becoming an instance of `into`:
+/// what the new form costs over the form the entity now holds must fit the
+/// headroom. A change that costs no more is always admitted.
+pub fn allows_change(
+    world: &World,
+    player: PlayerId,
+    entity: Entity,
+    into: &EntityTypeDef,
+) -> bool {
+    let after = into
+        .base_stat(EntityStatId::SUPPLY_COST)
+        .unwrap_or_default();
+    let now = holding_cost(world, entity);
+    if after <= now {
+        return true;
+    }
+    let (provided, used) = totals(world, player);
+    used.saturating_sub(now).saturating_add(after) <= provided
+}
+
+/// The supply `entity` holds: the destination's cost while it changes form,
+/// since a change reserves the supply of what it becomes from the tick it
+/// starts; the effective cost of the form it stands as otherwise.
+fn holding_cost(world: &World, entity: Entity) -> FixedU64 {
+    let entity_ref = world.entity(entity);
+    if let Some(morph) = entity_ref.get::<MorphComponent>() {
+        return world
+            .resource::<ContentRegistry>()
+            .entity(&morph.into)
+            .and_then(|def| def.base_stat(EntityStatId::SUPPLY_COST))
+            .unwrap_or_default();
+    }
+    entity_ref
+        .get::<StatsComponent>()
+        .and_then(|stats| stats.effective(EntityStatId::SUPPLY_COST))
+        .unwrap_or_default()
+}
+
 /// One pass over the player's entities: `(provided, used)`.
 fn totals(world: &World, player: PlayerId) -> (FixedU64, FixedU64) {
     let registry = world.resource::<ContentRegistry>();
@@ -87,12 +126,8 @@ fn totals(world: &World, player: PlayerId) -> (FixedU64, FixedU64) {
                     .effective(EntityStatId::SUPPLY_PROVIDED)
                     .unwrap_or_default(),
             );
-            used = used.saturating_add(
-                stats
-                    .effective(EntityStatId::SUPPLY_COST)
-                    .unwrap_or_default(),
-            );
         }
+        used = used.saturating_add(holding_cost(world, entity));
 
         // Reservations: every queued unit holds its supply already. The queue
         // stores type names, so the cost read is the def's base value — the

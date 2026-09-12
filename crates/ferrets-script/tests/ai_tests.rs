@@ -967,6 +967,7 @@ fn demo_like_content() -> ContentView {
                     cost: vec![("gold".to_string(), 400)],
                     time: Some(200),
                 }]),
+                breeder: None,
             },
             EntityContentView {
                 name: "soldier".to_string(),
@@ -988,6 +989,7 @@ fn demo_like_content() -> ContentView {
                 skills: None,
                 requires: None,
                 morphs: None,
+                breeder: None,
             },
         ],
         researches: Vec::new(),
@@ -1051,6 +1053,8 @@ fn populated_view(tick: u32) -> GameView {
                 resource_amount: None,
                 boarded: None,
                 passengers: Vec::new(),
+                broodlings: Vec::new(),
+                bred_by: None,
             },
             EntityView {
                 id: 2,
@@ -1071,6 +1075,8 @@ fn populated_view(tick: u32) -> GameView {
                 resource_amount: None,
                 boarded: None,
                 passengers: Vec::new(),
+                broodlings: Vec::new(),
+                bred_by: None,
             },
         ],
         ally_entities: Vec::new(),
@@ -1094,6 +1100,8 @@ fn populated_view(tick: u32) -> GameView {
             resource_amount: Some(900),
             boarded: None,
             passengers: Vec::new(),
+            broodlings: Vec::new(),
+            bred_by: None,
         }],
     }
 }

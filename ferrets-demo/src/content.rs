@@ -864,31 +864,136 @@ pub const CONTENT: &str = r#"
     })
 
     -- ── The Swarm ──────────────────────────────────────────────────────────
-    -- A drone is spent on what it builds: it walks to the site, pays, and
-    -- becomes the structure going up, so the swarm has no repairers. Every
-    -- structure but the hive must stand on creep; the hive itself spreads it,
-    -- at full reach when it is placed by the map, and from three cells a cell
-    -- every third of a second when it is built, showing a patch under itself
-    -- while still going up. Structures left off creep waste away; swarmlings run a third
-    -- faster on anyone's creep.
+    -- The hall — a hatchery, and the hive it grows into — bears larvae, and
+    -- larvae are what every swarm unit grows from inside an egg: the pit only
+    -- unlocks the swarmling. A drone is spent on what it builds: it walks to
+    -- the site, pays, and becomes the structure going up, so the swarm has no
+    -- repairers. Every structure but the hall must stand on creep; the hall
+    -- itself spreads it, at full reach when it is placed by the map, and from
+    -- three cells a cell every third of a second when it is built, showing a
+    -- patch under itself while still going up. Structures left off creep
+    -- waste away; a larva off creep is gone in a second; swarmlings run a
+    -- third faster on anyone's creep.
     local ON_CREEP = { requires = "creep", of = "anyone", coverage = "footprint" }
     local WITHERS_OFF_CREEP = { field = "creep", of = "anyone", outside = {
         modifiers = { { entity_stat = "health_drain", op = "flat", value = "0.2" } },
     } }
+    local DIES_OFF_CREEP = { field = "creep", of = "anyone", outside = {
+        modifiers = { { entity_stat = "health_drain", op = "flat", value = "1.25" } },
+    } }
 
-    define_entity("hive", {
+    -- The hatchery is the swarm's first hall. Five spots along the ground at
+    -- its southern foot, one row outside the footprint, are where its larvae
+    -- crawl; four sit at once, so one larva given back by a cancelled egg
+    -- always finds a seat. A larva waits the tick the hall stands, then one
+    -- comes every eleven seconds while fewer than three crawl it. Larvae
+    -- outlive the hall: they are set down beside its ruin, keep their
+    -- growths, wither with the creep once nothing sustains it, and are taken
+    -- in by any hall of theirs within four cells that has a seat free. Once
+    -- the pit stands the hatchery grows into a hive inside a cocoon whose own
+    -- berths carry the larvae across.
+    local BROOD_BERTHS = { brood = { points = {
+        { "0.5", "3.5" }, { "1.0", "3.5" }, { "1.5", "3.5" }, { "2.0", "3.5" }, { "2.5", "3.5" },
+    }, slots = 4 } }
+    local RESEATS_NEARBY = { linger = { reseat = { distance = 4 } } }
+    local CREEP_RADIUS = 10
+    local CREEP_GROWTH = { cycle = 6, initial_radius = 3 }
+    local CREEP_SPREAD = { { field = "creep", radius = CREEP_RADIUS, growth = CREEP_GROWTH } }
+    define_entity("hatchery", {
         race = "swarm",
         location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
         stats = { max_health = 800, sight_range = 9, supply_provided = 10 },
         dying = { time = 2 },
         cost = { gold = 400 },
         build_time = 200,
-        trainer = { "drone" },
         resource_storage = { "gold", "wood" },
         tags = { "building" },
+        berths = BROOD_BERTHS,
+        breeder = { breeds = "larva", period = 220, limit = 3, initial = 1, orphans = RESEATS_NEARBY },
         field_sources = {
-            { field = "creep", radius = 10, growth = { cycle = 6, initial_radius = 3 }, while_constructing = 1 },
+            { field = "creep", radius = CREEP_RADIUS, growth = CREEP_GROWTH, while_constructing = 1 },
         },
+        morphs = {
+            { into = "hive", via = "hive_cocoon", time = 200, placement = "reserve", cancel = "refundable",
+              interrupted = "reverts", reason = "change", cost = { resources = { gold = 150, wood = 100 } },
+              requires = { { entity_type = "spawning_pit" } } },
+        },
+    })
+
+    -- The cocoon keeps the hall's creep, storage, headroom and berths, so the
+    -- larvae keep crawling its foot; it breeds none while it is worn.
+    define_entity("hive_cocoon", {
+        race = "swarm",
+        location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
+        stats = { max_health = 800, sight_range = 9, supply_provided = 10 },
+        dying = { time = 2 },
+        resource_storage = { "gold", "wood" },
+        tags = { "building" },
+        berths = BROOD_BERTHS,
+        field_sources = CREEP_SPREAD,
+    })
+
+    -- The hive breeds faster, opens with two larvae, and is what a ravager
+    -- takes to grow.
+    define_entity("hive", {
+        race = "swarm",
+        location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
+        stats = { max_health = 1000, sight_range = 10, supply_provided = 10 },
+        dying = { time = 2 },
+        resource_storage = { "gold", "wood" },
+        tags = { "building" },
+        berths = BROOD_BERTHS,
+        breeder = { breeds = "larva", period = 180, limit = 3, initial = 2, orphans = RESEATS_NEARBY },
+        field_sources = CREEP_SPREAD,
+    })
+
+    -- A larva is what the swarm makes its units from. It crawls its hall's
+    -- brood berths holding no cells, cannot be moved, and does not survive
+    -- off creep: a drain empties its pool in a second, fast but watchable.
+    -- Each growth pays the unit's price and holds its supply from the first
+    -- tick; a growth called off gives the larva back.
+    define_entity("larva", {
+        race = "swarm",
+        location = { occupation = GROUND, size = 1, solidity = "passable" },
+        stats = { max_health = 25, armor = 10, sight_range = 1, health_drain = "0" },
+        dying = { time = 1 },
+        tags = { "biological" },
+        selection = { priority = 1 },
+        broodling = { berths = "brood", stance = { roaming = { speed = "0.05", dwell = 40 } } },
+        field_effects = { DIES_OFF_CREEP },
+        morphs = {
+            { into = "drone", via = "egg", time = 40, placement = "nearby", cancel = "refundable",
+              interrupted = "reverts", reason = "production", cost = { resources = { gold = 50 } } },
+            { into = "swarmling", via = "egg", time = 40, placement = "nearby", cancel = "refundable",
+              interrupted = "reverts", reason = "production", cost = { resources = { gold = 50 } },
+              requires = { { entity_type = "spawning_pit" } } },
+            { into = "overlord", via = "egg", time = 60, placement = "nearby", cancel = "refundable",
+              interrupted = "reverts", reason = "production", cost = { resources = { gold = 100 } } },
+        },
+    })
+
+    -- The overlord feeds the swarm the way a farm does, from the air: a slow
+    -- floating sac the size of a building that needs no creep under it.
+    define_entity("overlord", {
+        race = "swarm",
+        location = { occupation = AIR, size = { 2, 2 }, solidity = "solid" },
+        stats = {
+            speed = "0.2", turn_rate = 4, pivot_rate = 6, pivot_angle = 90, radius = "1", weight = 6,
+            max_health = 200, armor = 1, sight_range = 8, supply_provided = 6,
+        },
+        dying = { time = 2 },
+        tags = { "biological" },
+    })
+
+    -- The egg stands on the ground and neither moves nor fights; it blocks
+    -- the cell it sits on until it opens.
+    define_entity("egg", {
+        race = "swarm",
+        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        stats = { max_health = 200, armor = 10, sight_range = 1 },
+        dying = { time = 1 },
+        tags = { "biological" },
+        selection = { priority = 1 },
     })
 
     -- Drones spew a patch of creep on any cell they can see, which lets the
@@ -910,9 +1015,7 @@ pub const CONTENT: &str = r#"
             cargo_size = 1,
         },
         dying = { time = 2 },
-        cost = { gold = 50 },
-        train_time = 40,
-        builder = { builds = { "hive", "tumor", "spawning_pit", "brood_nest" }, attendance = "consumed" },
+        builder = { builds = { "hatchery", "tumor", "spawning_pit" }, attendance = "consumed" },
         tags = { "biological" },
         skills = { "spew_creep" },
         resource_carrier = {
@@ -938,19 +1041,6 @@ pub const CONTENT: &str = r#"
         },
     })
 
-    -- The brood nest feeds the swarm the way a farm does.
-    define_entity("brood_nest", {
-        race = "swarm",
-        location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
-        stats = { max_health = 200, sight_range = 3, supply_provided = 6, health_drain = "0" },
-        dying = { time = 2 },
-        cost = { gold = 40, wood = 20 },
-        build_time = 60,
-        tags = { "building" },
-        field_placement = { ON_CREEP },
-        field_effects = { WITHERS_OFF_CREEP },
-    })
-
     define_entity("spawning_pit", {
         race = "swarm",
         location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
@@ -958,7 +1048,6 @@ pub const CONTENT: &str = r#"
         dying = { time = 2 },
         cost = { gold = 200, wood = 100 },
         build_time = 120,
-        trainer = { "swarmling" },
         tags = { "building" },
         field_placement = { ON_CREEP },
         field_effects = { WITHERS_OFF_CREEP },
@@ -978,8 +1067,6 @@ pub const CONTENT: &str = r#"
         dying = { time = 2 },
         tags = { "biological" },
         attack = { targets = GROUND | WATER },
-        cost = { gold = 50 },
-        train_time = 40,
         selection = { priority = 10 },
         field_effects = {
             { field = "creep", of = "anyone", inside = {
@@ -987,25 +1074,26 @@ pub const CONTENT: &str = r#"
             } },
         },
         -- A swarmling grows into a ravager inside a cocoon: three seconds
-        -- wrapped up and helpless but thick-skinned, for a price the pit's
+        -- wrapped up and helpless but thick-skinned, for a price the hive's
         -- presence unlocks, and the price comes back if the growth is called
-        -- off or finds no room to finish.
+        -- off; the ravager lands on the nearest ground that takes it.
         morphs = {
             { into = "ravager",
               via = "cocoon",
               time = 60,
-              placement = "revalidate",
+              placement = "nearby",
               cancel = "refundable",
               cost = { resources = { gold = 25, wood = 25 } },
-              requires = { { entity_type = "spawning_pit" } } },
+              requires = { { entity_type = "hive" } } },
         },
     })
 
-    -- The cocoon neither moves nor fights; it only endures until it opens.
+    -- The cocoon neither moves nor fights; it only endures until it opens,
+    -- holding the ravager's supply the while.
     define_entity("cocoon", {
         race = "swarm",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
-        stats = { max_health = 120, armor = 3, sight_range = 2, supply_cost = 1 },
+        stats = { max_health = 120, armor = 3, sight_range = 2 },
         dying = { time = 2 },
         tags = { "biological" },
     })

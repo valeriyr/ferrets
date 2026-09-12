@@ -3,19 +3,20 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use bevy_ecs::prelude::*;
-use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect};
+use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
 use ferrets_math::FixedU64;
 use ferrets_pathfinder::{layer_id::LayerId, layer_mask::LayerMask};
 
 use crate::{
     annex::{AloneConduct, AnnexLife},
     attack::{AttackDef, Delivery, Weapon},
+    brood::BroodlingDef,
     build::BuilderAttendance,
     entity_buffs::{EntityBuffDef, EntityBuffId},
     entity_stats::{ENTITY_BUILTIN_STATS, EntityStatId},
     entity_type_def::{EntityTypeDef, EntityTypeId},
     field::{FieldDef, FieldEffectKind, FieldGrowth, FieldId},
-    morph::MorphTime,
+    period::Period,
     player_buffs::{PlayerBuffDef, PlayerBuffId},
     player_stats::{PLAYER_BUILTIN_STATS, PlayerStatId},
     projectile::{Aim, ProjectileDef, ProjectileId},
@@ -180,6 +181,8 @@ impl ContentRegistry {
             self.validate_overbuilds(def);
             self.validate_docks(def);
             self.validate_annex(def);
+            self.validate_breeder(def);
+            self.validate_broodling(def);
         }
         for (name, &id) in &self.researches {
             self.validate_requires(
@@ -942,27 +945,15 @@ impl ContentRegistry {
                 def.name,
                 morph.into_type()
             );
-            let other = self
-                .entity(morph.into_type())
-                .unwrap_or_else(|| panic!("{owner} names a type that is not registered"));
-            // The changed form is recentred so its middle stays put, which shifts
-            // the anchor by half the size difference per axis. Only an even
-            // difference keeps that shift in whole cells; an odd one strands the
-            // anchor between lattice points, where the cell model has no footprint.
-            if let (Some(from), Some(to)) = (def.location, other.location) {
-                let even_shift = |a: u32, b: u32| a.abs_diff(b).is_multiple_of(2);
-                assert!(
-                    even_shift(from.size().width, to.size().width)
-                        && even_shift(from.size().height, to.size().height),
-                    "{owner} crosses an odd footprint difference, which has no \
-                     whole-cell anchor to land on"
-                );
-            }
+            assert!(
+                self.entity(morph.into_type()).is_some(),
+                "{owner} names a type that is not registered"
+            );
             self.validate_requires(&owner, morph.requires());
             // A time read from a stat the type never declares would silently
             // mean an instant change — the same validates-but-lies class as a
             // cost without its pool.
-            if let MorphTime::Stat(stat) = morph.time() {
+            if let Period::Stat(stat) = morph.time() {
                 assert!(
                     def.base_stats.contains_key(&stat),
                     "{owner} reads its time from a stat the type does not carry"
@@ -977,17 +968,16 @@ impl ContentRegistry {
                     .entity(via)
                     .unwrap_or_else(|| panic!("{owner} wears a form that is not registered"));
                 // The interim form stands exactly where the origin stood, so
-                // entering and leaving it moves nothing on the grid.
+                // entering and leaving it moves nothing on the grid; whether
+                // it holds those cells is its own.
                 if let (Some(from), Some(worn)) = (def.location, interim.location) {
                     assert!(
-                        from.size() == worn.size()
-                            && from.occupation() == worn.occupation()
-                            && from.solidity() == worn.solidity(),
+                        from.size() == worn.size() && from.occupation() == worn.occupation(),
                         "{owner} wears a form whose footprint differs from its own"
                     );
                 }
                 // The time is read while the interim form is worn.
-                if let MorphTime::Stat(stat) = morph.time() {
+                if let Period::Stat(stat) = morph.time() {
                     assert!(
                         interim.base_stats.contains_key(&stat),
                         "{owner} reads its time from a stat the form it wears does not carry"
@@ -1187,6 +1177,18 @@ impl ContentRegistry {
                             modifier.stat.index() < self.entity_stats.len(),
                             "entity type '{}' has a field effect on an unregistered entity stat",
                             def.name
+                        );
+                        // A modifier folds into a stat the instance carries;
+                        // one on a stat the type never declares would validate
+                        // and do nothing.
+                        assert!(
+                            def.base_stats.contains_key(&modifier.stat),
+                            "entity type '{}' has a field effect on stat '{}', which the type does not carry",
+                            def.name,
+                            self.entity_stats
+                                .iter()
+                                .find(|(_, id)| **id == modifier.stat)
+                                .map_or("?", |(name, _)| name.as_str())
                         );
                     }
                 }
@@ -1808,36 +1810,14 @@ impl ContentRegistry {
         }
     }
 
-    /// Checks that the berth points a type declares lie inside its footprint, and
-    /// that every attachment its capabilities declare names a berth group the
-    /// jobs it reaches offer: every type a builder raises, at least one source
-    /// of a kind a carrier attaches for, and at least one type a repairer mends.
+    /// Checks that every attachment a type's capabilities declare names a
+    /// berth group the jobs it reaches offer: every type a builder raises, at
+    /// least one source of a kind a carrier attaches for, and at least one type
+    /// a repairer mends.
     ///
     /// Runs in [`validate`](Self::validate) rather than at registration, because
     /// a worker may be registered before the jobs it attaches to.
     fn validate_berths(&self, def: &EntityTypeDef) {
-        if let Some(berths) = &def.berths {
-            let size = def
-                .location
-                .expect("validated content defines a location")
-                .size();
-            let (width, height) = (
-                FixedU64::from_num(size.width),
-                FixedU64::from_num(size.height),
-            );
-            for (group, berths) in berths.groups() {
-                for point in berths.points() {
-                    assert!(
-                        point.x < width && point.y < height,
-                        "entity type '{}' puts a berth of group '{group}' at ({}, {}), outside its footprint",
-                        def.name,
-                        point.x,
-                        point.y
-                    );
-                }
-            }
-        }
-
         let offers = |job: &EntityTypeDef, group: &str| {
             job.berths
                 .as_ref()
@@ -1898,6 +1878,81 @@ impl ContentRegistry {
                 attachment.berths()
             );
         }
+    }
+
+    /// Checks what a breeder declares: the type it breeds is registered, stands
+    /// somewhere, is not the breeder itself and is a broodling that sits in a
+    /// group the breeder offers, with at least the limit in slots, and is one
+    /// cell across; a period read from a stat names one the breeder carries.
+    ///
+    /// Runs in [`validate`](Self::validate) rather than at registration, because
+    /// a breeder may be registered before what it breeds.
+    fn validate_breeder(&self, def: &EntityTypeDef) {
+        let Some(brood) = &def.breeder else {
+            return;
+        };
+        let owner = format!("entity type '{}' breeding '{}'", def.name, brood.breeds());
+        assert!(brood.breeds() != def.name, "{owner} breeds its own type");
+        let bred = self
+            .entity(brood.breeds())
+            .unwrap_or_else(|| panic!("{owner} names a type that is not registered"));
+        let location = bred
+            .location
+            .unwrap_or_else(|| panic!("{owner} names a type with no location"));
+        assert!(!bred.can_move(), "{owner} names a type that can move");
+        let attachment = bred
+            .broodling
+            .as_ref()
+            .map(BroodlingDef::attachment)
+            .unwrap_or_else(|| panic!("{owner} names a type that is no broodling"));
+        let group = def
+            .berths
+            .as_ref()
+            .and_then(|berths| berths.group(attachment.berths()))
+            .unwrap_or_else(|| {
+                panic!(
+                    "{owner} seats it in berth group '{}', which the breeder does not declare",
+                    attachment.berths()
+                )
+            });
+        assert!(
+            brood.limit() <= group.slots(),
+            "{owner} keeps up to {} but berth group '{}' seats only {}",
+            brood.limit(),
+            attachment.berths(),
+            group.slots()
+        );
+        assert!(
+            location.size() == CellSize::ONE,
+            "{owner} seats a type wider than one cell in a berth"
+        );
+        if let Period::Stat(stat) = brood.period() {
+            assert!(
+                def.base_stats.contains_key(&stat),
+                "{owner} reads its period from a stat the type does not carry"
+            );
+        }
+    }
+
+    /// Checks that a broodling type is bred by something: at least one
+    /// registered breeder breeds it.
+    ///
+    /// Runs in [`validate`](Self::validate) rather than at registration, because
+    /// the breeder may be registered after what it breeds.
+    fn validate_broodling(&self, def: &EntityTypeDef) {
+        if def.broodling.is_none() {
+            return;
+        }
+        assert!(
+            self.entities().any(|breeder| {
+                breeder
+                    .breeder
+                    .as_ref()
+                    .is_some_and(|brood| brood.breeds() == def.name)
+            }),
+            "entity type '{}' is a broodling, and no registered type breeds it",
+            def.name
+        );
     }
 
     /// Checks that every source a carrier's kind restricts itself to is a

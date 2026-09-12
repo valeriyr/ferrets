@@ -8,6 +8,7 @@ use ferrets_content::{
     annex::{AloneConduct, AnnexClaim, AnnexLife},
     attack::{Delivery, Weapon},
     berths::BerthGroup,
+    brood::{Lingering, OrphanFate},
     build::BuilderAttendance,
     costs::Cost,
     entity_buffs::EntityBuffDef,
@@ -17,7 +18,8 @@ use ferrets_content::{
         FieldDecay, FieldDef, FieldEffect, FieldEffectKind, FieldGrowth, FieldId, FieldPlacement,
         FieldSide, FieldSourceDef, FieldVision,
     },
-    morph::{MorphTime, MorphTransition},
+    morph::{MorphInterrupted, MorphReason, MorphTransition},
+    period::Period,
     player_buffs::PlayerBuffDef,
     projectile::ProjectileDef,
     registry::ContentRegistry,
@@ -32,7 +34,7 @@ use ferrets_content::{
     turret::{TurretDef, TurretMount, TurretStats, WeaponConduct},
     work::{Attachment, BerthStance, CrewLimit, WorkPresence},
 };
-use ferrets_math::{FixedI64, FixedU64, fixed_uvec2::FixedUVec2};
+use ferrets_math::{FixedI64, FixedU64, fixed_vec2::FixedVec2};
 use ferrets_pathfinder::layer_mask::LayerMask;
 use mlua::{Lua, Table, Value};
 
@@ -321,6 +323,21 @@ fn build_entity(
     if let Some(annex) = optional::<Table>(table, "annex")? {
         let (alone, claim) = parse_annex(&annex)?;
         def = def.with_annex(alone, claim);
+    }
+    if let Some(brood) = optional::<Table>(table, "breeder")? {
+        let breeds = required::<String>(&brood, "breeds")?;
+        let period = parse_period(
+            "brood period",
+            &required::<Value>(&brood, "period")?,
+            registry,
+        )?;
+        let limit = required::<usize>(&brood, "limit")?;
+        let initial = optional::<usize>(&brood, "initial")?.unwrap_or(0);
+        let orphans = orphan_fate(&required::<Value>(&brood, "orphans")?)?;
+        def = def.with_breeder(breeds, period, limit, initial, orphans);
+    }
+    if let Some(broodling) = optional::<Table>(table, "broodling")? {
+        def = def.with_broodling(attachment(&broodling)?);
     }
     if let Some(tags) = optional::<Vec<String>>(table, "tags")? {
         def = def.with_tags(tags);
@@ -658,18 +675,18 @@ fn harvest_kinds(carrier: &Table) -> crate::Result<Vec<(String, HarvestData)>> {
 }
 
 /// Reads a `berths` map: each group name maps to `{ points, slots }` — the
-/// `{x, y}` points inside the footprint, in cells from its anchor as whole
-/// numbers or decimal strings, and how many workers sit at once, defaulting to
-/// one per point.
+/// `{x, y}` points about the footprint, in cells from its anchor as whole
+/// numbers or decimal strings of either sign, and how many workers sit at
+/// once, defaulting to one per point.
 fn berth_groups(berths: &Table) -> crate::Result<Vec<(String, BerthGroup)>> {
     let mut groups = Vec::new();
     for (name, group) in pairs::<Table>(berths, "berths")? {
         let points = required::<Vec<Vec<Value>>>(&group, "points")?
             .into_iter()
             .map(|point| match point.as_slice() {
-                [x, y] => Ok(FixedUVec2::new(
-                    fixed_value("berth x", x)?,
-                    fixed_value("berth y", y)?,
+                [x, y] => Ok(FixedVec2::new(
+                    signed_fixed_value("berth x", x)?,
+                    signed_fixed_value("berth y", y)?,
                 )),
                 _ => Err(ScriptError::ContentError(format!(
                     "berth group '{name}' points must be {{x, y}} pairs"
@@ -680,6 +697,19 @@ fn berth_groups(berths: &Table) -> crate::Result<Vec<(String, BerthGroup)>> {
         groups.push((name, BerthGroup::new(points, slots)));
     }
     Ok(groups)
+}
+
+/// Reads a fixed-point value of either sign: a whole number, or a decimal
+/// string (floats are rejected at the determinism boundary).
+fn signed_fixed_value(what: &str, value: &Value) -> crate::Result<FixedI64> {
+    match value {
+        Value::Integer(n) => Ok(FixedI64::from_num(*n)),
+        Value::String(s) => content::signed_fixed(&s.to_string_lossy()),
+        other => Err(ScriptError::ContentError(format!(
+            "{what} must be an integer or a decimal string, got {}",
+            other.type_name()
+        ))),
+    }
 }
 
 /// Reads a non-negative fixed-point value: a whole number, or a decimal string
@@ -795,6 +825,34 @@ fn attachment(attached: &Table) -> crate::Result<Attachment> {
     let berths = required::<String>(attached, "berths")?;
     let stance = berth_stance(&required::<Value>(attached, "stance")?)?;
     Ok(Attachment::new(berths, stance))
+}
+
+/// Reads an orphan fate: the keyword `"perish"` or `"linger"`, or a
+/// `{ linger = ... }` table saying how the broodlings linger.
+fn orphan_fate(value: &Value) -> crate::Result<OrphanFate> {
+    keyword_or_table(
+        "orphan fate",
+        value,
+        &[
+            ("perish", OrphanFate::Perish),
+            ("linger", OrphanFate::Linger(Lingering::Stay)),
+        ],
+        &["a { linger = { reseat = { distance = ... } } } table"],
+        |table| {
+            Ok(OrphanFate::Linger(lingering(&required::<Table>(
+                table, "linger",
+            )?)?))
+        },
+    )
+}
+
+/// Reads how set-down broodlings linger from a `{ reseat = { distance = ... } }`
+/// table.
+fn lingering(table: &Table) -> crate::Result<Lingering> {
+    let reseat = required::<Table>(table, "reseat")?;
+    Ok(Lingering::Reseat {
+        distance: required::<u32>(&reseat, "distance")?,
+    })
 }
 
 /// Reads a berth stance: `"still"`, `{ circling = { speed, dwell } }`,
@@ -1001,11 +1059,34 @@ fn parse_entity_cast_cost(cost: &Table) -> crate::Result<Vec<EntityCastCost>> {
     Ok(costs)
 }
 
+/// Reads a time declared as a tick count or as `{ stat = ... }` naming a
+/// registered entity stat.
+fn parse_period(what: &str, value: &Value, registry: &ContentRegistry) -> crate::Result<Period> {
+    match value {
+        Value::Integer(ticks) => Ok(Period::Constant(u32::try_from(*ticks).map_err(|_| {
+            ScriptError::ContentError(format!("{what} {ticks} must be a non-negative tick count"))
+        })?)),
+        Value::Table(time) => {
+            let name = required::<String>(time, "stat")?;
+            let stat = registry.entity_stat(&name).ok_or_else(|| {
+                ScriptError::ContentError(format!("{what} stat '{name}' is not defined"))
+            })?;
+            Ok(Period::Stat(stat))
+        }
+        other => Err(content::unexpected(
+            what,
+            &["a tick count", "a { stat = ... } table"],
+            &found(other),
+        )),
+    }
+}
+
 /// Reads the `morphs` list: each entry names the destination type and the
 /// terms — an optional `via` form worn while the change runs, `time` (a tick
 /// count, or `{ stat = ... }` naming a registered entity stat), `placement`,
-/// `cancel`, an optional `cost` block shaped like a skill cost, and an optional
-/// `requires` list.
+/// `cancel`, an optional `interrupted` defaulting to `reverts`, an optional
+/// `reason` defaulting to `change`, an optional `cost` block shaped like a skill cost,
+/// and an optional `requires` list.
 fn parse_morphs(
     morphs: Vec<Table>,
     registry: &ContentRegistry,
@@ -1014,29 +1095,17 @@ fn parse_morphs(
     for entry in morphs {
         let into = required::<String>(&entry, "into")?;
         let via = optional::<String>(&entry, "via")?;
-        let time = match required::<Value>(&entry, "time")? {
-            Value::Integer(ticks) => MorphTime::Constant(u32::try_from(ticks).map_err(|_| {
-                ScriptError::ContentError(format!(
-                    "morph time {ticks} must be a non-negative tick count"
-                ))
-            })?),
-            Value::Table(time) => {
-                let name = required::<String>(&time, "stat")?;
-                let stat = registry.entity_stat(&name).ok_or_else(|| {
-                    ScriptError::ContentError(format!("morph time stat '{name}' is not defined"))
-                })?;
-                MorphTime::Stat(stat)
-            }
-            other => {
-                return Err(content::unexpected(
-                    "morph time",
-                    &["a tick count", "a { stat = ... } table"],
-                    &found(&other),
-                ));
-            }
-        };
+        let time = parse_period("morph time", &required::<Value>(&entry, "time")?, registry)?;
         let placement = content::morph_placement(&required::<String>(&entry, "placement")?)?;
         let cancel = content::morph_cancel(&required::<String>(&entry, "cancel")?)?;
+        let interrupted = match optional::<String>(&entry, "interrupted")? {
+            Some(name) => content::morph_interrupted(&name)?,
+            None => MorphInterrupted::Reverts,
+        };
+        let reason = match optional::<String>(&entry, "reason")? {
+            Some(name) => content::morph_reason(&name)?,
+            None => MorphReason::Change,
+        };
         let costs = match optional::<Table>(&entry, "cost")? {
             Some(cost) => parse_entity_cast_cost(&cost)?,
             None => Vec::new(),
@@ -1048,6 +1117,8 @@ fn parse_morphs(
             time,
             placement,
             cancel,
+            interrupted,
+            reason,
             costs,
             requires,
         ));

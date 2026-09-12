@@ -31,7 +31,7 @@ use crate::{
     },
     entity_def::{self, Operation, Switch},
     map::Map,
-    movement_model::MovementModel,
+    movement_model::{self, MovementModel},
     order::Order,
 };
 
@@ -54,6 +54,10 @@ pub enum Refusal {
     /// The entity's queue holds work a soft flush would leave in place, or
     /// workers sit in its berths.
     Busy,
+    /// Nothing around the entity can take what the order stands on the ground.
+    NoRoom,
+    /// The player's supply has no room for what the order makes.
+    NoSupply,
 }
 
 /// What an order does while its entity is disabled.
@@ -80,7 +84,7 @@ pub enum FollowUp {
     Dies,
 }
 
-/// Result of advancing an order by one tick.
+/// Result of an order's step: a tick advanced, or a cancel judged.
 pub struct Processing {
     /// The order's new state.
     pub state: OrderState,
@@ -177,10 +181,16 @@ fn survives_soft_cancel(order: &Order) -> bool {
     }
 }
 
-/// The refusal an entity's state hands new work when it is idle rather than
-/// merely switched off: an annex idling with no primary takes none, while a
-/// building a field switched off queues it and waits.
+/// The refusal an entity's state hands new production when it is idle rather
+/// than merely switched off: one changing form is busy, an annex idling with
+/// no primary takes none, and a building a field switched off queues it and
+/// waits.
 pub(super) fn requires_not_idle(world: &World, entity: Entity) -> Result<(), Refusal> {
+    // A change under way makes it busy whatever else it is: the form it lands
+    // as may have no queue to hold the work.
+    if entity_def::changing(world, entity) {
+        return Err(Refusal::Busy);
+    }
     match entity_def::operation(world, entity) {
         Operation::Operating => Ok(()),
         // An annex with nothing docked takes no new work at all; a building a
@@ -300,7 +310,7 @@ fn dispatch_cancel(
     policy: CancelPolicy,
     entry_state: OrderState,
     world: &mut World,
-) -> OrderState {
+) -> Processing {
     match order {
         Order::Move { .. } => {
             movement::cancel_processing(entity, order, policy, entry_state, world)
@@ -435,17 +445,22 @@ pub fn prepare_tick(entity: Entity, queue: &mut OrderQueueComponent, world: &mut
         // Clear cancel flag before dispatching — prevents re-cancellation on the next tick.
         queue.0[i].cancel = None;
 
-        let new_state = dispatch_cancel(entity, &order, policy, entry_state, world);
+        let result = dispatch_cancel(entity, &order, policy, entry_state, world);
 
-        match new_state {
+        match result.state {
             OrderState::Finished => {
                 queue.0.remove(i);
             }
             OrderState::InProcessing => i += 1,
             OrderState::New | OrderState::Suspended => unreachable!(
                 "cancel_processing must return InProcessing or Finished, got {:?}",
-                new_state
+                result.state
             ),
+        }
+        match result.follow_up {
+            FollowUp::None => {}
+            FollowUp::Dies => queue.push(Order::Die, Some(CancelPolicy::Force)),
+            FollowUp::SubOrder(_) => unreachable!("a cancel never suspends into a sub-order"),
         }
     }
 
@@ -475,7 +490,7 @@ pub fn watch_tick(entity: Entity, queue: &mut OrderQueueComponent, world: &mut W
         // state to finish — watchers may always interrupt.
         MovementModel::Continuous => {}
         MovementModel::Cell => {
-            if movement::is_mid_crossing(position) {
+            if movement_model::is_mid_crossing(position) {
                 return;
             }
         }
@@ -496,7 +511,7 @@ pub fn watch_tick(entity: Entity, queue: &mut OrderQueueComponent, world: &mut W
         world,
     );
     debug_assert_eq!(
-        cancelled,
+        cancelled.state,
         OrderState::Finished,
         "a force-cancelled sub-order must stop immediately"
     );

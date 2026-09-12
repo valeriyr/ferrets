@@ -4,7 +4,7 @@ use ferrets_content::{
     annex::{AnnexClaim, AnnexWork},
     field::{FieldAction, FieldAffiliation, FieldCoverage, FieldVision},
     location::Solidity,
-    morph::{MorphCancel, MorphPlacement},
+    morph::{MorphCancel, MorphInterrupted, MorphPlacement, MorphReason},
     projectile::Aim,
     registry::ContentRegistry,
     resource::{Banking, DepletionPolicy},
@@ -15,7 +15,7 @@ use ferrets_content::{
     transport::{BoardingPolicy, PassengerConduct, PassengerFate},
     turret::{TurretFire, WeaponConduct},
 };
-use ferrets_math::FixedU64;
+use ferrets_math::{FixedI64, FixedU64};
 
 use crate::{engine::ScriptEngine, error::ScriptError};
 
@@ -36,6 +36,13 @@ pub fn load(engine: &dyn ScriptEngine, source: &str) -> crate::Result<ContentReg
 pub(crate) fn fixed(value: &str) -> crate::Result<FixedU64> {
     value
         .parse::<FixedU64>()
+        .map_err(|error| ScriptError::NumberError(format!("'{value}': {error}")))
+}
+
+/// Parses a signed decimal string into a fixed-point number.
+pub(crate) fn signed_fixed(value: &str) -> crate::Result<FixedI64> {
+    value
+        .parse::<FixedI64>()
         .map_err(|error| ScriptError::NumberError(format!("'{value}': {error}")))
 }
 
@@ -197,6 +204,31 @@ pub(crate) fn morph_placement(value: &str) -> crate::Result<MorphPlacement> {
         &[
             ("reserve", MorphPlacement::Reserve),
             ("revalidate", MorphPlacement::Revalidate),
+            ("nearby", MorphPlacement::Nearby),
+        ],
+    )
+}
+
+/// Maps a morph interruption name to its enum.
+pub(crate) fn morph_interrupted(value: &str) -> crate::Result<MorphInterrupted> {
+    keyword(
+        "morph interrupted",
+        value,
+        &[
+            ("reverts", MorphInterrupted::Reverts),
+            ("dies", MorphInterrupted::Dies),
+        ],
+    )
+}
+
+/// Maps a morph reason name to its enum.
+pub(crate) fn morph_reason(value: &str) -> crate::Result<MorphReason> {
+    keyword(
+        "morph reason",
+        value,
+        &[
+            ("production", MorphReason::Production),
+            ("change", MorphReason::Change),
         ],
     )
 }

@@ -4,7 +4,7 @@
 use ferrets_content::{
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
-    morph::MorphTime,
+    period::Period,
     registry::ContentRegistry,
     requirement::Requirement,
     research::ResearchId,
@@ -178,6 +178,18 @@ pub struct EntityContentView {
     /// Changes of form instances can start, in declaration order. `None`
     /// when the type declares none.
     pub morphs: Option<Vec<MorphView>>,
+    /// What instances breed. `None` when the type breeds nothing.
+    pub breeder: Option<BreederView>,
+}
+
+/// What a type breeds, and how many at once.
+pub struct BreederView {
+    /// The type bred.
+    pub breeds: String,
+    /// How many broodlings live at once.
+    pub limit: u32,
+    /// Ticks between births. `None` when the period is read from a stat.
+    pub period: Option<u32>,
 }
 
 /// One change of form a type declares.
@@ -270,11 +282,19 @@ impl EntityContentView {
                             })
                             .collect(),
                         time: match transition.time() {
-                            MorphTime::Constant(ticks) => Some(ticks),
-                            MorphTime::Stat(_) => None,
+                            Period::Constant(ticks) => Some(ticks),
+                            Period::Stat(_) => None,
                         },
                     })
                     .collect()
+            }),
+            breeder: def.breeder.as_ref().map(|brood| BreederView {
+                breeds: brood.breeds().to_string(),
+                limit: u32::try_from(brood.limit()).expect("a brood limit fits in u32"),
+                period: match brood.period() {
+                    Period::Constant(ticks) => Some(ticks),
+                    Period::Stat(_) => None,
+                },
             }),
         }
     }

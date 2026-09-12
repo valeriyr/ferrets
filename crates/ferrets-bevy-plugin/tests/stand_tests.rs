@@ -11,7 +11,8 @@ use ferrets_content::{
     entity_type_def::EntityTypeDef,
     field::{FieldAction, FieldDecay, FieldDef, FieldGrowth, FieldId, FieldSourceDef, FieldVision},
     location::Solidity,
-    morph::{MorphCancel, MorphPlacement, MorphTime, MorphTransition},
+    morph::{MorphCancel, MorphInterrupted, MorphPlacement, MorphReason, MorphTransition},
+    period::Period,
     registry::ContentRegistry,
     skills::{EntityCastEffect, EntityCastTarget, SkillCaster, SkillDef},
     stand::StandingAct,
@@ -238,9 +239,11 @@ fn stand_app() -> App {
             MorphTransition::new(
                 into,
                 None,
-                MorphTime::Constant(1),
+                Period::Constant(1),
                 MorphPlacement::Revalidate,
                 MorphCancel::Forfeit,
+                MorphInterrupted::Reverts,
+                MorphReason::Change,
                 Vec::new(),
                 Vec::new(),
             )

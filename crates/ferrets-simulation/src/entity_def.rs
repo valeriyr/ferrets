@@ -10,7 +10,8 @@ use crate::{
     components::{
         attached::AttachedComponent, build::UnderConstructionComponent,
         entity_info::EntityInfoComponent, entity_stats::StatsComponent, hidden::HiddenComponent,
-        location::LocationComponent, order_queue::OrderQueueComponent, owner::OwnerComponent,
+        location::LocationComponent, morph::MorphComponent, order_queue::OrderQueueComponent,
+        owner::OwnerComponent,
     },
     fields,
     map::OccupancyClass,
@@ -24,6 +25,8 @@ use ferrets_content::{
     build::BuilderAttendance,
     entity_stats::EntityStatId,
     entity_type_def::{EntityTypeDef, EntityTypeId},
+    morph::MorphTransition,
+    period::Period,
     registry::ContentRegistry,
     resource::HarvestData,
     targeting,
@@ -121,14 +124,20 @@ pub enum Operation {
     Disabled(Switch),
 }
 
+/// Whether a change of form is under way on `entity`: it wears its origin or
+/// an interim form until the change lands. Apart from its [`Operation`] — a
+/// switched-off entity changes form all the same, and one changing form
+/// still operates.
+pub fn changing(world: &World, entity: Entity) -> bool {
+    world.entity(entity).contains::<MorphComponent>()
+}
+
 /// Returns the [`Operation`] `entity` is in. A site still being raised is
 /// [`Operation::UnderConstruction`] whatever the fields say about it or the
 /// dock it stands in.
 pub fn operation(world: &World, entity: Entity) -> Operation {
-    if world
-        .entity(entity)
-        .contains::<UnderConstructionComponent>()
-    {
+    let entity_ref = world.entity(entity);
+    if entity_ref.contains::<UnderConstructionComponent>() {
         Operation::UnderConstruction
     } else if fields::disabled(world, entity) {
         Operation::Disabled(Switch::Field)
@@ -148,6 +157,40 @@ pub fn orders(world: &World, entity: Entity) -> Vec<Order> {
         .map_or_else(Vec::new, |queue| {
             queue.0.iter().map(|entry| entry.order.clone()).collect()
         })
+}
+
+/// The terms of the change of form `morph` is under, read from the type that
+/// declared it — which the entity may no longer be, when it wears an interim
+/// form.
+pub fn morph_terms(world: &World, morph: &MorphComponent) -> Option<MorphTransition> {
+    world
+        .resource::<ContentRegistry>()
+        .def(morph.from)
+        .morphs
+        .iter()
+        .find(|transition| transition.into_type() == morph.into)
+        .cloned()
+}
+
+/// The form a change on `entity` is declared on: the one it changes from
+/// when a change is under way, its own otherwise.
+pub fn morph_origin(world: &World, entity: Entity) -> EntityTypeId {
+    world
+        .entity(entity)
+        .get::<MorphComponent>()
+        .map_or_else(|| type_id(world, entity), |morph| morph.from)
+}
+
+/// Ticks a declared period comes to for `entity`: a constant is what it says,
+/// and a stat names the entity's effective value. A period of zero is due the
+/// tick it starts.
+pub fn period_ticks(world: &World, entity: Entity, period: Period) -> u32 {
+    match period {
+        Period::Constant(ticks) => ticks,
+        Period::Stat(id) => effective_stat(world, entity, id)
+            .map(|time| time.to_num::<u32>())
+            .unwrap_or(0),
+    }
 }
 
 /// Returns where `entity` stands.

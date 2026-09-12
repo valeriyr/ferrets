@@ -63,13 +63,13 @@ pub fn cancel_processing(
     policy: CancelPolicy,
     _entry_state: OrderState,
     world: &mut World,
-) -> OrderState {
+) -> Processing {
     let Order::Research { research } = order else {
         unreachable!("cancel_processing called with a non-Research order");
     };
 
     match policy {
-        CancelPolicy::Soft => OrderState::InProcessing,
+        CancelPolicy::Soft => Processing::state(OrderState::InProcessing),
         CancelPolicy::Force => {
             let owner = entity_def::owner(world, entity);
             if let Some(player) = owner {
@@ -90,7 +90,7 @@ pub fn cancel_processing(
             }
 
             world.entity_mut(entity).remove::<ResearchComponent>();
-            OrderState::Finished
+            Processing::state(OrderState::Finished)
         }
     }
 }

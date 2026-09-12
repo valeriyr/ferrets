@@ -80,9 +80,9 @@ pub fn cancel_processing(
     _policy: CancelPolicy,
     _entry_state: OrderState,
     world: &mut World,
-) -> OrderState {
+) -> Processing {
     world.entity_mut(entity).remove::<BoardComponent>();
-    OrderState::Finished
+    Processing::state(OrderState::Finished)
 }
 
 /// Whether a Board can stand through a soft cancel: never — it drops like any

@@ -5,16 +5,18 @@ mod utils;
 
 use ferrets_content::{
     berths::{BerthGroup, BerthsDef},
+    brood::{BreederDef, OrphanFate},
     build::BuilderAttendance,
     dying::DyingDef,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     location::Solidity,
+    period::Period,
     resource::{Banking, DepletionPolicy, HarvestData, Sources},
     work::{Attachment, BerthStance, CrewLimit, WorkPresence},
 };
 use ferrets_geometry::cell_size::CellSize;
-use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
+use ferrets_math::{FixedI64, FixedU64, fixed_vec2::FixedVec2};
 use ferrets_pathfinder::layer_mask::LayerMask;
 use utils::GROUND;
 
@@ -263,7 +265,7 @@ fn empty_storage_kind_panics() {
 #[test]
 #[should_panic(expected = "a berth group must have at least one point")]
 fn berth_group_without_points_panics() {
-    BerthGroup::new(Vec::<FixedUVec2>::new(), 1);
+    BerthGroup::new(Vec::<FixedVec2>::new(), 1);
 }
 
 #[test]
@@ -288,6 +290,24 @@ fn berths_without_groups_panics() {
 #[should_panic(expected = "berth group names must not be empty")]
 fn empty_berth_group_name_panics() {
     BerthsDef::new([("", BerthGroup::new([middle()], 1))]);
+}
+
+#[test]
+#[should_panic(expected = "breeds must not be empty")]
+fn breeder_of_nothing_panics() {
+    BreederDef::new("", Period::Constant(10), 2, 0, OrphanFate::Perish);
+}
+
+#[test]
+#[should_panic(expected = "a brood limit must admit at least one broodling")]
+fn breeder_with_limit_of_zero_panics() {
+    BreederDef::new("grub", Period::Constant(10), 0, 0, OrphanFate::Perish);
+}
+
+#[test]
+#[should_panic(expected = "a brood cannot owe more broodlings than its limit admits")]
+fn breeder_owing_more_than_its_limit_panics() {
+    BreederDef::new("grub", Period::Constant(10), 2, 3, OrphanFate::Perish);
 }
 
 #[test]
@@ -368,8 +388,8 @@ fn empty_bonus_key_panics() {
 //
 
 /// The middle of a one-cell footprint, as a berth point.
-fn middle() -> FixedUVec2 {
-    FixedUVec2::new(FixedU64::from_num(0.5), FixedU64::from_num(0.5))
+fn middle() -> FixedVec2 {
+    FixedVec2::new(FixedI64::from_num(0.5), FixedI64::from_num(0.5))
 }
 
 fn footman() -> EntityTypeDef {
