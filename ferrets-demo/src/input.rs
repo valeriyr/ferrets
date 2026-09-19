@@ -15,6 +15,7 @@ use ferrets_physics::body;
 use ferrets_simulation::{
     command::{PlayerCommand, SelectMode, SkillCasterRef, SkillTarget},
     components::{
+        dying::RemainsComponent,
         entity_info::EntityInfoComponent,
         hidden::HiddenComponent,
         location::LocationComponent,
@@ -293,6 +294,15 @@ pub fn viewport_corners(
     ]
 }
 
+/// What a click is looking for under the cursor.
+#[derive(Clone, Copy)]
+enum Clicked {
+    /// Whatever is standing there — what every order means.
+    Standing,
+    /// The body lying there, which only a cast that spends one means.
+    Remains,
+}
+
 /// The selectable entity whose sprite covers the world position, preferring
 /// the smallest footprint (a unit standing on/near a building wins over the
 /// building). Sprites span the entity's fractional position plus its
@@ -301,12 +311,14 @@ pub fn viewport_corners(
 /// position truncates to.
 fn entity_at(
     world: Vec2,
+    looking_for: Clicked,
     registry: &ContentRegistry,
     entities: &Query<
         (
             &EntityInfoComponent,
             &LocationComponent,
             Option<&Visibility>,
+            Has<RemainsComponent>,
         ),
         Without<HiddenComponent>,
     >,
@@ -314,11 +326,21 @@ fn entity_at(
     let x = world.x / CELL_PX;
     let y = -world.y / CELL_PX;
     let mut best: Option<(u32, SimulationId)> = None;
-    for (info, location, visibility) in entities {
+    for (info, location, visibility, remains) in entities {
         // The click meets what the player sees: a sprite the fog (or the
         // watching perspective) hides is not there to be clicked, and the
         // simulation would refuse an order against it anyway.
         if matches!(visibility, Some(Visibility::Hidden)) {
+            continue;
+        }
+        // A body lies in the same cell as whoever is standing over it, so
+        // which of the two a click means is the click's own business: only a
+        // cast that spends a body ever means the body.
+        let wanted = match looking_for {
+            Clicked::Standing => !remains,
+            Clicked::Remains => remains,
+        };
+        if !wanted {
             continue;
         }
         let ox = location.position.x.to_num::<f32>();
@@ -361,6 +383,7 @@ pub fn selection_input(
             &EntityInfoComponent,
             &LocationComponent,
             Option<&Visibility>,
+            Has<RemainsComponent>,
         ),
         Without<HiddenComponent>,
     >,
@@ -407,7 +430,7 @@ pub fn selection_input(
         // a click toggles the entity, a box adds its contents.
         let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
         if start.distance(cursor) <= CLICK_SLOP
-            && let Some(id) = entity_at(cursor, &registry, &entities)
+            && let Some(id) = entity_at(cursor, Clicked::Standing, &registry, &entities)
         {
             let now = time.elapsed_secs();
             let double = last_click
@@ -482,6 +505,7 @@ pub fn order_input(
             &EntityInfoComponent,
             &LocationComponent,
             Option<&Visibility>,
+            Has<RemainsComponent>,
         ),
         Without<HiddenComponent>,
     >,
@@ -506,7 +530,7 @@ pub fn order_input(
     };
 
     let flush = !(keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight));
-    let target = entity_at(cursor, &registry, &entities);
+    let target = entity_at(cursor, Clicked::Standing, &registry, &entities);
     issue_orders_at(
         cursor,
         target,
@@ -625,6 +649,7 @@ pub fn inspect_input(
             &EntityInfoComponent,
             &LocationComponent,
             Option<&Visibility>,
+            Has<RemainsComponent>,
         ),
         Without<HiddenComponent>,
     >,
@@ -661,7 +686,7 @@ pub fn inspect_input(
     {
         let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
         if start.distance(cursor) <= CLICK_SLOP {
-            match entity_at(cursor, &registry, &entities) {
+            match entity_at(cursor, Clicked::Standing, &registry, &entities) {
                 Some(id) if shift => {
                     if let Some(held) = inspected.0.iter().position(|&it| it == id) {
                         inspected.0.remove(held);
@@ -679,8 +704,9 @@ pub fn inspect_input(
                 .unwrap_or_else(|| covering_rect(&[start, cursor]));
             let framed = entities
                 .iter()
-                .filter(|(_, location, visibility)| {
+                .filter(|(_, location, visibility, remains)| {
                     !matches!(visibility, Some(Visibility::Hidden))
+                        && !remains
                         && rect.contains(location.position)
                 })
                 .map(|(info, ..)| info.id());
@@ -783,6 +809,7 @@ pub fn targeting_input(
             &EntityInfoComponent,
             &LocationComponent,
             Option<&Visibility>,
+            Has<RemainsComponent>,
         ),
         Without<HiddenComponent>,
     >,
@@ -816,7 +843,7 @@ pub fn targeting_input(
             // An entity under the cursor is attacked as named — the executor
             // honours the order against allies too; an empty cell is attacked
             // toward, engaging whatever is met on the way.
-            match entity_at(cursor, &registry, &entities) {
+            match entity_at(cursor, Clicked::Standing, &registry, &entities) {
                 Some(target) => pending.push(PlayerCommand::Attack {
                     target: AttackTarget::Entity(target),
                     flush,
@@ -836,19 +863,19 @@ pub fn targeting_input(
         TargetedOrder::Guard => {
             // Guard needs an entity under the cursor; a miss keeps the mode
             // armed so the player can click again.
-            let Some(target) = entity_at(cursor, &registry, &entities) else {
+            let Some(target) = entity_at(cursor, Clicked::Standing, &registry, &entities) else {
                 return;
             };
             pending.push(PlayerCommand::Guard { target, flush });
         }
         TargetedOrder::Follow => {
-            let Some(target) = entity_at(cursor, &registry, &entities) else {
+            let Some(target) = entity_at(cursor, Clicked::Standing, &registry, &entities) else {
                 return;
             };
             pending.push(PlayerCommand::Follow { target, flush });
         }
         TargetedOrder::Board => {
-            let Some(target) = entity_at(cursor, &registry, &entities) else {
+            let Some(target) = entity_at(cursor, Clicked::Standing, &registry, &entities) else {
                 return;
             };
             pending.push(PlayerCommand::Board { target, flush });
@@ -862,7 +889,7 @@ pub fn targeting_input(
         TargetedOrder::Load => {
             // The fetch needs an entity under the cursor; a miss keeps the mode
             // armed so the player can click again.
-            let Some(target) = entity_at(cursor, &registry, &entities) else {
+            let Some(target) = entity_at(cursor, Clicked::Standing, &registry, &entities) else {
                 return;
             };
             if let Some(transport) = leading.0 {
@@ -886,24 +913,29 @@ pub fn targeting_input(
             let Some(local) = session.local_player() else {
                 return;
             };
-            let aims_at_position = registry.skill_def(skill).is_some_and(|def| {
-                matches!(
-                    def.caster,
-                    SkillCaster::Entity {
-                        target: EntityCastTarget::Position,
-                        ..
-                    }
-                )
-            });
-            let target = if aims_at_position {
-                SkillTarget::Position(world_to_pos(cursor))
-            } else {
-                // The cast needs an entity under the cursor; a miss keeps the
-                // mode armed so the player can click again.
-                let Some(target) = entity_at(cursor, &registry, &entities) else {
-                    return;
-                };
-                SkillTarget::Entity(target)
+            // What the click has to find depends on what the skill takes: a
+            // cell, a body on the ground, or something standing.
+            let aim = match registry.skill_def(skill).map(|def| &def.caster) {
+                Some(SkillCaster::Entity { target, .. }) => target,
+                Some(SkillCaster::Player { .. }) | None => return,
+            };
+            let target = match aim {
+                EntityCastTarget::Position => SkillTarget::Position(world_to_pos(cursor)),
+                EntityCastTarget::Fallen { .. } => {
+                    // A miss keeps the mode armed, so the player can click again.
+                    let Some(target) = entity_at(cursor, Clicked::Remains, &registry, &entities)
+                    else {
+                        return;
+                    };
+                    SkillTarget::Entity(target)
+                }
+                EntityCastTarget::Caster | EntityCastTarget::Standing { .. } => {
+                    let Some(target) = entity_at(cursor, Clicked::Standing, &registry, &entities)
+                    else {
+                        return;
+                    };
+                    SkillTarget::Entity(target)
+                }
             };
             for &caster in selection.get(local) {
                 pending.push(PlayerCommand::UseSkill {

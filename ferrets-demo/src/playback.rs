@@ -20,6 +20,7 @@ use ferrets_script::{content, engine::lua::LuaEngine};
 use ferrets_simulation::{
     map::Map,
     map_data::MapData,
+    ruleset::Ruleset,
     scenario::Scenario,
     session::{
         GameSession,
@@ -49,6 +50,8 @@ pub struct ResolvedGame {
     pub data: MapData,
     /// The mission a scenario recording names; `None` for a skirmish.
     pub scenario: Option<Scenario>,
+    /// The rules the recorded game was played under.
+    pub rules: Ruleset,
 }
 
 /// A rebuilt recording: the app to run it in, and the last tick it recorded —
@@ -66,18 +69,20 @@ pub struct Rebuilt {
 pub fn resolve(header: &ReplayHeader, registry: &ContentRegistry) -> Result<ResolvedGame, String> {
     let model = header.movement_model;
     let projection = header.projection;
-    let (slots, map_name, finish_policy, data, scenario) = match header.game.clone() {
+    let (slots, map_name, finish_policy, data, scenario, rules) = match header.game.clone() {
         RecordedGame::Scenario(name) => {
             let mission = scenario::builtin_mission(projection, model);
             if name != mission.name {
                 return Err(format!("the replay needs unknown scenario '{name}'"));
             }
+            let rules = mission.rules;
             (
                 player_slot::scenario_slots(&mission, ai::environment_vision(registry)),
                 mission.map.name().to_string(),
                 FinishPolicy::Scripted,
                 mission.map.clone(),
                 Some(mission),
+                rules,
             )
         }
         RecordedGame::Skirmish(skirmish) => {
@@ -92,11 +97,13 @@ pub fn resolve(header: &ReplayHeader, registry: &ContentRegistry) -> Result<Reso
                 skirmish.finish_policy,
                 data,
                 None,
+                skirmish.rules,
             )
         }
     };
 
     Ok(ResolvedGame {
+        rules,
         slots,
         map_name,
         finish_policy,
@@ -111,6 +118,9 @@ pub fn resolve(header: &ReplayHeader, registry: &ContentRegistry) -> Result<Reso
 /// the sole frame source, so the choices that only the net control plane and
 /// the AI frame sources read — the authority, its hosting mode, the drop
 /// policy — never come into play.
+///
+/// The rules come from the recording, never from whatever this build happens
+/// to play skirmishes under.
 pub fn session(resolved: &ResolvedGame) -> GameSession {
     GameSession::configured(
         LocalRole::Observer,
@@ -121,6 +131,7 @@ pub fn session(resolved: &ResolvedGame) -> GameSession {
         },
         DropPolicy::Automatic,
         resolved.finish_policy,
+        resolved.rules,
     )
 }
 

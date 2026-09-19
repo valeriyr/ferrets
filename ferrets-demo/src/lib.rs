@@ -26,6 +26,7 @@ pub mod minimap;
 pub mod playback;
 pub mod render;
 mod replay;
+pub mod ruleset;
 pub mod scenario;
 pub mod settings;
 pub mod setup;
@@ -172,6 +173,7 @@ pub fn run() {
                     hud::research_card_input,
                     hud::morph_card_input,
                     hud::cancel_build_card_input,
+                    hud::cancel_morph_card_input,
                     hud::select_brood_card_input,
                     hud::skill_card_input,
                     hud::player_skill_card_input,
@@ -251,7 +253,7 @@ pub fn run() {
                     // shadow sits under both rather than over them.
                     render::draw_air_shadows,
                     render::draw_selection,
-                    render::draw_skill_pulses,
+                    (render::draw_casts, render::draw_skill_pulses),
                     render::draw_puffs,
                     render::draw_shots,
                     render::draw_facing,
@@ -261,7 +263,7 @@ pub fn run() {
                     render::draw_watch_patches,
                     render::draw_work_markers,
                     render::draw_status_bars,
-                    render::tint_under_construction,
+                    (render::tint_under_construction, render::fade_remains),
                 )
                     .chain(),
             )

@@ -1,6 +1,7 @@
 //! The game session: lifecycle and participants.
 
 use ferrets_math::FixedU64;
+use ferrets_simulation::ruleset::{RemainsLimit, Ruleset};
 use ferrets_simulation::session::{
     GameResult, GameSession, Winner,
     ai_hosting::AiHosting,
@@ -56,6 +57,7 @@ fn configure_replaces_slots_and_local_player_while_pending() {
         FinishPolicy::LastStanding {
             elimination: EliminationScope::Player,
         },
+        Ruleset::new(RemainsLimit::Unbounded),
     );
 
     assert_eq!(session.slots().len(), 3);
@@ -82,6 +84,7 @@ fn configure_panics_after_start() {
         FinishPolicy::LastStanding {
             elimination: EliminationScope::Player,
         },
+        Ruleset::new(RemainsLimit::Unbounded),
     );
 }
 
@@ -599,6 +602,7 @@ fn session_without_local_player_is_valid_and_plays_nothing() {
         FinishPolicy::LastStanding {
             elimination: EliminationScope::Player,
         },
+        Ruleset::new(RemainsLimit::Unbounded),
     );
 
     assert_eq!(session.local_player(), None);
@@ -879,6 +883,7 @@ fn mixed_session(ai_hosting: AiHosting) -> GameSession {
         FinishPolicy::LastStanding {
             elimination: EliminationScope::Player,
         },
+        Ruleset::new(RemainsLimit::Unbounded),
     )
 }
 
@@ -897,6 +902,7 @@ fn configured(local_player: u8, slots: Vec<PlayerSlot>) -> GameSession {
         FinishPolicy::LastStanding {
             elimination: EliminationScope::Player,
         },
+        Ruleset::new(RemainsLimit::Unbounded),
     )
 }
 

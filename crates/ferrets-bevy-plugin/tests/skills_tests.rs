@@ -2,7 +2,7 @@
 
 use bevy::prelude::*;
 use ferrets_content::{
-    attack::{AttackDef, Delivery, Weapon},
+    attack::{AttackDef, Delivery, Slain, Weapon},
     costs::{self, Cost},
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
@@ -10,7 +10,10 @@ use ferrets_content::{
     registry::ContentRegistry,
     requirement::Requirement,
     research::ResearchDef,
-    skills::{EntityCastCost, EntityCastEffect, EntityCastTarget, SkillCaster, SkillDef, SkillId},
+    skills::{
+        Casting, EntityCastCost, EntityCastEffect, EntityCastTarget, Reach, SkillCaster, SkillDef,
+        SkillId,
+    },
     stats::ModifierOp,
 };
 use ferrets_geometry::cell_size::CellSize;
@@ -276,6 +279,8 @@ fn app() -> App {
             caster: SkillCaster::Entity {
                 costs,
                 target: EntityCastTarget::Caster,
+                reach: Reach::Wherever,
+                casting: Casting::Instant,
                 effect: EntityCastEffect::ApplyBuff(frenzy),
             },
             requires: Vec::new(),
@@ -310,7 +315,12 @@ fn app() -> App {
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
                 .with_health(50)
                 .with_attack(
-                    AttackDef::new(Weapon::new(utils::GROUND, Delivery::Instant, None)),
+                    AttackDef::new(Weapon::new(
+                        utils::GROUND,
+                        Delivery::Instant,
+                        None,
+                        Slain::Remains,
+                    )),
                     10,
                     1,
                     1,

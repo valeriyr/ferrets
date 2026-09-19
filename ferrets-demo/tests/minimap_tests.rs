@@ -68,7 +68,12 @@ fn cell_at_keeps_far_edge_inside_map() {
     let cells = (10, 10);
     let (x, y) =
         minimap::cell_at(cells, Vec2::new(0.99999, 0.99999)).expect("edge lands on a cell");
-    assert!(x < cells.0 && y < cells.1);
+    assert!(
+        x < cells.0 && y < cells.1,
+        "cell ({x}, {y}) lies past the last one on a {}x{} map",
+        cells.0,
+        cells.1
+    );
 }
 
 #[test]

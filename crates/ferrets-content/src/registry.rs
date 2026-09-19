@@ -13,20 +13,20 @@ use crate::{
     brood::BroodlingDef,
     build::BuilderAttendance,
     entity_buffs::{EntityBuffDef, EntityBuffId},
-    entity_stats::{ENTITY_BUILTIN_STATS, EntityStatId},
+    entity_stats::{ENTITY_BUILTIN_STATS, EntityStatDef, EntityStatId},
     entity_type_def::{EntityTypeDef, EntityTypeId},
     field::{FieldDef, FieldEffectKind, FieldGrowth, FieldId},
-    period::Period,
+    kinds::{Kind, Kinds},
     player_buffs::{PlayerBuffDef, PlayerBuffId},
     player_stats::{PLAYER_BUILTIN_STATS, PlayerStatId},
     projectile::{Aim, ProjectileDef, ProjectileId},
+    quantity::Quantity,
     repair::RepairCost,
     requirement::{Requirement, Scope},
     research::{ResearchDef, ResearchId},
-    resource::Sources,
     skills::{
-        EntityCastCost, EntityCastEffect, EntityCastTarget, PlayerCastEffect, SkillCaster,
-        SkillDef, SkillId,
+        Casting, EntityCastCost, EntityCastEffect, EntityCastTarget, PlayerCastEffect, Reach,
+        SkillCaster, SkillDef, SkillId,
     },
     stand::StandingAct,
     tags,
@@ -53,6 +53,9 @@ pub struct ContentRegistry {
     fields: BTreeMap<String, FieldId>,
     field_defs: Vec<FieldDef>,
     entity_stats: BTreeMap<String, EntityStatId>,
+    /// What each entity stat is, by registration index — the builtins first,
+    /// then what content declares.
+    entity_stat_defs: Vec<EntityStatDef>,
     player_stats: BTreeMap<String, PlayerStatId>,
     entity_buffs: BTreeMap<String, EntityBuffId>,
     entity_buff_defs: Vec<EntityBuffDef>,
@@ -76,7 +79,7 @@ impl Default for ContentRegistry {
             defs_by_name: BTreeMap::new(),
             resources: BTreeSet::new(),
             races: BTreeSet::new(),
-            tags: BTreeSet::from([tags::BUILDING.to_string()]),
+            tags: BTreeSet::from([tags::BUILDING.to_string(), tags::REMAINS.to_string()]),
             layers: BTreeMap::new(),
             terrains: BTreeMap::new(),
             fields: BTreeMap::new(),
@@ -84,6 +87,10 @@ impl Default for ContentRegistry {
             entity_stats: ENTITY_BUILTIN_STATS
                 .iter()
                 .map(|builtin| (builtin.name.to_string(), builtin.id))
+                .collect(),
+            entity_stat_defs: ENTITY_BUILTIN_STATS
+                .iter()
+                .map(|builtin| EntityStatDef::new(builtin.floor))
                 .collect(),
             player_stats: PLAYER_BUILTIN_STATS
                 .iter()
@@ -109,8 +116,10 @@ impl ContentRegistry {
     /// Registers an entity type definition.
     ///
     /// Validates everything intrinsic to the definition or that must form an
-    /// acyclic hierarchy — so resource kinds it references and any corpse type it
-    /// leaves must be registered first, and corpse cycles stay unconstructible.
+    /// acyclic hierarchy — so resource kinds it references must be registered
+    /// first. What a death leaves is *not* checked here, because a type may be
+    /// registered before what it hands on; [`validate`] checks that, and that
+    /// the decay chains it starts bottom out.
     /// Production catalogues (trained/built types) are *not* checked here because
     /// they may legitimately reference each other cyclically (a town hall trains a
     /// worker that builds the town hall); they are validated by [`validate`] once
@@ -123,8 +132,8 @@ impl ContentRegistry {
     /// definition has no location, belongs to an unregistered race, references an
     /// unregistered resource kind or tag, carries a skill with an energy cost but no
     /// energy pool, delivers a hit without a damage stat, splashes onto unregistered
-    /// layers, leaves a corpse type that is unregistered, has no dying phase,
-    /// or defines live-gameplay data, or projects, reads, or answers to a field
+    /// layers, is remains without a lifetime, with live-gameplay data on it or
+    /// with a dying time of its own, or projects, reads, or answers to a field
     /// this registry never minted.
     pub fn register(&mut self, def: EntityTypeDef) {
         assert!(
@@ -138,7 +147,7 @@ impl ContentRegistry {
         self.validate_resource_kinds(&def);
         self.validate_tags(&def);
         self.validate_layers(&def);
-        self.validate_corpse(&def);
+        self.validate_remains(&def);
         self.validate_stats(&def);
         self.validate_skills(&def);
         self.validate_researcher(&def);
@@ -158,9 +167,10 @@ impl ContentRegistry {
     /// and every declaration a type makes about itself. Call once after
     /// everything has been registered.
     ///
-    /// These references (trained and built types) may form cycles, so they cannot
-    /// be checked at registration time; this pass checks them against the complete
-    /// registry, in any registration order.
+    /// These references cannot be checked at registration time: production
+    /// catalogues may form cycles, and a filter may name a type registered
+    /// after it — or the very type that carries it. This pass checks them
+    /// against the complete registry, in any registration order.
     ///
     /// Panics, naming the offending type and reference, when any name a
     /// registered type points at does not resolve against the complete
@@ -171,6 +181,7 @@ impl ContentRegistry {
             self.validate_trains(def);
             self.validate_builds(def);
             self.validate_carries(def);
+            self.validate_repairs(def);
             self.validate_requires(&format!("entity type '{}'", def.name), &def.requires);
             self.validate_bonus_damage_vs(def);
             self.validate_traversable(def);
@@ -183,6 +194,7 @@ impl ContentRegistry {
             self.validate_annex(def);
             self.validate_breeder(def);
             self.validate_broodling(def);
+            self.validate_leaves(def);
         }
         for (name, &id) in &self.researches {
             self.validate_requires(
@@ -195,6 +207,7 @@ impl ContentRegistry {
                 &format!("skill '{name}'"),
                 &self.skill_defs[id.index()].requires,
             );
+            self.validate_aim(name, &self.skill_defs[id.index()]);
         }
     }
 
@@ -316,27 +329,49 @@ impl ContentRegistry {
     ///
     /// Ids are assigned in registration order. The built-in stats are
     /// pre-registered first, so their ids are the [`EntityStatId`] constants, and
-    /// content-declared stats follow. Re-registering a name returns its
-    /// existing id.
+    /// content-declared stats follow.
     ///
-    /// Panics if `name` is empty or already names a player stat — the two
-    /// vocabularies are separate, but one name meaning both would leave content
-    /// ambiguous to its readers.
-    pub fn register_entity_stat(&mut self, name: impl Into<String>) -> EntityStatId {
+    /// `floor` is the smallest effective value it may fold to: a non-zero one
+    /// marks a stat whose zero the consumer can never mean — a reach of
+    /// nothing, a cast worked over no time — so a debuff deep enough to reach
+    /// it holds there instead.
+    ///
+    /// Panics if `name` is empty, is already registered — a second declaration
+    /// would leave the floor depending on which of them ran first — or already
+    /// names a player stat, the two vocabularies being separate.
+    pub fn register_entity_stat(
+        &mut self,
+        name: impl Into<String>,
+        floor: FixedU64,
+    ) -> EntityStatId {
         let name = name.into();
         assert!(!name.is_empty(), "stat name must not be empty");
         assert!(
             !self.player_stats.contains_key(&name),
             "'{name}' is already registered as a player stat"
         );
-
-        if let Some(&id) = self.entity_stats.get(&name) {
-            return id;
-        }
+        assert!(
+            !self.entity_stats.contains_key(&name),
+            "entity stat '{name}' is already registered"
+        );
 
         let id = EntityStatId::from_index(self.entity_stats.len());
         self.entity_stats.insert(name, id);
+        self.entity_stat_defs.push(EntityStatDef::new(floor));
         id
+    }
+
+    /// What every registered entity stat is, by registration index.
+    pub fn entity_stat_defs(&self) -> &[EntityStatDef] {
+        &self.entity_stat_defs
+    }
+
+    /// What `stat` is, as it was registered.
+    pub fn entity_stat_def(&self, stat: EntityStatId) -> EntityStatDef {
+        self.entity_stat_defs
+            .get(stat.index())
+            .copied()
+            .expect("a stat id comes from this registry")
     }
 
     /// Returns `true` if `name` is a registered entity stat.
@@ -612,8 +647,32 @@ impl ContentRegistry {
             SkillCaster::Entity {
                 costs,
                 target,
+                reach: _,
+                casting,
                 effect,
             } => {
+                // A cast that lands on no tick at all never lands: a number
+                // content spells out is held to that here, and a stat is held
+                // to it by the floor it was registered with.
+                if let Casting::Delayed { point, period } = casting {
+                    // The least either ever folds to: a number content spells
+                    // out is that number, and a stat is the floor it was
+                    // registered with.
+                    let least = |quantity: &Quantity| match quantity {
+                        Quantity::Constant(value) => FixedU64::from_num(*value),
+                        Quantity::Stat(stat) => self.entity_stat_def(*stat).floor(),
+                    };
+                    assert!(
+                        least(point) >= FixedU64::ONE,
+                        "skill '{name}' is cast over no time at all: an instant cast declares no `cast`, and a point read from a stat is held to that stat's floor"
+                    );
+                    assert!(
+                        least(period) >= least(point),
+                        "skill '{name}' frees its caster before the cast lands: {} < {}",
+                        least(period),
+                        least(point),
+                    );
+                }
                 for cost in costs {
                     match cost {
                         EntityCastCost::Resources(resources) => {
@@ -645,13 +704,31 @@ impl ContentRegistry {
                     EntityCastEffect::Watch { duration, .. } => {
                         assert!(*duration > 0, "skill '{name}' watches for no time at all")
                     }
+                    EntityCastEffect::Summon { entity_type, count } => {
+                        let summoned = self.defs.get(entity_type.index()).unwrap_or_else(|| {
+                            panic!("skill '{name}' summons an unregistered entity type")
+                        });
+                        assert!(
+                            summoned.location.is_some(),
+                            "skill '{name}' summons '{}', which stands nowhere",
+                            summoned.name
+                        );
+                        assert!(
+                            !summoned.is_remains(),
+                            "skill '{name}' summons '{}', which is remains: a cast raises something from a body, it does not lay one",
+                            summoned.name
+                        );
+                        assert!(*count > 0, "skill '{name}' summons nothing at all");
+                    }
                 }
                 // A cell has no pools to buff, damage, or heal; only a field
                 // action and a watch land on one.
                 match (target, effect) {
                     (
                         EntityCastTarget::Position,
-                        EntityCastEffect::Field { .. } | EntityCastEffect::Watch { .. },
+                        EntityCastEffect::Field { .. }
+                        | EntityCastEffect::Watch { .. }
+                        | EntityCastEffect::Summon { .. },
                     ) => {}
                     (
                         EntityCastTarget::Position,
@@ -660,10 +737,20 @@ impl ContentRegistry {
                         | EntityCastEffect::Damage(_)
                         | EntityCastEffect::Heal(_),
                     ) => panic!("skill '{name}' aims at a position but its effect needs an entity"),
+                    // What lies where it fell has no pools and no ground of its
+                    // own to act on: what a cast does with a body is raise
+                    // something from it.
+                    (EntityCastTarget::Fallen { .. }, EntityCastEffect::Summon { .. }) => {}
                     (
-                        EntityCastTarget::Caster | EntityCastTarget::Ally | EntityCastTarget::Enemy,
-                        _,
-                    ) => {}
+                        EntityCastTarget::Fallen { .. },
+                        EntityCastEffect::ApplyBuff(_)
+                        | EntityCastEffect::RemoveBuff(_)
+                        | EntityCastEffect::Damage(_)
+                        | EntityCastEffect::Heal(_)
+                        | EntityCastEffect::Field { .. }
+                        | EntityCastEffect::Watch { .. },
+                    ) => panic!("skill '{name}' aims at the fallen, which only a summon may spend"),
+                    (EntityCastTarget::Caster | EntityCastTarget::Standing { .. }, _) => {}
                 }
             }
             SkillCaster::Player { cost, effect } => {
@@ -945,15 +1032,18 @@ impl ContentRegistry {
                 def.name,
                 morph.into_type()
             );
+            let into = self
+                .entity(morph.into_type())
+                .unwrap_or_else(|| panic!("{owner} names a type that is not registered"));
             assert!(
-                self.entity(morph.into_type()).is_some(),
-                "{owner} names a type that is not registered"
+                !into.is_remains(),
+                "{owner} names remains, which only a death may leave"
             );
             self.validate_requires(&owner, morph.requires());
             // A time read from a stat the type never declares would silently
             // mean an instant change — the same validates-but-lies class as a
             // cost without its pool.
-            if let Period::Stat(stat) = morph.time() {
+            if let Quantity::Stat(stat) = morph.time() {
                 assert!(
                     def.base_stats.contains_key(&stat),
                     "{owner} reads its time from a stat the type does not carry"
@@ -967,6 +1057,10 @@ impl ContentRegistry {
                 let interim = self
                     .entity(via)
                     .unwrap_or_else(|| panic!("{owner} wears a form that is not registered"));
+                assert!(
+                    !interim.is_remains(),
+                    "{owner} wears remains, which only a death may leave"
+                );
                 // The interim form stands exactly where the origin stood, so
                 // entering and leaving it moves nothing on the grid; whether
                 // it holds those cells is its own.
@@ -977,7 +1071,7 @@ impl ContentRegistry {
                     );
                 }
                 // The time is read while the interim form is worn.
-                if let Period::Stat(stat) = morph.time() {
+                if let Quantity::Stat(stat) = morph.time() {
                     assert!(
                         interim.base_stats.contains_key(&stat),
                         "{owner} reads its time from a stat the form it wears does not carry"
@@ -1088,6 +1182,48 @@ impl ContentRegistry {
                     self.skill_name(skill).unwrap_or("<unregistered>"),
                 ),
             };
+            // Every number a cast reads from a stat is read off whoever casts,
+            // so the caster must carry it: a reach it cannot read could never
+            // be closed, and a cast it cannot time would never land.
+            if let SkillCaster::Entity { reach, casting, .. } = &skill_def.caster {
+                let require = |quantity: Quantity, what: &str| {
+                    if let Quantity::Stat(stat) = quantity {
+                        assert!(
+                            def.base_stats.contains_key(&stat),
+                            "entity type '{}' has skill '{}' reading its {what} from a stat it does not carry",
+                            def.name,
+                            self.skill_name(skill).unwrap_or("<unregistered>"),
+                        );
+                    }
+                };
+                match reach {
+                    Reach::Within(cells) => require(*cells, "reach"),
+                    Reach::Wherever => {}
+                }
+                match casting {
+                    Casting::Delayed { point, period } => {
+                        require(*point, "cast point");
+                        require(*period, "cast period");
+                        // Registration held the two to each other by the least
+                        // either can fold to; here the carrier's own numbers
+                        // are known, so the relation is held to what it would
+                        // actually cast at.
+                        let authored = |quantity: Quantity| match quantity {
+                            Quantity::Constant(value) => Some(FixedU64::from_num(value)),
+                            Quantity::Stat(stat) => def.base_stat(stat),
+                        };
+                        if let (Some(point), Some(period)) = (authored(*point), authored(*period)) {
+                            assert!(
+                                period >= point,
+                                "entity type '{}' casts '{}' over {point} ticks but is freed after {period}",
+                                def.name,
+                                self.skill_name(skill).unwrap_or("<unregistered>"),
+                            );
+                        }
+                    }
+                    Casting::Instant => {}
+                }
+            }
             for cost in costs {
                 match cost {
                     // Kinds were checked when the skill was registered; the
@@ -1291,6 +1427,7 @@ impl ContentRegistry {
             EntityStatId::SUPPLY_PROVIDED,
             EntityStatId::SUPPLY_COST,
             EntityStatId::CARGO_CAPACITY,
+            EntityStatId::LIFETIME,
         ] {
             if let Some(value) = def.base_stat(stat) {
                 assert!(
@@ -1303,20 +1440,20 @@ impl ContentRegistry {
         }
 
         // A floored stat is one the engine reads as a whole number, so an authored
-        // value below the floor truncates to something its consumer can never
-        // satisfy — and an entity that is never buffed never reaches the fold that
-        // would raise it. Driven off the floor table so the two cannot disagree.
-        for builtin in &ENTITY_BUILTIN_STATS {
-            if builtin.floor == FixedU64::ZERO {
+        // value below the floor is a number the type never actually has: the fold
+        // raises it to the floor on the first tick. Driven off the registered
+        // floors, content's own stats included, so a declaration and the fold
+        // cannot disagree.
+        for (name, &stat) in &self.entity_stats {
+            let floor = self.entity_stat_defs[stat.index()].floor();
+            if floor == FixedU64::ZERO {
                 continue;
             }
-            if let Some(value) = def.base_stat(builtin.id) {
+            if let Some(value) = def.base_stat(stat) {
                 assert!(
-                    value >= builtin.floor,
-                    "entity type '{}' has {} below its minimum of {}",
+                    value >= floor,
+                    "entity type '{}' has {name} below its minimum of {floor}",
                     def.name,
-                    builtin.name,
-                    builtin.floor,
                 );
             }
         }
@@ -1548,8 +1685,9 @@ impl ContentRegistry {
         }
     }
 
-    /// Checks that a repair capability is complete and that the terms it names —
-    /// mended tags, charged resources, and the target's own repair scale — resolve.
+    /// Checks that a repair capability is complete and that the terms it
+    /// charges by resolve. What it mends is settled once every type is
+    /// registered, in [`validate_repairs`](Self::validate_repairs).
     fn validate_repair(&self, def: &EntityTypeDef) {
         // Both repair stats are read only through a repair capability, so either one
         // alone is content that can never take effect.
@@ -1592,13 +1730,6 @@ impl ContentRegistry {
                 "entity type '{}' can repair but is missing {}",
                 def.name,
                 ENTITY_BUILTIN_STATS[stat.index()].name,
-            );
-        }
-        for tag in repairer.repairs() {
-            assert!(
-                self.has_tag(tag),
-                "entity type '{}' repairs unregistered tag '{tag}'",
-                def.name
             );
         }
         match repairer.cost() {
@@ -1712,50 +1843,127 @@ impl ContentRegistry {
         }
     }
 
-    /// Checks that the definition's corpse type is registered, has a dying
-    /// phase, and defines only corpse-compatible data.
+    /// Checks that every type a death hands on is registered and stands
+    /// somewhere, and that what remains rot into bottoms out.
     ///
-    /// The decay chain needs no termination check: a corpse type is validated
-    /// when it is registered, which must happen before anything can reference
-    /// it, so by induction every chain bottoms out and no cycle can form.
-    fn validate_corpse(&self, def: &EntityTypeDef) {
-        let Some(corpse_type) = def.dying.as_ref().and_then(|dying| dying.corpse_type()) else {
-            return;
-        };
+    /// Runs in [`validate`](Self::validate) rather than at registration,
+    /// because a type may be registered before what it leaves.
+    fn validate_leaves(&self, def: &EntityTypeDef) {
+        let Some(dying) = &def.dying else { return };
 
-        assert!(
-            self.entity(corpse_type).is_some(),
-            "entity type '{}' leaves an unregistered corpse type '{corpse_type}'",
-            def.name
-        );
-        assert!(
-            self.entity(corpse_type).unwrap().dying.is_some(),
-            "entity type '{}' leaves a corpse type '{corpse_type}' that has no dying phase",
-            def.name
-        );
-        self.validate_corpse_compatible(def, corpse_type);
+        for bequest in dying.leaves() {
+            let left = bequest.entity_type();
+            assert!(
+                self.entity(left).is_some(),
+                "entity type '{}' leaves '{left}', which is not registered",
+                def.name
+            );
+        }
+
+        // Remains rotting into remains are a decay chain, and a chain that
+        // comes back round is a body that never leaves the map.
+        if !def.is_remains() {
+            return;
+        }
+        let mut seen: BTreeSet<&str> = BTreeSet::new();
+        let mut pending: Vec<&EntityTypeDef> = self.rots_into(def).collect();
+        while let Some(next) = pending.pop() {
+            assert!(
+                next.name != def.name,
+                "entity type '{}' rots into a chain that comes back round to '{}'",
+                def.name,
+                def.name
+            );
+            if seen.insert(next.name.as_str()) {
+                pending.extend(self.rots_into(next));
+            }
+        }
     }
 
-    /// Checks that a corpse type defines only data remains can use: identity,
-    /// footprint, occupation, and a dying phase. Corpses are spawned directly
-    /// into the dying state, so any other definition data would be silently
-    /// ignored.
+    /// What one remains type rots into: every remains among what its own death
+    /// leaves.
+    fn rots_into<'a>(&'a self, def: &'a EntityTypeDef) -> impl Iterator<Item = &'a EntityTypeDef> {
+        def.dying
+            .iter()
+            .flat_map(|dying| dying.leaves())
+            .filter_map(|bequest| self.entity(bequest.entity_type()))
+            .filter(|left| left.is_remains())
+    }
+
+    /// Checks that a type tagged as remains defines only what remains can use:
+    /// identity, footprint, tags, how it is picked out, the lifetime it lies
+    /// there for, and a dying phase of its own for what it rots into.
     ///
     /// Implemented as an equality check against a minimal definition carrying
     /// only the allowed data, so fields added to [`EntityTypeDef`] later are
-    /// corpse-incompatible by default.
-    fn validate_corpse_compatible(&self, user: &EntityTypeDef, corpse_type: &str) {
-        let corpse = self.entity(corpse_type).expect("corpse type is registered");
+    /// refused until somebody decides what remains do with them.
+    fn validate_remains(&self, def: &EntityTypeDef) {
+        if !def.is_remains() {
+            return;
+        }
 
-        let mut allowed = EntityTypeDef::new(corpse.name.clone());
-        allowed.race = corpse.race.clone();
-        allowed.location = corpse.location;
-        allowed.dying = corpse.dying.clone();
+        assert!(
+            def.base_stat(EntityStatId::LIFETIME).is_some(),
+            "entity type '{}' is remains but carries no lifetime, so it would lie there for good",
+            def.name
+        );
+        assert!(
+            def.dying
+                .as_ref()
+                .is_none_or(|dying| dying.dying_time().is_none()),
+            "entity type '{}' is remains and states a dying time: a body has lain its whole life already, so it goes the tick its decay ends",
+            def.name
+        );
+
+        let mut allowed = EntityTypeDef::new(def.name.clone());
+        allowed.race = def.race.clone();
+        allowed.location = def.location;
+        allowed.dying = def.dying.clone();
+        allowed.tags = def.tags.clone();
+        allowed.selection = def.selection.clone();
+        allowed = allowed.with_stat(
+            EntityStatId::LIFETIME,
+            def.base_stat(EntityStatId::LIFETIME)
+                .expect("the lifetime was just required"),
+        );
 
         assert_eq!(
-            *corpse, allowed,
-            "entity type '{}' uses '{corpse_type}' as a corpse type, but '{corpse_type}' defines live-gameplay data that remains never use",
-            user.name
+            *def, allowed,
+            "entity type '{}' is remains, but defines live-gameplay data that remains never use",
+            def.name
+        );
+    }
+
+    /// Checks that every type and tag a cast's aim names is registered.
+    ///
+    /// Runs in [`validate`](Self::validate) rather than at registration,
+    /// because a skill is registered before the type that carries it, and may
+    /// well name that type.
+    fn validate_aim(&self, name: &str, def: &SkillDef) {
+        let SkillCaster::Entity { target, .. } = &def.caster else {
+            return;
+        };
+        match target {
+            EntityCastTarget::Standing { kinds, .. } | EntityCastTarget::Fallen { kinds } => {
+                self.validate_kinds(&format!("skill '{name}'"), "aims at", kinds);
+            }
+            EntityCastTarget::Caster | EntityCastTarget::Position => {}
+        }
+    }
+
+    /// Checks that every type and tag a repairer names is registered.
+    ///
+    /// Runs in [`validate`](Self::validate) rather than at registration,
+    /// because a type may mend one registered after it — or itself.
+    fn validate_repairs(&self, def: &EntityTypeDef) {
+        let Some(repairer) = &def.repairer else {
+            return;
+        };
+
+        self.validate_kinds(
+            &format!("entity type '{}'", def.name),
+            "repairs",
+            repairer.repairs(),
         );
     }
 
@@ -1767,11 +1975,45 @@ impl ContentRegistry {
             return;
         };
 
-        for name in transporter.carries() {
+        self.validate_kinds(
+            &format!("entity type '{}'", def.name),
+            "carries",
+            transporter.carries(),
+        );
+    }
+
+    /// Every registered type a filter names — one it lists, or one wearing a
+    /// tag it lists.
+    fn matching<'a>(&'a self, kinds: &'a Kinds) -> impl Iterator<Item = &'a EntityTypeDef> {
+        self.defs.iter().filter(move |def| kinds.admits(def))
+    }
+
+    /// Every registered type one entry of a filter names.
+    fn matching_one<'a>(&'a self, kind: &'a Kind) -> impl Iterator<Item = &'a EntityTypeDef> {
+        self.defs.iter().filter(move |def| kind.names(def))
+    }
+
+    /// Checks that every name a filter lists is something this registry knows:
+    /// a registered entity type, or a registered tag.
+    ///
+    /// Runs in [`validate`](Self::validate) rather than at registration,
+    /// because a filter may name a type registered after the one that declares
+    /// it.
+    fn validate_kinds(&self, owner: &str, what: &str, kinds: &Kinds) {
+        // The constructor refuses a filter that names nobody; one written past
+        // it would quietly admit nothing at all.
+        if let Kinds::Only(named) = kinds {
+            assert!(!named.is_empty(), "{owner} {what} nothing at all");
+        }
+        for kind in kinds.kinds() {
+            let known = match kind {
+                Kind::Type(name) => self.defs_by_name.contains_key(name),
+                Kind::Tag(tag) => self.tags.contains(tag),
+            };
             assert!(
-                self.defs_by_name.contains_key(name) || self.tags.contains(name),
-                "entity type '{}' carries '{name}', which is not a registered entity type or tag",
-                def.name
+                known,
+                "{owner} {what} {}, which is not registered",
+                kind.describe()
             );
         }
     }
@@ -1852,7 +2094,7 @@ impl ContentRegistry {
                             .resource_source
                             .as_ref()
                             .is_some_and(|resource| resource.kind() == kind)
-                            && data.admits_source(&source.name)
+                            && data.sources().admits(source)
                             && offers(source, attachment.berths())
                     });
                     assert!(
@@ -1868,8 +2110,7 @@ impl ContentRegistry {
             && let WorkPresence::Attached(attachment) = repairer.presence()
         {
             let offered = self.entities().any(|target| {
-                repairer.repairs().any(|tag| target.tags.contains(tag))
-                    && offers(target, attachment.berths())
+                repairer.repairs().admits(target) && offers(target, attachment.berths())
             });
             assert!(
                 offered,
@@ -1926,7 +2167,7 @@ impl ContentRegistry {
             location.size() == CellSize::ONE,
             "{owner} seats a type wider than one cell in a berth"
         );
-        if let Period::Stat(stat) = brood.period() {
+        if let Quantity::Stat(stat) = brood.period() {
             assert!(
                 def.base_stats.contains_key(&stat),
                 "{owner} reads its period from a stat the type does not carry"
@@ -1965,31 +2206,23 @@ impl ContentRegistry {
             let data = carrier
                 .harvest_data(kind)
                 .expect("a carrier's kinds are the keys of its catalogue");
-            match data.sources() {
-                Sources::Any => {}
-                Sources::Only(names) => {
-                    assert!(
-                        !names.is_empty(),
-                        "entity type '{}' harvests {kind} from no source at all",
-                        def.name
-                    );
-                    for type_name in names {
-                        let source = self.entity(type_name).unwrap_or_else(|| {
-                            panic!(
-                                "entity type '{}' harvests {kind} from '{type_name}', which is not registered",
-                                def.name
-                            )
-                        });
-                        assert!(
-                            source
-                                .resource_source
-                                .as_ref()
-                                .is_some_and(|resource| resource.kind() == kind),
-                            "entity type '{}' harvests {kind} from '{type_name}', which is no {kind} source",
-                            def.name
-                        );
-                    }
-                }
+            // Every name must be something this registry knows, and must
+            // reach a source of the kind being carried: a type that yields it,
+            // or a tag some such type wears.
+            let owner = format!("entity type '{}'", def.name);
+            self.validate_kinds(&owner, &format!("harvests {kind} from"), data.sources());
+            for named in data.sources().kinds() {
+                let reaches_a_source = self.matching_one(named).any(|source| {
+                    source
+                        .resource_source
+                        .as_ref()
+                        .is_some_and(|resource| resource.kind() == kind)
+                });
+                assert!(
+                    reaches_a_source,
+                    "{owner} harvests {kind} from '{}', which is no {kind} source",
+                    named.name()
+                );
             }
         }
     }
@@ -2061,19 +2294,36 @@ impl ContentRegistry {
                 at.y
             );
 
-            let mut this_dock: Vec<(CellRect, &str)> = Vec::new();
-            for type_name in dock.accepted_types() {
-                let annex = self.entity(type_name).unwrap_or_else(|| {
-                    panic!(
-                        "entity type '{}' docks '{type_name}', which is not registered",
+            self.validate_kinds(
+                &format!("entity type '{}'", def.name),
+                "docks",
+                dock.accepts(),
+            );
+            // A type the filter names outright must be an annex: naming one
+            // that could never dock is a mistake content can see. A tag or
+            // `any` takes whatever among them is an annex and leaves the rest
+            // standing, since otherwise "any annex" could not be said at all.
+            if let Kinds::Only(named) = dock.accepts() {
+                for kind in named {
+                    let Kind::Type(type_name) = kind else {
+                        continue;
+                    };
+                    assert!(
+                        self.entity(type_name)
+                            .is_some_and(|docked| docked.annex.is_some()),
+                        "entity type '{}' docks '{type_name}', which is not an annex",
                         def.name
-                    )
-                });
-                assert!(
-                    annex.annex.is_some(),
-                    "entity type '{}' docks '{type_name}', which is not an annex",
-                    def.name
-                );
+                    );
+                }
+            }
+            let mut fillable = false;
+            let mut this_dock: Vec<(CellRect, &str)> = Vec::new();
+            for annex in self
+                .matching(dock.accepts())
+                .filter(|annex| annex.annex.is_some())
+            {
+                fillable = true;
+                let type_name = annex.name.as_str();
                 let annex_size = annex
                     .location
                     .expect("validated content defines a location")
@@ -2100,6 +2350,13 @@ impl ContentRegistry {
                     def.name
                 );
             }
+            assert!(
+                fillable,
+                "entity type '{}' offers a dock at ({}, {}) that names no annex",
+                def.name,
+                dock.at().x,
+                dock.at().y
+            );
             taken.extend(this_dock);
         }
     }
@@ -2144,7 +2401,7 @@ impl ContentRegistry {
         let docked = self
             .defs
             .iter()
-            .any(|primary| primary.docks.iter().any(|dock| dock.accepts(&def.name)));
+            .any(|primary| primary.docks.iter().any(|dock| dock.accepts().admits(def)));
         assert!(docked, "annex '{}' fits no registered dock", def.name);
     }
 

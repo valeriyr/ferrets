@@ -10,11 +10,14 @@ use utils::Announced;
 use bevy::prelude::*;
 
 use ferrets_content::{
+    affiliation::Affiliation,
+    attack::Slain,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
+    kinds::Kinds,
     location::Solidity,
     repair::{RepairCost, RepairRate},
-    skills::{EntityCastEffect, EntityCastTarget, SkillCaster, SkillDef},
+    skills::{Casting, EntityCastEffect, EntityCastTarget, Reach, SkillCaster, SkillDef},
     work::{CrewLimit, WorkPresence},
 };
 use ferrets_geometry::cell_size::CellSize;
@@ -22,6 +25,7 @@ use ferrets_math::FixedU64;
 use ferrets_simulation::{
     command::{PlayerCommand, SkillCasterRef, SkillTarget},
     components::resource::ResourceSourceComponent,
+    entity_index::EntityIndex,
     events::{DeathCause, EventRecord, SimulationEvent, SpawnCause, SpendCause},
     game_loop::damage,
     movement_model::MovementModel,
@@ -72,14 +76,7 @@ fn destroying_entity_announces_death_with_its_cause() {
     let (_, killer) = utils::create_entity(world, "soldier", utils::pos(6, 4), Some(1)).unwrap();
     world.resource_mut::<EventRecord>().clear();
 
-    spawn::despawn_entity(
-        world,
-        entity,
-        DeathCause::Killed {
-            by: killer,
-            by_owner: Some(1),
-        },
-    );
+    utils::despawn_killed(world, entity, killer, Some(1));
 
     let announced = world.resource::<EventRecord>().events().to_vec();
     assert!(announced.iter().any(|event| matches!(
@@ -189,14 +186,7 @@ fn entity_killed_same_tick_still_counts_as_produced() {
     )
     .unwrap();
     let (_, killer) = utils::create_entity(world, "soldier", utils::pos(6, 4), Some(1)).unwrap();
-    spawn::despawn_entity(
-        world,
-        entity,
-        DeathCause::Killed {
-            by: killer,
-            by_owner: Some(1),
-        },
-    );
+    utils::despawn_killed(world, entity, killer, Some(1));
     utils::run_ticks(&mut app, 1);
 
     let soldier = type_id(&app, "soldier");
@@ -313,14 +303,7 @@ fn killed_entity_counts_as_loss_for_owner_and_kill_for_attacker() {
     let (entity, _) = utils::create_entity(world, "soldier", utils::pos(4, 4), Some(0)).unwrap();
     let (_, killer) = utils::create_entity(world, "soldier", utils::pos(6, 4), Some(1)).unwrap();
 
-    spawn::despawn_entity(
-        world,
-        entity,
-        DeathCause::Killed {
-            by: killer,
-            by_owner: Some(1),
-        },
-    );
+    utils::despawn_killed(world, entity, killer, Some(1));
     utils::run_ticks(&mut app, 1);
 
     let soldier = type_id(&app, "soldier");
@@ -388,14 +371,7 @@ fn killing_own_entity_counts_loss_without_crediting_kill() {
     let (entity, _) = utils::create_entity(world, "soldier", utils::pos(4, 4), Some(0)).unwrap();
     let (_, own_side) = utils::create_entity(world, "soldier", utils::pos(6, 4), Some(0)).unwrap();
 
-    spawn::despawn_entity(
-        world,
-        entity,
-        DeathCause::Killed {
-            by: own_side,
-            by_owner: Some(0),
-        },
-    );
+    utils::despawn_killed(world, entity, own_side, Some(0));
     utils::run_ticks(&mut app, 1);
 
     let soldier = type_id(&app, "soldier");
@@ -415,14 +391,7 @@ fn allied_fire_counts_loss_without_kill_credit() {
     let (entity, _) = utils::create_entity(world, "rifleman", utils::pos(4, 4), Some(0)).unwrap();
     let (_, ally) = utils::create_entity(world, "rifleman", utils::pos(6, 4), Some(1)).unwrap();
 
-    spawn::despawn_entity(
-        world,
-        entity,
-        DeathCause::Killed {
-            by: ally,
-            by_owner: Some(1),
-        },
-    );
+    utils::despawn_killed(world, entity, ally, Some(1));
     utils::run_ticks(&mut app, 1);
 
     let rifleman = type_id(&app, "rifleman");
@@ -442,7 +411,7 @@ fn allied_damage_is_taken_but_not_dealt() {
     let (entity, _) = utils::create_entity(world, "rifleman", utils::pos(4, 4), Some(0)).unwrap();
     let (_, ally) = utils::create_entity(world, "rifleman", utils::pos(6, 4), Some(1)).unwrap();
 
-    damage::apply(world, ally, entity, FixedU64::from_num(10));
+    damage::apply(world, ally, entity, FixedU64::from_num(10), Slain::Remains);
     utils::run_ticks(&mut app, 1);
 
     let statistics = app.world().resource::<Statistics>();
@@ -464,7 +433,13 @@ fn dying_attacker_keeps_kill_and_damage_credit() {
 
     // The attacker starts dying, then a shot it already fired lands.
     spawn::despawn_entity(world, attacker_entity, DeathCause::Cancelled);
-    damage::apply(world, attacker, victim, FixedU64::from_num(50));
+    damage::apply(
+        world,
+        attacker,
+        victim,
+        FixedU64::from_num(50),
+        Slain::Remains,
+    );
     utils::run_ticks(&mut app, 1);
 
     let soldier = type_id(&app, "soldier");
@@ -487,13 +462,12 @@ fn passengers_lost_with_killed_transport_count_for_both_sides() {
     utils::send_to(&mut app, rider, wagon);
     utils::run_until_aboard(&mut app, wagon_entity, 1, 30);
 
-    spawn::despawn_entity(
+    spawn::despawn_killed(
         app.world_mut(),
         wagon_entity,
-        DeathCause::Killed {
-            by: enemy,
-            by_owner: Some(2),
-        },
+        enemy,
+        Some(2),
+        Slain::Remains,
     );
     utils::run_ticks(&mut app, 1);
 
@@ -869,14 +843,7 @@ fn game_slot_sees_tick_already_tallied_and_not_yet_retired() {
     let world = app.world_mut();
     let (entity, _) = utils::create_entity(world, "soldier", utils::pos(4, 4), Some(0)).unwrap();
     let (_, killer) = utils::create_entity(world, "soldier", utils::pos(6, 4), Some(1)).unwrap();
-    spawn::despawn_entity(
-        world,
-        entity,
-        DeathCause::Killed {
-            by: killer,
-            by_owner: Some(1),
-        },
-    );
+    utils::despawn_killed(world, entity, killer, Some(1));
 
     utils::run_ticks(&mut app, 1);
 
@@ -918,8 +885,33 @@ fn skill_cast_names_entity_it_was_applied_to() {
 
     assert_eq!(
         app.world().resource::<Announced>().casts(),
-        vec![(mage, victim)],
+        vec![(mage, SkillTarget::Entity(victim))],
         "the cast names the caster and what the skill landed on"
+    );
+}
+
+#[test]
+fn cast_on_ground_names_cell_it_landed_on() {
+    let (mut app, sweep) = ground_skill_app();
+    let world = app.world_mut();
+    let (_, sentry) = utils::create_entity(world, "sentry", utils::pos(4, 4), Some(0)).unwrap();
+
+    utils::push_command(
+        &mut app,
+        PlayerCommand::UseSkill {
+            skill: sweep,
+            caster: SkillCasterRef::Entity(sentry),
+            target: Some(SkillTarget::Position(utils::pos(7, 7))),
+        },
+    );
+
+    utils::record_announcements(&mut app);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+
+    assert_eq!(
+        app.world().resource::<Announced>().casts(),
+        vec![(sentry, SkillTarget::Position(utils::pos(7, 7)))],
+        "a cast that lands on ground names the cell, not the caster standing elsewhere"
     );
 }
 
@@ -965,21 +957,19 @@ fn remains_name_entity_they_are_left_by() {
     let (dummy, dummy_id) =
         utils::create_entity(world, "dummy", utils::pos(6, 6), Some(1)).unwrap();
     let (_, killer) = utils::create_entity(world, "soldier", utils::pos(4, 6), Some(0)).unwrap();
-    spawn::despawn_entity(
-        world,
-        dummy,
-        DeathCause::Killed {
-            by: killer,
-            by_owner: Some(0),
-        },
-    );
+    utils::despawn_killed(world, dummy, killer, Some(0));
     // Past the dying phase, which is when the remains are left.
     utils::run_ticks(&mut app, 8);
 
+    let bodies = app.world().resource::<EntityIndex>().remains_entries();
+    let [(body, _)] = bodies.as_slice() else {
+        panic!("the dummy left exactly one body");
+    };
     assert_eq!(
-        app.world().resource::<Announced>().remains_of(),
-        vec![dummy_id],
-        "remains say whose they are, so a cue can be drawn without the corpse"
+        app.world().resource::<Announced>().bequeathed(),
+        vec![(*body, dummy_id)],
+        "the announcement names the body that came of it and whose it was, so a \
+         cue can be drawn without looking either up"
     );
 }
 
@@ -1055,7 +1045,12 @@ fn enemy_skill_app() -> (App, ferrets_content::skills::SkillId) {
                 cooldown: 5,
                 caster: SkillCaster::Entity {
                     costs: Vec::new(),
-                    target: EntityCastTarget::Enemy,
+                    target: EntityCastTarget::Standing {
+                        side: Affiliation::Enemy,
+                        kinds: Kinds::Any,
+                    },
+                    reach: Reach::Wherever,
+                    casting: Casting::Instant,
                     effect: EntityCastEffect::Damage(FixedU64::from_num(5)),
                 },
                 requires: Vec::new(),
@@ -1082,6 +1077,52 @@ fn enemy_skill_app() -> (App, ferrets_content::skills::SkillId) {
         .validate();
     app.world_mut().resource_mut::<GameSession>().start();
     (app, smite)
+}
+
+/// Two players, and a `sentry` whose one skill watches a patch of ground — so a
+/// cast lands where it was aimed rather than on anything standing there.
+fn ground_skill_app() -> (App, ferrets_content::skills::SkillId) {
+    let mut app = utils::make_app(vec![
+        PlayerSlot::occupied(0, PlayerType::Human, None, None),
+        PlayerSlot::occupied(1, PlayerType::Human, None, None),
+    ]);
+    let sweep = {
+        let mut registry = app
+            .world_mut()
+            .resource_mut::<ferrets_content::registry::ContentRegistry>();
+        let sweep = registry.register_skill(
+            "sweep",
+            SkillDef {
+                cooldown: 5,
+                caster: SkillCaster::Entity {
+                    costs: Vec::new(),
+                    target: EntityCastTarget::Position,
+                    reach: Reach::Wherever,
+                    casting: Casting::Instant,
+                    effect: EntityCastEffect::Watch {
+                        radius: 2,
+                        duration: 5,
+                    },
+                },
+                requires: Vec::new(),
+            },
+        );
+        registry.register(
+            EntityTypeDef::new("sentry")
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_health(50)
+                // A cell out of sight cannot be named as an aim, so the caster
+                // needs eyes on the patch it watches.
+                .with_sight_range(8)
+                .with_skills([sweep]),
+        );
+        sweep
+    };
+    app.world_mut()
+        .resource::<ferrets_content::registry::ContentRegistry>()
+        .validate();
+    app.world_mut().resource_mut::<GameSession>().start();
+    (app, sweep)
 }
 
 /// One player, a damageable `hall` costing gold, and a `fixer` mending tagged
@@ -1117,7 +1158,7 @@ fn repair_app() -> App {
                 .with_stat(EntityStatId::REPAIR_RANGE, FixedU64::ONE)
                 .with_stat(EntityStatId::REPAIR_COST_FACTOR, FixedU64::ONE)
                 .with_repairer(
-                    ["building"],
+                    Kinds::tags(["building"]),
                     RepairRate::PerTick(FixedU64::from_num(5)),
                     WorkPresence::Present {
                         crew: CrewLimit::ONE,
@@ -1183,7 +1224,7 @@ impl Announced {
     }
 
     /// Every cast, as the caster and what the skill landed on.
-    fn casts(&self) -> Vec<(SimulationId, SimulationId)> {
+    fn casts(&self) -> Vec<(SimulationId, SkillTarget)> {
         self.0
             .iter()
             .filter_map(|event| match event {
@@ -1229,15 +1270,17 @@ impl Announced {
             .collect()
     }
 
-    /// The entities every set of remains was left by.
-    fn remains_of(&self) -> Vec<SimulationId> {
+    /// Every bequest announced, as what was left and the entity whose death
+    /// left it.
+    fn bequeathed(&self) -> Vec<(SimulationId, SimulationId)> {
         self.0
             .iter()
             .filter_map(|event| match event {
                 SimulationEvent::EntitySpawned {
-                    cause: SpawnCause::Remains { of },
+                    entity,
+                    cause: SpawnCause::Bequeathed { of },
                     ..
-                } => Some(*of),
+                } => Some((*entity, *of)),
                 _ => None,
             })
             .collect()

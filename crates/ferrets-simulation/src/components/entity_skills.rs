@@ -5,9 +5,9 @@ use bevy_ecs::prelude::*;
 use ferrets_content::skills::SkillId;
 
 use crate::{
+    command::SkillTarget,
     entity_def,
     events::{EventRecord, SimulationEvent},
-    simulation_id::SimulationId,
 };
 
 /// An entity's skills, each paired with the ticks remaining on its cooldown.
@@ -65,13 +65,7 @@ impl SkillsComponent {
 /// The announcing counterpart to [`SkillsComponent::start_cooldown`], which
 /// starts the timer and says nothing. A caster with no skills component is left
 /// alone, and nothing is announced for a cast that could not have happened.
-pub fn cast(
-    world: &mut World,
-    caster: Entity,
-    target: SimulationId,
-    skill: SkillId,
-    cooldown: u32,
-) {
+pub fn cast(world: &mut World, caster: Entity, target: SkillTarget, skill: SkillId, cooldown: u32) {
     let mut caster_mut = world.entity_mut(caster);
     let Some(mut skills) = caster_mut.get_mut::<SkillsComponent>() else {
         return;

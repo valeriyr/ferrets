@@ -1,16 +1,7 @@
 //! Content-defined transport capability: whom an entity carries, and on what
 //! terms.
 
-use std::collections::BTreeSet;
-
-/// Whose units a transporter admits aboard.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BoardingPolicy {
-    /// Only the holder's own units.
-    Own,
-    /// The holder's own units and those of its allies.
-    Allies,
-}
+use crate::{affiliation::Affiliation, kinds::Kinds};
 
 /// What happens to the passengers when their holder dies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,11 +27,10 @@ pub enum PassengerConduct {
 /// stat, so the modifier pipeline can move it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransporterDef {
-    /// The admission list. Each entry names an entity type or a tag; a
-    /// candidate matching none of them is refused.
-    carries: BTreeSet<String>,
+    /// Whom it admits.
+    carries: Kinds,
     /// Whose units may board.
-    boarding: BoardingPolicy,
+    boarding: Affiliation,
     /// What happens to the passengers when the holder dies.
     passenger_fate: PassengerFate,
     /// What passengers do while aboard.
@@ -49,22 +39,12 @@ pub struct TransporterDef {
 
 impl TransporterDef {
     /// Creates a new `TransporterDef` with the given data.
-    ///
-    /// Panics if `carries` is empty or contains an empty name.
     pub fn new(
-        carries: impl IntoIterator<Item = impl Into<String>>,
-        boarding: BoardingPolicy,
+        carries: Kinds,
+        boarding: Affiliation,
         passenger_fate: PassengerFate,
         conduct: PassengerConduct,
     ) -> Self {
-        let carries: BTreeSet<String> = carries.into_iter().map(Into::into).collect();
-
-        assert!(!carries.is_empty(), "carries must not be empty");
-        assert!(
-            carries.iter().all(|name| !name.is_empty()),
-            "carried names must not be empty"
-        );
-
         Self {
             carries,
             boarding,
@@ -73,23 +53,15 @@ impl TransporterDef {
         }
     }
 
-    /// Returns `true` if a candidate with the given type name and tags is one
-    /// this entity will carry.
-    pub fn admits(&self, candidate_type: &str, candidate_has_tag: impl Fn(&str) -> bool) -> bool {
-        self.carries.iter().any(|name| {
-            let name = name.as_str();
-            name == candidate_type || candidate_has_tag(name)
-        })
-    }
-
-    /// Returns the admission list entries.
-    pub fn carries(&self) -> impl Iterator<Item = &str> {
-        self.carries.iter().map(String::as_str)
+    /// Whom it admits.
+    #[inline]
+    pub fn carries(&self) -> &Kinds {
+        &self.carries
     }
 
     /// Whose units may board.
     #[inline]
-    pub fn boarding(&self) -> BoardingPolicy {
+    pub fn boarding(&self) -> Affiliation {
         self.boarding
     }
 

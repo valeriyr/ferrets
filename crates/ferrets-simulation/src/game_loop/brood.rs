@@ -67,7 +67,7 @@ pub fn advance(world: &mut World) {
         if brood::broodlings(world, entity).len() >= terms.limit() {
             continue;
         }
-        let period = entity_def::period_ticks(world, entity, terms.period());
+        let period = entity_def::quantity(world, entity, terms.period());
         let progress = {
             let mut breeder = world.entity_mut(entity);
             let mut brood = breeder

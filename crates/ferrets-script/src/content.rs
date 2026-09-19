@@ -1,18 +1,20 @@
 //! Loading game content from a script into a [`ContentRegistry`].
 
 use ferrets_content::{
+    affiliation::Affiliation,
     annex::{AnnexClaim, AnnexWork},
-    field::{FieldAction, FieldAffiliation, FieldCoverage, FieldVision},
+    attack::Slain,
+    dying::DeathKind,
+    field::{FieldAction, FieldCoverage, FieldVision},
     location::Solidity,
     morph::{MorphCancel, MorphInterrupted, MorphPlacement, MorphReason},
     projectile::Aim,
     registry::ContentRegistry,
     resource::{Banking, DepletionPolicy},
-    skills::EntityCastTarget,
     splash::SplashShape,
     stack_rule::StackRule,
     stats::ModifierOp,
-    transport::{BoardingPolicy, PassengerConduct, PassengerFate},
+    transport::{PassengerConduct, PassengerFate},
     turret::{TurretFire, WeaponConduct},
 };
 use ferrets_math::{FixedI64, FixedU64};
@@ -106,6 +108,35 @@ pub(crate) fn attack_aim(value: &str) -> crate::Result<Aim> {
     )
 }
 
+/// Maps a slain name to its enum.
+pub(crate) fn slain(value: &str) -> crate::Result<Slain> {
+    keyword(
+        "slain",
+        value,
+        &[("remains", Slain::Remains), ("nothing", Slain::Nothing)],
+    )
+}
+
+/// Maps a death kind name to its enum.
+pub(crate) fn death_kind(value: &str) -> crate::Result<DeathKind> {
+    keyword(
+        "death kind",
+        value,
+        &[
+            ("killed", DeathKind::Killed),
+            ("expired", DeathKind::Expired),
+            ("decayed", DeathKind::Decayed),
+            ("orphaned", DeathKind::Orphaned),
+            ("unseated", DeathKind::Unseated),
+            ("carried_down", DeathKind::CarriedDown),
+            ("consumed", DeathKind::Consumed),
+            ("cancelled", DeathKind::Cancelled),
+            ("depleted", DeathKind::Depleted),
+            ("overbuilt", DeathKind::Overbuilt),
+        ],
+    )
+}
+
 /// Maps a splash shape name to its enum.
 pub(crate) fn splash_shape(value: &str) -> crate::Result<SplashShape> {
     keyword(
@@ -148,14 +179,17 @@ pub(crate) fn banking(value: &str) -> crate::Result<Banking> {
     )
 }
 
-/// Maps a boarding policy name to its enum.
-pub(crate) fn boarding_policy(value: &str) -> crate::Result<BoardingPolicy> {
+/// Maps an affiliation name to its enum — the one "whose" every capability
+/// declares.
+pub(crate) fn affiliation(value: &str) -> crate::Result<Affiliation> {
     keyword(
-        "boarding policy",
+        "affiliation",
         value,
         &[
-            ("own", BoardingPolicy::Own),
-            ("allies", BoardingPolicy::Allies),
+            ("own", Affiliation::Own),
+            ("allied", Affiliation::Allied),
+            ("enemy", Affiliation::Enemy),
+            ("anyone", Affiliation::Anyone),
         ],
     )
 }
@@ -246,20 +280,6 @@ pub(crate) fn morph_cancel(value: &str) -> crate::Result<MorphCancel> {
     )
 }
 
-/// Maps a skill target name to its enum.
-pub(crate) fn entity_cast_target(value: &str) -> crate::Result<EntityCastTarget> {
-    keyword(
-        "skill target",
-        value,
-        &[
-            ("caster", EntityCastTarget::Caster),
-            ("ally", EntityCastTarget::Ally),
-            ("enemy", EntityCastTarget::Enemy),
-            ("position", EntityCastTarget::Position),
-        ],
-    )
-}
-
 /// Maps a modifier op name to its enum.
 pub(crate) fn modifier_op(value: &str) -> crate::Result<ModifierOp> {
     keyword(
@@ -280,19 +300,6 @@ pub(crate) fn field_vision(value: &str) -> crate::Result<FieldVision> {
         &[
             ("dark", FieldVision::Dark),
             ("watched", FieldVision::Watched),
-        ],
-    )
-}
-
-/// Maps a field affiliation name to its enum.
-pub(crate) fn field_affiliation(value: &str) -> crate::Result<FieldAffiliation> {
-    keyword(
-        "field affiliation",
-        value,
-        &[
-            ("own", FieldAffiliation::Own),
-            ("allied", FieldAffiliation::Allied),
-            ("anyone", FieldAffiliation::Anyone),
         ],
     )
 }

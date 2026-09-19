@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     map_data::MapData,
     resources::StartingStock,
+    ruleset::Ruleset,
     session::{player_id::PlayerId, player_slot::TeamId, player_type::PlayerType},
 };
 
@@ -45,4 +46,6 @@ pub struct Scenario {
     pub stockpile: Vec<StartingStock>,
     /// The scenario script, carried as source.
     pub script: String,
+    /// The rules the mission is played under.
+    pub rules: Ruleset,
 }

@@ -382,10 +382,11 @@ fn step_out_searches_ground_interim_form_fits() {
     order_morph(&mut app, grub, "worker");
     utils::run_ticks(&mut app, 1);
 
-    // The worker holds (10, 13); the search around it finds (9, 12), the
-    // first free cell of the ring in row order, beside the hatch's footprint.
+    // The worker holds (10, 13); the search around it takes the free cell
+    // nearest that middle, (9, 13) — (10, 12) above it is the hatch's own
+    // ground.
     assert_eq!(type_name_of(&app, grub), "egg");
-    assert_eq!(utils::cell_of(app.world(), grub), CellPos::new(9, 12));
+    assert_eq!(utils::cell_of(app.world(), grub), CellPos::new(9, 13));
 }
 
 #[test]
@@ -1278,7 +1279,7 @@ fn reseat_breeder_leaves_broodlings_beyond_its_reach() {
     let piglets = alive_of_type(&mut app, "piglet");
     assert_eq!(piglets.len(), 2);
 
-    // The pen dies and its piglets linger on row 13; a pen raised at (10, 17)
+    // The pen is taken off the map and its piglets linger on row 13; a pen raised at (10, 17)
     // stands four rows off, one beyond its reach of three, so it takes
     // neither.
     spawn::destroy_entity(app.world_mut(), pen);
@@ -1325,7 +1326,7 @@ fn lingering_broodlings_are_taken_in_lowest_ids_first_up_to_limit() {
     ids.sort_unstable();
     assert_eq!(ids.len(), 4);
 
-    // Both pens die and their piglets linger by their berths, rows 13 and
+    // Both pens go and their piglets linger by their berths, rows 13 and
     // 18; a third pen at (13, 13) reaches all four within three cells and
     // seats two: the two lowest ids, the first pen's.
     spawn::destroy_entity(app.world_mut(), first);
@@ -1363,7 +1364,7 @@ fn reseat_breeder_takes_in_broodlings_another_breeder_left_behind() {
     let piglets = alive_of_type(&mut app, "piglet");
     assert_eq!(piglets.len(), 2);
 
-    // The pen dies and its piglets linger on the row beneath its ruin; a
+    // The pen goes and its piglets linger on the row beneath its ruin; a
     // second pen raised flush against the ruin's east side has them within
     // its three-cell reach and two seats free, so it takes both in on its
     // first operating tick.

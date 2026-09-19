@@ -24,7 +24,7 @@ use crate::{
     simulation_id::SimulationId,
 };
 use ferrets_content::{
-    attack::{Delivery, Weapon},
+    attack::{Delivery, Slain, Weapon},
     entity_type_def::EntityTypeDef,
     projectile::Aim,
     registry::ContentRegistry,
@@ -200,9 +200,13 @@ fn land(
         .into_iter()
         .filter(|&victim| targeting::reaches(targets, entity_def::of(world, victim)))
         .collect();
+    // What the weapon leaves of what it kills. A shot whose weapon can no
+    // longer be resolved is one nothing reached anyway: the loop below runs
+    // over an empty list.
+    let slain = weapon.as_ref().map_or(Slain::Remains, Weapon::slain);
     for &victim in &direct {
         let dealt = damage::resolve(world, attacker_def, victim, damage);
-        damage::apply(world, attacker_id, victim, dealt);
+        damage::apply(world, attacker_id, victim, dealt, slain);
     }
 
     let Some(splash) = weapon.as_ref().and_then(Weapon::splash) else {
@@ -211,7 +215,7 @@ fn land(
     let victims = blast_victims(world, splash, attacker_id, &direct, impact, origin);
     for (victim, fraction) in victims {
         let dealt = damage::resolve_scaled(world, attacker_def, victim, damage, fraction);
-        damage::apply(world, attacker_id, victim, dealt);
+        damage::apply(world, attacker_id, victim, dealt, slain);
     }
 }
 

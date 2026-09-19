@@ -288,7 +288,7 @@ fn rally_app() -> App {
                 .with_location(utils::GROUND, CellSize::new(2, 2), Solidity::Solid)
                 .with_sight_range(8)
                 .with_health(100)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_trainer(["worker"]),
         );
     }

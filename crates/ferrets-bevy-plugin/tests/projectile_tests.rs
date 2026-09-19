@@ -3,7 +3,7 @@
 
 use bevy::prelude::*;
 use ferrets_content::{
-    attack::{AttackDef, Delivery, Weapon},
+    attack::{AttackDef, Delivery, Slain, Weapon},
     entity_type_def::EntityTypeDef,
     location::Solidity,
     projectile::{Aim, ProjectileDef},
@@ -341,6 +341,7 @@ fn app() -> App {
                             utils::GROUND,
                             false,
                         )),
+                        Slain::Remains,
                     )),
                     20,
                     6,
@@ -365,7 +366,12 @@ fn app() -> App {
                 .with_sight_range(12)
                 .with_health(40)
                 .with_attack(
-                    AttackDef::new(Weapon::new(utils::GROUND, Delivery::Projectile(lob), None)),
+                    AttackDef::new(Weapon::new(
+                        utils::GROUND,
+                        Delivery::Projectile(lob),
+                        None,
+                        Slain::Remains,
+                    )),
                     20,
                     8,
                     8,

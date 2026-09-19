@@ -32,9 +32,10 @@ use ferrets_content::{entity_stats::EntityStatId, field::FieldVision, registry::
 pub fn recompute_visibility(world: &mut World) {
     // Owned, on-map sight sources: (player, occupied cells, sight radius). Sight
     // is read from the effective stat store; an unset sight sees only the cells
-    // occupied. A raw query rather than the alive index: the dying still see
-    // until their remains leave the map. The OR-fold below is commutative, so
-    // iteration order cannot reach the shared grid.
+    // occupied. A raw query rather than the alive index, so something still
+    // dying goes on seeing — it is not dead yet — while a body sees nothing at
+    // all, carrying neither an owner nor a stat store. The OR-fold below is
+    // commutative, so iteration order cannot reach the shared grid.
     let seers: Vec<(Entity, PlayerId, u32)> = world
         .query_filtered::<(Entity, &OwnerComponent, &StatsComponent), (With<LocationComponent>, Without<HiddenComponent>)>()
         .iter(world)

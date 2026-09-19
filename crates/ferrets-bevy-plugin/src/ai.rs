@@ -16,17 +16,19 @@ use ferrets_content::{entity_stats::EntityStatId, registry::ContentRegistry};
 use ferrets_geometry::cell_pos::CellPos;
 use ferrets_script::ai::{
     AiRuntime,
-    view::game::{EntityView, GameView},
+    view::game::{EntityView, GameView, RemainsView},
 };
 use ferrets_simulation::{
     components::{
         brood::{BredComponent, BroodComponent},
         build::UnderConstructionComponent,
+        dying::RemainsComponent,
         energy::EnergyComponent,
         entity_info::EntityInfoComponent,
         entity_stats::StatsComponent,
         health::HealthComponent,
         hidden::HiddenComponent,
+        lifetime::LifetimeComponent,
         location::LocationComponent,
         order_queue::OrderQueueComponent,
         resource::{ResourceCarrierComponent, ResourceSourceComponent},
@@ -46,8 +48,7 @@ use ferrets_simulation::{
         player_type::PlayerType,
     },
     simulation_id::SimulationId,
-    supply,
-    visibility::VisibilityGrid,
+    supply, visibility,
 };
 
 use crate::{
@@ -248,7 +249,6 @@ pub fn game_view(world: &World, player: PlayerId, race: &str, vision: AiVision) 
         .collect();
 
     let session = world.resource::<GameSession>();
-    let visibility = world.resource::<VisibilityGrid>();
     let mut my_entities = Vec::new();
     let mut ally_entities = Vec::new();
     let mut enemy_entities = Vec::new();
@@ -272,16 +272,12 @@ pub fn game_view(world: &World, player: PlayerId, race: &str, vision: AiVision) 
             Some(owner) if owner == player => my_entities.push(view),
             Some(owner) if session.are_allied(player, owner) => ally_entities.push(view),
             Some(_) => {
-                if matches!(vision, AiVision::Omniscient)
-                    || team_visible(&entity_ref, visibility, session, player)
-                {
+                if visibility::sees_as(world, player, entity, vision) {
                     enemy_entities.push(view);
                 }
             }
             None => {
-                if matches!(vision, AiVision::Omniscient)
-                    || team_visible(&entity_ref, visibility, session, player)
-                {
+                if visibility::sees_as(world, player, entity, vision) {
                     neutral_entities.push(view);
                 }
             }
@@ -305,6 +301,7 @@ pub fn game_view(world: &World, player: PlayerId, race: &str, vision: AiVision) 
         ally_entities,
         enemy_entities,
         neutral_entities,
+        remains: remains_views(world, player, vision),
     }
 }
 
@@ -397,22 +394,49 @@ fn entity_view(entity: &EntityRef, id: SimulationId, hidden: bool, disabled: boo
                 brood.broodlings.iter().map(|id| id.0).collect()
             }),
         bred_by: entity.get::<BredComponent>().map(|bred| bred.by.0),
+        lifetime_left: lifetime_left(entity),
     }
 }
 
-/// Whether `player`'s team currently sees `entity`'s cell.
-fn team_visible(
-    entity: &EntityRef,
-    visibility: &VisibilityGrid,
-    session: &GameSession,
-    player: PlayerId,
-) -> bool {
-    entity.get::<LocationComponent>().is_some_and(|location| {
-        visibility.is_visible_to(
-            session,
-            player,
-            location.position.x.to_num::<u32>(),
-            location.position.y.to_num::<u32>(),
-        )
-    })
+/// Ticks left of an entity's timed life, or `None` for one that stands
+/// indefinitely.
+///
+/// Read against the effective stat, which is what the pass ending the life
+/// reads, so a brain sees what a buff has done to it.
+fn lifetime_left(entity: &EntityRef) -> Option<u32> {
+    let age = entity.get::<LifetimeComponent>()?.age;
+    let limit = entity
+        .get::<StatsComponent>()
+        .and_then(|stats| stats.effective_as_u32(EntityStatId::LIFETIME))?;
+    Some(limit.saturating_sub(age))
+}
+
+/// Snapshots the remains the brain may see, oldest first.
+fn remains_views(world: &World, player: PlayerId, vision: AiVision) -> Vec<RemainsView> {
+    world
+        .resource::<EntityIndex>()
+        .remains_entries()
+        .into_iter()
+        .filter_map(|(id, entity)| {
+            if !visibility::sees_as(world, player, entity, vision) {
+                return None;
+            }
+            let entity_ref = world.entity(entity);
+            // Everything the remains index holds is a body lying somewhere.
+            let location = entity_ref
+                .get::<LocationComponent>()
+                .expect("remains lie somewhere");
+            let cell = CellPos::from(location.position);
+            let fallen = entity_ref
+                .get::<RemainsComponent>()
+                .expect("the remains index holds only remains")
+                .of;
+            Some(RemainsView {
+                id: id.0,
+                type_name: world.resource::<ContentRegistry>().def(fallen).name.clone(),
+                x: cell.x,
+                y: cell.y,
+            })
+        })
+        .collect()
 }

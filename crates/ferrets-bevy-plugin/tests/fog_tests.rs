@@ -7,11 +7,11 @@ mod utils;
 use bevy::prelude::*;
 use ferrets_bevy_plugin::ai::game_view;
 use ferrets_content::{
-    attack::{AttackDef, Delivery, Weapon},
+    attack::{AttackDef, Delivery, Slain, Weapon},
     entity_type_def::EntityTypeDef,
     location::Solidity,
     registry::ContentRegistry,
-    skills::{EntityCastEffect, EntityCastTarget, SkillCaster, SkillDef},
+    skills::{Casting, EntityCastEffect, EntityCastTarget, Reach, SkillCaster, SkillDef},
 };
 use ferrets_geometry::cell_size::CellSize;
 use ferrets_math::FixedU64;
@@ -358,7 +358,10 @@ fn watch_reveals_patch_no_entity_can_see() {
     assert!(!visible(&app, 0, 20, 20), "the far cell starts dark");
 
     sweep_at(&mut app, station, 20, 20);
-    utils::run_ticks(&mut app, utils::APPLY);
+    // One tick past the command's own delay: a cast is an order, so the
+    // watch is set in the order phase, which the tick's fog pass has
+    // already run.
+    utils::run_ticks(&mut app, utils::APPLY + 1);
     // Radius two around the aim, and nothing outside it.
     assert!(visible(&app, 0, 20, 20));
     assert!(visible(&app, 0, 20, 22));
@@ -397,7 +400,10 @@ fn watch_outlives_caster_and_is_shared_with_allies() {
     utils::run_ticks(&mut app, utils::APPLY);
 
     sweep_at(&mut app, station, 20, 20);
-    utils::run_ticks(&mut app, utils::APPLY);
+    // One tick past the command's own delay: a cast is an order, so the
+    // watch is set in the order phase, which the tick's fog pass has
+    // already run.
+    utils::run_ticks(&mut app, utils::APPLY + 1);
     assert!(visible(&app, 0, 20, 20));
     assert!(visible(&app, 1, 20, 20), "an ally reads the same patch");
 
@@ -419,7 +425,10 @@ fn run_out_watch_leaves_store() {
     utils::run_ticks(&mut app, utils::APPLY);
 
     sweep_at(&mut app, station, 20, 20);
-    utils::run_ticks(&mut app, utils::APPLY);
+    // One tick past the command's own delay: a cast is an order, so the
+    // watch is set in the order phase, which the tick's fog pass has
+    // already run.
+    utils::run_ticks(&mut app, utils::APPLY + 1);
     assert_eq!(
         app.world().resource::<Watches>().in_force().len(),
         1,
@@ -566,7 +575,7 @@ fn fog_app(slots: Vec<PlayerSlot>) -> App {
                     FixedU64::from_num(360),
                 )
                 .with_health(20)
-                .with_dying(1, None)
+                .with_dying(1, [])
                 .with_sight_range(6)
                 // Trainable only so the post below validates; nothing trains
                 // one in these tests.
@@ -583,9 +592,14 @@ fn fog_app(slots: Vec<PlayerSlot>) -> App {
                     FixedU64::from_num(360),
                 )
                 .with_health(30)
-                .with_dying(1, None)
+                .with_dying(1, [])
                 .with_attack(
-                    AttackDef::new(Weapon::new(utils::GROUND, Delivery::Instant, None)),
+                    AttackDef::new(Weapon::new(
+                        utils::GROUND,
+                        Delivery::Instant,
+                        None,
+                        Slain::Remains,
+                    )),
                     10,
                     8,
                     8,
@@ -598,14 +612,14 @@ fn fog_app(slots: Vec<PlayerSlot>) -> App {
             EntityTypeDef::new("keep")
                 .with_location(utils::GROUND, CellSize::new(3, 3), Solidity::Solid)
                 .with_health(200)
-                .with_dying(1, None)
+                .with_dying(1, [])
                 .with_sight_range(2),
         );
         registry.register(
             EntityTypeDef::new("dummy")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
                 .with_health(20)
-                .with_dying(1, None)
+                .with_dying(1, [])
                 .with_sight_range(3),
         );
         // A trainer with no eyes of its own, for the rally-target gate: what
@@ -614,7 +628,7 @@ fn fog_app(slots: Vec<PlayerSlot>) -> App {
             EntityTypeDef::new("post")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
                 .with_health(50)
-                .with_dying(1, None)
+                .with_dying(1, [])
                 .with_trainer(["scout"]),
         );
         // A station that watches a patch of map from afar: the sight it leaves
@@ -627,6 +641,8 @@ fn fog_app(slots: Vec<PlayerSlot>) -> App {
                 caster: SkillCaster::Entity {
                     costs: Vec::new(),
                     target: EntityCastTarget::Position,
+                    reach: Reach::Wherever,
+                    casting: Casting::Instant,
                     effect: EntityCastEffect::Watch {
                         radius: 2,
                         duration: 5,
@@ -639,7 +655,7 @@ fn fog_app(slots: Vec<PlayerSlot>) -> App {
             EntityTypeDef::new("station")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
                 .with_health(50)
-                .with_dying(1, None)
+                .with_dying(1, [])
                 .with_sight_range(2)
                 .with_skills([sweep]),
         );

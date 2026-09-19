@@ -1,7 +1,7 @@
 //! Content-defined breeding: what an entity type bears on a timer and on what
 //! terms, and how a bred type is kept by its breeder.
 
-use crate::{period::Period, work::Attachment};
+use crate::{quantity::Quantity, work::Attachment};
 
 /// What becomes of the broodlings when the breeder dies, or lands a form
 /// that cannot hold them.
@@ -54,7 +54,7 @@ pub struct BreederDef {
     /// The type bred, by registered name.
     breeds: String,
     /// Ticks between births while below the limit.
-    period: Period,
+    period: Quantity,
     /// How many broodlings at once.
     limit: usize,
     /// How many broodlings the form opens with, at least: a breeder raised in
@@ -73,7 +73,7 @@ impl BreederDef {
     /// `limit`.
     pub fn new(
         breeds: impl Into<String>,
-        period: Period,
+        period: Quantity,
         limit: usize,
         initial: usize,
         orphans: OrphanFate,
@@ -102,7 +102,7 @@ impl BreederDef {
 
     /// Ticks between births while below the limit.
     #[inline]
-    pub fn period(&self) -> Period {
+    pub fn period(&self) -> Quantity {
         self.period
     }
 

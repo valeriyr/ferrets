@@ -26,7 +26,7 @@ use ferrets_content::{
     entity_stats::EntityStatId,
     entity_type_def::{EntityTypeDef, EntityTypeId},
     morph::MorphTransition,
-    period::Period,
+    quantity::Quantity,
     registry::ContentRegistry,
     resource::HarvestData,
     targeting,
@@ -54,6 +54,17 @@ pub fn type_id(world: &World, entity: Entity) -> EntityTypeId {
         .get::<EntityInfoComponent>()
         .expect("simulation entity must have EntityInfoComponent")
         .type_id()
+}
+
+/// The name of the type `entity` is an instance of.
+///
+/// Panics if `entity` is not a simulation entity.
+pub fn type_name(world: &World, entity: Entity) -> &str {
+    world
+        .entity(entity)
+        .get::<EntityInfoComponent>()
+        .expect("simulation entity must have EntityInfoComponent")
+        .type_name()
 }
 
 /// Returns the player owning `entity`, or `None` for a neutral one.
@@ -181,15 +192,16 @@ pub fn morph_origin(world: &World, entity: Entity) -> EntityTypeId {
         .map_or_else(|| type_id(world, entity), |morph| morph.from)
 }
 
-/// Ticks a declared period comes to for `entity`: a constant is what it says,
-/// and a stat names the entity's effective value. A period of zero is due the
-/// tick it starts.
-pub fn period_ticks(world: &World, entity: Entity, period: Period) -> u32 {
-    match period {
-        Period::Constant(ticks) => ticks,
-        Period::Stat(id) => effective_stat(world, entity, id)
-            .map(|time| time.to_num::<u32>())
-            .unwrap_or(0),
+/// What a declared quantity comes to for `entity`, in the unit the field that
+/// carries it counts: a constant is what it says, and a stat names the
+/// entity's effective value.
+///
+/// Panics if `entity` carries no such stat — content registration checks that
+/// whoever reads a quantity carries the stat it names.
+pub fn quantity(world: &World, entity: Entity, quantity: Quantity) -> u32 {
+    match quantity {
+        Quantity::Constant(value) => value,
+        Quantity::Stat(id) => effective_stat_u32(world, entity, id),
     }
 }
 

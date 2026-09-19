@@ -26,6 +26,19 @@ pub struct GameView {
     pub ally_entities: Vec<EntityView>,
     pub enemy_entities: Vec<EntityView>,
     pub neutral_entities: Vec<EntityView>,
+    /// Remains lying on the map, in ascending id order — oldest first. Only
+    /// those the brain's team can see, unless it is omniscient.
+    pub remains: Vec<RemainsView>,
+}
+
+/// One body lying on the map, for the casts that spend them.
+pub struct RemainsView {
+    pub id: u32,
+    /// What fell here.
+    pub type_name: String,
+    /// Cell coordinates of the remains.
+    pub x: u32,
+    pub y: u32,
 }
 
 /// One entity, snapshotted to integers.
@@ -73,4 +86,6 @@ pub struct EntityView {
     /// The breeder that bore this entity and still ties it. `None` when none
     /// does.
     pub bred_by: Option<u32>,
+    /// Ticks left of a timed life. `None` when the entity has none.
+    pub lifetime_left: Option<u32>,
 }

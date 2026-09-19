@@ -28,7 +28,7 @@ use ferrets_simulation::{
     },
 };
 
-use crate::{ai, settings::Settings, setup, states::GameState};
+use crate::{ai, ruleset, settings::Settings, setup, states::GameState};
 
 /// The scenario script. The engine holds the objective list (id + label,
 /// fixing the display order); the script only reports which are met and the
@@ -136,6 +136,9 @@ pub fn builtin_mission(projection: Projection, movement_model: MovementModel) ->
             },
         ],
         script: SCRIPT.to_string(),
+        // The mission states its own, as any scenario may: a scripted fight
+        // need not hold the same number of bodies a skirmish does.
+        rules: ruleset::demo(),
     }
 }
 
@@ -170,6 +173,7 @@ pub fn start_scenario(world: &mut World) {
             },
             DropPolicy::Automatic,
             FinishPolicy::Scripted,
+            scenario.rules,
         );
     }
     install_game_resources(world);

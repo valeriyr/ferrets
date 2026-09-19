@@ -11,12 +11,12 @@ use crate::{
     components::{entity_info::EntityInfoComponent, health::HealthComponent, tags::TagsComponent},
     entity_def,
     entity_index::EntityIndex,
-    events::{DeathCause, EventRecord, SimulationEvent},
+    events::{EventRecord, SimulationEvent},
     session::GameSession,
     simulation_id::SimulationId,
     spawn,
 };
-use ferrets_content::{entity_stats::EntityStatId, entity_type_def::EntityTypeDef};
+use ferrets_content::{attack::Slain, entity_stats::EntityStatId, entity_type_def::EntityTypeDef};
 
 /// The damage one full-strength hit from `attacker_def` deals to `target`.
 ///
@@ -64,8 +64,18 @@ pub fn resolve_scaled(
 /// Applies `amount` to `target`, recording `attacker` as the source, and starts the
 /// target dying when its pool empties.
 ///
+/// `slain` is what the weapon behind the hit leaves of a body it brings down;
+/// it travels with the death rather than being looked up at it, because the
+/// weapon that fired a shot may be gone by the time the shot lands.
+///
 /// No-op for a target with no health pool.
-pub fn apply(world: &mut World, attacker: SimulationId, target: Entity, amount: FixedU64) {
+pub fn apply(
+    world: &mut World,
+    attacker: SimulationId,
+    target: Entity,
+    amount: FixedU64,
+    slain: Slain,
+) {
     let tick = world.resource::<GameSession>().tick();
     let died = {
         let mut target_mut = world.entity_mut(target);
@@ -97,13 +107,6 @@ pub fn apply(world: &mut World, attacker: SimulationId, target: Entity, amount: 
         });
 
     if died {
-        spawn::despawn_entity(
-            world,
-            target,
-            DeathCause::Killed {
-                by: attacker,
-                by_owner: attacker_owner,
-            },
-        );
+        spawn::despawn_killed(world, target, attacker, attacker_owner, slain);
     }
 }

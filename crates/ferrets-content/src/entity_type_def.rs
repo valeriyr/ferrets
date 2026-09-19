@@ -7,18 +7,20 @@ use ferrets_math::FixedU64;
 use ferrets_pathfinder::layer_mask::LayerMask;
 
 use crate::{
+    affiliation::Affiliation,
     annex::{AloneConduct, AnnexClaim, AnnexDef, DockDef},
-    attack::{AttackDef, Delivery, Weapon},
+    attack::{AttackDef, Delivery, Slain, Weapon},
     berths::{BerthGroup, BerthsDef},
     brood::{BreederDef, BroodlingDef, OrphanFate},
     build::{BuilderAttendance, BuilderDef},
     costs::{self, Cost},
-    dying::DyingDef,
+    dying::{Bequest, DyingDef},
     entity_stats::EntityStatId,
     field::{FieldEffect, FieldPlacement, FieldSourceDef},
+    kinds::Kinds,
     location::{LocationDef, Solidity},
     morph::{MorphReason, MorphTransition},
-    period::Period,
+    quantity::Quantity,
     repair::{RepairCost, RepairRate, RepairerDef},
     requirement::Requirement,
     research::{ResearchId, ResearcherDef},
@@ -29,8 +31,9 @@ use crate::{
     skills::SkillId,
     splash::SplashDef,
     stand::StandingAct,
+    tags,
     train::TrainerDef,
-    transport::{BoardingPolicy, PassengerConduct, PassengerFate, TransporterDef},
+    transport::{PassengerConduct, PassengerFate, TransporterDef},
     turret::{TurretFire, TurretMount},
     work::{Attachment, WorkPresence},
 };
@@ -84,8 +87,9 @@ pub struct EntityTypeDef {
     /// Mandatory for every spawnable type; enforced by
     /// [`ContentRegistry::validate`](crate::registry::ContentRegistry::validate).
     pub location: Option<LocationDef>,
-    /// Dying-phase properties. `None` means a destroyed instance is removed
-    /// from the world immediately, with no dying phase.
+    /// Dying-phase properties: how long a destroyed instance waits before it
+    /// leaves the world, and what its death hands on. `None` is a type that
+    /// states neither.
     pub dying: Option<DyingDef>,
     /// Extra damage each hit deals to a target that carries the keyed tag or
     /// whose type name equals the key — the "damage class" side of combat. Added
@@ -232,6 +236,13 @@ impl EntityTypeDef {
     /// The authored base value of `stat`, if this type carries it.
     pub fn base_stat(&self, stat: EntityStatId) -> Option<FixedU64> {
         self.base_stats.get(&stat).copied()
+    }
+
+    /// The authored base value of `stat` truncated to a whole number, or `None`
+    /// if this type does not carry it — for integer-consuming callers.
+    #[inline]
+    pub fn base_stat_as_u32(&self, stat: EntityStatId) -> Option<u32> {
+        self.base_stat(stat).map(|value| value.to_num::<u32>())
     }
 
     /// The total bonus damage one hit deals to a target with the given type name
@@ -405,8 +416,9 @@ impl EntityTypeDef {
     }
 
     /// States the weapon the body itself points and nothing else: it reaches
-    /// `targets`, its hit travels as `delivery` says and spreads over `splash`.
-    /// The numbers it fights by are stats, set separately.
+    /// `targets`, its hit travels as `delivery` says and spreads over `splash`,
+    /// and leaves `slain` of what it brings down. The numbers it fights by are
+    /// stats, set separately.
     ///
     /// Panics if `targets` is empty, which would leave the weapon unable to hit
     /// anything at all.
@@ -415,8 +427,11 @@ impl EntityTypeDef {
         targets: impl Into<LayerMask>,
         delivery: Delivery,
         splash: Option<SplashDef>,
+        slain: Slain,
     ) -> Self {
-        self.attack = Some(AttackDef::new(Weapon::new(targets, delivery, splash)));
+        self.attack = Some(AttackDef::new(Weapon::new(
+            targets, delivery, splash, slain,
+        )));
         self
     }
 
@@ -476,14 +491,33 @@ impl EntityTypeDef {
     }
 
     /// Gives destroyed instances of this type a dying phase of `dying_time`
-    /// ticks before they are removed from the world, optionally leaving a
-    /// corpse of `corpse_type` behind. The corpse decays through its own dying
-    /// phase.
+    /// ticks before they are removed from the world, handing `leaves` on when
+    /// the death that took them is one those bequests name.
     ///
-    /// Panics if `dying_time` is `0` or `corpse_type` is empty.
-    pub fn with_dying(mut self, dying_time: u32, corpse_type: Option<&str>) -> Self {
-        self.dying = Some(DyingDef::new(dying_time, corpse_type));
+    /// Panics if `dying_time` is `0`.
+    pub fn with_dying(
+        mut self,
+        dying_time: u32,
+        leaves: impl IntoIterator<Item = Bequest>,
+    ) -> Self {
+        self.dying = Some(DyingDef::new(Some(dying_time), leaves));
         self
+    }
+
+    /// Hands `leaves` on when the death that took an instance is one those
+    /// bequests name, with no wait before it leaves the world — what a body
+    /// does, having spent its whole existence lying there.
+    pub fn with_leaves(mut self, leaves: impl IntoIterator<Item = Bequest>) -> Self {
+        self.dying = Some(DyingDef::new(None, leaves));
+        self
+    }
+
+    /// Whether instances of this type are remains: they lie where they are
+    /// left, belong to nobody, take no orders, and are gone when their
+    /// `lifetime` runs out.
+    #[inline]
+    pub fn is_remains(&self) -> bool {
+        self.tags.contains(tags::REMAINS)
     }
 
     /// Adds per-target damage bonuses, keyed by the target's tag or type name
@@ -609,15 +643,12 @@ impl EntityTypeDef {
         self
     }
 
-    /// Allows instances of this type to carry passengers matching the
-    /// `carries` type names or tags, on the given terms. How much fits aboard
-    /// is the `cargo_capacity` stat.
-    ///
-    /// Panics if `carries` is empty or contains an empty name.
+    /// Allows instances of this type to carry passengers `carries` names, on
+    /// the given terms. How much fits aboard is the `cargo_capacity` stat.
     pub fn with_transporter(
         mut self,
-        carries: impl IntoIterator<Item = impl Into<String>>,
-        boarding: BoardingPolicy,
+        carries: Kinds,
+        boarding: Affiliation,
         passenger_fate: PassengerFate,
         conduct: PassengerConduct,
     ) -> Self {
@@ -651,13 +682,11 @@ impl EntityTypeDef {
         self
     }
 
-    /// Allows instances of this type to mend targets carrying the `repairs` tags,
-    /// on the given terms.
-    ///
-    /// Panics if `repairs` is empty or any entry is empty.
+    /// Allows instances of this type to mend what `repairs` names, on the
+    /// given terms.
     pub fn with_repairer(
         mut self,
-        repairs: impl IntoIterator<Item = impl Into<String>>,
+        repairs: Kinds,
         rate: RepairRate,
         presence: WorkPresence,
         self_repair: bool,
@@ -748,15 +777,8 @@ impl EntityTypeDef {
     }
 
     /// Adds docks instances offer annexes: where each annex's anchor sits, in
-    /// cells from this footprint's own origin, and the annex types that dock
-    /// takes.
-    ///
-    /// Panics if a dock takes nothing, or an accepted name is empty.
-    pub fn with_docks<A, S>(mut self, docks: impl IntoIterator<Item = (CellPos, A)>) -> Self
-    where
-        A: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
+    /// cells from this footprint's own origin, and what that dock takes.
+    pub fn with_docks(mut self, docks: impl IntoIterator<Item = (CellPos, Kinds)>) -> Self {
         self.docks.extend(
             docks
                 .into_iter()
@@ -781,7 +803,7 @@ impl EntityTypeDef {
     pub fn with_breeder(
         mut self,
         breeds: impl Into<String>,
-        period: Period,
+        period: Quantity,
         limit: usize,
         initial: usize,
         orphans: OrphanFate,

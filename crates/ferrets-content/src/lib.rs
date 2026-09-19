@@ -1,6 +1,7 @@
 //! Content vocabulary — type definitions for everything content declares,
 //! and the registry that holds them.
 
+pub mod affiliation;
 pub mod annex;
 pub mod attack;
 pub mod berths;
@@ -12,12 +13,13 @@ pub mod entity_buffs;
 pub mod entity_stats;
 pub mod entity_type_def;
 pub mod field;
+pub mod kinds;
 pub mod location;
 pub mod morph;
-pub mod period;
 pub mod player_buffs;
 pub mod player_stats;
 pub mod projectile;
+pub mod quantity;
 pub mod registry;
 pub mod repair;
 pub mod requirement;

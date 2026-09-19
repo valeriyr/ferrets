@@ -8,30 +8,33 @@ use ferrets_bevy_plugin::{
     replay,
 };
 use ferrets_content::{
+    affiliation::Affiliation,
     annex::{AloneConduct, AnnexClaim, AnnexLife, AnnexWork},
-    attack::{AttackDef, Delivery, Weapon},
+    attack::{AttackDef, Delivery, Slain, Weapon},
     berths::BerthGroup,
     brood::{Lingering, OrphanFate},
     build::BuilderAttendance,
     costs,
+    dying::{Bequest, LeftBy},
     entity_buffs::{EntityBuffDef, EntityBuffId},
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     field::FieldId,
+    kinds::Kinds,
     location::Solidity,
     morph::{MorphCancel, MorphInterrupted, MorphPlacement, MorphReason, MorphTransition},
-    period::Period,
     player_buffs::PlayerBuffDef,
     projectile::{Aim, ProjectileDef},
+    quantity::Quantity,
     registry::ContentRegistry,
     requirement::Requirement,
     research::{ResearchDef, ResearchId},
-    resource::{Banking, DepletionPolicy, HarvestData, Sources},
+    resource::{Banking, DepletionPolicy, HarvestData},
     skills::{EntityCastCost, PlayerCastEffect, SkillCaster, SkillDef},
     splash::{SplashDef, SplashShape},
     stack_rule::StackRule,
     stats::{EntityModifier, ModifierOp},
-    transport::{BoardingPolicy, PassengerConduct, PassengerFate},
+    transport::{PassengerConduct, PassengerFate},
     turret::{TurretDef, TurretFire, TurretMount, TurretStats, WeaponConduct},
     work::{Attachment, BerthStance, CrewLimit, WorkPresence},
 };
@@ -81,6 +84,7 @@ use ferrets_simulation::{
     movement_model::MovementModel,
     order::AttackTarget,
     resources::PlayerResources,
+    ruleset::{RemainsLimit, Ruleset},
     selection::Selection,
     session::{
         GameSession, ai_hosting::AiHosting, authority::Authority, drop_policy::DropPolicy,
@@ -105,7 +109,12 @@ pub const AIR: LayerId = LayerId::new(2);
 /// A body weapon reaching `targets` that lands its hit where it stands — the
 /// plainest one there is, for fixtures about anything but the weapon.
 pub fn weapon(targets: impl Into<LayerMask>) -> AttackDef {
-    AttackDef::new(Weapon::new(targets, Delivery::Instant, None))
+    AttackDef::new(Weapon::new(
+        targets,
+        Delivery::Instant,
+        None,
+        Slain::Remains,
+    ))
 }
 
 /// Creates an app with the simulation plugin on a 32×32 single-layer map,
@@ -117,6 +126,11 @@ pub fn weapon(targets: impl Into<LayerMask>) -> AttackDef {
 /// content and starts the session; the registry already declares
 /// [`GROUND_LAYER`], matching the map's grid.
 pub fn make_app(slots: Vec<PlayerSlot>) -> App {
+    make_app_under(slots, Ruleset::new(RemainsLimit::Unbounded))
+}
+
+/// The same app under rules a test states for itself — a remains cap, say.
+pub fn make_app_under(slots: Vec<PlayerSlot>, rules: Ruleset) -> App {
     let mut registry = ContentRegistry::default();
     assert_eq!(registry.register_layer(GROUND_LAYER), GROUND);
 
@@ -134,6 +148,7 @@ pub fn make_app(slots: Vec<PlayerSlot>) -> App {
             },
             DropPolicy::Automatic,
             FinishPolicy::Endless,
+            rules,
         ),
         Map::new(
             "test",
@@ -146,6 +161,20 @@ pub fn make_app(slots: Vec<PlayerSlot>) -> App {
     ));
     app.insert_resource(registry);
     app
+}
+
+/// Kills `victim` outright, credited to `by`, with a weapon that leaves a body.
+///
+/// The announced death a test wants when the weapon is not its subject; one
+/// that is about what a weapon leaves calls [`spawn::despawn_killed`] with the
+/// [`Slain`] it means.
+pub fn despawn_killed(
+    world: &mut World,
+    victim: Entity,
+    by: SimulationId,
+    by_owner: Option<PlayerId>,
+) {
+    spawn::despawn_killed(world, victim, by, by_owner, Slain::Remains);
 }
 
 /// `count` occupied human slots with contiguous ids and no team.
@@ -192,6 +221,7 @@ pub fn skirmish_header(slots: Vec<PlayerSlot>, finish_policy: FinishPolicy) -> R
             slots,
             map: "test".to_string(),
             finish_policy,
+            rules: Ruleset::new(RemainsLimit::Unbounded),
         }),
         MovementModel::Cell,
         Projection::Isometric,
@@ -295,6 +325,12 @@ pub fn create_owned(
     .unwrap_or_else(|| panic!("{type_name} fits at ({x}, {y})"))
 }
 
+/// One bequest of `entity_type`, handed on by any death that ends a life —
+/// what most fixtures mean by "leaves a body".
+pub fn leaves(entity_type: &str) -> Vec<Bequest> {
+    vec![Bequest::new(entity_type, 1, LeftBy::Ordinary)]
+}
+
 /// Whether `player` covers the cell in `field`.
 pub fn covered_by(app: &App, field: FieldId, x: u32, y: u32, player: PlayerId) -> bool {
     app.world()
@@ -366,7 +402,7 @@ pub fn selection_app() -> App {
                     FixedU64::from_num(360),
                 )
                 .with_health(30)
-                .with_dying(1, None)
+                .with_dying(1, [])
                 .with_attack(weapon(GROUND), 10, 1, 3, 2, 1)
                 .with_sight_range(5),
         );
@@ -374,7 +410,7 @@ pub fn selection_app() -> App {
             EntityTypeDef::new("critter")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
                 .with_health(1)
-                .with_dying(1, None),
+                .with_dying(1, []),
         );
         registry.register(
             EntityTypeDef::new("keep")
@@ -422,7 +458,7 @@ pub fn cell_crowd_app() -> App {
                     FixedU64::from_num(360),
                 )
                 .with_health(30)
-                .with_dying(2, None),
+                .with_dying(2, []),
         );
         registry.register(
             EntityTypeDef::new("wagon")
@@ -435,7 +471,7 @@ pub fn cell_crowd_app() -> App {
                     FixedU64::from_num(360),
                 )
                 .with_health(60)
-                .with_dying(2, None),
+                .with_dying(2, []),
         );
     }
     app.world_mut().resource::<ContentRegistry>().validate();
@@ -466,14 +502,14 @@ pub fn morph_app(model: MovementModel) -> App {
                     FixedU64::from_num(360),
                 )
                 .with_health(30)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_cost([("gold", 10)])
                 .with_train_time(20)
                 .with_morphs([
                     MorphTransition::new(
                         "giant",
                         None,
-                        Period::Constant(10),
+                        Quantity::Constant(10),
                         MorphPlacement::Reserve,
                         MorphCancel::Refundable,
                         MorphInterrupted::Reverts,
@@ -484,7 +520,7 @@ pub fn morph_app(model: MovementModel) -> App {
                     MorphTransition::new(
                         "boulder",
                         None,
-                        Period::Constant(0),
+                        Quantity::Constant(0),
                         MorphPlacement::Revalidate,
                         MorphCancel::Committed,
                         MorphInterrupted::Dies,
@@ -495,7 +531,7 @@ pub fn morph_app(model: MovementModel) -> App {
                     MorphTransition::new(
                         "ogre",
                         None,
-                        Period::Constant(10),
+                        Quantity::Constant(10),
                         MorphPlacement::Reserve,
                         MorphCancel::Refundable,
                         MorphInterrupted::Reverts,
@@ -506,7 +542,7 @@ pub fn morph_app(model: MovementModel) -> App {
                     MorphTransition::new(
                         "husk",
                         None,
-                        Period::Constant(0),
+                        Quantity::Constant(0),
                         MorphPlacement::Revalidate,
                         MorphCancel::Committed,
                         MorphInterrupted::Reverts,
@@ -517,7 +553,7 @@ pub fn morph_app(model: MovementModel) -> App {
                     MorphTransition::new(
                         "wisp",
                         None,
-                        Period::Constant(10),
+                        Quantity::Constant(10),
                         MorphPlacement::Revalidate,
                         MorphCancel::Forfeit,
                         MorphInterrupted::Reverts,
@@ -530,7 +566,7 @@ pub fn morph_app(model: MovementModel) -> App {
                     MorphTransition::new(
                         "wyrm",
                         Some("chrysalis"),
-                        Period::Constant(10),
+                        Quantity::Constant(10),
                         MorphPlacement::Revalidate,
                         MorphCancel::Refundable,
                         MorphInterrupted::Reverts,
@@ -544,7 +580,7 @@ pub fn morph_app(model: MovementModel) -> App {
             EntityTypeDef::new("chrysalis")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
                 .with_health(60)
-                .with_dying(2, None),
+                .with_dying(2, []),
         );
         registry.register(
             EntityTypeDef::new("wyrm")
@@ -557,7 +593,7 @@ pub fn morph_app(model: MovementModel) -> App {
                     FixedU64::from_num(360),
                 )
                 .with_health(90)
-                .with_dying(2, None),
+                .with_dying(2, []),
         );
         registry.register(
             EntityTypeDef::new("giant")
@@ -570,13 +606,13 @@ pub fn morph_app(model: MovementModel) -> App {
                     FixedU64::from_num(360),
                 )
                 .with_health(60)
-                .with_dying(2, None),
+                .with_dying(2, []),
         );
         registry.register(
             EntityTypeDef::new("boulder")
                 .with_location(GROUND, CellSize::new(3, 3), Solidity::Solid)
                 .with_health(100)
-                .with_dying(2, None),
+                .with_dying(2, []),
         );
         registry.register(
             EntityTypeDef::new("ogre")
@@ -589,7 +625,7 @@ pub fn morph_app(model: MovementModel) -> App {
                     FixedU64::from_num(360),
                 )
                 .with_health(60)
-                .with_dying(2, None),
+                .with_dying(2, []),
         );
         registry.register(
             EntityTypeDef::new("husk")
@@ -602,7 +638,7 @@ pub fn morph_app(model: MovementModel) -> App {
                     FixedU64::from_num(360),
                 )
                 .with_health(10)
-                .with_dying(2, None),
+                .with_dying(2, []),
         );
         registry.register(
             EntityTypeDef::new("wisp")
@@ -617,7 +653,7 @@ pub fn morph_app(model: MovementModel) -> App {
                 .with_morphs([MorphTransition::new(
                     "whelp",
                     None,
-                    Period::Constant(10),
+                    Quantity::Constant(10),
                     MorphPlacement::Revalidate,
                     MorphCancel::Forfeit,
                     MorphInterrupted::Reverts,
@@ -630,7 +666,7 @@ pub fn morph_app(model: MovementModel) -> App {
             EntityTypeDef::new("shrine")
                 .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
                 .with_health(100)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_tags(["building"])
                 // Trains the whelp, and its unrooted form does not: the one
                 // role whose live state is pre-paid, so what happens to the
@@ -639,7 +675,7 @@ pub fn morph_app(model: MovementModel) -> App {
                 .with_morphs([MorphTransition::new(
                     "golem",
                     None,
-                    Period::Constant(10),
+                    Quantity::Constant(10),
                     MorphPlacement::Reserve,
                     MorphCancel::Refundable,
                     MorphInterrupted::Reverts,
@@ -659,11 +695,11 @@ pub fn morph_app(model: MovementModel) -> App {
                     FixedU64::from_num(360),
                 )
                 .with_health(50)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_morphs([MorphTransition::new(
                     "shrine",
                     None,
-                    Period::Constant(10),
+                    Quantity::Constant(10),
                     MorphPlacement::Reserve,
                     MorphCancel::Refundable,
                     MorphInterrupted::Reverts,
@@ -702,7 +738,7 @@ fn brood_building(name: &str) -> EntityTypeDef {
         .with_location(GROUND, CellSize::new(3, 3), Solidity::Solid)
         .with_health(300)
         .with_stat(EntityStatId::SUPPLY_PROVIDED, FixedU64::from_num(3))
-        .with_dying(2, None)
+        .with_dying(2, [])
         .with_tags(["building"])
 }
 
@@ -718,7 +754,7 @@ fn brood_mover(name: &str, max_health: u32) -> EntityTypeDef {
             FixedU64::from_num(360),
         )
         .with_health(max_health)
-        .with_dying(2, None)
+        .with_dying(2, [])
 }
 
 /// A free, timed, refundable transition of [`brood_app`] into `into` after
@@ -727,7 +763,7 @@ fn brood_change(into: &str) -> MorphTransition {
     MorphTransition::new(
         into,
         None,
-        Period::Constant(10),
+        Quantity::Constant(10),
         MorphPlacement::Revalidate,
         MorphCancel::Refundable,
         MorphInterrupted::Reverts,
@@ -766,17 +802,17 @@ pub fn brood_app(model: MovementModel) -> App {
     {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
         registry.register_resource("gold");
-        let brood_period = registry.register_entity_stat("brood_period");
+        let brood_period = registry.register_entity_stat("brood_period", FixedU64::ONE);
 
         registry.register(
             brood_building("hatch")
                 .with_berths(brood_berths(4))
-                .with_breeder("grub", Period::Constant(10), 3, 0, OrphanFate::Perish)
+                .with_breeder("grub", Quantity::Constant(10), 3, 0, OrphanFate::Perish)
                 .with_morphs([
                     MorphTransition::new(
                         "great_hatch",
                         Some("shell"),
-                        Period::Constant(10),
+                        Quantity::Constant(10),
                         MorphPlacement::Revalidate,
                         MorphCancel::Refundable,
                         MorphInterrupted::Reverts,
@@ -792,33 +828,39 @@ pub fn brood_app(model: MovementModel) -> App {
         registry.register(
             brood_building("great_hatch")
                 .with_berths(brood_berths(4))
-                .with_breeder("grub", Period::Constant(10), 3, 2, OrphanFate::Perish)
+                .with_breeder("grub", Quantity::Constant(10), 3, 2, OrphanFate::Perish)
                 .with_morphs([brood_change("hatch")]),
         );
         registry.register(brood_building("bare_hatch"));
         registry.register(
             brood_building("tight_hatch")
                 .with_berths(brood_berths(2))
-                .with_breeder("grub", Period::Constant(10), 2, 0, OrphanFate::Perish),
+                .with_breeder("grub", Quantity::Constant(10), 2, 0, OrphanFate::Perish),
         );
         registry.register(
             brood_building("ready_hatch")
                 .with_build_time(20)
                 .with_berths(brood_berths(4))
-                .with_breeder("grub", Period::Constant(10), 3, 2, OrphanFate::Perish),
+                .with_breeder("grub", Quantity::Constant(10), 3, 2, OrphanFate::Perish),
         );
         registry.register(
             brood_building("stat_hatch")
                 .with_stat(brood_period, FixedU64::from_num(6))
                 .with_berths(brood_berths(4))
-                .with_breeder("grub", Period::Stat(brood_period), 3, 0, OrphanFate::Perish),
+                .with_breeder(
+                    "grub",
+                    Quantity::Stat(brood_period),
+                    3,
+                    0,
+                    OrphanFate::Perish,
+                ),
         );
         registry.register(
             brood_building("linger_pen")
                 .with_berths(brood_berths(2))
                 .with_breeder(
                     "piglet",
-                    Period::Constant(10),
+                    Quantity::Constant(10),
                     2,
                     0,
                     OrphanFate::Linger(Lingering::Stay),
@@ -830,11 +872,11 @@ pub fn brood_app(model: MovementModel) -> App {
         registry.register(
             brood_building("reseat_pen")
                 .with_berths(brood_berths(2))
-                .with_breeder("piglet", Period::Constant(10), 2, 0, reseat)
+                .with_breeder("piglet", Quantity::Constant(10), 2, 0, reseat)
                 .with_morphs([MorphTransition::new(
                     "roomy_pen",
                     Some("pen_shell"),
-                    Period::Constant(10),
+                    Quantity::Constant(10),
                     MorphPlacement::Revalidate,
                     MorphCancel::Refundable,
                     MorphInterrupted::Reverts,
@@ -847,14 +889,14 @@ pub fn brood_app(model: MovementModel) -> App {
         registry.register(
             brood_building("roomy_pen")
                 .with_berths(brood_berths(2))
-                .with_breeder("piglet", Period::Constant(10), 2, 0, reseat),
+                .with_breeder("piglet", Quantity::Constant(10), 2, 0, reseat),
         );
 
         registry.register(
             EntityTypeDef::new("grub")
                 .with_location(GROUND, CellSize::ONE, Solidity::Passable)
                 .with_health(25)
-                .with_dying(1, None)
+                .with_dying(1, [])
                 .with_selection(1, None)
                 .with_broodling(Attachment::new(
                     "brood",
@@ -867,7 +909,7 @@ pub fn brood_app(model: MovementModel) -> App {
                     MorphTransition::new(
                         "worker",
                         Some("egg"),
-                        Period::Constant(10),
+                        Quantity::Constant(10),
                         MorphPlacement::Nearby,
                         MorphCancel::Refundable,
                         MorphInterrupted::Reverts,
@@ -878,7 +920,7 @@ pub fn brood_app(model: MovementModel) -> App {
                     MorphTransition::new(
                         "brute",
                         Some("egg"),
-                        Period::Constant(20),
+                        Quantity::Constant(20),
                         MorphPlacement::Nearby,
                         MorphCancel::Refundable,
                         MorphInterrupted::Reverts,
@@ -889,7 +931,7 @@ pub fn brood_app(model: MovementModel) -> App {
                     MorphTransition::new(
                         "mound",
                         None,
-                        Period::Constant(10),
+                        Quantity::Constant(10),
                         MorphPlacement::Reserve,
                         MorphCancel::Refundable,
                         MorphInterrupted::Reverts,
@@ -900,7 +942,7 @@ pub fn brood_app(model: MovementModel) -> App {
                     MorphTransition::new(
                         "flit",
                         Some("egg"),
-                        Period::Constant(10),
+                        Quantity::Constant(10),
                         MorphPlacement::Nearby,
                         MorphCancel::Refundable,
                         MorphInterrupted::Dies,
@@ -911,7 +953,7 @@ pub fn brood_app(model: MovementModel) -> App {
                     MorphTransition::new(
                         "bulk",
                         Some("egg"),
-                        Period::Constant(10),
+                        Quantity::Constant(10),
                         MorphPlacement::Nearby,
                         MorphCancel::Refundable,
                         MorphInterrupted::Reverts,
@@ -922,7 +964,7 @@ pub fn brood_app(model: MovementModel) -> App {
                     MorphTransition::new(
                         "hulk",
                         Some("egg"),
-                        Period::Constant(10),
+                        Quantity::Constant(10),
                         MorphPlacement::Nearby,
                         MorphCancel::Refundable,
                         MorphInterrupted::Dies,
@@ -944,14 +986,14 @@ pub fn brood_app(model: MovementModel) -> App {
                         FixedU64::from_num(360),
                     )
                     .with_health(90)
-                    .with_dying(2, None),
+                    .with_dying(2, []),
             );
         }
         registry.register(
             EntityTypeDef::new("egg")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
                 .with_health(100)
-                .with_dying(1, None),
+                .with_dying(1, []),
         );
         registry.register(
             brood_mover("worker", 30).with_stat(EntityStatId::SUPPLY_COST, FixedU64::ONE),
@@ -964,18 +1006,18 @@ pub fn brood_app(model: MovementModel) -> App {
             EntityTypeDef::new("mound")
                 .with_location(GROUND, CellSize::new(3, 3), Solidity::Solid)
                 .with_health(100)
-                .with_dying(2, None),
+                .with_dying(2, []),
         );
         registry.register(
             EntityTypeDef::new("piglet")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
                 .with_health(20)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_broodling(Attachment::new("brood", BerthStance::Still))
                 .with_morphs([MorphTransition::new(
                     "worker",
                     None,
-                    Period::Constant(10),
+                    Quantity::Constant(10),
                     MorphPlacement::Revalidate,
                     MorphCancel::Refundable,
                     MorphInterrupted::Reverts,
@@ -988,7 +1030,7 @@ pub fn brood_app(model: MovementModel) -> App {
             EntityTypeDef::new("den")
                 .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
                 .with_health(100)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_tags(["building"]),
         );
         registry.register(
@@ -1366,7 +1408,7 @@ pub fn combat_app() -> App {
                     FixedU64::from_num(360),
                 )
                 .with_health(50)
-                .with_dying(3, None)
+                .with_dying(3, [])
                 .with_attack(weapon(GROUND), 10, 1, 1, 4, 2),
         );
         // A gun on a turret: it never moves and never turns, and what comes round
@@ -1377,7 +1419,7 @@ pub fn combat_app() -> App {
         let keep_gun = registry.register_turret(
             "keep_gun",
             TurretDef::new(
-                Weapon::new(GROUND, Delivery::Instant, None),
+                Weapon::new(GROUND, Delivery::Instant, None, Slain::Remains),
                 TurretStats::default(),
                 WeaponConduct::Halts,
             ),
@@ -1406,7 +1448,7 @@ pub fn combat_app() -> App {
         let wagon_gun = registry.register_turret(
             "wagon_gun",
             TurretDef::new(
-                Weapon::new(GROUND, Delivery::Instant, None),
+                Weapon::new(GROUND, Delivery::Instant, None, Slain::Remains),
                 TurretStats::default(),
                 WeaponConduct::Halts,
             ),
@@ -1441,7 +1483,7 @@ pub fn combat_app() -> App {
         let rolling_gun = registry.register_turret(
             "rolling_gun_mount",
             TurretDef::new(
-                Weapon::new(GROUND, Delivery::Instant, None),
+                Weapon::new(GROUND, Delivery::Instant, None, Slain::Remains),
                 TurretStats::default(),
                 WeaponConduct::OnTheMove,
             ),
@@ -1494,6 +1536,7 @@ pub fn combat_app() -> App {
                         GROUND,
                         true,
                     )),
+                    Slain::Remains,
                 ),
                 TurretStats::default(),
                 WeaponConduct::OnTheMove,
@@ -1558,7 +1601,7 @@ pub fn combat_app() -> App {
         let flak = registry.register_turret(
             "flak",
             TurretDef::new(
-                Weapon::new(AIR, Delivery::Instant, None),
+                Weapon::new(AIR, Delivery::Instant, None, Slain::Remains),
                 TurretStats::default(),
                 WeaponConduct::Halts,
             ),
@@ -1583,14 +1626,14 @@ pub fn combat_app() -> App {
                 .with_location(GROUND, CellSize::ONE, Solidity::Passable)
                 .with_targetable(AIR)
                 .with_health(30)
-                .with_dying(3, None),
+                .with_dying(3, []),
         );
         // A keep with one gun on its far corner, throwing something slow enough to
         // watch: where a shot leaves from is only visible while it is in the air.
         let corner_gun = registry.register_turret(
             "corner_gun",
             TurretDef::new(
-                Weapon::new(GROUND, Delivery::Projectile(lob), None),
+                Weapon::new(GROUND, Delivery::Projectile(lob), None, Slain::Remains),
                 TurretStats::default(),
                 WeaponConduct::Halts,
             ),
@@ -1615,11 +1658,11 @@ pub fn combat_app() -> App {
         // A body pointing a short spear beside a far-reaching gun: the gun reads
         // a range stat of its own, four times the spear's, so an order arriving
         // at the body's longest reach has not put its own weapon in range.
-        let gun_range = registry.register_entity_stat("gun_range");
+        let gun_range = registry.register_entity_stat("gun_range", FixedU64::ONE);
         let long_gun = registry.register_turret(
             "long_gun",
             TurretDef::new(
-                Weapon::new(GROUND, Delivery::Instant, None),
+                Weapon::new(GROUND, Delivery::Instant, None, Slain::Remains),
                 TurretStats {
                     range: gun_range,
                     ..TurretStats::default()
@@ -1661,7 +1704,12 @@ pub fn combat_app() -> App {
                 .with_health(60)
                 .with_sight_range(12)
                 .with_attack(
-                    AttackDef::new(Weapon::new(GROUND, Delivery::Projectile(lob), None)),
+                    AttackDef::new(Weapon::new(
+                        GROUND,
+                        Delivery::Projectile(lob),
+                        None,
+                        Slain::Remains,
+                    )),
                     10,
                     4,
                     8,
@@ -1677,11 +1725,11 @@ pub fn combat_app() -> App {
         // A mover fighting only from a gun that names its own acquisition stat,
         // so the type legally declares no acquire_range: what an attack-move
         // stops for has to be asked of every weapon rather than of the body.
-        let prowl_notice = registry.register_entity_stat("prowl_notice");
+        let prowl_notice = registry.register_entity_stat("prowl_notice", FixedU64::ONE);
         let prowl_gun = registry.register_turret(
             "prowl_gun",
             TurretDef::new(
-                Weapon::new(GROUND, Delivery::Instant, None),
+                Weapon::new(GROUND, Delivery::Instant, None, Slain::Remains),
                 TurretStats {
                     acquire_range: prowl_notice,
                     ..TurretStats::default()
@@ -1715,11 +1763,11 @@ pub fn combat_app() -> App {
         // A short spear under a long anti-air gun, on wheels: what an ordered
         // attack closes to has to be asked of the weapon that can serve the
         // target, or the long gun's reach would park the body out of the spear's.
-        let anti_air_range = registry.register_entity_stat("anti_air_range");
+        let anti_air_range = registry.register_entity_stat("anti_air_range", FixedU64::ONE);
         let anti_air_gun = registry.register_turret(
             "anti_air_gun",
             TurretDef::new(
-                Weapon::new(AIR, Delivery::Instant, None),
+                Weapon::new(AIR, Delivery::Instant, None, Slain::Remains),
                 TurretStats {
                     range: anti_air_range,
                     ..TurretStats::default()
@@ -1753,19 +1801,21 @@ pub fn combat_app() -> App {
             EntityTypeDef::new("hulk")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
                 .with_health(500)
-                .with_dying(3, None),
+                .with_dying(3, []),
         );
-        // Registered before `dummy`, which leaves it as a corpse.
+        // Registered before `dummy`, which leaves it as a body: tagged remains
+        // and lying there for the lifetime it carries, like every corpse.
         registry.register(
             EntityTypeDef::new("bones")
-                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-                .with_dying(2, None),
+                .with_location(GROUND, CellSize::ONE, Solidity::Passable)
+                .with_tags(["remains"])
+                .with_stat(EntityStatId::LIFETIME, FixedU64::from_num(400)),
         );
         registry.register(
             EntityTypeDef::new("dummy")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
                 .with_health(20)
-                .with_dying(3, Some("bones")),
+                .with_dying(3, leaves("bones")),
         );
         // A wide attacker, so a chase threads a 2x2 chaser footprint: reach
         // is rect to rect, measured from its nearest edge.
@@ -1781,7 +1831,7 @@ pub fn combat_app() -> App {
                     FixedU64::from_num(360),
                 )
                 .with_health(80)
-                .with_dying(3, None)
+                .with_dying(3, [])
                 .with_attack(weapon(GROUND), 10, 2, 2, 4, 2),
         );
     }
@@ -1836,7 +1886,7 @@ pub fn supply_app() -> App {
             EntityTypeDef::new("camp")
                 .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
                 .with_health(100)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_cost([("gold", 20)])
                 .with_build_time(10)
                 .with_stat(EntityStatId::SUPPLY_PROVIDED, FixedU64::from_num(8)),
@@ -1853,7 +1903,7 @@ pub fn supply_app() -> App {
                     FixedU64::from_num(360),
                 )
                 .with_health(20)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_cost([("gold", 10)])
                 .with_train_time(10)
                 .with_stat(EntityStatId::SUPPLY_COST, FixedU64::ONE),
@@ -1864,7 +1914,7 @@ pub fn supply_app() -> App {
             EntityTypeDef::new("lodge")
                 .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
                 .with_health(100)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_trainer(["settler", "worker"]),
         );
         // Works from outside the site, so a camp going up stays observable.
@@ -1879,7 +1929,7 @@ pub fn supply_app() -> App {
                     FixedU64::from_num(360),
                 )
                 .with_health(20)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
                 .with_builder(
                     ["camp"],
@@ -1916,7 +1966,7 @@ pub fn player_effects_app() -> App {
                     FixedU64::from_num(360),
                 )
                 .with_health(20)
-                .with_dying(2, None),
+                .with_dying(2, []),
         );
         let drums_haste = registry.register_player_buff(
             "drums_haste",
@@ -2001,7 +2051,7 @@ pub fn research_app() -> App {
                     FixedU64::from_num(360),
                 )
                 .with_health(30)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_attack(weapon(GROUND), 10, 1, 1, 4, 2)
                 .with_cost([("gold", 10)])
                 .with_train_time(5)
@@ -2014,7 +2064,7 @@ pub fn research_app() -> App {
             EntityTypeDef::new("lab")
                 .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
                 .with_health(100)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_researcher([smithing, tactics])
                 .with_tags(["workshop"]),
         );
@@ -2022,7 +2072,7 @@ pub fn research_app() -> App {
             EntityTypeDef::new("guardhouse")
                 .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
                 .with_health(100)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_trainer(["pikeman", "halberdier", "knight"]),
         );
     }
@@ -2085,7 +2135,7 @@ pub fn annex_app() -> App {
                 .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
                 .with_health(200)
                 .with_sight_range(8)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_tags(["building"])
                 .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
                 .with_builder(
@@ -2096,12 +2146,15 @@ pub fn annex_app() -> App {
                 )
                 // Two docks, so which one an annex fills is recorded and not
                 // merely counted: east of the keep, and south of it.
-                .with_docks([(CellPos::new(2, 0), annexes), (CellPos::new(0, 2), annexes)])
+                .with_docks([
+                    (CellPos::new(2, 0), Kinds::types(annexes)),
+                    (CellPos::new(0, 2), Kinds::types(annexes)),
+                ])
                 .with_trainer(["sentry", "runner"])
                 .with_morphs([MorphTransition::new(
                     "keep_aloft",
                     None,
-                    Period::Constant(4),
+                    Quantity::Constant(4),
                     MorphPlacement::Revalidate,
                     MorphCancel::Committed,
                     MorphInterrupted::Reverts,
@@ -2122,12 +2175,12 @@ pub fn annex_app() -> App {
                 )
                 .with_health(200)
                 .with_sight_range(8)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_tags(["building"])
                 .with_morphs([MorphTransition::new(
                     "keep",
                     None,
-                    Period::Constant(4),
+                    Quantity::Constant(4),
                     MorphPlacement::Reserve,
                     MorphCancel::Committed,
                     MorphInterrupted::Reverts,
@@ -2143,7 +2196,7 @@ pub fn annex_app() -> App {
                 .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
                 .with_health(150)
                 .with_sight_range(8)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_tags(["building"])
                 .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
                 .with_builder(
@@ -2152,14 +2205,14 @@ pub fn annex_app() -> App {
                         crew: CrewLimit::ONE,
                     }),
                 )
-                .with_docks([(CellPos::new(0, 2), ["lookout"])]),
+                .with_docks([(CellPos::new(0, 2), Kinds::types(["lookout"]))]),
         );
         registry.register(
             EntityTypeDef::new("lookout")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
                 .with_health(40)
                 .with_sight_range(6)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_tags(["building"])
                 .with_cost([("gold", 10)])
                 .with_build_time(4)
@@ -2180,7 +2233,7 @@ pub fn annex_app() -> App {
             EntityTypeDef::new("watchpost")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
                 .with_health(40)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_tags(["building"])
                 .with_cost([("gold", 10)])
                 .with_build_time(12)
@@ -2196,7 +2249,7 @@ pub fn annex_app() -> App {
             EntityTypeDef::new("beacon")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
                 .with_health(30)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_tags(["building"])
                 .with_cost([("gold", 10)])
                 .with_build_time(4)
@@ -2209,7 +2262,7 @@ pub fn annex_app() -> App {
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
                 .with_health(10)
                 .with_stat(EntityStatId::HEALTH_DRAIN, FixedU64::ZERO)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_tags(["building"])
                 .with_cost([("gold", 10)])
                 .with_build_time(4)
@@ -2229,7 +2282,7 @@ pub fn annex_app() -> App {
             EntityTypeDef::new("spire")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
                 .with_health(60)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_tags(["building"])
                 .with_cost([("gold", 10)])
                 .with_build_time(4)
@@ -2247,7 +2300,7 @@ pub fn annex_app() -> App {
             EntityTypeDef::new("mooring")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
                 .with_health(60)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_tags(["building"])
                 .with_cost([("gold", 10)])
                 .with_build_time(4)
@@ -2266,7 +2319,7 @@ pub fn annex_app() -> App {
             EntityTypeDef::new("hub")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
                 .with_health(60)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_tags(["building"])
                 .with_cost([("gold", 10)])
                 .with_build_time(4)
@@ -2277,7 +2330,7 @@ pub fn annex_app() -> App {
                         crew: CrewLimit::ONE,
                     }),
                 )
-                .with_docks([(CellPos::new(1, 0), ["relay"])])
+                .with_docks([(CellPos::new(1, 0), Kinds::types(["relay"]))])
                 .with_annex(
                     AloneConduct::Standing {
                         work: AnnexWork::Works,
@@ -2290,7 +2343,7 @@ pub fn annex_app() -> App {
             EntityTypeDef::new("relay")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
                 .with_health(60)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_tags(["building"])
                 .with_cost([("gold", 10)])
                 .with_build_time(4)
@@ -2314,7 +2367,7 @@ pub fn annex_app() -> App {
                     FixedU64::from_num(360),
                 )
                 .with_health(20)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_cost([("gold", 10)])
                 // Shorter than the lookout's build time, so a unit that trained
                 // alongside the annex instead of behind it would be out while
@@ -2332,7 +2385,7 @@ pub fn annex_app() -> App {
                     FixedU64::from_num(360),
                 )
                 .with_health(30)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_cost([("gold", 10)])
                 .with_train_time(4)
                 .with_requires([Requirement::Annexed("lookout".to_string())]),
@@ -2369,7 +2422,7 @@ pub fn transport_app() -> App {
                     FixedU64::from_num(360),
                 )
                 .with_health(30)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_attack(weapon(GROUND), 10, 3, 5, 4, 2)
                 .with_sight_range(8)
                 .with_tags(["infantry"])
@@ -2386,7 +2439,7 @@ pub fn transport_app() -> App {
                     FixedU64::from_num(360),
                 )
                 .with_health(20)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_tags(["infantry"])
                 .with_stat(EntityStatId::CARGO_SIZE, FixedU64::from_num(2)),
         );
@@ -2401,10 +2454,10 @@ pub fn transport_app() -> App {
                     FixedU64::from_num(360),
                 )
                 .with_health(20)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_tags(["infantry"]),
         );
-        let carrier = |name: &str, boarding: BoardingPolicy| {
+        let carrier = |name: &str, boarding: Affiliation| {
             EntityTypeDef::new(name)
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
                 .with_movement(
@@ -2415,31 +2468,31 @@ pub fn transport_app() -> App {
                     FixedU64::from_num(360),
                 )
                 .with_health(60)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_stat(EntityStatId::CARGO_CAPACITY, FixedU64::from_num(4))
                 .with_stat(EntityStatId::LOAD_RANGE, FixedU64::from_num(2))
                 .with_stat(EntityStatId::UNLOAD_RANGE, FixedU64::ONE)
                 .with_stat(EntityStatId::LOAD_PERIOD, FixedU64::from_num(3))
                 .with_stat(EntityStatId::UNLOAD_PERIOD, FixedU64::from_num(2))
                 .with_transporter(
-                    ["infantry"],
+                    Kinds::tags(["infantry"]),
                     boarding,
                     PassengerFate::Destroy,
                     PassengerConduct::Shelter,
                 )
         };
-        registry.register(carrier("wagon", BoardingPolicy::Own));
-        registry.register(carrier("ferry", BoardingPolicy::Allies));
+        registry.register(carrier("wagon", Affiliation::Own));
+        registry.register(carrier("ferry", Affiliation::Allied));
         // A rider whose only weapon is a turret, for the rule that a passenger
         // fights with what it points itself: a turret is mounted on a body that
         // stands somewhere, and a passenger stands nowhere.
         // Its gun reads a stat of its own, the way content declares one for a
         // second weapon: a body weapon's numbers are not there to be read.
-        let rider_damage = registry.register_entity_stat("rider_damage");
+        let rider_damage = registry.register_entity_stat("rider_damage", FixedU64::ZERO);
         let rider_gun = registry.register_turret(
             "rider_gun",
             TurretDef::new(
-                Weapon::new(GROUND, Delivery::Instant, None),
+                Weapon::new(GROUND, Delivery::Instant, None, Slain::Remains),
                 TurretStats {
                     damage: rider_damage,
                     ..TurretStats::default()
@@ -2458,7 +2511,7 @@ pub fn transport_app() -> App {
                     FixedU64::from_num(360),
                 )
                 .with_health(30)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_sight_range(8)
                 .with_stat(EntityStatId::AIM_RATE, FixedU64::from_num(360))
                 .with_stat(rider_damage, FixedU64::from_num(10))
@@ -2477,7 +2530,7 @@ pub fn transport_app() -> App {
             EntityTypeDef::new("bunker")
                 .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
                 .with_health(200)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_sight_range(8)
                 .with_stat(EntityStatId::CARGO_CAPACITY, FixedU64::from_num(4))
                 .with_stat(EntityStatId::LOAD_RANGE, FixedU64::ONE)
@@ -2485,8 +2538,8 @@ pub fn transport_app() -> App {
                 .with_stat(EntityStatId::LOAD_PERIOD, FixedU64::ZERO)
                 .with_stat(EntityStatId::UNLOAD_PERIOD, FixedU64::ZERO)
                 .with_transporter(
-                    ["rifleman", "gun_rider"],
-                    BoardingPolicy::Own,
+                    Kinds::types(["rifleman", "gun_rider"]),
+                    Affiliation::Own,
                     PassengerFate::Eject,
                     PassengerConduct::Fight,
                 ),
@@ -2495,7 +2548,7 @@ pub fn transport_app() -> App {
             EntityTypeDef::new("bombard")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
                 .with_health(40)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_sight_range(10)
                 .with_attack(
                     AttackDef::new(Weapon::new(
@@ -2507,6 +2560,7 @@ pub fn transport_app() -> App {
                             GROUND,
                             true,
                         )),
+                        Slain::Remains,
                     )),
                     20,
                     6,
@@ -2695,7 +2749,7 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(360),
                 )
                 .with_health(30)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_attack(weapon(GROUND), 10, 1, 1, 4, 2)
                 .with_cost([("gold", 30)])
                 .with_train_time(4),
@@ -2715,7 +2769,7 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(360),
                 )
                 .with_health(60)
-                .with_dying(2, None),
+                .with_dying(2, []),
         );
         // A heavy continuous mover on a soldier's footprint, for contact tests
         // that need weight told apart from size.
@@ -2731,14 +2785,14 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(360),
                 )
                 .with_health(60)
-                .with_dying(2, None),
+                .with_dying(2, []),
         );
         // Registered before `worker`, which builds it.
         registry.register(
             EntityTypeDef::new("depot")
                 .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
                 .with_health(100)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_cost([("gold", 50)])
                 .with_build_time(6)
                 .with_resource_storage(["gold", "wood"])
@@ -2767,7 +2821,7 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(360),
                 )
                 .with_health(20)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_cost([("gold", 10)])
                 .with_train_time(2)
                 .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
@@ -2788,7 +2842,7 @@ pub fn register_orders_content(app: &mut App) {
                             crew: CrewLimit::ONE,
                         },
                         Banking::Carried,
-                        Sources::Any,
+                        Kinds::Any,
                     ),
                 )]),
         );
@@ -2806,7 +2860,7 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(360),
                 )
                 .with_health(20)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
                 .with_builder(
                     ["depot"],
@@ -2828,7 +2882,7 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(360),
                 )
                 .with_health(20)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
                 .with_builder(
                     ["depot"],
@@ -2851,7 +2905,7 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(360),
                 )
                 .with_health(20)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
                 .with_builder(
                     ["depot"],
@@ -2875,7 +2929,7 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(360),
                 )
                 .with_health(20)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
                 .with_builder(["depot"], BuilderAttendance::Unattended),
         );
@@ -2893,7 +2947,7 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(360),
                 )
                 .with_health(20)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
                 .with_stat(EntityStatId::SUPPLY_COST, FixedU64::ONE)
                 .with_builder(["depot"], BuilderAttendance::Consumed),
@@ -2910,7 +2964,7 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(360),
                 )
                 .with_health(20)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
                 .with_resource_carrier([(
                     "wood",
@@ -2922,7 +2976,7 @@ pub fn register_orders_content(app: &mut App) {
                             crew: CrewLimit::ONE,
                         },
                         Banking::Carried,
-                        Sources::Any,
+                        Kinds::Any,
                     ),
                 )]),
         );
@@ -2940,7 +2994,7 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(360),
                 )
                 .with_health(20)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::from_num(3))
                 .with_resource_carrier([(
                     "gold",
@@ -2952,7 +3006,7 @@ pub fn register_orders_content(app: &mut App) {
                             crew: CrewLimit::ONE,
                         },
                         Banking::Carried,
-                        Sources::Any,
+                        Kinds::Any,
                     ),
                 )]),
         );
@@ -2970,7 +3024,7 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(360),
                 )
                 .with_health(20)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
                 .with_resource_carrier([(
                     "wood",
@@ -2982,7 +3036,7 @@ pub fn register_orders_content(app: &mut App) {
                             crew: CrewLimit::Unlimited,
                         },
                         Banking::Carried,
-                        Sources::Any,
+                        Kinds::Any,
                     ),
                 )]),
         );
@@ -2991,7 +3045,7 @@ pub fn register_orders_content(app: &mut App) {
                 .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
                 .with_sight_range(8)
                 .with_health(100)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_cost([("gold", 40)])
                 .with_build_time(4)
                 .with_trainer(["soldier"]),
@@ -3016,7 +3070,7 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(360),
                 )
                 .with_health(20)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
                 .with_resource_carrier([
                     (
@@ -3029,7 +3083,7 @@ pub fn register_orders_content(app: &mut App) {
                                 crew: CrewLimit::ONE,
                             },
                             Banking::Carried,
-                            Sources::Any,
+                            Kinds::Any,
                         ),
                     ),
                     (
@@ -3042,7 +3096,7 @@ pub fn register_orders_content(app: &mut App) {
                                 crew: CrewLimit::ONE,
                             },
                             Banking::Carried,
-                            Sources::Any,
+                            Kinds::Any,
                         ),
                     ),
                 ]),
@@ -3061,7 +3115,7 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(360),
                 )
                 .with_health(20)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
                 .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
                 .with_builder(["shaft_house", "pump_house"], BuilderAttendance::Unattended)
@@ -3074,7 +3128,7 @@ pub fn register_orders_content(app: &mut App) {
                             2,
                             WorkPresence::Attached(Attachment::new("canopy", BerthStance::Still)),
                             Banking::Direct,
-                            Sources::Any,
+                            Kinds::Any,
                         ),
                     ),
                     (
@@ -3085,7 +3139,7 @@ pub fn register_orders_content(app: &mut App) {
                             2,
                             WorkPresence::Attached(Attachment::new("rim", BerthStance::Still)),
                             Banking::Direct,
-                            Sources::Any,
+                            Kinds::Any,
                         ),
                     ),
                 ]),
@@ -3104,7 +3158,7 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(360),
                 )
                 .with_health(20)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
                 .with_resource_carrier([(
                     "gold",
@@ -3120,7 +3174,7 @@ pub fn register_orders_content(app: &mut App) {
                             },
                         )),
                         Banking::Direct,
-                        Sources::Any,
+                        Kinds::Any,
                     ),
                 )]),
         );
@@ -3138,7 +3192,7 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(360),
                 )
                 .with_health(20)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
                 .with_resource_carrier([(
                     "gold",
@@ -3154,7 +3208,7 @@ pub fn register_orders_content(app: &mut App) {
                             },
                         )),
                         Banking::Direct,
-                        Sources::Any,
+                        Kinds::Any,
                     ),
                 )]),
         );
@@ -3172,7 +3226,7 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(360),
                 )
                 .with_health(20)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
                 .with_resource_carrier([(
                     "wood",
@@ -3188,7 +3242,7 @@ pub fn register_orders_content(app: &mut App) {
                             },
                         )),
                         Banking::Direct,
-                        Sources::Any,
+                        Kinds::Any,
                     ),
                 )]),
         );
@@ -3205,7 +3259,7 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(360),
                 )
                 .with_health(20)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
                 .with_resource_carrier([(
                     "gold",
@@ -3215,7 +3269,7 @@ pub fn register_orders_content(app: &mut App) {
                         2,
                         WorkPresence::Attached(Attachment::new("rim", BerthStance::Still)),
                         Banking::Direct,
-                        Sources::Any,
+                        Kinds::Any,
                     ),
                 )]),
         );
@@ -3233,7 +3287,7 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(360),
                 )
                 .with_health(20)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
                 .with_resource_carrier([(
                     "gold",
@@ -3245,7 +3299,7 @@ pub fn register_orders_content(app: &mut App) {
                             crew: CrewLimit::limit(2),
                         },
                         Banking::Carried,
-                        Sources::Any,
+                        Kinds::Any,
                     ),
                 )]),
         );
@@ -3264,7 +3318,7 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(360),
                 )
                 .with_health(20)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
                 .with_resource_carrier([(
                     "gold",
@@ -3276,7 +3330,7 @@ pub fn register_orders_content(app: &mut App) {
                             crew: CrewLimit::ONE,
                         },
                         Banking::Carried,
-                        Sources::Any,
+                        Kinds::Any,
                     ),
                 )]),
         );
@@ -3294,7 +3348,7 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(360),
                 )
                 .with_health(20)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
                 .with_resource_carrier([(
                     "gold",
@@ -3306,7 +3360,7 @@ pub fn register_orders_content(app: &mut App) {
                             crew: CrewLimit::ONE,
                         },
                         Banking::Carried,
-                        Sources::only(["geyser"]),
+                        Kinds::types(["geyser"]),
                     ),
                 )]),
         );
@@ -3372,7 +3426,7 @@ pub fn register_orders_content(app: &mut App) {
             EntityTypeDef::new("shaft_house")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
                 .with_health(100)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_cost([("gold", 20)])
                 .with_build_time(20)
                 .with_tags(["building"])
@@ -3382,7 +3436,7 @@ pub fn register_orders_content(app: &mut App) {
                 .with_morphs([MorphTransition::new(
                     "walking_shaft",
                     None,
-                    Period::Constant(4),
+                    Quantity::Constant(4),
                     MorphPlacement::Reserve,
                     MorphCancel::Committed,
                     MorphInterrupted::Reverts,
@@ -3403,13 +3457,13 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(360),
                 )
                 .with_health(100)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 // Back to standing, as an uprooted ancient roots again: the
                 // ground it settles on is reserved when the change starts.
                 .with_morphs([MorphTransition::new(
                     "shaft_house",
                     None,
-                    Period::Constant(4),
+                    Quantity::Constant(4),
                     MorphPlacement::Reserve,
                     MorphCancel::Committed,
                     MorphInterrupted::Reverts,
@@ -3424,7 +3478,7 @@ pub fn register_orders_content(app: &mut App) {
             EntityTypeDef::new("pump_house")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
                 .with_health(100)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_cost([("gold", 20)])
                 .with_build_time(20)
                 .with_tags(["building"])
@@ -3434,7 +3488,7 @@ pub fn register_orders_content(app: &mut App) {
                 .with_morphs([MorphTransition::new(
                     "walking_pump",
                     None,
-                    Period::Constant(4),
+                    Quantity::Constant(4),
                     MorphPlacement::Reserve,
                     MorphCancel::Committed,
                     MorphInterrupted::Reverts,
@@ -3457,7 +3511,7 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(360),
                 )
                 .with_health(100)
-                .with_dying(2, None),
+                .with_dying(2, []),
         );
         registry.register(
             EntityTypeDef::new("tree")
@@ -3496,7 +3550,7 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(360),
                 )
                 .with_health(30)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_attack(weapon(GROUND), 10, 1, 5, 4, 2)
                 // Sees farther than it auto-engages, so its circular vision
                 // covers everything within acquisition range.
@@ -3514,7 +3568,7 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(360),
                 )
                 .with_health(30)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_attack(weapon(GROUND), 10, 3, 5, 4, 2)
                 .with_sight_range(8),
         );
@@ -3584,6 +3638,7 @@ pub fn net_app_with_slots(
         authority,
         DropPolicy::Automatic,
         FinishPolicy::Endless,
+        Ruleset::new(RemainsLimit::Unbounded),
     );
 
     let mut app = App::new();
@@ -3629,7 +3684,7 @@ pub fn harness_soldier() -> EntityTypeDef {
             FixedU64::from_num(360),
         )
         .with_health(30)
-        .with_dying(2, None)
+        .with_dying(2, [])
         .with_attack(weapon(GROUND), 10, 1, 1, 4, 2)
 }
 
@@ -3639,6 +3694,6 @@ pub fn harness_base() -> EntityTypeDef {
     EntityTypeDef::new("base")
         .with_location(GROUND, CellSize::ONE, Solidity::Solid)
         .with_health(30)
-        .with_dying(2, None)
+        .with_dying(2, [])
         .with_tags(["building"])
 }

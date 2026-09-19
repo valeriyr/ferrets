@@ -5,6 +5,8 @@
 //! with no primary docked, and who may dock with it.
 
 use ferrets_geometry::cell_pos::CellPos;
+
+use crate::kinds::Kinds;
 use ferrets_math::FixedU64;
 
 /// One dock a type offers: the spot beside it an annex stands on, and which
@@ -15,22 +17,12 @@ pub struct DockDef {
     /// origin.
     at: CellPos,
     /// The annex types the dock takes, by registered name.
-    accepts: Vec<String>,
+    accepts: Kinds,
 }
 
 impl DockDef {
     /// Creates a new `DockDef` with the given data.
-    ///
-    /// Panics if `accepts` is empty or holds an empty name.
-    pub fn new(at: CellPos, accepts: impl IntoIterator<Item = impl Into<String>>) -> Self {
-        let accepts: Vec<String> = accepts.into_iter().map(Into::into).collect();
-
-        assert!(!accepts.is_empty(), "a dock must accept at least one type");
-        assert!(
-            accepts.iter().all(|name| !name.is_empty()),
-            "accepted annex names must not be empty"
-        );
-
+    pub fn new(at: CellPos, accepts: Kinds) -> Self {
         Self { at, accepts }
     }
 
@@ -40,14 +32,10 @@ impl DockDef {
         self.at
     }
 
-    /// Whether the dock takes annexes of `type_name`.
-    pub fn accepts(&self, type_name: &str) -> bool {
-        self.accepts.iter().any(|name| name == type_name)
-    }
-
-    /// The annex types the dock takes.
-    pub fn accepted_types(&self) -> impl Iterator<Item = &str> {
-        self.accepts.iter().map(String::as_str)
+    /// What the dock takes.
+    #[inline]
+    pub fn accepts(&self) -> &Kinds {
+        &self.accepts
     }
 }
 

@@ -4,32 +4,36 @@
 //! [`engine`] picks the binding the suite runs against.
 
 use ferrets_content::{
+    affiliation::Affiliation,
     annex::{AloneConduct, AnnexClaim, AnnexLife, AnnexWork},
-    attack::{AttackDef, Delivery, Weapon},
+    attack::{AttackDef, Delivery, Slain, Weapon},
     brood::{BroodlingDef, Lingering, OrphanFate},
     build::BuilderAttendance,
     costs,
+    dying::{Bequest, DeathKind, DyingDef, LeftBy},
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     field::{
-        FieldAction, FieldAffiliation, FieldCoverage, FieldDecay, FieldEffect, FieldEffectKind,
-        FieldGrowth, FieldPlacement, FieldSide, FieldSourceDef, FieldVision,
+        FieldAction, FieldCoverage, FieldDecay, FieldEffect, FieldEffectKind, FieldGrowth,
+        FieldPlacement, FieldSide, FieldSourceDef, FieldVision,
     },
+    kinds::{Kind, Kinds},
     location::Solidity,
     morph::{MorphCancel, MorphInterrupted, MorphPlacement, MorphReason},
-    period::Period,
     player_stats::PlayerStatId,
+    quantity::Quantity,
     repair::{RepairCost, RepairRate},
     requirement::Requirement,
     research::ResearchDef,
-    resource::{Banking, Sources},
+    resource::Banking,
     skills::{
-        EntityCastCost, EntityCastEffect, EntityCastTarget, PlayerCastEffect, SkillCaster, SkillDef,
+        Casting, EntityCastCost, EntityCastEffect, EntityCastTarget, PlayerCastEffect, Reach,
+        SkillCaster, SkillDef,
     },
     splash::{SplashDef, SplashShape},
     stand::StandingAct,
     stats::{EntityModifier, ModifierOp, PlayerModifier},
-    transport::{BoardingPolicy, PassengerConduct, PassengerFate},
+    transport::{PassengerConduct, PassengerFate},
     turret::{TurretDef, TurretMount, TurretStats, WeaponConduct},
     work::{Attachment, BerthStance, CrewLimit, WorkPresence},
 };
@@ -65,9 +69,14 @@ fn loads_races_resources_and_entities() {
             FixedU64::from_num(30),
         )
         .with_health(40)
-        .with_dying(2, None)
+        .with_dying(2, [])
         .with_attack(
-            AttackDef::new(Weapon::new(LayerId::new(1), Delivery::Instant, None)),
+            AttackDef::new(Weapon::new(
+                LayerId::new(1),
+                Delivery::Instant,
+                None,
+                Slain::Remains,
+            )),
             6,
             4,
             4,
@@ -100,7 +109,12 @@ fn declared_acquire_range_overrides_weapon_range_default() {
         .with_location(LayerId::new(1), CellSize::ONE, Solidity::Solid)
         .with_health(20)
         .with_attack(
-            AttackDef::new(Weapon::new(LayerId::new(1), Delivery::Instant, None)),
+            AttackDef::new(Weapon::new(
+                LayerId::new(1),
+                Delivery::Instant,
+                None,
+                Slain::Remains,
+            )),
             2,
             3,
             7,
@@ -115,7 +129,7 @@ fn declared_acquire_range_overrides_weapon_range_default() {
 fn custom_stat_is_declared_and_seeded() {
     let source = r#"
         local GROUND = define_layer("ground")
-        define_entity_stat("morale")
+        define_entity_stat("morale", 0)
         define_entity("hero", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
             stats = { max_health = 10, morale = 7 },
@@ -187,7 +201,12 @@ fn parses_armor_bonus_damage_vs_and_energy() {
         .with_health(100)
         .with_armor(4)
         .with_attack(
-            AttackDef::new(Weapon::new(LayerId::new(1), Delivery::Instant, None)),
+            AttackDef::new(Weapon::new(
+                LayerId::new(1),
+                Delivery::Instant,
+                None,
+                Slain::Remains,
+            )),
             12,
             1,
             1,
@@ -223,7 +242,7 @@ fn parses_repairer_and_repair_ratio() {
                 repair_range = 1,
             },
             repairer = {
-                repairs = { "building" },
+                repairs = { tags = { "building" } },
                 rate = { mode = "production" },
                 presence = { present = { crew = "any" } },
                 cost = { mode = "pro_rata" },
@@ -238,7 +257,7 @@ fn parses_repairer_and_repair_ratio() {
 
     let worker = registry.entity("worker").expect("worker defined");
     let repairer = worker.repairer.as_ref().expect("worker can repair");
-    assert_eq!(repairer.repairs().collect::<Vec<_>>(), ["building"]);
+    assert_eq!(repairer.repairs(), &Kinds::tags(["building"]));
     assert_eq!(
         *repairer.presence(),
         WorkPresence::Present {
@@ -272,8 +291,8 @@ fn parses_transporter() {
                 load_range = 2, unload_range = 3, load_period = 4, unload_period = 8,
             },
             transporter = {
-                carries = { "infantry", "footman" },
-                boarding = "allies",
+                carries = { types = { "footman" }, tags = { "infantry" } },
+                boarding = "allied",
                 fate = "eject",
                 conduct = "fight",
             },
@@ -284,10 +303,13 @@ fn parses_transporter() {
     let wagon = registry.entity("wagon").expect("wagon defined");
     let transporter = wagon.transporter.as_ref().expect("wagon can transport");
     assert_eq!(
-        transporter.carries().collect::<Vec<_>>(),
-        ["footman", "infantry"]
+        transporter.carries(),
+        &Kinds::only([
+            Kind::Type("footman".to_string()),
+            Kind::Tag("infantry".to_string()),
+        ])
     );
-    assert_eq!(transporter.boarding(), BoardingPolicy::Allies);
+    assert_eq!(transporter.boarding(), Affiliation::Allied);
     assert_eq!(transporter.passenger_fate(), PassengerFate::Eject);
     assert_eq!(transporter.conduct(), PassengerConduct::Fight);
     assert_eq!(
@@ -322,7 +344,7 @@ fn parses_sheltering_transporter() {
                 max_health = 100, cargo_capacity = 2,
                 load_range = 1, unload_range = 1, load_period = 0, unload_period = 0,
             },
-            transporter = { carries = { "infantry" }, boarding = "own", fate = "destroy", conduct = "shelter" },
+            transporter = { carries = { tags = { "infantry" } }, boarding = "own", fate = "destroy", conduct = "shelter" },
         })
     "#;
     let registry = content::load(&engine(), source).expect("load content");
@@ -333,7 +355,7 @@ fn parses_sheltering_transporter() {
         .transporter
         .as_ref()
         .expect("cart can transport");
-    assert_eq!(transporter.boarding(), BoardingPolicy::Own);
+    assert_eq!(transporter.boarding(), Affiliation::Own);
     assert_eq!(transporter.passenger_fate(), PassengerFate::Destroy);
     assert_eq!(transporter.conduct(), PassengerConduct::Shelter);
 }
@@ -350,7 +372,7 @@ fn unknown_passenger_conduct_errors() {
                 max_health = 100, cargo_capacity = 2,
                 load_range = 1, unload_range = 1, load_period = 0, unload_period = 0,
             },
-            transporter = { carries = { "infantry" }, boarding = "own", fate = "destroy", conduct = "mutiny" },
+            transporter = { carries = { tags = { "infantry" } }, boarding = "own", fate = "destroy", conduct = "mutiny" },
         })
     "#;
     let Err(error) = content::load(&engine(), source) else {
@@ -363,7 +385,7 @@ fn unknown_passenger_conduct_errors() {
 }
 
 #[test]
-fn unknown_boarding_policy_errors() {
+fn unknown_boarding_affiliation_errors() {
     let source = r#"
         local GROUND = define_layer("ground")
         define_tag("infantry")
@@ -374,14 +396,14 @@ fn unknown_boarding_policy_errors() {
                 max_health = 100, cargo_capacity = 2,
                 load_range = 1, unload_range = 1, load_period = 0, unload_period = 0,
             },
-            transporter = { carries = { "infantry" }, boarding = "anyone", fate = "destroy", conduct = "shelter" },
+            transporter = { carries = { tags = { "infantry" } }, boarding = "everybody", fate = "destroy", conduct = "shelter" },
         })
     "#;
     let Err(error) = content::load(&engine(), source) else {
-        panic!("must reject an unknown boarding policy");
+        panic!("must reject a boarding rule naming nobody the engine knows");
     };
     assert!(
-        matches!(&error, ScriptError::ContentError(m) if m.contains("boarding policy must be 'own' or 'allies', found 'anyone'")),
+        matches!(&error, ScriptError::ContentError(m) if m.contains("affiliation must be 'own', 'allied', 'enemy', or 'anyone', found 'everybody'")),
         "unexpected error: {error:?}"
     );
 }
@@ -398,7 +420,7 @@ fn unknown_passenger_fate_errors() {
                 max_health = 100, cargo_capacity = 2,
                 load_range = 1, unload_range = 1, load_period = 0, unload_period = 0,
             },
-            transporter = { carries = { "infantry" }, boarding = "own", fate = "scatter", conduct = "shelter" },
+            transporter = { carries = { tags = { "infantry" } }, boarding = "own", fate = "scatter", conduct = "shelter" },
         })
     "#;
     let Err(error) = content::load(&engine(), source) else {
@@ -421,7 +443,7 @@ fn parses_flat_per_tick_repair_cost() {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
             stats = { max_health = 20, repair_speed = "1.0", repair_range = 1 },
             repairer = {
-                repairs = { "building" },
+                repairs = { tags = { "building" } },
                 rate = { mode = "production" },
                 presence = { present = { crew = 1 } },
                 self_repair = true,
@@ -462,7 +484,7 @@ fn parses_medic_paying_energy_at_flat_rate() {
                 repair_speed = "1.0", repair_range = 2,
             },
             repairer = {
-                repairs = { "biological" },
+                repairs = { tags = { "biological" } },
                 rate = { mode = "per_tick", health = "1.0" },
                 presence = { present = { crew = 1 } },
                 cost = { mode = "energy", per_health = "0.5" },
@@ -536,6 +558,8 @@ fn parses_skill_with_buff_effect() {
             caster: SkillCaster::Entity {
                 costs: vec![EntityCastCost::Energy(FixedU64::from_num(30))],
                 target: EntityCastTarget::Caster,
+                reach: Reach::Wherever,
+                casting: Casting::Instant,
                 effect: EntityCastEffect::ApplyBuff(haste),
             },
             requires: Vec::new(),
@@ -759,7 +783,7 @@ fn unknown_skill_target_errors() {
         panic!("must reject an unknown target");
     };
     assert!(
-        matches!(&error, ScriptError::ContentError(m) if m.contains("skill target must be 'caster', 'ally', 'enemy', or 'position', found 'everyone'")),
+        matches!(&error, ScriptError::ContentError(m) if m.contains("skill target must be 'caster', 'position', 'fallen', 'own', 'allied', 'enemy', or 'anyone', found 'everyone'")),
         "unexpected error: {error:?}"
     );
 }
@@ -936,6 +960,7 @@ fn parses_projectile_and_splash() {
                     LayerId::new(1),
                     true,
                 )),
+                Slain::Remains,
             )),
             12,
             6,
@@ -1094,7 +1119,8 @@ fn wires_production_catalogues_across_entities() {
             .as_ref()
             .unwrap()
             .builds()
-            .any(|b| b == "town_hall")
+            .any(|b| b == "town_hall"),
+        "a builds list carries every name it declares"
     );
 
     let hall = registry.entity("town_hall").expect("town_hall");
@@ -1103,7 +1129,8 @@ fn wires_production_catalogues_across_entities() {
             .as_ref()
             .unwrap()
             .trains()
-            .any(|t| t == "peasant")
+            .any(|t| t == "peasant"),
+        "and a trains list the same"
     );
 }
 
@@ -1420,7 +1447,7 @@ fn repairer_without_rate_errors() {
         define_entity("worker", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
             stats = { max_health = 20, repair_speed = "1.0", repair_range = 1 },
-            repairer = { repairs = { "building" }, presence = { present = { crew = 1 } } },
+            repairer = { repairs = { tags = { "building" } }, presence = { present = { crew = 1 } } },
         })
     "#;
     let Err(error) = content::load(&engine(), source) else {
@@ -1444,7 +1471,7 @@ fn repairer_without_cost_errors() {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
             stats = { max_health = 20, repair_speed = "1.0", repair_range = 1 },
             repairer = {
-                repairs = { "building" },
+                repairs = { tags = { "building" } },
                 rate = { mode = "production" },
                 presence = { present = { crew = 1 } },
             },
@@ -1469,7 +1496,7 @@ fn unknown_repair_rate_mode_errors() {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
             stats = { max_health = 20, repair_speed = "1.0", repair_range = 1 },
             repairer = {
-                repairs = { "biological" },
+                repairs = { tags = { "biological" } },
                 rate = { mode = "instant" },
                 presence = { present = { crew = 1 } },
             },
@@ -1494,7 +1521,7 @@ fn unknown_work_presence_errors() {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
             stats = { max_health = 20, repair_speed = "1.0" },
             repairer = {
-                repairs = { "building" },
+                repairs = { tags = { "building" } },
                 rate = { mode = "production" },
                 presence = "lurking",
                 cost = { mode = "free" },
@@ -1522,7 +1549,7 @@ fn docks_and_annex_read_their_terms() {
             stats = { max_health = 100, build_range = 1 },
             tags = { "building" },
             builder = { builds = { "tech_lab" }, attendance = { present = { crew = 1 } } },
-            docks = { { at = { 2, 0 }, accepts = { "tech_lab" } } },
+            docks = { { at = { 2, 0 }, accepts = { types = { "tech_lab" } } } },
         })
         define_entity("tech_lab", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
@@ -1538,7 +1565,14 @@ fn docks_and_annex_read_their_terms() {
     let barracks = registry.entity("barracks").expect("barracks defined");
     let dock = barracks.docks.first().expect("it offers one dock");
     assert_eq!(dock.at(), CellPos::new(2, 0));
-    assert!(dock.accepts("tech_lab") && !dock.accepts("barracks"));
+    let takes = |name: &str| {
+        dock.accepts()
+            .admits(registry.entity(name).expect("type is registered"))
+    };
+    assert!(
+        takes("tech_lab") && !takes("barracks"),
+        "a dock takes the annex it names and nothing else"
+    );
 
     let annex = registry
         .entity("tech_lab")
@@ -1587,6 +1621,376 @@ fn watch_effect_reads_its_radius_and_duration() {
 }
 
 #[test]
+fn skill_reads_time_it_is_worked_over() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_entity_stat("ritual_time", 1)
+
+        define_skill("bolt", {
+            cooldown = 10,
+            caster = "entity",
+            target = "enemy",
+            effect = { damage = "5" },
+        })
+        define_skill("raise_dead", {
+            cooldown = 10,
+            caster = "entity",
+            target = "enemy",
+            cast = { point = 30, period = 45 },
+            effect = { damage = "5" },
+        })
+        define_skill("ritual", {
+            cooldown = 10,
+            caster = "entity",
+            target = "enemy",
+            cast = { point = { stat = "ritual_time" } },
+            effect = { damage = "5" },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("content loads");
+    let ritual_time = registry
+        .entity_stat("ritual_time")
+        .expect("the stat is registered");
+    let casting = |name: &str| {
+        let def = registry
+            .skill(name)
+            .and_then(|id| registry.skill_def(id))
+            .expect("the skill is defined");
+        let SkillCaster::Entity { casting, .. } = &def.caster else {
+            panic!("{name} is cast by an entity");
+        };
+        *casting
+    };
+
+    assert_eq!(
+        casting("bolt"),
+        Casting::Instant,
+        "a skill saying nothing about time lands the tick it is cast"
+    );
+    assert_eq!(
+        casting("raise_dead"),
+        Casting::Delayed {
+            point: Quantity::Constant(30),
+            period: Quantity::Constant(45),
+        }
+    );
+    assert_eq!(
+        casting("ritual"),
+        Casting::Delayed {
+            point: Quantity::Stat(ritual_time),
+            period: Quantity::Stat(ritual_time),
+        },
+        "an omitted period is the point itself: the caster is free the tick it lands"
+    );
+}
+
+#[test]
+fn entity_stat_without_floor_is_refused() {
+    let source = r#"
+        define_entity_stat("morale")
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("a stat's floor is not optional");
+    };
+
+    assert!(
+        format!("{error}").contains("entity stat floor"),
+        "a stat declared without a floor is refused where it is declared: {error}"
+    );
+}
+
+#[test]
+fn skill_reads_reach_it_is_cast_from() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_entity_stat("raise_range", 1)
+
+        define_skill("bolt", {
+            cooldown = 10,
+            caster = "entity",
+            target = "enemy",
+            effect = { damage = "5" },
+        })
+        define_skill("raise_dead", {
+            cooldown = 10,
+            caster = "entity",
+            target = "enemy",
+            range = 6,
+            effect = { damage = "5" },
+        })
+        define_skill("far_sight", {
+            cooldown = 10,
+            caster = "entity",
+            target = "enemy",
+            range = { stat = "raise_range" },
+            effect = { damage = "5" },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("content loads");
+    let raise_range = registry
+        .entity_stat("raise_range")
+        .expect("the stat is registered");
+    let reach = |name: &str| {
+        let def = registry
+            .skill(name)
+            .and_then(|id| registry.skill_def(id))
+            .expect("the skill is defined");
+        let SkillCaster::Entity { reach, .. } = &def.caster else {
+            panic!("{name} is cast by an entity");
+        };
+        *reach
+    };
+
+    assert_eq!(
+        reach("bolt"),
+        Reach::Wherever,
+        "a skill that names no range is cast where the caster stands"
+    );
+    assert_eq!(reach("raise_dead"), Reach::Within(Quantity::Constant(6)));
+    assert_eq!(
+        reach("far_sight"),
+        Reach::Within(Quantity::Stat(raise_range))
+    );
+}
+
+#[test]
+fn skill_reach_by_undefined_stat_errors() {
+    let source = r#"
+        define_layer("ground")
+
+        define_skill("far_sight", {
+            cooldown = 10,
+            caster = "entity",
+            target = "enemy",
+            range = { stat = "raise_range" },
+            effect = { damage = "5" },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject a reach read from a stat that is not defined");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("cast range stat 'raise_range' is not defined")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn summon_effect_reads_its_type_and_count() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+
+        define_entity("skeleton", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = { max_health = 20 },
+        })
+        define_skill("raise_dead", {
+            cooldown = 10,
+            caster = "entity",
+            target = "fallen",
+            effect = { summon = { entity = "skeleton", count = 2 } },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("content loads");
+    let skeleton = registry.type_id("skeleton").expect("skeleton defined");
+    let skill = registry
+        .skill("raise_dead")
+        .and_then(|id| registry.skill_def(id))
+        .expect("raise_dead defined");
+    let SkillCaster::Entity { target, effect, .. } = &skill.caster else {
+        panic!("raise_dead is cast by an entity");
+    };
+    assert_eq!(*target, EntityCastTarget::Fallen { kinds: Kinds::Any });
+    assert_eq!(
+        *effect,
+        EntityCastEffect::Summon {
+            entity_type: skeleton,
+            count: 2,
+        }
+    );
+}
+
+#[test]
+fn summon_of_undefined_type_errors() {
+    let source = r#"
+        define_layer("ground")
+
+        define_skill("raise_dead", {
+            cooldown = 10,
+            caster = "entity",
+            target = "fallen",
+            effect = { summon = { entity = "skeleton", count = 2 } },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject a summon of a type that is not defined");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("entity type 'skeleton' is not defined")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+#[should_panic(expected = "a death that waits for nothing and leaves nothing is no dying at all")]
+fn empty_dying_block_panics_on_load() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_entity("marine", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = { max_health = 40 },
+            dying = {},
+        })
+    "#;
+    let _ = content::load(&engine(), source);
+}
+
+#[test]
+fn dying_reads_what_it_leaves_and_deaths_that_leave_it() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+
+        define_entity("corpse", {
+            location = { occupation = GROUND, size = 1, solidity = "passable" },
+            tags = { "remains" },
+            stats = { lifetime = 600 },
+        })
+        define_entity("broodling", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = { max_health = 20 },
+        })
+        -- A body states what it rots into and no time: it has lain its whole
+        -- life already, so what it leaves goes down the tick its decay ends.
+        define_entity("ash", {
+            location = { occupation = GROUND, size = 1, solidity = "passable" },
+            tags = { "remains" },
+            stats = { lifetime = 60 },
+            dying = { leaves = { { entity = "corpse" } } },
+        })
+        -- An entry that names no deaths takes the engine's own rule; one that
+        -- names them is left by exactly those. A count of one is the default.
+        define_entity("marine", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = { max_health = 40 },
+            dying = { time = 2, leaves = { { entity = "corpse" } } },
+        })
+        define_entity("hive", {
+            location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
+            stats = { max_health = 200 },
+            dying = { time = 2, leaves = {
+                { entity = "corpse", on = { "killed", "expired" } },
+                { entity = "broodling", count = 2, on = { "killed" } },
+            } },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("content loads");
+    let leaves = |name: &str| {
+        registry
+            .entity(name)
+            .and_then(|def| def.dying.as_ref())
+            .map(DyingDef::leaves)
+            .expect("the type has a dying phase")
+            .to_vec()
+    };
+
+    let dying_time = |name: &str| {
+        registry
+            .entity(name)
+            .and_then(|def| def.dying.as_ref())
+            .expect("the type has a dying phase")
+            .dying_time()
+    };
+    assert_eq!(dying_time("marine"), Some(2));
+    assert_eq!(
+        dying_time("ash"),
+        None,
+        "a body states what it rots into and no wait before it goes"
+    );
+    assert_eq!(
+        leaves("marine"),
+        vec![Bequest::new("corpse", 1, LeftBy::Ordinary)]
+    );
+    assert_eq!(
+        leaves("hive"),
+        vec![
+            Bequest::new(
+                "corpse",
+                1,
+                LeftBy::Named(vec![DeathKind::Killed, DeathKind::Expired])
+            ),
+            Bequest::new("broodling", 2, LeftBy::Named(vec![DeathKind::Killed])),
+        ]
+    );
+    assert!(
+        registry
+            .entity("corpse")
+            .expect("the type is registered")
+            .is_remains(),
+        "the engine's own remains tag is what makes a body a body"
+    );
+}
+
+#[test]
+fn weapon_reads_what_it_leaves_of_what_it_kills() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+
+        define_entity("mortar", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = {
+                max_health = 30, damage = 10, attack_range = 6,
+                acquire_range = 8, attack_period = 20, damage_point = 8,
+            },
+            attack = { targets = GROUND, slain = "nothing" },
+        })
+        define_entity("marine", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = {
+                max_health = 30, damage = 10, attack_range = 6,
+                acquire_range = 8, attack_period = 20, damage_point = 8,
+            },
+            attack = { targets = GROUND },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("content loads");
+    let slain = |name: &str| {
+        registry
+            .entity(name)
+            .and_then(|def| def.attack.as_ref())
+            .expect("the type points a weapon")
+            .weapon()
+            .slain()
+    };
+
+    assert_eq!(slain("mortar"), Slain::Nothing);
+    assert_eq!(
+        slain("marine"),
+        Slain::Remains,
+        "a weapon that says nothing leaves whatever its victim leaves"
+    );
+}
+
+#[test]
+fn lifetime_stat_parses() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+
+        define_entity("skeleton", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = { max_health = 50, lifetime = 900 },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("content loads");
+
+    assert_eq!(
+        registry
+            .entity("skeleton")
+            .and_then(|def| def.base_stat(EntityStatId::LIFETIME)),
+        Some(FixedU64::from_num(900))
+    );
+}
+
+#[test]
 fn presence_table_reads_crew_limit_and_harvest_reads_its_sources() {
     let source = r#"
         local GROUND = define_layer("ground")
@@ -1608,7 +2012,7 @@ fn presence_table_reads_crew_limit_and_harvest_reads_its_sources() {
                 gold = {
                     capacity = 5, time = 20,
                     presence = { hidden = { crew = 3 } },
-                    sources = { "refinery" },
+                    sources = { types = { "refinery" } },
                 },
             },
         })
@@ -1638,8 +2042,12 @@ fn presence_table_reads_crew_limit_and_harvest_reads_its_sources() {
             crew: CrewLimit::limit(3)
         }
     );
-    assert_eq!(gold.sources(), &Sources::only(["refinery"]));
-    assert!(!gold.admits_source("seam"));
+    assert_eq!(gold.sources(), &Kinds::types(["refinery"]));
+    let source = |name: &str| registry.entity(name).expect("source is registered");
+    assert!(
+        !gold.sources().admits(source("seam")),
+        "a named source shuts out every other, bare seam included"
+    );
 
     // A crew of "any", and no source named, which takes every gold source.
     let gang = registry
@@ -1657,7 +2065,10 @@ fn presence_table_reads_crew_limit_and_harvest_reads_its_sources() {
             crew: CrewLimit::Unlimited
         }
     );
-    assert!(gang.admits_source("seam") && gang.admits_source("refinery"));
+    assert!(
+        gang.sources().admits(source("seam")) && gang.sources().admits(source("refinery")),
+        "naming no source takes every one of that kind"
+    );
 }
 
 #[test]
@@ -1888,7 +2299,7 @@ fn berth_point_of_float_errors() {
 }
 
 #[test]
-fn berth_point_that_is_not_a_pair_errors() {
+fn berth_point_that_is_not_pair_errors() {
     let Err(error) = content::load(&engine(), &carrier_content("{ { 1, 1, 1 } }", "\"still\""))
     else {
         panic!("must reject a berth point that is not a pair");
@@ -2103,7 +2514,7 @@ fn parses_fields_sources_placement_and_effects() {
         vec![
             FieldPlacement::Requires {
                 field: power,
-                of: FieldAffiliation::Own,
+                of: Affiliation::Own,
                 coverage: FieldCoverage::Anchor,
             },
             FieldPlacement::Forbids { field: creep },
@@ -2113,7 +2524,7 @@ fn parses_fields_sources_placement_and_effects() {
         gateway.field_effects,
         vec![FieldEffect::new(
             power,
-            FieldAffiliation::Own,
+            Affiliation::Own,
             FieldSide::Outside,
             FieldEffectKind::Disabled,
         )]
@@ -2122,7 +2533,7 @@ fn parses_fields_sources_placement_and_effects() {
         registry.entity("zergling").unwrap().field_effects,
         vec![FieldEffect::new(
             creep,
-            FieldAffiliation::Anyone,
+            Affiliation::Anyone,
             FieldSide::Inside,
             FieldEffectKind::Modifiers(vec![EntityModifier {
                 stat: EntityStatId::SPEED,
@@ -2139,6 +2550,8 @@ fn parses_fields_sources_placement_and_effects() {
             caster: SkillCaster::Entity {
                 costs: Vec::new(),
                 target: EntityCastTarget::Position,
+                reach: Reach::Wherever,
+                casting: Casting::Instant,
                 effect: EntityCastEffect::Field {
                     field: creep,
                     radius: 1,
@@ -2219,7 +2632,7 @@ fn unknown_field_decay_errors() {
 fn breeder_and_broodling_round_trip() {
     let source = r#"
         local GROUND = define_layer("ground")
-        define_entity_stat("brood_period")
+        define_entity_stat("brood_period", 1)
         define_entity("hatch", {
             location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
             stats = { max_health = 300, brood_period = 12 },
@@ -2252,7 +2665,7 @@ fn breeder_and_broodling_round_trip() {
         .entity_stat("brood_period")
         .expect("brood_period is declared");
     assert_eq!(brood.breeds(), "grub");
-    assert_eq!(brood.period(), Period::Stat(brood_period));
+    assert_eq!(brood.period(), Quantity::Stat(brood_period));
     assert_eq!(brood.limit(), 2);
     assert_eq!(brood.initial(), 1);
     assert_eq!(
@@ -2281,7 +2694,7 @@ fn breeder_and_broodling_round_trip() {
 
     let pen = registry.entity("pen").expect("pen is registered");
     let brood = pen.breeder.as_ref().expect("the pen breeds");
-    assert_eq!(brood.period(), Period::Constant(30));
+    assert_eq!(brood.period(), Quantity::Constant(30));
     assert_eq!(brood.initial(), 0);
     assert_eq!(brood.orphans(), OrphanFate::Perish);
     let piglet = registry.entity("piglet").expect("piglet is registered");
@@ -2596,7 +3009,7 @@ fn morph_transitions_round_trip() {
         local GROUND = define_layer("ground")
         define_resource("gold")
         define_tag("winged")
-        define_entity_stat("morph_time")
+        define_entity_stat("morph_time", 1)
 
         define_entity("walker", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
@@ -2640,7 +3053,7 @@ fn morph_transitions_round_trip() {
         .entity_stat("morph_time")
         .expect("morph_time is declared");
     assert_eq!(first.into_type(), "flier");
-    assert_eq!(first.time(), Period::Stat(morph_time));
+    assert_eq!(first.time(), Quantity::Stat(morph_time));
     assert_eq!(first.placement(), MorphPlacement::Revalidate);
     assert_eq!(first.cancel(), MorphCancel::Committed);
     assert_eq!(
@@ -2650,14 +3063,17 @@ fn morph_transitions_round_trip() {
     assert_eq!(first.requires(), [Requirement::Tag("winged".to_string())]);
 
     assert_eq!(second.into_type(), "statue");
-    assert_eq!(second.time(), Period::Constant(40));
+    assert_eq!(second.time(), Quantity::Constant(40));
     assert_eq!(second.placement(), MorphPlacement::Reserve);
     assert_eq!(second.cancel(), MorphCancel::Refundable);
     assert_eq!(
         second.costs(),
         [EntityCastCost::Resources(costs::cost([("gold", 30)]))]
     );
-    assert!(second.requires().is_empty());
+    assert!(
+        second.requires().is_empty(),
+        "a transition stating no requirements is gated by none"
+    );
     assert_eq!(first.via_type(), None);
     assert_eq!(second.via_type(), Some("chrysalis"));
 }
@@ -2772,7 +3188,7 @@ fn parses_turret_and_its_mount() {
     assert_eq!(
         registry.turret_def(cannon),
         &TurretDef::new(
-            Weapon::new(LayerId::new(1), Delivery::Instant, None),
+            Weapon::new(LayerId::new(1), Delivery::Instant, None, Slain::Remains),
             TurretStats::default(),
             WeaponConduct::OnTheMove,
         )
@@ -2807,7 +3223,7 @@ fn parses_turret_and_its_mount() {
 fn parses_turret_reading_its_own_stats() {
     let source = r#"
         local GROUND = define_layer("ground")
-        define_entity_stat("flak_damage")
+        define_entity_stat("flak_damage", 0)
 
         define_turret("flak", {
             targets = GROUND,

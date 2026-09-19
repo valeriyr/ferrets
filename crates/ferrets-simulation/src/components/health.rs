@@ -3,7 +3,9 @@
 use bevy_ecs::prelude::*;
 use ferrets_math::FixedU64;
 
-use crate::simulation_id::SimulationId;
+use ferrets_content::entity_stats::EntityStatId;
+
+use crate::{entity_def, simulation_id::SimulationId};
 
 /// The most recent damage source: who hit the entity and when.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,5 +80,18 @@ impl HealthComponent {
     #[inline]
     pub fn heal(&mut self, amount: FixedU64, max: FixedU64) {
         self.current = (self.current + amount).min(max);
+    }
+}
+
+/// Restores `amount` health to `entity`, capped at its ceiling. An entity with
+/// no health pool has nothing to restore.
+pub fn restore(world: &mut World, entity: Entity, amount: FixedU64) {
+    // Read before the pool is taken hold of, since the ceiling comes from the
+    // stat store the pool was seeded out of.
+    let max = entity_def::effective_stat(world, entity, EntityStatId::MAX_HEALTH);
+    match (world.entity_mut(entity).get_mut::<HealthComponent>(), max) {
+        (Some(mut health), Some(max)) => health.heal(amount, max),
+        (Some(_), None) => panic!("a health pool implies the stat it was seeded from"),
+        (None, _) => {}
     }
 }

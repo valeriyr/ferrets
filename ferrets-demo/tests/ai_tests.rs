@@ -7,9 +7,11 @@ use bevy::prelude::*;
 use ferrets_bevy_plugin::{SimulationPlugin, ai::AiPlugin};
 use ferrets_content::registry::ContentRegistry;
 use ferrets_demo::{
-    ai::{conclave_ai, elves_ai, human_ai, install_demo_ai, orc_ai, swarm_ai, terran_ai},
+    ai::{
+        conclave_ai, elves_ai, human_ai, install_demo_ai, orc_ai, swarm_ai, terran_ai, undead_ai,
+    },
     content::CONTENT,
-    map, setup,
+    map, ruleset, setup,
 };
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_script::{
@@ -44,6 +46,7 @@ fn ai_scripts_load() {
         conclave_ai(),
         elves_ai(),
         terran_ai(),
+        undead_ai(),
     ] {
         let runtime = LuaEngine.load_ai(&script, &content).expect("demo ai loads");
         assert_eq!(runtime.period(), 20);
@@ -84,6 +87,7 @@ fn field_races_ai_build_economy_and_army() {
             },
             DropPolicy::Automatic,
             FinishPolicy::Endless,
+            ruleset::demo(),
         ),
         map::build(),
     ));
@@ -104,20 +108,26 @@ fn field_races_ai_build_economy_and_army() {
     // The swarm's structures are drones that changed: the pit the swarmlings
     // come from, a tumor walking the creep out — with the hatchery grown into
     // a hive, an overlord grown for headroom and the drone line kept topped
-    // up behind them.
-    assert!(count_owned(world, 1, "spawning_pit") >= 1);
-    assert!(count_owned(world, 1, "hive") >= 1);
-    assert!(count_owned(world, 1, "overlord") >= 1);
-    assert!(count_owned(world, 1, "tumor") >= 1);
-    assert!(count_owned(world, 1, "swarmling") >= 1);
-    assert!(count_owned(world, 1, "ravager") + count_owned(world, 1, "cocoon") >= 1);
-    assert!(count_owned(world, 1, "drone") >= 3);
+    // up behind them. Every count is what the seven thousand ticks above
+    // produce, which the lockstep sim reproduces exactly.
+    assert_eq!(count_owned(world, 1, "spawning_pit"), 1);
+    assert_eq!(count_owned(world, 1, "hive"), 1);
+    assert_eq!(count_owned(world, 1, "overlord"), 3);
+    assert_eq!(count_owned(world, 1, "tumor"), 1);
+    assert_eq!(count_owned(world, 1, "swarmling"), 15);
+    // Counted together: one part way through its growth is still a ravager
+    // the brain paid for.
+    assert_eq!(
+        count_owned(world, 1, "ravager") + count_owned(world, 1, "cocoon"),
+        4
+    );
+    assert_eq!(count_owned(world, 1, "drone"), 5);
     // The conclave's structures warped in on their own after a probe placed
     // them: the gateway in the nexus's power, a pylon, the cannon.
-    assert!(count_owned(world, 2, "gateway") >= 1);
-    assert!(count_owned(world, 2, "pylon") >= 1);
-    assert!(count_owned(world, 2, "photon_cannon") >= 1);
-    assert!(count_owned(world, 2, "zealot") >= 1);
+    assert_eq!(count_owned(world, 2, "gateway"), 1);
+    assert_eq!(count_owned(world, 2, "pylon"), 3);
+    assert_eq!(count_owned(world, 2, "photon_cannon"), 1);
+    assert_eq!(count_owned(world, 2, "zealot"), 16);
     assert_eq!(count_owned(world, 2, "probe"), 5);
 }
 
@@ -147,6 +157,7 @@ fn elves_ai_builds_economy_and_army() {
             },
             DropPolicy::Automatic,
             FinishPolicy::Endless,
+            ruleset::demo(),
         ),
         map::build(),
     ));
@@ -168,11 +179,11 @@ fn elves_ai_builds_economy_and_army() {
     // paid for the ancient the huntresses come from and a well for headroom,
     // each a wisp spent; the worker line is kept topped up behind them, with
     // nothing ever stored.
-    assert!(count_owned(world, 1, "entangled_mine") >= 1);
-    assert!(count_owned(world, 1, "ancient_of_war") >= 1);
-    assert!(count_owned(world, 1, "moon_well") >= 1);
-    assert!(count_owned(world, 1, "huntress") >= 1);
-    assert!(count_owned(world, 1, "wisp") >= 3);
+    assert_eq!(count_owned(world, 1, "entangled_mine"), 1);
+    assert_eq!(count_owned(world, 1, "ancient_of_war"), 1);
+    assert_eq!(count_owned(world, 1, "moon_well"), 3);
+    assert_eq!(count_owned(world, 1, "huntress"), 24);
+    assert_eq!(count_owned(world, 1, "wisp"), 4);
 }
 
 #[test]
@@ -201,6 +212,7 @@ fn terran_ai_builds_economy_and_army() {
             },
             DropPolicy::Automatic,
             FinishPolicy::Endless,
+            ruleset::demo(),
         ),
         map::build(),
     ));
@@ -224,14 +236,83 @@ fn terran_ai_builds_economy_and_army() {
     // what would let a tank be trained — and the station on the command
     // center. Whether it gets as far as a tank is not asserted; that the lab
     // docked to the factory unlocks one is `annex_tests`' to say.
-    assert!(count_owned(world, 1, "refinery") >= 1);
-    assert!(count_owned(world, 1, "barracks") >= 1);
-    assert!(count_owned(world, 1, "factory") >= 1);
-    assert!(count_owned(world, 1, "tech_lab") >= 1);
-    assert!(count_owned(world, 1, "comsat_station") >= 1);
-    assert!(count_owned(world, 1, "marine") >= 1);
+    assert_eq!(count_owned(world, 1, "refinery"), 1);
+    assert_eq!(count_owned(world, 1, "barracks"), 1);
+    assert_eq!(count_owned(world, 1, "factory"), 1);
+    assert_eq!(count_owned(world, 1, "tech_lab"), 1);
+    assert_eq!(count_owned(world, 1, "comsat_station"), 1);
+    assert_eq!(count_owned(world, 1, "marine"), 22);
     // The brain's own worker cap, reached and held: MAX_WORKERS is five.
     assert_eq!(count_owned(world, 1, "scv"), 5);
+}
+
+#[test]
+fn undead_ai_builds_economy_and_army() {
+    let slots = vec![
+        PlayerSlot::occupied(0, PlayerType::Human, Some("human"), None),
+        PlayerSlot::occupied(
+            1,
+            PlayerType::Ai {
+                vision: AiVision::Filtered,
+            },
+            Some("undead"),
+            Some(1),
+        ),
+        PlayerSlot::free(2),
+        PlayerSlot::free(3),
+    ];
+    let mut app = App::new();
+    app.add_plugins(SimulationPlugin::new(
+        GameSession::configured(
+            LocalRole::Player(0),
+            slots,
+            map::NAME,
+            Authority::Host {
+                ai_hosting: AiHosting::Replicated,
+            },
+            DropPolicy::Automatic,
+            FinishPolicy::Endless,
+            ruleset::demo(),
+        ),
+        map::build(),
+    ));
+    app.add_plugins(AiPlugin);
+    {
+        let world = app.world_mut();
+        *world.resource_mut::<ContentRegistry>() =
+            content::load(&LuaEngine, CONTENT).expect("demo content");
+        setup::spawn_demo_scene(world);
+        install_demo_ai(world);
+    }
+
+    for _ in 0..7000 {
+        app.world_mut().run_schedule(FixedUpdate);
+    }
+
+    let world = app.world_mut();
+    // The haunted mine went up over the nearest seam first — an acolyte works
+    // its rim and nothing else — with acolytes seated round it; the crypt
+    // followed for ghouls, which cut the wood the rest of the base is paid
+    // for, and a ziggurat fed the headroom. Whether it gets as far as a
+    // necromancer is not asserted: that depends on how the fighting goes.
+    assert_eq!(count_owned(world, 1, "haunted_mine"), 1);
+    assert_eq!(count_owned(world, 1, "crypt"), 1);
+    assert_eq!(count_owned(world, 1, "ziggurat"), 2);
+    assert_eq!(count_owned(world, 1, "ghoul"), 25);
+    // And the hall grew: the temple, and every necromancer behind it, is
+    // gated on a hall past the necropolis, so a brain that never grows one
+    // reserves for a temple it can never raise.
+    // A hall wears exactly one of its forms at a time, so the three of them
+    // count one between them.
+    assert_eq!(
+        count_owned(world, 1, "halls_of_the_dead")
+            + count_owned(world, 1, "halls_of_the_dead_rising")
+            + count_owned(world, 1, "black_citadel"),
+        1,
+        "the undead brain never grew its hall past the necropolis"
+    );
+    // The brain's own worker cap, reached and held: MAX_WORKERS is five.
+    assert_eq!(count_owned(world, 1, "acolyte"), 5);
 }
 
 #[test]
@@ -269,6 +350,7 @@ fn ai_builds_economy_and_army() {
             },
             DropPolicy::Automatic,
             FinishPolicy::Endless,
+            ruleset::demo(),
         ),
         map::build(),
     ));
@@ -294,13 +376,13 @@ fn ai_builds_economy_and_army() {
     assert_eq!(world.resource::<GameSession>().tick(), 7000);
     assert_eq!(count_owned(world, 1, "peasant"), 5);
     assert_eq!(count_owned(world, 2, "peon"), 5);
-    assert!(count_owned(world, 1, "training_camp") >= 1);
-    assert!(count_owned(world, 2, "war_camp") >= 1);
-    assert!(count_owned(world, 1, "blacksmith") >= 1);
-    assert!(count_owned(world, 1, "archer") >= 1);
-    assert!(count_owned(world, 1, "mortar") >= 1);
-    assert!(count_owned(world, 2, "grunt") >= 1);
-    assert!(count_owned(world, 2, "shaman") >= 1);
+    assert_eq!(count_owned(world, 1, "training_camp"), 1);
+    assert_eq!(count_owned(world, 2, "war_camp"), 1);
+    assert_eq!(count_owned(world, 1, "blacksmith"), 1);
+    assert_eq!(count_owned(world, 1, "archer"), 9);
+    assert_eq!(count_owned(world, 1, "mortar"), 2);
+    assert_eq!(count_owned(world, 2, "grunt"), 9);
+    assert_eq!(count_owned(world, 2, "shaman"), 2);
     // The orc siege line: the works that requires the camp, and the pair of
     // wagons it trains — the demo's turreted mover.
     assert_eq!(count_owned(world, 2, "siege_works"), 1);
@@ -351,6 +433,7 @@ fn boss_mans_its_fleet_and_defends_lake() {
             },
             DropPolicy::Automatic,
             FinishPolicy::Endless,
+            ruleset::demo(),
         ),
         map::build(),
     ));
@@ -386,7 +469,10 @@ fn boss_mans_its_fleet_and_defends_lake() {
     // The boss neither ends the game nor gets eliminated.
     let session = world.resource::<GameSession>();
     assert_eq!(session.result(), None);
-    assert!(!session.is_player_eliminated(map::BOSS));
+    assert!(
+        !session.is_player_eliminated(map::BOSS),
+        "an environment seat is out of the running, not out of the game"
+    );
 
     // Two ships sink; the fortress rebuilds the fleet — free production keeps
     // running, not just the opening batch.
@@ -444,6 +530,7 @@ fn ai_economy_runs_under_continuous_movement() {
             },
             DropPolicy::Automatic,
             FinishPolicy::Endless,
+            ruleset::demo(),
         ),
         game_map,
     ));
@@ -466,9 +553,9 @@ fn ai_economy_runs_under_continuous_movement() {
     let world = app.world_mut();
     assert_eq!(count_owned(world, 1, "peasant"), 5);
     assert_eq!(count_owned(world, 2, "peon"), 5);
-    assert!(count_owned(world, 1, "training_camp") >= 1);
-    assert!(count_owned(world, 2, "war_camp") >= 1);
-    assert!(count_owned(world, 1, "archer") >= 1);
+    assert_eq!(count_owned(world, 1, "training_camp"), 1);
+    assert_eq!(count_owned(world, 2, "war_camp"), 1);
+    assert_eq!(count_owned(world, 1, "archer"), 6);
 }
 
 //

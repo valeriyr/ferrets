@@ -17,7 +17,7 @@ use ferrets_pathfinder::{
 use ferrets_simulation::{
     components::location::LocationComponent,
     map::{Map, OccupancyClass},
-    map_data::MapData,
+    map_data::{MapData, Placement},
     movement_model::MovementModel,
 };
 
@@ -442,6 +442,32 @@ fn map_without_terrain_passes_every_layer_everywhere() {
             }
         }
     }
+}
+
+#[test]
+#[should_panic(expected = "placement 'corpse' names remains, which only a death may leave")]
+fn placement_of_remains_panics() {
+    let mut registry = ContentRegistry::default();
+    let ground = registry.register_layer("ground");
+    registry.register_terrain("grass", ground);
+    registry.register_tag("remains");
+    registry.register(
+        EntityTypeDef::new("corpse")
+            .with_location(ground, CellSize::ONE, Solidity::Solid)
+            .with_tags(["remains"])
+            .with_stat(EntityStatId::LIFETIME, FixedU64::from_num(600)),
+    );
+
+    let mut data = MapData::new("field", Projection::Isometric, 8, 8);
+    data.fill_terrain("grass");
+    data.add_placement(Placement {
+        type_name: "corpse".to_string(),
+        cell: (2, 2),
+        owner: None,
+        amount: None,
+    });
+
+    Map::from_data(&data, &registry);
 }
 
 #[test]

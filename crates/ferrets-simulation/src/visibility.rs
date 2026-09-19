@@ -7,7 +7,12 @@
 
 use bevy_ecs::prelude::*;
 
-use crate::session::{GameSession, player_id::PlayerId};
+use crate::{
+    components::location::LocationComponent,
+    entity_index::EntityIndex,
+    session::{GameSession, ai_vision::AiVision, player_id::PlayerId, player_slot::PlayerSlot},
+    simulation_id::SimulationId,
+};
 
 /// How much of a cell a player currently knows. Ordered least to most known, so
 /// a team's combined knowledge of a cell is the maximum over its members.
@@ -118,4 +123,59 @@ impl VisibilityGrid {
             self.cells.len()
         );
     }
+}
+
+/// Resolves `id` to an entity `player` may name in a command: interactable —
+/// alive and not hidden away inside something
+/// ([`EntityIndex::interactable`]) — and in the player's sight (see
+/// [`sees`]).
+pub fn interactable_to(world: &World, player: PlayerId, id: SimulationId) -> Option<Entity> {
+    let entity = world.resource::<EntityIndex>().interactable(world, id)?;
+    sees(world, player, entity).then_some(entity)
+}
+
+/// Whether `player` may look at `entity` at all: the fog that hides a sprite
+/// must hide its stats and refuse orders against it too.
+///
+/// No ownership shortcut: own and allied entities pass through the same grid (a
+/// unit's sight covers the cell it stands on, and team vision is merged), so the
+/// grid stays the one truth.
+///
+/// A scripted player is gated by the vision its seat declares: a fog-limited
+/// brain lives under the same rule as a human, an omniscient one legitimately
+/// names what fog hides. The seat is session state, so every node (and a
+/// replay) resolves its commands identically.
+pub fn sees(world: &World, player: PlayerId, entity: Entity) -> bool {
+    match world
+        .resource::<GameSession>()
+        .slot(player)
+        .and_then(PlayerSlot::ai_vision)
+    {
+        // A seat with no brain behind it is a human's, and a human reads the
+        // fog like any other.
+        None | Some(AiVision::Filtered) => in_sight(world, player, entity),
+        Some(AiVision::Omniscient) => true,
+    }
+}
+
+/// Whether `player` may look at `entity` with the vision given, rather than the
+/// one its seat declares — what a view rendered as somebody else would show.
+pub fn sees_as(world: &World, player: PlayerId, entity: Entity, vision: AiVision) -> bool {
+    match vision {
+        AiVision::Omniscient => true,
+        AiVision::Filtered => in_sight(world, player, entity),
+    }
+}
+
+/// Whether `player`'s team's vision covers the cell `entity` stands on.
+fn in_sight(world: &World, player: PlayerId, entity: Entity) -> bool {
+    let Some(location) = world.entity(entity).get::<LocationComponent>() else {
+        return false;
+    };
+    world.resource::<VisibilityGrid>().is_visible_to(
+        world.resource::<GameSession>(),
+        player,
+        location.position.x.to_num::<u32>(),
+        location.position.y.to_num::<u32>(),
+    )
 }

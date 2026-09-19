@@ -163,7 +163,7 @@ fn app() -> App {
             EntityTypeDef::new("troll")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
                 .with_health(40)
-                .with_dying(3, None)
+                .with_dying(3, [])
                 .with_stat(EntityStatId::HEALTH_REGEN, FixedU64::from_num(0.5)),
         );
         registry.register(

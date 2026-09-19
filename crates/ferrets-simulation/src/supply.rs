@@ -56,6 +56,18 @@ pub fn allows(world: &World, player: PlayerId, def: &EntityTypeDef) -> bool {
     used.saturating_add(cost) <= provided
 }
 
+/// Whether `player`'s supply admits `count` more instances of `def` at once.
+///
+/// A cast that calls up several units answers for all of them together: half a
+/// summon is not a summon.
+pub fn allows_all(world: &World, player: PlayerId, def: &EntityTypeDef, count: usize) -> bool {
+    let Some(cost) = def.base_stat(EntityStatId::SUPPLY_COST) else {
+        return true;
+    };
+    let (provided, used) = totals(world, player);
+    used.saturating_add(cost.saturating_mul(FixedU64::from_num(count as u32))) <= provided
+}
+
 /// Whether `player`'s supply admits `entity` becoming an instance of `into`:
 /// what the new form costs over the form the entity now holds must fit the
 /// headroom. A change that costs no more is always admitted.

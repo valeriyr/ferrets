@@ -8,7 +8,7 @@ use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_content::{entity_stats::EntityStatId, registry::ContentRegistry};
 use ferrets_physics::body;
 use ferrets_simulation::{
-    command::PlayerCommand,
+    command::{PlayerCommand, SkillTarget},
     components::{
         entity_info::EntityInfoComponent, entity_stats::StatsComponent, hidden::HiddenComponent,
         location::LocationComponent, movement::MoveComponent, order_queue::OrderQueueComponent,
@@ -502,6 +502,11 @@ pub fn draw_orders(
                 Order::Load { target } => (entity_center(*target), GUARD),
                 Order::Unload { at } => match at {
                     Some(position) => (Some(cell_center(*position)), GUARD),
+                    None => continue,
+                },
+                Order::Cast { target, .. } => match target {
+                    Some(SkillTarget::Entity(id)) => (entity_center(*id), COMBAT),
+                    Some(SkillTarget::Position(cell)) => (Some(cell_center(*cell)), COMBAT),
                     None => continue,
                 },
                 // A form change happens where the unit stands, so it has no line.

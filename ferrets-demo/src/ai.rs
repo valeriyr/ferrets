@@ -643,6 +643,9 @@ const SWARM_AI: &str = r#"
             local pits = group(groups, "spawning_pit")
             local tumors = group(groups, "tumor")
             local swarmlings = group(groups, "swarmling")
+            -- What a killed structure spills fights for the few seconds it
+            -- has, rather than standing over the ruin waiting to be noticed.
+            local hatchlings = group(groups, "hatchling")
             local cocoons = group(groups, "cocoon")
             local ravagers = group(groups, "ravager")
             local hall = hives[1] or hive_cocoons[1] or hatcheries[1]
@@ -728,6 +731,7 @@ const SWARM_AI: &str = r#"
             local fighters = {}
             for _, e in ipairs(swarmlings) do fighters[#fighters + 1] = e end
             for _, e in ipairs(ravagers) do fighters[#fighters + 1] = e end
+            for _, e in ipairs(hatchlings) do fighters[#fighters + 1] = e end
             attack_wave(commands, view, fighters, {}, hall)
 
             return commands
@@ -1068,6 +1072,183 @@ const TERRAN_AI: &str = r#"
     })
 "#;
 
+/// The undead brain: a haunted mine over the nearest seam first — no acolyte
+/// draws gold without one — then a crypt for ghouls, ziggurats for headroom,
+/// a graveyard, and the temple its necromancers come from. Ghouls cut the wood
+/// and make the wave; necromancers walk with it and raise whatever bodies the
+/// fighting leaves, anyone's, through the fog they see by.
+const UNDEAD_AI: &str = r#"
+    define_ai("undead", {
+        period = 20,
+        vision = "filtered",
+        think = function(state, view)
+            local commands = {}
+            local budget = budget_of(view)
+            local groups = muster(view)
+            -- The hall in all three of its forms: the temple asks for one
+            -- grown past the necropolis, and acolytes are trained from
+            -- whichever form stands.
+            local necropolises = group(groups, "necropolis")
+            local grown_halls = group(groups, "halls_of_the_dead")
+            local citadels = group(groups, "black_citadel")
+            local halls = {}
+            for _, list in ipairs({ necropolises, grown_halls, citadels }) do
+                for _, h in ipairs(list) do halls[#halls + 1] = h end
+            end
+            local acolytes = group(groups, "acolyte")
+            local mines = group(groups, "haunted_mine")
+            local crypts = group(groups, "crypt")
+            local ziggurats = group(groups, "ziggurat")
+            local graveyards = group(groups, "graveyard")
+            local temples = group(groups, "temple_of_the_damned")
+            local ghouls = group(groups, "ghoul")
+            local necromancers = group(groups, "necromancer")
+            local skeletons = group(groups, "skeleton")
+            local hall = halls[1]
+
+            keep_workers(commands, budget, hall, halls, acolytes, "acolyte")
+
+            -- The hall grows once the crypt stands: the temple, and with it
+            -- every necromancer, wants a hall past the necropolis, and the
+            -- growth is worth more than another ghoul in the meantime.
+            if any_standing(crypts) and #grown_halls == 0 and #citadels == 0 then
+                for _, n in ipairs(necropolises) do
+                    if not n.under_construction
+                        and morph_one(commands, budget, n, "halls_of_the_dead") then
+                        break
+                    end
+                end
+            end
+
+            -- The haunted mine comes first, raised on the seam nearest the
+            -- hall: an acolyte works its rim and nothing else, so until one
+            -- stands there is no gold at all.
+            local builder_id = nil
+            local wanted = nil
+            if #mines == 0 then
+                local seam = hall and nearest(hall, view.neutral_entities, function(e)
+                    return e.type_name == "gold_mine" and (e.resource_amount or 0) > 0
+                end)
+                local in_flight = false
+                for _, e in ipairs(view.my_entities) do
+                    if e.under_construction then in_flight = true end
+                end
+                if seam ~= nil and not in_flight
+                    and (state.build_deadline == nil or view.tick >= state.build_deadline)
+                    and afford(budget, "haunted_mine") then
+                    local builder = nil
+                    for _, w in ipairs(acolytes) do
+                        if w.idle and not w.hidden then builder = w break end
+                    end
+                    builder = builder or acolytes[1]
+                    if builder ~= nil then
+                        commands[#commands + 1] = {
+                            kind = "build", builder = builder.id,
+                            type_name = "haunted_mine", x = seam.x, y = seam.y,
+                        }
+                        state.build_deadline = view.tick + 200
+                        builder_id = builder.id
+                    end
+                end
+                reserve(budget, "haunted_mine")
+            else
+                -- Every structure but the hall and the mine wants blight under
+                -- it, which those two spread: the ring offsets the chassis
+                -- tries sit well inside the hall's own patch.
+                if #crypts == 0 then
+                    wanted = "crypt"
+                elseif budget.supply < 2 then
+                    wanted = "ziggurat"
+                elseif #graveyards == 0 then
+                    wanted = "graveyard"
+                elseif #temples == 0 then
+                    wanted = "temple_of_the_damned"
+                end
+                builder_id = build_next(commands, state, view, acolytes, hall, wanted, budget)
+            end
+
+            -- Idle acolytes sit round the mine while it has room; the ghouls
+            -- do the cutting, so an acolyte never touches a tree.
+            for _, w in ipairs(acolytes) do
+                if w.idle and not w.hidden and w.id ~= builder_id then
+                    local target = nearest(w, mines, function(m)
+                        return not m.under_construction and (m.resource_amount or 0) > 0
+                    end)
+                    if target ~= nil then
+                        commands[#commands + 1] = { kind = "select", id = w.id }
+                        commands[#commands + 1] = { kind = "send", target = target.id }
+                    end
+                end
+            end
+
+            -- One ghoul stays on wood whenever anything is waiting on it; the
+            -- rest muster. A ghoul carrying a load never picks a fight, which
+            -- is the point of the axe being in a soldier's hands.
+            local need_wood = (wanted ~= nil and budget.wood < cost_of(wanted, "wood"))
+                or (#crypts == 0 and budget.wood < cost_of("crypt", "wood"))
+            local fighters = {}
+            for _, g in ipairs(ghouls) do
+                if need_wood and g.idle and not g.hidden then
+                    local tree = nearest(g, view.neutral_entities, function(e)
+                        return e.type_name == "tree" and (e.resource_amount or 0) > 0
+                    end)
+                    if tree ~= nil then
+                        commands[#commands + 1] = { kind = "select", id = g.id }
+                        commands[#commands + 1] = { kind = "send", target = tree.id }
+                        need_wood = false
+                    end
+                elseif g.carrying == nil then
+                    fighters[#fighters + 1] = g
+                end
+            end
+
+            -- The pending structure holds its price back from the army.
+            reserve(budget, wanted)
+
+            for _, c in ipairs(crypts) do
+                if train_from(commands, budget, c, "ghoul") then break end
+            end
+            -- One necromancer per four ghouls: the raise is worth more than
+            -- another body in the line, but only with a line to raise beside.
+            if any_standing(temples) and #necromancers * 4 < #ghouls then
+                for _, t in ipairs(temples) do
+                    if train_from(commands, budget, t, "necromancer") then break end
+                end
+            end
+            buy_research(commands, budget, view, "skeletal_longevity", temples)
+
+            -- Raise the dead: the nearest body each necromancer with the
+            -- energy for it can see, whoever fell there. The cast is an order
+            -- — the necromancer walks into the skill's reach and raises — so
+            -- one already casting is left to finish.
+            local claimed = {}
+            for _, n in ipairs(necromancers) do
+                if (n.energy or 0) >= 40 and n.idle then
+                    local body = nearest(n, view.remains, function(r)
+                        return not claimed[r.id]
+                    end)
+                    if body ~= nil then
+                        claimed[body.id] = true
+                        commands[#commands + 1] = {
+                            kind = "use_skill", skill = "raise_dead",
+                            caster = n.id, target = body.id,
+                        }
+                    end
+                end
+            end
+
+            -- The raised walk with the wave while they last; the necromancers
+            -- follow it rather than lead it.
+            local walkers = {}
+            for _, e in ipairs(necromancers) do walkers[#walkers + 1] = e end
+            for _, e in ipairs(skeletons) do walkers[#walkers + 1] = e end
+            attack_wave(commands, view, fighters, walkers, hall)
+
+            return commands
+        end,
+    })
+"#;
+
 /// The human brain's full source: the shared chassis plus its `define_ai`.
 pub fn human_ai() -> String {
     format!("{COMMON_AI}\n{HUMAN_AI}")
@@ -1098,6 +1279,11 @@ pub fn terran_ai() -> String {
     format!("{COMMON_AI}\n{TERRAN_AI}")
 }
 
+/// The undead brain's full source: the shared chassis plus its `define_ai`.
+pub fn undead_ai() -> String {
+    format!("{COMMON_AI}\n{UNDEAD_AI}")
+}
+
 /// The brain source a race's AI slots load, or `None` for a race with no
 /// demo brain — its slots idle on unmanned input.
 fn race_brain(race: &str) -> Option<String> {
@@ -1108,6 +1294,7 @@ fn race_brain(race: &str) -> Option<String> {
         "conclave" => Some(conclave_ai()),
         "elves" => Some(elves_ai()),
         "terran" => Some(terran_ai()),
+        "undead" => Some(undead_ai()),
         _ => None,
     }
 }

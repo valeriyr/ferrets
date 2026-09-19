@@ -22,6 +22,7 @@ use ferrets_simulation::{
     map::Map,
     map_data::{MapData, Placement},
     resources::{PlayerResources, StartingStock},
+    ruleset::{RemainsLimit, Ruleset},
     scenario::{Scenario, ScenarioPlayer},
     session::{
         GameResult, GameSession, Winner, finish_policy::FinishPolicy, player_slot::PlayerSlot,
@@ -312,5 +313,6 @@ fn scene_scenario() -> Scenario {
             amount: 75,
         }],
         script: String::new(),
+        rules: Ruleset::new(RemainsLimit::Unbounded),
     }
 }

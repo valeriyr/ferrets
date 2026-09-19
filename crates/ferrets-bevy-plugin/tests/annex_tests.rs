@@ -214,7 +214,12 @@ fn primary_between_cells_raises_its_annex_on_whole_cell() {
 
     // Its dock is read from the cell its footprint anchors to, not from the
     // fraction it stands on, so it still names a whole cell.
-    let dock = annex::dock_anchor_for(app.world(), keep, "lookout").expect("the keep offers one");
+    let lookout = app
+        .world()
+        .resource::<ContentRegistry>()
+        .entity("lookout")
+        .expect("lookout is registered");
+    let dock = annex::dock_anchor_for(app.world(), keep, lookout).expect("the keep offers one");
     assert_eq!(dock, CellPos::new(13, 10));
 
     order_annex(&mut app, keep_id, "lookout", dock.x, dock.y);

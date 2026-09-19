@@ -44,7 +44,7 @@ use crate::{
         location::LocationComponent,
         morph::{MorphComponent, MorphReservation},
         movement::MoveComponent,
-        order_queue::{CancelPolicy, OrderState},
+        order_queue::{CancelPolicy, OrderQueueComponent, OrderState},
         transport::TransporterComponent,
     },
     entity_def,
@@ -57,6 +57,7 @@ use crate::{
     order::Order,
     rally, requirements,
     session::player_id::PlayerId,
+    simulation_id::SimulationId,
     spawn::{self, FieldReach, StandingActs},
     supply,
 };
@@ -109,7 +110,7 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
         .expect("a Morph order under way carries its change");
     let transition = entity_def::morph_terms(world, &morph)
         .expect("a change under way is one the form it came from declares");
-    let time = entity_def::period_ticks(world, entity, transition.time());
+    let time = entity_def::quantity(world, entity, transition.time());
 
     morph.progress += 1;
     if morph.progress < time {
@@ -193,6 +194,50 @@ pub fn cancel_processing(
 /// own cancel terms in [`cancel_processing`].
 pub fn survives_soft_cancel() -> bool {
     false
+}
+
+/// Calls off the change of form `entity` is under, for `player`.
+///
+/// The change answers on its own terms, as it does for any other cancel: a
+/// refundable one gives the price back and returns the entity to what it was,
+/// a forfeit one keeps the price, and a committed one holds until its window
+/// closes. Nothing happens for an entity that is not the player's or is not
+/// changing at all.
+pub fn cancel_change(world: &mut World, player: PlayerId, entity: SimulationId) {
+    let Some(entity) = world.resource::<EntityIndex>().interactable(world, entity) else {
+        return;
+    };
+    if entity_def::owner(world, entity) != Some(player) {
+        return;
+    }
+    let mut entity_mut = world.entity_mut(entity);
+    let Some(mut queue) = entity_mut.get_mut::<OrderQueueComponent>() else {
+        return;
+    };
+    let Some(front) = queue.front_mut() else {
+        return;
+    };
+    // Only the change itself is called off: whatever else the entity has
+    // queued is none of this command's business.
+    match front.order {
+        Order::Morph { .. } => front.cancel = Some(CancelPolicy::Soft),
+        Order::Move { .. }
+        | Order::Attack { .. }
+        | Order::AttackMove { .. }
+        | Order::Patrol { .. }
+        | Order::Guard { .. }
+        | Order::Follow { .. }
+        | Order::Board { .. }
+        | Order::Load { .. }
+        | Order::Unload { .. }
+        | Order::Harvest { .. }
+        | Order::Build { .. }
+        | Order::Repair { .. }
+        | Order::Train
+        | Order::Research { .. }
+        | Order::Cast { .. }
+        | Order::Die => {}
+    }
 }
 
 /// Whether `player` meets the requirements of `entity`'s transition into
@@ -940,8 +985,7 @@ fn cargo_fits(world: &World, entity: Entity, type_id: EntityTypeId) -> bool {
         return false;
     };
     let capacity = def
-        .base_stat(EntityStatId::CARGO_CAPACITY)
-        .map(|capacity| capacity.to_num::<u32>())
+        .base_stat_as_u32(EntityStatId::CARGO_CAPACITY)
         .unwrap_or(0);
 
     let mut slots = 0;
@@ -949,7 +993,7 @@ fn cargo_fits(world: &World, entity: Entity, type_id: EntityTypeId) -> bool {
         let passenger_def = entity_def::of(world, passenger);
         // Admission is by type name or tag, exactly as boarding checks it: a form
         // that would not have let this passenger in cannot inherit it either.
-        if !transporter.admits(&passenger_def.name, |tag| passenger_def.tags.contains(tag)) {
+        if !transporter.carries().admits(passenger_def) {
             return false;
         }
         slots += entity_def::effective_stat_u32(world, passenger, EntityStatId::CARGO_SIZE);

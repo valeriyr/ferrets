@@ -245,7 +245,7 @@ fn accepts(world: &World, entity: Entity, target: Entity) -> bool {
         return false;
     }
     let target_def = entity_def::of(world, target);
-    if !target_def.has_health() || !repairer.mends(&target_def.tags) {
+    if !target_def.has_health() || !repairer.repairs().admits(target_def) {
         return false;
     }
     // Only a production-paced mender needs the target to be something

@@ -264,6 +264,73 @@ fn static_footprint_query_blocks_out_of_bounds() {
 }
 
 //
+// ─── is_footprint_terrain_passable_by ─────────────────────────────────────────
+//
+
+#[test]
+fn terrain_footprint_query_ignores_claims_and_standing_footprints() {
+    let mut grid = utils::grid(8, 8);
+    grid.set_claimed_by(utils::GROUND, utils::nav(3, 3), true);
+    grid.set_occupied(utils::GROUND, utils::nav(4, 3), true);
+
+    assert!(!grid.is_footprint_passable_by(utils::GROUND, utils::nav(2, 2), CellSize::new(3, 2)));
+    assert!(!grid.is_footprint_statically_passable_by(
+        utils::GROUND,
+        utils::nav(2, 2),
+        CellSize::new(3, 2)
+    ));
+    assert!(grid.is_footprint_terrain_passable_by(
+        utils::GROUND,
+        utils::nav(2, 2),
+        CellSize::new(3, 2)
+    ));
+}
+
+#[test]
+fn terrain_footprint_query_is_blocked_by_any_terrain_cell() {
+    let mut grid = utils::grid(8, 8);
+    grid.set_terrain_blocked(utils::GROUND, utils::nav(4, 3));
+
+    assert!(!grid.is_footprint_terrain_passable_by(
+        utils::GROUND,
+        utils::nav(2, 2),
+        CellSize::new(3, 2)
+    ));
+    assert!(
+        grid.is_footprint_terrain_passable_by(utils::GROUND, utils::nav(2, 2), CellSize::ONE),
+        "a footprint clear of it still stands"
+    );
+}
+
+#[test]
+fn terrain_footprint_query_reads_only_its_own_layers() {
+    let mut grid = utils::grid(8, 8);
+    grid.set_terrain_blocked(utils::AIR, utils::nav(3, 3));
+
+    assert!(grid.is_footprint_terrain_passable_by(
+        utils::GROUND,
+        utils::nav(2, 2),
+        CellSize::new(3, 2)
+    ));
+    assert!(!grid.is_footprint_terrain_passable_by(
+        utils::AIR,
+        utils::nav(2, 2),
+        CellSize::new(3, 2)
+    ));
+}
+
+#[test]
+fn terrain_footprint_query_blocks_out_of_bounds() {
+    let grid = utils::grid(8, 8);
+
+    assert!(!grid.is_footprint_terrain_passable_by(
+        utils::GROUND,
+        utils::nav(7, 7),
+        CellSize::new(2, 2)
+    ));
+}
+
+//
 // ─── Shape queries ────────────────────────────────────────────────────────────
 //
 

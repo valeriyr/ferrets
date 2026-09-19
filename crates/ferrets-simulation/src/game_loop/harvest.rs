@@ -136,7 +136,7 @@ fn admits(
     let Some(data) = carrier_def.harvest_data(kind) else {
         return false;
     };
-    data.admits_source(&entity_def::of(world, source).name)
+    data.sources().admits(entity_def::of(world, source))
         && data
             .presence()
             .attachment()

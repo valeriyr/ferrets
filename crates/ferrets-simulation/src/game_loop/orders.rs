@@ -21,8 +21,8 @@
 use bevy_ecs::{entity::Entity, world::World};
 
 use super::{
-    attack, attack_move, board, build, die, follow, guard, harvest, load, morph, movement, patrol,
-    repair, research, train, unload,
+    attack, attack_move, board, build, cast, die, follow, guard, harvest, load, morph, movement,
+    patrol, repair, research, train, unload,
 };
 use crate::{
     components::{
@@ -139,6 +139,7 @@ pub fn can_start(world: &World, entity: Entity, order: &Order) -> Result<(), Ref
         Order::Board { .. } => board::can_start(world, entity, order),
         Order::Load { .. } => load::can_start(world, entity, order),
         Order::Unload { .. } => unload::can_start(world, entity, order),
+        Order::Cast { .. } => cast::can_start(world, entity, order),
         Order::Die => die::can_start(world, entity, order),
     }
 }
@@ -177,6 +178,7 @@ fn survives_soft_cancel(order: &Order) -> bool {
         Order::Board { .. } => board::survives_soft_cancel(),
         Order::Load { .. } => load::survives_soft_cancel(),
         Order::Unload { .. } => unload::survives_soft_cancel(),
+        Order::Cast { .. } => cast::survives_soft_cancel(),
         Order::Die => die::survives_soft_cancel(),
     }
 }
@@ -258,7 +260,8 @@ fn disabled_conduct(
         | Order::Repair { .. }
         | Order::Board { .. }
         | Order::Load { .. }
-        | Order::Unload { .. } => DisabledConduct::Cancels,
+        | Order::Unload { .. }
+        | Order::Cast { .. } => DisabledConduct::Cancels,
     }
 }
 
@@ -279,6 +282,7 @@ fn dispatch_prepare(entity: Entity, order: &Order, world: &mut World) -> OrderSt
         Order::Board { .. } => board::prepare(entity, order, world),
         Order::Load { .. } => load::prepare(entity, order, world),
         Order::Unload { .. } => unload::prepare(entity, order, world),
+        Order::Cast { .. } => cast::prepare(entity, order, world),
         Order::Die => die::prepare(entity, order, world),
     }
 }
@@ -296,6 +300,7 @@ fn dispatch_prepare_suspended(entity: Entity, order: &Order, world: &mut World) 
         Order::Board { .. } => board::prepare_suspended(entity, order, world),
         Order::Load { .. } => load::prepare_suspended(entity, order, world),
         Order::Unload { .. } => unload::prepare_suspended(entity, order, world),
+        Order::Cast { .. } => cast::prepare_suspended(entity, order, world),
         Order::Move { .. } => unreachable!("Move orders never suspend"),
         Order::Train => unreachable!("Train orders never suspend"),
         Order::Research { .. } => unreachable!("Research orders never suspend"),
@@ -345,6 +350,7 @@ fn dispatch_cancel(
         Order::Unload { .. } => {
             unload::cancel_processing(entity, order, policy, entry_state, world)
         }
+        Order::Cast { .. } => cast::cancel_processing(entity, order, policy, entry_state, world),
         Order::Die => die::cancel_processing(entity, order, policy, entry_state, world),
     }
 }
@@ -366,6 +372,7 @@ fn dispatch_process(entity: Entity, order: &Order, world: &mut World) -> Process
         Order::Board { .. } => board::process(entity, order, world),
         Order::Load { .. } => load::process(entity, order, world),
         Order::Unload { .. } => unload::process(entity, order, world),
+        Order::Cast { .. } => cast::process(entity, order, world),
         Order::Die => die::process(entity, order, world),
     }
 }
@@ -394,6 +401,7 @@ fn dispatch_watch(
         | Order::Board { .. }
         | Order::Load { .. }
         | Order::Unload { .. }
+        | Order::Cast { .. }
         | Order::Die => None,
     }
 }

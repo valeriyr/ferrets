@@ -33,15 +33,25 @@ pub const CONTENT: &str = r#"
     define_race("elves")
     -- The terrans' production buildings fly, and leave their annexes behind.
     define_race("terran")
+    -- The undead raise their buildings on blight and their soldiers from the
+    -- bodies everyone else leaves.
+    define_race("undead")
 
     -- Creep covers the ground and recedes ring by ring, half a second a ring,
     -- once nothing sustains it, and whoever spreads it sees every cell of it;
     -- power is there while its pylon stands and gone the tick it falls.
     define_field("creep", { layer = GROUND, decay = { cycle = 10 }, vision = "watched" })
     define_field("power", { layer = GROUND, decay = "instant" })
+    -- Blight is the ground the undead build on: it spreads from every
+    -- structure they raise, heals what stands on it, and recedes slowly once
+    -- nothing sustains it. Unlike creep it watches nothing — the dead see by
+    -- their own eyes.
+    define_field("blight", { layer = GROUND, decay = { cycle = 40 } })
 
-    -- What a structure that will not stand on creep declares.
+    -- What a structure that will not stand on creep declares, and what the
+    -- elves add to it: neither the swarm's ground nor the undead's.
     local NOT_ON_CREEP = { forbids = "creep" }
+    local NOT_ON_BLIGHT = { forbids = "blight" }
 
     define_resource("gold")
     define_resource("wood")
@@ -49,9 +59,32 @@ pub const CONTENT: &str = r#"
     -- Marks the living, which is what a medic will treat and a worker will not.
     -- "building" is pre-registered by the engine.
     define_tag("biological")
-    -- Marks what an SCV may patch up besides a wall: in the demo, its own
-    -- tanks.
+    -- Marks what is mended rather than healed: the tanks, the war wagon and
+    -- the mortar. A medic passes them by.
     define_tag("mechanical")
+    -- Marks an undead hall grown past the necropolis. What the temple asks
+    -- for is the tier, not one form of it: a hall grown all the way to the
+    -- citadel answers for it as the halls of the dead do.
+    define_tag("grown_hall")
+
+    -- What a death hands on, and the deaths that hand it on: something killed
+    -- it, or its time ran out. Every ground living unit of every race leaves
+    -- this, so a necromancer can raise from anyone's dead. A death that takes
+    -- an entity off the board rather than ending it — a builder consumed by
+    -- its own site, a cancelled construction, a seam built over — leaves
+    -- nothing, which is why the deaths are named rather than left to the
+    -- engine's rule.
+    local FALLS = { time = 2, leaves = { { entity = "corpse", on = { "killed", "expired" } } } }
+
+    -- A body: raceless, ownerless, claiming no cell, lying there thirty
+    -- seconds whether or not anybody raises anything from it. The "remains"
+    -- tag is the engine's own, like "building": what wears it lies where it is
+    -- left, answers to nobody, and is gone when its lifetime runs out.
+    define_entity("corpse", {
+        location = { occupation = GROUND, size = 1, solidity = "passable" },
+        tags = { "remains" },
+        stats = { lifetime = 600 },
+    })
 
     -- Projectile kinds. Each is registered by name so the renderer can draw an
     -- arrow differently from a cannonball, and so several weapons can share one.
@@ -113,11 +146,13 @@ pub const CONTENT: &str = r#"
         target = "caster",
         effect = { apply_buff = "frenzy" },
     })
+    -- The shaman mends the living and nothing else: a filter on the aim, in
+    -- the same vocabulary a transporter says whom it carries.
     define_skill("second_wind", {
         caster = "entity",
         cooldown = 120,
         cost = { energy = "20" },
-        target = "ally",
+        target = { kind = "allied", only = { tags = { "biological" } } },
         effect = { heal = "15" },
     })
     -- Blood rite unlocks with the frenzy ritual: the button sits greyed on
@@ -273,14 +308,14 @@ pub const CONTENT: &str = r#"
                 -- One shelter slot: a worker fits in a bunker or a pig farm.
                 cargo_size = 1,
             },
-            dying = { time = 2 },
+            dying = FALLS,
             cost = { gold = 50 },
             train_time = 40,
             builder = { builds = builds, attendance = work.attendance },
-            -- Workers mend structures at the pace the structure took to raise, and
-            -- each pays its own share of the bill.
+            -- Workers mend structures and machines at the pace the thing took
+            -- to build, and each pays its own share of the bill.
             repairer = {
-                repairs = { "building" },
+                repairs = { tags = { "building", "mechanical" } },
                 rate = { mode = "production" },
                 presence = work.repair_presence,
                 cost = { mode = "pro_rata" },
@@ -381,7 +416,9 @@ pub const CONTENT: &str = r#"
         cost = { gold = 100 },
         build_time = 80,
         transporter = {
-            carries = { "biological" },
+            -- Soldiers and the siege tube alike: what shelters here is
+            -- whatever can be carried through a door.
+            carries = { tags = { "biological", "mechanical" } },
             boarding = "own",
             fate = "eject",
             conduct = "fight",
@@ -417,7 +454,7 @@ pub const CONTENT: &str = r#"
             supply_cost = 1,
             cargo_size = 1,
         },
-        dying = { time = 2 },
+        dying = FALLS,
         tags = { "biological" },
         -- Anti-armor arrows: extra damage against the (armored) grunt.
         bonus_damage_vs = { grunt = 4 },
@@ -453,10 +490,10 @@ pub const CONTENT: &str = r#"
             supply_cost = 1,
             cargo_size = 1,
         },
-        dying = { time = 2 },
+        dying = FALLS,
         tags = { "biological" },
         repairer = {
-            repairs = { "biological" },
+            repairs = { tags = { "biological" } },
             rate = { mode = "per_tick", health = "1.0" },
             -- Stays on the map beside its patient, and works alone.
             presence = { present = { crew = 1 } },
@@ -485,8 +522,10 @@ pub const CONTENT: &str = r#"
             -- The tube and its crew take two shelter slots.
             cargo_size = 2,
         },
+        -- A tube on a carriage: it is mended, not healed, and what it leaves
+        -- when it falls is wreckage nobody raises anything from.
         dying = { time = 2 },
-        tags = { "biological" },
+        tags = { "mechanical" },
         attack = {
             -- Siege fires at the ground, so it must not take aim at what flies: the
             -- blast below already spares fliers, and a mortar allowed to *target*
@@ -495,6 +534,9 @@ pub const CONTENT: &str = r#"
             -- The shell crosses one cell every five ticks, so a target that keeps
             -- moving takes the direct hit while the burst lands behind it.
             projectile = "shell",
+            -- Shelled bodies leave nothing to raise: bringing siege is how an
+            -- army denies a necromancer its material.
+            slain = "nothing",
             splash = {
                 shape = "circular",
                 bands = { {1, "0.5"}, {2, "0.25"} },
@@ -519,7 +561,7 @@ pub const CONTENT: &str = r#"
     -- notion of a morph-time stat — a transition's `time` may name any declared
     -- stat, and this is the one the gryphon's take-off reads. A stat rather
     -- than a plain tick count so a buff or research could quicken it.
-    define_entity_stat("morph_time")
+    define_entity_stat("morph_time", 1)
 
     -- Each form names the other, which is why the pair is authored as two types:
     -- everything that differs between them — layer, speed, what reaches them — is
@@ -553,7 +595,7 @@ pub const CONTENT: &str = r#"
             },
             dying = { time = 2 },
             transporter = {
-                carries = { "archer" },
+                carries = { types = { "archer" } },
                 boarding = "own",
                 fate = fate,
                 conduct = "fight",
@@ -619,7 +661,7 @@ pub const CONTENT: &str = r#"
         -- when it is shot down goes down with it, the same bargain the
         -- gryphon's rider strikes aloft.
         transporter = {
-            carries = { "peon", "grunt", "shaman" },
+            carries = { types = { "peon", "grunt", "shaman" } },
             boarding = "own",
             fate = "destroy",
             conduct = "shelter",
@@ -675,7 +717,7 @@ pub const CONTENT: &str = r#"
         cost = { gold = 40, wood = 20 },
         build_time = 60,
         transporter = {
-            carries = { "peon" },
+            carries = { types = { "peon" } },
             boarding = "own",
             fate = "destroy",
             conduct = "shelter",
@@ -732,6 +774,10 @@ pub const CONTENT: &str = r#"
         dying = { time = 2 },
         attack = { targets = GROUND | WATER | AIR, projectile = "arrow" },
         tags = { "building" },
+        -- The watch tower's price and the upgrade's on top of it, over the
+        -- raising and the upgrading together: what the tower cost to have.
+        cost = { gold = 200, wood = 60 },
+        build_time = 130,
     })
     camp("war_camp", "orc", { "grunt", "shaman", "zeppelin" }, { "frenzy_ritual" }, { rim = { points = rim(3, 3) } })
 
@@ -757,6 +803,8 @@ pub const CONTENT: &str = r#"
         targets = GROUND | WATER,
         projectile = "cannonball",
         conduct = "on_the_move",
+        -- A cannonball leaves no body behind, as the mortar's shell does not.
+        slain = "nothing",
     })
 
     -- The orc war wagon: the demo's turreted mover, and the only unit whose gun
@@ -806,6 +854,7 @@ pub const CONTENT: &str = r#"
         },
         cost = { gold = 160, wood = 60 },
         train_time = 110,
+        tags = { "mechanical" },
         -- Siege leads a mixed selection, like the mortar it answers.
         selection = { priority = 10 },
     })
@@ -827,7 +876,7 @@ pub const CONTENT: &str = r#"
             supply_cost = 1,
             cargo_size = 1,
         },
-        dying = { time = 2 },
+        dying = FALLS,
         tags = { "biological" },
         -- An axe reaches what stands on the ground or floats on the water and
         -- nothing that flies.
@@ -852,7 +901,7 @@ pub const CONTENT: &str = r#"
             supply_cost = 1,
             cargo_size = 1,
         },
-        dying = { time = 2 },
+        dying = FALLS,
         tags = { "biological" },
         skills = { "second_wind" },
         cost = { gold = 120 },
@@ -882,6 +931,36 @@ pub const CONTENT: &str = r#"
         modifiers = { { entity_stat = "health_drain", op = "flat", value = "1.25" } },
     } }
 
+    -- What every swarm structure is full of: spawn too young to be a
+    -- swarmling, which lives twenty seconds and is gone. It costs no supply,
+    -- is trained by nothing, and leaves no body — there was never enough of it
+    -- to bury.
+    define_entity("hatchling", {
+        race = "swarm",
+        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        stats = {
+            speed = "0.32", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1, max_health = 25,
+            damage = 4, attack_range = 1, acquire_range = 5, attack_period = 6, damage_point = 2,
+            sight_range = 6,
+            lifetime = 400,
+            cargo_size = 1,
+        },
+        dying = { time = 1 },
+        tags = { "biological" },
+        attack = { targets = GROUND | WATER },
+        selection = { priority = 10 },
+        field_effects = {
+            { field = "creep", of = "anyone", inside = {
+                modifiers = { { entity_stat = "speed", op = "percent", value = "0.3" } },
+            } },
+        },
+    })
+
+    -- What a swarm structure is holding when it falls, and only when something
+    -- kills it — a building called off or withered away has nothing left in
+    -- it. The demo's one death that hands on units rather than a body.
+    local BURSTS = { { entity = "hatchling", count = 2, on = { "killed" } } }
+
     -- The hatchery is the swarm's first hall. Five spots along the ground at
     -- its southern foot, one row outside the footprint, are where its larvae
     -- crawl; four sit at once, so one larva given back by a cancelled egg
@@ -899,11 +978,12 @@ pub const CONTENT: &str = r#"
     local CREEP_RADIUS = 10
     local CREEP_GROWTH = { cycle = 6, initial_radius = 3 }
     local CREEP_SPREAD = { { field = "creep", radius = CREEP_RADIUS, growth = CREEP_GROWTH } }
+
     define_entity("hatchery", {
         race = "swarm",
         location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
         stats = { max_health = 800, sight_range = 9, supply_provided = 10 },
-        dying = { time = 2 },
+        dying = { time = 2, leaves = BURSTS },
         cost = { gold = 400 },
         build_time = 200,
         resource_storage = { "gold", "wood" },
@@ -926,7 +1006,7 @@ pub const CONTENT: &str = r#"
         race = "swarm",
         location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
         stats = { max_health = 800, sight_range = 9, supply_provided = 10 },
-        dying = { time = 2 },
+        dying = { time = 2, leaves = BURSTS },
         resource_storage = { "gold", "wood" },
         tags = { "building" },
         berths = BROOD_BERTHS,
@@ -939,7 +1019,11 @@ pub const CONTENT: &str = r#"
         race = "swarm",
         location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
         stats = { max_health = 1000, sight_range = 10, supply_provided = 10 },
-        dying = { time = 2 },
+        dying = { time = 2, leaves = BURSTS },
+        -- Nothing builds a hive: it carries the hatchery's price and the
+        -- growth's on top of it, over the raising and the growing together.
+        cost = { gold = 550, wood = 100 },
+        build_time = 400,
         resource_storage = { "gold", "wood" },
         tags = { "building" },
         berths = BROOD_BERTHS,
@@ -1014,7 +1098,7 @@ pub const CONTENT: &str = r#"
             supply_cost = 1,
             cargo_size = 1,
         },
-        dying = { time = 2 },
+        dying = FALLS,
         builder = { builds = { "hatchery", "tumor", "spawning_pit" }, attendance = "consumed" },
         tags = { "biological" },
         skills = { "spew_creep" },
@@ -1045,7 +1129,7 @@ pub const CONTENT: &str = r#"
         race = "swarm",
         location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
         stats = { max_health = 500, sight_range = 6, health_drain = "0" },
-        dying = { time = 2 },
+        dying = { time = 2, leaves = BURSTS },
         cost = { gold = 200, wood = 100 },
         build_time = 120,
         tags = { "building" },
@@ -1064,7 +1148,7 @@ pub const CONTENT: &str = r#"
             supply_cost = 1,
             cargo_size = 1,
         },
-        dying = { time = 2 },
+        dying = FALLS,
         tags = { "biological" },
         attack = { targets = GROUND | WATER },
         selection = { priority = 10 },
@@ -1112,7 +1196,7 @@ pub const CONTENT: &str = r#"
             supply_cost = 2,
             cargo_size = 1,
         },
-        dying = { time = 2 },
+        dying = FALLS,
         tags = { "biological" },
         attack = { targets = GROUND | WATER },
         selection = { priority = 12 },
@@ -1167,7 +1251,7 @@ pub const CONTENT: &str = r#"
             supply_cost = 1,
             cargo_size = 1,
         },
-        dying = { time = 2 },
+        dying = FALLS,
         cost = { gold = 50 },
         train_time = 40,
         builder = { builds = { "nexus", "pylon", "gateway", "photon_cannon" }, attendance = "unattended" },
@@ -1238,7 +1322,7 @@ pub const CONTENT: &str = r#"
             supply_cost = 1,
             cargo_size = 1,
         },
-        dying = { time = 2 },
+        dying = FALLS,
         tags = { "biological" },
         attack = { targets = GROUND | WATER },
         cost = { gold = 100 },
@@ -1254,8 +1338,9 @@ pub const CONTENT: &str = r#"
     -- anything. A wisp is spent on what it builds, like a drone. Every
     -- structure but the moon well roots and uproots: rooted it trains or
     -- shoots at range; uprooted it walks and bites, and trains nothing.
-    -- Nothing of the elves' takes root on creep, neither a wisp's site nor a
-    -- walker settling down.
+    -- Nothing of the elves' takes root on creep or on blight, neither a
+    -- wisp's site nor a walker settling down: the ground another race has
+    -- made its own is ground no ancient will stand in.
     define_entity("wisp", {
         race = "elves",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
@@ -1328,7 +1413,7 @@ pub const CONTENT: &str = r#"
             trainer = rooted.trainer,
             attack = rooted.attack,
             tags = { "building" },
-            field_placement = { NOT_ON_CREEP },
+            field_placement = { NOT_ON_CREEP, NOT_ON_BLIGHT },
             morphs = {
                 { into = uprooted, time = 40, placement = "revalidate", cancel = "refundable" },
             },
@@ -1370,7 +1455,7 @@ pub const CONTENT: &str = r#"
         cost = { gold = 40, wood = 20 },
         build_time = 60,
         tags = { "building" },
-        field_placement = { NOT_ON_CREEP },
+        field_placement = { NOT_ON_CREEP, NOT_ON_BLIGHT },
     })
     -- The war ancient: huntresses rooted, a heavy bite uprooted.
     ancient("ancient_of_war", { 3, 3 }, {
@@ -1413,7 +1498,7 @@ pub const CONTENT: &str = r#"
             supply_cost = 1,
             cargo_size = 1,
         },
-        dying = { time = 2 },
+        dying = FALLS,
         tags = { "biological" },
         attack = { targets = GROUND | WATER },
         cost = { gold = 90, wood = 10 },
@@ -1463,7 +1548,7 @@ pub const CONTENT: &str = r#"
             supply_cost = 1,
             cargo_size = 1,
         },
-        dying = { time = 2 },
+        dying = FALLS,
         cost = { gold = 50 },
         train_time = 40,
         builder = {
@@ -1471,7 +1556,7 @@ pub const CONTENT: &str = r#"
             attendance = { attached = { berths = "rim", stance = { roaming = { speed = "0.08", dwell = 30 } } } },
         },
         repairer = {
-            repairs = { "building", "mechanical" },
+            repairs = { tags = { "building", "mechanical" } },
             rate = { mode = "production" },
             presence = { present = { crew = "any" } },
             cost = { mode = "pro_rata" },
@@ -1482,7 +1567,7 @@ pub const CONTENT: &str = r#"
         -- time disappears into it, and a bare seam is not a source it may
         -- work. Wood is cut from the next cell over, one axe to a tree.
         resource_carrier = {
-            gold = { capacity = 5, time = 20, presence = { hidden = { crew = 1 } }, sources = { "refinery" } },
+            gold = { capacity = 5, time = 20, presence = { hidden = { crew = 1 } }, sources = { types = { "refinery" } } },
             wood = { capacity = 5, time = 20, presence = { present = { crew = 1 } } },
         },
     })
@@ -1506,7 +1591,7 @@ pub const CONTENT: &str = r#"
         -- It raises its own annex, standing where it stands while the work is
         -- done: the dock is the next cell over, so there is nowhere to walk.
         builder = { builds = { "comsat_station" }, attendance = { present = { crew = 1 } } },
-        docks = { { at = { 3, 0 }, accepts = { "comsat_station" } } },
+        docks = { { at = { 3, 0 }, accepts = { types = { "comsat_station" } } } },
         berths = { rim = { points = rim(3, 3), slots = 1 } },
         tags = { "building" },
         morphs = {
@@ -1573,7 +1658,7 @@ pub const CONTENT: &str = r#"
         repair_ratio = "0.5",
         trainer = { "tank" },
         builder = { builds = { "tech_lab" }, attendance = { present = { crew = 1 } } },
-        docks = { { at = { 3, 0 }, accepts = { "tech_lab" } } },
+        docks = { { at = { 3, 0 }, accepts = { types = { "tech_lab" } } } },
         berths = { rim = { points = rim(3, 3), slots = 1 } },
         tags = { "building" },
         morphs = {
@@ -1671,7 +1756,7 @@ pub const CONTENT: &str = r#"
             supply_cost = 1,
             cargo_size = 1,
         },
-        dying = { time = 2 },
+        dying = FALLS,
         tags = { "biological" },
         -- A rifle: the shot lands the tick it is fired, with nothing to
         -- outrun and nothing to dodge.
@@ -1711,6 +1796,8 @@ pub const CONTENT: &str = r#"
             attack_arc = 20,
             supply_cost = 2,
         },
+        -- The gun leaves what it kills: only the planted form shells a body
+        -- to nothing, which is what makes planting the answer to raised dead.
         attack = { targets = GROUND | WATER },
         cost = { gold = 150, wood = 100 },
         train_time = 100,
@@ -1720,6 +1807,7 @@ pub const CONTENT: &str = r#"
               requires = { { research = "siege_tech" } } },
         },
     })
+
     tank("siege_tank", {
         stats = {
             max_health = 160, armor = 1, sight_range = 11,
@@ -1733,6 +1821,7 @@ pub const CONTENT: &str = r#"
         },
         attack = {
             targets = GROUND | WATER,
+            slain = "nothing",
             -- A ring of blast around the hit: half of it one cell out, a
             -- quarter two, and it does not spare its own.
             splash = {
@@ -1742,10 +1831,329 @@ pub const CONTENT: &str = r#"
                 friendly_fire = true,
             },
         },
+        -- Nothing builds or trains a planted tank, so it carries what the
+        -- player paid to have one standing: the tank's price, and the pace of
+        -- the training and the digging in together. That is what an SCV mends
+        -- it against.
+        cost = { gold = 150, wood = 100 },
+        train_time = 160,
         morphs = {
             { into = "tank", time = 60, placement = "revalidate", cancel = "committed" },
         },
     })
+    --
+    -- ─── The Undead ───────────────────────────────────────────────────────────
+    --
+    -- The sixth race, and the one that makes use of what the other five leave
+    -- behind. Its ground is blight, spread by every structure it raises and
+    -- needed by all but the hall and the mine; its gold comes from a mine
+    -- raised over the seam with five acolytes seated round it, banking where
+    -- they stand; its wood is cut by the ghoul, which fights when it is not
+    -- carrying; its supply comes from ziggurats that harden into towers; and
+    -- its necromancers raise skeletons out of corpses — anyone's — that stand
+    -- for forty-five seconds and then fall apart.
+
+    -- Every undead structure stands on blight and spreads its own, so a base
+    -- grows its ground outward as it is built. The hall and the mine are the
+    -- exceptions: they make blight where there is none.
+    local ON_BLIGHT = { requires = "blight", of = "anyone", coverage = "footprint" }
+    local function blights(radius)
+        return { { field = "blight", radius = radius, growth = "instant" } }
+    end
+    -- The dead mend only on their own ground: off blight nothing knits.
+    local HEALS_ON_BLIGHT = { field = "blight", of = "anyone", inside = {
+        modifiers = { { entity_stat = "health_regen", op = "flat", value = "0.1" } },
+    } }
+    define_entity("acolyte", {
+        race = "undead",
+        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        stats = {
+            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1, max_health = 40, sight_range = 4,
+            build_range = 1, harvest_range = 1,
+            health_regen = "0",
+            supply_cost = 1,
+            cargo_size = 1,
+        },
+        dying = FALLS,
+        cost = { gold = 50 },
+        train_time = 40,
+        -- It summons a structure and walks away; the site finishes on its own.
+        builder = {
+            builds = { "necropolis", "haunted_mine", "ziggurat", "crypt", "graveyard", "temple_of_the_damned" },
+            attendance = "unattended",
+        },
+        tags = { "biological" },
+        field_effects = { HEALS_ON_BLIGHT },
+        -- Ten gold every five seconds, straight to the stockpile, from the rim
+        -- of a haunted mine and nowhere else: a bare seam seats nobody.
+        resource_carrier = {
+            gold = {
+                capacity = 10, time = 100, banking = "direct",
+                sources = { types = { "haunted_mine" } },
+                presence = { attached = { berths = "crypt", stance = "still" } },
+            },
+        },
+    })
+
+    define_entity("ghoul", {
+        race = "undead",
+        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        stats = {
+            speed = "0.35", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 2, max_health = 60,
+            damage = 8, attack_range = 1, acquire_range = 6, attack_period = 8, damage_point = 4,
+            sight_range = 6, harvest_range = 1,
+            health_regen = "0",
+            supply_cost = 1,
+            cargo_size = 1,
+        },
+        dying = FALLS,
+        cost = { gold = 80 },
+        train_time = 50,
+        tags = { "biological" },
+        attack = { targets = GROUND | WATER },
+        field_effects = { HEALS_ON_BLIGHT },
+        -- A ghoul carrying wood is a ghoul not fighting: a running order is
+        -- what keeps it out of a fight it did not pick.
+        resource_carrier = {
+            wood = { capacity = 20, time = 20, presence = { present = { crew = 1 } } },
+        },
+    })
+
+    -- What comes out of a body: free, costing no supply, standing forty-five
+    -- seconds unless the research lengthens it, and leaving nothing when it
+    -- falls apart.
+    define_entity("skeleton", {
+        race = "undead",
+        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        stats = {
+            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 2, max_health = 50,
+            damage = 7, attack_range = 1, acquire_range = 6, attack_period = 14, damage_point = 6,
+            sight_range = 5,
+            health_regen = "0",
+            lifetime = 900,
+            cargo_size = 1,
+        },
+        dying = { time = 2 },
+        attack = { targets = GROUND | WATER },
+        field_effects = { HEALS_ON_BLIGHT },
+    })
+
+    -- The reach is the skill's own, as its price is: told to raise a body
+    -- across the field, a necromancer walks to six cells of it and then casts.
+    -- Raising the dead is not instant: the necromancer works at it for a
+    -- second, and is another half-second putting his arms down. Cut the order
+    -- short before the bodies rise and the energy is not spent.
+    define_skill("raise_dead", {
+        caster = "entity",
+        cooldown = 160,
+        cost = { energy = "40" },
+        -- Bodies, and bodies only: the filter names what it raises from rather
+        -- than taking whatever the field happens to leave lying.
+        target = { kind = "fallen", only = { types = { "corpse" } } },
+        range = 6,
+        cast = { point = 30, period = 45 },
+        effect = { summon = { entity = "skeleton", count = 2 } },
+    })
+    define_player_buff("skeletal_longevity", {
+        stack = "ignore",
+        entity_modifiers = { { entity_stat = "lifetime", op = "flat", value = "300" } },
+    })
+    define_research("skeletal_longevity", {
+        cost = { gold = 100 },
+        time = 200,
+        buff = "skeletal_longevity",
+    })
+
+    define_entity("necromancer", {
+        race = "undead",
+        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        stats = {
+            speed = "0.28", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 2, max_health = 45,
+            damage = 5, attack_range = 4, acquire_range = 6, attack_period = 20, damage_point = 8,
+            sight_range = 8,
+            max_energy = 100, energy_regen = "0.3",
+            health_regen = "0",
+            supply_cost = 2,
+            cargo_size = 1,
+        },
+        dying = FALLS,
+        cost = { gold = 100 },
+        train_time = 60,
+        tags = { "biological" },
+        attack = { targets = GROUND | WATER, projectile = "arrow" },
+        skills = { "raise_dead" },
+        field_effects = { HEALS_ON_BLIGHT },
+    })
+
+    -- The hall, in three forms. Each grows into the next through an interim
+    -- form that trains nothing, so the hall is silent while it rises; a change
+    -- ordered with acolytes queued is refused until the queue is empty.
+    local function hall(name, into, stats, extra)
+        local def = {
+            race = "undead",
+            location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
+            stats = stats,
+            dying = { time = 2 },
+            tags = { "building" },
+            trainer = { "acolyte" },
+            resource_storage = { "wood" },
+            field_sources = blights(6),
+        }
+        for key, value in pairs(extra or {}) do def[key] = value end
+        if into then
+            local rising = into .. "_rising"
+            def.morphs = { { into = into, via = rising, time = 120, placement = "revalidate", cancel = "refundable",
+                             cost = { resources = { gold = 150 } } } }
+            -- The hall rising is still the place wood is carried to, so a
+            -- ghoul with a load does not wait out the change. It wears the
+            -- tags of the hall it grew from, so a tier already reached stays
+            -- reached while the next one rises, and a tier is reached when
+            -- its growth finishes rather than when it starts.
+            define_entity(rising, {
+                race = "undead",
+                location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
+                stats = stats,
+                dying = { time = 2 },
+                tags = def.tags,
+                resource_storage = { "wood" },
+                field_sources = blights(6),
+            })
+        end
+        define_entity(name, def)
+    end
+    hall("necropolis", "halls_of_the_dead",
+        { max_health = 700, sight_range = 9, supply_provided = 10 },
+        { cost = { gold = 350 }, build_time = 180 })
+    -- A grown hall is never built, so it carries the necropolis's price and
+    -- every growth paid since, over the raising and the growing together.
+    hall("halls_of_the_dead", "black_citadel",
+        { max_health = 900, sight_range = 10, supply_provided = 10 },
+        { tags = { "building", "grown_hall" },
+          cost = { gold = 500 }, build_time = 300 })
+    -- The citadel is the one hall that answers for itself: bolts at whatever
+    -- comes into its reach, in the air as readily as on the ground.
+    hall("black_citadel", nil,
+        { max_health = 1100, sight_range = 11, supply_provided = 10,
+          damage = 18, attack_range = 8, acquire_range = 9, attack_period = 22, damage_point = 9 },
+        { tags = { "building", "grown_hall" },
+          cost = { gold = 650 }, build_time = 420,
+          attack = { targets = GROUND | WATER | AIR, projectile = "arrow" } })
+
+    -- Raised over a gold seam, the haunted mine is the mine from then on: it
+    -- takes the gold that was left, seats five acolytes round its rim, and
+    -- gives the seam back with whatever remains if it is torn down. A mine is
+    -- where the gold is, so it needs no blight — and makes its own.
+    define_entity("haunted_mine", {
+        race = "undead",
+        location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
+        stats = { max_health = 600, sight_range = 6 },
+        dying = { time = 2 },
+        cost = { gold = 100 },
+        build_time = 100,
+        tags = { "building" },
+        resource_source = { kind = "gold", depletion = "destroy" },
+        overbuilds = "gold_mine",
+        -- Five spots in a star about the mine's middle, two on its own ground
+        -- and three a half-cell outside it, so five acolytes at work stand
+        -- the points of one.
+        berths = { crypt = { points = {
+            { "1.0", "2.2" }, { "-0.1", "1.4" }, { "0.3", "0.0" }, { "1.7", "0.0" }, { "2.1", "1.4" },
+        }, slots = 5 } },
+        field_sources = blights(4),
+    })
+
+    -- Supply that hardens: a ziggurat feeds ten, and for a hundred gold it
+    -- becomes a tower that still feeds ten and shoots. The spirit tower
+    -- answers everything; the nerubian one is the heavier gun, and flat.
+    define_entity("ziggurat", {
+        race = "undead",
+        location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
+        stats = { max_health = 300, sight_range = 6, supply_provided = 10 },
+        dying = { time = 2 },
+        cost = { gold = 80, wood = 30 },
+        build_time = 100,
+        tags = { "building" },
+        field_placement = { ON_BLIGHT },
+        field_sources = blights(4),
+        morphs = {
+            { into = "spirit_tower", time = 70, placement = "revalidate", cancel = "refundable",
+              cost = { resources = { gold = 100 } },
+              requires = { { entity_type = "graveyard" } } },
+            { into = "nerubian_tower", time = 70, placement = "revalidate", cancel = "refundable",
+              cost = { resources = { gold = 120, wood = 40 } },
+              requires = { { entity_type = "graveyard" } } },
+        },
+    })
+    -- A tower is only ever reached by hardening a ziggurat, so it carries the
+    -- ziggurat's price and the hardening's on top of it, over the raising and
+    -- the hardening together.
+    local function tower(name, stats, attack, cost, build_time)
+        define_entity(name, {
+            race = "undead",
+            location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
+            stats = stats,
+            dying = { time = 2 },
+            tags = { "building" },
+            attack = attack,
+            cost = cost,
+            build_time = build_time,
+            field_placement = { ON_BLIGHT },
+            field_sources = blights(4),
+        })
+    end
+    tower("spirit_tower",
+        { max_health = 400, sight_range = 8, supply_provided = 10,
+          damage = 14, attack_range = 7, acquire_range = 8, attack_period = 18, damage_point = 7 },
+        { targets = GROUND | WATER | AIR, projectile = "arrow" },
+        { gold = 180, wood = 30 }, 170)
+    tower("nerubian_tower",
+        { max_health = 500, sight_range = 8, supply_provided = 10,
+          damage = 22, attack_range = 6, acquire_range = 7, attack_period = 24, damage_point = 10 },
+        { targets = GROUND | WATER, projectile = "cannonball" },
+        { gold = 200, wood = 70 }, 170)
+
+    define_entity("crypt", {
+        race = "undead",
+        location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
+        stats = { max_health = 500, sight_range = 6 },
+        dying = { time = 2 },
+        cost = { gold = 200, wood = 50 },
+        build_time = 120,
+        tags = { "building" },
+        trainer = { "ghoul" },
+        field_placement = { ON_BLIGHT },
+        field_sources = blights(4),
+    })
+
+    -- The graveyard unlocks the towers, and nothing else: the bodies it is
+    -- named for come from the field.
+    define_entity("graveyard", {
+        race = "undead",
+        location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
+        stats = { max_health = 300, sight_range = 5 },
+        dying = { time = 2 },
+        cost = { gold = 120, wood = 40 },
+        build_time = 90,
+        tags = { "building" },
+        field_placement = { ON_BLIGHT },
+        field_sources = blights(4),
+    })
+
+    define_entity("temple_of_the_damned", {
+        race = "undead",
+        location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
+        stats = { max_health = 450, sight_range = 6 },
+        dying = { time = 2 },
+        cost = { gold = 250, wood = 100 },
+        build_time = 140,
+        tags = { "building" },
+        trainer = { "necromancer" },
+        researcher = { "skeletal_longevity" },
+        requires = { { tag = "grown_hall" } },
+        field_placement = { ON_BLIGHT },
+        field_sources = blights(4),
+    })
+
 "#;
 
 /// Loads all demo content from Lua into the registry, then validates it. Runs at

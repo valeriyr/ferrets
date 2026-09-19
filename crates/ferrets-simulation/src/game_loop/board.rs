@@ -12,7 +12,7 @@ use crate::{
     components::{
         entity_stats::StatsComponent,
         order_queue::{CancelPolicy, OrderQueueComponent, OrderState},
-        tags::TagsComponent,
+        owner,
         transport::{BoardComponent, BoardedComponent, TransporterComponent},
     },
     entity_def,
@@ -22,7 +22,7 @@ use crate::{
     session::GameSession,
     spawn,
 };
-use ferrets_content::{entity_stats::EntityStatId, transport::BoardingPolicy};
+use ferrets_content::entity_stats::EntityStatId;
 
 /// Whether `entity` may start this Board: its type rides and it operates, the
 /// transporter is there and operating, and it takes this entity aboard (see
@@ -197,25 +197,18 @@ pub(super) fn would_board(world: &World, entity: Entity, target: Entity) -> Resu
         return Err(Refusal::TargetUnfit);
     };
 
-    let allowed = match (
-        entity_def::owner(world, entity),
+    // Read from the holder: whom it admits is its own rule about its riders.
+    let allowed = owner::admits(
+        world.resource::<GameSession>(),
+        transporter.boarding(),
         entity_def::owner(world, target),
-    ) {
-        (Some(rider), Some(holder)) => match transporter.boarding() {
-            BoardingPolicy::Own => rider == holder,
-            BoardingPolicy::Allies => world.resource::<GameSession>().are_allied(rider, holder),
-        },
-        // A passenger belongs to somebody, and a neutral holder to nobody.
-        _ => false,
-    };
+        entity_def::owner(world, entity),
+    );
     if !allowed {
         return Err(Refusal::TargetUnfit);
     }
 
-    let entity_tags = world.entity(entity).get::<TagsComponent>();
-    if !transporter.admits(&entity_def.name, |tag| {
-        entity_tags.is_some_and(|tags| tags.contains(tag))
-    }) {
+    if !transporter.carries().admits(entity_def) {
         return Err(Refusal::TargetUnfit);
     }
 

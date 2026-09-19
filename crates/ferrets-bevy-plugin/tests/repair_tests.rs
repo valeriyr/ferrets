@@ -11,9 +11,10 @@ use ferrets_content::{
     costs,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
+    kinds::Kinds,
     location::Solidity,
     morph::{MorphCancel, MorphInterrupted, MorphPlacement, MorphReason, MorphTransition},
-    period::Period,
+    quantity::Quantity,
     registry::ContentRegistry,
     repair::{RepairCost, RepairRate},
     work::{Attachment, BerthStance, CrewLimit, WorkPresence},
@@ -932,7 +933,7 @@ fn app() -> App {
                 .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
                 .with_stat(EntityStatId::REPAIR_RANGE, FixedU64::ONE)
                 .with_repairer(
-                    ["flesh"],
+                    Kinds::tags(["flesh"]),
                     RepairRate::PerTick(FixedU64::from_num(5)),
                     WorkPresence::Present {
                         crew: CrewLimit::ONE,
@@ -951,7 +952,7 @@ fn app() -> App {
                 .with_morphs([MorphTransition::new(
                     "shuttered_forge",
                     None,
-                    Period::Constant(1),
+                    Quantity::Constant(1),
                     MorphPlacement::Reserve,
                     MorphCancel::Committed,
                     MorphInterrupted::Reverts,
@@ -1025,7 +1026,7 @@ fn app() -> App {
                 .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
                 .with_stat(EntityStatId::REPAIR_RANGE, FixedU64::from_num(2))
                 .with_repairer(
-                    ["building"],
+                    Kinds::tags(["building"]),
                     RepairRate::PerTick(FixedU64::from_num(5)),
                     WorkPresence::Present {
                         crew: CrewLimit::ONE,
@@ -1116,7 +1117,7 @@ fn repairer(
         _ => def,
     };
     def.with_repairer(
-        ["building"],
+        Kinds::tags(["building"]),
         RepairRate::Production,
         presence,
         false,

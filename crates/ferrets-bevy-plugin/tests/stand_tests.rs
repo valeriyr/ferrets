@@ -12,9 +12,9 @@ use ferrets_content::{
     field::{FieldAction, FieldDecay, FieldDef, FieldGrowth, FieldId, FieldSourceDef, FieldVision},
     location::Solidity,
     morph::{MorphCancel, MorphInterrupted, MorphPlacement, MorphReason, MorphTransition},
-    period::Period,
+    quantity::Quantity,
     registry::ContentRegistry,
-    skills::{EntityCastEffect, EntityCastTarget, SkillCaster, SkillDef},
+    skills::{Casting, EntityCastEffect, EntityCastTarget, Reach, SkillCaster, SkillDef},
     stand::StandingAct,
     work::{CrewLimit, WorkPresence},
 };
@@ -196,14 +196,14 @@ fn mover(name: &str) -> EntityTypeDef {
             FixedU64::from_num(360),
         )
         .with_health(20)
-        .with_dying(1, None)
+        .with_dying(1, [])
 }
 
 fn building(name: &str, side: u32, build_time: u32) -> EntityTypeDef {
     EntityTypeDef::new(name)
         .with_location(utils::GROUND, CellSize::new(side, side), Solidity::Solid)
         .with_health(100)
-        .with_dying(1, None)
+        .with_dying(1, [])
         .with_build_time(build_time)
 }
 
@@ -239,7 +239,7 @@ fn stand_app() -> App {
             MorphTransition::new(
                 into,
                 None,
-                Period::Constant(1),
+                Quantity::Constant(1),
                 MorphPlacement::Revalidate,
                 MorphCancel::Forfeit,
                 MorphInterrupted::Reverts,
@@ -266,6 +266,8 @@ fn stand_app() -> App {
                 caster: SkillCaster::Entity {
                     costs: Vec::new(),
                     target: EntityCastTarget::Position,
+                    reach: Reach::Wherever,
+                    casting: Casting::Instant,
                     effect: EntityCastEffect::Field {
                         field: blight,
                         radius: 1,

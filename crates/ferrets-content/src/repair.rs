@@ -1,10 +1,8 @@
 //! Content-defined repair capability: what an entity mends, and on what terms.
 
-use std::collections::BTreeSet;
-
 use ferrets_math::FixedU64;
 
-use crate::{costs::Cost, work::WorkPresence};
+use crate::{costs::Cost, kinds::Kinds, work::WorkPresence};
 
 /// How fast the work goes, before the repairer's `repair_speed` stat scales it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,9 +38,8 @@ pub enum RepairCost {
 /// mends them on.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepairerDef {
-    /// The target tags this entity will mend. A target carrying none of them is
-    /// refused.
-    repairs: BTreeSet<String>,
+    /// What this entity will mend.
+    repairs: Kinds,
     /// What sets the pace of the work.
     rate: RepairRate,
     /// Where the worker stands while it works.
@@ -59,23 +56,15 @@ pub struct RepairerDef {
 impl RepairerDef {
     /// Creates a new `RepairerDef` with the given data.
     ///
-    /// Panics if `repairs` is empty, contains an empty tag name, or the rate is a
-    /// non-positive flat amount.
+    /// Panics if the rate is a non-positive flat amount.
     pub fn new(
-        repairs: impl IntoIterator<Item = impl Into<String>>,
+        repairs: Kinds,
         rate: RepairRate,
         presence: WorkPresence,
         self_repair: bool,
         cost: RepairCost,
         patience: Option<u32>,
     ) -> Self {
-        let repairs: BTreeSet<String> = repairs.into_iter().map(Into::into).collect();
-
-        assert!(!repairs.is_empty(), "repairs must not be empty");
-        assert!(
-            repairs.iter().all(|tag| !tag.is_empty()),
-            "repaired tag names must not be empty"
-        );
         if let RepairRate::PerTick(health) = rate {
             assert!(
                 health > FixedU64::ZERO,
@@ -99,14 +88,10 @@ impl RepairerDef {
         self.rate
     }
 
-    /// Returns `true` if a target carrying `tags` is one this entity will mend.
-    pub fn mends(&self, tags: &BTreeSet<String>) -> bool {
-        self.repairs.intersection(tags).next().is_some()
-    }
-
-    /// Returns the target tags this entity mends.
-    pub fn repairs(&self) -> impl Iterator<Item = &str> {
-        self.repairs.iter().map(String::as_str)
+    /// What this entity will mend.
+    #[inline]
+    pub fn repairs(&self) -> &Kinds {
+        &self.repairs
     }
 
     /// Where the worker stands while it works.

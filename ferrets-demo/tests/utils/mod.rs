@@ -3,7 +3,7 @@
 use bevy::{app::FixedMain, ecs::system::RunSystemOnce, prelude::*};
 use ferrets_bevy_plugin::{PendingInput, SimulationPlugin};
 use ferrets_content::registry::ContentRegistry;
-use ferrets_demo::{content::CONTENT, minimap, render, scenario, view};
+use ferrets_demo::{content::CONTENT, minimap, render, ruleset, scenario, view};
 use ferrets_geometry::projection::Projection;
 
 use ferrets_math::{FixedI64, FixedU64, fixed_uvec2::FixedUVec2};
@@ -77,6 +77,7 @@ pub fn scenario_app(model: MovementModel) -> App {
             },
             DropPolicy::Automatic,
             FinishPolicy::Endless,
+            ruleset::demo(),
         ),
         game_map,
     ));
@@ -120,6 +121,7 @@ pub fn demo_map_app(model: MovementModel) -> App {
             },
             DropPolicy::Automatic,
             FinishPolicy::Endless,
+            ruleset::demo(),
         ),
         game_map,
     ));

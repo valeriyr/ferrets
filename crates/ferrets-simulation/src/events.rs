@@ -12,10 +12,11 @@ use bevy_ecs::prelude::*;
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 
 use ferrets_content::{
-    costs::Cost, entity_type_def::EntityTypeId, research::ResearchId, skills::SkillId,
+    costs::Cost, dying::DeathKind, entity_type_def::EntityTypeId, research::ResearchId,
+    skills::SkillId,
 };
 
-use crate::{session::player_id::PlayerId, simulation_id::SimulationId};
+use crate::{command::SkillTarget, session::player_id::PlayerId, simulation_id::SimulationId};
 
 /// How an entity came to be.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,10 +44,23 @@ pub enum SpawnCause {
         /// The breeder that bore it.
         by: SimulationId,
     },
-    /// What an entity left behind when it finished dying.
-    Remains {
+    /// Handed on by a death: a body left lying, or whatever burst out of the
+    /// dying thing.
+    Bequeathed {
         /// The entity that died here.
         of: SimulationId,
+    },
+    /// Raised from remains a cast spent.
+    Raised {
+        /// The caster that raised it.
+        by: SimulationId,
+        /// The remains it came out of.
+        from: SimulationId,
+    },
+    /// Called up by a cast that spent no body.
+    Summoned {
+        /// The caster that called it up.
+        by: SimulationId,
     },
     /// A resource source put back where the entity raised over it died, with
     /// what that entity had left of it. Paired with [`DeathCause::Overbuilt`],
@@ -134,6 +148,27 @@ pub enum DeathCause {
         /// The breeder.
         of: SimulationId,
     },
+    /// A timed life that ran out.
+    Expired,
+}
+
+/// The one place the simulation's causes meet the content vocabulary a type
+/// declares its remains against; a cause added later is caught here.
+impl From<DeathCause> for DeathKind {
+    fn from(cause: DeathCause) -> Self {
+        match cause {
+            DeathCause::Killed { .. } => DeathKind::Killed,
+            DeathCause::Depleted => DeathKind::Depleted,
+            DeathCause::Cancelled => DeathKind::Cancelled,
+            DeathCause::Consumed => DeathKind::Consumed,
+            DeathCause::Overbuilt => DeathKind::Overbuilt,
+            DeathCause::PassengerLost { .. } => DeathKind::CarriedDown,
+            DeathCause::Decayed => DeathKind::Decayed,
+            DeathCause::Orphaned { .. } => DeathKind::Orphaned,
+            DeathCause::Unseated { .. } => DeathKind::Unseated,
+            DeathCause::Expired => DeathKind::Expired,
+        }
+    }
 }
 
 /// Something the simulation announced.
@@ -261,10 +296,20 @@ pub enum SimulationEvent {
     SkillCast {
         /// Who cast it.
         caster: SimulationId,
-        /// What it was applied to; the caster itself for a self-cast.
-        target: SimulationId,
+        /// What it landed on — what stands there, or the ground itself; a
+        /// cast that spends a body names the ground it lay on.
+        target: SkillTarget,
         /// What was cast.
         skill: SkillId,
+    },
+    /// Remains spent by a cast, and gone from the map because of it.
+    RemainsSpent {
+        /// The remains that were spent.
+        remains: SimulationId,
+        /// Where they lay.
+        position: FixedUVec2,
+        /// The caster that spent them.
+        by: SimulationId,
     },
     /// An entity passed from one player to another, the entity itself
     /// unchanged.

@@ -2,9 +2,10 @@
 //! session.
 
 use ferrets_content::{
+    affiliation::Affiliation,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
-    period::Period,
+    quantity::Quantity,
     registry::ContentRegistry,
     requirement::Requirement,
     research::ResearchId,
@@ -98,9 +99,14 @@ impl ContentView {
                             "entity",
                             Some(match target {
                                 EntityCastTarget::Caster => "caster",
-                                EntityCastTarget::Ally => "ally",
-                                EntityCastTarget::Enemy => "enemy",
                                 EntityCastTarget::Position => "position",
+                                EntityCastTarget::Fallen { .. } => "fallen",
+                                EntityCastTarget::Standing { side, .. } => match side {
+                                    Affiliation::Own => "own",
+                                    Affiliation::Allied => "allied",
+                                    Affiliation::Enemy => "enemy",
+                                    Affiliation::Anyone => "anyone",
+                                },
                             }),
                         ),
                         SkillCaster::Player { .. } => ("player", None),
@@ -246,9 +252,7 @@ impl EntityContentView {
                 .location
                 .as_ref()
                 .map_or((1, 1), |l| (l.size().width, l.size().height)),
-            max_health: def
-                .base_stat(EntityStatId::MAX_HEALTH)
-                .map(|v| v.to_num::<u32>()),
+            max_health: def.base_stat_as_u32(EntityStatId::MAX_HEALTH),
             attack: def
                 .base_stat(EntityStatId::DAMAGE)
                 .zip(def.base_stat(EntityStatId::ATTACK_RANGE))
@@ -282,8 +286,8 @@ impl EntityContentView {
                             })
                             .collect(),
                         time: match transition.time() {
-                            Period::Constant(ticks) => Some(ticks),
-                            Period::Stat(_) => None,
+                            Quantity::Constant(ticks) => Some(ticks),
+                            Quantity::Stat(_) => None,
                         },
                     })
                     .collect()
@@ -292,8 +296,8 @@ impl EntityContentView {
                 breeds: brood.breeds().to_string(),
                 limit: u32::try_from(brood.limit()).expect("a brood limit fits in u32"),
                 period: match brood.period() {
-                    Period::Constant(ticks) => Some(ticks),
-                    Period::Stat(_) => None,
+                    Quantity::Constant(ticks) => Some(ticks),
+                    Quantity::Stat(_) => None,
                 },
             }),
         }

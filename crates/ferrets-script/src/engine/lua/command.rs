@@ -205,6 +205,9 @@ fn command(table: &Table, index: usize, names: &CommandNames) -> crate::Result<P
         "cancel_build" => Ok(PlayerCommand::CancelBuild {
             site: SimulationId(integer(table, index, "site")?),
         }),
+        "cancel_morph" => Ok(PlayerCommand::CancelMorph {
+            entity: SimulationId(integer(table, index, "entity")?),
+        }),
         "morph" => Ok(PlayerCommand::Morph {
             type_name: field(table, index, "type_name")?,
             flush: flush(table, index)?,

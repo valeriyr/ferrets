@@ -1,7 +1,7 @@
 //! Per-tick stat pipeline: fold active buffs into effective stats, age timed
 //! buffs, and advance the per-tick counters and pools that read those stats.
 
-use bevy_ecs::{entity::Entity, world::World};
+use bevy_ecs::{change_detection::Mut, entity::Entity, world::World};
 use ferrets_math::FixedU64;
 
 use crate::{
@@ -9,6 +9,7 @@ use crate::{
     components::{
         build::UnderConstructionComponent, energy::EnergyComponent, entity_buffs::BuffsComponent,
         entity_skills::SkillsComponent, entity_stats::StatsComponent, health::HealthComponent,
+        lifetime::LifetimeComponent,
     },
     entity_def,
     entity_index::EntityIndex,
@@ -43,6 +44,14 @@ pub fn apply_entity_buff(world: &mut World, entity: Entity, id: EntityBuffId) {
         let mut buffs = BuffsComponent::default();
         buffs.apply(id, stack_rule, duration);
         entity_mut.insert(buffs);
+    }
+}
+
+/// Takes every stack of `id` off `entity`. An entity that carries no buffs at
+/// all carries none of this one.
+pub fn remove_entity_buff(world: &mut World, entity: Entity, id: EntityBuffId) {
+    if let Some(mut buffs) = world.entity_mut(entity).get_mut::<BuffsComponent>() {
+        buffs.remove(id);
     }
 }
 
@@ -88,11 +97,16 @@ pub fn recompute_entity_stats(world: &mut World) {
         folds.push((entity, modifiers));
     }
 
-    for (entity, modifiers) in folds {
-        if let Some(mut stats) = world.entity_mut(entity).get_mut::<StatsComponent>() {
-            stats.recompute(&modifiers);
+    // The fold holds every stat at the floor its registration carries, and the
+    // registry is the only place that knows them — held aside for the pass so
+    // the entities it folds can be reached at the same time.
+    world.resource_scope(|world, registry: Mut<ContentRegistry>| {
+        for (entity, modifiers) in folds {
+            if let Some(mut stats) = world.entity_mut(entity).get_mut::<StatsComponent>() {
+                stats.recompute(&modifiers, registry.entity_stat_defs());
+            }
         }
-    }
+    });
 }
 
 /// Recomputes every player's effective stats: the player's own buffs fold
@@ -141,6 +155,11 @@ pub fn apply_player_buff(world: &mut World, player: PlayerId, id: PlayerBuffId) 
     world
         .resource_mut::<PlayerBuffs>()
         .apply(player, id, stack_rule, duration);
+}
+
+/// Takes the player-level buff `id` off `player`, however much of it was left.
+pub fn remove_player_buff(world: &mut World, player: PlayerId, id: PlayerBuffId) {
+    world.resource_mut::<PlayerBuffs>().remove(player, id);
 }
 
 /// Ages player-skill cooldowns by one tick. The buffs a cast applied age with
@@ -234,6 +253,33 @@ pub fn process_health_flow(world: &mut World) {
         if emptied {
             spawn::despawn_entity(world, entity, DeathCause::Decayed);
         }
+    }
+}
+
+/// Ages every timed life by one tick, ending the ones whose time is up.
+///
+/// Runs over the alive index, so the dying are already excluded. The age is
+/// compared against the *effective* stat, so a buff that lengthens a life keeps
+/// standing instances on their feet and one that shortens it takes them at
+/// once.
+pub fn process_lifetimes(world: &mut World) {
+    for (_, entity) in world.resource::<EntityIndex>().alive_entries() {
+        let Some(lifetime) = world.entity(entity).get::<LifetimeComponent>() else {
+            continue;
+        };
+        // A timed life is only ever fitted from the stat, so anything carrying
+        // one carries the stat.
+        let limit = entity_def::effective_stat_u32(world, entity, EntityStatId::LIFETIME);
+        let age = lifetime.age + 1;
+        if age >= limit {
+            spawn::despawn_entity(world, entity, DeathCause::Expired);
+            continue;
+        }
+        world
+            .entity_mut(entity)
+            .get_mut::<LifetimeComponent>()
+            .expect("the timed life read a moment ago is still the entity's own")
+            .age = age;
     }
 }
 

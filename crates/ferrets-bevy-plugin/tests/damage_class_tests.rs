@@ -3,7 +3,7 @@
 
 use bevy::prelude::*;
 use ferrets_content::{
-    attack::{AttackDef, Delivery, Weapon},
+    attack::{AttackDef, Delivery, Slain, Weapon},
     entity_type_def::EntityTypeDef,
     location::Solidity,
     registry::ContentRegistry,
@@ -96,7 +96,12 @@ fn app() -> App {
                 )
                 .with_health(50)
                 .with_attack(
-                    AttackDef::new(Weapon::new(utils::GROUND, Delivery::Instant, None)),
+                    AttackDef::new(Weapon::new(
+                        utils::GROUND,
+                        Delivery::Instant,
+                        None,
+                        Slain::Remains,
+                    )),
                     10,
                     1,
                     1,

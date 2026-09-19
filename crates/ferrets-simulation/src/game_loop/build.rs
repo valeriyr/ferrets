@@ -414,20 +414,6 @@ pub fn advance_sites_without_builder(world: &mut World) {
     }
 }
 
-/// Removes the construction marker from `building` and announces the
-/// completion, naming `builder` — whoever worked the completing tick, or the
-/// founder of a site that raised itself.
-fn complete_site(world: &mut World, building: Entity, builder: SimulationId) {
-    world
-        .entity_mut(building)
-        .remove::<UnderConstructionComponent>();
-    let announced = SimulationEvent::ConstructionCompleted {
-        building: entity_def::simulation_id(world, building),
-        builder,
-    };
-    world.resource_mut::<EventRecord>().emit(announced);
-}
-
 /// Tears down the unfinished `site` for `player` and refunds what it cost.
 /// Whoever is working it finds the site gone on its next tick and steps off.
 ///
@@ -445,6 +431,20 @@ pub fn cancel_site(world: &mut World, player: PlayerId, site: SimulationId) {
         return;
     }
     tear_down_site(world, building, site);
+}
+
+/// Removes the construction marker from `building` and announces the
+/// completion, naming `builder` — whoever worked the completing tick, or the
+/// founder of a site that raised itself.
+fn complete_site(world: &mut World, building: Entity, builder: SimulationId) {
+    world
+        .entity_mut(building)
+        .remove::<UnderConstructionComponent>();
+    let announced = SimulationEvent::ConstructionCompleted {
+        building: entity_def::simulation_id(world, building),
+        builder,
+    };
+    world.resource_mut::<EventRecord>().emit(announced);
 }
 
 /// Destroys an unfinished site and refunds what it cost, called by the last builder

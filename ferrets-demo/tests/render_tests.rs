@@ -15,7 +15,7 @@ use ferrets_demo::{
 use ferrets_math::facing::Facing;
 
 use ferrets_content::{
-    attack::{Delivery, Weapon},
+    attack::{Delivery, Slain, Weapon},
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     location::Solidity,
@@ -74,7 +74,10 @@ fn reveal_snaps_look_to_where_entity_reappeared() {
     face(&mut app, worker, Facing::WEST);
     record_tick(&mut app);
     draw(&mut app);
-    assert!(nose_of(rotation_of(&app, worker)).distance(WEST) < 1e-6);
+    assert!(
+        nose_of(rotation_of(&app, worker)).distance(WEST) < 1e-6,
+        "the sprite opens facing the way the entity faces"
+    );
 
     app.world_mut().entity_mut(worker).insert(HiddenComponent);
     face(&mut app, worker, Facing::EAST);
@@ -430,7 +433,7 @@ fn register_gun_wagon(app: &mut App) {
     let gun = registry.register_turret(
         "wagon_gun",
         TurretDef::new(
-            Weapon::new(ground, Delivery::Instant, None),
+            Weapon::new(ground, Delivery::Instant, None, Slain::Remains),
             TurretStats::default(),
             WeaponConduct::Halts,
         ),

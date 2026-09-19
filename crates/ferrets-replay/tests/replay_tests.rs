@@ -13,6 +13,7 @@ use ferrets_replay::{
 use ferrets_simulation::{
     command::PlayerCommand,
     movement_model::MovementModel,
+    ruleset::{RemainsLimit, Ruleset},
     session::{
         ai_vision::AiVision, elimination_scope::EliminationScope, finish_policy::FinishPolicy,
         player_id::PlayerId, player_slot::PlayerSlot, player_type::PlayerType,
@@ -170,6 +171,7 @@ fn header() -> ReplayHeader {
             finish_policy: FinishPolicy::LastStanding {
                 elimination: EliminationScope::Player,
             },
+            rules: Ruleset::new(RemainsLimit::Unbounded),
         }),
         MovementModel::Continuous,
         Projection::Isometric,

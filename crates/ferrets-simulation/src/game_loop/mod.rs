@@ -7,6 +7,7 @@ pub mod auto_engage;
 pub mod board;
 pub mod brood;
 pub mod build;
+pub mod cast;
 mod cast_cost;
 mod chase;
 mod crew;

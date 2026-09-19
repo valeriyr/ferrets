@@ -74,25 +74,6 @@ pub fn can_start(world: &World, entity: Entity, order: &Order) -> Result<(), Ref
     Ok(())
 }
 
-/// Whether `attacker`'s weapon can reach the layers `target` is answerable on.
-fn reaches(world: &World, attacker: Entity, target: Entity) -> bool {
-    targeting::reaches(
-        world
-            .resource::<ContentRegistry>()
-            .targets_of(entity_def::of(world, attacker)),
-        entity_def::of(world, target),
-    )
-}
-
-/// Whether any weapon the entity carries sends its shots to a cell rather than
-/// following a target.
-fn aims_at_cells(world: &World, entity: Entity) -> bool {
-    let registry = world.resource::<ContentRegistry>();
-    registry
-        .weapons_of(entity_def::of(world, entity))
-        .any(|weapon| registry.weapon_aims_at_cells(weapon))
-}
-
 /// Called once when an Attack order becomes the front `New` entry.
 ///
 /// Inserts the fight state and returns `InProcessing`, or `Finished`
@@ -455,4 +436,23 @@ pub(super) fn swing(
     if *phase >= stats.attack_period {
         *phase = 0;
     }
+}
+
+/// Whether `attacker`'s weapon can reach the layers `target` is answerable on.
+fn reaches(world: &World, attacker: Entity, target: Entity) -> bool {
+    targeting::reaches(
+        world
+            .resource::<ContentRegistry>()
+            .targets_of(entity_def::of(world, attacker)),
+        entity_def::of(world, target),
+    )
+}
+
+/// Whether any weapon the entity carries sends its shots to a cell rather than
+/// following a target.
+fn aims_at_cells(world: &World, entity: Entity) -> bool {
+    let registry = world.resource::<ContentRegistry>();
+    registry
+        .weapons_of(entity_def::of(world, entity))
+        .any(|weapon| registry.weapon_aims_at_cells(weapon))
 }

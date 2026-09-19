@@ -2,7 +2,10 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::session::{finish_policy::FinishPolicy, player_slot::PlayerSlot};
+use crate::{
+    ruleset::Ruleset,
+    session::{finish_policy::FinishPolicy, player_slot::PlayerSlot},
+};
 
 /// A lobby-made game — the counterpart of a scenario. Where a scenario is an
 /// authored package resolved by name, a skirmish has no identity of its own:
@@ -15,4 +18,6 @@ pub struct Skirmish {
     pub map: String,
     /// When the game ends on its own.
     pub finish_policy: FinishPolicy,
+    /// The rules its ticks run under.
+    pub rules: Ruleset,
 }

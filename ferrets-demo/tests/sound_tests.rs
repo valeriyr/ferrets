@@ -12,7 +12,7 @@ use bevy::{
     window::PrimaryWindow,
 };
 use ferrets_bevy_plugin::TickPacing;
-use ferrets_content::{registry::ContentRegistry, skills::SkillId};
+use ferrets_content::{attack::Slain, registry::ContentRegistry, skills::SkillId};
 use ferrets_demo::{
     debug::{self, DebugState, DebugText},
     input::InputMode,
@@ -22,6 +22,7 @@ use ferrets_demo::{
 use ferrets_geometry::cell_pos::CellPos;
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_simulation::{
+    command::SkillTarget,
     events::{DeathCause, EventRecord, SimulationEvent},
     movement_model::MovementModel,
     simulation_id::SimulationId,
@@ -34,14 +35,7 @@ fn kill_is_heard_where_it_happened() {
     let world = app.world_mut();
     let (victim, _) = utils::create_entity(world, "grunt", utils::at_cell(6, 6), Some(1)).unwrap();
     let (_, killer) = utils::create_entity(world, "grunt", utils::at_cell(5, 6), Some(0)).unwrap();
-    spawn::despawn_entity(
-        world,
-        victim,
-        DeathCause::Killed {
-            by: killer,
-            by_owner: Some(0),
-        },
-    );
+    spawn::despawn_killed(world, victim, killer, Some(0), Slain::Remains);
     play(&mut app);
 
     assert_eq!(
@@ -74,14 +68,7 @@ fn burst_of_cues_stops_at_ceiling() {
         let Some((victim, _)) = placed else {
             continue;
         };
-        spawn::despawn_entity(
-            world,
-            victim,
-            DeathCause::Killed {
-                by: SimulationId(0),
-                by_owner: Some(0),
-            },
-        );
+        spawn::despawn_killed(world, victim, SimulationId(0), Some(0), Slain::Remains);
     }
     play(&mut app);
 
@@ -195,7 +182,7 @@ fn cast_across_map_is_heard_at_both_ends() {
         .resource_mut::<EventRecord>()
         .emit(SimulationEvent::SkillCast {
             caster: mage,
-            target: victim,
+            target: SkillTarget::Entity(victim),
             skill,
         });
     play(&mut app);
@@ -217,7 +204,7 @@ fn self_cast_is_heard_once() {
         .resource_mut::<EventRecord>()
         .emit(SimulationEvent::SkillCast {
             caster: mage,
-            target: mage,
+            target: SkillTarget::Entity(mage),
             skill,
         });
     play(&mut app);

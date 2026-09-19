@@ -243,6 +243,31 @@ impl NavGrid {
         true
     }
 
+    /// Returns `true` if the terrain under every cell of the `size` footprint
+    /// at `origin` allows **all** layers in `mask`, whoever else is there.
+    ///
+    /// The question a footprint that claims no cells asks: it shares its ground
+    /// with whatever stands on it, so only the ground itself can refuse it.
+    /// Footprints reaching out of bounds always return `false`.
+    pub fn is_footprint_terrain_passable_by(
+        &self,
+        mask: impl Into<LayerMask>,
+        origin: CellPos,
+        size: CellSize,
+    ) -> bool {
+        let mask = mask.into();
+        let CellSize { width, height } = size;
+
+        for dy in 0..height {
+            for dx in 0..width {
+                if !self.is_terrain_passable_by(mask, CellPos::new(origin.x + dx, origin.y + dy)) {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
     /// Returns `true` if every cell of the `size` footprint at `origin` is
     /// statically free on **all** layers in `mask`, ignoring unit claims.
     ///

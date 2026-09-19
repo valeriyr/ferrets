@@ -6,11 +6,12 @@ use std::{cell::RefCell, rc::Rc};
 
 use ferrets_content::{
     annex::{AloneConduct, AnnexClaim, AnnexLife},
-    attack::{Delivery, Weapon},
+    attack::{Delivery, Slain, Weapon},
     berths::BerthGroup,
     brood::{Lingering, OrphanFate},
     build::BuilderAttendance,
     costs::Cost,
+    dying::{Bequest, LeftBy},
     entity_buffs::EntityBuffDef,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
@@ -18,16 +19,20 @@ use ferrets_content::{
         FieldDecay, FieldDef, FieldEffect, FieldEffectKind, FieldGrowth, FieldId, FieldPlacement,
         FieldSide, FieldSourceDef, FieldVision,
     },
+    kinds::{Kind, Kinds},
     morph::{MorphInterrupted, MorphReason, MorphTransition},
-    period::Period,
     player_buffs::PlayerBuffDef,
     projectile::ProjectileDef,
+    quantity::Quantity,
     registry::ContentRegistry,
     repair::{RepairCost, RepairRate},
     requirement::Requirement,
     research::{ResearchDef, ResearchId},
-    resource::{Banking, HarvestData, Sources},
-    skills::{EntityCastCost, EntityCastEffect, PlayerCastEffect, SkillCaster, SkillDef},
+    resource::{Banking, HarvestData},
+    skills::{
+        Casting, EntityCastCost, EntityCastEffect, EntityCastTarget, PlayerCastEffect, Reach,
+        SkillCaster, SkillDef,
+    },
     splash::SplashDef,
     stand::StandingAct,
     stats::{EntityModifier, ModifierOp, PlayerModifier},
@@ -112,8 +117,9 @@ pub(super) fn register(lua: &Lua, registry: &Rc<RefCell<ContentRegistry>>) -> ml
     let stats = Rc::clone(registry);
     globals.set(
         "define_entity_stat",
-        lua.create_function(move |_, name: String| {
-            stats.borrow_mut().register_entity_stat(name);
+        lua.create_function(move |_, (name, floor): (String, Value)| {
+            let floor = fixed_value("entity stat floor", &floor).map_err(mlua::Error::external)?;
+            stats.borrow_mut().register_entity_stat(name, floor);
             Ok(())
         })?,
     )?;
@@ -234,9 +240,11 @@ fn build_entity(
         }
     }
     if let Some(dying) = optional::<Table>(table, "dying")? {
-        let time = required::<u32>(&dying, "time")?;
-        let corpse = optional::<String>(&dying, "corpse")?;
-        def = def.with_dying(time, corpse.as_deref());
+        let leaves = parse_leaves(&dying)?;
+        def = match optional::<u32>(&dying, "time")? {
+            Some(time) => def.with_dying(time, leaves),
+            None => def.with_leaves(leaves),
+        };
     }
     if let Some(cost) = optional::<Table>(table, "cost")? {
         def = def.with_cost(pairs::<u32>(&cost, "cost")?);
@@ -251,13 +259,13 @@ fn build_entity(
         def = def.with_trainer(trainer);
     }
     if let Some(transporter) = optional::<Table>(table, "transporter")? {
-        let carries = required::<Vec<String>>(&transporter, "carries")?;
+        let carries = parse_kinds(&required::<Value>(&transporter, "carries")?, "carries")?;
         let boarding = required::<String>(&transporter, "boarding")?;
         let fate = required::<String>(&transporter, "fate")?;
         let conduct = required::<String>(&transporter, "conduct")?;
         def = def.with_transporter(
             carries,
-            content::boarding_policy(&boarding)?,
+            content::affiliation(&boarding)?,
             content::passenger_fate(&fate)?,
             content::passenger_conduct(&conduct)?,
         );
@@ -283,7 +291,7 @@ fn build_entity(
         def = def.with_builder(builds, builder_attendance(&attendance)?);
     }
     if let Some(repairer) = optional::<Table>(table, "repairer")? {
-        let repairs = required::<Vec<String>>(&repairer, "repairs")?;
+        let repairs = parse_kinds(&required::<Value>(&repairer, "repairs")?, "repairs")?;
         let presence = required::<Value>(&repairer, "presence")?;
         // Off unless declared, and an omitted patience waits indefinitely.
         let self_repair = optional::<bool>(&repairer, "self_repair")?.unwrap_or(false);
@@ -326,8 +334,9 @@ fn build_entity(
     }
     if let Some(brood) = optional::<Table>(table, "breeder")? {
         let breeds = required::<String>(&brood, "breeds")?;
-        let period = parse_period(
+        let period = parse_quantity(
             "brood period",
+            "tick",
             &required::<Value>(&brood, "period")?,
             registry,
         )?;
@@ -355,8 +364,8 @@ fn build_entity(
     // it reaches are required inside it — a weapon that reaches nothing could
     // never fire, and stating the rest without them says nothing.
     if let Some(attack) = optional::<Table>(table, "attack")? {
-        let (targets, delivery, splash) = parse_weapon(&attack, registry)?;
-        def = def.with_attack_def(targets, delivery, splash);
+        let (targets, delivery, splash, slain) = parse_weapon(&attack, registry)?;
+        def = def.with_attack_def(targets, delivery, splash, slain);
     }
     if let Some(turrets) = optional::<Vec<Table>>(table, "turrets")? {
         def = def.with_turrets(parse_turret_mounts(turrets, registry)?);
@@ -470,12 +479,111 @@ fn parse_projectile(table: &Table) -> crate::Result<ProjectileDef> {
     ))
 }
 
-/// Reads the weapon a block states: what it reaches, how its hit travels, and
-/// what that hit spreads over. Shared by the body's own weapon and every turret's.
+/// Reads what a cast is aimed at: `"caster"`, `"position"`, `"ally"`,
+/// `"enemy"` or `"fallen"` on their own, or any of the last three as a table
+/// with a filter — `{ kind = "ally", only = { tags = { "biological" } } }`.
+fn parse_cast_target(value: &Value) -> crate::Result<EntityCastTarget> {
+    let (kind, only) = match value {
+        Value::String(kind) => (kind.to_string_lossy(), Kinds::Any),
+        Value::Table(target) => {
+            let kind = required::<String>(target, "kind")?;
+            let only = match optional::<Value>(target, "only")? {
+                Some(only) => parse_kinds(&only, "cast target filter")?,
+                None => Kinds::Any,
+            };
+            (kind, only)
+        }
+        other => {
+            return Err(content::unexpected(
+                "skill target",
+                &["a target name", "a { kind = ..., only = ... } table"],
+                &found(other),
+            ));
+        }
+    };
+    match kind.as_str() {
+        "caster" => Ok(EntityCastTarget::Caster),
+        "position" => Ok(EntityCastTarget::Position),
+        "fallen" => Ok(EntityCastTarget::Fallen { kinds: only }),
+        // Anything else names whose it must be, in the same words every other
+        // capability uses.
+        whose => {
+            let side = content::affiliation(whose).map_err(|_| {
+                content::unexpected(
+                    "skill target",
+                    &[
+                        "'caster'",
+                        "'position'",
+                        "'fallen'",
+                        "'own'",
+                        "'allied'",
+                        "'enemy'",
+                        "'anyone'",
+                    ],
+                    &content::quoted(whose),
+                )
+            })?;
+            Ok(EntityCastTarget::Standing { side, kinds: only })
+        }
+    }
+}
+
+/// Reads a filter: `{ types = {...}, tags = {...} }`, or `"any"` for one that
+/// names everything. Which vocabulary each name is drawn from is said rather
+/// than guessed, since a type and a tag may share a name.
+fn parse_kinds(value: &Value, what: &str) -> crate::Result<Kinds> {
+    match value {
+        Value::String(any) if any == "any" => Ok(Kinds::Any),
+        Value::Table(kinds) => {
+            let mut named: Vec<Kind> = Vec::new();
+            for name in optional::<Vec<String>>(kinds, "types")?.unwrap_or_default() {
+                named.push(Kind::Type(name));
+            }
+            for name in optional::<Vec<String>>(kinds, "tags")?.unwrap_or_default() {
+                named.push(Kind::Tag(name));
+            }
+            Ok(Kinds::only(named))
+        }
+        other => Err(content::unexpected(
+            what,
+            &["'any'", "a { types = {...}, tags = {...} } table"],
+            &found(other),
+        )),
+    }
+}
+
+/// Reads what a death hands on: each entry names the entity type left standing,
+/// how many of it (one unless said), and the deaths that leave it — the
+/// engine's own rule unless the entry names them itself.
+fn parse_leaves(dying: &Table) -> crate::Result<Vec<Bequest>> {
+    let Some(leaves) = optional::<Vec<Table>>(dying, "leaves")? else {
+        return Ok(Vec::new());
+    };
+    let mut bequests = Vec::with_capacity(leaves.len());
+    for entry in leaves {
+        let entity_type = required::<String>(&entry, "entity")?;
+        let count = optional::<u32>(&entry, "count")?.unwrap_or(1);
+        let causes = match optional::<Vec<String>>(&entry, "on")? {
+            None => LeftBy::Ordinary,
+            Some(names) => LeftBy::Named(
+                names
+                    .iter()
+                    .map(|name| content::death_kind(name))
+                    .collect::<crate::Result<Vec<_>>>()?,
+            ),
+        };
+        bequests.push(Bequest::new(&entity_type, count, causes));
+    }
+    Ok(bequests)
+}
+
+/// Reads the weapon a block states: what it reaches, how its hit travels, what
+/// that hit spreads over, and what it leaves of what it kills. Shared by the
+/// body's own weapon and every turret's.
 fn parse_weapon(
     table: &Table,
     registry: &ContentRegistry,
-) -> crate::Result<(LayerMask, Delivery, Option<SplashDef>)> {
+) -> crate::Result<(LayerMask, Delivery, Option<SplashDef>, Slain)> {
     let targets = required::<u32>(table, "targets")?;
     let delivery = match optional::<String>(table, "projectile")? {
         None => Delivery::Instant,
@@ -502,13 +610,17 @@ fn parse_weapon(
             ))
         }
     };
-    Ok((LayerMask::from(targets), delivery, splash))
+    let slain = match optional::<String>(table, "slain")? {
+        None => Slain::Remains,
+        Some(slain) => content::slain(&slain)?,
+    };
+    Ok((LayerMask::from(targets), delivery, splash, slain))
 }
 
 /// Reads one turret: the weapon it fires, which of the mounting type's stats each
 /// of its numbers reads, and whether it works a target while the body walks.
 fn parse_turret(table: &Table, registry: &ContentRegistry) -> crate::Result<TurretDef> {
-    let (targets, delivery, splash) = parse_weapon(table, registry)?;
+    let (targets, delivery, splash, slain) = parse_weapon(table, registry)?;
     let conduct = match optional::<String>(table, "conduct")? {
         None => WeaponConduct::Halts,
         Some(conduct) => content::weapon_conduct(&conduct)?,
@@ -533,7 +645,7 @@ fn parse_turret(table: &Table, registry: &ContentRegistry) -> crate::Result<Turr
         }
     }
     Ok(TurretDef::new(
-        Weapon::new(targets, delivery, splash),
+        Weapon::new(targets, delivery, splash, slain),
         stats,
         conduct,
     ))
@@ -664,9 +776,9 @@ fn harvest_kinds(carrier: &Table) -> crate::Result<Vec<(String, HarvestData)>> {
             required::<u32>(&data, "time")?,
             work_presence(&required::<Value>(&data, "presence")?)?,
             banking,
-            match optional::<Vec<String>>(&data, "sources")? {
-                Some(names) => Sources::only(names),
-                None => Sources::Any,
+            match optional::<Value>(&data, "sources")? {
+                Some(sources) => parse_kinds(&sources, "harvest sources")?,
+                None => Kinds::Any,
             },
         );
         carries.push((kind, harvest));
@@ -970,9 +1082,10 @@ fn field_error(field: &str, error: mlua::Error) -> ScriptError {
 }
 
 /// Reads one skill: `{ caster, cooldown, ... }` — the `caster` arm decides the
-/// remaining fields. An entity cast reads `{ cost?, target, effect }`; a
-/// player cast reads `{ cost?, effect }` and takes no target (the cast lands
-/// on the casting player). A missing `cost` block is a free skill.
+/// remaining fields. An entity cast reads `{ cost?, target, range?, effect }`;
+/// a player cast reads `{ cost?, effect }` and takes no target (the cast lands
+/// on the casting player). A missing `cost` block is a free skill, and a
+/// missing `range` a cast that lands from wherever the caster stands.
 fn parse_skill(table: &Table, registry: &ContentRegistry) -> crate::Result<SkillDef> {
     let cooldown = required::<u32>(table, "cooldown")?;
     let caster = match required::<String>(table, "caster")?.as_str() {
@@ -981,7 +1094,9 @@ fn parse_skill(table: &Table, registry: &ContentRegistry) -> crate::Result<Skill
                 Some(cost) => parse_entity_cast_cost(&cost)?,
                 None => Vec::new(),
             },
-            target: content::entity_cast_target(&required::<String>(table, "target")?)?,
+            target: parse_cast_target(&required::<Value>(table, "target")?)?,
+            reach: parse_reach(table, registry)?,
+            casting: parse_casting(table, registry)?,
             effect: parse_entity_effect(&required::<Table>(table, "effect")?, registry)?,
         },
         "player" => {
@@ -1059,23 +1174,30 @@ fn parse_entity_cast_cost(cost: &Table) -> crate::Result<Vec<EntityCastCost>> {
     Ok(costs)
 }
 
-/// Reads a time declared as a tick count or as `{ stat = ... }` naming a
-/// registered entity stat.
-fn parse_period(what: &str, value: &Value, registry: &ContentRegistry) -> crate::Result<Period> {
+/// Reads a number declared as a count of `unit`s or as `{ stat = ... }` naming
+/// a registered entity stat.
+fn parse_quantity(
+    what: &str,
+    unit: &str,
+    value: &Value,
+    registry: &ContentRegistry,
+) -> crate::Result<Quantity> {
     match value {
-        Value::Integer(ticks) => Ok(Period::Constant(u32::try_from(*ticks).map_err(|_| {
-            ScriptError::ContentError(format!("{what} {ticks} must be a non-negative tick count"))
+        Value::Integer(count) => Ok(Quantity::Constant(u32::try_from(*count).map_err(|_| {
+            ScriptError::ContentError(format!(
+                "{what} {count} must be a non-negative {unit} count"
+            ))
         })?)),
-        Value::Table(time) => {
-            let name = required::<String>(time, "stat")?;
+        Value::Table(named) => {
+            let name = required::<String>(named, "stat")?;
             let stat = registry.entity_stat(&name).ok_or_else(|| {
                 ScriptError::ContentError(format!("{what} stat '{name}' is not defined"))
             })?;
-            Ok(Period::Stat(stat))
+            Ok(Quantity::Stat(stat))
         }
         other => Err(content::unexpected(
             what,
-            &["a tick count", "a { stat = ... } table"],
+            &[&format!("a {unit} count"), "a { stat = ... } table"],
             &found(other),
         )),
     }
@@ -1095,7 +1217,12 @@ fn parse_morphs(
     for entry in morphs {
         let into = required::<String>(&entry, "into")?;
         let via = optional::<String>(&entry, "via")?;
-        let time = parse_period("morph time", &required::<Value>(&entry, "time")?, registry)?;
+        let time = parse_quantity(
+            "morph time",
+            "tick",
+            &required::<Value>(&entry, "time")?,
+            registry,
+        )?;
         let placement = content::morph_placement(&required::<String>(&entry, "placement")?)?;
         let cancel = content::morph_cancel(&required::<String>(&entry, "cancel")?)?;
         let interrupted = match optional::<String>(&entry, "interrupted")? {
@@ -1133,9 +1260,45 @@ fn parse_player_cast_cost(cost: &Table) -> crate::Result<Cost> {
     Ok(pairs::<u32>(&resources, "resources")?.into_iter().collect())
 }
 
+/// Reads how long a cast holds its caster: `cast = { point = ..., period = ... }`
+/// in ticks or as `{ stat = ... }` tables, or nothing at all for a cast that
+/// lands at once. An omitted `period` is the point itself — no recovery.
+fn parse_casting(table: &Table, registry: &ContentRegistry) -> crate::Result<Casting> {
+    let Some(cast) = optional::<Table>(table, "cast")? else {
+        return Ok(Casting::Instant);
+    };
+    let point = parse_quantity(
+        "cast point",
+        "tick",
+        &required::<Value>(&cast, "point")?,
+        registry,
+    )?;
+    let period = match optional::<Value>(&cast, "period")? {
+        Some(period) => parse_quantity("cast period", "tick", &period, registry)?,
+        None => point,
+    };
+    Ok(Casting::Delayed { point, period })
+}
+
+/// Reads how close a cast is made from: a cell count, a `{ stat = ... }` table
+/// naming a registered entity stat, or nothing at all for a cast that lands
+/// from wherever the caster stands.
+fn parse_reach(table: &Table, registry: &ContentRegistry) -> crate::Result<Reach> {
+    match optional::<Value>(table, "range")? {
+        None => Ok(Reach::Wherever),
+        Some(range) => Ok(Reach::Within(parse_quantity(
+            "cast range",
+            "cell",
+            &range,
+            registry,
+        )?)),
+    }
+}
+
 /// Reads an entity cast's effect: exactly one of `apply_buff`, `remove_buff`,
-/// `damage`, `heal`, `field`. Buff names resolve in the entity-buff registry,
-/// field names in the field registry.
+/// `damage`, `heal`, `field`, `watch`, `summon`. Buff names resolve in the
+/// entity-buff registry, field names in the field registry, and a summoned type
+/// in the entity registry.
 fn parse_entity_effect(
     table: &Table,
     registry: &ContentRegistry,
@@ -1165,9 +1328,18 @@ fn parse_entity_effect(
             radius: required::<u32>(&watch, "radius")?,
             duration: required::<u32>(&watch, "duration")?,
         })
+    } else if let Some(summon) = optional::<Table>(table, "summon")? {
+        let name = required::<String>(&summon, "entity")?;
+        let entity_type = registry.type_id(&name).ok_or_else(|| {
+            ScriptError::ContentError(format!("entity type '{name}' is not defined"))
+        })?;
+        Ok(EntityCastEffect::Summon {
+            entity_type,
+            count: required::<u32>(&summon, "count")?,
+        })
     } else {
         Err(ScriptError::ContentError(
-            "skill effect must be one of apply_buff, remove_buff, damage, heal, field, or watch"
+            "skill effect must be one of apply_buff, remove_buff, damage, heal, field, watch, or summon"
                 .to_string(),
         ))
     }
@@ -1304,7 +1476,7 @@ fn parse_on_stand(acts: &[Table], registry: &ContentRegistry) -> crate::Result<V
 
 /// Reads the `docks` list: each entry the cell offset `at` its annex stands
 /// on and the annex types it `accepts`.
-fn parse_docks(docks: Vec<Table>) -> crate::Result<Vec<(CellPos, Vec<String>)>> {
+fn parse_docks(docks: Vec<Table>) -> crate::Result<Vec<(CellPos, Kinds)>> {
     let mut out = Vec::with_capacity(docks.len());
     for dock in docks {
         let at = required::<Table>(&dock, "at")?;
@@ -1314,7 +1486,10 @@ fn parse_docks(docks: Vec<Table>) -> crate::Result<Vec<(CellPos, Vec<String>)>> 
             at.get::<u32>(2)
                 .map_err(|error| field_error("dock y", error))?,
         );
-        out.push((at, required::<Vec<String>>(&dock, "accepts")?));
+        out.push((
+            at,
+            parse_kinds(&required::<Value>(&dock, "accepts")?, "dock accepts")?,
+        ));
     }
     Ok(out)
 }
@@ -1434,7 +1609,7 @@ fn parse_field_placement(
             ) {
                 (Some(name), None) => Ok(FieldPlacement::Requires {
                     field: resolve(name)?,
-                    of: content::field_affiliation(&required::<String>(entry, "of")?)?,
+                    of: content::affiliation(&required::<String>(entry, "of")?)?,
                     coverage: content::field_coverage(&required::<String>(entry, "coverage")?)?,
                 }),
                 (None, Some(name)) => Ok(FieldPlacement::Forbids {
@@ -1473,7 +1648,7 @@ fn parse_field_effects(
             let kind = parse_field_effect_kind(value, registry)?;
             Ok(FieldEffect::new(
                 field_id(entry, registry)?,
-                content::field_affiliation(&required::<String>(entry, "of")?)?,
+                content::affiliation(&required::<String>(entry, "of")?)?,
                 side,
                 kind,
             ))

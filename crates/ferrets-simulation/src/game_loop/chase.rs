@@ -121,19 +121,6 @@ pub fn bearing_to(
     Facing::of(nearest_point_on(target, target_size, middle) - middle)
 }
 
-/// The point of the footprint at `origin`/`size` closest to `from`, clamping each
-/// axis into the footprint's span. Continuous rather than per-cell, so a unit part
-/// way across a cell turns smoothly instead of in steps.
-fn nearest_point_on(origin: FixedUVec2, size: CellSize, from: FixedVec2) -> FixedVec2 {
-    let span = |start: FixedI64, cells: u32, value: FixedI64| {
-        value.clamp(start, start + FixedI64::from_num(cells))
-    };
-    FixedVec2::new(
-        span(origin.x.to_num::<FixedI64>(), size.width, from.x),
-        span(origin.y.to_num::<FixedI64>(), size.height, from.y),
-    )
-}
-
 /// Like [`advance`], with the destination taken from a target entity's location.
 pub fn advance_to_entity(
     last_chase: &mut ChaseState,
@@ -154,6 +141,19 @@ pub fn advance_to_entity(
         destination_position,
         destination_size,
         range,
+    )
+}
+
+/// The point of the footprint at `origin`/`size` closest to `from`, clamping each
+/// axis into the footprint's span. Continuous rather than per-cell, so a unit part
+/// way across a cell turns smoothly instead of in steps.
+fn nearest_point_on(origin: FixedUVec2, size: CellSize, from: FixedVec2) -> FixedVec2 {
+    let span = |start: FixedI64, cells: u32, value: FixedI64| {
+        value.clamp(start, start + FixedI64::from_num(cells))
+    };
+    FixedVec2::new(
+        span(origin.x.to_num::<FixedI64>(), size.width, from.x),
+        span(origin.y.to_num::<FixedI64>(), size.height, from.y),
     )
 }
 

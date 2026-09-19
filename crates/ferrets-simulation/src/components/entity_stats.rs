@@ -9,7 +9,7 @@ use bevy_ecs::prelude::*;
 use ferrets_math::FixedU64;
 
 use ferrets_content::{
-    entity_stats::{self, EntityStatId},
+    entity_stats::{EntityStatDef, EntityStatId},
     stats::EntityModifier,
 };
 
@@ -64,12 +64,19 @@ impl StatsComponent {
     }
 
     /// Recomputes every present stat's effective value from its base and the
-    /// modifiers targeting it, holding the result at the stat's floor.
-    pub fn recompute(&mut self, modifiers: &[EntityModifier]) {
+    /// modifiers targeting it, holding each at the floor its registration
+    /// carries — `floors` by registration index, as the content registry keeps
+    /// them.
+    pub fn recompute(&mut self, modifiers: &[EntityModifier], stats: &[EntityStatDef]) {
         let targeting: Vec<_> = modifiers
             .iter()
             .map(|m| (m.stat.index(), m.op, m.magnitude))
             .collect();
-        self.0.recompute(&targeting, entity_stats::floor_of);
+        self.0.recompute(&targeting, |index| {
+            stats
+                .get(index)
+                .expect("every stat an entity carries was registered")
+                .floor()
+        });
     }
 }

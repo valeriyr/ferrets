@@ -11,8 +11,14 @@ use std::collections::{HashMap, HashSet};
 
 use bevy::prelude::*;
 use ferrets_content::{
-    entity_stats::EntityStatId, entity_type_def::EntityTypeDef, period::Period,
-    registry::ContentRegistry, resource::ResourceSourceDef, tags, turret::TurretMount,
+    entity_stats::EntityStatId,
+    entity_type_def::EntityTypeDef,
+    quantity::Quantity,
+    registry::ContentRegistry,
+    resource::ResourceSourceDef,
+    skills::{Casting, SkillCaster},
+    tags,
+    turret::TurretMount,
 };
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::{
@@ -21,16 +27,20 @@ use ferrets_math::{
     fixed_uvec2::FixedUVec2,
 };
 use ferrets_simulation::{
+    command::SkillTarget,
     components::{
         annex::{AnnexComponent, Docking},
         attached::AttachedComponent,
         brood::{BredComponent, BroodComponent},
         build::{BuildComponent, SiteWork, UnderConstructionComponent},
+        cast::{CastComponent, CastStage},
+        dying::{DyingComponent, RemainsComponent},
         energy::EnergyComponent,
         entity_info::EntityInfoComponent,
         entity_stats::StatsComponent,
         health::HealthComponent,
         hidden::HiddenComponent,
+        lifetime::LifetimeComponent,
         location::LocationComponent,
         morph::MorphComponent,
         order_queue::OrderQueueComponent,
@@ -73,6 +83,8 @@ pub const LOOK_COLOR: Color = Color::srgb(1.0, 1.0, 0.4);
 /// building only the second ever moves. Warm rather than cool — the keep that
 /// carries four of them sits in water, which a cool line would sink into.
 pub const BEARING_COLOR: Color = Color::srgb(1.0, 0.45, 0.25);
+/// What a body on the ground is drawn in: grey, and fading as it decays.
+pub const REMAINS_COLOR: Color = Color::srgba(0.45, 0.44, 0.42, 1.0);
 
 /// Screen pixels per grid cell.
 pub const CELL_PX: f32 = 32.0;
@@ -456,6 +468,10 @@ enum Shape {
     Triangle,
     /// Melee fighters — a diamond.
     Diamond,
+    /// The raised dead — a darkened diamond wearing pale ribs across it.
+    Skeleton,
+    /// The swarm's spawn — a small wedge with a pale bud on its nose.
+    Spawn,
     /// Siege units (those whose hits burst) — a pentagon.
     Pentagon,
     /// Workers, and the big rock — a circle.
@@ -497,6 +513,11 @@ enum Shape {
     /// Armed towers — the watch tower's silhouette with a darker four-point
     /// turret on the lookout.
     GuardTower,
+    /// The spirit tower — a base bearing a pale orb in a halo, with nothing
+    /// solid on the lookout at all.
+    SpiritTower,
+    /// The nerubian tower — a base bearing a dark body crouched on four legs.
+    NerubianTower,
     /// Growths — the creep tumor and the cocoon — a disc bearing a darker core.
     Pod,
     /// The pylon — a square base bearing a lighter crystal, a diamond standing
@@ -519,6 +540,12 @@ enum Shape {
         /// Whether this is the planted form.
         sieged: bool,
     },
+    /// The undead hall grown once — a keep between two dark spires under a
+    /// pale lintel.
+    Halls,
+    /// The undead hall grown twice — a keep with dark towers at its corners
+    /// and a pale keep standing at its heart.
+    Citadel,
     /// Main buildings and resource sources — a square.
     Square,
 }
@@ -526,14 +553,22 @@ enum Shape {
 /// Picks a shape from the entity type name. Add new types here.
 fn shape_for(type_name: &str) -> Shape {
     match type_name {
-        "peasant" | "peon" | "drone" | "probe" | "wisp" | "scv" => Shape::Circle,
-        "grunt" | "swarmling" | "ravager" | "zealot" | "huntress" => Shape::Diamond,
+        "peasant" | "peon" | "drone" | "probe" | "wisp" | "scv" | "acolyte" => Shape::Circle,
+        "grunt" | "swarmling" | "ravager" | "zealot" | "huntress" | "ghoul" => Shape::Diamond,
+        "skeleton" => Shape::Skeleton,
+        "hatchling" => Shape::Spawn,
         "archer" | "marine" => Shape::Triangle,
         "mortar" => Shape::Pentagon,
-        "medic" | "shaman" => Shape::Cross,
+        "medic" | "shaman" | "necromancer" => Shape::Cross,
         "ship" => Shape::Ship,
-        "training_camp" | "war_camp" | "spawning_pit" | "gateway" | "barracks"
-        | "barracks_aloft" => Shape::Hexagon,
+        "training_camp"
+        | "war_camp"
+        | "spawning_pit"
+        | "gateway"
+        | "barracks"
+        | "barracks_aloft"
+        | "crypt"
+        | "temple_of_the_damned" => Shape::Hexagon,
         "sea_fortress" => Shape::Fortress,
         "gryphon" => Shape::Gryphon { aloft: false },
         "gryphon_aloft" => Shape::Gryphon { aloft: true },
@@ -544,6 +579,8 @@ fn shape_for(type_name: &str) -> Shape {
         "siege_works" | "factory" | "factory_aloft" => Shape::Octagon,
         "watch_tower" => Shape::WatchTower,
         "guard_tower" | "photon_cannon" => Shape::GuardTower,
+        "spirit_tower" => Shape::SpiritTower,
+        "nerubian_tower" => Shape::NerubianTower,
         "tumor" | "cocoon" | "hive_cocoon" | "egg" => Shape::Pod,
         "larva" => Shape::Grub,
         "pylon" => Shape::Pylon,
@@ -552,7 +589,7 @@ fn shape_for(type_name: &str) -> Shape {
         // apart from the shape (see `uprooted`).
         "ancient_of_war" | "ancient_of_war_uprooted" => Shape::Hexagon,
         "ancient_protector" | "ancient_protector_uprooted" => Shape::GuardTower,
-        "entangled_mine" => Shape::EntangledMine,
+        "entangled_mine" | "haunted_mine" => Shape::EntangledMine,
         // The terran annexes and the tank. A lifted-off structure keeps its
         // grounded shape: the lift and its shadow are what say it is flying.
         "comsat_station" => Shape::Dish,
@@ -561,6 +598,12 @@ fn shape_for(type_name: &str) -> Shape {
         "tank" => Shape::Tank { sieged: false },
         "siege_tank" => Shape::Tank { sieged: true },
         "big_rock" => Shape::Circle,
+        // The undead hall wears its tier: the necropolis is a square like any
+        // first hall, and each form it grows into has one of its own — worn
+        // from the moment it starts rising, so a hall never reads as a form it
+        // has left behind.
+        "halls_of_the_dead" | "halls_of_the_dead_rising" => Shape::Halls,
+        "black_citadel" | "black_citadel_rising" => Shape::Citadel,
         _ => Shape::Square,
     }
 }
@@ -593,19 +636,33 @@ pub fn attach_sprites(
             &LocationComponent,
             Option<&OwnerComponent>,
             Option<&TurretsComponent>,
+            Option<&RemainsComponent>,
         ),
         Without<Renderable>,
     >,
 ) {
-    for (entity, info, location, owner, turret) in &query {
+    for (entity, info, location, owner, turret, corpse) in &query {
         let def = registry.def(info.type_id());
         let size = def.location.unwrap().size();
         let center = world_center(location.position, size) + lift(&registry, def);
-        let color = color_for(owner, def.resource_source.as_ref(), &session);
-        let radius = size.width.min(size.height) as f32 * CELL_PX * 0.45;
+        // Remains wear whoever fell there: the fallen type's silhouette, greyed
+        // and drawn small, so a field of bodies reads as bodies rather than as
+        // a crowd of whatever they were.
+        let (shape, color, scale): (Shape, Color, f32) = match corpse {
+            Some(corpse) => (
+                shape_for(registry.def(corpse.of).name.as_str()),
+                REMAINS_COLOR,
+                0.6,
+            ),
+            None => (
+                shape_for(info.type_name()),
+                color_for(owner, def.resource_source.as_ref(), &session),
+                1.0,
+            ),
+        };
+        let radius = size.width.min(size.height) as f32 * CELL_PX * 0.45 * scale;
 
         let mut entity = commands.entity(entity);
-        let shape = shape_for(info.type_name());
         match shape {
             Shape::Triangle => {
                 entity.insert((
@@ -833,6 +890,125 @@ pub fn attach_sprites(
                     parent.spawn((
                         Mesh2d(meshes.add(RegularPolygon::new(radius * 0.42, 4))),
                         MeshMaterial2d(materials.add(color.darker(0.1))),
+                        Transform::from_translation(Vec3::new(0.0, 0.0, 0.2)),
+                    ));
+                });
+            }
+            Shape::Spawn => {
+                // A wedge two thirds of a swarmling, tipped with a pale bud:
+                // plainly less than the thing it was too young to become.
+                entity.insert((
+                    Mesh2d(meshes.add(RegularPolygon::new(radius * 0.7, 3))),
+                    MeshMaterial2d(materials.add(color)),
+                ));
+                entity.with_children(|parent| {
+                    parent.spawn((
+                        Mesh2d(meshes.add(Circle::new(radius * 0.18))),
+                        MeshMaterial2d(materials.add(color.lighter(0.4))),
+                        Transform::from_translation(Vec3::new(0.0, radius * 0.3, 0.1)),
+                    ));
+                });
+            }
+            Shape::Halls => {
+                // A keep between two spires with a pale lintel across their
+                // heads: the hall that has grown once.
+                let px = Vec2::new(size.width as f32, size.height as f32) * CELL_PX * 0.85;
+                let spire = Vec2::new(radius * 0.22, radius * 1.1);
+                entity.insert(Sprite::from_color(color, px));
+                entity.with_children(|parent| {
+                    for side in [-0.62, 0.62] {
+                        parent.spawn((
+                            Sprite::from_color(color.darker(0.3), spire),
+                            Transform::from_translation(Vec3::new(radius * side, 0.0, 0.1)),
+                        ));
+                    }
+                    parent.spawn((
+                        Sprite::from_color(
+                            color.lighter(0.3),
+                            Vec2::new(radius * 1.55, radius * 0.2),
+                        ),
+                        Transform::from_translation(Vec3::new(0.0, radius * 0.5, 0.2)),
+                    ));
+                });
+            }
+            Shape::Citadel => {
+                // Towers at the corners about a keep standing on its point:
+                // the hall grown all the way, and the one that shoots.
+                let px = Vec2::new(size.width as f32, size.height as f32) * CELL_PX * 0.85;
+                let tower = Vec2::splat(radius * 0.38);
+                entity.insert(Sprite::from_color(color, px));
+                entity.with_children(|parent| {
+                    for corner in [(-0.62, -0.62), (-0.62, 0.62), (0.62, -0.62), (0.62, 0.62)] {
+                        parent.spawn((
+                            Sprite::from_color(color.darker(0.35), tower),
+                            Transform::from_translation(Vec3::new(
+                                radius * corner.0,
+                                radius * corner.1,
+                                0.1,
+                            )),
+                        ));
+                    }
+                    parent.spawn((
+                        Mesh2d(meshes.add(RegularPolygon::new(radius * 0.5, 4))),
+                        MeshMaterial2d(materials.add(color.lighter(0.3))),
+                        Transform::from_translation(Vec3::new(0.0, 0.0, 0.2)),
+                    ));
+                });
+            }
+            Shape::Skeleton => {
+                // The diamond every melee fighter wears, darkened and ribbed:
+                // what walked back up off the field reads as bone at a glance.
+                let bone = color.lighter(0.45);
+                entity.insert((
+                    Mesh2d(meshes.add(RegularPolygon::new(radius, 4))),
+                    MeshMaterial2d(materials.add(color.darker(0.2))),
+                ));
+                entity.with_children(|parent| {
+                    for (lane, span) in [(0.32, 0.5), (0.0, 0.85), (-0.32, 0.5)] {
+                        parent.spawn((
+                            Sprite::from_color(bone, Vec2::new(radius * span, radius * 0.14)),
+                            Transform::from_translation(Vec3::new(0.0, radius * lane, 0.1)),
+                        ));
+                    }
+                });
+            }
+            Shape::SpiritTower => {
+                // The tower's base under an orb in a halo: what shoots is a
+                // spirit, so nothing sits on the lookout.
+                let px = Vec2::new(size.width as f32, size.height as f32) * CELL_PX * 0.85;
+                entity.insert(Sprite::from_color(color, px));
+                entity.with_children(|parent| {
+                    parent.spawn((
+                        Mesh2d(meshes.add(Circle::new(radius * 0.62))),
+                        MeshMaterial2d(materials.add(color.lighter(0.2))),
+                        Transform::from_translation(Vec3::new(0.0, 0.0, 0.1)),
+                    ));
+                    parent.spawn((
+                        Mesh2d(meshes.add(Circle::new(radius * 0.32))),
+                        MeshMaterial2d(materials.add(color.lighter(0.55))),
+                        Transform::from_translation(Vec3::new(0.0, 0.0, 0.2)),
+                    ));
+                });
+            }
+            Shape::NerubianTower => {
+                // The base under a dark body on four legs: the heavier gun,
+                // and flat — nothing of it points up.
+                let px = Vec2::new(size.width as f32, size.height as f32) * CELL_PX * 0.85;
+                let leg = Vec2::new(radius * 0.16, radius * 1.35);
+                entity.insert(Sprite::from_color(color, px));
+                entity.with_children(|parent| {
+                    for quarter in 0..4 {
+                        let angle = std::f32::consts::FRAC_PI_4
+                            + quarter as f32 * std::f32::consts::FRAC_PI_2;
+                        parent.spawn((
+                            Sprite::from_color(color.darker(0.25), leg),
+                            Transform::from_translation(Vec3::new(0.0, 0.0, 0.1))
+                                .with_rotation(Quat::from_rotation_z(angle)),
+                        ));
+                    }
+                    parent.spawn((
+                        Mesh2d(meshes.add(Circle::new(radius * 0.42))),
+                        MeshMaterial2d(materials.add(color.darker(0.4))),
                         Transform::from_translation(Vec3::new(0.0, 0.0, 0.2)),
                     ));
                 });
@@ -1432,9 +1608,9 @@ fn pulse_progress(now: f32, started: u32) -> Option<f32> {
 /// Ring pulses marking skills that have just been cast.
 #[derive(Resource, Default)]
 pub struct SkillPulses {
-    /// Live pulses: the entity a skill was applied to, and the tick its cast was
+    /// Live pulses: what a skill landed on, and the tick its cast was
     /// announced on.
-    active: Vec<(SimulationId, u32)>,
+    active: Vec<(SkillTarget, u32)>,
 }
 
 /// Starts a pulse for every skill the simulation announced this tick, and drops
@@ -1462,8 +1638,9 @@ pub fn collect_skill_pulses(
 /// What a brief place-marker is standing for.
 #[derive(Clone, Copy)]
 enum PuffKind {
-    /// Something left remains here.
-    Remains,
+    /// A death left something standing here — a body, or whatever burst out of
+    /// the dying thing.
+    Bequeathed,
     /// Something went off the map here — boarded, or stepped inside.
     Hidden,
     /// Something came back onto the map here.
@@ -1474,7 +1651,7 @@ impl PuffKind {
     /// The ring's colour, so the three read apart at a glance.
     fn color(self, fade: f32) -> Color {
         match self {
-            PuffKind::Remains => Color::srgba(0.55, 0.5, 0.45, fade),
+            PuffKind::Bequeathed => Color::srgba(0.55, 0.5, 0.45, fade),
             PuffKind::Hidden => Color::srgba(0.45, 0.6, 0.85, fade),
             PuffKind::Revealed => Color::srgba(0.6, 0.85, 0.5, fade),
         }
@@ -1500,15 +1677,16 @@ pub fn collect_puffs(world: &mut World) {
             let marked = match event {
                 SimulationEvent::EntitySpawned {
                     entity,
-                    cause: SpawnCause::Remains { .. },
-                } => Some((*entity, PuffKind::Remains)),
+                    cause: SpawnCause::Bequeathed { .. },
+                } => Some((*entity, PuffKind::Bequeathed)),
                 SimulationEvent::EntityHidden { entity } => Some((*entity, PuffKind::Hidden)),
                 SimulationEvent::EntityRevealed { entity } => Some((*entity, PuffKind::Revealed)),
                 _ => None,
             };
             // The announcement names its subject; where it stands and how much
-            // ground it covers come from the subject itself. Remains begin their
-            // life dying, so the lookup has to accept that stage.
+            // ground it covers come from the subject itself. What a death leaves
+            // may be a body, which begins its life dying, so the lookup has to
+            // accept that stage as well as the standing one.
             if let Some((id, kind)) = marked
                 && let Some(entity) = world.resource::<EntityIndex>().any(id)
             {
@@ -1559,16 +1737,20 @@ pub fn draw_puffs(
     }
 }
 
-/// Draws an expanding ring on a unit for a moment after a skill is applied to it
-/// (run in `Update`).
+/// Draws an expanding ring on what a skill landed on for a moment after it
+/// goes off (run in `Update`).
 ///
-/// The ring marks what the skill landed on rather than who cast it — the caster
-/// itself for a self-cast, and the ally healed or the enemy struck otherwise. A
-/// target the local player cannot see draws nothing.
+/// The ring marks the aim rather than the caster: the thing struck, healed or
+/// buffed, and the ground itself for a cast that landed on a cell — which is
+/// what a body spent by a raise leaves behind to mark. An aim the local player
+/// cannot see draws nothing.
 pub fn draw_skill_pulses(
     mut gizmos: Gizmos,
     session: Res<GameSession>,
     fixed: Res<Time<Fixed>>,
+    grid: Res<VisibilityGrid>,
+    watch: Res<ObserverPerspective>,
+    reveal: Res<FogReveal>,
     mut pulses: ResMut<SkillPulses>,
     rendered: Query<
         (&EntityInfoComponent, &Transform, &Visibility),
@@ -1581,9 +1763,20 @@ pub fn draw_skill_pulses(
         .retain(|&(_, started)| pulse_progress(now, started).is_some());
 
     for &(target, started) in &pulses.active {
-        let Some((_, transform, _)) = rendered.iter().find(|(info, _, visibility)| {
-            info.id() == target && !matches!(visibility, Visibility::Hidden)
-        }) else {
+        let at = match target {
+            SkillTarget::Entity(id) => rendered
+                .iter()
+                .find(|(info, _, visibility)| {
+                    info.id() == id && !matches!(visibility, Visibility::Hidden)
+                })
+                .map(|(_, transform, _)| transform.translation),
+            SkillTarget::Position(position) => {
+                let cell = CellPos::from(position);
+                (reveal.0 || sees(&session, &watch, &grid, cell.x, cell.y))
+                    .then(|| world_center(position, CellSize::ONE))
+            }
+        };
+        let Some(at) = at else {
             continue;
         };
         // Expand and fade over the pulse's life.
@@ -1592,10 +1785,75 @@ pub fn draw_skill_pulses(
         };
         let radius = CELL_PX * (0.35 + 0.55 * progress);
         gizmos.circle_2d(
-            transform.translation.truncate(),
+            at.truncate(),
             radius,
             Color::srgba(1.0, 0.85, 0.35, 1.0 - progress),
         );
+    }
+}
+
+/// Draws the ring a caster closes while it works at a cast (run in `Update`).
+///
+/// A cast that is not instant holds its caster still for the ticks before the
+/// effect lands: the ring draws inward over that stretch and closes on the
+/// tick it goes off, so the work shows and not only its result. A caster the
+/// local player cannot see draws nothing.
+pub fn draw_casts(
+    mut gizmos: Gizmos,
+    registry: Res<ContentRegistry>,
+    casters: Query<
+        (
+            &CastComponent,
+            &OrderQueueComponent,
+            Option<&StatsComponent>,
+            &Transform,
+            &Visibility,
+        ),
+        (With<Renderable>, Without<HiddenComponent>),
+    >,
+) {
+    for (cast, orders, stats, transform, visibility) in &casters {
+        // Only while the caster is still working at it: past its point the
+        // cast has gone off, and what is left is the caster standing.
+        match cast.stage {
+            CastStage::Working if cast.phase > 0 => {}
+            CastStage::Working | CastStage::Holding => continue,
+        }
+        if matches!(visibility, Visibility::Hidden) {
+            continue;
+        }
+        let Some(point) = cast_point(&registry, orders, stats) else {
+            continue;
+        };
+        let progress = (cast.phase as f32 / point as f32).clamp(0.0, 1.0);
+        gizmos.circle_2d(
+            transform.translation.truncate(),
+            CELL_PX * (0.95 - 0.5 * progress),
+            Color::srgba(0.72, 0.45, 1.0, 0.25 + 0.6 * progress),
+        );
+    }
+}
+
+/// The tick of a cast's work the effect lands on, or `None` when what is being
+/// cast lands the moment it is ordered.
+fn cast_point(
+    registry: &ContentRegistry,
+    orders: &OrderQueueComponent,
+    stats: Option<&StatsComponent>,
+) -> Option<u32> {
+    let (skill, _) = orders
+        .0
+        .iter()
+        .find_map(|entry| entry.order.cast_params())?;
+    let SkillCaster::Entity { casting, .. } = &registry.skill_def(skill)?.caster else {
+        return None;
+    };
+    match casting {
+        Casting::Instant => None,
+        Casting::Delayed { point, .. } => match point {
+            Quantity::Constant(ticks) => Some(*ticks),
+            Quantity::Stat(stat) => stats?.effective_as_u32(*stat),
+        },
     }
 }
 
@@ -1895,10 +2153,11 @@ pub fn spawn_terrain_tiles(
     }
 }
 
-/// The tint a covered cell is drawn in, by field name: creep is shown
-/// whoever's it is, power only where it is the viewed player's own.
+/// The tint a covered cell is drawn in, by field name: creep and blight are
+/// shown whoever's they are, power only where it is the viewed player's own.
 pub(crate) const CREEP_TINT: Color = Color::srgba(0.55, 0.2, 0.65, 0.5);
 pub(crate) const POWER_TINT: Color = Color::srgba(0.25, 0.55, 1.0, 0.28);
+pub(crate) const BLIGHT_TINT: Color = Color::srgba(0.16, 0.16, 0.17, 0.6);
 
 /// The player whose own fields this node draws: the local player, or the
 /// side an observer is watching.
@@ -1919,11 +2178,14 @@ pub fn update_field_overlay(
 ) {
     let creep = registry.field("creep");
     let power = registry.field("power");
+    let blight = registry.field("blight");
     let viewed = viewed_player(&session, &watch);
     for (tile, mut sprite) in &mut tiles {
         let cell = CellPos::new(tile.x, tile.y);
         let color = if creep.is_some_and(|creep| !fields.covered(creep, cell).is_empty()) {
             CREEP_TINT
+        } else if blight.is_some_and(|blight| !fields.covered(blight, cell).is_empty()) {
+            BLIGHT_TINT
         } else if let (Some(power), Some(player)) = (power, viewed)
             && fields.covered(power, cell).contains(player)
         {
@@ -2069,6 +2331,10 @@ fn ghost_shape(type_name: &str, size: CellSize) -> GhostShape {
         Shape::Square
         | Shape::Triangle
         | Shape::Diamond
+        | Shape::Skeleton
+        | Shape::Spawn
+        | Shape::Halls
+        | Shape::Citadel
         | Shape::Pentagon
         | Shape::Ship
         | Shape::Cross
@@ -2078,6 +2344,8 @@ fn ghost_shape(type_name: &str, size: CellSize) -> GhostShape {
         | Shape::WarWagon
         | Shape::WatchTower
         | Shape::GuardTower
+        | Shape::SpiritTower
+        | Shape::NerubianTower
         | Shape::Pylon
         | Shape::EntangledMine
         | Shape::Dish
@@ -2204,6 +2472,7 @@ pub fn draw_work_links(
             | Order::Board { .. }
             | Order::Load { .. }
             | Order::Unload { .. }
+            | Order::Cast { .. }
             | Order::Die => continue,
         };
         let Some(end) = end else {
@@ -2410,7 +2679,8 @@ pub fn draw_work_markers(
     }
 }
 
-/// Draws slim bars over entities — energy, then health, then construction
+/// Draws slim bars over entities — energy, then health, then what is left of a
+/// timed life, then construction
 /// progress while a site goes up, then training progress with a dot per queued
 /// unit, then research progress, then a running form change's progress, then
 /// a breeder's progress toward its next birth — for whichever of those the
@@ -2430,6 +2700,7 @@ pub fn draw_status_bars(
             Option<&HealthComponent>,
             Option<&StatsComponent>,
             Option<&EnergyComponent>,
+            Option<&LifetimeComponent>,
             Option<&UnderConstructionComponent>,
             Option<&TrainQueueComponent>,
             Option<&TrainComponent>,
@@ -2449,6 +2720,7 @@ pub fn draw_status_bars(
         health,
         stats,
         energy,
+        lifetime,
         construction,
         queue,
         train,
@@ -2513,6 +2785,22 @@ pub fn draw_status_bars(
             y += 4.0;
         }
 
+        // What a summon has left of its time, under its health: a thin bar
+        // draining as it ages.
+        if let (Some(lifetime), Some(stats)) = (lifetime, stats)
+            && let Some(limit) = stats.effective_as_u32(EntityStatId::LIFETIME)
+            && limit > 0
+        {
+            let left = limit.saturating_sub(lifetime.age);
+            bar(
+                &mut gizmos,
+                left as f32 / limit as f32,
+                Color::srgb(0.75, 0.75, 0.85),
+                y,
+            );
+            y += 4.0;
+        }
+
         if let Some(construction) = construction {
             let time = def.build_time.unwrap_or(1).max(1);
             let fraction = construction.progress as f32 / time as f32;
@@ -2542,8 +2830,8 @@ pub fn draw_status_bars(
                 .iter()
                 .find(|transition| transition.into_type() == morph.into)
                 .map(|transition| match transition.time() {
-                    Period::Constant(ticks) => ticks,
-                    Period::Stat(id) => stats
+                    Quantity::Constant(ticks) => ticks,
+                    Quantity::Stat(id) => stats
                         .and_then(|stats| stats.effective(id))
                         .map_or(0, |time| time.to_num::<u32>()),
                 })
@@ -2559,8 +2847,8 @@ pub fn draw_status_bars(
             // terms; a brood at its limit holds its progress, and the bar
             // holds with it.
             let period = match breeder.period() {
-                Period::Constant(ticks) => ticks,
-                Period::Stat(id) => stats
+                Quantity::Constant(ticks) => ticks,
+                Quantity::Stat(id) => stats
                     .and_then(|stats| stats.effective(id))
                     .map_or(0, |time| time.to_num::<u32>()),
             }
@@ -2638,6 +2926,59 @@ pub fn tint_under_construction(
             && let Some(material) = materials.get_mut(&material.0)
         {
             material.color.set_alpha(alpha);
+        }
+    }
+}
+
+/// Fades every body on the ground as it decays, so a fresh corpse reads as
+/// fresher than one about to go (run in `Update`).
+///
+/// A site going up is tinted by the same means ([`tint_under_construction`]);
+/// the two never meet on one entity, since remains are never built.
+pub fn fade_remains(
+    registry: Res<ContentRegistry>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+    query: Query<
+        (
+            &MeshMaterial2d<ColorMaterial>,
+            &EntityInfoComponent,
+            &DyingComponent,
+            Option<&Children>,
+        ),
+        (With<Renderable>, With<RemainsComponent>),
+    >,
+    parts: Query<&MeshMaterial2d<ColorMaterial>, Without<RemainsComponent>>,
+) {
+    /// How faint the last tick of a body is drawn.
+    const FAINTEST: f32 = 0.2;
+
+    for (material, info, dying, children) in &query {
+        // A body's countdown is its `lifetime`, the stat the simulation seeded
+        // it from — not the dying time every other death runs down.
+        let decay = registry
+            .def(info.type_id())
+            .base_stat_as_u32(EntityStatId::LIFETIME)
+            .unwrap_or(1)
+            .max(1);
+        let left = dying.ticks_remaining as f32 / decay as f32;
+        let alpha = FAINTEST + (1.0 - FAINTEST) * left.clamp(0.0, 1.0);
+        // The parts a silhouette is drawn from carry their own materials — a
+        // medic's cross, a tower's turret — and a body fades whole or it reads
+        // as half a corpse.
+        let drawn = children
+            .into_iter()
+            .flatten()
+            .filter_map(|&child| parts.get(child).ok())
+            .chain(std::iter::once(material));
+        for material in drawn {
+            // Read first, write only on a change, as the construction tint does.
+            if materials
+                .get(&material.0)
+                .is_some_and(|m| m.color.alpha() != alpha)
+                && let Some(material) = materials.get_mut(&material.0)
+            {
+                material.color.set_alpha(alpha);
+            }
         }
     }
 }

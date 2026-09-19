@@ -3,6 +3,7 @@
 use ferrets_geometry::projection::Projection;
 use ferrets_simulation::{
     map_data::MapData,
+    ruleset::{RemainsLimit, Ruleset},
     scenario::{Scenario, ScenarioPlayer},
     session::{
         ai_vision::AiVision,
@@ -109,6 +110,7 @@ fn mission(players: Vec<ScenarioPlayer>) -> Scenario {
         judged_player: 0,
         map: scene_map(),
         stockpile: vec![],
+        rules: Ruleset::new(RemainsLimit::Unbounded),
         script: String::new(),
     }
 }

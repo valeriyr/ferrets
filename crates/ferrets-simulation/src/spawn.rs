@@ -4,7 +4,9 @@ use std::collections::BTreeMap;
 
 use bevy_ecs::{component::Component, entity::Entity, world::EntityWorldMut, world::World};
 use ferrets_content::{
+    attack::Slain,
     brood::{BreederDef, OrphanFate},
+    dying::{DeathKind, DyingDef},
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeId,
     location::LocationDef,
@@ -25,7 +27,7 @@ use crate::{
         attached::AttachedComponent,
         brood::{BredComponent, BroodComponent},
         build::OverbuiltComponent,
-        dying::{CorpseComponent, DiedComponent, DyingComponent},
+        dying::{DiedComponent, DyingComponent, Passing, RemainsComponent},
         energy::EnergyComponent,
         entity_info::EntityInfoComponent,
         entity_skills::SkillsComponent,
@@ -33,6 +35,7 @@ use crate::{
         field_source::FieldSourcesComponent,
         health::HealthComponent,
         hidden::HiddenComponent,
+        lifetime::LifetimeComponent,
         location::LocationComponent,
         morph::MorphComponent,
         movement::MoveComponent,
@@ -55,8 +58,9 @@ use crate::{
     map::{Map, OccupancyClass},
     movement_model::{self, MovementModel},
     order::Order,
+    ruleset::RemainsLimit,
     selection::Selection,
-    session::player_id::PlayerId,
+    session::{GameSession, player_id::PlayerId},
     simulation_id::{SimulationId, SimulationIdGenerator},
 };
 /// Look direction a freshly spawned entity starts with: south, the conventional
@@ -240,63 +244,143 @@ pub fn spawn_entity(
     Some((entity, id))
 }
 
-/// Spawns an entity of the given type as remains, directly in the dying state,
-/// at `position`.
+/// Sets down `count` of `type_name` around the footprint at `around`, as what
+/// `fallen` left behind.
 ///
-/// The entity never joins the alive world: it is not selectable or targetable,
-/// and is removed when its dying phase completes. Remains always occupy the
-/// navigation grid per their occupation mask — blocking rubble claims movement
-/// layers, walkable corpses use a layer moving entities do not collide with —
-/// so when the footprint cells are not free, no remains are left at all.
+/// The left type decides what it becomes: one tagged as remains is laid down
+/// ownerless and already dying, its `lifetime` its whole existence, remembering
+/// who fell there; anything else stands up as an ordinary entity of whoever
+/// owned the deceased. A `slain` of [`Slain::Nothing`] leaves no body — the
+/// weapon left nothing of it — and does not touch what else the death hands on.
 ///
-/// Only the components meaningful in the dying state are added: identity,
-/// location, the [`CorpseComponent`] marker, the order queue with its `Die`
-/// order, and the dying properties. Live-gameplay components from the type
-/// definition (health, movement, combat, …) are skipped — remains can never
-/// use them, and a freshly initialized value (e.g. full health on a corpse)
-/// would be false.
+/// Supply is never asked: what stands up here stands whatever the owner's
+/// ceiling says, and holds its cost from then on like any other entity.
 ///
-/// Returns `(entity, simulation_id)`, or `None` if `type_name` is not
-/// registered or the footprint is blocked.
+/// What stands up here is as new as anything trained, so its field sources
+/// start at their initial reach and grow from there.
 ///
-/// `position` must lie exactly on a cell's origin corner, like every rest
-/// position.
-pub(crate) fn spawn_corpse_entity(
+/// The deceased has already freed its footprint, so the search starts on the
+/// ground it was standing on and works outward; what claims no cells is laid
+/// down there whatever stands over it. Fewer free cells than asked for set down
+/// fewer: half a brood is better than none of it.
+pub(crate) fn spawn_bequest(
+    world: &mut World,
+    type_name: &str,
+    count: u32,
+    around: CellPos,
+    around_size: CellSize,
+    fallen: Fallen,
+    slain: Slain,
+) {
+    let (location_def, left) = {
+        let registry = world.resource::<ContentRegistry>();
+        let def = registry
+            .entity(type_name)
+            .expect("validated content leaves registered types");
+        let left = if def.is_remains() {
+            Left::Remains {
+                decay: def
+                    .base_stat_as_u32(EntityStatId::LIFETIME)
+                    .expect("a type tagged as remains carries the lifetime it lies for"),
+            }
+        } else {
+            Left::Entity
+        };
+        (
+            def.location.expect("a registered type stands somewhere"),
+            left,
+        )
+    };
+    match (left, slain) {
+        (Left::Remains { .. }, Slain::Nothing) => return,
+        (Left::Remains { .. }, Slain::Remains) | (Left::Entity, _) => {}
+    }
+
+    // The search knows what ground each of them needs: one that claims its
+    // cells takes the nearest free ones, one that shares them lies where it
+    // fell, under whoever is standing there. Either way it starts on the
+    // ground the deceased freed a moment ago.
+    let cells = world.resource::<Map>().find_placements_near(
+        around,
+        around_size,
+        &location_def,
+        count as usize,
+    );
+
+    for cell in cells {
+        let position = FixedUVec2::from(cell);
+        match left {
+            Left::Remains { decay } => {
+                spawn_remains(world, type_name, position, location_def, decay, fallen);
+            }
+            Left::Entity => {
+                spawn_entity(
+                    world,
+                    type_name,
+                    position,
+                    fallen.owner,
+                    SpawnCause::Bequeathed { of: fallen.id },
+                    FieldReach::Initial,
+                );
+            }
+        }
+    }
+}
+
+/// Lays one body down: an entity that never joins the alive world, is not
+/// selectable or targetable but by a cast that names remains, and is removed
+/// when its decay runs out.
+///
+/// Only the components meaningful to something lying on the ground are added:
+/// identity, location, the [`RemainsComponent`] memory of who fell here, the
+/// order queue with its `Die` order, and the decay. Live-gameplay components
+/// from the type definition (health, movement, combat, …) are skipped — remains
+/// can never use them, and a freshly initialized value (e.g. full health on a
+/// body) would be false.
+fn spawn_remains(
     world: &mut World,
     type_name: &str,
     position: FixedUVec2,
-    of: SimulationId,
-) -> Option<(Entity, SimulationId)> {
+    location_def: LocationDef,
+    decay: u32,
+    fallen: Fallen,
+) {
     debug_assert!(
         !movement_model::is_mid_crossing(position),
         "remains spawn at rest: position must lie exactly on a cell origin"
     );
-    let (type_id, location_def, dying_def, class) = {
+    if !room_for_remains(world) {
+        return;
+    }
+    let (type_id, class) = {
         let registry = world.resource::<ContentRegistry>();
-        let type_id = registry.type_id(type_name)?;
-        let type_def = registry.entity(type_name)?;
+        let type_def = registry
+            .entity(type_name)
+            .expect("the type was resolved a moment ago");
         (
-            type_id,
-            type_def.location?,
-            type_def.dying.clone(),
+            registry
+                .type_id(type_name)
+                .expect("the type was resolved a moment ago"),
             OccupancyClass::of(type_def),
         )
     };
 
     let location = LocationComponent::new(position, DEFAULT_FACING);
-    if !world
-        .resource::<Map>()
-        .can_place_entity(&location, &location_def)
+    // Remains that claim nothing are laid down whatever stands there: a mover
+    // in the cell a body falls in shares it with the body. Remains that do
+    // claim their cells — rubble — can genuinely be blocked.
+    if location_def.solidity().claims_cells()
+        && !world
+            .resource::<Map>()
+            .can_place_entity(&location, &location_def)
     {
-        return None;
+        return;
     }
     world
         .resource_mut::<Map>()
         .place_entity(&location, &location_def, class);
 
     let id = world.resource_mut::<SimulationIdGenerator>().generate();
-    let dying_time = dying_def.as_ref().map(|d| d.dying_time()).unwrap_or(0);
-
     let mut queue = OrderQueueComponent::default();
     queue.push(Order::Die, None);
 
@@ -304,22 +388,85 @@ pub(crate) fn spawn_corpse_entity(
         EntityInfoComponent::new(id, type_id, type_name),
         location,
         queue,
-        CorpseComponent,
+        RemainsComponent {
+            of: fallen.entity_type,
+            owner: fallen.owner,
+        },
         DyingComponent {
-            ticks_remaining: dying_time,
+            ticks_remaining: decay,
+            // Nothing sustains a body: what it rots into, it rots into by
+            // lying there long enough.
+            passing: Passing::Death {
+                kind: DeathKind::Decayed,
+                slain: Slain::Remains,
+            },
         },
     ));
     let entity = entity_mut.id();
 
-    world.resource_mut::<EntityIndex>().insert_dying(id, entity);
+    world
+        .resource_mut::<EntityIndex>()
+        .insert_remains(id, entity);
     world
         .resource_mut::<EventRecord>()
         .emit(SimulationEvent::EntitySpawned {
             entity: id,
-            cause: SpawnCause::Remains { of },
+            cause: SpawnCause::Bequeathed { of: fallen.id },
         });
+}
 
-    Some((entity, id))
+/// What a death hands on, once its type is resolved.
+#[derive(Debug, Clone, Copy)]
+enum Left {
+    /// A body, lying there for the ticks its type declares.
+    Remains {
+        /// Ticks it lies before it is gone, its type's `lifetime`.
+        decay: u32,
+    },
+    /// Anything else, standing up as an ordinary entity of whoever owned the
+    /// deceased.
+    Entity,
+}
+
+/// Who died, as what they left behind remembers them.
+#[derive(Clone, Copy)]
+pub(crate) struct Fallen {
+    /// The entity that died here.
+    pub id: SimulationId,
+    /// The type it wore.
+    pub entity_type: EntityTypeId,
+    /// Who owned it, if anyone.
+    pub owner: Option<PlayerId>,
+}
+
+/// Whether the rules leave room on the map for another body.
+///
+/// A death beyond the limit leaves none: what lies there already stays, and
+/// decay is what makes room again.
+fn room_for_remains(world: &World) -> bool {
+    match world.resource::<GameSession>().rules().remains() {
+        RemainsLimit::Unbounded => true,
+        RemainsLimit::AtMost(limit) => {
+            world.resource::<EntityIndex>().remains_count() < limit as usize
+        }
+    }
+}
+
+/// Takes a body off the map before its decay has run out — the counterpart of
+/// [`spawn_remains`].
+///
+/// Its cells are freed as the end of the decay would have freed them. Nothing
+/// is announced here: what takes a body announces the taking itself.
+pub(crate) fn despawn_remains(world: &mut World, entity: Entity) {
+    debug_assert!(
+        world.entity(entity).contains::<RemainsComponent>(),
+        "only remains are cleared away"
+    );
+
+    lift_footprint(world, entity);
+    let id = entity_def::simulation_id(world, entity);
+    world.resource_mut::<EntityIndex>().remove_dying(id);
+    world.despawn(entity);
 }
 
 /// Takes an entity off the map: frees its footprint and marks it hidden.
@@ -728,7 +875,7 @@ pub(crate) fn cover_source(world: &mut World, source: Entity, site: Entity) {
 /// A caller uncovers once the entity's own footprint is off the grid. When
 /// those cells are no longer free even so — something walked onto ground the
 /// cover never claimed — the source does not come back at all, the way blocked
-/// ground leaves no remains (see [`spawn_corpse_entity`]).
+/// ground leaves no rubble (see [`spawn_remains`]).
 ///
 /// A cover that wears a form which is no resource source holds nothing, so what
 /// it gives back is an empty source or none at all, as if it had been drained.
@@ -782,11 +929,31 @@ pub(crate) fn uncover_source(world: &mut World, entity: Entity) {
 /// rebuild stops counting its body — until the `Die` order completes and
 /// frees it.
 ///
-/// Announces nothing; [`despawn_entity`] is the announcing counterpart, as
-/// [`spawn_entity`] is to [`create_entity`].
+/// Takes `entity` off the map, announcing nothing — the counterpart of
+/// [`create_entity`], as [`despawn_entity`] is of [`spawn_entity`].
+///
+/// Nothing authored it, so it leaves nothing: no body, no brood bursting out.
+/// A death the game has something to say about — what took it, and so what it
+/// hands on — goes through [`despawn_entity`].
+///
+/// The dying phase still runs, because it is what gives back whatever the
+/// entity was holding: a crew seat, a berth, the cells under it. What was in
+/// its care is settled as any death settles it.
 ///
 /// No-op if the entity is already dying or has died.
 pub fn destroy_entity(world: &mut World, entity: Entity) {
+    start_dying(world, entity, Passing::Removal);
+}
+
+/// Starts the dying phase, whatever the death was.
+///
+/// `cause` is what the entity is dying of: what its type leaves is declared
+/// against the kind of death, and whether a body is left at all against the
+/// weapon behind it — and by the time the dying phase ends neither is knowable
+/// any more.
+///
+/// No-op if the entity is already dying or has died.
+fn start_dying(world: &mut World, entity: Entity, passing: Passing) {
     {
         let entity_ref = world.entity(entity);
         if entity_ref.contains::<DyingComponent>() || entity_ref.contains::<DiedComponent>() {
@@ -831,15 +998,18 @@ pub fn destroy_entity(world: &mut World, entity: Entity) {
     settle_broodlings(world, entity, entity_def::morph_origin(world, entity));
     leave_brood(world, entity, id);
 
+    // What waits is the death; a type that states none goes the tick it dies,
+    // and a body has already spent its whole existence lying there.
     let dying_time = entity_def::of(world, entity)
         .dying
         .as_ref()
-        .map(|d| d.dying_time())
+        .and_then(DyingDef::dying_time)
         .unwrap_or(0);
 
     let mut entity_mut = world.entity_mut(entity);
     entity_mut.insert(DyingComponent {
         ticks_remaining: dying_time,
+        passing,
     });
     if let Some(mut queue) = entity_mut.get_mut::<OrderQueueComponent>() {
         queue.push(Order::Die, Some(CancelPolicy::Force));
@@ -858,6 +1028,28 @@ pub fn destroy_entity(world: &mut World, entity: Entity) {
 /// No-op if the entity is already dying or has died, so a death is never
 /// announced twice.
 pub fn despawn_entity(world: &mut World, entity: Entity, cause: DeathCause) {
+    announce_death(world, entity, cause, Slain::Remains);
+}
+
+/// Starts the dying phase for an entity a weapon brought down, and announces
+/// the kill.
+///
+/// The one death with a weapon behind it, so the one that can deny a body:
+/// `slain` is what that weapon leaves of it, known now and nowhere later.
+///
+/// No-op if the entity is already dying or has died.
+pub fn despawn_killed(
+    world: &mut World,
+    entity: Entity,
+    by: SimulationId,
+    by_owner: Option<PlayerId>,
+    slain: Slain,
+) {
+    announce_death(world, entity, DeathCause::Killed { by, by_owner }, slain);
+}
+
+/// Announces a death and starts the phase it dies through.
+fn announce_death(world: &mut World, entity: Entity, cause: DeathCause, slain: Slain) {
     {
         let entity_ref = world.entity(entity);
         if entity_ref.contains::<DyingComponent>() || entity_ref.contains::<DiedComponent>() {
@@ -874,7 +1066,14 @@ pub fn despawn_entity(world: &mut World, entity: Entity, cause: DeathCause) {
     };
     world.resource_mut::<EventRecord>().emit(announced);
 
-    destroy_entity(world, entity);
+    start_dying(
+        world,
+        entity,
+        Passing::Death {
+            kind: cause.into(),
+            slain,
+        },
+    );
 }
 
 /// Hands `entity` to `to`, announcing the capture, with `by` naming what took
@@ -1105,6 +1304,7 @@ pub(crate) fn fit_components(
         acts_on_standing,
         breeds,
         breeds_producers,
+        timed_life,
     ) = {
         let registry = world.resource::<ContentRegistry>();
         let def = registry.def(type_id);
@@ -1130,6 +1330,7 @@ pub(crate) fn fit_components(
                     .expect("validated content breeds registered types")
                     .produces_by_morph()
             }),
+            def.base_stat(EntityStatId::LIFETIME).is_some(),
         )
     };
     // A rally point serves whatever releases units: the trainer, the holder,
@@ -1175,6 +1376,10 @@ pub(crate) fn fit_components(
                 .is_none_or(|queue| queue.0.is_empty()),
         "a type change must not drop a paid production queue"
     );
+    // How long an instance has stood is live state, so a change of form that
+    // keeps a timed life keeps the age with it: what is summoned for forty
+    // seconds has forty seconds whatever it turns into.
+    fit_default::<LifetimeComponent>(&mut entity_mut, timed_life);
     fit_default::<TrainQueueComponent>(&mut entity_mut, trainer);
     fit_default::<TransporterComponent>(&mut entity_mut, transporter);
     fit_default::<ResourceSourceComponent>(&mut entity_mut, source);

@@ -9,10 +9,14 @@ use ferrets_math::FixedU64;
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    affiliation::Affiliation,
     costs::Cost,
     entity_buffs::EntityBuffId,
+    entity_type_def::EntityTypeId,
     field::{FieldAction, FieldId},
+    kinds::Kinds,
     player_buffs::PlayerBuffId,
+    quantity::Quantity,
     requirement::Requirement,
 };
 
@@ -37,9 +41,37 @@ impl SkillId {
     }
 }
 
+/// How close a caster must be to what it casts at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reach {
+    /// Wherever the caster stands: the cast lands the moment it is ordered,
+    /// however far off the aim is.
+    Wherever,
+    /// Within the cells this comes to, which the caster walks into first.
+    /// Zero is satisfied only by standing inside the aim's own footprint.
+    Within(Quantity),
+}
+
+/// How long a cast holds its caster once it has settled into reach.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Casting {
+    /// It lands the moment the caster is in reach, and takes no more of its
+    /// time.
+    Instant,
+    /// It lands later: the effect arrives — and what it costs is paid — as the
+    /// cast reaches `point`, and the caster is free again at `period`. A cast
+    /// cut short before its point costs nothing.
+    Delayed {
+        /// Ticks before the cast lands.
+        point: Quantity,
+        /// Ticks the whole cast holds the caster, the landing included.
+        period: Quantity,
+    },
+}
+
 /// How a skill is cast: by one of the issuing player's entities, or by the
-/// player itself. Each arm carries the costs, targets, and effects its caster
-/// kind can serve.
+/// player itself. Each arm carries the costs, targets, reaches, and effects its
+/// caster kind can serve.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SkillCaster {
     /// An entity casts: its type must declare the skill, its cooldown is
@@ -50,6 +82,10 @@ pub enum SkillCaster {
         costs: Vec<EntityCastCost>,
         /// Who the cast acts on.
         target: EntityCastTarget,
+        /// How close the caster must be to it.
+        reach: Reach,
+        /// How long the cast holds the caster once it is in reach.
+        casting: Casting,
         /// What the cast does to the resolved target entity.
         effect: EntityCastEffect,
     },
@@ -76,18 +112,26 @@ pub enum EntityCastCost {
     Health(FixedU64),
 }
 
-/// What an entity cast is aimed at. Allegiance is judged from the caster's
-/// owner, and ally includes self.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// What an entity cast is aimed at.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EntityCastTarget {
     /// The casting entity itself; the use command carries no target.
     Caster,
-    /// An owned or allied entity.
-    Ally,
-    /// A hostile entity.
-    Enemy,
     /// A cell of the map; the use command carries a position.
     Position,
+    /// Something standing: whose it must be, and what it must be.
+    Standing {
+        /// Whose it must be.
+        side: Affiliation,
+        /// What it must be.
+        kinds: Kinds,
+    },
+    /// Something lying where it fell — anyone's, since remains belong to
+    /// nobody. The cast spends what it is aimed at.
+    Fallen {
+        /// What it must be.
+        kinds: Kinds,
+    },
 }
 
 /// What a cast does at its resolved aim.
@@ -109,6 +153,15 @@ pub enum EntityCastEffect {
         radius: u32,
         /// Ticks it lasts.
         duration: u32,
+    },
+    /// Sets units down around the aim, for the casting player: on the cells
+    /// nearest the remains a raise spends, the caster's own footprint, or the
+    /// aimed cell.
+    Summon {
+        /// The type summoned.
+        entity_type: EntityTypeId,
+        /// How many. A cast with nowhere to put them all does nothing.
+        count: u32,
     },
     /// Covers or clears a field around the aim: the aimed cell for a
     /// position cast, the cell the target's position falls in otherwise.

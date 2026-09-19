@@ -2,20 +2,23 @@
 //! Called by [`super::orders`] as part of the shared order lifecycle.
 
 use bevy_ecs::{entity::Entity, world::World};
-use ferrets_math::fixed_uvec2::FixedUVec2;
 use ferrets_physics::body;
+
+use ferrets_content::dying::DyingDef;
 
 use super::orders::{Processing, Refusal};
 use crate::{
     components::{
-        dying::{DiedComponent, DyingComponent},
+        dying::{DiedComponent, DyingComponent, Passing},
+        hidden::HiddenComponent,
         location::LocationComponent,
         order_queue::{CancelPolicy, OrderState},
     },
     entity_def,
+    entity_index::EntityIndex,
     map::{Map, OccupancyClass},
     order::Order,
-    spawn,
+    spawn::{self, Fallen},
 };
 
 /// Whether `entity` may start a Die: always.
@@ -58,10 +61,10 @@ pub fn survives_soft_cancel() -> bool {
 ///
 /// Counts down the dying timer. When it expires, [`DyingComponent`] is replaced
 /// with [`DiedComponent`], the source the entity was raised over (if any) is
-/// put back, the configured corpse (if any) is left behind, and the order
+/// put back, what the death hands on is left behind, and the order
 /// finishes.
 pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing {
-    {
+    let passing = {
         let mut entity_mut = world.entity_mut(entity);
         let mut dying = entity_mut
             .get_mut::<DyingComponent>()
@@ -72,16 +75,28 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
             return Processing::state(OrderState::InProcessing);
         }
 
+        // Read before the component goes: what the death settled about what it
+        // leaves is held nowhere else.
+        let passing = dying.passing;
         entity_mut.remove::<DyingComponent>();
         entity_mut.insert(DiedComponent);
-    }
+        passing
+    };
 
-    free_footprint(entity, world);
+    // The decay has run out, so a body stops being one the moment it ends: it
+    // must not go on filling a slot the cap counts while the death it is in
+    // the middle of hands on what it leaves — a body that rots into another
+    // would be refused the room it just freed — and a cast must not raise
+    // what is already gone.
+    let id = entity_def::simulation_id(world, entity);
+    world.resource_mut::<EntityIndex>().remove_remains(id);
+
+    free_footprint(world, entity);
     // The berth the entity held through its dying phase — one it died in with
     // no free cell to step back onto — goes back to the job.
     spawn::unseat(world, entity);
     spawn::uncover_source(world, entity);
-    leave_corpse(entity, world);
+    leave_bequests(world, entity, passing);
     Processing::state(OrderState::Finished)
 }
 
@@ -89,7 +104,7 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
 /// remains it leaves behind (or anyone else) can take the cells.
 ///
 /// An entity off the grid — hidden, or attached to a job — holds nothing.
-fn free_footprint(entity: Entity, world: &mut World) {
+fn free_footprint(world: &mut World, entity: Entity) {
     if !entity_def::stands_on_grid(world, entity) {
         return;
     }
@@ -103,28 +118,56 @@ fn free_footprint(entity: Entity, world: &mut World) {
         .displace_entity(&location, &location_def, class);
 }
 
-/// Leaves the entity's configured corpse at its position, if any.
+/// Hands on what the entity's type leaves for the death it died.
 ///
-/// The corpse is born dying: its own dying phase acts as the decay timer, and a
-/// corpse type with a corpse of its own forms the next decay stage. It claims
-/// its footprint on the navigation grid per its occupation mask, so remains can
-/// block movement (rubble) or lie passable (a corpse layer movers ignore).
-/// When the footprint is blocked — someone took the cell during the death — no
-/// remains are left.
-fn leave_corpse(entity: Entity, world: &mut World) {
-    let Some(corpse_type) = entity_def::of(world, entity)
+/// Each bequest names a type and how many of it: anything tagged as remains is
+/// set down as a body — ownerless, lying where it fell, remembering who it was
+/// — and anything else stands up as an ordinary entity of whoever owned the
+/// deceased. A weapon that leaves nothing of what it kills denies the bodies
+/// and nothing else: what bursts out of a dying thing is that thing's own doing.
+///
+/// Called after the footprint is freed, so the first cells the bequests are
+/// offered are the ones the deceased was standing on.
+fn leave_bequests(world: &mut World, entity: Entity, passing: Passing) {
+    let (kind, slain) = match passing {
+        Passing::Death { kind, slain } => (kind, slain),
+        Passing::Removal => return,
+    };
+    let left: Vec<(String, u32)> = entity_def::of(world, entity)
         .dying
         .as_ref()
-        .and_then(|dying| dying.corpse_type().map(String::from))
-    else {
+        .map(DyingDef::leaves)
+        .unwrap_or_default()
+        .iter()
+        .filter(|bequest| bequest.left_by(kind))
+        .map(|bequest| (bequest.entity_type().to_string(), bequest.count()))
+        .collect();
+    if left.is_empty() {
         return;
-    };
-    let position = entity_def::position(world, entity);
-    // Remains rest on the lattice: a continuous mover dies wherever pushing
-    // left it, and the corpse takes the cell the body visually stood on. On
-    // the cell model the two coincide.
-    let cell = FixedUVec2::from(body::anchor(position));
+    }
+    // A death off the map hands nothing on: there is no ground under what went
+    // down inside a carrier or inside the site it was spent on, and the cell it
+    // last stood on is wherever it happened to step aboard.
+    if world.entity(entity).contains::<HiddenComponent>() {
+        return;
+    }
 
-    let of = entity_def::simulation_id(world, entity);
-    spawn::spawn_corpse_entity(world, &corpse_type, cell, of);
+    let position = entity_def::position(world, entity);
+    // What is left rests on the lattice: a continuous mover dies wherever
+    // pushing left it, and what it leaves takes the cell its body stood on. On
+    // the cell model the two coincide.
+    let around = body::anchor(position);
+    let size = entity_def::of(world, entity)
+        .location
+        .expect("a standing entity has a location")
+        .size();
+    let fallen = Fallen {
+        id: entity_def::simulation_id(world, entity),
+        entity_type: entity_def::type_id(world, entity),
+        owner: entity_def::owner(world, entity),
+    };
+
+    for (type_name, count) in left {
+        spawn::spawn_bequest(world, &type_name, count, around, size, fallen, slain);
+    }
 }

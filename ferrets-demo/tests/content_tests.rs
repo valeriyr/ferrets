@@ -2,19 +2,25 @@
 //! with each other.
 
 use ferrets_content::{
+    affiliation::Affiliation,
+    attack::Slain,
     brood::{BroodlingDef, Lingering, OrphanFate},
     build::BuilderAttendance,
     costs,
+    dying::DeathKind,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     field::{FieldAction, FieldCoverage, FieldEffectKind, FieldPlacement, FieldSide, FieldVision},
+    kinds::{Kind, Kinds},
     location::Solidity,
     morph::{MorphCancel, MorphInterrupted, MorphPlacement, MorphReason},
-    period::Period,
+    quantity::Quantity,
     registry::ContentRegistry,
     requirement::Requirement,
-    resource::{Banking, Sources},
-    skills::{EntityCastCost, EntityCastTarget, PlayerCastEffect, SkillCaster},
+    resource::Banking,
+    skills::{
+        EntityCastCost, EntityCastEffect, EntityCastTarget, PlayerCastEffect, Reach, SkillCaster,
+    },
     stand::StandingAct,
     targeting,
     work::{Attachment, BerthStance, CrewLimit, WorkPresence},
@@ -345,10 +351,10 @@ fn elf_structures_root_and_uproot_as_pairs() {
             uprooted.base_stat(EntityStatId::SUPPLY_PROVIDED),
             "'{name}' feeds the army walking or rooted"
         );
-        // Nothing of the elves' takes root on creep.
+        // Nothing of the elves' takes root on another race's ground.
         assert!(
-            forbids_creep(&registry, rooted),
-            "'{name}' takes no root on creep"
+            forbids(&registry, rooted, "creep") && forbids(&registry, rooted, "blight"),
+            "'{name}' takes root on creep or on blight"
         );
     }
 
@@ -358,11 +364,15 @@ fn elf_structures_root_and_uproot_as_pairs() {
     let moon_well = registry
         .entity("moon_well")
         .expect("moon well is registered");
-    assert!(moon_well.morphs.is_empty() && forbids_creep(&registry, moon_well));
+    assert!(
+        moon_well.morphs.is_empty()
+            && forbids(&registry, moon_well, "creep")
+            && forbids(&registry, moon_well, "blight")
+    );
     let entangled = registry
         .entity("entangled_mine")
         .expect("entangled mine is registered");
-    assert!(!forbids_creep(&registry, entangled));
+    assert!(!forbids(&registry, entangled, "creep") && !forbids(&registry, entangled, "blight"));
 }
 
 #[test]
@@ -409,7 +419,7 @@ fn hatchery_breeds_larvae_that_grow_into_drones_swarmlings_and_overlords() {
     let hatchery = registry.entity("hatchery").expect("hatchery is registered");
     let brood = hatchery.breeder.as_ref().expect("the hatchery breeds");
     assert_eq!(brood.breeds(), "larva");
-    assert_eq!(brood.period(), Period::Constant(220));
+    assert_eq!(brood.period(), Quantity::Constant(220));
     assert_eq!(brood.limit(), 3);
     assert_eq!(brood.initial(), 1);
     assert_eq!(
@@ -550,16 +560,21 @@ fn hatchery_grows_into_hive_inside_cocoon_that_carries_its_brood() {
 
     let hive = registry.entity("hive").expect("hive is registered");
     let brood = hive.breeder.as_ref().expect("the hive breeds");
-    assert_eq!(brood.period(), Period::Constant(180));
+    assert_eq!(brood.period(), Quantity::Constant(180));
     assert_eq!(brood.initial(), 2);
     assert_eq!(
         brood.orphans(),
         OrphanFate::Linger(Lingering::Reseat { distance: 4 })
     );
     assert!(
-        hive.morphs.is_empty() && hive.build_time.is_none() && hive.cost.is_empty(),
+        hive.morphs.is_empty() && !produced(&registry, "hive"),
         "the hive is only ever grown from a hatchery"
     );
+    // Nothing raises a hive, so it carries what a hatchery cost plus the
+    // growth's own price, over both spans: 400 gold and 200 ticks raising the
+    // hatchery, 150 gold, 100 wood and 200 ticks growing out of it.
+    assert_eq!(hive.cost, costs::cost([("gold", 550), ("wood", 100)]));
+    assert_eq!(hive.build_time, Some(400));
     let drone = registry.entity("drone").expect("drone is registered");
     let builder = drone.builder.as_ref().expect("the drone builds");
     assert!(!builder.can_build("hive"));
@@ -581,6 +596,63 @@ fn hatchery_grows_into_hive_inside_cocoon_that_carries_its_brood() {
         let def = registry.entity(name).expect("swarm hall is registered");
         assert!(def.field_placement.is_empty(), "'{name}' needs no creep");
         assert!(!def.field_sources.is_empty(), "'{name}' spreads creep");
+    }
+}
+
+#[test]
+fn killed_swarm_structures_burst_into_hatchlings_that_expire() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+
+    // Spawn nobody pays for and nobody keeps: four hundred ticks at twenty a
+    // second is twenty seconds of a unit, and then it is gone.
+    let hatchling = registry
+        .entity("hatchling")
+        .expect("hatchling is registered");
+    assert_eq!(
+        hatchling.base_stat_as_u32(EntityStatId::LIFETIME),
+        Some(400)
+    );
+    assert!(
+        hatchling.cost.is_empty() && hatchling.train_time.is_none(),
+        "spawn is left by a death, never bought"
+    );
+    assert_eq!(
+        hatchling.base_stat_as_u32(EntityStatId::SUPPLY_COST),
+        None,
+        "spawn feeds off nothing"
+    );
+    assert!(
+        hatchling
+            .dying
+            .as_ref()
+            .expect("spawn takes a moment to fall")
+            .leaves()
+            .is_empty(),
+        "spawn leaves no body of its own"
+    );
+
+    // Every structure with life growing inside it spills two, and only when
+    // something kills it.
+    for name in ["hatchery", "hive_cocoon", "hive", "spawning_pit"] {
+        let def = registry
+            .entity(name)
+            .expect("swarm structure is registered");
+        let [burst] = def
+            .dying
+            .as_ref()
+            .expect("swarm structure takes a moment to fall")
+            .leaves()
+        else {
+            panic!("'{name}' hands on exactly one kind of spawn");
+        };
+        assert_eq!(burst.entity_type(), "hatchling");
+        assert_eq!(burst.count(), 2);
+        assert!(
+            burst.left_by(DeathKind::Killed)
+                && !burst.left_by(DeathKind::Cancelled)
+                && !burst.left_by(DeathKind::Decayed),
+            "'{name}' spills only what is killed out of it"
+        );
     }
 }
 
@@ -742,14 +814,27 @@ fn grunt_and_shaman_carry_their_abilities() {
         .expect("handle came from this registry");
     assert!(
         matches!(
-            def.caster,
+            &def.caster,
             SkillCaster::Entity {
-                target: EntityCastTarget::Ally,
+                target: EntityCastTarget::Standing {
+                    side: Affiliation::Allied,
+                    ..
+                },
+                reach: Reach::Wherever,
                 ..
             }
         ),
         "second_wind mends a clicked ally, or the shaman can only heal itself"
     );
+    let SkillCaster::Entity {
+        target: EntityCastTarget::Standing { kinds, .. },
+        ..
+    } = &def.caster
+    else {
+        panic!("second_wind aims at something standing");
+    };
+    // It mends the living and refuses the rest: a shaman cannot patch a wall.
+    assert_eq!(kinds, &Kinds::tags(["biological"]));
 }
 
 #[test]
@@ -856,8 +941,10 @@ fn only_melee_and_siege_exclude_air() {
     let air = registry.layer(map::AIR).expect("air layer is registered");
 
     // Every weapon declares its layers; what stays deliberate per type is what
-    // it leaves out. Only the melee blades and bites, the shells and the flat
-    // guns of the wagon and the tank cannot answer what flies.
+    // it leaves out. Only the melee blades and bites, the shells, the flat
+    // guns of the wagon and the tank, and the undead's flat gun and raised
+    // blades cannot answer what flies. The swarm's spawn bites like the
+    // swarmling it is too young to be.
     let grounded: Vec<&str> = registry
         .entities()
         .filter(|def| def.can_attack())
@@ -870,17 +957,120 @@ fn only_melee_and_siege_exclude_air() {
         [
             "ancient_of_war_uprooted",
             "ancient_protector_uprooted",
+            "ghoul",
             "grunt",
+            "hatchling",
             "huntress",
             "mortar",
+            "necromancer",
+            "nerubian_tower",
             "ravager",
             "siege_tank",
+            "skeleton",
             "swarmling",
             "tank",
             "tree_of_life_uprooted",
             "war_wagon",
             "zealot"
         ]
+    );
+}
+
+#[test]
+fn shells_deny_bodies_that_rolling_guns_leave() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+
+    // Bringing siege is how an army denies a necromancer its material — and
+    // it is the shells that do it, planted or carried. Everything that kills
+    // by rolling up and firing leaves what it kills where it falls.
+    for shelling in ["mortar", "siege_tank"] {
+        let def = registry.entity(shelling).expect("siege is registered");
+        assert_eq!(
+            def.attack.as_ref().expect("siege fights").weapon().slain(),
+            Slain::Nothing,
+            "'{shelling}' leaves bodies to raise"
+        );
+    }
+    for firing in ["tank", "grunt", "archer"] {
+        let def = registry.entity(firing).expect("fighter is registered");
+        assert_eq!(
+            def.attack
+                .as_ref()
+                .expect("fighter fights")
+                .weapon()
+                .slain(),
+            Slain::Remains,
+            "'{firing}' denies the dead"
+        );
+    }
+}
+
+#[test]
+fn machines_are_mended_by_workers_and_sheltered_like_soldiers() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    let mortar = registry.entity("mortar").expect("mortar is registered");
+
+    // Every worker mends what is built and what is machined, so a race's
+    // siege is never a unit nothing can put back together.
+    for name in ["peasant", "peon", "scv"] {
+        let worker = registry.entity(name).expect("worker is registered");
+        assert!(
+            worker
+                .repairer
+                .as_ref()
+                .expect("a worker mends")
+                .repairs()
+                .admits(mortar),
+            "'{name}' cannot mend a machine"
+        );
+    }
+    // And the tube rides where the soldiers ride, which is what its two
+    // shelter slots are for.
+    let bunker = registry.entity("bunker").expect("bunker is registered");
+    assert!(
+        bunker
+            .transporter
+            .as_ref()
+            .expect("the bunker shelters")
+            .carries()
+            .admits(mortar)
+    );
+    let wagon = registry
+        .entity("war_wagon")
+        .expect("war wagon is registered");
+    assert!(
+        wagon.tags.contains("mechanical"),
+        "the orc's siege is a machine like every other, or nothing can mend it"
+    );
+}
+
+#[test]
+fn mortar_is_mended_not_healed_and_leaves_no_body() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    let mortar = registry.entity("mortar").expect("mortar is registered");
+
+    // A tube on a carriage: the medic passes it by, the SCV patches it up,
+    // and what it leaves when it falls is wreckage nobody raises anything
+    // from — unlike every other footsoldier of the demo.
+    assert!(mortar.tags.contains("mechanical") && !mortar.tags.contains("biological"));
+    assert!(
+        mortar
+            .dying
+            .as_ref()
+            .expect("the mortar takes a moment to fall")
+            .leaves()
+            .is_empty()
+    );
+    let archer = registry.entity("archer").expect("archer is registered");
+    assert!(
+        archer.tags.contains("biological")
+            && !archer
+                .dying
+                .as_ref()
+                .expect("the archer takes a moment to fall")
+                .leaves()
+                .is_empty(),
+        "the infantry it walks with still falls as a body"
     );
 }
 
@@ -1035,7 +1225,7 @@ fn gryphon_edges_wear_different_terms() {
     assert_eq!(take_off.into_type(), "gryphon_aloft");
     assert_eq!(
         take_off.time(),
-        Period::Stat(morph_time),
+        Quantity::Stat(morph_time),
         "the take-off window is not the quickenable stat"
     );
     assert_eq!(take_off.placement(), MorphPlacement::Revalidate);
@@ -1052,7 +1242,7 @@ fn gryphon_edges_wear_different_terms() {
         panic!("the airborne gryphon declares exactly one transition");
     };
     assert_eq!(landing.into_type(), "gryphon");
-    assert_eq!(landing.time(), Period::Constant(20));
+    assert_eq!(landing.time(), Quantity::Constant(20));
     assert_eq!(landing.placement(), MorphPlacement::Reserve);
     assert_eq!(landing.cancel(), MorphCancel::Committed);
     assert!(landing.costs().is_empty(), "landing is free");
@@ -1071,7 +1261,7 @@ fn tower_upgrade_is_paid_and_refundable() {
         panic!("the watch tower declares exactly one transition");
     };
     assert_eq!(upgrade.into_type(), "guard_tower");
-    assert_eq!(upgrade.time(), Period::Constant(60));
+    assert_eq!(upgrade.time(), Quantity::Constant(60));
     assert_eq!(upgrade.placement(), MorphPlacement::Reserve);
     assert_eq!(upgrade.cancel(), MorphCancel::Refundable);
     assert_eq!(
@@ -1086,9 +1276,18 @@ fn tower_upgrade_is_paid_and_refundable() {
         .entity("guard_tower")
         .expect("upgraded tower is registered");
     assert!(
-        upgraded.train_time.is_none() && upgraded.build_time.is_none(),
+        !produced(&registry, "guard_tower"),
         "the upgraded tower is not producible, only changeable into"
     );
+    // Priced and paced by what it took to have one standing: 120 gold, 40 wood
+    // and 70 ticks raising the watch tower, 80 gold, 20 wood and 60 ticks
+    // upgrading it.
+    assert_eq!(
+        upgraded.cost,
+        costs::cost([("gold", 200), ("wood", 60)]),
+        "a peon mends the upgraded tower against what it cost to have"
+    );
+    assert_eq!(upgraded.build_time, Some(130));
     assert!(
         upgraded.tags.contains("building"),
         "an upgraded tower must still count as a standing base"
@@ -1119,9 +1318,10 @@ fn terran_gold_comes_through_refinery_alone() {
     );
     // And a refinery is the only source it may work: a bare seam is one the
     // scv turns down, however much gold is in it.
-    assert_eq!(gold.sources(), &Sources::only(["refinery"]));
-    assert!(gold.admits_source("refinery"));
-    assert!(!gold.admits_source("gold_mine"));
+    assert_eq!(gold.sources(), &Kinds::types(["refinery"]));
+    let source = |name: &str| registry.entity(name).expect("source is registered");
+    assert!(gold.sources().admits(source("refinery")));
+    assert!(!gold.sources().admits(source("gold_mine")));
 
     // The refinery seats builders and nobody else.
     let refinery = registry.entity("refinery").expect("refinery defined");
@@ -1164,6 +1364,203 @@ fn every_terran_production_building_flies_but_depot() {
     assert!(!depot.can_move());
 }
 
+#[test]
+fn planted_tank_is_priced_and_paced_like_one_that_rolls() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    let planted = registry.entity("siege_tank").expect("siege_tank defined");
+
+    assert!(
+        !produced(&registry, "siege_tank"),
+        "a factory rolls out tanks, not planted ones"
+    );
+    // 150 gold and 100 wood to train the tank, nothing more to dig in, over a
+    // hundred ticks of training and sixty of planting.
+    assert_eq!(
+        planted.cost,
+        costs::cost([("gold", 150), ("wood", 100)]),
+        "an SCV bills a share of what the tank cost to have planted"
+    );
+    assert_eq!(planted.train_time, Some(160));
+    assert!(
+        planted.tags.contains("mechanical"),
+        "and mends as a machine, planted or not"
+    );
+}
+
+//
+// ─── Undead ───────────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn raising_dead_names_bodies_it_raises_from() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+
+    let raise_dead = registry
+        .skill("raise_dead")
+        .expect("raise_dead is registered");
+    let def = registry
+        .skill_def(raise_dead)
+        .expect("handle came from this registry");
+    let SkillCaster::Entity { target, effect, .. } = &def.caster else {
+        panic!("a necromancer casts it, not the player");
+    };
+
+    // Bodies and bodies only: an unnamed filter would raise skeletons out of
+    // whatever else the field came to leave lying.
+    assert_eq!(
+        *target,
+        EntityCastTarget::Fallen {
+            kinds: Kinds::only([Kind::Type("corpse".to_string())])
+        }
+    );
+    let EntityCastEffect::Summon { entity_type, count } = effect else {
+        panic!("what it does with a body is raise something from it");
+    };
+    assert_eq!(
+        (registry.def(*entity_type).name.as_str(), *count),
+        ("skeleton", 2)
+    );
+}
+
+#[test]
+fn hall_rising_into_next_form_still_takes_wood() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+
+    // A ghoul with a load does not wait out the change: the form a hall wears
+    // while it grows accepts what the finished hall accepts.
+    for rising in ["halls_of_the_dead_rising", "black_citadel_rising"] {
+        let def = registry.entity(rising).expect("rising hall is registered");
+        assert!(
+            def.resource_storage
+                .as_ref()
+                .expect("rising hall stores")
+                .accepts("wood")
+        );
+    }
+}
+
+#[test]
+fn rising_hall_carries_tier_it_has_reached() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    let tagged = |name: &str| {
+        registry
+            .entity(name)
+            .expect("hall is registered")
+            .tags
+            .contains("grown_hall")
+    };
+
+    // A tier is reached when its growth finishes: the necropolis rising into
+    // the halls of the dead has not reached it yet, while the halls rising
+    // into the citadel keep the tier they already stand at — so a temple
+    // ordered during that second growth is not refused.
+    assert!(!tagged("necropolis"));
+    assert!(!tagged("halls_of_the_dead_rising"));
+    assert!(tagged("halls_of_the_dead"));
+    assert!(tagged("black_citadel_rising"));
+    assert!(tagged("black_citadel"));
+}
+
+#[test]
+fn last_hall_is_only_one_that_fights() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    let air = registry.layer(map::AIR).expect("air layer is registered");
+
+    for quiet in ["necropolis", "halls_of_the_dead"] {
+        let def = registry.entity(quiet).expect("hall is registered");
+        assert!(def.attack.is_none(), "'{quiet}' answers for itself");
+    }
+    let citadel = registry
+        .entity("black_citadel")
+        .expect("black citadel is registered");
+    assert!(citadel.attack.is_some());
+    assert!(
+        registry.targets_of(citadel) & air != 0,
+        "the citadel's bolts cannot answer what flies over it"
+    );
+    assert!(
+        citadel.trainer.is_some(),
+        "the citadel trains acolytes like the halls before it"
+    );
+}
+
+#[test]
+fn undead_price_headroom_and_ghoul_like_other_races() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+
+    // Ten supply for eighty gold and thirty wood — eight gold a point, where
+    // a farm's six for forty and twenty is under seven.
+    let ziggurat = registry.entity("ziggurat").expect("ziggurat is registered");
+    assert_eq!(
+        ziggurat.base_stat_as_u32(EntityStatId::SUPPLY_PROVIDED),
+        Some(10)
+    );
+    assert_eq!(ziggurat.cost, costs::cost([("gold", 80), ("wood", 30)]));
+
+    // And the ghoul stands in the line for one supply, like every other
+    // race's, swinging eight damage every eight ticks.
+    let ghoul = registry.entity("ghoul").expect("ghoul is registered");
+    assert_eq!(ghoul.base_stat_as_u32(EntityStatId::SUPPLY_COST), Some(1));
+    assert_eq!(ghoul.base_stat_as_u32(EntityStatId::DAMAGE), Some(8));
+    assert_eq!(ghoul.base_stat_as_u32(EntityStatId::ATTACK_PERIOD), Some(8));
+}
+
+#[test]
+fn hardened_towers_and_grown_halls_carry_what_they_cost() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+
+    // A ziggurat is 80 gold, 30 wood and a hundred ticks; hardening adds a
+    // hundred gold for the spirit tower and 120 gold with 40 wood for the
+    // nerubian one, over seventy ticks either way.
+    for (tower, gold, wood) in [("spirit_tower", 180, 30), ("nerubian_tower", 200, 70)] {
+        let def = registry.entity(tower).expect("tower is registered");
+        assert!(
+            !produced(&registry, tower),
+            "'{tower}' is only hardened into"
+        );
+        assert_eq!(def.cost, costs::cost([("gold", gold), ("wood", wood)]));
+        assert_eq!(def.build_time, Some(170));
+    }
+
+    // A necropolis is 350 gold over 180 ticks, and each growth adds 150 gold
+    // over 120 more.
+    for (hall, gold, time) in [("halls_of_the_dead", 500, 300), ("black_citadel", 650, 420)] {
+        let def = registry.entity(hall).expect("hall is registered");
+        assert!(!produced(&registry, hall), "'{hall}' is only grown into");
+        assert_eq!(def.cost, costs::cost([("gold", gold)]));
+        assert_eq!(def.build_time, Some(time));
+    }
+}
+
+#[test]
+fn haunted_mine_seats_five_acolytes_in_star() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    let mine = registry
+        .entity("haunted_mine")
+        .expect("haunted mine is registered");
+
+    let group = mine
+        .berths
+        .as_ref()
+        .expect("the mine seats its acolytes")
+        .group("crypt")
+        .expect("the mine's berths are the crypt group");
+    // Five points of a star about the mine's middle, two standing on its own
+    // ground and three a half-cell outside it — one spot each, so five at
+    // work stand the points rather than crowding a rim.
+    assert_eq!(
+        group.points(),
+        [
+            berth("1.0", "2.2"),
+            berth("-0.1", "1.4"),
+            berth("0.3", "0.0"),
+            berth("1.7", "0.0"),
+            berth("2.1", "1.4"),
+        ]
+    );
+    assert_eq!(group.slots(), 5);
+}
+
 //
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 //
@@ -1173,10 +1570,23 @@ fn berth(x: &str, y: &str) -> FixedVec2 {
     FixedVec2::new(FixedI64::lit(x), FixedI64::lit(y))
 }
 
-/// Whether `def` refuses to stand on creep.
-fn forbids_creep(registry: &ContentRegistry, def: &EntityTypeDef) -> bool {
-    let creep = registry.field("creep").expect("creep field is registered");
+/// Whether `def` refuses to stand on the named field.
+fn forbids(registry: &ContentRegistry, def: &EntityTypeDef, field: &str) -> bool {
+    let refused = registry.field(field).expect("field is registered");
     def.field_placement.iter().any(
-        |placement| matches!(placement, FieldPlacement::Forbids { field, .. } if *field == creep),
+        |placement| matches!(placement, FieldPlacement::Forbids { field } if *field == refused),
     )
+}
+
+/// Whether any registered type raises or trains the named one.
+fn produced(registry: &ContentRegistry, name: &str) -> bool {
+    registry.entities().any(|def| {
+        def.builder
+            .as_ref()
+            .is_some_and(|builder| builder.can_build(name))
+            || def
+                .trainer
+                .as_ref()
+                .is_some_and(|trainer| trainer.can_train(name))
+    })
 }

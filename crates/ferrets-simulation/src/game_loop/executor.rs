@@ -6,16 +6,14 @@
 
 use bevy_ecs::{entity::Entity, world::World};
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
-use ferrets_math::{FixedU64, fixed_urect::FixedURect, fixed_uvec2::FixedUVec2};
+use ferrets_math::{fixed_urect::FixedURect, fixed_uvec2::FixedUVec2};
 
-use super::{build, morph, orders, stats};
+use super::{build, cast, morph, orders};
 use crate::{
     command::{PlayerCommand, SelectMode, SkillCasterRef, SkillTarget},
     components::{
         build::UnderConstructionComponent,
-        entity_buffs::BuffsComponent,
         entity_info::EntityInfoComponent,
-        entity_skills::{self, SkillsComponent},
         health::HealthComponent,
         location::LocationComponent,
         order_queue::{CancelPolicy, OrderQueueComponent},
@@ -26,34 +24,24 @@ use crate::{
         train::TrainQueueComponent,
     },
     control_groups::{CONTROL_GROUP_COUNT, ControlGroups},
-    entity_def::{self, Operation},
+    entity_def,
     entity_index::EntityIndex,
     events::{SpawnCause, SpendCause},
-    game_loop::{cast_cost, damage},
     input::InputFrames,
-    map::Map,
     order::{AttackTarget, Order},
-    player_buffs::PlayerBuffs,
     player_research::PlayerResearch,
-    player_skills::{self, PlayerSkills},
     requirements,
     resources::{self, PlayerResources},
     selection::Selection,
-    session::{GameSession, ai_vision::AiVision, player_id::PlayerId, player_slot::PlayerSlot},
+    session::{GameSession, player_id::PlayerId},
     simulation_id::SimulationId,
     spawn::{self, FieldReach},
-    supply,
-    visibility::VisibilityGrid,
-    watches::{Watch, Watches},
+    supply, visibility,
 };
 use ferrets_content::{
-    costs::Cost,
-    entity_stats::EntityStatId,
     registry::ContentRegistry,
     research::ResearchId,
-    skills::{
-        EntityCastCost, EntityCastEffect, EntityCastTarget, PlayerCastEffect, SkillCaster, SkillId,
-    },
+    skills::{SkillCaster, SkillId},
     tags,
 };
 
@@ -89,7 +77,7 @@ pub fn tick(world: &mut World, current_tick: u32) -> bool {
 fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
     match command {
         PlayerCommand::SelectById { id, mode } => {
-            if interactable_entity(world, player, *id).is_some() {
+            if visibility::interactable_to(world, player, *id).is_some() {
                 apply_selection(world, player, vec![*id], *mode);
             }
         }
@@ -97,7 +85,7 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
             let selected: Vec<SimulationId> = ids
                 .iter()
                 .copied()
-                .filter(|&id| interactable_entity(world, player, id).is_some())
+                .filter(|&id| visibility::interactable_to(world, player, id).is_some())
                 .collect();
             apply_selection(world, player, selected, *mode);
         }
@@ -140,7 +128,7 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
                 .get(player, group)
                 .to_vec()
                 .into_iter()
-                .filter(|&id| interactable_entity(world, player, id).is_some())
+                .filter(|&id| visibility::interactable_to(world, player, id).is_some())
                 .collect();
             // Recalling an empty (or fully-wiped) group is a no-op: it must not
             // clear the current selection.
@@ -172,7 +160,7 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
             // A named target must be in sight to be named at all — fog
             // refuses the order the way it hides the sprite.
             if let Some(id) = target.entity()
-                && interactable_entity(world, player, id).is_none()
+                && visibility::interactable_to(world, player, id).is_none()
             {
                 return;
             }
@@ -209,7 +197,7 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
             );
         }
         PlayerCommand::Guard { target, flush } => {
-            if interactable_entity(world, player, *target).is_none() {
+            if visibility::interactable_to(world, player, *target).is_none() {
                 return;
             }
             let commanded = commanded_selection_excluding(world, player, *target);
@@ -228,7 +216,7 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
             }
         }
         PlayerCommand::SendToEntity { target, flush } => {
-            if interactable_entity(world, player, *target).is_none() {
+            if visibility::interactable_to(world, player, *target).is_none() {
                 return;
             }
             for entity in commanded_selection_excluding(world, player, *target) {
@@ -254,7 +242,7 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
             // the send-to-entity rule; it may be gone again by the time a unit
             // spawns, which spawn-time resolution handles.
             if let Some(RallyTarget::Entity(id)) = target
-                && interactable_entity(world, player, *id).is_none()
+                && visibility::interactable_to(world, player, *id).is_none()
             {
                 return;
             }
@@ -282,8 +270,9 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
             );
         }
         PlayerCommand::CancelBuild { site } => build::cancel_site(world, player, *site),
+        PlayerCommand::CancelMorph { entity } => morph::cancel_change(world, player, *entity),
         PlayerCommand::Repair { target, flush } => {
-            if interactable_entity(world, player, *target).is_none() {
+            if visibility::interactable_to(world, player, *target).is_none() {
                 return;
             }
             // A mixed selection sends the ones that can mend this target.
@@ -297,7 +286,7 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
         }
         PlayerCommand::Follow { target, flush } => {
             // Following what the fog hides would be a tracking beacon.
-            if interactable_entity(world, player, *target).is_none() {
+            if visibility::interactable_to(world, player, *target).is_none() {
                 return;
             }
             let commanded = commanded_selection_excluding(world, player, *target);
@@ -310,7 +299,7 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
         }
         PlayerCommand::Board { target, flush } => {
             // A mixed selection sends the ones the target takes aboard.
-            if interactable_entity(world, player, *target).is_none() {
+            if visibility::interactable_to(world, player, *target).is_none() {
                 return;
             }
             let commanded = commanded_selection_excluding(world, player, *target);
@@ -329,7 +318,7 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
             let Some(entity) = find_owned_interactable(world, player, *transport) else {
                 return;
             };
-            if interactable_entity(world, player, *target).is_none() {
+            if visibility::interactable_to(world, player, *target).is_none() {
                 return;
             }
             issue(
@@ -636,7 +625,7 @@ fn resolve_box_selection(world: &World, player: PlayerId, rect: &FixedURect) -> 
         .alive_entries()
         .into_iter()
         .filter(|&(id, entity)| {
-            interactable_entity(world, player, id).is_some()
+            visibility::interactable_to(world, player, id).is_some()
                 && world.entity(entity).contains::<LocationComponent>()
                 && rect.contains(entity_def::footprint_center(world, entity))
                 && !world
@@ -691,40 +680,6 @@ fn resolve_type_selection(
         })
         .map(|(id, _)| id)
         .collect()
-}
-
-/// Resolves `id` to an entity `player` may name in a command: interactable —
-/// alive and not hidden away inside something
-/// ([`EntityIndex::interactable`]) — and, for a human player, standing in
-/// its sight: the fog that hides a sprite must hide its stats and refuse
-/// orders against it too. No ownership shortcut: own and allied entities
-/// pass through the same grid (a unit's sight covers the cell it stands on,
-/// and team vision is merged), so the grid stays the one truth.
-///
-/// A scripted player is gated by the vision its seat declares: a fog-limited
-/// brain lives under the same rule as a human, an omniscient one legitimately
-/// names what fog hides. The seat is session state, so every node (and a
-/// replay) resolves its commands identically.
-fn interactable_entity(world: &World, player: PlayerId, id: SimulationId) -> Option<Entity> {
-    let entity = world.resource::<EntityIndex>().interactable(world, id)?;
-    let session = world.resource::<GameSession>();
-    let sight_gated = match session.slot(player).and_then(PlayerSlot::ai_vision) {
-        None | Some(AiVision::Filtered) => true,
-        Some(AiVision::Omniscient) => false,
-    };
-    if !sight_gated {
-        return Some(entity);
-    }
-    let location = world.entity(entity).get::<LocationComponent>()?;
-    world
-        .resource::<VisibilityGrid>()
-        .is_visible_to(
-            session,
-            player,
-            location.position.x.to_num::<u32>(),
-            location.position.y.to_num::<u32>(),
-        )
-        .then_some(entity)
 }
 
 /// Combines `candidates` into `player`'s selection according to `mode`.
@@ -793,9 +748,14 @@ fn push_order(world: &mut World, entity: Entity, order: Order, flush: Option<Can
     }
 }
 
-/// Validates and executes a cast: the skill must exist, match its caster
-/// kind, be off cooldown for that caster, be affordable (every cost payable),
-/// and the target must be valid for the skill.
+/// Casts a skill for `player`: the skill must exist, match the caster kind it
+/// is asked of, and its requirements must be met.
+///
+/// A player cast is settled here and now. An entity cast becomes an order, so
+/// what it is aimed at, what it costs and how far it must walk are all settled
+/// when the order runs — but a caster whose skill is still cooling down, or
+/// that cannot start the order at all, is left at whatever it was doing rather
+/// than dropping it for a cast that will not happen.
 fn use_skill(
     world: &mut World,
     player: PlayerId,
@@ -813,13 +773,6 @@ fn use_skill(
     else {
         return;
     };
-    // A named target must be in sight to be named at all — fog refuses the
-    // cast the way it hides the sprite.
-    if let Some(SkillTarget::Entity(target)) = target
-        && interactable_entity(world, player, target).is_none()
-    {
-        return;
-    }
     // Requirements answer to the issuing player whoever casts: an entity's
     // skill unlocks with its owner's research, and locks again with it. An
     // annex entry is asked of the caster, so a player cast can hold none.
@@ -830,238 +783,29 @@ fn use_skill(
     if !requirements::met(world, player, casting, &def.requires) {
         return;
     }
-    match (caster, def.caster) {
+    match (caster, &def.caster) {
         (SkillCasterRef::Player, SkillCaster::Player { cost, effect }) => {
-            use_skill_as_player(world, player, skill, def.cooldown, &cost, effect);
+            cast::by_player(world, player, skill, def.cooldown, cost, *effect);
         }
-        (
-            SkillCasterRef::Entity(caster_id),
-            SkillCaster::Entity {
-                costs,
-                target: cast_target,
-                effect,
-            },
-        ) => {
-            use_skill_as_entity(
-                world,
-                player,
-                skill,
-                def.cooldown,
-                &costs,
-                cast_target,
-                effect,
-                caster_id,
-                target,
-            );
+        (SkillCasterRef::Entity(_), SkillCaster::Entity { .. }) => {
+            let Some(entity) = casting else {
+                return;
+            };
+            // Casting is something the caster does, so it goes through the
+            // queue like any other doing: what it was at is cancelled, the
+            // order walks it into reach if the skill has one, and the cast
+            // answers to the same gating, refusals and cancellation as the
+            // rest. Judged before the queue is touched, though — a cast the
+            // caster could not start, or one still cooling down, must not
+            // cancel what it was doing for nothing.
+            let order = Order::Cast { skill, target };
+            if cast::can_start(world, entity, &order).is_err() || !cast::ready(world, entity, skill)
+            {
+                return;
+            }
+            issue(world, vec![entity], order, Some(CancelPolicy::Soft));
         }
         (SkillCasterRef::Player, SkillCaster::Entity { .. })
         | (SkillCasterRef::Entity(_), SkillCaster::Player { .. }) => {}
-    }
-}
-
-/// The player-cast path: cooldown per player, resource cost, effect on the
-/// casting player.
-fn use_skill_as_player(
-    world: &mut World,
-    player: PlayerId,
-    skill: SkillId,
-    cooldown: u32,
-    cost: &Cost,
-    effect: PlayerCastEffect,
-) {
-    if !world.resource::<PlayerSkills>().ready(player, skill) {
-        return;
-    }
-    if !world.resource::<PlayerResources>().can_afford(player, cost) {
-        return;
-    }
-    resources::charge(world, player, cost.clone(), SpendCause::Skill { skill });
-
-    match effect {
-        PlayerCastEffect::ApplyBuff(buff) => stats::apply_player_buff(world, player, buff),
-        PlayerCastEffect::RemoveBuff(buff) => {
-            world.resource_mut::<PlayerBuffs>().remove(player, buff);
-        }
-    }
-
-    player_skills::cast(world, player, skill, cooldown);
-}
-
-/// Where a resolved entity cast lands.
-#[derive(Clone, Copy)]
-enum CastAim {
-    /// On an entity.
-    Entity(Entity),
-    /// On a cell.
-    Cell(CellPos),
-}
-
-/// The entity-cast path: the caster must be an owned entity whose type
-/// declares the skill; cooldown per entity, pool costs draw from the caster,
-/// the effect lands at the resolved aim.
-#[allow(clippy::too_many_arguments)]
-fn use_skill_as_entity(
-    world: &mut World,
-    player: PlayerId,
-    skill: SkillId,
-    cooldown: u32,
-    costs: &[EntityCastCost],
-    cast_target: EntityCastTarget,
-    effect: EntityCastEffect,
-    caster_id: SimulationId,
-    target: Option<SkillTarget>,
-) {
-    let Some(caster) = find_owned_interactable(world, player, caster_id) else {
-        return;
-    };
-    // The caster must have the skill, and it must be off cooldown.
-    if !world
-        .entity(caster)
-        .get::<SkillsComponent>()
-        .is_some_and(|skills| skills.ready(skill))
-    {
-        return;
-    }
-
-    // Only an operating caster casts.
-    match entity_def::operation(world, caster) {
-        Operation::Operating => {}
-        Operation::UnderConstruction | Operation::Disabled(_) => return,
-    }
-
-    // Resolve and validate the aim.
-    let aim = match cast_target {
-        EntityCastTarget::Caster => CastAim::Entity(caster),
-        EntityCastTarget::Position => {
-            let Some(SkillTarget::Position(position)) = target else {
-                return;
-            };
-            let cell = CellPos::from(position);
-            if !world.resource::<Map>().contains(cell) {
-                return;
-            }
-            CastAim::Cell(cell)
-        }
-        EntityCastTarget::Ally | EntityCastTarget::Enemy => {
-            let Some(SkillTarget::Entity(target_id)) = target else {
-                return;
-            };
-            let Some(target) = world
-                .resource::<EntityIndex>()
-                .interactable(world, target_id)
-            else {
-                return;
-            };
-            let session = world.resource::<GameSession>();
-            let caster_owner = entity_def::owner(world, caster);
-            let target_owner = entity_def::owner(world, target);
-            let valid = match cast_target {
-                EntityCastTarget::Ally => matches!(
-                    (caster_owner, target_owner),
-                    (Some(caster), Some(target)) if session.are_allied(caster, target)
-                ),
-                EntityCastTarget::Enemy => owner::are_hostile(session, caster_owner, target_owner),
-                EntityCastTarget::Caster | EntityCastTarget::Position => {
-                    unreachable!("handled above")
-                }
-            };
-            if !valid {
-                return;
-            }
-            CastAim::Entity(target)
-        }
-    };
-
-    if !cast_cost::can_pay(world, caster, player, costs) {
-        return;
-    }
-    cast_cost::pay(world, caster, player, costs, SpendCause::Skill { skill });
-
-    apply_skill_effect(world, player, caster, aim, effect);
-
-    // A cast on a cell is announced against the caster, like a self-cast.
-    let target_id = match aim {
-        CastAim::Entity(target) => entity_def::simulation_id(world, target),
-        CastAim::Cell(_) => caster_id,
-    };
-    entity_skills::cast(world, caster, target_id, skill, cooldown);
-}
-
-/// Applies a resolved skill effect at `aim`.
-fn apply_skill_effect(
-    world: &mut World,
-    player: PlayerId,
-    caster: Entity,
-    aim: CastAim,
-    effect: EntityCastEffect,
-) {
-    // The two effects that act on a patch of ground rather than on a thing:
-    // both read the aim as a cell, whether it was aimed there or at something
-    // standing there.
-    match effect {
-        EntityCastEffect::Field {
-            field,
-            radius,
-            action,
-        } => {
-            let center = aimed_cell(world, aim);
-            super::fields::apply_action(world, player, field, center, radius, action);
-            return;
-        }
-        EntityCastEffect::Watch { radius, duration } => {
-            let center = aimed_cell(world, aim);
-            let caster_id = entity_def::simulation_id(world, caster);
-            world.resource_mut::<Watches>().add(Watch {
-                player,
-                caster: caster_id,
-                center,
-                radius,
-                remaining: duration,
-            });
-            return;
-        }
-        EntityCastEffect::ApplyBuff(_)
-        | EntityCastEffect::RemoveBuff(_)
-        | EntityCastEffect::Damage(_)
-        | EntityCastEffect::Heal(_) => {}
-    }
-    let target = match aim {
-        CastAim::Entity(target) => target,
-        CastAim::Cell(_) => {
-            unreachable!("registration pairs a cell aim with a field or watch effect only")
-        }
-    };
-    match effect {
-        EntityCastEffect::ApplyBuff(id) => super::stats::apply_entity_buff(world, target, id),
-        EntityCastEffect::RemoveBuff(id) => {
-            if let Some(mut buffs) = world.entity_mut(target).get_mut::<BuffsComponent>() {
-                buffs.remove(id);
-            }
-        }
-        EntityCastEffect::Damage(amount) => {
-            // Skill damage bypasses armor, like an ability rather than a
-            // weapon.
-            let caster_id = entity_def::simulation_id(world, caster);
-            damage::apply(world, caster_id, target, amount);
-        }
-        EntityCastEffect::Heal(amount) => {
-            let max = entity_def::effective_stat(world, target, EntityStatId::MAX_HEALTH)
-                .unwrap_or(FixedU64::ZERO);
-            if let Some(mut health) = world.entity_mut(target).get_mut::<HealthComponent>() {
-                health.heal(amount, max);
-            }
-        }
-        EntityCastEffect::Field { .. } | EntityCastEffect::Watch { .. } => {
-            unreachable!("handled above")
-        }
-    }
-}
-
-/// The cell a cast acts on: the one it was aimed at, or the one its target
-/// stands in.
-fn aimed_cell(world: &World, aim: CastAim) -> CellPos {
-    match aim {
-        CastAim::Cell(cell) => cell,
-        CastAim::Entity(target) => CellPos::from(entity_def::position(world, target)),
     }
 }

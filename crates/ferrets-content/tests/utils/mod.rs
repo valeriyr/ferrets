@@ -1,7 +1,8 @@
 #![allow(dead_code)]
 
 use ferrets_content::{
-    attack::{AttackDef, Delivery, Weapon},
+    attack::{AttackDef, Delivery, Slain, Weapon},
+    dying::{Bequest, LeftBy},
     entity_type_def::EntityTypeDef,
     location::Solidity,
     registry::ContentRegistry,
@@ -27,6 +28,11 @@ pub fn standing(name: &str, occupation: impl Into<LayerMask>) -> EntityTypeDef {
     sized(name, occupation, CellSize::ONE)
 }
 
+/// One bequest of `entity_type`, handed on by any death that ends a life.
+pub fn leaves(entity_type: &str) -> Vec<Bequest> {
+    vec![Bequest::new(entity_type, 1, LeftBy::Ordinary)]
+}
+
 /// A solid entity occupying `occupation` whose footprint spans `size`.
 pub fn sized(name: &str, occupation: impl Into<LayerMask>, size: CellSize) -> EntityTypeDef {
     EntityTypeDef::new(name).with_location(occupation, size, Solidity::Solid)
@@ -35,5 +41,10 @@ pub fn sized(name: &str, occupation: impl Into<LayerMask>, size: CellSize) -> En
 /// A weapon reaching `targets` that lands its hit where it stands, aimed from the
 /// body — the plainest one there is, for tests about anything but the weapon.
 pub fn weapon(targets: impl Into<LayerMask>) -> AttackDef {
-    AttackDef::new(Weapon::new(targets, Delivery::Instant, None))
+    AttackDef::new(Weapon::new(
+        targets,
+        Delivery::Instant,
+        None,
+        Slain::Remains,
+    ))
 }

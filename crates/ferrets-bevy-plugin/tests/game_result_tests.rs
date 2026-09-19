@@ -527,14 +527,14 @@ fn register_bases_content(app: &mut App) {
         EntityTypeDef::new("base")
             .with_location(GROUND, CellSize::ONE, Solidity::Solid)
             .with_health(30)
-            .with_dying(2, None)
+            .with_dying(2, [])
             .with_tags(["building"]),
     );
     registry.register(
         EntityTypeDef::new("soldier")
             .with_location(GROUND, CellSize::ONE, Solidity::Solid)
             .with_health(30)
-            .with_dying(2, None),
+            .with_dying(2, []),
     );
     registry.validate();
 }

@@ -26,6 +26,7 @@ pub mod player_stats;
 pub mod rally;
 pub mod requirements;
 pub mod resources;
+pub mod ruleset;
 pub mod scenario;
 pub mod selection;
 pub mod session;

@@ -11,15 +11,14 @@ use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect};
 use ferrets_physics::body;
 
 use crate::{
+    components::owner,
     entity_def,
     session::{GameSession, player_id::PlayerId, player_mask::PlayerMask},
 };
 use ferrets_content::{
+    affiliation::Affiliation,
     entity_type_def::EntityTypeDef,
-    field::{
-        FieldAffiliation, FieldCoverage, FieldEffect, FieldEffectKind, FieldId, FieldPlacement,
-        FieldSide,
-    },
+    field::{FieldCoverage, FieldEffect, FieldEffectKind, FieldId, FieldPlacement, FieldSide},
     stats::EntityModifier,
 };
 
@@ -104,7 +103,7 @@ impl FieldGrid {
         session: &GameSession,
         field: FieldId,
         pos: CellPos,
-        of: FieldAffiliation,
+        of: Affiliation,
         player: Option<PlayerId>,
     ) -> bool {
         self.covered(field, pos).satisfies(session, of, player)
@@ -219,21 +218,20 @@ impl FieldGrid {
 
 /// The field's reading of a cover mask: whom its coverage counts for.
 impl PlayerMask {
-    /// Whether any player in the mask satisfies `of` judged from `player`.
+    /// Whether any player in the mask is whose `of` names, judged from
+    /// `player`.
+    ///
+    /// Coverage belongs to whoever laid it, so an empty mask is nobody's and
+    /// satisfies nothing — not even [`Affiliation::Anyone`], which names anyone
+    /// who is there rather than the absence of cover.
     pub fn satisfies(
         self,
         session: &GameSession,
-        of: FieldAffiliation,
+        of: Affiliation,
         player: Option<PlayerId>,
     ) -> bool {
-        match of {
-            FieldAffiliation::Anyone => !self.is_empty(),
-            FieldAffiliation::Own => player.is_some_and(|player| self.contains(player)),
-            FieldAffiliation::Allied => player.is_some_and(|player| {
-                self.players()
-                    .any(|other| session.are_allied(player, other))
-            }),
-        }
+        self.players()
+            .any(|other| owner::admits(session, of, player, Some(other)))
     }
 }
 

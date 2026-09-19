@@ -3,17 +3,21 @@
 //! malformed scripts and results surface as errors rather than panics.
 
 use ferrets_content::{
+    affiliation::Affiliation,
     annex::{AloneConduct, AnnexClaim, AnnexLife, AnnexWork},
     build::BuilderAttendance,
     costs,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
+    kinds::Kinds,
     location::Solidity,
     player_buffs::PlayerBuffDef,
     registry::ContentRegistry,
     requirement::Requirement,
     research::{ResearchDef, ResearchId},
-    skills::{EntityCastEffect, EntityCastTarget, PlayerCastEffect, SkillCaster, SkillDef},
+    skills::{
+        Casting, EntityCastEffect, EntityCastTarget, PlayerCastEffect, Reach, SkillCaster, SkillDef,
+    },
     stack_rule::StackRule,
     stats::{EntityModifier, ModifierOp},
     work::{CrewLimit, WorkPresence},
@@ -26,7 +30,7 @@ use ferrets_script::{
         AiRuntime,
         view::{
             content::{AttackView, ContentView, EntityContentView, MorphView},
-            game::{EntityView, GameView},
+            game::{EntityView, GameView, RemainsView},
         },
     },
     engine::{ScriptEngine, lua::LuaEngine},
@@ -779,6 +783,29 @@ fn scripts_read_view_and_content_tables() {
     );
 }
 
+#[test]
+fn scripts_read_bodies_on_ground() {
+    let source = ai_script(
+        r#"function(state, view)
+            local body = view.remains[1]
+            if body == nil then error("no remains") end
+            if body.type_name ~= "soldier" then error("type_name") end
+            return { { kind = "move", x = body.x, y = body.y } }
+        end"#,
+    );
+    let mut runtime = load_ai(&source, &demo_like_content()).expect("load ai");
+
+    let commands = runtime.think(&populated_view(0)).expect("think");
+
+    assert_eq!(
+        commands,
+        vec![PlayerCommand::Move {
+            target: cell(6, 7),
+            flush: true,
+        }]
+    );
+}
+
 //
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 //
@@ -843,6 +870,8 @@ fn research_content() -> (ContentView, ResearchId) {
             caster: SkillCaster::Entity {
                 costs: Vec::new(),
                 target: EntityCastTarget::Caster,
+                reach: Reach::Wherever,
+                casting: Casting::Instant,
                 effect: EntityCastEffect::Damage(FixedU64::ONE),
             },
             requires: vec![Requirement::Research(smithing)],
@@ -854,7 +883,12 @@ fn research_content() -> (ContentView, ResearchId) {
             cooldown: 5,
             caster: SkillCaster::Entity {
                 costs: Vec::new(),
-                target: EntityCastTarget::Ally,
+                target: EntityCastTarget::Standing {
+                    side: Affiliation::Allied,
+                    kinds: Kinds::Any,
+                },
+                reach: Reach::Wherever,
+                casting: Casting::Instant,
                 effect: EntityCastEffect::Heal(FixedU64::ONE),
             },
             requires: Vec::new(),
@@ -920,7 +954,7 @@ fn research_content() -> (ContentView, ResearchId) {
                     crew: CrewLimit::ONE,
                 }),
             )
-            .with_docks([(CellPos::new(1, 0), ["relay"])])
+            .with_docks([(CellPos::new(1, 0), Kinds::types(["relay"]))])
             .with_requires([
                 Requirement::EntityType("lab".to_string()),
                 Requirement::Tag("workshop".to_string()),
@@ -1017,6 +1051,7 @@ fn view_at_tick(tick: u32) -> GameView {
         ally_entities: Vec::new(),
         enemy_entities: Vec::new(),
         neutral_entities: Vec::new(),
+        remains: Vec::new(),
     }
 }
 
@@ -1055,6 +1090,7 @@ fn populated_view(tick: u32) -> GameView {
                 passengers: Vec::new(),
                 broodlings: Vec::new(),
                 bred_by: None,
+                lifetime_left: None,
             },
             EntityView {
                 id: 2,
@@ -1077,6 +1113,7 @@ fn populated_view(tick: u32) -> GameView {
                 passengers: Vec::new(),
                 broodlings: Vec::new(),
                 bred_by: None,
+                lifetime_left: None,
             },
         ],
         ally_entities: Vec::new(),
@@ -1102,6 +1139,13 @@ fn populated_view(tick: u32) -> GameView {
             passengers: Vec::new(),
             broodlings: Vec::new(),
             bred_by: None,
+            lifetime_left: None,
+        }],
+        remains: vec![RemainsView {
+            id: 4,
+            type_name: "soldier".to_string(),
+            x: 6,
+            y: 7,
         }],
     }
 }

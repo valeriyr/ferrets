@@ -25,6 +25,7 @@ use bevy::{
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::fixed_uvec2::FixedUVec2;
 use ferrets_simulation::{
+    command::SkillTarget,
     entity_def,
     entity_index::EntityIndex,
     events::{DeathCause, EventRecord, SimulationEvent},
@@ -80,6 +81,8 @@ enum Cue {
     Completed,
     /// A research topic finishing.
     Research,
+    /// A timed life running out.
+    Expiry,
 }
 
 impl Cue {
@@ -103,6 +106,8 @@ impl Cue {
             // The longest and cleanest: a milestone rather than a thing in the
             // field.
             Cue::Research => tone(0.45, 440.0, 660.0, 0.02, 5.0),
+            // A thin fall to nothing: what was called up is gone again.
+            Cue::Expiry => tone(0.20, 480.0, 160.0, 0.10, 12.0),
         }
     }
 }
@@ -174,6 +179,7 @@ pub struct Cues {
     morph: Handle<GeneratedCue>,
     completed: Handle<GeneratedCue>,
     research: Handle<GeneratedCue>,
+    expiry: Handle<GeneratedCue>,
 }
 
 impl Cues {
@@ -188,6 +194,7 @@ impl Cues {
             Cue::Morph => self.morph.clone(),
             Cue::Completed => self.completed.clone(),
             Cue::Research => self.research.clone(),
+            Cue::Expiry => self.expiry.clone(),
         }
     }
 }
@@ -266,6 +273,7 @@ pub fn build_cues(mut commands: Commands, mut assets: ResMut<Assets<GeneratedCue
         morph: built(Cue::Morph),
         completed: built(Cue::Completed),
         research: built(Cue::Research),
+        expiry: built(Cue::Expiry),
     });
 }
 
@@ -454,6 +462,12 @@ fn cues_for(
             cause: DeathCause::Killed { .. },
             ..
         } => out.push((Cue::Explosion, Some(*position))),
+        // A summon's time running out, heard where it stood.
+        SimulationEvent::EntityDied {
+            position,
+            cause: DeathCause::Expired,
+            ..
+        } => out.push((Cue::Expiry, Some(*position))),
         SimulationEvent::EntityMorphed { entity, .. } => {
             out.extend(at(*entity).map(|place| (Cue::Morph, Some(place))));
         }
@@ -479,7 +493,10 @@ fn cues_for(
         }
         SimulationEvent::SkillCast { caster, target, .. } => {
             let from = at(*caster);
-            let onto = at(*target);
+            let onto = match target {
+                SkillTarget::Entity(target) => at(*target),
+                SkillTarget::Position(position) => Some(*position),
+            };
             out.extend(from.map(|place| (Cue::Cast, Some(place))));
             if onto != from {
                 out.extend(onto.map(|place| (Cue::Effect, Some(place))));
@@ -497,8 +514,11 @@ fn cues_for(
                 out.push((Cue::Completed, Some(*position)));
             }
         }
-        SimulationEvent::EntityDied { .. }
+        // A body spent is the cast landing, which the effect cue already
+        // sounds where it lands.
+        SimulationEvent::RemainsSpent { .. }
         | SimulationEvent::EntitySpawned { .. }
+        | SimulationEvent::EntityDied { .. }
         | SimulationEvent::EntityHidden { .. }
         | SimulationEvent::EntityRevealed { .. }
         | SimulationEvent::ResourcesSpent { .. }

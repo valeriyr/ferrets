@@ -7,12 +7,13 @@ use ferrets_content::{
     berths::{BerthGroup, BerthsDef},
     brood::{BreederDef, OrphanFate},
     build::BuilderAttendance,
-    dying::DyingDef,
+    dying::{Bequest, DeathKind, DyingDef, LeftBy},
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
+    kinds::Kinds,
     location::Solidity,
-    period::Period,
-    resource::{Banking, DepletionPolicy, HarvestData, Sources},
+    quantity::Quantity,
+    resource::{Banking, DepletionPolicy, HarvestData},
     work::{Attachment, BerthStance, CrewLimit, WorkPresence},
 };
 use ferrets_geometry::cell_size::CellSize;
@@ -35,7 +36,7 @@ fn fully_loaded_definition_is_valid() {
             FixedU64::from_num(360),
         )
         .with_health(50)
-        .with_dying(3, None)
+        .with_dying(3, [])
         .with_attack(utils::weapon(GROUND), 10, 1, 1, 4, 2)
         .with_cost([("gold", 30), ("wood", 10)])
         .with_train_time(4)
@@ -59,7 +60,7 @@ fn fully_loaded_definition_is_valid() {
                     crew: CrewLimit::ONE,
                 },
                 Banking::Carried,
-                Sources::Any,
+                Kinds::Any,
             ),
         )])
         .with_resource_storage(["gold"]);
@@ -97,15 +98,70 @@ fn zero_footprint_panics() {
 //
 
 #[test]
-#[should_panic(expected = "dying_time must be greater than 0")]
-fn zero_dying_time_panics() {
-    DyingDef::new(0, None);
+#[should_panic(expected = "a dying time of no ticks is no dying time at all")]
+fn dying_time_of_no_ticks_panics() {
+    // None is how a type says it waits not at all; a stated zero is a number
+    // meaning the same thing twice.
+    DyingDef::new(Some(0), Vec::new());
 }
 
 #[test]
-#[should_panic(expected = "corpse_type must not be empty")]
-fn empty_corpse_type_panics() {
-    DyingDef::new(3, Some(""));
+#[should_panic(expected = "entity_type must not be empty")]
+fn empty_bequest_type_panics() {
+    Bequest::new("", 1, LeftBy::Ordinary);
+}
+
+#[test]
+#[should_panic(expected = "leaves none of it")]
+fn bequest_of_none_panics() {
+    Bequest::new("corpse", 0, LeftBy::Ordinary);
+}
+
+#[test]
+#[should_panic(expected = "is left by no death at all")]
+fn bequest_no_death_hands_on_panics() {
+    Bequest::new("corpse", 1, LeftBy::Named(Vec::new()));
+}
+
+#[test]
+#[should_panic(expected = "a bequest of 'corpse' names Killed twice")]
+fn bequest_naming_one_death_twice_panics() {
+    Bequest::new(
+        "corpse",
+        1,
+        LeftBy::Named(vec![DeathKind::Killed, DeathKind::Killed]),
+    );
+}
+
+#[test]
+#[should_panic(expected = "a death leaves 'corpse' twice")]
+fn leaving_one_type_twice_panics() {
+    DyingDef::new(
+        Some(2),
+        vec![
+            Bequest::new("corpse", 1, LeftBy::Ordinary),
+            Bequest::new("corpse", 2, LeftBy::Ordinary),
+        ],
+    );
+}
+
+#[test]
+fn ordinary_bequest_is_left_by_death_that_ends_life() {
+    let bequest = Bequest::new("corpse", 1, LeftBy::Ordinary);
+
+    assert!(bequest.left_by(DeathKind::Killed));
+    assert!(bequest.left_by(DeathKind::Expired));
+    // Taken off the board rather than killed: the site it founded swallowed it.
+    assert!(!bequest.left_by(DeathKind::Consumed));
+    assert!(!bequest.left_by(DeathKind::Cancelled));
+}
+
+#[test]
+fn named_bequest_is_left_by_exactly_what_it_names() {
+    let bequest = Bequest::new("corpse", 1, LeftBy::Named(vec![DeathKind::Cancelled]));
+
+    assert!(bequest.left_by(DeathKind::Cancelled));
+    assert!(!bequest.left_by(DeathKind::Killed));
 }
 
 //
@@ -191,20 +247,8 @@ fn zero_harvest_time_panics() {
             crew: CrewLimit::ONE,
         },
         Banking::Carried,
-        Sources::Any,
+        Kinds::Any,
     );
-}
-
-#[test]
-#[should_panic(expected = "a source list must name a source")]
-fn empty_source_list_panics() {
-    Sources::only(Vec::<String>::new());
-}
-
-#[test]
-#[should_panic(expected = "source names must not be empty")]
-fn empty_source_name_panics() {
-    Sources::only(["gold_mine", ""]);
 }
 
 #[test]
@@ -218,7 +262,7 @@ fn zero_carry_capacity_panics() {
             crew: CrewLimit::ONE,
         },
         Banking::Carried,
-        Sources::Any,
+        Kinds::Any,
     );
 }
 
@@ -241,7 +285,7 @@ fn empty_carry_kind_panics() {
                 crew: CrewLimit::ONE,
             },
             Banking::Carried,
-            Sources::Any,
+            Kinds::Any,
         ),
     )]);
 }
@@ -295,19 +339,19 @@ fn empty_berth_group_name_panics() {
 #[test]
 #[should_panic(expected = "breeds must not be empty")]
 fn breeder_of_nothing_panics() {
-    BreederDef::new("", Period::Constant(10), 2, 0, OrphanFate::Perish);
+    BreederDef::new("", Quantity::Constant(10), 2, 0, OrphanFate::Perish);
 }
 
 #[test]
 #[should_panic(expected = "a brood limit must admit at least one broodling")]
 fn breeder_with_limit_of_zero_panics() {
-    BreederDef::new("grub", Period::Constant(10), 0, 0, OrphanFate::Perish);
+    BreederDef::new("grub", Quantity::Constant(10), 0, 0, OrphanFate::Perish);
 }
 
 #[test]
 #[should_panic(expected = "a brood cannot owe more broodlings than its limit admits")]
 fn breeder_owing_more_than_its_limit_panics() {
-    BreederDef::new("grub", Period::Constant(10), 2, 3, OrphanFate::Perish);
+    BreederDef::new("grub", Quantity::Constant(10), 2, 3, OrphanFate::Perish);
 }
 
 #[test]

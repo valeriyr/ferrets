@@ -93,6 +93,8 @@
 //! process_health_flow — exclusive system; move health pools up by health_regen
 //!                      toward max_health and down by health_drain,
 //!                      skipping the dying and the still-under-construction
+//! process_lifetimes  — exclusive system; age every timed life by a tick and end
+//!                      the ones whose time is up
 //! process_entity_ai  — per-entity AI think (throttled, every N ticks) [not yet implemented]
 //! check_game_result  — apply the finish policy; may end the session (last player
 //!                      standing, or a scripted scenario's verdict)
@@ -521,7 +523,12 @@ impl Plugin for SimulationPlugin {
                     // applied.
                     systems::process_entity_skills,
                     systems::process_player_skills,
-                    (systems::process_energy_regen, systems::process_health_flow).chain(),
+                    (
+                        systems::process_energy_regen,
+                        systems::process_health_flow,
+                        systems::process_lifetimes,
+                    )
+                        .chain(),
                     systems::check_game_result,
                     systems::tick_counter,
                 )

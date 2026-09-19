@@ -127,6 +127,9 @@ pub enum PlayerCommand {
     /// Tears down the unfinished `site` the issuing player owns, refunding its
     /// cost; whoever was working it is released.
     CancelBuild { site: SimulationId },
+    /// Calls off the change of form `entity` is under, on that change's own
+    /// terms: a refundable one gives the price back, a committed one holds.
+    CancelMorph { entity: SimulationId },
     /// Issues a repair order against `target` to every selected entity that can
     /// mend it.
     /// `flush` cancels existing orders before issuing this one; `false` appends.

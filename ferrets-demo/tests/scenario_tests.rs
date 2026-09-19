@@ -29,7 +29,10 @@ fn mission_wins_with_camp_and_three_archers() {
         .expect("evaluate");
 
     assert_eq!(status.outcome, Outcome::Victory);
-    assert!(status.objectives.iter().all(|objective| objective.done));
+    assert!(
+        status.objectives.iter().all(|objective| objective.done),
+        "a victory is every objective done, not a majority of them"
+    );
 }
 
 #[test]
@@ -95,6 +98,7 @@ fn entity(type_name: &str, under_construction: bool) -> EntityView {
         passengers: Vec::new(),
         broodlings: Vec::new(),
         bred_by: None,
+        lifetime_left: None,
     }
 }
 
@@ -114,5 +118,6 @@ fn view_with(my_entities: Vec<EntityView>) -> GameView {
         ally_entities: Vec::new(),
         enemy_entities: Vec::new(),
         neutral_entities: Vec::new(),
+        remains: Vec::new(),
     }
 }

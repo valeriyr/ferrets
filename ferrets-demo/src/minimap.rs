@@ -62,6 +62,8 @@ const VOID: [u8; 4] = [23, 23, 28, 255];
 const CREEP: [u8; 4] = [120, 45, 140, 255];
 /// The tint a cell takes toward power where the viewed player's own covers it.
 const POWER: [u8; 4] = [70, 130, 255, 255];
+/// Blight, wherever anyone's covers a cell.
+const BLIGHT: [u8; 4] = [86, 84, 78, 255];
 
 /// `color` moved `factor` of the way toward `toward`, alpha kept.
 fn mix(color: [u8; 4], toward: [u8; 4], factor: f32) -> [u8; 4] {
@@ -564,12 +566,20 @@ pub fn refresh_minimap(
     canvas.restore(base);
 
     // Fields, over the terrain and under the fog like the tiles they tint:
-    // creep whoever's it is, power where it is the viewed player's own.
+    // creep and blight whoever's they are, power where it is the viewed
+    // player's own.
     let viewed = render::viewed_player(&session, &watch);
     if let Some(creep) = registry.field("creep") {
         for (cell, mask) in fields.cells(creep) {
             if !mask.is_empty() {
                 canvas.put(cell.x, cell.y, CREEP);
+            }
+        }
+    }
+    if let Some(blight) = registry.field("blight") {
+        for (cell, mask) in fields.cells(blight) {
+            if !mask.is_empty() {
+                canvas.put(cell.x, cell.y, BLIGHT);
             }
         }
     }

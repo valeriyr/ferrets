@@ -6,7 +6,7 @@ mod utils;
 use bevy::prelude::*;
 use ferrets_bevy_plugin::SimulationPlugin;
 use ferrets_content::registry::ContentRegistry;
-use ferrets_demo::{content::CONTENT, map, setup};
+use ferrets_demo::{content::CONTENT, map, ruleset, setup};
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_script::{content, engine::lua::LuaEngine};
 use ferrets_simulation::{
@@ -43,6 +43,7 @@ fn worker_harvests_wood_on_demo_map() {
             },
             DropPolicy::Automatic,
             FinishPolicy::Endless,
+            ruleset::demo(),
         ),
         map::build(),
     ));

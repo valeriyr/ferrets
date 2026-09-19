@@ -4,8 +4,8 @@ use ferrets_geometry::cell_size::CellSize;
 use ferrets_math::fixed_uvec2::FixedUVec2;
 use serde::{Deserialize, Serialize};
 
-use crate::simulation_id::SimulationId;
-use ferrets_content::research::ResearchId;
+use crate::{command::SkillTarget, simulation_id::SimulationId};
+use ferrets_content::{research::ResearchId, skills::SkillId};
 
 /// What an attack is aimed at.
 ///
@@ -108,6 +108,14 @@ pub enum Order {
     /// unload range of it first and send each freed passenger marching there;
     /// without one, freed passengers go to the rally point, if set.
     Unload { at: Option<FixedUVec2> },
+    /// Cast `skill` at `target`: walk into the skill's reach of what it is
+    /// aimed at, then work at it until it lands. A skill that declares no
+    /// reach has nothing to walk toward and is worked where the caster
+    /// stands.
+    Cast {
+        skill: SkillId,
+        target: Option<SkillTarget>,
+    },
     /// Wait out the dying phase, then leave the world.
     Die,
 }
@@ -220,6 +228,16 @@ impl Order {
     pub fn load_target(&self) -> Option<SimulationId> {
         match self {
             Order::Load { target } => Some(*target),
+            _ => None,
+        }
+    }
+
+    /// If this order is a cast order, returns the skill and what it is aimed
+    /// at — the outer `Option` says whether this is a cast order at all, the
+    /// inner one whether the cast names an aim. Otherwise, returns `None`.
+    pub fn cast_params(&self) -> Option<(SkillId, Option<SkillTarget>)> {
+        match self {
+            Order::Cast { skill, target } => Some((*skill, *target)),
             _ => None,
         }
     }

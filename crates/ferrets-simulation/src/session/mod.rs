@@ -14,6 +14,7 @@ pub mod player_mask;
 pub mod player_slot;
 pub mod player_type;
 
+use crate::ruleset::{RemainsLimit, Ruleset};
 use crate::session::{
     ai_hosting::AiHosting,
     authority::Authority,
@@ -101,6 +102,8 @@ pub struct GameSession {
     drop_policy: DropPolicy,
     /// When this session ends on its own.
     finish_policy: FinishPolicy,
+    /// The rules this session's game is played under.
+    rules: Ruleset,
     /// What this node does when the local player is defeated while the match
     /// goes on.
     defeat_conduct: DefeatConduct,
@@ -145,9 +148,18 @@ impl GameSession {
         authority: Authority,
         drop_policy: DropPolicy,
         finish_policy: FinishPolicy,
+        rules: Ruleset,
     ) -> Self {
         assert_valid_slots(local, &slots);
-        Self::new(local, slots, map, authority, drop_policy, finish_policy)
+        Self::new(
+            local,
+            slots,
+            map,
+            authority,
+            drop_policy,
+            finish_policy,
+            rules,
+        )
     }
 
     /// The inert pre-configuration placeholder: a game inserts the resource
@@ -168,6 +180,7 @@ impl GameSession {
             FinishPolicy::LastStanding {
                 elimination: EliminationScope::Player,
             },
+            Ruleset::new(RemainsLimit::Unbounded),
         )
     }
 
@@ -178,6 +191,7 @@ impl GameSession {
     ///
     /// Panics if the session has already started, or if the slot ids are not
     /// contiguous from `0`, or `local` fields a slot outside them.
+    #[allow(clippy::too_many_arguments)]
     pub fn configure(
         &mut self,
         local: LocalRole,
@@ -186,6 +200,7 @@ impl GameSession {
         authority: Authority,
         drop_policy: DropPolicy,
         finish_policy: FinishPolicy,
+        rules: Ruleset,
     ) {
         assert_eq!(
             self.state,
@@ -201,6 +216,7 @@ impl GameSession {
         self.authority = authority;
         self.drop_policy = drop_policy;
         self.finish_policy = finish_policy;
+        self.rules = rules;
     }
 
     pub fn start(&mut self) {
@@ -327,6 +343,11 @@ impl GameSession {
     /// Returns when this session ends on its own.
     pub fn finish_policy(&self) -> FinishPolicy {
         self.finish_policy
+    }
+
+    /// Returns the rules this session's game is played under.
+    pub fn rules(&self) -> Ruleset {
+        self.rules
     }
 
     /// Sets what this node does when the local player is defeated while the
@@ -614,6 +635,7 @@ impl GameSession {
         authority: Authority,
         drop_policy: DropPolicy,
         finish_policy: FinishPolicy,
+        rules: Ruleset,
     ) -> Self {
         Self {
             tick: 0,
@@ -626,6 +648,7 @@ impl GameSession {
             authority,
             drop_policy,
             finish_policy,
+            rules,
             defeat_conduct: DefeatConduct::Conclude,
             result: None,
             paused: false,

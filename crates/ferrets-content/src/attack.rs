@@ -21,8 +21,17 @@ pub enum Delivery {
     Projectile(ProjectileId),
 }
 
-/// A weapon: what it reaches, how its hit travels, and what that hit spreads
-/// over.
+/// What is left of a body this weapon brings down.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Slain {
+    /// Whatever the fallen type leaves for a death by damage.
+    Remains,
+    /// Nothing at all, whatever the fallen type declares — a body blown apart.
+    Nothing,
+}
+
+/// A weapon: what it reaches, how its hit travels, what that hit spreads over,
+/// and what it leaves of what it kills.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Weapon {
     /// The navigation layers it can reach — see
@@ -34,6 +43,8 @@ pub struct Weapon {
     /// hit. Independent of the delivery: a cleaving swing lands instantly and
     /// still catches everything beside it.
     splash: Option<SplashDef>,
+    /// What is left of a body it brings down.
+    slain: Slain,
 }
 
 impl Weapon {
@@ -45,6 +56,7 @@ impl Weapon {
         targets: impl Into<LayerMask>,
         delivery: Delivery,
         splash: Option<SplashDef>,
+        slain: Slain,
     ) -> Self {
         let targets = targets.into();
         assert!(
@@ -55,6 +67,7 @@ impl Weapon {
             targets,
             delivery,
             splash,
+            slain,
         }
     }
 
@@ -74,6 +87,12 @@ impl Weapon {
     #[inline]
     pub fn splash(&self) -> Option<&SplashDef> {
         self.splash.as_ref()
+    }
+
+    /// What is left of a body it brings down.
+    #[inline]
+    pub fn slain(&self) -> Slain {
+        self.slain
     }
 }
 

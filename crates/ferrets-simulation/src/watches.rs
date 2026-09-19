@@ -33,7 +33,7 @@ pub struct Watches(Vec<Watch>);
 
 impl Watches {
     /// Puts `watch` in force.
-    pub fn add(&mut self, watch: Watch) {
+    fn add(&mut self, watch: Watch) {
         self.0.push(watch);
     }
 
@@ -49,4 +49,23 @@ impl Watches {
     pub fn in_force(&self) -> &[Watch] {
         &self.0
     }
+}
+
+/// Puts a watch in force for `player`, `radius` cells around `center` and
+/// holding for `duration` ticks, cast by `caster`.
+pub fn open(
+    world: &mut World,
+    player: PlayerId,
+    caster: SimulationId,
+    center: CellPos,
+    radius: u32,
+    duration: u32,
+) {
+    world.resource_mut::<Watches>().add(Watch {
+        player,
+        caster,
+        center,
+        radius,
+        remaining: duration,
+    });
 }

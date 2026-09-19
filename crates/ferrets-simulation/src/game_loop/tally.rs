@@ -49,16 +49,22 @@ fn fold(
     match event {
         SimulationEvent::EntitySpawned { entity, cause } => {
             // Only what a player finished counts as production: a map placement
-            // or a sandbox conjuring was not their doing, remains never are, and
-            // a founded site is counted by its completion instead.
+            // or a sandbox conjuring was not their doing, what a death handed
+            // on nobody made, and a founded site is counted by its completion
+            // instead.
             let produced = match cause {
                 SpawnCause::Trained { .. } => true,
                 SpawnCause::Placed
                 | SpawnCause::Founded { .. }
                 | SpawnCause::Sandbox
                 | SpawnCause::Bred { .. }
-                | SpawnCause::Remains { .. }
-                | SpawnCause::Uncovered { .. } => false,
+                | SpawnCause::Bequeathed { .. }
+                | SpawnCause::Uncovered { .. }
+                // What a cast calls up is the cast's doing, counted no more
+                // than the energy that paid for it: a raised skeleton is a
+                // spell that lasts a while, not a unit anyone produced.
+                | SpawnCause::Raised { .. }
+                | SpawnCause::Summoned { .. } => false,
             };
             if !produced {
                 return;
@@ -178,7 +184,10 @@ fn fold(
         // under another flag.
         SimulationEvent::EntityHidden { .. }
         | SimulationEvent::EntityRevealed { .. }
-        | SimulationEvent::EntityCaptured { .. } => {}
+        | SimulationEvent::EntityCaptured { .. }
+        // Remains were never anyone's to lose, so spending them is nothing to
+        // tally either.
+        | SimulationEvent::RemainsSpent { .. } => {}
     }
 }
 
@@ -216,7 +225,10 @@ fn fire_behind(
             | DeathCause::Consumed
             | DeathCause::Overbuilt
             | DeathCause::Decayed
-            | DeathCause::Unseated { .. } => return None,
+            | DeathCause::Unseated { .. }
+            // A timed life running out is nobody's kill and nobody's loss: a
+            // summon was never a standing army.
+            | DeathCause::Expired => return None,
         }
     }
 }

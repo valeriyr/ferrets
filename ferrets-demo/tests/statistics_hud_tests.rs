@@ -5,6 +5,7 @@ mod utils;
 
 use bevy::{ecs::system::RunSystemOnce, prelude::*};
 use ferrets_demo::hud::{self, FinalStatsText};
+use ferrets_demo::ruleset;
 use ferrets_simulation::{
     events::SpendCause,
     movement_model::MovementModel,
@@ -98,6 +99,7 @@ fn free_and_environment_seats_get_no_row() {
         },
         DropPolicy::Automatic,
         FinishPolicy::Endless,
+        ruleset::demo(),
     );
     session.start();
     session.finish(GameResult::Draw);

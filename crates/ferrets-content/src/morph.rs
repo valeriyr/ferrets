@@ -1,7 +1,7 @@
 //! Content-defined in-place transitions: what an entity can become, and on
 //! what terms.
 
-use crate::{period::Period, requirement::Requirement, skills::EntityCastCost};
+use crate::{quantity::Quantity, requirement::Requirement, skills::EntityCastCost};
 
 /// When a transition secures the ground its destination form stands on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,7 +62,7 @@ pub struct MorphTransition {
     /// origin form for the duration.
     via: Option<String>,
     /// How long the transition takes.
-    time: Period,
+    time: Quantity,
     /// When the destination footprint is secured.
     placement: MorphPlacement,
     /// Whether the transition can be called off once under way.
@@ -88,7 +88,7 @@ impl MorphTransition {
     pub fn new(
         into: impl Into<String>,
         via: Option<&str>,
-        time: Period,
+        time: Quantity,
         placement: MorphPlacement,
         cancel: MorphCancel,
         interrupted: MorphInterrupted,
@@ -132,7 +132,7 @@ impl MorphTransition {
 
     /// How long the transition takes.
     #[inline]
-    pub fn time(&self) -> Period {
+    pub fn time(&self) -> Quantity {
         self.time
     }
 

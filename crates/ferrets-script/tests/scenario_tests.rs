@@ -336,6 +336,7 @@ fn entity(id: u32, type_name: &str, under_construction: bool) -> EntityView {
         passengers: Vec::new(),
         broodlings: Vec::new(),
         bred_by: None,
+        lifetime_left: None,
     }
 }
 
@@ -355,5 +356,6 @@ fn view_with(my_entities: Vec<EntityView>) -> GameView {
         ally_entities: Vec::new(),
         enemy_entities: Vec::new(),
         neutral_entities: Vec::new(),
+        remains: Vec::new(),
     }
 }

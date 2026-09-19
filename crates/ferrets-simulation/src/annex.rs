@@ -88,11 +88,11 @@ fn dock_anchor(world: &World, primary: Entity, dock: &DockDef) -> CellPos {
 
 /// The anchor of the first dock of `primary` that takes `type_name`, or `None`
 /// when it offers no such dock.
-pub fn dock_anchor_for(world: &World, primary: Entity, type_name: &str) -> Option<CellPos> {
+pub fn dock_anchor_for(world: &World, primary: Entity, annex: &EntityTypeDef) -> Option<CellPos> {
     entity_def::of(world, primary)
         .docks
         .iter()
-        .find(|dock| dock.accepts(type_name))
+        .find(|dock| dock.accepts().admits(annex))
         .map(|dock| dock_anchor(world, primary, dock))
 }
 
@@ -105,16 +105,16 @@ pub fn allows_placement(
     def: &EntityTypeDef,
     anchor: CellPos,
 ) -> bool {
-    def.annex.is_none() || has_dock_at(world, builder, &def.name, anchor)
+    def.annex.is_none() || has_dock_at(world, builder, def, anchor)
 }
 
-/// Whether `primary` offers a dock that takes `type_name` with its annex
-/// standing at `anchor`.
-fn has_dock_at(world: &World, primary: Entity, type_name: &str, anchor: CellPos) -> bool {
+/// Whether `primary` offers a dock that takes `annex` with it standing at
+/// `anchor`.
+fn has_dock_at(world: &World, primary: Entity, annex: &EntityTypeDef, anchor: CellPos) -> bool {
     entity_def::of(world, primary)
         .docks
         .iter()
-        .any(|dock| dock.accepts(type_name) && dock_anchor(world, primary, dock) == anchor)
+        .any(|dock| dock.accepts().admits(annex) && dock_anchor(world, primary, dock) == anchor)
 }
 
 /// One dock on offer this tick.
@@ -179,7 +179,7 @@ fn tend_sites(world: &mut World, offers: &[Offer]) {
 
     for (_, site) in sites {
         let anchor = entity_def::footprint_rect(world, site).origin;
-        let type_name = entity_def::of(world, site).name.clone();
+        let annex = entity_def::of(world, site);
         let owner = entity_def::owner(world, site);
         // Only the owner's own primary works it: a rival's landing beside a
         // half-raised annex does not finish it for them.
@@ -187,7 +187,9 @@ fn tend_sites(world: &mut World, offers: &[Offer]) {
             .iter()
             .filter(|offer| offer.anchor == anchor)
             .filter(|offer| {
-                entity_def::of(world, offer.primary).docks[offer.dock_index].accepts(&type_name)
+                entity_def::of(world, offer.primary).docks[offer.dock_index]
+                    .accepts()
+                    .admits(annex)
             })
             .filter(|offer| entity_def::owner(world, offer.primary) == owner)
             .map(|offer| (offer.primary_id, offer.primary))
@@ -241,17 +243,12 @@ fn docks_on_offer(world: &mut World) -> Vec<Offer> {
         if !entity_def::stands_on_grid(world, primary) {
             continue;
         }
-        let docks = entity_def::of(world, primary).docks.len();
-        for dock_index in 0..docks {
-            let anchor = {
-                let def = entity_def::of(world, primary);
-                dock_anchor(world, primary, &def.docks[dock_index])
-            };
+        for (dock_index, dock) in entity_def::of(world, primary).docks.iter().enumerate() {
             offers.push(Offer {
                 primary,
                 primary_id,
                 dock_index,
-                anchor,
+                anchor: dock_anchor(world, primary, dock),
             });
         }
     }
@@ -284,7 +281,7 @@ fn standing_annexes(world: &mut World) -> Vec<Entity> {
 /// admits. Ties go to the lowest id.
 fn primary_among(world: &World, annex: Entity, offers: &[Offer]) -> Docking {
     let anchor = entity_def::footprint_rect(world, annex).origin;
-    let type_name = entity_def::of(world, annex).name.clone();
+    let annex_def = entity_def::of(world, annex);
     let claim = terms(world, annex).claim();
     let owner = entity_def::owner(world, annex);
 
@@ -292,7 +289,9 @@ fn primary_among(world: &World, annex: Entity, offers: &[Offer]) -> Docking {
         .iter()
         .filter(|offer| offer.anchor == anchor)
         .filter(|offer| {
-            entity_def::of(world, offer.primary).docks[offer.dock_index].accepts(&type_name)
+            entity_def::of(world, offer.primary).docks[offer.dock_index]
+                .accepts()
+                .admits(annex_def)
         })
         .filter(|offer| claim_admits(world, claim, owner, entity_def::owner(world, offer.primary)))
         .min_by_key(|offer| offer.primary_id)

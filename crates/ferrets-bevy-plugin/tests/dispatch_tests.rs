@@ -6,10 +6,11 @@ use bevy::prelude::*;
 use ferrets_content::{
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
+    kinds::Kinds,
     location::Solidity,
     registry::ContentRegistry,
     repair::{RepairCost, RepairRate},
-    resource::{Banking, HarvestData, Sources},
+    resource::{Banking, HarvestData},
     work::{CrewLimit, WorkPresence},
 };
 use ferrets_geometry::cell_size::CellSize;
@@ -193,13 +194,13 @@ fn repair_dispatch_app() -> App {
                             crew: CrewLimit::ONE,
                         },
                         Banking::Carried,
-                        Sources::Any,
+                        Kinds::Any,
                     ),
                 )])
                 .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
                 .with_stat(EntityStatId::REPAIR_RANGE, FixedU64::ONE)
                 .with_repairer(
-                    ["building"],
+                    Kinds::tags(["building"]),
                     RepairRate::PerTick(FixedU64::from_num(5)),
                     WorkPresence::Present {
                         crew: CrewLimit::ONE,

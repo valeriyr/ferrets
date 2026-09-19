@@ -6,7 +6,7 @@ use bevy::prelude::{App, Entity};
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize, projection::Projection};
 
 use ferrets_content::{
-    attack::{AttackDef, Delivery, Weapon},
+    attack::{AttackDef, Delivery, Slain, Weapon},
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     location::Solidity,
@@ -230,9 +230,14 @@ fn send_to_entity_does_not_attack_ally() {
                     FixedU64::from_num(360),
                 )
                 .with_health(30)
-                .with_dying(2, None)
+                .with_dying(2, [])
                 .with_attack(
-                    AttackDef::new(Weapon::new(utils::GROUND, Delivery::Instant, None)),
+                    AttackDef::new(Weapon::new(
+                        utils::GROUND,
+                        Delivery::Instant,
+                        None,
+                        Slain::Remains,
+                    )),
                     10,
                     1,
                     1,

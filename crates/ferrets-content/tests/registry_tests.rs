@@ -5,39 +5,44 @@
 
 mod utils;
 
+use std::collections::BTreeSet;
+
 use ferrets_content::{
+    affiliation::Affiliation,
     annex::{AloneConduct, AnnexClaim, AnnexLife, AnnexWork},
-    attack::{Delivery, Weapon},
+    attack::{Delivery, Slain, Weapon},
     berths::BerthGroup,
     brood::OrphanFate,
     build::BuilderAttendance,
     costs::{self, Cost},
+    dying::{Bequest, DeathKind, DyingDef, LeftBy},
     entity_buffs::EntityBuffDef,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     field::{
-        FieldAction, FieldAffiliation, FieldCoverage, FieldDecay, FieldDef, FieldEffect,
-        FieldEffectKind, FieldGrowth, FieldId, FieldPlacement, FieldSide, FieldSourceDef,
-        FieldVision,
+        FieldAction, FieldCoverage, FieldDecay, FieldDef, FieldEffect, FieldEffectKind,
+        FieldGrowth, FieldId, FieldPlacement, FieldSide, FieldSourceDef, FieldVision,
     },
+    kinds::Kinds,
     location::Solidity,
     morph::{MorphCancel, MorphInterrupted, MorphPlacement, MorphReason, MorphTransition},
-    period::Period,
     player_buffs::{PlayerBuffDef, PlayerBuffId},
     player_stats::PlayerStatId,
+    quantity::Quantity,
     registry::ContentRegistry,
     repair::{RepairCost, RepairRate},
     requirement::Requirement,
     research::{ResearchDef, ResearcherDef},
-    resource::{Banking, DepletionPolicy, HarvestData, Sources},
+    resource::{Banking, DepletionPolicy, HarvestData},
     skills::{
-        EntityCastCost, EntityCastEffect, EntityCastTarget, PlayerCastEffect, SkillCaster, SkillDef,
+        Casting, EntityCastCost, EntityCastEffect, EntityCastTarget, PlayerCastEffect, Reach,
+        SkillCaster, SkillDef,
     },
     stack_rule::StackRule,
     stand::StandingAct,
     stats::{EntityModifier, ModifierOp},
     tags,
-    transport::{BoardingPolicy, PassengerConduct, PassengerFate},
+    transport::{PassengerConduct, PassengerFate},
     turret::{TurretDef, TurretMount, TurretStats, WeaponConduct},
     work::{Attachment, BerthStance, CrewLimit, WorkPresence},
 };
@@ -134,7 +139,7 @@ fn register_accepts_registered_kinds() {
                         crew: CrewLimit::ONE,
                     },
                     Banking::Carried,
-                    Sources::Any,
+                    Kinds::Any,
                 ),
             )])
             .with_resource_storage(["gold"]),
@@ -168,7 +173,7 @@ fn register_rejects_unknown_carrier_kind() {
                 crew: CrewLimit::ONE,
             },
             Banking::Carried,
-            Sources::Any,
+            Kinds::Any,
         ),
     )]));
 }
@@ -260,7 +265,7 @@ fn validate_accepts_attachments_offered_by_their_jobs() {
                         },
                     )),
                     Banking::Direct,
-                    Sources::Any,
+                    Kinds::Any,
                 ),
             )]),
     );
@@ -310,7 +315,7 @@ fn validate_rejects_carrier_attaching_to_group_no_source_offers() {
                     2,
                     WorkPresence::Attached(Attachment::new("canopy", BerthStance::Still)),
                     Banking::Direct,
-                    Sources::Any,
+                    Kinds::Any,
                 ),
             )]),
     );
@@ -551,61 +556,125 @@ fn validate_rejects_unconstructible_built_type() {
 }
 
 //
-// ─── Corpse chains ────────────────────────────────────────────────────────────
+// ─── What a death leaves ──────────────────────────────────────────────────────
 //
 
 #[test]
-fn register_accepts_terminating_corpse_chains() {
+fn register_accepts_terminating_decay_chains() {
     let mut registry = utils::ground_registry();
 
-    registry.register(utils::standing("bones", GROUND).with_dying(2, None));
-    registry.register(utils::standing("corpse", GROUND).with_dying(2, Some("bones")));
-    registry.register(utils::standing("soldier", GROUND).with_dying(3, Some("corpse")));
+    registry.register(remains("bones", 200));
+    registry.register(remains("corpse", 600).with_leaves(utils::leaves("bones")));
+    registry.register(utils::standing("soldier", GROUND).with_dying(3, utils::leaves("corpse")));
+    registry.validate();
 }
 
 #[test]
-#[should_panic(expected = "entity type 'soldier' leaves an unregistered corpse type 'ghost'")]
-fn register_rejects_unknown_corpse_type() {
+fn register_accepts_death_that_leaves_standing_units() {
     let mut registry = utils::ground_registry();
-    registry.register(utils::standing("soldier", GROUND).with_dying(3, Some("ghost")));
-}
 
-#[test]
-#[should_panic(expected = "leaves a corpse type 'statue' that has no dying phase")]
-fn register_rejects_corpse_without_dying_phase() {
-    let mut registry = utils::ground_registry();
-    registry.register(EntityTypeDef::new("statue").with_location(
-        GROUND,
-        CellSize::ONE,
-        Solidity::Solid,
+    registry.register(utils::standing("broodling", GROUND));
+    registry.register(utils::standing("hive", GROUND).with_dying(
+        2,
+        [Bequest::new(
+            "broodling",
+            2,
+            LeftBy::Named(vec![DeathKind::Killed]),
+        )],
     ));
-    registry.register(utils::standing("soldier", GROUND).with_dying(3, Some("statue")));
+    registry.validate();
+}
+
+#[test]
+#[should_panic(expected = "entity type 'soldier' leaves 'ghost', which is not registered")]
+fn validate_rejects_leaving_unregistered_type() {
+    let mut registry = utils::ground_registry();
+    registry.register(utils::standing("soldier", GROUND).with_dying(3, utils::leaves("ghost")));
+    registry.validate();
 }
 
 #[test]
 #[should_panic(
-    expected = "uses 'bones' as a corpse type, but 'bones' defines live-gameplay data that remains never use"
+    expected = "entity type 'bones' is remains, but defines live-gameplay data that remains never use"
 )]
-fn register_rejects_corpse_with_live_gameplay_data() {
+fn register_rejects_remains_with_live_gameplay_data() {
     let mut registry = utils::ground_registry();
-    registry.register(
-        utils::standing("bones", GROUND)
-            .with_health(10)
-            .with_attack(utils::weapon(GROUND), 1, 1, 1, 2, 1)
-            .with_dying(2, None),
-    );
-    registry.register(utils::standing("soldier", GROUND).with_dying(3, Some("bones")));
+    registry.register(remains("bones", 200).with_health(10).with_attack(
+        utils::weapon(GROUND),
+        1,
+        1,
+        1,
+        2,
+        1,
+    ));
 }
 
 #[test]
-#[should_panic(expected = "leaves an unregistered corpse type 'bones'")]
-fn register_cannot_form_corpse_cycle() {
+#[should_panic(expected = "entity type 'bones' is remains but carries no lifetime")]
+fn register_rejects_remains_that_never_go_away() {
+    let mut registry = utils::ground_registry();
+    registry.register(utils::standing("bones", GROUND).with_tags(["remains"]));
+}
+
+#[test]
+#[should_panic(expected = "entity type 'corpse' is remains and states a dying time")]
+fn register_rejects_remains_waiting_to_leave() {
     let mut registry = utils::ground_registry();
 
-    // A corpse cycle is unconstructible: a corpse type must be registered before
-    // the type that leaves it, so the first member of any cycle fails because
-    // its own corpse is not registered yet.
-    registry.register(utils::standing("corpse", GROUND).with_dying(2, Some("bones")));
+    // A body has lain its whole life already: what it rots into goes down the
+    // tick its decay ends, and a wait on top of that is a number nothing
+    // reads.
+    registry.register(remains("corpse", 600).with_dying(2, []));
+}
+
+#[test]
+#[should_panic(expected = "a dying time of no ticks is no dying time at all")]
+fn dying_of_no_ticks_is_refused() {
+    DyingDef::new(Some(0), []);
+}
+
+#[test]
+#[should_panic(expected = "a death that waits for nothing and leaves nothing is no dying at all")]
+fn dying_that_waits_for_nothing_and_leaves_nothing_is_refused() {
+    DyingDef::new(None, []);
+}
+
+#[test]
+#[should_panic(expected = "entity type 'soldier' morphing into 'corpse' names remains")]
+fn validate_rejects_transition_into_remains() {
+    let mut registry = utils::ground_registry();
+
+    // Only a death leaves a body: a unit that could simply turn into one
+    // would lay remains nothing died for.
+    registry.register(remains("corpse", 600));
+    registry.register(utils::standing("soldier", GROUND).with_morphs([morph_into("corpse")]));
+    registry.validate();
+}
+
+#[test]
+#[should_panic(expected = "entity type 'larva' morphing into 'hatchling' wears remains")]
+fn validate_rejects_transition_wearing_remains() {
+    let mut registry = utils::ground_registry();
+
+    registry.register(remains("corpse", 600));
+    registry.register(utils::standing("hatchling", GROUND).with_health(30));
+    registry.register(
+        utils::standing("larva", GROUND)
+            .with_health(20)
+            .with_morphs([morph_through("corpse", "hatchling")]),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(expected = "rots into a chain that comes back round to 'corpse'")]
+fn validate_rejects_decay_chain_that_comes_back_round() {
+    let mut registry = utils::ground_registry();
+
+    // Bodies that rot into each other are bodies that never leave the map.
+    registry.register(remains("corpse", 600).with_leaves(utils::leaves("bones")));
+    registry.register(remains("bones", 200).with_leaves(utils::leaves("corpse")));
+    registry.validate();
 }
 
 //
@@ -965,6 +1034,8 @@ fn register_rejects_costed_skill_without_energy_pool() {
             caster: SkillCaster::Entity {
                 costs: vec![EntityCastCost::Energy(FixedU64::from_num(25))],
                 target: EntityCastTarget::Caster,
+                reach: Reach::Wherever,
+                casting: Casting::Instant,
                 effect: EntityCastEffect::Damage(FixedU64::from_num(5)),
             },
             requires: Vec::new(),
@@ -987,6 +1058,8 @@ fn register_accepts_free_skill_without_energy_pool() {
             caster: SkillCaster::Entity {
                 costs: Vec::new(),
                 target: EntityCastTarget::Caster,
+                reach: Reach::Wherever,
+                casting: Casting::Instant,
                 effect: EntityCastEffect::Damage(FixedU64::from_num(5)),
             },
             requires: Vec::new(),
@@ -1011,6 +1084,8 @@ fn register_rejects_skill_costing_unregistered_resource() {
             caster: SkillCaster::Entity {
                 costs: vec![EntityCastCost::Resources(costs::cost([("wood", 5)]))],
                 target: EntityCastTarget::Caster,
+                reach: Reach::Wherever,
+                casting: Casting::Instant,
                 effect: EntityCastEffect::Damage(FixedU64::from_num(5)),
             },
             requires: Vec::new(),
@@ -1031,6 +1106,8 @@ fn register_accepts_resource_costed_skill_without_pools() {
             caster: SkillCaster::Entity {
                 costs: vec![EntityCastCost::Resources(costs::cost([("gold", 25)]))],
                 target: EntityCastTarget::Caster,
+                reach: Reach::Wherever,
+                casting: Casting::Instant,
                 effect: EntityCastEffect::Damage(FixedU64::from_num(5)),
             },
             requires: Vec::new(),
@@ -1055,6 +1132,8 @@ fn register_rejects_health_costed_skill_without_health_pool() {
             caster: SkillCaster::Entity {
                 costs: vec![EntityCastCost::Health(FixedU64::from_num(5))],
                 target: EntityCastTarget::Caster,
+                reach: Reach::Wherever,
+                casting: Casting::Instant,
                 effect: EntityCastEffect::Damage(FixedU64::from_num(5)),
             },
             requires: Vec::new(),
@@ -1112,7 +1191,7 @@ fn register_rejects_weapon_without_its_numbers() {
     registry.register(
         utils::standing("scarecrow", GROUND)
             .with_health(10)
-            .with_attack_def(GROUND, Delivery::Instant, None),
+            .with_attack_def(GROUND, Delivery::Instant, None, Slain::Remains),
     );
 }
 
@@ -1182,7 +1261,7 @@ fn register_rejects_carrier_without_reach() {
                 crew: CrewLimit::ONE,
             },
             Banking::Carried,
-            Sources::Any,
+            Kinds::Any,
         ),
     )]));
 }
@@ -1203,7 +1282,7 @@ fn register_rejects_attacker_without_weapon_stats() {
     registry.register(
         utils::standing("worker", GROUND)
             .with_stat(EntityStatId::DAMAGE, FixedU64::from_num(5))
-            .with_attack_def(GROUND, Delivery::Instant, None),
+            .with_attack_def(GROUND, Delivery::Instant, None, Slain::Remains),
     );
 }
 
@@ -1220,8 +1299,8 @@ fn register_rejects_transporter_without_reach() {
         utils::standing("wagon", GROUND)
             .with_stat(EntityStatId::CARGO_CAPACITY, FixedU64::from_num(4))
             .with_transporter(
-                ["infantry"],
-                BoardingPolicy::Own,
+                Kinds::tags(["infantry"]),
+                Affiliation::Own,
                 PassengerFate::Destroy,
                 PassengerConduct::Shelter,
             ),
@@ -1241,8 +1320,8 @@ fn register_rejects_zero_cargo_capacity() {
             .with_stat(EntityStatId::LOAD_PERIOD, FixedU64::ZERO)
             .with_stat(EntityStatId::UNLOAD_PERIOD, FixedU64::ZERO)
             .with_transporter(
-                ["infantry"],
-                BoardingPolicy::Own,
+                Kinds::tags(["infantry"]),
+                Affiliation::Own,
                 PassengerFate::Destroy,
                 PassengerConduct::Shelter,
             ),
@@ -1261,8 +1340,8 @@ fn register_rejects_transporter_without_capacity() {
             .with_stat(EntityStatId::LOAD_PERIOD, FixedU64::ZERO)
             .with_stat(EntityStatId::UNLOAD_PERIOD, FixedU64::ZERO)
             .with_transporter(
-                ["infantry"],
-                BoardingPolicy::Own,
+                Kinds::tags(["infantry"]),
+                Affiliation::Own,
                 PassengerFate::Destroy,
                 PassengerConduct::Shelter,
             ),
@@ -1293,8 +1372,8 @@ fn register_rejects_transportable_transporter() {
             .with_stat(EntityStatId::UNLOAD_PERIOD, FixedU64::ZERO)
             .with_stat(EntityStatId::CARGO_SIZE, FixedU64::from_num(2))
             .with_transporter(
-                ["infantry"],
-                BoardingPolicy::Own,
+                Kinds::tags(["infantry"]),
+                Affiliation::Own,
                 PassengerFate::Destroy,
                 PassengerConduct::Shelter,
             ),
@@ -1302,7 +1381,7 @@ fn register_rejects_transportable_transporter() {
 }
 
 #[test]
-#[should_panic(expected = "carries 'critters', which is not a registered entity type or tag")]
+#[should_panic(expected = "entity type 'wagon' carries tag 'critters', which is not registered")]
 fn validate_rejects_unresolved_carries_entry() {
     let mut registry = utils::ground_registry();
     registry.register(
@@ -1313,8 +1392,8 @@ fn validate_rejects_unresolved_carries_entry() {
             .with_stat(EntityStatId::LOAD_PERIOD, FixedU64::ZERO)
             .with_stat(EntityStatId::UNLOAD_PERIOD, FixedU64::ZERO)
             .with_transporter(
-                ["critters"],
-                BoardingPolicy::Own,
+                Kinds::tags(["critters"]),
+                Affiliation::Own,
                 PassengerFate::Destroy,
                 PassengerConduct::Shelter,
             ),
@@ -1333,8 +1412,8 @@ fn validate_accepts_carries_entry_registered_later() {
             .with_stat(EntityStatId::LOAD_PERIOD, FixedU64::ZERO)
             .with_stat(EntityStatId::UNLOAD_PERIOD, FixedU64::ZERO)
             .with_transporter(
-                ["footman"],
-                BoardingPolicy::Own,
+                Kinds::types(["footman"]),
+                Affiliation::Own,
                 PassengerFate::Destroy,
                 PassengerConduct::Shelter,
             ),
@@ -1390,9 +1469,35 @@ fn register_player_stat_rejects_entity_stat_name() {
 }
 
 #[test]
+#[should_panic(expected = "entity type 'priest' has ritual_time below its minimum of 1")]
+fn register_rejects_content_stat_below_its_floor() {
+    let mut registry = utils::ground_registry();
+    let ritual_time = registry.register_entity_stat("ritual_time", FixedU64::ONE);
+
+    // The fold would raise it on the first tick, so the authored number is one
+    // the type never actually has.
+    registry.register(
+        utils::standing("priest", GROUND)
+            .with_health(20)
+            .with_stat(ritual_time, FixedU64::ZERO),
+    );
+}
+
+#[test]
+#[should_panic(expected = "entity stat 'ritual_time' is already registered")]
+fn register_rejects_stat_declared_twice() {
+    let mut registry = ContentRegistry::default();
+    registry.register_entity_stat("ritual_time", FixedU64::ONE);
+
+    // A second declaration would leave the floor depending on which of them
+    // ran first, as every other name the registry mints is declared once.
+    registry.register_entity_stat("ritual_time", FixedU64::ZERO);
+}
+
+#[test]
 #[should_panic(expected = "'max_supply' is already registered as a player stat")]
 fn register_stat_rejects_player_stat_name() {
-    ContentRegistry::default().register_entity_stat("max_supply");
+    ContentRegistry::default().register_entity_stat("max_supply", FixedU64::ZERO);
 }
 
 //
@@ -1441,6 +1546,8 @@ fn register_rejects_entity_cast_skill_with_unregistered_buff() {
             caster: SkillCaster::Entity {
                 costs: Vec::new(),
                 target: EntityCastTarget::Caster,
+                reach: Reach::Wherever,
+                casting: Casting::Instant,
                 effect: EntityCastEffect::ApplyBuff(buff),
             },
             requires: Vec::new(),
@@ -1491,7 +1598,7 @@ fn register_rejects_repairer_without_rate() {
         utils::standing("worker", GROUND)
             .with_health(20)
             .with_repairer(
-                ["building"],
+                Kinds::tags(["building"]),
                 RepairRate::Production,
                 WorkPresence::Present {
                     crew: CrewLimit::ONE,
@@ -1512,7 +1619,7 @@ fn register_rejects_repairer_without_reach() {
             .with_health(20)
             .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
             .with_repairer(
-                ["building"],
+                Kinds::tags(["building"]),
                 RepairRate::Production,
                 WorkPresence::Present {
                     crew: CrewLimit::ONE,
@@ -1525,18 +1632,18 @@ fn register_rejects_repairer_without_reach() {
 }
 
 #[test]
-#[should_panic(expected = "repairs unregistered tag 'mechanical'")]
-fn register_rejects_repairer_mending_unknown_tag() {
-    // "building" is pre-registered, so an unknown tag has to be one content would
-    // have had to declare itself.
+fn validate_accepts_repairer_mending_its_own_kind() {
     let mut registry = utils::ground_registry();
+
+    // A filter is settled once everything is registered, so a mechanic may
+    // mend mechanics — and anything declared after it.
     registry.register(
-        utils::standing("worker", GROUND)
+        utils::standing("mechanic", GROUND)
             .with_health(20)
             .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
             .with_stat(EntityStatId::REPAIR_RANGE, FixedU64::ONE)
             .with_repairer(
-                ["mechanical"],
+                Kinds::types(["mechanic", "tank"]),
                 RepairRate::Production,
                 WorkPresence::Present {
                     crew: CrewLimit::ONE,
@@ -1546,6 +1653,34 @@ fn register_rejects_repairer_mending_unknown_tag() {
                 None,
             ),
     );
+    registry.register(utils::standing("tank", GROUND).with_health(40));
+
+    registry.validate();
+}
+
+#[test]
+#[should_panic(expected = "entity type 'worker' repairs tag 'mechanical', which is not registered")]
+fn validate_rejects_repairer_mending_unknown_tag() {
+    // "building" is pre-registered, so an unknown tag has to be one content would
+    // have had to declare itself.
+    let mut registry = utils::ground_registry();
+    registry.register(
+        utils::standing("worker", GROUND)
+            .with_health(20)
+            .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
+            .with_stat(EntityStatId::REPAIR_RANGE, FixedU64::ONE)
+            .with_repairer(
+                Kinds::tags(["mechanical"]),
+                RepairRate::Production,
+                WorkPresence::Present {
+                    crew: CrewLimit::ONE,
+                },
+                false,
+                RepairCost::Free,
+                None,
+            ),
+    );
+    registry.validate();
 }
 
 #[test]
@@ -1558,7 +1693,7 @@ fn register_rejects_pro_rata_repair_without_factor() {
             .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
             .with_stat(EntityStatId::REPAIR_RANGE, FixedU64::ONE)
             .with_repairer(
-                ["building"],
+                Kinds::tags(["building"]),
                 RepairRate::Production,
                 WorkPresence::Present {
                     crew: CrewLimit::ONE,
@@ -1581,7 +1716,7 @@ fn register_rejects_energy_paid_repair_without_pool() {
             .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
             .with_stat(EntityStatId::REPAIR_RANGE, FixedU64::from_num(2))
             .with_repairer(
-                ["biological"],
+                Kinds::tags(["biological"]),
                 RepairRate::PerTick(FixedU64::ONE),
                 WorkPresence::Present {
                     crew: CrewLimit::ONE,
@@ -1597,7 +1732,7 @@ fn register_rejects_energy_paid_repair_without_pool() {
 #[should_panic(expected = "a flat repair rate must be positive")]
 fn repairer_rejects_non_positive_flat_rate() {
     EntityTypeDef::new("medic").with_repairer(
-        ["biological"],
+        Kinds::tags(["biological"]),
         RepairRate::PerTick(FixedU64::ZERO),
         WorkPresence::Present {
             crew: CrewLimit::ONE,
@@ -1721,7 +1856,7 @@ fn validate_rejects_primary_that_goes_inside_its_annex_site() {
                     crew: CrewLimit::ONE,
                 }),
             )
-            .with_docks([(CellPos::new(2, 0), ["lookout"])]),
+            .with_docks([(CellPos::new(2, 0), Kinds::types(["lookout"]))]),
     );
     registry.register(
         EntityTypeDef::new("lookout")
@@ -1755,7 +1890,7 @@ fn validate_rejects_fading_annex_without_drain_stat() {
                     crew: CrewLimit::ONE,
                 }),
             )
-            .with_docks([(CellPos::new(2, 0), ["mast"])]),
+            .with_docks([(CellPos::new(2, 0), Kinds::types(["mast"]))]),
     );
     registry.register(
         EntityTypeDef::new("mast")
@@ -1797,7 +1932,7 @@ fn validate_rejects_crew_limit_of_nobody() {
                         crew: CrewLimit::Limit(0),
                     },
                     Banking::Carried,
-                    Sources::Any,
+                    Kinds::Any,
                 ),
             )]),
     );
@@ -1805,7 +1940,7 @@ fn validate_rejects_crew_limit_of_nobody() {
 }
 
 #[test]
-#[should_panic(expected = "entity type 'miner' harvests gold from no source at all")]
+#[should_panic(expected = "entity type 'miner' harvests gold from nothing at all")]
 fn validate_rejects_harvest_source_list_that_names_nobody() {
     let mut registry = utils::ground_registry();
     registry.register_resource("gold");
@@ -1826,7 +1961,7 @@ fn validate_rejects_harvest_source_list_that_names_nobody() {
                     },
                     Banking::Carried,
                     // Written past the constructor that would have refused it.
-                    Sources::Only(Vec::new()),
+                    Kinds::Only(BTreeSet::new()),
                 ),
             )]),
     );
@@ -1834,7 +1969,7 @@ fn validate_rejects_harvest_source_list_that_names_nobody() {
 }
 
 #[test]
-#[should_panic(expected = "entity type 'keep' docks 'ghost', which is not registered")]
+#[should_panic(expected = "entity type 'keep' docks entity type 'ghost', which is not registered")]
 fn validate_rejects_dock_taking_unregistered_type() {
     let mut registry = utils::ground_registry();
     // The builder catalogue is sound, so `validate_builds` has nothing to say
@@ -1849,7 +1984,7 @@ fn validate_rejects_dock_taking_unregistered_type() {
                     crew: CrewLimit::ONE,
                 }),
             )
-            .with_docks([(CellPos::new(2, 0), ["ghost"])]),
+            .with_docks([(CellPos::new(2, 0), Kinds::types(["ghost"]))]),
     );
     registry.register(annex("lookout", CellSize::ONE));
     registry.validate();
@@ -1872,7 +2007,7 @@ fn validate_rejects_annex_that_moves() {
 
 #[test]
 #[should_panic(
-    expected = "entity type 'miner' harvests gold from 'refinery', which is not registered"
+    expected = "entity type 'miner' harvests gold from entity type 'refinery', which is not registered"
 )]
 fn validate_rejects_harvest_source_that_is_not_registered() {
     let mut registry = utils::ground_registry();
@@ -1890,7 +2025,7 @@ fn validate_rejects_harvest_source_that_is_not_registered() {
                         crew: CrewLimit::ONE,
                     },
                     Banking::Carried,
-                    Sources::only(["refinery"]),
+                    Kinds::types(["refinery"]),
                 ),
             )]),
     );
@@ -1921,10 +2056,55 @@ fn validate_rejects_harvest_source_of_another_kind() {
                         crew: CrewLimit::ONE,
                     },
                     Banking::Carried,
-                    Sources::only(["grove"]),
+                    Kinds::types(["grove"]),
                 ),
             )]),
     );
+    registry.validate();
+}
+
+#[test]
+fn validate_accepts_dock_that_takes_any_annex() {
+    let mut registry = utils::ground_registry();
+    // A filter that names nobody in particular takes whatever is an annex,
+    // and what it sweeps in besides goes on standing where it stands.
+    registry.register(
+        utils::sized("keep", GROUND, CellSize::new(2, 2))
+            .with_health(100)
+            .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
+            .with_builder(
+                ["lab"],
+                BuilderAttendance::Crew(WorkPresence::Present {
+                    crew: CrewLimit::ONE,
+                }),
+            )
+            .with_docks([(CellPos::new(2, 0), Kinds::Any)]),
+    );
+    registry.register(annex("lab", CellSize::ONE));
+    registry.register(utils::standing("runner", GROUND).with_health(10));
+
+    registry.validate();
+}
+
+#[test]
+#[should_panic(expected = "entity type 'keep' offers a dock at (2, 0) that names no annex")]
+fn validate_rejects_dock_that_names_no_annex() {
+    let mut registry = utils::ground_registry();
+    registry.register_tag("workshop");
+    registry.register(
+        utils::sized("keep", GROUND, CellSize::new(2, 2))
+            .with_health(100)
+            .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
+            .with_builder(
+                ["lab"],
+                BuilderAttendance::Crew(WorkPresence::Present {
+                    crew: CrewLimit::ONE,
+                }),
+            )
+            .with_docks([(CellPos::new(2, 0), Kinds::tags(["workshop"]))]),
+    );
+    registry.register(annex("lab", CellSize::ONE));
+
     registry.validate();
 }
 
@@ -1955,7 +2135,7 @@ fn validate_rejects_dock_inside_its_primarys_own_footprint() {
                     crew: CrewLimit::ONE,
                 }),
             )
-            .with_docks([(CellPos::new(0, 0), ["lookout"])]),
+            .with_docks([(CellPos::new(0, 0), Kinds::types(["lookout"]))]),
     );
     registry.register(annex("lookout", CellSize::ONE));
     registry.validate();
@@ -1968,7 +2148,7 @@ fn validate_rejects_dock_whose_primary_cannot_raise_what_it_takes() {
     registry.register(
         utils::sized("keep", GROUND, CellSize::new(2, 2))
             .with_health(100)
-            .with_docks([(CellPos::new(2, 0), ["lookout"])]),
+            .with_docks([(CellPos::new(2, 0), Kinds::types(["lookout"]))]),
     );
     registry.register(annex("lookout", CellSize::ONE));
     registry.validate();
@@ -1989,8 +2169,8 @@ fn validate_rejects_two_docks_on_one_cell() {
                 }),
             )
             .with_docks([
-                (CellPos::new(2, 0), ["lookout"]),
-                (CellPos::new(2, 0), ["lookout"]),
+                (CellPos::new(2, 0), Kinds::types(["lookout"])),
+                (CellPos::new(2, 0), Kinds::types(["lookout"])),
             ]),
     );
     registry.register(annex("lookout", CellSize::ONE));
@@ -2016,8 +2196,8 @@ fn validate_rejects_docks_whose_annexes_would_stand_on_each_other() {
             // A two-cell lookout at (2, 0) covers (3, 0) too, which is where
             // the beacon is told to stand.
             .with_docks([
-                (CellPos::new(2, 0), ["lookout"]),
-                (CellPos::new(3, 0), ["beacon"]),
+                (CellPos::new(2, 0), Kinds::types(["lookout"])),
+                (CellPos::new(3, 0), Kinds::types(["beacon"])),
             ]),
     );
     registry.register(annex("lookout", CellSize::new(2, 1)));
@@ -2098,7 +2278,7 @@ fn validate_rejects_docks_on_type_that_moves() {
                     crew: CrewLimit::ONE,
                 }),
             )
-            .with_docks([(CellPos::new(2, 0), ["lookout"])]),
+            .with_docks([(CellPos::new(2, 0), Kinds::types(["lookout"]))]),
     );
     registry.register(
         EntityTypeDef::new("lookout")
@@ -2411,7 +2591,7 @@ fn validate_rejects_transition_with_unresolved_requirement() {
             .with_morphs([MorphTransition::new(
                 "flier",
                 None,
-                Period::Constant(20),
+                Quantity::Constant(20),
                 MorphPlacement::Revalidate,
                 MorphCancel::Committed,
                 MorphInterrupted::Reverts,
@@ -2438,7 +2618,7 @@ fn validate_rejects_transition_with_unresolved_requirement() {
 )]
 fn validate_rejects_transition_timed_by_undeclared_stat() {
     let mut registry = utils::ground_registry();
-    let stat = registry.register_entity_stat("change_time");
+    let stat = registry.register_entity_stat("change_time", FixedU64::ONE);
     registry.register(
         utils::standing("walker", GROUND)
             .with_movement(
@@ -2451,7 +2631,7 @@ fn validate_rejects_transition_timed_by_undeclared_stat() {
             .with_morphs([MorphTransition::new(
                 "flier",
                 None,
-                Period::Stat(stat),
+                Quantity::Stat(stat),
                 MorphPlacement::Revalidate,
                 MorphCancel::Committed,
                 MorphInterrupted::Reverts,
@@ -2490,7 +2670,7 @@ fn validate_rejects_transition_with_energy_cost_but_no_energy_pool() {
             .with_morphs([MorphTransition::new(
                 "flier",
                 None,
-                Period::Constant(20),
+                Quantity::Constant(20),
                 MorphPlacement::Revalidate,
                 MorphCancel::Committed,
                 MorphInterrupted::Reverts,
@@ -2529,7 +2709,7 @@ fn validate_rejects_transition_with_unregistered_resource_cost() {
             .with_morphs([MorphTransition::new(
                 "flier",
                 None,
-                Period::Constant(20),
+                Quantity::Constant(20),
                 MorphPlacement::Revalidate,
                 MorphCancel::Committed,
                 MorphInterrupted::Reverts,
@@ -2609,7 +2789,7 @@ fn validate_accepts_transition_with_payable_costs() {
             .with_morphs([MorphTransition::new(
                 "flier",
                 None,
-                Period::Constant(20),
+                Quantity::Constant(20),
                 MorphPlacement::Reserve,
                 MorphCancel::Refundable,
                 MorphInterrupted::Reverts,
@@ -2645,7 +2825,7 @@ fn validate_rejects_turret_firing_while_moving_without_movement() {
     let rolling = registry.register_turret(
         "rolling",
         TurretDef::new(
-            Weapon::new(GROUND, Delivery::Instant, None),
+            Weapon::new(GROUND, Delivery::Instant, None, Slain::Remains),
             TurretStats::default(),
             WeaponConduct::OnTheMove,
         ),
@@ -2670,7 +2850,7 @@ fn validate_rejects_turret_mounted_off_its_footprint() {
     let gun = registry.register_turret(
         "gun",
         TurretDef::new(
-            Weapon::new(GROUND, Delivery::Instant, None),
+            Weapon::new(GROUND, Delivery::Instant, None, Slain::Remains),
             TurretStats::default(),
             WeaponConduct::Halts,
         ),
@@ -2702,7 +2882,7 @@ fn validate_rejects_turret_reading_stat_its_body_lacks() {
     let gun = registry.register_turret(
         "gun",
         TurretDef::new(
-            Weapon::new(GROUND, Delivery::Instant, None),
+            Weapon::new(GROUND, Delivery::Instant, None, Slain::Remains),
             TurretStats::default(),
             WeaponConduct::Halts,
         ),
@@ -2732,12 +2912,12 @@ fn register_accepts_field_sources_placement_and_effects() {
             .with_field_sources([emitter(creep)])
             .with_field_placement([FieldPlacement::Requires {
                 field: creep,
-                of: FieldAffiliation::Anyone,
+                of: Affiliation::Anyone,
                 coverage: FieldCoverage::Footprint,
             }])
             .with_field_effects([FieldEffect::new(
                 creep,
-                FieldAffiliation::Anyone,
+                Affiliation::Anyone,
                 FieldSide::Inside,
                 FieldEffectKind::Modifiers(vec![EntityModifier {
                     stat: EntityStatId::MAX_HEALTH,
@@ -2866,7 +3046,7 @@ fn register_rejects_effect_of_foreign_field() {
     utils::ground_registry().register(utils::standing("zergling", GROUND).with_field_effects([
         FieldEffect::new(
             creep,
-            FieldAffiliation::Own,
+            Affiliation::Own,
             FieldSide::Outside,
             FieldEffectKind::Disabled,
         ),
@@ -2936,7 +3116,7 @@ fn register_rejects_field_effect_with_no_modifiers() {
     registry.register(
         utils::standing("zergling", GROUND).with_field_effects([FieldEffect::new(
             creep,
-            FieldAffiliation::Anyone,
+            Affiliation::Anyone,
             FieldSide::Inside,
             FieldEffectKind::Modifiers(Vec::new()),
         )]),
@@ -2955,7 +3135,7 @@ fn register_rejects_field_effect_on_stat_type_lacks() {
             .with_health(35)
             .with_field_effects([FieldEffect::new(
                 creep,
-                FieldAffiliation::Anyone,
+                Affiliation::Anyone,
                 FieldSide::Outside,
                 FieldEffectKind::Modifiers(vec![EntityModifier {
                     stat: EntityStatId::HEALTH_DRAIN,
@@ -2977,6 +3157,8 @@ fn register_rejects_watch_that_lasts_no_time() {
             caster: SkillCaster::Entity {
                 costs: Vec::new(),
                 target: EntityCastTarget::Position,
+                reach: Reach::Wherever,
+                casting: Casting::Instant,
                 effect: EntityCastEffect::Watch {
                     radius: 3,
                     duration: 0,
@@ -3026,6 +3208,8 @@ fn register_accepts_position_cast_with_field_effect() {
             caster: SkillCaster::Entity {
                 costs: Vec::new(),
                 target: EntityCastTarget::Position,
+                reach: Reach::Wherever,
+                casting: Casting::Instant,
                 effect: EntityCastEffect::Field {
                     field: creep,
                     radius: 2,
@@ -3038,6 +3222,455 @@ fn register_accepts_position_cast_with_field_effect() {
 }
 
 #[test]
+#[should_panic(expected = "skill 'raise_dead' summons 'corpse', which is remains")]
+fn register_rejects_summon_of_remains() {
+    let mut registry = utils::ground_registry();
+    registry.register(
+        utils::standing("corpse", GROUND)
+            .with_tags(["remains"])
+            .with_stat(EntityStatId::LIFETIME, FixedU64::from_num(600)),
+    );
+    let corpse = registry.type_id("corpse").expect("just registered");
+    registry.register_skill(
+        "raise_dead",
+        SkillDef {
+            cooldown: 1,
+            caster: SkillCaster::Entity {
+                costs: Vec::new(),
+                target: EntityCastTarget::Fallen { kinds: Kinds::Any },
+                reach: Reach::Wherever,
+                casting: Casting::Instant,
+                effect: EntityCastEffect::Summon {
+                    entity_type: corpse,
+                    count: 2,
+                },
+            },
+            requires: Vec::new(),
+        },
+    );
+}
+
+#[test]
+fn register_accepts_remains_cast_with_summon_effect() {
+    let mut registry = utils::ground_registry();
+    registry.register(utils::standing("skeleton", GROUND));
+    let skeleton = registry.type_id("skeleton").expect("just registered");
+    registry.register_skill(
+        "raise_dead",
+        SkillDef {
+            cooldown: 1,
+            caster: SkillCaster::Entity {
+                costs: Vec::new(),
+                target: EntityCastTarget::Fallen { kinds: Kinds::Any },
+                reach: Reach::Wherever,
+                casting: Casting::Instant,
+                effect: EntityCastEffect::Summon {
+                    entity_type: skeleton,
+                    count: 2,
+                },
+            },
+            requires: Vec::new(),
+        },
+    );
+}
+
+#[test]
+#[should_panic(expected = "skill 'smite' aims at entity type 'ghost', which is not registered")]
+fn validate_rejects_skill_aimed_at_unregistered_type() {
+    let mut registry = utils::ground_registry();
+    registry.register_skill(
+        "smite",
+        SkillDef {
+            cooldown: 1,
+            caster: SkillCaster::Entity {
+                costs: Vec::new(),
+                target: EntityCastTarget::Standing {
+                    side: Affiliation::Enemy,
+                    kinds: Kinds::types(["ghost"]),
+                },
+                reach: Reach::Wherever,
+                casting: Casting::Instant,
+                effect: EntityCastEffect::Damage(FixedU64::ONE),
+            },
+            requires: Vec::new(),
+        },
+    );
+
+    registry.validate();
+}
+
+#[test]
+fn validate_accepts_skill_aimed_at_type_that_carries_it() {
+    let mut registry = utils::ground_registry();
+
+    // A skill is registered before the type that carries it, so an aim is
+    // settled once everything is registered: a priest may heal priests.
+    let heal = registry.register_skill(
+        "heal",
+        SkillDef {
+            cooldown: 1,
+            caster: SkillCaster::Entity {
+                costs: Vec::new(),
+                target: EntityCastTarget::Standing {
+                    side: Affiliation::Allied,
+                    kinds: Kinds::types(["priest"]),
+                },
+                reach: Reach::Wherever,
+                casting: Casting::Instant,
+                effect: EntityCastEffect::Heal(FixedU64::ONE),
+            },
+            requires: Vec::new(),
+        },
+    );
+    registry.register(
+        utils::standing("priest", GROUND)
+            .with_health(20)
+            .with_skills([heal]),
+    );
+
+    registry.validate();
+}
+
+#[test]
+#[should_panic(expected = "skill 'feast' aims at the fallen, which only a summon may spend")]
+fn register_rejects_remains_cast_with_other_effect() {
+    utils::ground_registry().register_skill(
+        "feast",
+        SkillDef {
+            cooldown: 1,
+            caster: SkillCaster::Entity {
+                costs: Vec::new(),
+                target: EntityCastTarget::Fallen { kinds: Kinds::Any },
+                reach: Reach::Wherever,
+                casting: Casting::Instant,
+                effect: EntityCastEffect::Heal(FixedU64::ONE),
+            },
+            requires: Vec::new(),
+        },
+    );
+}
+
+#[test]
+fn register_accepts_summon_aimed_at_caster_and_at_cell() {
+    let mut registry = utils::ground_registry();
+    registry.register(utils::standing("skeleton", GROUND));
+    let skeleton = registry.type_id("skeleton").expect("just registered");
+    let summons = |target| SkillDef {
+        cooldown: 1,
+        caster: SkillCaster::Entity {
+            costs: Vec::new(),
+            target,
+            reach: Reach::Wherever,
+            casting: Casting::Instant,
+            effect: EntityCastEffect::Summon {
+                entity_type: skeleton,
+                count: 1,
+            },
+        },
+        requires: Vec::new(),
+    };
+    registry.register_skill("guard_me", summons(EntityCastTarget::Caster));
+    registry.register_skill("guard_there", summons(EntityCastTarget::Position));
+}
+
+#[test]
+#[should_panic(expected = "skill 'raise_dead' summons an unregistered entity type")]
+fn register_rejects_summon_of_foreign_type() {
+    let mut foreign = utils::ground_registry();
+    foreign.register(utils::standing("skeleton", GROUND));
+    let skeleton = foreign.type_id("skeleton").expect("just registered");
+    utils::ground_registry().register_skill(
+        "raise_dead",
+        SkillDef {
+            cooldown: 1,
+            caster: SkillCaster::Entity {
+                costs: Vec::new(),
+                target: EntityCastTarget::Fallen { kinds: Kinds::Any },
+                reach: Reach::Wherever,
+                casting: Casting::Instant,
+                effect: EntityCastEffect::Summon {
+                    entity_type: skeleton,
+                    count: 1,
+                },
+            },
+            requires: Vec::new(),
+        },
+    );
+}
+
+#[test]
+#[should_panic(expected = "skill 'raise_dead' summons nothing at all")]
+fn register_rejects_summon_of_nobody() {
+    let mut registry = utils::ground_registry();
+    registry.register(utils::standing("skeleton", GROUND));
+    let skeleton = registry.type_id("skeleton").expect("just registered");
+    registry.register_skill(
+        "raise_dead",
+        SkillDef {
+            cooldown: 1,
+            caster: SkillCaster::Entity {
+                costs: Vec::new(),
+                target: EntityCastTarget::Fallen { kinds: Kinds::Any },
+                reach: Reach::Wherever,
+                casting: Casting::Instant,
+                effect: EntityCastEffect::Summon {
+                    entity_type: skeleton,
+                    count: 0,
+                },
+            },
+            requires: Vec::new(),
+        },
+    );
+}
+
+#[test]
+fn register_accepts_reach_read_from_stat_caster_carries() {
+    let mut registry = utils::ground_registry();
+    let raise_range = registry.register_entity_stat("raise_range", FixedU64::ONE);
+    let bolt = registry.register_skill(
+        "bolt",
+        SkillDef {
+            cooldown: 1,
+            caster: SkillCaster::Entity {
+                costs: Vec::new(),
+                target: EntityCastTarget::Standing {
+                    side: Affiliation::Enemy,
+                    kinds: Kinds::Any,
+                },
+                reach: Reach::Within(Quantity::Stat(raise_range)),
+                casting: Casting::Instant,
+                effect: EntityCastEffect::Damage(FixedU64::ONE),
+            },
+            requires: Vec::new(),
+        },
+    );
+    registry.register(
+        utils::standing("necromancer", GROUND)
+            .with_stat(raise_range, FixedU64::from_num(6))
+            .with_skills([bolt]),
+    );
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'necromancer' has skill 'bolt' reading its reach from a stat it does not carry"
+)]
+fn register_rejects_reach_by_stat_caster_lacks() {
+    let mut registry = utils::ground_registry();
+    let raise_range = registry.register_entity_stat("raise_range", FixedU64::ONE);
+    let bolt = registry.register_skill(
+        "bolt",
+        SkillDef {
+            cooldown: 1,
+            caster: SkillCaster::Entity {
+                costs: Vec::new(),
+                target: EntityCastTarget::Standing {
+                    side: Affiliation::Enemy,
+                    kinds: Kinds::Any,
+                },
+                reach: Reach::Within(Quantity::Stat(raise_range)),
+                casting: Casting::Instant,
+                effect: EntityCastEffect::Damage(FixedU64::ONE),
+            },
+            requires: Vec::new(),
+        },
+    );
+    registry.register(utils::standing("necromancer", GROUND).with_skills([bolt]));
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'necromancer' has skill 'bolt' reading its cast point from a stat it does not carry"
+)]
+fn register_rejects_cast_point_by_stat_caster_lacks() {
+    let mut registry = utils::ground_registry();
+    let ritual_time = registry.register_entity_stat("ritual_time", FixedU64::ONE);
+    let bolt = registry.register_skill(
+        "bolt",
+        SkillDef {
+            cooldown: 1,
+            caster: SkillCaster::Entity {
+                costs: Vec::new(),
+                target: EntityCastTarget::Standing {
+                    side: Affiliation::Enemy,
+                    kinds: Kinds::Any,
+                },
+                reach: Reach::Wherever,
+                casting: Casting::Delayed {
+                    point: Quantity::Stat(ritual_time),
+                    period: Quantity::Constant(20),
+                },
+                effect: EntityCastEffect::Damage(FixedU64::ONE),
+            },
+            requires: Vec::new(),
+        },
+    );
+    registry.register(utils::standing("necromancer", GROUND).with_skills([bolt]));
+}
+
+#[test]
+#[should_panic(
+    expected = "skill 'bolt' is cast over no time at all: an instant cast declares no `cast`"
+)]
+fn register_rejects_cast_over_no_time() {
+    let mut registry = utils::ground_registry();
+    registry.register_skill(
+        "bolt",
+        SkillDef {
+            cooldown: 1,
+            caster: SkillCaster::Entity {
+                costs: Vec::new(),
+                target: EntityCastTarget::Caster,
+                reach: Reach::Wherever,
+                casting: Casting::Delayed {
+                    point: Quantity::Constant(0),
+                    period: Quantity::Constant(10),
+                },
+                effect: EntityCastEffect::Damage(FixedU64::ONE),
+            },
+            requires: Vec::new(),
+        },
+    );
+}
+
+#[test]
+#[should_panic(expected = "skill 'bolt' frees its caster before the cast lands")]
+fn register_rejects_cast_period_stat_that_folds_under_its_point() {
+    let mut registry = utils::ground_registry();
+    // The least the period ever folds to is its floor, so a stat floored
+    // below the point frees the caster before the cast lands.
+    let recovery = registry.register_entity_stat("recovery", FixedU64::ONE);
+    registry.register_skill(
+        "bolt",
+        SkillDef {
+            cooldown: 1,
+            caster: SkillCaster::Entity {
+                costs: Vec::new(),
+                target: EntityCastTarget::Caster,
+                reach: Reach::Wherever,
+                casting: Casting::Delayed {
+                    point: Quantity::Constant(10),
+                    period: Quantity::Stat(recovery),
+                },
+                effect: EntityCastEffect::Damage(FixedU64::ONE),
+            },
+            requires: Vec::new(),
+        },
+    );
+}
+
+#[test]
+#[should_panic(expected = "skill 'bolt' frees its caster before the cast lands: 5 < 10")]
+fn register_rejects_cast_period_shorter_than_its_point() {
+    let mut registry = utils::ground_registry();
+    registry.register_skill(
+        "bolt",
+        SkillDef {
+            cooldown: 1,
+            caster: SkillCaster::Entity {
+                costs: Vec::new(),
+                target: EntityCastTarget::Caster,
+                reach: Reach::Wherever,
+                casting: Casting::Delayed {
+                    point: Quantity::Constant(10),
+                    period: Quantity::Constant(5),
+                },
+                effect: EntityCastEffect::Damage(FixedU64::ONE),
+            },
+            requires: Vec::new(),
+        },
+    );
+}
+
+#[test]
+#[should_panic(expected = "skill 'bolt' is cast over no time at all")]
+fn register_rejects_cast_point_from_floorless_stat() {
+    let mut registry = utils::ground_registry();
+    let ritual_time = registry.register_entity_stat("ritual_time", FixedU64::ZERO);
+    registry.register_skill(
+        "bolt",
+        SkillDef {
+            cooldown: 1,
+            caster: SkillCaster::Entity {
+                costs: Vec::new(),
+                target: EntityCastTarget::Caster,
+                reach: Reach::Wherever,
+                casting: Casting::Delayed {
+                    point: Quantity::Stat(ritual_time),
+                    period: Quantity::Stat(ritual_time),
+                },
+                effect: EntityCastEffect::Damage(FixedU64::ONE),
+            },
+            requires: Vec::new(),
+        },
+    );
+}
+
+#[test]
+fn register_accepts_cast_worked_on_stats_caster_carries() {
+    let mut registry = utils::ground_registry();
+    let ritual_time = registry.register_entity_stat("ritual_time", FixedU64::ONE);
+    let bolt = registry.register_skill(
+        "bolt",
+        SkillDef {
+            cooldown: 1,
+            caster: SkillCaster::Entity {
+                costs: Vec::new(),
+                target: EntityCastTarget::Standing {
+                    side: Affiliation::Enemy,
+                    kinds: Kinds::Any,
+                },
+                reach: Reach::Wherever,
+                casting: Casting::Delayed {
+                    point: Quantity::Stat(ritual_time),
+                    period: Quantity::Stat(ritual_time),
+                },
+                effect: EntityCastEffect::Damage(FixedU64::ONE),
+            },
+            requires: Vec::new(),
+        },
+    );
+    registry.register(
+        utils::standing("necromancer", GROUND)
+            .with_stat(ritual_time, FixedU64::from_num(20))
+            .with_skills([bolt]),
+    );
+}
+
+#[test]
+fn register_accepts_weapon_beside_carrier() {
+    let mut registry = utils::ground_registry();
+    registry.register_resource("wood");
+    registry.register(
+        utils::standing("tree", GROUND).with_resource_source("wood", DepletionPolicy::Destroy),
+    );
+    registry.register(
+        utils::standing("ghoul", GROUND)
+            .with_attack_def(GROUND, Delivery::Instant, None, Slain::Remains)
+            .with_stat(EntityStatId::DAMAGE, FixedU64::from_num(5))
+            .with_stat(EntityStatId::ATTACK_RANGE, FixedU64::ONE)
+            .with_stat(EntityStatId::ACQUIRE_RANGE, FixedU64::from_num(5))
+            .with_stat(EntityStatId::ATTACK_PERIOD, FixedU64::from_num(10))
+            .with_stat(EntityStatId::DAMAGE_POINT, FixedU64::from_num(5))
+            .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
+            .with_resource_carrier([(
+                "wood".to_string(),
+                HarvestData::new(
+                    20,
+                    20,
+                    1,
+                    WorkPresence::Present {
+                        crew: CrewLimit::ONE,
+                    },
+                    Banking::Carried,
+                    Kinds::Any,
+                ),
+            )]),
+    );
+    registry.validate();
+}
+
+#[test]
 #[should_panic(expected = "skill 'zap' aims at a position but its effect needs an entity")]
 fn register_rejects_position_cast_with_entity_effect() {
     utils::ground_registry().register_skill(
@@ -3047,6 +3680,8 @@ fn register_rejects_position_cast_with_entity_effect() {
             caster: SkillCaster::Entity {
                 costs: Vec::new(),
                 target: EntityCastTarget::Position,
+                reach: Reach::Wherever,
+                casting: Casting::Instant,
                 effect: EntityCastEffect::Damage(FixedU64::ONE),
             },
             requires: Vec::new(),
@@ -3066,6 +3701,8 @@ fn register_rejects_cast_on_foreign_field() {
             caster: SkillCaster::Entity {
                 costs: Vec::new(),
                 target: EntityCastTarget::Position,
+                reach: Reach::Wherever,
+                casting: Casting::Instant,
                 effect: EntityCastEffect::Field {
                     field: creep,
                     radius: 2,
@@ -3117,7 +3754,7 @@ fn validate_rejects_berthed_broodling_in_group_breeder_lacks() {
     registry.register(
         utils::sized("hatch", GROUND, CellSize::new(3, 3))
             .with_health(300)
-            .with_breeder("grub", Period::Constant(10), 2, 0, OrphanFate::Perish),
+            .with_breeder("grub", Quantity::Constant(10), 2, 0, OrphanFate::Perish),
     );
     registry.register(grub("grub"));
     registry.validate();
@@ -3140,7 +3777,7 @@ fn validate_rejects_breeder_breeding_its_own_type() {
     let mut registry = utils::ground_registry();
     registry.register(
         hatch("hatch", 3, 2)
-            .with_breeder("hatch", Period::Constant(10), 2, 0, OrphanFate::Perish)
+            .with_breeder("hatch", Quantity::Constant(10), 2, 0, OrphanFate::Perish)
             .with_broodling(Attachment::new("brood", BerthStance::Still)),
     );
     registry.validate();
@@ -3182,10 +3819,10 @@ fn validate_rejects_bred_type_that_can_move() {
 )]
 fn validate_rejects_brood_period_from_stat_breeder_lacks() {
     let mut registry = utils::ground_registry();
-    let brood_period = registry.register_entity_stat("brood_period");
+    let brood_period = registry.register_entity_stat("brood_period", FixedU64::ONE);
     registry.register(hatch("hatch", 3, 2).with_breeder(
         "grub",
-        Period::Stat(brood_period),
+        Quantity::Stat(brood_period),
         2,
         0,
         OrphanFate::Perish,
@@ -3220,6 +3857,13 @@ fn validate_accepts_interim_form_of_other_solidity() {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 //
 
+/// A type that lies where it is left and is gone after `decay` ticks.
+fn remains(name: &str, decay: u32) -> EntityTypeDef {
+    utils::standing(name, GROUND)
+        .with_tags(["remains"])
+        .with_stat(EntityStatId::LIFETIME, FixedU64::from_num(decay))
+}
+
 /// A 2x2 primary that raises the `annexes` it docks at (2, 0), standing on the
 /// site to do it.
 fn primary(annexes: [&str; 1]) -> EntityTypeDef {
@@ -3232,7 +3876,7 @@ fn primary(annexes: [&str; 1]) -> EntityTypeDef {
                 crew: CrewLimit::ONE,
             }),
         )
-        .with_docks([(CellPos::new(2, 0), annexes)])
+        .with_docks([(CellPos::new(2, 0), Kinds::types(annexes))])
 }
 
 /// A constructible annex of `size` that endures alone and is bound to its owner.
@@ -3311,7 +3955,7 @@ fn hatch(name: &str, slots: usize, limit: usize) -> EntityTypeDef {
                 slots,
             ),
         )])
-        .with_breeder("grub", Period::Constant(10), limit, 0, OrphanFate::Perish)
+        .with_breeder("grub", Quantity::Constant(10), limit, 0, OrphanFate::Perish)
 }
 
 /// A passable one-cell broodling that sits still in the `brood` group.
@@ -3327,7 +3971,7 @@ fn morph_through(via: &str, into: &str) -> MorphTransition {
     MorphTransition::new(
         into,
         Some(via),
-        Period::Constant(20),
+        Quantity::Constant(20),
         MorphPlacement::Revalidate,
         MorphCancel::Committed,
         MorphInterrupted::Reverts,
@@ -3342,7 +3986,7 @@ fn morph_into(into: &str) -> MorphTransition {
     MorphTransition::new(
         into,
         None,
-        Period::Constant(20),
+        Quantity::Constant(20),
         MorphPlacement::Revalidate,
         MorphCancel::Committed,
         MorphInterrupted::Reverts,

@@ -119,6 +119,10 @@ impl EntityStatId {
     /// Health points removed each tick, after regeneration, while the entity
     /// stands. Fractional and zero by default.
     pub const HEALTH_DRAIN: EntityStatId = EntityStatId(32);
+    /// Ticks an instance stands before its time runs out. Declaring it is what
+    /// gives a type a timed life; without it an instance stands until something
+    /// ends it.
+    pub const LIFETIME: EntityStatId = EntityStatId(33);
 
     /// Creates an entity stat id for the given registration index.
     pub(crate) fn from_index(index: usize) -> Self {
@@ -134,7 +138,7 @@ impl EntityStatId {
 
 /// The built-in entity stats, registered first and in this order, so their
 /// assigned ids equal the [`EntityStatId`] constants above.
-pub(crate) const ENTITY_BUILTIN_STATS: [BuiltinStat<EntityStatId>; 33] = [
+pub(crate) const ENTITY_BUILTIN_STATS: [BuiltinStat<EntityStatId>; 34] = [
     // Current health settles under this ceiling, so a zero would turn any debuff
     // that reached it into an instant kill.
     stats::builtin(EntityStatId::MAX_HEALTH, "max_health", FixedU64::ONE),
@@ -210,6 +214,9 @@ pub(crate) const ENTITY_BUILTIN_STATS: [BuiltinStat<EntityStatId>; 33] = [
     stats::builtin(EntityStatId::ATTACK_ARC, "attack_arc", FixedU64::ZERO),
     // No floor: a fractional per-tick amount where zero means no drain.
     stats::builtin(EntityStatId::HEALTH_DRAIN, "health_drain", FixedU64::ZERO),
+    // Counted in whole ticks, so a life shorter than one tick is a life that
+    // ends the moment it begins: the floor holds it to the tick it is read in.
+    stats::builtin(EntityStatId::LIFETIME, "lifetime", FixedU64::ONE),
 ];
 
 // Floors and names are looked up by `EntityStatId::index`, so every entry must sit at
@@ -222,12 +229,26 @@ const _: () = {
     }
 };
 
-/// The smallest effective value the entity stat at registration `index` may
-/// fold to. Content-declared entity stats carry no engine meaning, so they have
-/// no floor beyond the non-negative clamp.
-pub fn floor_of(index: usize) -> FixedU64 {
-    match ENTITY_BUILTIN_STATS.get(index) {
-        Some(builtin) => builtin.floor,
-        None => FixedU64::ZERO,
+/// What a registered entity stat is, beyond its name and id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EntityStatDef {
+    /// The least the stat ever folds to, whatever is taken off it.
+    floor: FixedU64,
+}
+
+impl EntityStatDef {
+    /// Creates a new `EntityStatDef` with the given data.
+    pub const fn new(floor: FixedU64) -> Self {
+        Self { floor }
+    }
+
+    /// The smallest effective value this stat may fold to.
+    ///
+    /// A non-zero floor marks one whose zero the consumer can never mean — a
+    /// reach of nothing, a cast worked over no time — so a debuff deep enough
+    /// to reach it holds there instead.
+    #[inline]
+    pub fn floor(self) -> FixedU64 {
+        self.floor
     }
 }

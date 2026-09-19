@@ -4,7 +4,7 @@
 
 use ferrets_pathfinder::layer_mask::LayerMask;
 
-use crate::stats::EntityModifier;
+use crate::{affiliation::Affiliation, stats::EntityModifier};
 
 /// A handle to a registered field kind, assigned in registration order.
 ///
@@ -187,17 +187,6 @@ impl FieldSourceDef {
     }
 }
 
-/// Whose coverage of a cell counts, judged from the entity's owner.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FieldAffiliation {
-    /// Only the owner's own coverage.
-    Own,
-    /// Coverage by the owner or any of its allies.
-    Allied,
-    /// Coverage by anyone.
-    Anyone,
-}
-
 /// Which cells of a footprint a placement rule reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FieldCoverage {
@@ -215,7 +204,7 @@ pub enum FieldPlacement {
         /// The field read.
         field: FieldId,
         /// Whose coverage counts.
-        of: FieldAffiliation,
+        of: Affiliation,
         /// Which footprint cells are read.
         coverage: FieldCoverage,
     },
@@ -262,7 +251,7 @@ pub struct FieldEffect {
     /// The field read.
     field: FieldId,
     /// Whose coverage counts.
-    of: FieldAffiliation,
+    of: Affiliation,
     /// The side of the field the effect applies on.
     side: FieldSide,
     /// What the effect does.
@@ -271,12 +260,7 @@ pub struct FieldEffect {
 
 impl FieldEffect {
     /// Creates a new `FieldEffect` with the given data.
-    pub fn new(
-        field: FieldId,
-        of: FieldAffiliation,
-        side: FieldSide,
-        kind: FieldEffectKind,
-    ) -> Self {
+    pub fn new(field: FieldId, of: Affiliation, side: FieldSide, kind: FieldEffectKind) -> Self {
         Self {
             field,
             of,
@@ -293,7 +277,7 @@ impl FieldEffect {
 
     /// Whose coverage counts.
     #[inline]
-    pub fn of(&self) -> FieldAffiliation {
+    pub fn of(&self) -> Affiliation {
         self.of
     }
 

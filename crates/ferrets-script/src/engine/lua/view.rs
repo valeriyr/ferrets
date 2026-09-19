@@ -4,7 +4,7 @@ use mlua::{Lua, Table, Value};
 
 use crate::ai::view::{
     content::{ContentView, EntityContentView, RequirementView},
-    game::{EntityView, GameView},
+    game::{EntityView, GameView, RemainsView},
 };
 
 /// Encodes a game view as the `view` table a think call receives.
@@ -40,7 +40,22 @@ pub(super) fn game_table(lua: &Lua, view: &GameView) -> mlua::Result<Table> {
         "neutral_entities",
         entities_table(lua, &view.neutral_entities)?,
     )?;
+    table.set("remains", remains_table(lua, &view.remains)?)?;
     Ok(table)
+}
+
+/// Encodes remains views as an array table, preserving their order.
+fn remains_table(lua: &Lua, remains: &[RemainsView]) -> mlua::Result<Table> {
+    let array = lua.create_table()?;
+    for (index, body) in remains.iter().enumerate() {
+        let table = lua.create_table()?;
+        table.set("id", body.id)?;
+        table.set("type_name", body.type_name.as_str())?;
+        table.set("x", body.x)?;
+        table.set("y", body.y)?;
+        array.set(index + 1, table)?;
+    }
+    Ok(array)
 }
 
 /// Encodes entity views as an array table, preserving their order.
@@ -87,6 +102,7 @@ fn entity_table(lua: &Lua, entity: &EntityView) -> mlua::Result<Table> {
     }
     table.set("broodlings", broodlings)?;
     table.set("bred_by", entity.bred_by)?;
+    table.set("lifetime_left", entity.lifetime_left)?;
     Ok(table)
 }
 

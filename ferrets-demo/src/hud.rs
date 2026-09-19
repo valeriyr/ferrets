@@ -6,6 +6,7 @@ use bevy::prelude::*;
 use ferrets_bevy_plugin::{PendingInput, ReplayPlayback, ScenarioObjectives};
 use ferrets_content::{
     entity_stats::EntityStatId,
+    morph::MorphCancel,
     registry::ContentRegistry,
     research::ResearchId,
     skills::{EntityCastTarget, SkillCaster, SkillId},
@@ -150,6 +151,11 @@ pub struct MorphButton {
 /// A command-card button that tears down the leading entity's unfinished site.
 #[derive(Component)]
 pub struct CancelBuildButton;
+
+/// A command-card button that calls off the change of form the leading entity
+/// is under.
+#[derive(Component)]
+pub struct CancelMorphButton;
 
 /// Replaces the selection with every living broodling the local player has.
 #[derive(Component)]
@@ -999,10 +1005,15 @@ pub fn update_command_card(
     leading: Res<Leading>,
     registry: Res<ContentRegistry>,
     changed: Query<&EntityInfoComponent, Changed<EntityInfoComponent>>,
-    entities: Query<(&EntityInfoComponent, Option<&MorphComponent>)>,
+    entities: Query<(
+        &EntityInfoComponent,
+        Option<&MorphComponent>,
+        Option<&OwnerComponent>,
+    )>,
     sites: Query<(&EntityInfoComponent, &OwnerComponent), With<UnderConstructionComponent>>,
     broodlings: Broodlings,
     brood_button: Query<(), With<SelectBroodButton>>,
+    morph_button: Query<(), With<CancelMorphButton>>,
     mut finished: RemovedComponents<UnderConstructionComponent>,
     card: Query<Entity, With<CommandCard>>,
     buttons: Query<
@@ -1016,6 +1027,7 @@ pub fn update_command_card(
             With<LoadButton>,
             With<MorphButton>,
             With<CancelBuildButton>,
+            With<CancelMorphButton>,
             With<SelectBroodButton>,
         )>,
     >,
@@ -1035,7 +1047,7 @@ pub fn update_command_card(
     let leading_site_finished = leading.0.is_some_and(|id| {
         finished
             .read()
-            .any(|entity| entities.get(entity).is_ok_and(|(info, _)| info.id() == id))
+            .any(|entity| entities.get(entity).is_ok_and(|(info, ..)| info.id() == id))
     });
     // A hall's card offers the player's whole brood once there is one — a
     // hall being a breeding form, or one changing form from a breeding form;
@@ -1043,7 +1055,7 @@ pub fn update_command_card(
     // kind, and only then — a breeder's timer changes its component every
     // tick, which is no reason to rebuild.
     let leading_breeds = leading.0.is_some_and(|id| {
-        entities.iter().any(|(info, morph)| {
+        entities.iter().any(|(info, morph, _)| {
             info.id() == id
                 && (registry.def(info.type_id()).breeder.is_some()
                     || morph.is_some_and(|morph| registry.def(morph.from).breeder.is_some()))
@@ -1054,10 +1066,24 @@ pub fn update_command_card(
             .local_player()
             .is_some_and(|local| !own_broodlings(local, &registry, &broodlings).is_empty());
     let brood_button_stale = has_brood == brood_button.is_empty();
+    // A change of form comes and goes without the type always changing with
+    // it — one worn through an interim form changes the type twice, one worn
+    // in place not at all — so the card watches the change itself.
+    let changing = session.local_player().is_some_and(|local| {
+        leading.0.is_some_and(|id| {
+            entities.iter().any(|(info, morph, owner)| {
+                info.id() == id
+                    && morph.is_some()
+                    && owner.is_some_and(|owner| owner.player() == local)
+            })
+        })
+    });
+    let morph_button_stale = changing == morph_button.is_empty();
     if !leading.is_changed()
         && !leading_type_changed
         && !leading_site_finished
         && !brood_button_stale
+        && !morph_button_stale
     {
         return;
     }
@@ -1072,8 +1098,8 @@ pub fn update_command_card(
     };
     let def = entities
         .iter()
-        .find(|(info, _)| info.id() == id)
-        .map(|(info, _)| registry.def(info.type_id()));
+        .find(|(info, ..)| info.id() == id)
+        .map(|(info, ..)| registry.def(info.type_id()));
     let trains = def
         .and_then(|def| def.trainer.as_ref())
         .map(|trainer| trainer.trains().map(String::from).collect::<Vec<_>>())
@@ -1153,6 +1179,9 @@ pub fn update_command_card(
         }
         if own_site {
             parent.spawn((CancelBuildButton, card_button("Cancel", BUTTON_NORMAL)));
+        }
+        if changing {
+            parent.spawn((CancelMorphButton, card_button("Cancel", BUTTON_NORMAL)));
         }
         if has_brood {
             parent.spawn((SelectBroodButton, card_button("Brood", BUTTON_NORMAL)));
@@ -1343,6 +1372,25 @@ pub fn cancel_build_card_input(
     }
 }
 
+/// Calls off the change of form the leading entity is under when the cancel
+/// button is clicked, as the build cancel tears down its own site. The engine
+/// answers on the transition's own terms: a refundable change gives the price
+/// back and returns the entity to what it was, and a committed one holds
+/// until its window closes.
+pub fn cancel_morph_card_input(
+    buttons: Query<&Interaction, (With<CancelMorphButton>, Changed<Interaction>)>,
+    leading: Res<Leading>,
+    mut pending: ResMut<PendingInput>,
+) {
+    for interaction in &buttons {
+        if matches!(interaction, Interaction::Pressed)
+            && let Some(entity) = leading.0
+        {
+            pending.push(PlayerCommand::CancelMorph { entity });
+        }
+    }
+}
+
 /// Starts the button's research on the leading researcher when clicked. The
 /// executor holds every gate (requirements, completion, the one-per-topic
 /// rule), so a click that slips past the greyed-out tint is still refused.
@@ -1378,6 +1426,8 @@ enum CardAction {
     PlayerSkill(SkillId),
     /// Changes the selection into the type.
     Morph(String),
+    /// Calls off the change of form the leading entity is under.
+    CancelMorph,
 }
 
 /// Recolors the gated card buttons from what the executor would currently
@@ -1420,6 +1470,25 @@ pub fn update_card_availability(world: &mut World) {
             matches!(entity_def::operation(world, entity), Operation::Operating)
         })
     };
+    let ready = |world: &World, skill: SkillId| {
+        leading.is_some_and(|entity| {
+            world
+                .entity(entity)
+                .get::<SkillsComponent>()
+                .is_some_and(|skills| skills.ready(skill))
+        })
+    };
+    // What the change under way answers a cancel with: a refundable one
+    // returns the price, a forfeit one keeps it, and a committed one refuses.
+    let calls_off = |world: &World| {
+        leading
+            .and_then(|entity| world.entity(entity).get::<MorphComponent>())
+            .and_then(|morph| entity_def::morph_terms(world, morph))
+            .is_some_and(|transition| match transition.cancel() {
+                MorphCancel::Refundable | MorphCancel::Forfeit => true,
+                MorphCancel::Committed => false,
+            })
+    };
 
     let mut buttons: Vec<(Entity, Interaction, CardAction)> = Vec::new();
     let mut query = world.query::<(
@@ -1431,8 +1500,9 @@ pub fn update_card_availability(world: &mut World) {
         Option<&SkillButton>,
         Option<&PlayerSkillButton>,
         Option<&MorphButton>,
+        Option<&CancelMorphButton>,
     )>();
-    for (entity, interaction, train, build, research, skill, player_skill, morph_button) in
+    for (entity, interaction, train, build, research, skill, player_skill, morph_button, cancel) in
         query.iter(world)
     {
         let action = if let Some(button) = train {
@@ -1447,6 +1517,8 @@ pub fn update_card_availability(world: &mut World) {
             CardAction::PlayerSkill(button.skill)
         } else if let Some(button) = morph_button {
             CardAction::Morph(button.type_name.clone())
+        } else if cancel.is_some() {
+            CardAction::CancelMorph
         } else {
             continue;
         };
@@ -1507,8 +1579,11 @@ pub fn update_card_availability(world: &mut World) {
                     );
                 (available, RESEARCH_NORMAL, RESEARCH_HOVERED)
             }
+            // The cooldown is judged where the cast is issued, so a skill
+            // still cooling down is refused outright: the button says so
+            // rather than swallowing the click.
             CardAction::Skill(skill) => (
-                skill_requirements_met(world, *skill) && operating(world),
+                skill_requirements_met(world, *skill) && operating(world) && ready(world, *skill),
                 SKILL_NORMAL,
                 SKILL_HOVERED,
             ),
@@ -1522,6 +1597,10 @@ pub fn update_card_availability(world: &mut World) {
                 SKILL_NORMAL,
                 SKILL_HOVERED,
             ),
+            // A committed change is not the player's to call off while its
+            // window stands open, so the button greys out rather than doing
+            // nothing when it is clicked.
+            CardAction::CancelMorph => (calls_off(world), BUTTON_NORMAL, BUTTON_HOVERED),
         };
 
         let color = match (available, interaction) {
@@ -1580,7 +1659,12 @@ pub fn build_card_input(world: &mut World) {
                         // A builder may list an annex without offering a dock
                         // that takes it, and there is nowhere to send the
                         // order then.
-                        if let Some(at) = annex::dock_anchor_for(world, selected, &type_name) {
+                        let annex_def = world
+                            .resource::<ContentRegistry>()
+                            .entity(&type_name)
+                            .expect("the card names a registered type")
+                            .clone();
+                        if let Some(at) = annex::dock_anchor_for(world, selected, &annex_def) {
                             world
                                 .resource_mut::<PendingInput>()
                                 .push(PlayerCommand::BuildEntity {
@@ -1632,7 +1716,7 @@ pub fn skill_card_input(
                     continue;
                 };
                 let target = match &def.caster {
-                    SkillCaster::Entity { target, .. } => *target,
+                    SkillCaster::Entity { target, .. } => target,
                     SkillCaster::Player { .. } => {
                         unreachable!("entity types declare only entity-cast skills")
                     }
@@ -1653,9 +1737,9 @@ pub fn skill_card_input(
                         }
                     }
                     // Targeted cast: arm the click that names the target.
-                    EntityCastTarget::Ally
-                    | EntityCastTarget::Enemy
-                    | EntityCastTarget::Position => {
+                    EntityCastTarget::Standing { .. }
+                    | EntityCastTarget::Position
+                    | EntityCastTarget::Fallen { .. } => {
                         *mode = InputMode::Targeting(TargetedOrder::Skill(button.skill));
                     }
                 }

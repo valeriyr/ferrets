@@ -9,7 +9,7 @@ use ferrets_pathfinder::{
     layer_mask::LayerMask,
     mover_shape::MoverShape,
     nav_grid::NavGrid,
-    search,
+    search::{self, Footing},
 };
 
 use ferrets_math::FixedU64;
@@ -22,9 +22,14 @@ use crate::{
     session::player_id::PlayerId,
 };
 use ferrets_content::{
-    entity_stats::EntityStatId, entity_type_def::EntityTypeDef, location::LocationDef,
+    entity_stats::EntityStatId,
+    entity_type_def::EntityTypeDef,
+    location::{LocationDef, Solidity},
     registry::ContentRegistry,
 };
+
+/// How far out from a rectangle a placement search looks before giving up.
+const MAX_RADIUS: u32 = 8;
 
 /// How an entity's footprint occupies the navigation grid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -83,6 +88,19 @@ impl Map {
 
         if !data.terrain_cells().is_empty() {
             Self::seed_terrain(&mut nav_grid, data, registry);
+        }
+
+        // What a death leaves is laid by the death that leaves it; a map that
+        // opens with bodies already on it would have nobody they were left by.
+        for placement in data.placements() {
+            let laid = registry
+                .entity(&placement.type_name)
+                .is_some_and(EntityTypeDef::is_remains);
+            assert!(
+                !laid,
+                "placement '{}' names remains, which only a death may leave",
+                placement.type_name
+            );
         }
 
         // Start positions indexed by slot id; environment seats have none.
@@ -352,16 +370,33 @@ impl Map {
         size: CellSize,
         location_def: &LocationDef,
     ) -> Option<CellPos> {
-        /// How far out from the rectangle to search before giving up.
-        const MAX_RADIUS: u32 = 8;
-
         search::find_placement_near(
             &self.nav_grid,
             location_def.occupation(),
-            origin,
-            size,
+            CellRect::new(origin, size),
             location_def.size(),
             MAX_RADIUS,
+            footing(location_def),
+        )
+    }
+
+    /// Finds at most `max_amount` free placements for `location_def`'s footprint
+    /// near the rectangle at `origin`, none overlapping another.
+    pub fn find_placements_near(
+        &self,
+        origin: CellPos,
+        size: CellSize,
+        location_def: &LocationDef,
+        max_amount: usize,
+    ) -> Vec<CellPos> {
+        search::find_placements_near(
+            &self.nav_grid,
+            location_def.occupation(),
+            CellRect::new(origin, size),
+            location_def.size(),
+            MAX_RADIUS,
+            max_amount,
+            footing(location_def),
         )
     }
 
@@ -680,5 +715,14 @@ impl Map {
                 }
             }
         }
+    }
+}
+
+/// The ground a footprint of this definition needs: one that claims its cells
+/// needs them free, one that shares them needs only terrain that allows it.
+fn footing(location_def: &LocationDef) -> Footing {
+    match location_def.solidity() {
+        Solidity::Solid => Footing::Free,
+        Solidity::Passable => Footing::Shared,
     }
 }

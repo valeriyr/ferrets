@@ -45,7 +45,7 @@ use ferrets_simulation::{
 use ferrets_content::registry::ContentRegistry;
 
 use crate::{
-    ai, map,
+    ai, map, ruleset,
     skirmish::CurrentSkirmish,
     states::{GameState, LobbyMode},
 };
@@ -69,6 +69,7 @@ pub enum Race {
     Conclave,
     Elves,
     Terran,
+    Undead,
 }
 
 impl Race {
@@ -80,6 +81,7 @@ impl Race {
             Race::Conclave => "conclave",
             Race::Elves => "elves",
             Race::Terran => "terran",
+            Race::Undead => "undead",
         }
     }
 
@@ -91,6 +93,7 @@ impl Race {
             Race::Conclave => "Conclave",
             Race::Elves => "Elves",
             Race::Terran => "Terrans",
+            Race::Undead => "Undead",
         }
     }
 
@@ -101,7 +104,8 @@ impl Race {
             Race::Swarm => Race::Conclave,
             Race::Conclave => Race::Elves,
             Race::Elves => Race::Terran,
-            Race::Terran => Race::Human,
+            Race::Terran => Race::Undead,
+            Race::Undead => Race::Human,
         }
     }
 
@@ -112,6 +116,7 @@ impl Race {
             Some("conclave") => Race::Conclave,
             Some("elves") => Race::Elves,
             Some("terran") => Race::Terran,
+            Some("undead") => Race::Undead,
             _ => Race::Human,
         }
     }
@@ -1534,6 +1539,7 @@ pub fn start_game(world: &mut World) {
             authority,
             drop_policy,
             skirmish.finish_policy,
+            skirmish.rules,
         );
         // This node's own choice, applied outside the shared configuration —
         // peers may legitimately differ.
@@ -1563,6 +1569,7 @@ fn vacant_skirmish(config: &LobbyConfig, registry: &ContentRegistry) -> Skirmish
         finish_policy: FinishPolicy::LastStanding {
             elimination: config.elimination,
         },
+        rules: ruleset::demo(),
     }
 }
 

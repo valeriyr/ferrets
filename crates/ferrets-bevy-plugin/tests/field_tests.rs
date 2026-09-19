@@ -10,27 +10,28 @@ use bevy::prelude::*;
 use ferrets_bevy_plugin::ai::game_view;
 use ferrets_bevy_plugin::instantiate_map;
 use ferrets_content::{
-    attack::{Delivery, Weapon},
+    affiliation::Affiliation,
+    attack::{Delivery, Slain, Weapon},
     build::BuilderAttendance,
     costs,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     field::{
-        FieldAction, FieldAffiliation, FieldCoverage, FieldDecay, FieldDef, FieldEffect,
-        FieldEffectKind, FieldGrowth, FieldId, FieldPlacement, FieldSide, FieldSourceDef,
-        FieldVision,
+        FieldAction, FieldCoverage, FieldDecay, FieldDef, FieldEffect, FieldEffectKind,
+        FieldGrowth, FieldId, FieldPlacement, FieldSide, FieldSourceDef, FieldVision,
     },
+    kinds::Kinds,
     location::Solidity,
     morph::{MorphCancel, MorphInterrupted, MorphPlacement, MorphReason, MorphTransition},
-    period::Period,
+    quantity::Quantity,
     registry::ContentRegistry,
     repair::{RepairCost, RepairRate},
     requirement::Requirement,
     research::ResearchDef,
-    resource::{Banking, DepletionPolicy, HarvestData, Sources},
-    skills::{EntityCastEffect, EntityCastTarget, SkillCaster, SkillDef},
+    resource::{Banking, DepletionPolicy, HarvestData},
+    skills::{Casting, EntityCastEffect, EntityCastTarget, Reach, SkillCaster, SkillDef},
     stats::{EntityModifier, ModifierOp},
-    transport::{BoardingPolicy, PassengerConduct, PassengerFate},
+    transport::{PassengerConduct, PassengerFate},
     turret::{TurretDef, TurretMount, TurretStats, WeaponConduct},
     work::{CrewLimit, WorkPresence},
 };
@@ -1207,7 +1208,10 @@ fn watching_field_reveals_covered_cells_to_whoever_covers_them() {
             target: Some(SkillTarget::Position(utils::pos(24, 20))),
         },
     );
-    utils::run_ticks(&mut app, utils::APPLY);
+    // One tick past the command's own delay: a cast is an order, so the
+    // creep is laid in the order phase, which the tick's fog pass has
+    // already run.
+    utils::run_ticks(&mut app, utils::APPLY + 1);
 
     // The spreader sees its creep; the rival, with no creep there, does not.
     assert_eq!(seen_by(&app, 0, 24, 20), CellVisibility::Visible);
@@ -1255,7 +1259,10 @@ fn ally_sees_through_watched_field_and_enemy_does_not() {
             target: Some(SkillTarget::Position(utils::pos(24, 20))),
         },
     );
-    utils::run_ticks(&mut app, utils::APPLY);
+    // One tick past the command's own delay: a cast is an order, so the
+    // creep is laid in the order phase, which the tick's fog pass has
+    // already run.
+    utils::run_ticks(&mut app, utils::APPLY + 1);
 
     // The creep is player 0's alone, so only player 0's own grid is stamped;
     // the ally reads it through team vision, the enemy never does.
@@ -1308,7 +1315,7 @@ fn mover(name: &str) -> EntityTypeDef {
             FixedU64::from_num(360),
         )
         .with_health(20)
-        .with_dying(1, None)
+        .with_dying(1, [])
 }
 
 /// A square structure of `side` cells that takes `build_time` ticks to raise.
@@ -1316,7 +1323,7 @@ fn building(name: &str, side: u32, build_time: u32) -> EntityTypeDef {
     EntityTypeDef::new(name)
         .with_location(utils::GROUND, CellSize::new(side, side), Solidity::Solid)
         .with_health(100)
-        .with_dying(1, None)
+        .with_dying(1, [])
         .with_build_time(build_time)
 }
 
@@ -1386,13 +1393,13 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
             building("spore", 1, 2)
                 .with_field_placement([FieldPlacement::Requires {
                     field: creep,
-                    of: FieldAffiliation::Anyone,
+                    of: Affiliation::Anyone,
                     coverage: FieldCoverage::Footprint,
                 }])
                 .with_morphs([MorphTransition::new(
                     "tower",
                     Some("pupa"),
-                    Period::Constant(10),
+                    Quantity::Constant(10),
                     MorphPlacement::Revalidate,
                     MorphCancel::Refundable,
                     MorphInterrupted::Reverts,
@@ -1406,7 +1413,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
         registry.register(building("spire", 2, 2).with_field_placement([
             FieldPlacement::Requires {
                 field: creep,
-                of: FieldAffiliation::Anyone,
+                of: Affiliation::Anyone,
                 coverage: FieldCoverage::Footprint,
             },
         ]));
@@ -1417,7 +1424,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
         registry.register(building("lander", 1, 2).with_morphs([MorphTransition::new(
             "bunker",
             None,
-            Period::Constant(1),
+            Quantity::Constant(1),
             MorphPlacement::Revalidate,
             MorphCancel::Forfeit,
             MorphInterrupted::Reverts,
@@ -1429,7 +1436,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
         // that withers off it.
         registry.register(mover("zergling").with_field_effects([FieldEffect::new(
             creep,
-            FieldAffiliation::Anyone,
+            Affiliation::Anyone,
             FieldSide::Inside,
             FieldEffectKind::Modifiers(vec![modifier(
                 EntityStatId::SPEED,
@@ -1441,13 +1448,13 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
             EntityTypeDef::new("larva")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
                 .with_health(20)
-                .with_dying(1, None)
+                .with_dying(1, [])
                 // Modifiers move only the stats a type carries, so the drain
                 // is declared at zero for the field to raise.
                 .with_stat(EntityStatId::HEALTH_DRAIN, FixedU64::ZERO)
                 .with_field_effects([FieldEffect::new(
                     creep,
-                    FieldAffiliation::Anyone,
+                    Affiliation::Anyone,
                     FieldSide::Outside,
                     FieldEffectKind::Modifiers(vec![modifier(
                         EntityStatId::HEALTH_DRAIN,
@@ -1466,7 +1473,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
         let unpowered_idles = || {
             FieldEffect::new(
                 power,
-                FieldAffiliation::Own,
+                Affiliation::Own,
                 FieldSide::Outside,
                 FieldEffectKind::Disabled,
             )
@@ -1490,13 +1497,13 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 .with_trainer(["zealot"])
                 .with_field_placement([FieldPlacement::Requires {
                     field: power,
-                    of: FieldAffiliation::Own,
+                    of: Affiliation::Own,
                     coverage: FieldCoverage::Anchor,
                 }])
                 .with_morphs([MorphTransition::new(
                     "warpgate",
                     None,
-                    Period::Constant(10),
+                    Quantity::Constant(10),
                     MorphPlacement::Revalidate,
                     MorphCancel::Forfeit,
                     MorphInterrupted::Reverts,
@@ -1526,7 +1533,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
         let battery_gun = registry.register_turret(
             "battery_gun",
             TurretDef::new(
-                Weapon::new(utils::GROUND, Delivery::Instant, None),
+                Weapon::new(utils::GROUND, Delivery::Instant, None, Slain::Remains),
                 TurretStats::default(),
                 WeaponConduct::Halts,
             ),
@@ -1550,7 +1557,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
         );
         registry.register(mover("acolyte").with_field_effects([FieldEffect::new(
             power,
-            FieldAffiliation::Own,
+            Affiliation::Own,
             FieldSide::Inside,
             FieldEffectKind::Modifiers(vec![modifier(
                 EntityStatId::SPEED,
@@ -1572,8 +1579,8 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 .with_stat(EntityStatId::LOAD_PERIOD, FixedU64::ONE)
                 .with_stat(EntityStatId::UNLOAD_PERIOD, FixedU64::ONE)
                 .with_transporter(
-                    ["zealot"],
-                    BoardingPolicy::Own,
+                    Kinds::types(["zealot"]),
+                    Affiliation::Own,
                     PassengerFate::Eject,
                     PassengerConduct::Shelter,
                 )
@@ -1586,7 +1593,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 .with_resource_source("crystal", DepletionPolicy::Persist)
                 .with_field_effects([FieldEffect::new(
                     power,
-                    FieldAffiliation::Anyone,
+                    Affiliation::Anyone,
                     FieldSide::Outside,
                     FieldEffectKind::Disabled,
                 )]),
@@ -1604,7 +1611,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                     }),
                 )
                 .with_repairer(
-                    ["structure"],
+                    Kinds::tags(["structure"]),
                     RepairRate::PerTick(FixedU64::from_num(5)),
                     WorkPresence::Present {
                         crew: CrewLimit::ONE,
@@ -1623,7 +1630,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                             crew: CrewLimit::ONE,
                         },
                         Banking::Carried,
-                        Sources::Any,
+                        Kinds::Any,
                     ),
                 )])
                 .with_field_effects([unpowered_idles()]),
@@ -1632,7 +1639,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
             EntityTypeDef::new("dummy")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
                 .with_health(100)
-                .with_dying(1, None),
+                .with_dying(1, []),
         );
 
         // Casts: an overlord spews a creep patch on a cell; a scourer clears one.
@@ -1643,6 +1650,8 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 caster: SkillCaster::Entity {
                     costs: Vec::new(),
                     target: EntityCastTarget::Position,
+                    reach: Reach::Wherever,
+                    casting: Casting::Instant,
                     effect: EntityCastEffect::Field {
                         field: creep,
                         radius: 1,
@@ -1659,6 +1668,8 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 caster: SkillCaster::Entity {
                     costs: Vec::new(),
                     target: EntityCastTarget::Position,
+                    reach: Reach::Wherever,
+                    casting: Casting::Instant,
                     effect: EntityCastEffect::Field {
                         field: creep,
                         radius: 2,
