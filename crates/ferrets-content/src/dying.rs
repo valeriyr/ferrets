@@ -26,7 +26,7 @@ pub enum DeathKind {
     /// Spent on the construction site it founded.
     Consumed,
     /// Called off before it was finished.
-    Cancelled,
+    Canceled,
     /// A resource source that ran out.
     Depleted,
     /// A resource source taken off the map by what was raised over it.
@@ -56,7 +56,7 @@ impl LeftBy {
                 | DeathKind::Unseated => true,
                 DeathKind::CarriedDown
                 | DeathKind::Consumed
-                | DeathKind::Cancelled
+                | DeathKind::Canceled
                 | DeathKind::Depleted
                 | DeathKind::Overbuilt => false,
             },
@@ -143,7 +143,7 @@ impl Bequest {
 ///
 /// A destroyed entity waits out the ticks this states before it is removed, or
 /// goes the tick it dies when it states none. Destruction is independent of health — depleted resource sources,
-/// cancelled constructions, and scripted removals all destroy entities that may
+/// canceled constructions, and scripted removals all destroy entities that may
 /// never take damage.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DyingDef {

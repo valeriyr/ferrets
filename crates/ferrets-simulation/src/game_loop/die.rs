@@ -40,7 +40,7 @@ pub fn prepare(entity: Entity, _order: &Order, world: &mut World) -> OrderState 
 
 /// Called for every Die entry that has a cancel policy.
 ///
-/// Dying cannot be cancelled; the entry always stays in the queue.
+/// Dying cannot be canceled; the entry always stays in the queue.
 pub fn cancel_processing(
     _entity: Entity,
     _order: &Order,

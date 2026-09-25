@@ -18,9 +18,10 @@ use ferrets_simulation::{
         location::LocationComponent,
         research::ResearchComponent,
     },
-    entity_def::{self, Operation, Switch},
+    entity_def::{self, Operation, Outage},
     events::{DeathCause, SimulationEvent},
     player_research::PlayerResearch,
+    resources::PlayerResources,
     session::player_id::PlayerId,
     simulation_id::SimulationId,
 };
@@ -264,7 +265,7 @@ fn lifting_off_orphans_annex_and_switches_it_off() {
     // Idle without a primary: it stands, and it does not work.
     assert_eq!(
         entity_def::operation(app.world(), lookout),
-        Operation::Disabled(Switch::Alone)
+        Operation::Disabled(Outage::Orphaned)
     );
 }
 
@@ -333,7 +334,7 @@ fn lift_off_leaves_researching_annex_to_hold_its_work() {
     assert_eq!(primary_of(&app, lookout), Docking::Alone);
     assert_eq!(
         entity_def::operation(app.world(), lookout),
-        Operation::Disabled(Switch::Alone)
+        Operation::Disabled(Outage::Orphaned)
     );
     let held = research_progress(&app, lookout);
     assert_eq!(held, 10);
@@ -382,7 +383,7 @@ fn orphaned_annex_takes_no_new_research() {
     assert_eq!(primary_of(&app, lookout), Docking::Alone);
     assert_eq!(
         entity_def::operation(app.world(), lookout),
-        Operation::Disabled(Switch::Alone)
+        Operation::Disabled(Outage::Orphaned)
     );
 
     utils::grant_gold(&mut app, 10);
@@ -698,6 +699,109 @@ fn rival_landing_beside_seized_annex_takes_it() {
     assert!(
         utils::selection(&app).is_empty(),
         "it left the old owner's selection"
+    );
+}
+
+#[test]
+fn orphaned_annex_takes_no_new_training() {
+    let mut app = utils::annex_app();
+    let (_, keep_id) = utils::create_owned(&mut app, "keep", 10, 10, 0);
+    let lookout = docked_lookout(&mut app, keep_id, 12, 10);
+    let lookout_id = entity_def::simulation_id(app.world(), lookout);
+
+    // Orphaned before anything is asked of it.
+    command_morph(&mut app, keep_id, "keep_aloft");
+    utils::run_ticks(&mut app, utils::APPLY + 5);
+    assert_eq!(primary_of(&app, lookout), Docking::Alone);
+
+    utils::grant_gold(&mut app, 10);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::TrainEntity {
+            trainer: lookout_id,
+            type_name: "signaler".into(),
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY + 10);
+
+    // An idling annex is idle: nothing queues, nothing trains, and the ten
+    // gold is still the player's.
+    assert_eq!(utils::train_queue_len(app.world(), lookout), 0);
+    assert_eq!(utils::count_of_type(app.world_mut(), "signaler"), 0);
+    assert_eq!(utils::gold(app.world()), 10);
+}
+
+#[test]
+fn seized_annex_forfeits_training_its_old_owner_paid_for() {
+    let mut app = utils::annex_app();
+    let (_, keep_id) = utils::create_owned(&mut app, "keep", 10, 10, 0);
+    let lookout = docked_lookout(&mut app, keep_id, 12, 10);
+    let lookout_id = entity_def::simulation_id(app.world(), lookout);
+    utils::grant_gold(&mut app, 10);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::TrainEntity {
+            trainer: lookout_id,
+            type_name: "signaler".into(),
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY);
+    assert_eq!(utils::train_queue_len(app.world(), lookout), 1);
+    assert_eq!(
+        utils::gold(app.world()),
+        0,
+        "the entry was paid for at issue"
+    );
+
+    // The rival docks with it: the training is not the rival's to finish, so
+    // the entry goes — and the ten gold stay spent, lost with the annex.
+    hand_over(&mut app, keep_id, 1);
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(entity_def::owner(app.world(), lookout), Some(1));
+    assert_eq!(utils::train_queue_len(app.world(), lookout), 0);
+    assert_eq!(utils::gold(app.world()), 0, "nothing is paid back");
+    assert_eq!(
+        app.world().resource::<PlayerResources>().amount(1, "gold"),
+        0,
+        "and nothing reached the taker"
+    );
+}
+
+#[test]
+fn seized_annex_drops_its_orders_and_forfeits_what_they_took() {
+    let mut app = utils::annex_app();
+    let (_, keep_id) = utils::create_owned(&mut app, "keep", 10, 10, 0);
+    let lookout = docked_lookout(&mut app, keep_id, 12, 10);
+    let lookout_id = entity_def::simulation_id(app.world(), lookout);
+    let signals = app
+        .world()
+        .resource::<ContentRegistry>()
+        .research("signals")
+        .expect("the fixture registers signals");
+    utils::grant_gold(&mut app, 10);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::StartResearch {
+            researcher: lookout_id,
+            research: signals,
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY + 3);
+    assert_eq!(research_progress(&app, lookout), 4);
+    assert_eq!(utils::gold(app.world()), 0);
+
+    // The rival docks with it: the research is not the rival's to finish, so
+    // the order goes — and the ten gold stay spent, lost with the annex.
+    hand_over(&mut app, keep_id, 1);
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(entity_def::owner(app.world(), lookout), Some(1));
+    assert!(utils::order_queue_is_empty(app.world_mut(), lookout));
+    assert!(app.world().get::<ResearchComponent>(lookout).is_none());
+    assert_eq!(utils::gold(app.world()), 0, "nothing is paid back");
+    assert_eq!(
+        app.world().resource::<PlayerResources>().amount(1, "gold"),
+        0,
+        "and nothing reached the taker"
     );
 }
 

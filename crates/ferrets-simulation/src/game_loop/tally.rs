@@ -90,7 +90,7 @@ fn fold(
             cause,
             ..
         } => {
-            // A loss is something fire took: an owner cancelling its own
+            // A loss is something fire took: an owner canceling its own
             // construction, a builder spent on its site, or a resource node
             // running dry, is neither a loss nor anyone's kill. A passenger's
             // death traces to whoever brought its carrier down.
@@ -133,13 +133,13 @@ fn fold(
         // The cause is carried for a reader that wants spending broken down by
         // reason; these totals are per resource kind, so it is not folded in
         // here.
-        SimulationEvent::ResourcesSpent { player, cost, .. } => {
-            for (kind, amount) in cost {
+        SimulationEvent::ResourcesSpent { player, price, .. } => {
+            for (kind, amount) in price {
                 statistics.record_spent(*player, kind, *amount);
             }
         }
-        SimulationEvent::ResourcesRefunded { player, cost, .. } => {
-            for (kind, amount) in cost {
+        SimulationEvent::ResourcesRefunded { player, price, .. } => {
+            for (kind, amount) in price {
                 statistics.record_refunded(*player, kind, *amount);
             }
         }
@@ -221,7 +221,7 @@ fn fire_behind(
                 }
             }
             DeathCause::Depleted
-            | DeathCause::Cancelled
+            | DeathCause::Canceled
             | DeathCause::Consumed
             | DeathCause::Overbuilt
             | DeathCause::Decayed

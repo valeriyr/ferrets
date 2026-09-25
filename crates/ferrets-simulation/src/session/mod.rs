@@ -1,5 +1,6 @@
 //! Manages the lifecycle and participants of a running game.
 
+pub mod ai_detection;
 pub mod ai_hosting;
 pub mod ai_vision;
 pub mod authority;

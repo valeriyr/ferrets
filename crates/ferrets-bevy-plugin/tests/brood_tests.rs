@@ -87,7 +87,7 @@ fn births_stop_at_limit_and_timer_holds() {
 
     // The growth is called off at tick 36: the grub comes back to its seat and
     // the count, and the timer holds at 5 — no birth through tick 45.
-    utils::stop_orders(app.world_mut(), grubs[0]);
+    utils::soft_cancel_orders(app.world_mut(), grubs[0]);
     utils::run_ticks(&mut app, 10);
     assert_eq!(broodlings_of(&app, hatch).len(), 3);
     assert_eq!(alive_of_type(&mut app, "grub").len(), 3);
@@ -498,11 +498,17 @@ fn fizzled_change_dies_when_declared_to() {
     // The landing found no ground; the transition dies rather than reverts,
     // the egg is what died, and the price came back all the same.
     assert_eq!(utils::gold(app.world()), 10);
-    assert!(app.world().resource::<utils::Announced>().0.iter().any(|event| matches!(
-        event,
-        SimulationEvent::EntityDied { entity, cause: DeathCause::Cancelled, entity_type, .. }
-            if *entity == grub_id && *entity_type == type_id(&app, "egg")
-    )));
+    assert!(
+        app.world()
+            .resource::<utils::Announced>()
+            .0
+            .iter()
+            .any(|event| matches!(
+                event,
+                SimulationEvent::EntityDied { entity, cause: DeathCause::Canceled, entity_type, .. }
+                    if *entity == grub_id && *entity_type == type_id(&app, "egg")
+            ))
+    );
     assert_eq!(broodlings_of(&app, hatch).len(), 1);
     utils::run_ticks(&mut app, 2);
     utils::assert_despawned(app.world_mut(), grub);
@@ -679,7 +685,7 @@ fn reverted_egg_forgets_rally_point() {
         },
     );
     utils::run_ticks(&mut app, utils::APPLY);
-    utils::stop_orders(app.world_mut(), grub);
+    utils::soft_cancel_orders(app.world_mut(), grub);
     utils::run_ticks(&mut app, 1);
 
     assert_eq!(type_name_of(&app, grub), "grub");
@@ -687,7 +693,7 @@ fn reverted_egg_forgets_rally_point() {
 }
 
 #[test]
-fn cancelled_growth_reseats_when_seat_is_free() {
+fn canceled_growth_reseats_when_seat_is_free() {
     let mut app = utils::brood_app(MovementModel::Cell);
     utils::grant_gold(&mut app, 10);
     let hatch = utils::place(&mut app, "hatch", 10, 10, 0);
@@ -698,7 +704,7 @@ fn cancelled_growth_reseats_when_seat_is_free() {
     order_morph(&mut app, grub, "worker");
     utils::run_ticks(&mut app, 3);
     assert_eq!(type_name_of(&app, grub), "egg");
-    utils::stop_orders(app.world_mut(), grub);
+    utils::soft_cancel_orders(app.world_mut(), grub);
     utils::run_ticks(&mut app, 1);
 
     // The seat again, the price back, and the supply the worker held let go.
@@ -715,7 +721,7 @@ fn cancelled_growth_reseats_when_seat_is_free() {
 }
 
 #[test]
-fn cancelled_growth_dies_when_no_seat_is_free() {
+fn canceled_growth_dies_when_no_seat_is_free() {
     let mut app = utils::brood_app(MovementModel::Cell);
     utils::record_announcements(&mut app);
     utils::grant_gold(&mut app, 10);
@@ -734,7 +740,7 @@ fn cancelled_growth_dies_when_no_seat_is_free() {
     assert_eq!(type_name_of(&app, grubs[0]), "egg");
     assert_eq!(alive_of_type(&mut app, "grub").len(), 2);
 
-    utils::stop_orders(app.world_mut(), grubs[0]);
+    utils::soft_cancel_orders(app.world_mut(), grubs[0]);
     utils::run_ticks(&mut app, 1);
     assert_eq!(alive_of_type(&mut app, "grub").len(), 2);
     assert_eq!(broodlings_of(&app, hatch).len(), 2);
@@ -755,7 +761,7 @@ fn cancelled_growth_dies_when_no_seat_is_free() {
 }
 
 #[test]
-fn cancelled_growth_dies_when_breeder_is_gone() {
+fn canceled_growth_dies_when_breeder_is_gone() {
     let mut app = utils::brood_app(MovementModel::Cell);
     utils::record_announcements(&mut app);
     utils::grant_gold(&mut app, 10);
@@ -772,7 +778,7 @@ fn cancelled_growth_dies_when_breeder_is_gone() {
     // The egg is no broodling: it outlives the hatch.
     assert_eq!(type_name_of(&app, grub), "egg");
 
-    utils::stop_orders(app.world_mut(), grub);
+    utils::soft_cancel_orders(app.world_mut(), grub);
     utils::run_ticks(&mut app, 1);
     assert!(
         app.world()
@@ -834,7 +840,7 @@ fn changing_entity_counts_destination_supply() {
 }
 
 #[test]
-fn cancelled_change_dies_when_declared_to() {
+fn canceled_change_dies_when_declared_to() {
     let mut app = utils::brood_app(MovementModel::Cell);
     utils::record_announcements(&mut app);
     utils::grant_gold(&mut app, 10);
@@ -846,17 +852,23 @@ fn cancelled_change_dies_when_declared_to() {
     order_morph(&mut app, grub, "flit");
     utils::run_ticks(&mut app, 3);
     assert_eq!(type_name_of(&app, grub), "egg");
-    utils::stop_orders(app.world_mut(), grub);
+    utils::soft_cancel_orders(app.world_mut(), grub);
     utils::run_ticks(&mut app, 1);
 
     // The price came back, and the egg is what died.
     assert_eq!(utils::gold(app.world()), 10);
     assert_eq!(broodlings_of(&app, hatch).len(), 0);
-    assert!(app.world().resource::<utils::Announced>().0.iter().any(|event| matches!(
-        event,
-        SimulationEvent::EntityDied { entity, cause: DeathCause::Cancelled, entity_type, .. }
-            if *entity == grub_id && *entity_type == type_id(&app, "egg")
-    )));
+    assert!(
+        app.world()
+            .resource::<utils::Announced>()
+            .0
+            .iter()
+            .any(|event| matches!(
+                event,
+                SimulationEvent::EntityDied { entity, cause: DeathCause::Canceled, entity_type, .. }
+                    if *entity == grub_id && *entity_type == type_id(&app, "egg")
+            ))
+    );
     utils::run_ticks(&mut app, 2);
     utils::assert_despawned(app.world_mut(), grub);
 }
@@ -1132,7 +1144,7 @@ fn egg_hatching_while_interim_form_is_worn_obeys_breeder_rally() {
 }
 
 #[test]
-fn cancelled_change_back_to_breeding_form_owes_no_top_up() {
+fn canceled_change_back_to_breeding_form_owes_no_top_up() {
     let mut app = utils::brood_app(MovementModel::Cell);
     utils::grant_gold(&mut app, 10);
     // A great hatch opens with two grubs; one grows away, leaving one.
@@ -1149,7 +1161,7 @@ fn cancelled_change_back_to_breeding_form_owes_no_top_up() {
     // next one — at its ten-tick pace from the change's start.
     order_morph(&mut app, hatch, "hatch");
     utils::run_ticks(&mut app, 3);
-    utils::stop_orders(app.world_mut(), hatch);
+    utils::force_cancel_orders(app.world_mut(), hatch);
     utils::run_ticks(&mut app, 1);
     assert_eq!(type_name_of(&app, hatch), "great_hatch");
     assert_eq!(broodlings_of(&app, hatch).len(), 1);
@@ -1293,7 +1305,7 @@ fn reseat_breeder_leaves_broodlings_beyond_its_reach() {
 }
 
 #[test]
-fn cancelled_change_takes_set_down_broodlings_in_again_on_return() {
+fn canceled_change_takes_set_down_broodlings_in_again_on_return() {
     let mut app = utils::brood_app(MovementModel::Cell);
     let pen = utils::place(&mut app, "reseat_pen", 10, 10, 0);
     utils::run_ticks(&mut app, 20);
@@ -1302,7 +1314,7 @@ fn cancelled_change_takes_set_down_broodlings_in_again_on_return() {
     order_morph(&mut app, pen, "roomy_pen");
     utils::run_ticks(&mut app, 3);
     assert_eq!(broodlings_of(&app, pen).len(), 0);
-    utils::stop_orders(app.world_mut(), pen);
+    utils::force_cancel_orders(app.world_mut(), pen);
     utils::run_ticks(&mut app, 1);
 
     assert_eq!(type_name_of(&app, pen), "reseat_pen");

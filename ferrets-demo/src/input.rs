@@ -5,7 +5,7 @@
 use bevy::{prelude::*, window::PrimaryWindow};
 use ferrets_bevy_plugin::{NetworkActive, PauseIntent, PendingInput, SpeedIntent, tick};
 use ferrets_content::{
-    field::FieldId,
+    entity_type_def::EntityTypeDef,
     registry::ContentRegistry,
     skills::{EntityCastTarget, SkillCaster, SkillId},
 };
@@ -17,6 +17,7 @@ use ferrets_simulation::{
     components::{
         dying::RemainsComponent,
         entity_info::EntityInfoComponent,
+        field_source::{Emitted, FieldSourcesComponent},
         hidden::HiddenComponent,
         location::LocationComponent,
         owner::OwnerComponent,
@@ -28,9 +29,8 @@ use ferrets_simulation::{
     map::Map,
     order::AttackTarget,
     selection::Selection,
-    session::GameSession,
+    session::{GameSession, player_id::PlayerId},
     simulation_id::SimulationId,
-    visibility::VisibilityGrid,
 };
 
 use crate::{
@@ -318,6 +318,7 @@ fn entity_at(
             &EntityInfoComponent,
             &LocationComponent,
             Option<&Visibility>,
+            Option<&render::Sighted>,
             Has<RemainsComponent>,
         ),
         Without<HiddenComponent>,
@@ -326,11 +327,12 @@ fn entity_at(
     let x = world.x / CELL_PX;
     let y = -world.y / CELL_PX;
     let mut best: Option<(u32, SimulationId)> = None;
-    for (info, location, visibility, remains) in entities {
+    for (info, location, visibility, sighted, remains) in entities {
         // The click meets what the player sees: a sprite the fog (or the
         // watching perspective) hides is not there to be clicked, and the
-        // simulation would refuse an order against it anyway.
-        if matches!(visibility, Some(Visibility::Hidden)) {
+        // simulation would refuse an order against it anyway. A glimpse is a
+        // shimmer, not a thing: nothing to click either.
+        if matches!(visibility, Some(Visibility::Hidden)) || !render::stamped(sighted).is_seen() {
             continue;
         }
         // A body lies in the same cell as whoever is standing over it, so
@@ -383,6 +385,7 @@ pub fn selection_input(
             &EntityInfoComponent,
             &LocationComponent,
             Option<&Visibility>,
+            Option<&render::Sighted>,
             Has<RemainsComponent>,
         ),
         Without<HiddenComponent>,
@@ -505,6 +508,7 @@ pub fn order_input(
             &EntityInfoComponent,
             &LocationComponent,
             Option<&Visibility>,
+            Option<&render::Sighted>,
             Has<RemainsComponent>,
         ),
         Without<HiddenComponent>,
@@ -649,6 +653,7 @@ pub fn inspect_input(
             &EntityInfoComponent,
             &LocationComponent,
             Option<&Visibility>,
+            Option<&render::Sighted>,
             Has<RemainsComponent>,
         ),
         Without<HiddenComponent>,
@@ -704,8 +709,9 @@ pub fn inspect_input(
                 .unwrap_or_else(|| covering_rect(&[start, cursor]));
             let framed = entities
                 .iter()
-                .filter(|(_, location, visibility, remains)| {
+                .filter(|(_, location, visibility, sighted, remains)| {
                     !matches!(visibility, Some(Visibility::Hidden))
+                        && render::stamped(*sighted).is_seen()
                         && !remains
                         && rect.contains(location.position)
                 })
@@ -809,6 +815,7 @@ pub fn targeting_input(
             &EntityInfoComponent,
             &LocationComponent,
             Option<&Visibility>,
+            Option<&render::Sighted>,
             Has<RemainsComponent>,
         ),
         Without<HiddenComponent>,
@@ -1077,6 +1084,10 @@ fn center_on_group(
 }
 
 /// While placing, draw a footprint ghost and place on left-click (Esc/RMB cancel).
+///
+/// The ghost is judged by what the perspective knows of the ground: the grid
+/// and the fields the type reads. What stands underfoot unseen refuses the
+/// raise when it starts, never the ghost.
 pub fn placement_input(
     mouse: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
@@ -1088,7 +1099,6 @@ pub fn placement_input(
     registry: Res<ContentRegistry>,
     session: Res<GameSession>,
     fields: Res<FieldGrid>,
-    visibility: Res<VisibilityGrid>,
     interactions: Query<&Interaction>,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
@@ -1096,7 +1106,10 @@ pub fn placement_input(
         (
             &EntityInfoComponent,
             &LocationComponent,
+            &Visibility,
+            Option<&render::Sighted>,
             Option<&OwnerComponent>,
+            Option<&FieldSourcesComponent>,
         ),
         Without<HiddenComponent>,
     >,
@@ -1135,49 +1148,41 @@ pub fn placement_input(
     let location_def = def.location.expect("validated content defines a location");
     let size = location_def.size();
 
-    // What the raise will judge: the ground, and the fields the type reads. A
-    // type raised over a resource source is placed on the source itself — the
-    // ghost snaps to the footprint of a source of that type under the cursor,
-    // and that footprint is the ground, so the grid is not asked about it. Only
-    // a source the player owns or can see snaps.
-    let (anchor, ground) = match def.overbuilds.as_deref() {
+    // What the perspective knows of the ground, and the fields the type
+    // reads. A type raised over a resource source is placed on the source
+    // itself — the ghost snaps to the footprint of a source of that type under
+    // the cursor, and that footprint is the ground, so the grid is not asked
+    // about it. Only a source the perspective sees snaps, judged by its stamp
+    // like every other pick.
+    let cursor = CellPos::new(cx, cy);
+    let (anchor, passable) = match def.overbuilds.as_deref() {
         Some(over) => {
-            let under = sources.iter().find_map(|(info, location, owner)| {
-                let standing = registry
-                    .def(info.type_id())
-                    .location
-                    .expect("validated content defines a location")
-                    .size();
-                let cell = body::anchor(location.position);
-                let seen = owner.is_some_and(|owner| owner.player() == local)
-                    || visibility.is_visible_to(&session, local, cell.x, cell.y);
-                let footprint = CellRect::new(cell, standing);
-                (seen && info.type_name() == over && footprint.contains(CellPos::new(cx, cy)))
-                    .then_some(footprint.origin)
-            });
+            let under = sources
+                .iter()
+                .find_map(|(info, location, visibility, sighted, _, _)| {
+                    let standing = registry.def(info.type_id());
+                    snaps_to(over, cursor, info, location, standing, visibility, sighted)
+                });
             match under {
-                Some(origin) => (origin, true),
-                None => (CellPos::new(cx, cy), false),
+                Some(origin) => (
+                    origin,
+                    fields::allows_placement_in(&fields, &session, Some(local), def, origin),
+                ),
+                None => (cursor, false),
             }
         }
         None => (
-            CellPos::new(cx, cy),
-            map.nav_grid().is_footprint_passable_by(
-                location_def.occupation(),
-                CellPos::new(cx, cy),
-                size,
-            ),
+            cursor,
+            ghost_fits(&map, &fields, &session, local, def, cursor),
         ),
     };
     let (cx, cy) = (anchor.x, anchor.y);
-    let passable = ground
-        && fields::allows_placement_in(&fields, &session, session.local_player(), def, anchor);
 
     // The area each field the type projects would cover, and the areas the
     // standing sources of those fields already cover, so a pylon is placed
     // where it links up and a tumor where it reaches.
     for source in &def.field_sources {
-        let color = field_color(&registry, source.field());
+        let color = render::field_reach_color(&registry, source.field());
         draw_reach(
             &mut gizmos,
             CellPos::new(cx, cy),
@@ -1185,22 +1190,26 @@ pub fn placement_input(
             source.radius(),
             color,
         );
-        // Other sources of the same field: own ones, and those the fog does
-        // not hide.
-        for (info, location, owner) in &sources {
-            let cell = body::anchor(location.position);
-            let seen = owner.is_some_and(|owner| owner.player() == local)
-                || visibility.is_visible_to(&session, local, cell.x, cell.y);
-            if !seen {
+        // Other sources of the same field, at what they put on the grid: the
+        // side's own, allies included — another side's reach is its own to
+        // know, whatever the fog shows of the source itself.
+        for (info, location, _, _, owner, states) in &sources {
+            let own_side = owner.is_some_and(|owner| session.are_allied(local, owner.player()));
+            let Some(states) = states else {
+                continue;
+            };
+            if !own_side {
                 continue;
             }
+            let cell = body::anchor(location.position);
             let standing = registry.def(info.type_id());
-            for other in standing
-                .field_sources
-                .iter()
-                .filter(|other| other.field() == source.field())
-            {
-                let dimmed = color.with_alpha(0.35);
+            for (other, state) in standing.field_sources.iter().zip(&states.0) {
+                if other.field() != source.field() {
+                    continue;
+                }
+                let Emitted::Reach(reach) = state.last_emitted else {
+                    continue;
+                };
                 draw_reach(
                     &mut gizmos,
                     cell,
@@ -1208,8 +1217,8 @@ pub fn placement_input(
                         .location
                         .expect("validated content defines a location")
                         .size(),
-                    other.radius(),
-                    dimmed,
+                    reach,
+                    color.with_alpha(0.35),
                 );
             }
         }
@@ -1239,12 +1248,46 @@ pub fn placement_input(
     }
 }
 
-/// The outline colour of a field's reach, by content name.
-fn field_color(registry: &ContentRegistry, field: FieldId) -> Color {
-    match registry.field_name(field) {
-        Some("power") => render::POWER_TINT.with_alpha(0.9),
-        _ => render::CREEP_TINT.with_alpha(0.9),
+/// Whether the placement ghost of `def` anchored at `anchor` shows as fitting
+/// for `player`: every cell of the footprint free on the grid, and the fields
+/// the type reads allowing it. What stands underfoot is not asked; the raise
+/// refuses it when it starts.
+pub fn ghost_fits(
+    map: &Map,
+    fields: &FieldGrid,
+    session: &GameSession,
+    player: PlayerId,
+    def: &EntityTypeDef,
+    anchor: CellPos,
+) -> bool {
+    let location_def = def.location.expect("validated content defines a location");
+    map.nav_grid()
+        .is_footprint_passable_by(location_def.occupation(), anchor, location_def.size())
+        && fields::allows_placement_in(fields, session, Some(player), def, anchor)
+}
+
+/// The footprint origin a raise over `over` snaps to when `cursor` is on a
+/// source of that type the perspective sees: `info`, `location`, `standing`
+/// and the stamp are the source's own.
+pub fn snaps_to(
+    over: &str,
+    cursor: CellPos,
+    info: &EntityInfoComponent,
+    location: &LocationComponent,
+    standing: &EntityTypeDef,
+    visibility: &Visibility,
+    sighted: Option<&render::Sighted>,
+) -> Option<CellPos> {
+    if info.type_name() != over {
+        return None;
     }
+    let size = standing
+        .location
+        .expect("validated content defines a location")
+        .size();
+    let footprint = CellRect::new(body::anchor(location.position), size);
+    (footprint.contains(cursor) && render::made_out(visibility, sighted))
+        .then_some(footprint.origin)
 }
 
 /// Outlines the reach of a `size` footprint anchored at `anchor`: a circle

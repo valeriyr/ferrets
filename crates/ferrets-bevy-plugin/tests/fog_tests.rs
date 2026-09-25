@@ -7,23 +7,22 @@ mod utils;
 use bevy::prelude::*;
 use ferrets_bevy_plugin::ai::game_view;
 use ferrets_content::{
-    attack::{AttackDef, Delivery, Slain, Weapon},
+    detection::Detection,
     entity_type_def::EntityTypeDef,
     location::Solidity,
     registry::ContentRegistry,
     skills::{Casting, EntityCastEffect, EntityCastTarget, Reach, SkillCaster, SkillDef},
 };
 use ferrets_geometry::cell_size::CellSize;
-use ferrets_math::FixedU64;
 use ferrets_simulation::{
-    command::{PlayerCommand, SelectMode},
+    command::{PlayerCommand, SelectMode, SkillCasterRef, SkillTarget},
     components::rally::{RallyPointComponent, RallyTarget},
-    input::{InputFrames, PlayerFrame},
     order::AttackTarget,
     session::{
-        GameSession, ai_vision::AiVision, player_id::PlayerId, player_slot::PlayerSlot,
-        player_type::PlayerType,
+        GameSession, ai_detection::AiDetection, ai_vision::AiVision, player_id::PlayerId,
+        player_slot::PlayerSlot, player_type::PlayerType,
     },
+    simulation_id::SimulationId,
     visibility::{CellVisibility, VisibilityGrid},
     watches::Watches,
 };
@@ -135,8 +134,20 @@ fn ai_view_hides_fogged_enemies_only_when_fog_limited() {
     utils::run_ticks(&mut app, utils::APPLY);
 
     let world = app.world();
-    let fog_limited = game_view(world, 0, "human", AiVision::Filtered);
-    let omniscient = game_view(world, 0, "human", AiVision::Omniscient);
+    let fog_limited = game_view(
+        world,
+        0,
+        "human",
+        AiVision::Filtered,
+        AiDetection::Detectors,
+    );
+    let omniscient = game_view(
+        world,
+        0,
+        "human",
+        AiVision::Omniscient,
+        AiDetection::Detectors,
+    );
     assert!(
         fog_limited.enemy_entities.is_empty(),
         "a fog-limited brain must not see the fogged enemy"
@@ -345,6 +356,77 @@ fn rally_refuses_fogged_entity_target() {
     );
 }
 
+#[test]
+fn rally_on_entity_drops_when_owner_seat_loses_sight() {
+    let mut app = fog_app(vec![
+        PlayerSlot::occupied(0, PlayerType::Human, None, None),
+        PlayerSlot::occupied(1, PlayerType::Human, None, None),
+    ]);
+    let world = app.world_mut();
+    let (post, post_id) = utils::create_entity(world, "post", utils::pos(5, 5), Some(0)).unwrap();
+    // The post has no eyes; the scout beside it sees six cells for its owner.
+    let (eyes, _) = utils::create_entity(world, "scout", utils::pos(5, 6), Some(0)).unwrap();
+    let (_, quarry_id) = utils::create_entity(world, "scout", utils::pos(5, 8), Some(1)).unwrap();
+    utils::run_ticks(&mut app, utils::APPLY);
+
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SetRallyPoint {
+            entity: post_id,
+            target: Some(RallyTarget::Entity(quarry_id)),
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY);
+    assert_eq!(
+        app.world().get::<RallyPointComponent>(post).unwrap().0,
+        Some(RallyTarget::Entity(quarry_id))
+    );
+
+    // The rival walks its scout to the far corner, out of the local scout's
+    // sight long before it arrives: the rally lapses with the sight of it.
+    let due = utils::tick(&app) + utils::APPLY;
+    utils::run_ticks_commanding(
+        &mut app,
+        40,
+        1,
+        due,
+        vec![
+            PlayerCommand::SelectById {
+                id: quarry_id,
+                mode: SelectMode::Replace,
+            },
+            PlayerCommand::Move {
+                target: utils::pos(25, 25),
+                flush: true,
+            },
+        ],
+    );
+    assert_eq!(
+        app.world().get::<RallyPointComponent>(post).unwrap().0,
+        None,
+        "a rally on what the owner cannot make out is dropped"
+    );
+
+    // A scout trained now is sent nowhere: it stands beside the post.
+    utils::push_command(
+        &mut app,
+        PlayerCommand::TrainEntity {
+            trainer: post_id,
+            type_name: "scout".into(),
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY + 11);
+    let recruits: Vec<Entity> = utils::owned_of_type(app.world_mut(), "scout", 0)
+        .into_iter()
+        .filter(|&scout| scout != eyes)
+        .collect();
+    let [recruit] = recruits.as_slice() else {
+        panic!("the post trained exactly one scout");
+    };
+    assert!(utils::order_queue_is_empty(app.world_mut(), *recruit));
+    utils::assert_adjacent_to_footprint(app.world_mut(), *recruit, post);
+}
+
 //
 // ─── Watches ─────────────────────────────────────────────────────────────────
 //
@@ -376,9 +458,9 @@ fn watch_lapses_exactly_when_its_duration_runs_out() {
     utils::run_ticks(&mut app, utils::APPLY);
 
     sweep_at(&mut app, station, 20, 20);
-    // The cast lands on the third tick and holds for five: the fifth tick
-    // after it is the last one the patch is in sight.
-    utils::run_ticks(&mut app, utils::APPLY + 4);
+    // The cast lands on the third tick and holds for the five ticks after
+    // it: the fifth of those is the last one the patch is in sight.
+    utils::run_ticks(&mut app, utils::APPLY + 5);
     assert!(visible(&app, 0, 20, 20), "the fifth tick still sees it");
     utils::run_ticks(&mut app, 1);
     assert!(!visible(&app, 0, 20, 20), "the sixth does not");
@@ -456,13 +538,21 @@ fn run_out_watch_leaves_store() {
 fn scripted_sniper_attacks_fogged_mark(vision: AiVision) -> (App, Entity, Entity) {
     let mut app = fog_app(vec![
         PlayerSlot::occupied(0, PlayerType::Human, None, None),
-        PlayerSlot::occupied(1, PlayerType::Ai { vision }, None, None),
+        PlayerSlot::occupied(
+            1,
+            PlayerType::Ai {
+                vision,
+                detection: AiDetection::Detectors,
+            },
+            None,
+            None,
+        ),
     ]);
     let world = app.world_mut();
     let (sniper, sniper_id) =
         utils::create_entity(world, "sniper", utils::pos(5, 5), Some(1)).unwrap();
     let (mark, mark_id) = utils::create_entity(world, "dummy", utils::pos(5, 10), Some(0)).unwrap();
-    run_ticks_commanding(
+    utils::run_ticks_commanding(
         &mut app,
         25,
         1,
@@ -481,64 +571,13 @@ fn scripted_sniper_attacks_fogged_mark(vision: AiVision) -> (App, Entity, Entity
     (app, mark, sniper)
 }
 
-/// Runs `ticks` fixed updates feeding idle frames the way `utils::run_ticks`
-/// does, except that `player`'s frame at tick `at` carries `commands` — the
-/// one way to issue commands as a non-local player, whose input never flows
-/// through `PendingInput`.
-fn run_ticks_commanding(
-    app: &mut App,
-    ticks: u32,
-    player: PlayerId,
-    at: u32,
-    commands: Vec<PlayerCommand>,
-) {
-    let mut commands = Some(commands);
-    for _ in 0..ticks {
-        let world = app.world_mut();
-        let (current_tick, local_player, players) = {
-            let session = world.resource::<GameSession>();
-            let players: Vec<PlayerId> = session.slots().iter().map(|slot| slot.id()).collect();
-            (session.tick(), session.local_player(), players)
-        };
-        for other in players {
-            if Some(other) == local_player {
-                continue;
-            }
-            let frame = match commands.take_if(|_| other == player && current_tick == at) {
-                Some(commands) => PlayerFrame {
-                    player,
-                    tick: current_tick,
-                    commands,
-                },
-                None => PlayerFrame::idle(other, current_tick),
-            };
-            world.resource_mut::<InputFrames>().push_frame(frame);
-        }
-        world.run_schedule(FixedUpdate);
-    }
-}
-
 /// Casts the station's sweep at `(x, y)`.
-fn sweep_at(
-    app: &mut App,
-    caster: ferrets_simulation::simulation_id::SimulationId,
-    x: u32,
-    y: u32,
-) {
-    let skill = app
-        .world()
-        .resource::<ContentRegistry>()
-        .skill("sweep")
-        .expect("the fixture registers the sweep");
-    utils::push_command(
+fn sweep_at(app: &mut App, caster: SimulationId, x: u32, y: u32) {
+    utils::use_skill(
         app,
-        PlayerCommand::UseSkill {
-            skill,
-            caster: ferrets_simulation::command::SkillCasterRef::Entity(caster),
-            target: Some(ferrets_simulation::command::SkillTarget::Position(
-                utils::pos(x, y),
-            )),
-        },
+        "sweep",
+        SkillCasterRef::Entity(caster),
+        Some(SkillTarget::Position(utils::pos(x, y))),
     );
 }
 
@@ -565,15 +604,7 @@ fn fog_app(slots: Vec<PlayerSlot>) -> App {
     {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
         registry.register(
-            EntityTypeDef::new("scout")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
-                    FixedU64::ONE,
-                    FixedU64::from_num(360),
-                    FixedU64::from_num(360),
-                )
+            utils::walker("scout", utils::GROUND)
                 .with_health(20)
                 .with_dying(1, [])
                 .with_sight_range(6)
@@ -582,30 +613,10 @@ fn fog_app(slots: Vec<PlayerSlot>) -> App {
                 .with_train_time(10),
         );
         registry.register(
-            EntityTypeDef::new("sniper")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
-                    FixedU64::ONE,
-                    FixedU64::from_num(360),
-                    FixedU64::from_num(360),
-                )
+            utils::walker("sniper", utils::GROUND)
                 .with_health(30)
                 .with_dying(1, [])
-                .with_attack(
-                    AttackDef::new(Weapon::new(
-                        utils::GROUND,
-                        Delivery::Instant,
-                        None,
-                        Slain::Remains,
-                    )),
-                    10,
-                    8,
-                    8,
-                    2,
-                    1,
-                )
+                .with_attack(utils::weapon(utils::GROUND), 10, 8, 8, 2, 1)
                 .with_sight_range(3),
         );
         registry.register(
@@ -646,6 +657,7 @@ fn fog_app(slots: Vec<PlayerSlot>) -> App {
                     effect: EntityCastEffect::Watch {
                         radius: 2,
                         duration: 5,
+                        detection: Detection::Blind,
                     },
                 },
                 requires: Vec::new(),

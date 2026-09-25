@@ -77,7 +77,10 @@ pub fn resolve(header: &ReplayHeader, registry: &ContentRegistry) -> Result<Reso
             }
             let rules = mission.rules;
             (
-                player_slot::scenario_slots(&mission, ai::environment_vision(registry)),
+                {
+                    let (vision, detection) = ai::environment_senses(registry);
+                    player_slot::scenario_slots(&mission, vision, detection)
+                },
                 mission.map.name().to_string(),
                 FinishPolicy::Scripted,
                 mission.map.clone(),

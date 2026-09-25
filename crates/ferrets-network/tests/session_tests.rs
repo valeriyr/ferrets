@@ -14,9 +14,9 @@ use ferrets_network::{
 use ferrets_simulation::{
     input::PlayerFrame,
     session::{
-        ai_hosting::AiHosting, ai_vision::AiVision, drop_policy::DropPolicy,
-        elimination_scope::EliminationScope, finish_policy::FinishPolicy, player_id::PlayerId,
-        player_slot::PlayerSlot, player_type::PlayerType,
+        ai_detection::AiDetection, ai_hosting::AiHosting, ai_vision::AiVision,
+        drop_policy::DropPolicy, elimination_scope::EliminationScope, finish_policy::FinishPolicy,
+        player_id::PlayerId, player_slot::PlayerSlot, player_type::PlayerType,
     },
 };
 
@@ -72,6 +72,7 @@ fn ai_slots_are_networked_only_under_host_only_hosting() {
             2,
             PlayerType::Ai {
                 vision: AiVision::Filtered,
+                detection: AiDetection::Detectors,
             },
             None,
             None,

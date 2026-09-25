@@ -44,20 +44,19 @@ use crate::{
         location::LocationComponent,
         morph::{MorphComponent, MorphReservation},
         movement::MoveComponent,
-        order_queue::{CancelPolicy, OrderQueueComponent, OrderState},
+        order_queue::{CancelPolicy, OrderState},
         transport::TransporterComponent,
     },
     entity_def,
     entity_index::EntityIndex,
     events::{DeathCause, EventRecord, SimulationEvent, SpendCause},
     fields,
-    game_loop::cast_cost,
+    game_loop::cost,
     map::{Map, OccupancyClass},
     movement_model::{self, MovementModel},
     order::Order,
     rally, requirements,
     session::player_id::PlayerId,
-    simulation_id::SimulationId,
     spawn::{self, FieldReach, StandingActs},
     supply,
 };
@@ -92,7 +91,7 @@ pub fn prepare(entity: Entity, order: &Order, world: &mut World) -> OrderState {
         return OrderState::Finished;
     };
     if !requirements::met(world, player, Some(entity), start.transition.requires())
-        || !cast_cost::can_pay(world, entity, player, start.transition.costs())
+        || !cost::can_pay(world, entity, player, start.transition.costs())
     {
         return OrderState::Finished;
     }
@@ -126,14 +125,11 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
 /// Called for every Morph entry that a cancel reaches, judged by the
 /// transition's own cancel terms.
 ///
-/// A **committed** transition refuses a soft cancel — the window is a real
-/// decision, not a feint a player could bait with and think better of — and
-/// honors only force, because force is not the player changing their mind: it
-/// is the engine flushing the queue for something that overrides everything
-/// (dying, being taken aboard), and the payment is lost with the change. A
-/// **forfeiting** transition can be called off but keeps the payment. A
-/// **refundable** one gives the full cost back. Any early end lets go of the
-/// ground a reserving change held.
+/// A **committed** transition stands through a soft cancel and ends on a
+/// forced one, keeping the payment. A **forfeiting** transition ends on either
+/// and keeps the payment. A **refundable** one gives the full cost back when
+/// the player calls it off, and keeps it when the change is taken away. Any
+/// early end lets go of the ground a reserving change held.
 pub fn cancel_processing(
     entity: Entity,
     order: &Order,
@@ -170,7 +166,10 @@ pub fn cancel_processing(
         }
         (MorphCancel::Committed, CancelPolicy::Force) => Payment::Kept,
         (MorphCancel::Forfeit, _) => Payment::Kept,
-        (MorphCancel::Refundable, _) => Payment::Returned,
+        // A change taken away rather than called off keeps what it took,
+        // whatever the transition allows a player to reclaim.
+        (MorphCancel::Refundable, CancelPolicy::Force) => Payment::Kept,
+        (MorphCancel::Refundable, CancelPolicy::Soft) => Payment::Returned,
     };
 
     let morph = world
@@ -194,50 +193,6 @@ pub fn cancel_processing(
 /// own cancel terms in [`cancel_processing`].
 pub fn survives_soft_cancel() -> bool {
     false
-}
-
-/// Calls off the change of form `entity` is under, for `player`.
-///
-/// The change answers on its own terms, as it does for any other cancel: a
-/// refundable one gives the price back and returns the entity to what it was,
-/// a forfeit one keeps the price, and a committed one holds until its window
-/// closes. Nothing happens for an entity that is not the player's or is not
-/// changing at all.
-pub fn cancel_change(world: &mut World, player: PlayerId, entity: SimulationId) {
-    let Some(entity) = world.resource::<EntityIndex>().interactable(world, entity) else {
-        return;
-    };
-    if entity_def::owner(world, entity) != Some(player) {
-        return;
-    }
-    let mut entity_mut = world.entity_mut(entity);
-    let Some(mut queue) = entity_mut.get_mut::<OrderQueueComponent>() else {
-        return;
-    };
-    let Some(front) = queue.front_mut() else {
-        return;
-    };
-    // Only the change itself is called off: whatever else the entity has
-    // queued is none of this command's business.
-    match front.order {
-        Order::Morph { .. } => front.cancel = Some(CancelPolicy::Soft),
-        Order::Move { .. }
-        | Order::Attack { .. }
-        | Order::AttackMove { .. }
-        | Order::Patrol { .. }
-        | Order::Guard { .. }
-        | Order::Follow { .. }
-        | Order::Board { .. }
-        | Order::Load { .. }
-        | Order::Unload { .. }
-        | Order::Harvest { .. }
-        | Order::Build { .. }
-        | Order::Repair { .. }
-        | Order::Train
-        | Order::Research { .. }
-        | Order::Cast { .. }
-        | Order::Die => {}
-    }
 }
 
 /// Whether `player` meets the requirements of `entity`'s transition into
@@ -349,10 +304,17 @@ fn judge(world: &World, entity: Entity, type_name: &str) -> Result<Start, Refusa
     let takes = |worn_id: EntityTypeId, worn: LocationDef, anchor: FixedUVec2| {
         let placed = LocationComponent::new(anchor, spawn::DEFAULT_FACING);
         allowed(worn_id, anchor)
-            && world.resource::<Map>().can_place_entity_over_own(
+            && spawn::ground_takes(
+                world,
                 &placed,
-                &worn,
-                own.as_ref().map(|location| (location, &from, own_class)),
+                worn,
+                OccupancyClass::of(world.resource::<ContentRegistry>().def(worn_id)),
+                own.map(|location| spawn::Own {
+                    entity,
+                    location,
+                    def: from,
+                    class: own_class,
+                }),
             )
     };
 
@@ -438,7 +400,7 @@ fn begin(
         ),
         mask: to.occupation(),
     });
-    cast_cost::pay(
+    cost::pay(
         world,
         entity,
         player,
@@ -494,7 +456,7 @@ enum Finish {
 /// for it. A refused landing is a fizzle: the entity meets the transition's
 /// terms for an early end — back in the form it started from, or dead in the
 /// one it wore — and a refundable transition's payment goes back the same way
-/// a cancel returns it.
+/// its owner calling it off returns it.
 fn finish(
     world: &mut World,
     entity: Entity,
@@ -529,7 +491,7 @@ fn finish(
         return Finish::Landed;
     }
     // The change fizzled: a refundable transition's payment goes back the
-    // same way a cancel returns it.
+    // same way its owner calling it off returns it.
     let payment = match transition.cancel() {
         MorphCancel::Refundable => Payment::Returned,
         MorphCancel::Committed | MorphCancel::Forfeit => Payment::Kept,
@@ -774,10 +736,17 @@ fn reoccupy(
             let placed = LocationComponent::new(anchor, facing);
             let fits = allowed(world, anchor)
                 && (unchanged
-                    || world.resource::<Map>().can_place_entity_over_own(
+                    || spawn::ground_takes(
+                        world,
                         &placed,
-                        &to,
-                        Some((&standing, &from, old_class)),
+                        to,
+                        new_class,
+                        Some(spawn::Own {
+                            entity,
+                            location: standing,
+                            def: from,
+                            class: old_class,
+                        }),
                     ));
             if !fits {
                 return None;
@@ -785,6 +754,9 @@ fn reoccupy(
             anchor
         }
         Landing::Nearby => {
+            // Only a mover lands nearby (the registry refuses the placement
+            // for a static form), so the grid's answer is the whole answer:
+            // what stands underfoot never refuses a mover.
             let mut map = world.resource_mut::<Map>();
             let own = lift_standing_presence(&mut map, &standing, &from, old_class);
             let around = CellRect::new(body::anchor(position), from.size());
@@ -841,7 +813,7 @@ fn abandon(
     if let Payment::Returned = payment
         && let Some(player) = entity_def::owner(world, entity)
     {
-        cast_cost::refund(
+        cost::refund(
             world,
             entity,
             player,
@@ -885,7 +857,7 @@ fn ended_early(
         }
         MorphInterrupted::Dies => {
             spawn::settle_broodlings(world, entity, origin);
-            spawn::despawn_entity(world, entity, DeathCause::Cancelled);
+            spawn::despawn_entity(world, entity, DeathCause::Canceled);
             EarlyEnd::Dying
         }
     }

@@ -162,11 +162,12 @@ pub fn start_scenario(world: &mut World) {
     };
 
     {
-        let environment_vision = ai::environment_vision(world.resource::<ContentRegistry>());
+        let (environment_vision, environment_detection) =
+            ai::environment_senses(world.resource::<ContentRegistry>());
         let mut session = world.resource_mut::<GameSession>();
         session.configure(
             LocalRole::Player(scenario.judged_player),
-            player_slot::scenario_slots(&scenario, environment_vision),
+            player_slot::scenario_slots(&scenario, environment_vision, environment_detection),
             scenario.map.name(),
             Authority::Host {
                 ai_hosting: AiHosting::Replicated,

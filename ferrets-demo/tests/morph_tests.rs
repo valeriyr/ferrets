@@ -914,7 +914,7 @@ fn upgrade_pays_up_front_and_lands() {
 }
 
 #[test]
-fn cancelled_upgrade_returns_its_money() {
+fn canceled_upgrade_returns_its_money() {
     let mut app = utils::demo_map_app(MovementModel::Continuous);
     let (tower, _) = utils::create_entity(
         app.world_mut(),
@@ -954,7 +954,7 @@ fn cancelled_upgrade_returns_its_money() {
     assert_eq!(
         type_name_of(&app, tower),
         "watch_tower",
-        "a cancelled upgrade landed anyway"
+        "a canceled upgrade landed anyway"
     );
 }
 

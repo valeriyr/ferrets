@@ -2,7 +2,10 @@ use bevy::prelude::*;
 use ferrets_script::scenario::Outcome;
 use ferrets_simulation::{
     game_loop,
-    session::{GameResult, GameSession, Winner, ai_vision::AiVision, finish_policy::FinishPolicy},
+    session::{
+        GameResult, GameSession, Winner, ai_detection::AiDetection, ai_vision::AiVision,
+        finish_policy::FinishPolicy,
+    },
 };
 
 use crate::{
@@ -60,8 +63,15 @@ fn check_scenario(world: &mut World) {
     match judged_race {
         Some(race) => {
             // The scenario judge evaluates win conditions over the whole game,
-            // not as a competitor, so it sees everything.
-            let view = ai::game_view(world, player, &race, AiVision::Omniscient);
+            // not as a competitor, so it sees everything: through the fog and
+            // through every cloak.
+            let view = ai::game_view(
+                world,
+                player,
+                &race,
+                AiVision::Omniscient,
+                AiDetection::Everywhere,
+            );
             match runtimes.runtime.evaluate(&view) {
                 Ok(status) => {
                     world.insert_resource(ScenarioObjectives(status.objectives));

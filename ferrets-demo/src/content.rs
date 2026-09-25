@@ -47,6 +47,15 @@ pub const CONTENT: &str = r#"
     -- nothing sustains it. Unlike creep it watches nothing — the dead see by
     -- their own eyes.
     define_field("blight", { layer = GROUND, decay = { cycle = 40 } })
+    -- True sight is what a detector projects. It grants no sight of its own —
+    -- a turret sees by its own eyes — but whatever hides on the ground or in
+    -- the air under it is seen by whoever covers it. Lying anywhere, it
+    -- reaches over water, so a cloaked flier gets no shelter from a lake.
+    define_field("true_sight", { layer = "anywhere", decay = "instant", detection = GROUND | AIR })
+    -- The veil an arbiter casts over the ground and the air it flies over:
+    -- gone the tick it moves on, seeing nothing, detecting nothing; what it
+    -- does for those inside is theirs to declare.
+    define_field("veil", { layer = "anywhere", decay = "instant" })
 
     -- What a structure that will not stand on creep declares, and what the
     -- elves add to it: neither the swarm's ground nor the undead's.
@@ -71,7 +80,7 @@ pub const CONTENT: &str = r#"
     -- it, or its time ran out. Every ground living unit of every race leaves
     -- this, so a necromancer can raise from anyone's dead. A death that takes
     -- an entity off the board rather than ending it — a builder consumed by
-    -- its own site, a cancelled construction, a seam built over — leaves
+    -- its own site, a canceled construction, a seam built over — leaves
     -- nothing, which is why the deaths are named rather than left to the
     -- engine's rule.
     local FALLS = { time = 2, leaves = { { entity = "corpse", on = { "killed", "expired" } } } }
@@ -106,7 +115,7 @@ pub const CONTENT: &str = r#"
         },
     })
     define_research("iron_weapons", {
-        cost = { gold = 100, wood = 50 },
+        price = { gold = 100, wood = 50 },
         time = 200,
         buff = "iron_weapons",
     })
@@ -117,7 +126,7 @@ pub const CONTENT: &str = r#"
         },
     })
     define_research("frenzy_ritual", {
-        cost = { gold = 150 },
+        price = { gold = 150 },
         time = 240,
         buff = "frenzy_ritual",
         requires = { { entity_type = "pig_farm" } },
@@ -126,12 +135,12 @@ pub const CONTENT: &str = r#"
     -- The archer's self-buff: a burst of speed and damage that reverts on expiry.
     -- Five seconds at 20 Hz, long enough to watch it work and then wear off.
     define_entity_buff("frenzy", {
-        duration = 100,
+        lasting = { ticks = 100 },
         stack = "refresh",
-        modifiers = {
+        effects = { { modifiers = {
             { entity_stat = "speed", op = "percent", value = "1.0" },
             { entity_stat = "damage", op = "percent", value = "0.5" },
-        },
+        } } },
     })
 
     -- Activated abilities, cast from the command card. Battle focus is the
@@ -180,7 +189,7 @@ pub const CONTENT: &str = r#"
     define_skill("war_drums", {
         caster = "player",
         cooldown = 300,
-        cost = { resources = { gold = 50 } },
+        price = { gold = 50 },
         effect = { apply_buff = "war_drums" },
     })
 
@@ -309,7 +318,7 @@ pub const CONTENT: &str = r#"
                 cargo_size = 1,
             },
             dying = FALLS,
-            cost = { gold = 50 },
+            price = { gold = 50 },
             train_time = 40,
             builder = { builds = builds, attendance = work.attendance },
             -- Workers mend structures and machines at the pace the thing took
@@ -343,7 +352,7 @@ pub const CONTENT: &str = r#"
             -- the economy never depends on a lucky scout.
             stats = { max_health = 800, sight_range = 9, supply_provided = 10 },
             dying = { time = 2 },
-            cost = { gold = 400 },
+            price = { gold = 400 },
             build_time = 200,
             trainer = { trains },
             resource_storage = { "gold", "wood" },
@@ -360,7 +369,7 @@ pub const CONTENT: &str = r#"
             location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
             stats = { max_health = 200, sight_range = 3, supply_provided = 6 },
             dying = { time = 2 },
-            cost = { gold = 40, wood = 20 },
+            price = { gold = 40, wood = 20 },
             build_time = 60,
             tags = { "building" },
         })
@@ -372,7 +381,7 @@ pub const CONTENT: &str = r#"
             location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
             stats = { max_health = 500, sight_range = 6 },
             dying = { time = 2 },
-            cost = { gold = 200, wood = 100 },
+            price = { gold = 200, wood = 100 },
             build_time = 120,
             -- Mends in half the time it took to raise: a camp is quicker to
             -- patch up than to put up.
@@ -413,7 +422,7 @@ pub const CONTENT: &str = r#"
         dying = { time = 2 },
         -- Stone and earthworks: no call on the wood line, which the demo
         -- economy keeps stretched over the upgrades.
-        cost = { gold = 100 },
+        price = { gold = 100 },
         build_time = 80,
         transporter = {
             -- Soldiers and the siege tube alike: what shelters here is
@@ -424,6 +433,11 @@ pub const CONTENT: &str = r#"
             conduct = "fight",
         },
         tags = { "building" },
+        -- The garrison keeps watch for what hides, a little short of how far
+        -- it sees.
+        field_sources = {
+            { field = "true_sight", radius = 6, growth = "instant", while_constructing = "nothing", while_disabled = "nothing" },
+        },
     })
 
     -- The human tech building: while one stands, mortars unlock, and it hosts
@@ -433,7 +447,7 @@ pub const CONTENT: &str = r#"
         location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
         stats = { max_health = 350, sight_range = 5 },
         dying = { time = 2 },
-        cost = { gold = 150, wood = 80 },
+        price = { gold = 150, wood = 80 },
         build_time = 100,
         researcher = { "iron_weapons" },
         tags = { "building" },
@@ -467,7 +481,7 @@ pub const CONTENT: &str = r#"
         -- An energy pool (above) feeds the self-buff burst of speed and damage
         -- that reverts on expiry.
         skills = { "battle_focus" },
-        cost = { gold = 80 },
+        price = { gold = 80 },
         train_time = 60,
         -- Combat units lead a mixed selection over workers.
         selection = { priority = 10 },
@@ -502,7 +516,7 @@ pub const CONTENT: &str = r#"
             -- the pool refills.
             patience = nil,
         },
-        cost = { gold = 100 },
+        price = { gold = 100 },
         train_time = 70,
         selection = { priority = 8 },
     })
@@ -544,7 +558,7 @@ pub const CONTENT: &str = r#"
                 friendly_fire = true,
             },
         },
-        cost = { gold = 120, wood = 40 },
+        price = { gold = 120, wood = 40 },
         train_time = 90,
         selection = { priority = 10 },
         -- Siege needs the forge: no mortars until a blacksmith stands.
@@ -600,7 +614,7 @@ pub const CONTENT: &str = r#"
                 fate = fate,
                 conduct = "fight",
             },
-            cost = trainable and { gold = 200, wood = 60 } or nil,
+            price = trainable and { gold = 200, wood = 60 } or nil,
             train_time = trainable and 110 or nil,
             selection = { priority = 10 },
         })
@@ -655,7 +669,7 @@ pub const CONTENT: &str = r#"
             load_period = 20, unload_period = 20,
         },
         dying = { time = 2 },
-        cost = { gold = 160, wood = 60 },
+        price = { gold = 160, wood = 60 },
         train_time = 90,
         -- Carries the workforce and the army alike — and whoever is aboard
         -- when it is shot down goes down with it, the same bargain the
@@ -692,7 +706,7 @@ pub const CONTENT: &str = r#"
         location = { occupation = GROUND, size = { 4, 4 }, solidity = "solid" },
         stats = { max_health = 2000, sight_range = 2 },
         dying = { time = 2 },
-        cost = { gold = 50 },
+        price = { gold = 50 },
         build_time = 1200,
         tags = { "building" },
         berths = { rim = { points = rim(4, 4) } },
@@ -714,7 +728,7 @@ pub const CONTENT: &str = r#"
             load_period = 20, unload_period = 20,
         },
         dying = { time = 2 },
-        cost = { gold = 40, wood = 20 },
+        price = { gold = 40, wood = 20 },
         build_time = 60,
         transporter = {
             carries = { types = { "peon" } },
@@ -732,9 +746,10 @@ pub const CONTENT: &str = r#"
     -- `occupation` could not. Occupying the air instead would make it a wall
     -- across the sky, which is the fortress's job, not a tower's.
     --
-    -- The watch tower only watches: the farthest eyes on the orc side and no
-    -- weapon. The upgrade trades some of that watch for bolts — the guard
-    -- tower below sees less and is the orc answer to fliers.
+    -- The watch tower only watches: the farthest eyes on the orc side, the
+    -- orcs' one detector, and no weapon. The upgrade trades some of that
+    -- watch for bolts — the guard tower below sees less, detects nothing, and
+    -- is the orc answer to fliers.
     define_entity("watch_tower", {
         race = "orc",
         location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
@@ -744,10 +759,13 @@ pub const CONTENT: &str = r#"
             sight_range = 12,
         },
         dying = { time = 2 },
-        cost = { gold = 120, wood = 40 },
+        price = { gold = 120, wood = 40 },
         build_time = 70,
         tags = { "building" },
         berths = { rim = { points = rim(2, 2) } },
+        field_sources = {
+            { field = "true_sight", radius = 8, growth = "instant", while_constructing = "nothing", while_disabled = "nothing" },
+        },
         -- The demo's building upgrade: a paid, refundable change in place. The
         -- money is committed up front and comes back in full if the upgrade is
         -- called off — which is what makes starting one cheap to reconsider.
@@ -776,7 +794,7 @@ pub const CONTENT: &str = r#"
         tags = { "building" },
         -- The watch tower's price and the upgrade's on top of it, over the
         -- raising and the upgrading together: what the tower cost to have.
-        cost = { gold = 200, wood = 60 },
+        price = { gold = 200, wood = 60 },
         build_time = 130,
     })
     camp("war_camp", "orc", { "grunt", "shaman", "zeppelin" }, { "frenzy_ritual" }, { rim = { points = rim(3, 3) } })
@@ -790,7 +808,7 @@ pub const CONTENT: &str = r#"
         location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
         stats = { max_health = 400, sight_range = 5 },
         dying = { time = 2 },
-        cost = { gold = 180, wood = 120 },
+        price = { gold = 180, wood = 120 },
         build_time = 130,
         repair_ratio = "0.5",
         trainer = { "war_wagon" },
@@ -852,7 +870,7 @@ pub const CONTENT: &str = r#"
         turrets = {
             { turret = "siege_cannon", at = { 0, 0 }, size = { 2, 2 } },
         },
-        cost = { gold = 160, wood = 60 },
+        price = { gold = 160, wood = 60 },
         train_time = 110,
         tags = { "mechanical" },
         -- Siege leads a mixed selection, like the mortar it answers.
@@ -884,7 +902,7 @@ pub const CONTENT: &str = r#"
         -- Blood rite: the grunt buys the archer's frenzy with its own blood and
         -- a little gold — regeneration (above) walks the price off afterwards.
         skills = { "blood_rite" },
-        cost = { gold = 90 },
+        price = { gold = 90 },
         train_time = 70,
         selection = { priority = 10 },
     })
@@ -904,7 +922,7 @@ pub const CONTENT: &str = r#"
         dying = FALLS,
         tags = { "biological" },
         skills = { "second_wind" },
-        cost = { gold = 120 },
+        price = { gold = 120 },
         train_time = 80,
         -- Support trails combat units in a mixed selection, like the medic.
         selection = { priority = 5 },
@@ -923,11 +941,11 @@ pub const CONTENT: &str = r#"
     -- patch under itself while still going up. Structures left off creep
     -- waste away; a larva off creep is gone in a second; swarmlings run a
     -- third faster on anyone's creep.
-    local ON_CREEP = { requires = "creep", of = "anyone", coverage = "footprint" }
-    local WITHERS_OFF_CREEP = { field = "creep", of = "anyone", outside = {
+    local ON_CREEP = { requires = "creep", of = "anyone", coverage = "every" }
+    local WITHERS_OFF_CREEP = { field = "creep", of = "anyone", coverage = "every", outside = {
         modifiers = { { entity_stat = "health_drain", op = "flat", value = "0.2" } },
     } }
-    local DIES_OFF_CREEP = { field = "creep", of = "anyone", outside = {
+    local DIES_OFF_CREEP = { field = "creep", of = "anyone", coverage = "every", outside = {
         modifiers = { { entity_stat = "health_drain", op = "flat", value = "1.25" } },
     } }
 
@@ -950,7 +968,7 @@ pub const CONTENT: &str = r#"
         attack = { targets = GROUND | WATER },
         selection = { priority = 10 },
         field_effects = {
-            { field = "creep", of = "anyone", inside = {
+            { field = "creep", of = "anyone", coverage = "any", inside = {
                 modifiers = { { entity_stat = "speed", op = "percent", value = "0.3" } },
             } },
         },
@@ -963,7 +981,7 @@ pub const CONTENT: &str = r#"
 
     -- The hatchery is the swarm's first hall. Five spots along the ground at
     -- its southern foot, one row outside the footprint, are where its larvae
-    -- crawl; four sit at once, so one larva given back by a cancelled egg
+    -- crawl; four sit at once, so one larva given back by a canceled egg
     -- always finds a seat. A larva waits the tick the hall stands, then one
     -- comes every eleven seconds while fewer than three crawl it. Larvae
     -- outlive the hall: they are set down beside its ruin, keep their
@@ -977,21 +995,29 @@ pub const CONTENT: &str = r#"
     local RESEATS_NEARBY = { linger = { reseat = { distance = 4 } } }
     local CREEP_RADIUS = 10
     local CREEP_GROWTH = { cycle = 6, initial_radius = 3 }
-    local CREEP_SPREAD = { { field = "creep", radius = CREEP_RADIUS, growth = CREEP_GROWTH } }
+    local CREEP_SPREAD = { { field = "creep", radius = CREEP_RADIUS, growth = CREEP_GROWTH, while_constructing = "nothing", while_disabled = "full" } }
+
+    -- Burrowing, researched at the hall: a swarmling digs in where it stands
+    -- and lies unseen until a detector passes over it.
+    define_research("burrow", {
+        price = { gold = 100 },
+        time = 150,
+    })
 
     define_entity("hatchery", {
         race = "swarm",
         location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
         stats = { max_health = 800, sight_range = 9, supply_provided = 10 },
         dying = { time = 2, leaves = BURSTS },
-        cost = { gold = 400 },
+        price = { gold = 400 },
         build_time = 200,
         resource_storage = { "gold", "wood" },
         tags = { "building" },
         berths = BROOD_BERTHS,
         breeder = { breeds = "larva", period = 220, limit = 3, initial = 1, orphans = RESEATS_NEARBY },
+        researcher = { "burrow" },
         field_sources = {
-            { field = "creep", radius = CREEP_RADIUS, growth = CREEP_GROWTH, while_constructing = 1 },
+            { field = "creep", radius = CREEP_RADIUS, growth = CREEP_GROWTH, while_constructing = { held = 1 }, while_disabled = "full" },
         },
         morphs = {
             { into = "hive", via = "hive_cocoon", time = 200, placement = "reserve", cancel = "refundable",
@@ -1022,12 +1048,13 @@ pub const CONTENT: &str = r#"
         dying = { time = 2, leaves = BURSTS },
         -- Nothing builds a hive: it carries the hatchery's price and the
         -- growth's on top of it, over the raising and the growing together.
-        cost = { gold = 550, wood = 100 },
+        price = { gold = 550, wood = 100 },
         build_time = 400,
         resource_storage = { "gold", "wood" },
         tags = { "building" },
         berths = BROOD_BERTHS,
         breeder = { breeds = "larva", period = 180, limit = 3, initial = 2, orphans = RESEATS_NEARBY },
+        researcher = { "burrow" },
         field_sources = CREEP_SPREAD,
     })
 
@@ -1057,7 +1084,9 @@ pub const CONTENT: &str = r#"
     })
 
     -- The overlord feeds the swarm the way a farm does, from the air: a slow
-    -- floating sac the size of a building that needs no creep under it.
+    -- floating sac the size of a building that needs no creep under it — and
+    -- the swarm's eyes for what hides: it sees through cloaks as far as it
+    -- sees at all.
     define_entity("overlord", {
         race = "swarm",
         location = { occupation = AIR, size = { 2, 2 }, solidity = "solid" },
@@ -1067,6 +1096,9 @@ pub const CONTENT: &str = r#"
         },
         dying = { time = 2 },
         tags = { "biological" },
+        field_sources = {
+            { field = "true_sight", radius = 8, growth = "instant", while_constructing = "nothing", while_disabled = "nothing" },
+        },
     })
 
     -- The egg stands on the ground and neither moves nor fights; it blocks
@@ -1116,12 +1148,12 @@ pub const CONTENT: &str = r#"
         location = { occupation = GROUND, size = 1, solidity = "solid" },
         stats = { max_health = 50, sight_range = 1 },
         dying = { time = 2 },
-        cost = { gold = 25 },
+        price = { gold = 25 },
         build_time = 40,
         tags = { "building" },
         field_placement = { ON_CREEP },
         field_sources = {
-            { field = "creep", radius = 6, growth = { cycle = 8, initial_radius = 1 } },
+            { field = "creep", radius = 6, growth = { cycle = 8, initial_radius = 1 }, while_constructing = "nothing", while_disabled = "full" },
         },
     })
 
@@ -1130,7 +1162,7 @@ pub const CONTENT: &str = r#"
         location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
         stats = { max_health = 500, sight_range = 6, health_drain = "0" },
         dying = { time = 2, leaves = BURSTS },
-        cost = { gold = 200, wood = 100 },
+        price = { gold = 200, wood = 100 },
         build_time = 120,
         tags = { "building" },
         field_placement = { ON_CREEP },
@@ -1153,7 +1185,7 @@ pub const CONTENT: &str = r#"
         attack = { targets = GROUND | WATER },
         selection = { priority = 10 },
         field_effects = {
-            { field = "creep", of = "anyone", inside = {
+            { field = "creep", of = "anyone", coverage = "any", inside = {
                 modifiers = { { entity_stat = "speed", op = "percent", value = "0.3" } },
             } },
         },
@@ -1169,6 +1201,43 @@ pub const CONTENT: &str = r#"
               cancel = "refundable",
               cost = { resources = { gold = 25, wood = 25 } },
               requires = { { entity_type = "hive" } } },
+            -- Digging in takes a moment and cannot be called off; the ground
+            -- it digs into is the ground it stands on.
+            { into = "swarmling_burrowed",
+              time = 12,
+              placement = "reserve",
+              cancel = "committed",
+              reason = "change",
+              requires = { { research = "burrow" } } },
+        },
+    })
+
+    -- A burrowed swarmling: under the ground, so others walk over it and no
+    -- side but its own sees it without a detector. It neither moves nor
+    -- bites, heals faster than one above ground, and is dug out — onto the
+    -- nearest free ground, since something may stand on top of it — by the
+    -- change back.
+    define_entity("swarmling_burrowed", {
+        race = "swarm",
+        -- Underfoot: a swarmling walks over what has dug in, and nothing is
+        -- raised on top of it.
+        location = { occupation = GROUND, size = 1, solidity = "underfoot" },
+        stats = {
+            radius = "0.5", weight = 2, max_health = 35,
+            health_regen = "0.15",
+            sight_range = 6,
+            supply_cost = 1,
+        },
+        concealment = "concealed",
+        dying = FALLS,
+        tags = { "biological" },
+        selection = { priority = 10 },
+        morphs = {
+            { into = "swarmling",
+              time = 12,
+              placement = "nearby",
+              cancel = "committed",
+              reason = "change" },
         },
     })
 
@@ -1201,7 +1270,7 @@ pub const CONTENT: &str = r#"
         attack = { targets = GROUND | WATER },
         selection = { priority = 12 },
         field_effects = {
-            { field = "creep", of = "anyone", inside = {
+            { field = "creep", of = "anyone", coverage = "any", inside = {
                 modifiers = { { entity_stat = "speed", op = "percent", value = "0.3" } },
             } },
         },
@@ -1215,22 +1284,26 @@ pub const CONTENT: &str = r#"
     -- on its own, so no probe ever stands at a site or mends anything. Nothing
     -- of the conclave's is built on creep, and a pylon that finishes burns
     -- away creep nothing sustains around it.
-    local POWERED = { requires = "power", of = "own", coverage = "footprint" }
-    local UNPOWERED_IDLES = { field = "power", of = "own", outside = "disabled" }
+    local POWERED = { requires = "power", of = "own", coverage = "every" }
+    local UNPOWERED_IDLES = { field = "power", of = "own", coverage = "every", outside = "disable" }
+
+    -- Every conclave unit but the arbiter itself declares that the veil of
+    -- its own side, or an ally's, conceals it while it stands inside.
+    local VEILED = { field = "veil", of = "allied", coverage = "every", inside = "conceal" }
 
     define_entity("nexus", {
         race = "conclave",
         location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
         stats = { max_health = 800, sight_range = 9, supply_provided = 10 },
         dying = { time = 2 },
-        cost = { gold = 400 },
+        price = { gold = 400 },
         build_time = 200,
         trainer = { "probe" },
         resource_storage = { "gold", "wood" },
         tags = { "building" },
         field_placement = { NOT_ON_CREEP },
         field_sources = {
-            { field = "power", radius = 7, growth = "instant" },
+            { field = "power", radius = 7, growth = "instant", while_constructing = "nothing", while_disabled = "nothing" },
         },
     })
 
@@ -1252,11 +1325,12 @@ pub const CONTENT: &str = r#"
             cargo_size = 1,
         },
         dying = FALLS,
-        cost = { gold = 50 },
+        price = { gold = 50 },
         train_time = 40,
         builder = { builds = { "nexus", "pylon", "gateway", "photon_cannon" }, attendance = "unattended" },
         tags = { "biological" },
         skills = { "purge_creep" },
+        field_effects = { VEILED },
         resource_carrier = {
             gold = { capacity = 5, time = 20, presence = { hidden = { crew = 1 } } },
             wood = { capacity = 5, time = 20, presence = { present = { crew = 1 } } },
@@ -1268,12 +1342,12 @@ pub const CONTENT: &str = r#"
         location = { occupation = GROUND, size = 1, solidity = "solid" },
         stats = { max_health = 200, sight_range = 6, supply_provided = 6 },
         dying = { time = 2 },
-        cost = { gold = 60 },
+        price = { gold = 60 },
         build_time = 50,
         tags = { "building" },
         field_placement = { NOT_ON_CREEP },
         field_sources = {
-            { field = "power", radius = 6, growth = "instant" },
+            { field = "power", radius = 6, growth = "instant", while_constructing = "nothing", while_disabled = "nothing" },
         },
         on_stand = {
             { field = { field = "creep", radius = 6, action = "clear" } },
@@ -1285,10 +1359,10 @@ pub const CONTENT: &str = r#"
         location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
         stats = { max_health = 500, sight_range = 6 },
         dying = { time = 2 },
-        cost = { gold = 200, wood = 100 },
+        price = { gold = 200, wood = 100 },
         build_time = 120,
         repair_ratio = "0.5",
-        trainer = { "zealot" },
+        trainer = { "zealot", "dark_templar", "observer", "arbiter" },
         tags = { "building" },
         field_placement = { POWERED, NOT_ON_CREEP },
         field_effects = { UNPOWERED_IDLES },
@@ -1303,12 +1377,17 @@ pub const CONTENT: &str = r#"
             sight_range = 8,
         },
         dying = { time = 2 },
-        cost = { gold = 120 },
+        price = { gold = 120 },
         build_time = 80,
         tags = { "building" },
         attack = { targets = GROUND | WATER | AIR, projectile = "arrow" },
         field_placement = { POWERED, NOT_ON_CREEP },
         field_effects = { UNPOWERED_IDLES },
+        -- The cannon is the conclave's standing detector: a shorter reach
+        -- than its eyes, as a turret's is.
+        field_sources = {
+            { field = "true_sight", radius = 7, growth = "instant", while_constructing = "nothing", while_disabled = "nothing" },
+        },
     })
 
     define_entity("zealot", {
@@ -1325,9 +1404,78 @@ pub const CONTENT: &str = r#"
         dying = FALLS,
         tags = { "biological" },
         attack = { targets = GROUND | WATER },
-        cost = { gold = 100 },
+        price = { gold = 100 },
         train_time = 60,
         selection = { priority = 10 },
+        field_effects = { VEILED },
+    })
+
+    -- The dark templar is never seen by an enemy without a detector, and
+    -- nothing it does gives it away: it walks, swings and kills under the
+    -- cloak it was born with.
+    define_entity("dark_templar", {
+        race = "conclave",
+        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        stats = {
+            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 3, max_health = 80,
+            damage = 20, attack_range = 1, acquire_range = 5, attack_period = 20, damage_point = 6,
+            armor = 1,
+            sight_range = 8,
+            supply_cost = 2,
+            cargo_size = 1,
+        },
+        concealment = "concealed",
+        dying = FALLS,
+        tags = { "biological" },
+        attack = { targets = GROUND | WATER },
+        price = { gold = 125, wood = 50 },
+        train_time = 75,
+        selection = { priority = 10 },
+        field_effects = { VEILED },
+    })
+
+    -- The observer: a cloaked eye that flies, with no weapon, that sees what
+    -- hides as far as it sees at all — the thing that finds the other side's
+    -- observer.
+    define_entity("observer", {
+        race = "conclave",
+        location = { occupation = AIR, size = 1, solidity = "solid" },
+        stats = {
+            speed = "0.35", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1, max_health = 40,
+            sight_range = 9,
+            supply_cost = 1,
+        },
+        concealment = "concealed",
+        dying = { time = 2 },
+        tags = { "mechanical" },
+        price = { gold = 50, wood = 50 },
+        train_time = 50,
+        selection = { priority = 5 },
+        field_sources = {
+            { field = "true_sight", radius = 9, growth = "instant", while_constructing = "nothing", while_disabled = "nothing" },
+        },
+        field_effects = { VEILED },
+    })
+
+    -- The arbiter carries the veil: everything of its side's under it is
+    -- concealed, itself excepted, and the veil moves with it.
+    define_entity("arbiter", {
+        race = "conclave",
+        location = { occupation = AIR, size = 1, solidity = "solid" },
+        stats = {
+            speed = "0.3", turn_rate = 20, pivot_rate = 20, radius = "0.5", weight = 4, max_health = 200,
+            armor = 1,
+            sight_range = 9,
+            supply_cost = 3,
+        },
+        dying = { time = 2 },
+        tags = { "mechanical" },
+        price = { gold = 200, wood = 150 },
+        train_time = 120,
+        selection = { priority = 5 },
+        field_sources = {
+            { field = "veil", radius = 4, growth = "instant", while_constructing = "nothing", while_disabled = "nothing" },
+        },
     })
 
     -- ── The Elves ──────────────────────────────────────────────────────────
@@ -1351,7 +1499,7 @@ pub const CONTENT: &str = r#"
             cargo_size = 1,
         },
         dying = { time = 2 },
-        cost = { gold = 50 },
+        price = { gold = 50 },
         train_time = 40,
         builder = {
             builds = { "tree_of_life", "moon_well", "ancient_of_war", "ancient_protector", "entangled_mine" },
@@ -1385,7 +1533,7 @@ pub const CONTENT: &str = r#"
         location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
         stats = { max_health = 600, sight_range = 6 },
         dying = { time = 2 },
-        cost = { gold = 100 },
+        price = { gold = 100 },
         build_time = 100,
         tags = { "building" },
         resource_source = { kind = "gold", depletion = "destroy" },
@@ -1408,12 +1556,13 @@ pub const CONTENT: &str = r#"
             location = { occupation = GROUND, size = size, solidity = "solid" },
             stats = rooted.stats,
             dying = { time = 2 },
-            cost = rooted.cost,
+            price = rooted.price,
             build_time = rooted.build_time,
             trainer = rooted.trainer,
             attack = rooted.attack,
             tags = { "building" },
             field_placement = { NOT_ON_CREEP, NOT_ON_BLIGHT },
+            field_sources = rooted.field_sources,
             morphs = {
                 { into = uprooted, time = 40, placement = "revalidate", cancel = "refundable" },
             },
@@ -1435,7 +1584,7 @@ pub const CONTENT: &str = r#"
     -- The hall: trains wisps rooted; uprooted it lumbers and swats.
     ancient("tree_of_life", { 3, 3 }, {
         stats = { max_health = 800, sight_range = 9, supply_provided = 10 },
-        cost = { gold = 400 },
+        price = { gold = 400 },
         build_time = 200,
         trainer = { "wisp" },
     }, {
@@ -1452,7 +1601,7 @@ pub const CONTENT: &str = r#"
         location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
         stats = { max_health = 200, sight_range = 3, supply_provided = 6 },
         dying = { time = 2 },
-        cost = { gold = 40, wood = 20 },
+        price = { gold = 40, wood = 20 },
         build_time = 60,
         tags = { "building" },
         field_placement = { NOT_ON_CREEP, NOT_ON_BLIGHT },
@@ -1460,7 +1609,7 @@ pub const CONTENT: &str = r#"
     -- The war ancient: huntresses rooted, a heavy bite uprooted.
     ancient("ancient_of_war", { 3, 3 }, {
         stats = { max_health = 500, sight_range = 6 },
-        cost = { gold = 200, wood = 100 },
+        price = { gold = 200, wood = 100 },
         build_time = 120,
         trainer = { "huntress" },
     }, {
@@ -1472,14 +1621,18 @@ pub const CONTENT: &str = r#"
     })
     -- The tower: rooted it throws at range, over ground and water and into the
     -- air; uprooted it can only bite at what walks up to it.
+    -- Rooted, the protector also sees through cloaks: the elves' one detector.
     ancient("ancient_protector", { 2, 2 }, {
         stats = {
             max_health = 300, armor = 1, sight_range = 8,
             damage = 14, attack_range = 6, acquire_range = 7, attack_period = 20, damage_point = 5,
         },
-        cost = { gold = 120, wood = 40 },
+        price = { gold = 120, wood = 40 },
         build_time = 80,
         attack = { targets = GROUND | WATER | AIR, projectile = "arrow" },
+        field_sources = {
+            { field = "true_sight", radius = 7, growth = "instant", while_constructing = "nothing", while_disabled = "nothing" },
+        },
     }, {
         stats = {
             speed = "0.15", turn_rate = 12, pivot_rate = 12, radius = "1", weight = 6,
@@ -1488,6 +1641,20 @@ pub const CONTENT: &str = r#"
         },
     })
 
+    -- The huntress lies in ambush: unseen for fifteen seconds, or until she
+    -- strikes or is struck — whichever comes first ends it.
+    define_entity_buff("ambushing", {
+        lasting = { ticks = 300 },
+        stack = "refresh",
+        effects = { "conceal" },
+        interrupted_by = { "attack", "hit" },
+    })
+    define_skill("ambush", {
+        caster = "entity",
+        cooldown = 400,
+        target = "caster",
+        effect = { apply_buff = "ambushing" },
+    })
     define_entity("huntress", {
         race = "elves",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
@@ -1501,9 +1668,10 @@ pub const CONTENT: &str = r#"
         dying = FALLS,
         tags = { "biological" },
         attack = { targets = GROUND | WATER },
-        cost = { gold = 90, wood = 10 },
+        price = { gold = 90, wood = 10 },
         train_time = 55,
         selection = { priority = 10 },
+        skills = { "ambush" },
     })
 
     -- ── The Terrans ─────────────────────────────────────────────────────────
@@ -1524,13 +1692,37 @@ pub const CONTENT: &str = r#"
         cooldown = 200,
         cost = { energy = "50" },
         target = "position",
-        effect = { watch = { radius = 6, duration = 180 } },
+        effect = { watch = { radius = 6, duration = 180, detection = GROUND | AIR } },
+    })
+
+    -- The wraith's cloak: a buff that conceals and nothing else, switched on
+    -- for a price and kept up from the pool every tick, so a wraith that lets
+    -- its energy run dry is seen again. Two hundred energy at a quarter a tick
+    -- net of regeneration is about a minute of cloak. Switching it off is
+    -- taking the buff back. Neither shooting nor casting ends it.
+    define_entity_buff("cloaked", {
+        lasting = { upkeep = { cost = { energy = "0.25" }, period = 1 } },
+        stack = "ignore",
+        effects = { "conceal" },
+    })
+    define_skill("cloak", {
+        caster = "entity",
+        cooldown = 20,
+        cost = { energy = "25" },
+        target = "caster",
+        effect = { apply_buff = "cloaked" },
+    })
+    define_skill("decloak", {
+        caster = "entity",
+        cooldown = 0,
+        target = "caster",
+        effect = { remove_buff = "cloaked" },
     })
 
     -- Siege mechanics, researched in the tech lab and unlocking nothing but
     -- the tank's other form.
     define_research("siege_tech", {
-        cost = { gold = 100, wood = 50 },
+        price = { gold = 100, wood = 50 },
         time = 160,
     })
 
@@ -1549,10 +1741,10 @@ pub const CONTENT: &str = r#"
             cargo_size = 1,
         },
         dying = FALLS,
-        cost = { gold = 50 },
+        price = { gold = 50 },
         train_time = 40,
         builder = {
-            builds = { "command_center", "barracks", "factory", "supply_depot", "refinery" },
+            builds = { "command_center", "barracks", "factory", "supply_depot", "refinery", "missile_turret" },
             attendance = { attached = { berths = "rim", stance = { roaming = { speed = "0.08", dwell = 30 } } } },
         },
         repairer = {
@@ -1584,7 +1776,7 @@ pub const CONTENT: &str = r#"
         location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
         stats = { max_health = 800, sight_range = 9, supply_provided = 10, build_range = 1 },
         dying = { time = 2 },
-        cost = { gold = 400 },
+        price = { gold = 400 },
         build_time = 200,
         trainer = { "scv" },
         resource_storage = { "gold", "wood" },
@@ -1623,7 +1815,7 @@ pub const CONTENT: &str = r#"
         location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
         stats = { max_health = 500, sight_range = 6 },
         dying = { time = 2 },
-        cost = { gold = 150 },
+        price = { gold = 150 },
         build_time = 100,
         repair_ratio = "0.5",
         trainer = { "marine" },
@@ -1653,10 +1845,10 @@ pub const CONTENT: &str = r#"
         location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
         stats = { max_health = 500, sight_range = 6, build_range = 1 },
         dying = { time = 2 },
-        cost = { gold = 200, wood = 100 },
+        price = { gold = 200, wood = 100 },
         build_time = 120,
         repair_ratio = "0.5",
-        trainer = { "tank" },
+        trainer = { "tank", "wraith" },
         builder = { builds = { "tech_lab" }, attendance = { present = { crew = 1 } } },
         docks = { { at = { 3, 0 }, accepts = { types = { "tech_lab" } } } },
         berths = { rim = { points = rim(3, 3), slots = 1 } },
@@ -1694,11 +1886,62 @@ pub const CONTENT: &str = r#"
             max_energy = 200, energy_regen = "0.2",
         },
         dying = { time = 2 },
-        cost = { gold = 50, wood = 50 },
+        price = { gold = 50, wood = 50 },
         build_time = 80,
         skills = { "scanner_sweep" },
         tags = { "building" },
         annex = { alone = { work = "idles", life = "endures" }, claim = "seized" },
+    })
+
+    -- The wraith: a fighter that flies, shoots at anything, and hides in
+    -- plain sight for as long as its energy holds.
+    define_entity("wraith", {
+        race = "terran",
+        location = { occupation = AIR, size = 1, solidity = "solid" },
+        stats = {
+            speed = "0.45", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 3, max_health = 120,
+            damage = 8, attack_range = 5, acquire_range = 7, attack_period = 12, damage_point = 4,
+            sight_range = 9,
+            max_energy = 200, energy_regen = "0.1",
+            supply_cost = 2,
+        },
+        dying = { time = 2 },
+        tags = { "mechanical" },
+        attack = { targets = GROUND | WATER | AIR },
+        price = { gold = 150, wood = 100 },
+        train_time = 90,
+        skills = { "cloak", "decloak" },
+        selection = { priority = 10 },
+    })
+
+    -- The turret's rack: a gun that bears on its own, the way a tower aims
+    -- without turning its walls, and reaches only the air.
+    define_turret("missile_rack", {
+        targets = AIR,
+        projectile = "arrow",
+    })
+    -- The missile turret: the terran answer to what flies and to what hides.
+    -- It shoots into the air alone, and detects a little short of where it
+    -- sees.
+    define_entity("missile_turret", {
+        race = "terran",
+        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        stats = {
+            max_health = 200, armor = 1,
+            damage = 12, attack_range = 7, acquire_range = 8, attack_period = 15, damage_point = 5,
+            sight_range = 9,
+        },
+        dying = { time = 2 },
+        price = { gold = 75, wood = 25 },
+        build_time = 60,
+        berths = { rim = { points = rim(1, 1), slots = 1 } },
+        tags = { "building" },
+        turrets = {
+            { turret = "missile_rack" },
+        },
+        field_sources = {
+            { field = "true_sight", radius = 7, growth = "instant", while_constructing = "nothing", while_disabled = "nothing" },
+        },
     })
 
     -- The tech lab: the annex that researches. It keeps its footing without a
@@ -1709,7 +1952,7 @@ pub const CONTENT: &str = r#"
         location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
         stats = { max_health = 300, sight_range = 5 },
         dying = { time = 2 },
-        cost = { gold = 50, wood = 25 },
+        price = { gold = 50, wood = 25 },
         build_time = 80,
         researcher = { "siege_tech" },
         tags = { "building" },
@@ -1721,7 +1964,7 @@ pub const CONTENT: &str = r#"
         location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
         stats = { max_health = 200, sight_range = 3, supply_provided = 6 },
         dying = { time = 2 },
-        cost = { gold = 40, wood = 20 },
+        price = { gold = 40, wood = 20 },
         build_time = 60,
         tags = { "building" },
         berths = { rim = { points = rim(2, 2), slots = 1 } },
@@ -1735,7 +1978,7 @@ pub const CONTENT: &str = r#"
         location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
         stats = { max_health = 500, sight_range = 4 },
         dying = { time = 2 },
-        cost = { gold = 75 },
+        price = { gold = 75 },
         build_time = 90,
         tags = { "building" },
         resource_source = { kind = "gold", depletion = "persist" },
@@ -1761,7 +2004,7 @@ pub const CONTENT: &str = r#"
         -- A rifle: the shot lands the tick it is fired, with nothing to
         -- outrun and nothing to dodge.
         attack = { targets = GROUND | WATER | AIR },
-        cost = { gold = 60 },
+        price = { gold = 60 },
         train_time = 45,
     })
 
@@ -1799,7 +2042,7 @@ pub const CONTENT: &str = r#"
         -- The gun leaves what it kills: only the planted form shells a body
         -- to nothing, which is what makes planting the answer to raised dead.
         attack = { targets = GROUND | WATER },
-        cost = { gold = 150, wood = 100 },
+        price = { gold = 150, wood = 100 },
         train_time = 100,
         requires = { { annexed = "tech_lab" } },
         morphs = {
@@ -1835,7 +2078,7 @@ pub const CONTENT: &str = r#"
         -- player paid to have one standing: the tank's price, and the pace of
         -- the training and the digging in together. That is what an SCV mends
         -- it against.
-        cost = { gold = 150, wood = 100 },
+        price = { gold = 150, wood = 100 },
         train_time = 160,
         morphs = {
             { into = "tank", time = 60, placement = "revalidate", cancel = "committed" },
@@ -1856,12 +2099,12 @@ pub const CONTENT: &str = r#"
     -- Every undead structure stands on blight and spreads its own, so a base
     -- grows its ground outward as it is built. The hall and the mine are the
     -- exceptions: they make blight where there is none.
-    local ON_BLIGHT = { requires = "blight", of = "anyone", coverage = "footprint" }
+    local ON_BLIGHT = { requires = "blight", of = "anyone", coverage = "every" }
     local function blights(radius)
-        return { { field = "blight", radius = radius, growth = "instant" } }
+        return { { field = "blight", radius = radius, growth = "instant", while_constructing = "nothing", while_disabled = "full" } }
     end
     -- The dead mend only on their own ground: off blight nothing knits.
-    local HEALS_ON_BLIGHT = { field = "blight", of = "anyone", inside = {
+    local HEALS_ON_BLIGHT = { field = "blight", of = "anyone", coverage = "any", inside = {
         modifiers = { { entity_stat = "health_regen", op = "flat", value = "0.1" } },
     } }
     define_entity("acolyte", {
@@ -1875,7 +2118,7 @@ pub const CONTENT: &str = r#"
             cargo_size = 1,
         },
         dying = FALLS,
-        cost = { gold = 50 },
+        price = { gold = 50 },
         train_time = 40,
         -- It summons a structure and walks away; the site finishes on its own.
         builder = {
@@ -1907,7 +2150,7 @@ pub const CONTENT: &str = r#"
             cargo_size = 1,
         },
         dying = FALLS,
-        cost = { gold = 80 },
+        price = { gold = 80 },
         train_time = 50,
         tags = { "biological" },
         attack = { targets = GROUND | WATER },
@@ -1959,7 +2202,7 @@ pub const CONTENT: &str = r#"
         entity_modifiers = { { entity_stat = "lifetime", op = "flat", value = "300" } },
     })
     define_research("skeletal_longevity", {
-        cost = { gold = 100 },
+        price = { gold = 100 },
         time = 200,
         buff = "skeletal_longevity",
     })
@@ -1977,7 +2220,7 @@ pub const CONTENT: &str = r#"
             cargo_size = 1,
         },
         dying = FALLS,
-        cost = { gold = 100 },
+        price = { gold = 100 },
         train_time = 60,
         tags = { "biological" },
         attack = { targets = GROUND | WATER, projectile = "arrow" },
@@ -2029,14 +2272,14 @@ pub const CONTENT: &str = r#"
     hall("halls_of_the_dead", "black_citadel",
         { max_health = 900, sight_range = 10, supply_provided = 10 },
         { tags = { "building", "grown_hall" },
-          cost = { gold = 500 }, build_time = 300 })
+          price = { gold = 500 }, build_time = 300 })
     -- The citadel is the one hall that answers for itself: bolts at whatever
     -- comes into its reach, in the air as readily as on the ground.
     hall("black_citadel", nil,
         { max_health = 1100, sight_range = 11, supply_provided = 10,
           damage = 18, attack_range = 8, acquire_range = 9, attack_period = 22, damage_point = 9 },
         { tags = { "building", "grown_hall" },
-          cost = { gold = 650 }, build_time = 420,
+          price = { gold = 650 }, build_time = 420,
           attack = { targets = GROUND | WATER | AIR, projectile = "arrow" } })
 
     -- Raised over a gold seam, the haunted mine is the mine from then on: it
@@ -2048,7 +2291,7 @@ pub const CONTENT: &str = r#"
         location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
         stats = { max_health = 600, sight_range = 6 },
         dying = { time = 2 },
-        cost = { gold = 100 },
+        price = { gold = 100 },
         build_time = 100,
         tags = { "building" },
         resource_source = { kind = "gold", depletion = "destroy" },
@@ -2070,7 +2313,7 @@ pub const CONTENT: &str = r#"
         location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
         stats = { max_health = 300, sight_range = 6, supply_provided = 10 },
         dying = { time = 2 },
-        cost = { gold = 80, wood = 30 },
+        price = { gold = 80, wood = 30 },
         build_time = 100,
         tags = { "building" },
         field_placement = { ON_BLIGHT },
@@ -2087,7 +2330,7 @@ pub const CONTENT: &str = r#"
     -- A tower is only ever reached by hardening a ziggurat, so it carries the
     -- ziggurat's price and the hardening's on top of it, over the raising and
     -- the hardening together.
-    local function tower(name, stats, attack, cost, build_time)
+    local function tower(name, stats, attack, price, build_time, field_sources)
         define_entity(name, {
             race = "undead",
             location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
@@ -2095,29 +2338,34 @@ pub const CONTENT: &str = r#"
             dying = { time = 2 },
             tags = { "building" },
             attack = attack,
-            cost = cost,
+            price = price,
             build_time = build_time,
             field_placement = { ON_BLIGHT },
-            field_sources = blights(4),
+            field_sources = field_sources,
         })
     end
+    -- The spirit tower spreads blight and sees through cloaks: the undead's
+    -- one detector, as the ghostly eye it is.
     tower("spirit_tower",
         { max_health = 400, sight_range = 8, supply_provided = 10,
           damage = 14, attack_range = 7, acquire_range = 8, attack_period = 18, damage_point = 7 },
         { targets = GROUND | WATER | AIR, projectile = "arrow" },
-        { gold = 180, wood = 30 }, 170)
+        { gold = 180, wood = 30 }, 170,
+        { { field = "blight", radius = 4, growth = "instant", while_constructing = "nothing", while_disabled = "full" },
+          { field = "true_sight", radius = 7, growth = "instant", while_constructing = "nothing", while_disabled = "nothing" } })
     tower("nerubian_tower",
         { max_health = 500, sight_range = 8, supply_provided = 10,
           damage = 22, attack_range = 6, acquire_range = 7, attack_period = 24, damage_point = 10 },
         { targets = GROUND | WATER, projectile = "cannonball" },
-        { gold = 200, wood = 70 }, 170)
+        { gold = 200, wood = 70 }, 170,
+        blights(4))
 
     define_entity("crypt", {
         race = "undead",
         location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
         stats = { max_health = 500, sight_range = 6 },
         dying = { time = 2 },
-        cost = { gold = 200, wood = 50 },
+        price = { gold = 200, wood = 50 },
         build_time = 120,
         tags = { "building" },
         trainer = { "ghoul" },
@@ -2132,7 +2380,7 @@ pub const CONTENT: &str = r#"
         location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
         stats = { max_health = 300, sight_range = 5 },
         dying = { time = 2 },
-        cost = { gold = 120, wood = 40 },
+        price = { gold = 120, wood = 40 },
         build_time = 90,
         tags = { "building" },
         field_placement = { ON_BLIGHT },
@@ -2144,7 +2392,7 @@ pub const CONTENT: &str = r#"
         location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
         stats = { max_health = 450, sight_range = 6 },
         dying = { time = 2 },
-        cost = { gold = 250, wood = 100 },
+        price = { gold = 250, wood = 100 },
         build_time = 140,
         tags = { "building" },
         trainer = { "necromancer" },

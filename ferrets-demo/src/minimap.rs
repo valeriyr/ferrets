@@ -33,7 +33,7 @@ use ferrets_simulation::{
 
 use crate::{
     camera, input, map,
-    render::{self, CELL_PX, FogReveal, Ghosts},
+    render::{self, CELL_PX, FogReveal, Ghosts, Shown},
     scenario::CurrentScenario,
     states::InGameUi,
     view::WorldView,
@@ -64,6 +64,12 @@ const CREEP: [u8; 4] = [120, 45, 140, 255];
 const POWER: [u8; 4] = [70, 130, 255, 255];
 /// Blight, wherever anyone's covers a cell.
 const BLIGHT: [u8; 4] = [86, 84, 78, 255];
+/// The tint a cell takes toward true sight where the viewed side's detection
+/// covers it, allies included.
+const TRUE_SIGHT: [u8; 4] = [150, 230, 255, 255];
+/// The tint a cell takes toward the veil where the viewed side's covers it,
+/// allies included.
+const VEIL: [u8; 4] = [190, 150, 255, 255];
 
 /// `color` moved `factor` of the way toward `toward`, alpha kept.
 fn mix(color: [u8; 4], toward: [u8; 4], factor: f32) -> [u8; 4] {
@@ -531,6 +537,7 @@ pub fn refresh_minimap(
             &LocationComponent,
             Option<&OwnerComponent>,
             Option<&HealthComponent>,
+            Option<&render::Sighted>,
         ),
         Without<HiddenComponent>,
     >,
@@ -565,9 +572,11 @@ pub fn refresh_minimap(
     let Minimap { base, canvas, .. } = &mut *minimap;
     canvas.restore(base);
 
-    // Fields, over the terrain and under the fog like the tiles they tint:
-    // creep and blight whoever's they are, power where it is the viewed
-    // player's own.
+    // Fields, over the terrain and under the fog like the tiles they tint, by
+    // the world view's rule: creep and blight whoever's they are; power where
+    // it is the viewed player's own; true sight and the veil where they are
+    // the viewed side's, allies included; all of them to an observer watching
+    // the whole map.
     let viewed = render::viewed_player(&session, &watch);
     if let Some(creep) = registry.field("creep") {
         for (cell, mask) in fields.cells(creep) {
@@ -583,12 +592,23 @@ pub fn refresh_minimap(
             }
         }
     }
-    if let (Some(power), Some(player)) = (registry.field("power"), viewed) {
-        for (cell, mask) in fields.cells(power) {
-            if mask.contains(player)
+    // The same rule the world overlay reads, off the same enum, so the two
+    // surfaces cannot drift: power to the viewed player, true sight and the
+    // veil to its whole side. Creep and blight are shown to anyone and paint
+    // solid rather than tinting, which is why they keep their own loops above.
+    for (name, toward, shown) in [
+        ("power", POWER, Shown::Own),
+        ("true_sight", TRUE_SIGHT, Shown::Allied),
+        ("veil", VEIL, Shown::Allied),
+    ] {
+        let Some(field) = registry.field(name) else {
+            continue;
+        };
+        for (cell, mask) in fields.cells(field) {
+            if shown.admits(&session, viewed, &mask)
                 && let Some(color) = canvas.get(cell.x, cell.y)
             {
-                canvas.put(cell.x, cell.y, mix(color, POWER, 0.45));
+                canvas.put(cell.x, cell.y, mix(color, toward, 0.45));
             }
         }
     }
@@ -625,12 +645,16 @@ pub fn refresh_minimap(
     let selected = local.map_or(&[][..], |local| selection.get(local));
     let mut blips: Vec<_> = entities
         .iter()
-        .filter_map(|(info, location, owner, health)| {
+        .filter_map(|(info, location, owner, health, sighted)| {
             let (x, y) = (
                 location.position.x.to_num::<u32>(),
                 location.position.y.to_num::<u32>(),
             );
-            if !reveal.0 && !render::sees(&session, &watch, &fog, x, y) {
+            // The stamp is the whole answer: it already folds the footprint,
+            // the watched side and the reveal, where this cell alone would
+            // lose a building lit only at a corner. A glimpse is a shimmer on
+            // the field and nothing on the map.
+            if !render::stamped(sighted).is_seen() {
                 return None;
             }
             let def = registry.def(info.type_id());

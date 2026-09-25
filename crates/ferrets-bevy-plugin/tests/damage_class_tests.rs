@@ -3,13 +3,9 @@
 
 use bevy::prelude::*;
 use ferrets_content::{
-    attack::{AttackDef, Delivery, Slain, Weapon},
-    entity_type_def::EntityTypeDef,
-    location::Solidity,
-    registry::ContentRegistry,
+    entity_type_def::EntityTypeDef, location::Solidity, registry::ContentRegistry,
 };
 use ferrets_geometry::cell_size::CellSize;
-use ferrets_math::FixedU64;
 use ferrets_simulation::session::{GameSession, player_slot::PlayerSlot, player_type::PlayerType};
 
 mod utils;
@@ -84,30 +80,10 @@ fn app() -> App {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
         registry.register_tag("armored");
         registry.register(
-            EntityTypeDef::new("grunt")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+            utils::walker("grunt", utils::GROUND)
                 .with_sight_range(8)
-                .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
-                    FixedU64::ONE,
-                    FixedU64::from_num(360),
-                    FixedU64::from_num(360),
-                )
                 .with_health(50)
-                .with_attack(
-                    AttackDef::new(Weapon::new(
-                        utils::GROUND,
-                        Delivery::Instant,
-                        None,
-                        Slain::Remains,
-                    )),
-                    10,
-                    1,
-                    1,
-                    4,
-                    2,
-                )
+                .with_attack(utils::weapon(utils::GROUND), 10, 1, 1, 4, 2)
                 .with_bonus_damage_vs([("armored", 10u32)]),
         );
         registry.register(

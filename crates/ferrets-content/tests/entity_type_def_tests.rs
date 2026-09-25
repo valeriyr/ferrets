@@ -38,7 +38,7 @@ fn fully_loaded_definition_is_valid() {
         .with_health(50)
         .with_dying(3, [])
         .with_attack(utils::weapon(GROUND), 10, 1, 1, 4, 2)
-        .with_cost([("gold", 30), ("wood", 10)])
+        .with_price([("gold", 30), ("wood", 10)])
         .with_train_time(4)
         .with_build_time(6)
         .with_trainer(["footman"])
@@ -153,14 +153,14 @@ fn ordinary_bequest_is_left_by_death_that_ends_life() {
     assert!(bequest.left_by(DeathKind::Expired));
     // Taken off the board rather than killed: the site it founded swallowed it.
     assert!(!bequest.left_by(DeathKind::Consumed));
-    assert!(!bequest.left_by(DeathKind::Cancelled));
+    assert!(!bequest.left_by(DeathKind::Canceled));
 }
 
 #[test]
 fn named_bequest_is_left_by_exactly_what_it_names() {
-    let bequest = Bequest::new("corpse", 1, LeftBy::Named(vec![DeathKind::Cancelled]));
+    let bequest = Bequest::new("corpse", 1, LeftBy::Named(vec![DeathKind::Canceled]));
 
-    assert!(bequest.left_by(DeathKind::Cancelled));
+    assert!(bequest.left_by(DeathKind::Canceled));
     assert!(!bequest.left_by(DeathKind::Killed));
 }
 
@@ -169,15 +169,15 @@ fn named_bequest_is_left_by_exactly_what_it_names() {
 //
 
 #[test]
-#[should_panic(expected = "cost resource kinds must not be empty")]
-fn empty_cost_kind_panics() {
-    footman().with_cost([("", 30)]);
+#[should_panic(expected = "price resource kinds must not be empty")]
+fn empty_price_kind_panics() {
+    footman().with_price([("", 30)]);
 }
 
 #[test]
-#[should_panic(expected = "cost amounts must be greater than 0")]
-fn zero_cost_amount_panics() {
-    footman().with_cost([("gold", 0)]);
+#[should_panic(expected = "price amounts must be greater than 0")]
+fn zero_price_amount_panics() {
+    footman().with_price([("gold", 0)]);
 }
 
 #[test]

@@ -2,7 +2,7 @@
 //!
 //! Each tick the queue goes through three phases inside a single exclusive Bevy system:
 //!
-//! - [`prepare_tick`] — flush cancelled entries, then transition the front order to
+//! - [`prepare_tick`] — flush canceled entries, then transition the front order to
 //!   `InProcessing` (preparing `New` entries and resuming `Suspended` ones).
 //! - [`watch_tick`] — let a suspended order interrupt the sub-order running in
 //!   front of it, replacing the front.
@@ -29,7 +29,7 @@ use crate::{
         build::BuildComponent,
         order_queue::{CancelPolicy, OrderQueueComponent, OrderState},
     },
-    entity_def::{self, Operation, Switch},
+    entity_def::{self, Operation, Outage},
     map::Map,
     movement_model::{self, MovementModel},
     order::Order,
@@ -67,7 +67,7 @@ enum DisabledConduct {
     Holds,
     /// Keeps running.
     Completes,
-    /// Force-cancelled.
+    /// Ends at once, keeping nothing back.
     Cancels,
 }
 
@@ -183,11 +183,11 @@ fn survives_soft_cancel(order: &Order) -> bool {
     }
 }
 
-/// The refusal an entity's state hands new production when it is idle rather
-/// than merely switched off: one changing form is busy, an annex idling with
-/// no primary takes none, and a building a field switched off queues it and
-/// waits.
-pub(super) fn requires_not_idle(world: &World, entity: Entity) -> Result<(), Refusal> {
+/// The refusal an entity's state hands work that queues and waits: busy while
+/// a change of form is under way, refused while still being raised or standing
+/// as an annex with no primary, and admitted when a field or a buff switched it
+/// off — the work waits for the outage to pass.
+pub(super) fn admits_queued_work(world: &World, entity: Entity) -> Result<(), Refusal> {
     // A change under way makes it busy whatever else it is: the form it lands
     // as may have no queue to hold the work.
     if entity_def::changing(world, entity) {
@@ -196,9 +196,10 @@ pub(super) fn requires_not_idle(world: &World, entity: Entity) -> Result<(), Ref
     match entity_def::operation(world, entity) {
         Operation::Operating => Ok(()),
         // An annex with nothing docked takes no new work at all; a building a
-        // field switched off queues it and waits, which that design intends.
-        Operation::Disabled(Switch::Alone) => Err(Refusal::Disabled),
-        Operation::Disabled(Switch::Field) => Ok(()),
+        // field or a buff switched off queues it and waits for the outage to
+        // pass.
+        Operation::Disabled(Outage::Orphaned) => Err(Refusal::Disabled),
+        Operation::Disabled(Outage::Field | Outage::Buff) => Ok(()),
         Operation::UnderConstruction => Err(Refusal::UnderConstruction),
     }
 }
@@ -378,7 +379,7 @@ fn dispatch_process(entity: Entity, order: &Order, world: &mut World) -> Process
 }
 
 /// A suspended order watching the sub-order running in front of it. `Some`
-/// interrupts: the sub-order is force-cancelled and replaced (see [`watch_tick`]).
+/// interrupts: the sub-order is force-canceled and replaced (see [`watch_tick`]).
 fn dispatch_watch(
     entity: Entity,
     order: &Order,
@@ -406,7 +407,7 @@ fn dispatch_watch(
     }
 }
 
-/// Flush cancelled entries, then prepare the front order.
+/// Flush canceled entries, then prepare the front order.
 ///
 /// The caller is responsible for taking `queue` out of the world before this call and
 /// reinserting it after. This keeps the world borrow free so per-type handlers can
@@ -418,7 +419,7 @@ fn dispatch_watch(
 ///
 /// **Flush**: for every entry with a cancel policy, calls the per-type
 /// `cancel_processing` (which handles driver removal). If the result is `Finished`,
-/// removes the entry. Entries whose cancel returns `InProcessing` (cancel deferred or
+/// removes the entry. Entries whose cancel returns `InProcessing` (deferred or
 /// refused) stay in the queue with their cancel policy cleared.
 ///
 /// **Prepare loop**: while the front is `New` or `Suspended`, calls the per-type
@@ -440,7 +441,34 @@ pub fn prepare_tick(entity: Entity, queue: &mut OrderQueueComponent, world: &mut
         Operation::Operating | Operation::UnderConstruction => {}
     }
 
-    // Flush cancelled entries.
+    flush_canceled(entity, queue, world);
+    prepare_front(entity, queue, world);
+}
+
+/// Cancels every order `entity` holds and applies the cancels at once, with
+/// what each order took left spent: an entity changing hands carries away
+/// what its old owner paid. Only a death survives: a `Die` already queued, or
+/// one a canceled change of form hands on, keeps running.
+pub fn drop_all(world: &mut World, entity: Entity) {
+    let mut queue = world
+        .entity_mut(entity)
+        .take::<OrderQueueComponent>()
+        .expect("simulation entities carry an order queue");
+    queue.cancel_all(CancelPolicy::Force);
+    flush_canceled(entity, &mut queue, world);
+    assert!(
+        queue
+            .0
+            .iter()
+            .all(|entry| matches!(entry.order, Order::Die)),
+        "a force cancel finishes every order but a death"
+    );
+    world.entity_mut(entity).insert(queue);
+}
+
+/// Applies every pending cancel in `queue`: each flagged entry is dispatched
+/// to its processor's cancel and removed once it reports `Finished`.
+fn flush_canceled(entity: Entity, queue: &mut OrderQueueComponent, world: &mut World) {
     let mut i = 0;
     while let Some(e) = queue.0.get(i) {
         let Some(policy) = e.cancel else {
@@ -450,7 +478,7 @@ pub fn prepare_tick(entity: Entity, queue: &mut OrderQueueComponent, world: &mut
         let order = e.order.clone();
         let entry_state = e.state;
 
-        // Clear cancel flag before dispatching — prevents re-cancellation on the next tick.
+        // Clear the flag before dispatching — prevents re-cancellation on the next tick.
         queue.0[i].cancel = None;
 
         let result = dispatch_cancel(entity, &order, policy, entry_state, world);
@@ -471,14 +499,12 @@ pub fn prepare_tick(entity: Entity, queue: &mut OrderQueueComponent, world: &mut
             FollowUp::SubOrder(_) => unreachable!("a cancel never suspends into a sub-order"),
         }
     }
-
-    prepare_front(entity, queue, world);
 }
 
 /// Give the entry directly behind the front — when it is `Suspended`, i.e. the
 /// front is a sub-order it spawned — a chance to interrupt that sub-order.
 ///
-/// On an interrupt, the front is force-cancelled, the replacement pushed in
+/// On an interrupt, the front is force-canceled, the replacement pushed in
 /// its place, and the prepare loop re-run so the front is `InProcessing` again
 /// for [`process_tick`]. The watcher itself stays suspended.
 ///
@@ -511,7 +537,7 @@ pub fn watch_tick(entity: Entity, queue: &mut OrderQueueComponent, world: &mut W
     };
 
     let front_state = queue.front().unwrap().state;
-    let cancelled = dispatch_cancel(
+    let canceled = dispatch_cancel(
         entity,
         &front_order,
         CancelPolicy::Force,
@@ -519,9 +545,9 @@ pub fn watch_tick(entity: Entity, queue: &mut OrderQueueComponent, world: &mut W
         world,
     );
     debug_assert_eq!(
-        cancelled.state,
+        canceled.state,
         OrderState::Finished,
-        "a force-cancelled sub-order must stop immediately"
+        "a force-canceled sub-order must stop immediately"
     );
     queue.0.pop_front();
     queue.push_front(replacement);

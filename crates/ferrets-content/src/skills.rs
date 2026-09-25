@@ -10,12 +10,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     affiliation::Affiliation,
-    costs::Cost,
+    cost::Cost,
+    detection::Detection,
     entity_buffs::EntityBuffId,
     entity_type_def::EntityTypeId,
     field::{FieldAction, FieldId},
     kinds::Kinds,
     player_buffs::PlayerBuffId,
+    price::Price,
     quantity::Quantity,
     requirement::Requirement,
 };
@@ -79,7 +81,7 @@ pub enum SkillCaster {
     Entity {
         /// What one cast costs. Every entry must be payable and all are paid,
         /// so a cast never half-charges. Empty means free.
-        costs: Vec<EntityCastCost>,
+        costs: Vec<Cost>,
         /// Who the cast acts on.
         target: EntityCastTarget,
         /// How close the caster must be to it.
@@ -94,22 +96,10 @@ pub enum SkillCaster {
     Player {
         /// Resource kinds one cast draws from the player's stockpile. Empty
         /// means free.
-        cost: Cost,
+        price: Price,
         /// What the cast does to the casting player.
         effect: PlayerCastEffect,
     },
-}
-
-/// One price an entity cast pays, drawn from the pool its arm names.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum EntityCastCost {
-    /// Resource kinds from the casting player's stockpile.
-    Resources(Cost),
-    /// The casting entity's energy pool.
-    Energy(FixedU64),
-    /// The casting entity's own health — a cast that could not be survived is
-    /// refused.
-    Health(FixedU64),
 }
 
 /// What an entity cast is aimed at.
@@ -153,6 +143,9 @@ pub enum EntityCastEffect {
         radius: u32,
         /// Ticks it lasts.
         duration: u32,
+        /// What it does for the casting player against the concealed
+        /// entities standing on the patch.
+        detection: Detection,
     },
     /// Sets units down around the aim, for the casting player: on the cells
     /// nearest the remains a raise spends, the caster's own footprint, or the

@@ -14,6 +14,7 @@ use ferrets_content::{
 use ferrets_geometry::cell_size::CellSize;
 use ferrets_math::{FixedI64, FixedU64};
 use ferrets_simulation::{
+    buffs_store::Term,
     entity_index::EntityIndex,
     events::{DeathCause, SimulationEvent},
     player_buffs::PlayerBuffs,
@@ -112,7 +113,7 @@ fn buff_lengthening_stat_keeps_standing_summon_up() {
         PlayerId::from(0u8),
         longevity,
         StackRule::Ignore,
-        None,
+        Term::Forever,
     );
 
     // 10 + 5 = 15: the buff lengthens the stat the age is compared against, so
@@ -147,7 +148,7 @@ fn buff_shortening_life_past_nothing_ends_it_at_once() {
         PlayerId::from(0u8),
         withering,
         StackRule::Ignore,
-        None,
+        Term::Forever,
     );
     let (_, summon) = utils::create_owned(&mut app, "wisp_of_ten", 5, 5, 0);
 

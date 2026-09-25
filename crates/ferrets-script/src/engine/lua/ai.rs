@@ -2,7 +2,10 @@
 
 use std::{cell::RefCell, rc::Rc};
 
-use ferrets_simulation::{command::PlayerCommand, session::ai_vision::AiVision};
+use ferrets_simulation::{
+    command::PlayerCommand,
+    session::{ai_detection::AiDetection, ai_vision::AiVision},
+};
 use mlua::{Function, Lua, Table, Value};
 
 use crate::{
@@ -27,6 +30,7 @@ pub(super) struct LuaAiRuntime {
     name: String,
     period: u32,
     vision: AiVision,
+    detection: AiDetection,
     think: Function,
     state: Table,
     /// Content name → registry handle indexes: a returned command names
@@ -65,6 +69,7 @@ impl LuaAiRuntime {
             name: definition.name,
             period: definition.period,
             vision: definition.vision,
+            detection: definition.detection,
             think: definition.think,
             state,
             names: CommandNames::from_content(content),
@@ -85,6 +90,10 @@ impl AiRuntime for LuaAiRuntime {
         self.vision
     }
 
+    fn detection(&self) -> AiDetection {
+        self.detection
+    }
+
     fn think(&mut self, view: &GameView) -> crate::Result<Vec<PlayerCommand>> {
         let view_table = view::game_table(&self.lua, view).map_err(lua::engine_error)?;
         let result: Value = self
@@ -100,6 +109,7 @@ struct AiDefinition {
     name: String,
     period: u32,
     vision: AiVision,
+    detection: AiDetection,
     think: Function,
 }
 
@@ -140,11 +150,27 @@ fn register_define_ai(lua: &Lua, sink: &Rc<RefCell<Option<AiDefinition>>>) -> ml
                 )));
             }
         };
+        // So is what it makes of a cloak.
+        let detection = match options.get::<Option<String>>("detection")?.as_deref() {
+            Some("detectors") => AiDetection::Detectors,
+            Some("everywhere") => AiDetection::Everywhere,
+            None => {
+                return Err(ai_error(
+                    "define_ai must declare 'detection' ('detectors' or 'everywhere')",
+                ));
+            }
+            Some(other) => {
+                return Err(ai_error(&format!(
+                    "'detection' must be 'detectors' or 'everywhere', got '{other}'"
+                )));
+            }
+        };
 
         *slot = Some(AiDefinition {
             name,
             period,
             vision,
+            detection,
             think,
         });
         Ok(())

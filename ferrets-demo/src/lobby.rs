@@ -1564,7 +1564,10 @@ pub fn start_game(world: &mut World) {
 /// player seats free, environment seats seated — and the default finish rule.
 fn vacant_skirmish(config: &LobbyConfig, registry: &ContentRegistry) -> Skirmish {
     Skirmish {
-        slots: player_slot::vacant_slots(&map_data(&config.map), ai::environment_vision(registry)),
+        slots: {
+            let (vision, detection) = ai::environment_senses(registry);
+            player_slot::vacant_slots(&map_data(&config.map), vision, detection)
+        },
         map: config.map.clone(),
         finish_policy: FinishPolicy::LastStanding {
             elimination: config.elimination,
@@ -1587,16 +1590,18 @@ fn player_slots(config: &LobbyConfig, registry: &ContentRegistry) -> Vec<PlayerS
                 SlotKind::Human => {
                     PlayerSlot::occupied(id, PlayerType::Human, Some(view.race.id()), view.team)
                 }
-                SlotKind::Ai => PlayerSlot::occupied(
-                    id,
-                    PlayerType::Ai {
-                        // The seat carries the brain's declared vision: it is
-                        // what the executor resolves the AI's commands by.
-                        vision: ai::race_vision(view.race.id(), registry),
-                    },
-                    Some(view.race.id()),
-                    view.team,
-                ),
+                SlotKind::Ai => {
+                    // The seat carries the brain's declared vision and
+                    // detection: they are what the executor resolves the AI's
+                    // commands by.
+                    let (vision, detection) = ai::race_senses(view.race.id(), registry);
+                    PlayerSlot::occupied(
+                        id,
+                        PlayerType::Ai { vision, detection },
+                        Some(view.race.id()),
+                        view.team,
+                    )
+                }
                 SlotKind::Open | SlotKind::Closed => PlayerSlot::free(id),
             }
         })

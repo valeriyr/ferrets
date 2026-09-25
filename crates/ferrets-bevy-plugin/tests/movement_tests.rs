@@ -320,7 +320,7 @@ fn stop_ends_cell_walk_after_its_current_step() {
     // the route. The walk then has to *end* when that step lands: an emptied
     // path looks exactly like a spent corridor leg, and a walk that reads it as
     // one plans the whole journey again and carries on to the destination the
-    // player just cancelled.
+    // player just canceled.
     let mut app = utils::orders_app();
     utils::install_map(&mut app, Projection::Isometric, MovementModel::Cell);
     let (soldier, id) = utils::create_owned(&mut app, "soldier", 2, 2, 0);
@@ -346,7 +346,7 @@ fn stop_ends_cell_walk_after_its_current_step() {
     );
     assert!(
         utils::order_queue_is_empty(app.world_mut(), soldier),
-        "the cancelled walk is still queued"
+        "the canceled walk is still queued"
     );
 }
 

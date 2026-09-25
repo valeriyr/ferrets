@@ -7,7 +7,10 @@
 
 use bevy_ecs::prelude::*;
 
-use crate::{buffs_store::BuffsStore, session::player_id::PlayerId};
+use crate::{
+    buffs_store::{BuffsStore, Term},
+    session::player_id::PlayerId,
+};
 use ferrets_content::{player_buffs::PlayerBuffId, stack_rule::StackRule};
 
 /// The active buffs of all players in the session, indexed by [`PlayerId`] —
@@ -22,16 +25,10 @@ impl PlayerBuffs {
         Self(vec![BuffsStore::default(); player_count])
     }
 
-    /// Applies the buff `id` to `player` with the given lifetime, resolving
-    /// stacking against any active instance of the same id per `stack_rule`.
-    pub fn apply(
-        &mut self,
-        player: PlayerId,
-        id: PlayerBuffId,
-        stack_rule: StackRule,
-        duration: Option<u32>,
-    ) {
-        self.0[player as usize].apply(id, stack_rule, duration);
+    /// Applies the buff `id` to `player` for `term`, resolving stacking against
+    /// any active instance of the same id per `stack_rule`.
+    pub fn apply(&mut self, player: PlayerId, id: PlayerBuffId, stack_rule: StackRule, term: Term) {
+        self.0[player as usize].apply(id, stack_rule, term);
     }
 
     /// Removes every active instance of `id` from `player`. Returns `true` if
@@ -48,7 +45,11 @@ impl PlayerBuffs {
     /// Ages every player's timed buffs by one tick, dropping any that expire.
     pub(crate) fn tick_down(&mut self) {
         for buffs in &mut self.0 {
-            buffs.tick_down();
+            let due = buffs.tick_down();
+            assert!(
+                due.is_empty(),
+                "a player buff is applied for a time or forever, never on an upkeep"
+            );
         }
     }
 }

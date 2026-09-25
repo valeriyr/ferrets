@@ -1,18 +1,46 @@
-//! Fog of war — per-player cell visibility.
-//!
-//! A deterministic grid, one entry per cell per player, recomputed each tick
-//! from the sight of owned entities. Consumers (AI view, combat acquisition,
-//! rendering) read it through [`VisibilityGrid::is_visible_to`], which unions a
-//! player's own sight with that of its allies.
+//! Fog of war and sighting: the per-player cell visibility grid, and what a
+//! side makes of an entity given that grid, the entity's concealment and the
+//! side's detection.
 
 use bevy_ecs::prelude::*;
+use ferrets_content::{affiliation::Affiliation, entity_type_def::EntityTypeDef};
 
 use crate::{
-    components::location::LocationComponent,
+    components::{
+        concealed::ConcealedComponent, hidden::HiddenComponent, location::LocationComponent, owner,
+    },
+    entity_def,
     entity_index::EntityIndex,
-    session::{GameSession, ai_vision::AiVision, player_id::PlayerId, player_slot::PlayerSlot},
+    fields,
+    session::{
+        GameSession, ai_detection::AiDetection, ai_vision::AiVision, player_id::PlayerId,
+        player_slot::PlayerSlot,
+    },
     simulation_id::SimulationId,
+    watches,
 };
+
+/// What one side makes of one entity this tick.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sighting {
+    /// Nothing: the side's sight reaches no cell the entity stands on.
+    Unseen,
+    /// A presence and no more: the side's sight reaches the cell, but the
+    /// entity is concealed and the side's detection does not reach it.
+    Glimpsed,
+    /// The entity itself.
+    Seen,
+}
+
+impl Sighting {
+    /// Whether the sighting is the entity itself.
+    pub fn is_seen(self) -> bool {
+        match self {
+            Sighting::Seen => true,
+            Sighting::Unseen | Sighting::Glimpsed => false,
+        }
+    }
+}
 
 /// How much of a cell a player currently knows. Ordered least to most known, so
 /// a team's combined knowledge of a cell is the maximum over its members.
@@ -125,57 +153,138 @@ impl VisibilityGrid {
     }
 }
 
+/// Whose senses a sighting is judged by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Senses {
+    /// Ordinary sight and ordinary detectors: the rule every side acts under,
+    /// whatever its seat declares.
+    Ordinary,
+    /// The ones the player's seat declares, privilege included. A free seat
+    /// declares none, and makes out nothing.
+    SeatDeclared,
+    /// A pair named outright.
+    Given(AiVision, AiDetection),
+}
+
 /// Resolves `id` to an entity `player` may name in a command: interactable —
 /// alive and not hidden away inside something
-/// ([`EntityIndex::interactable`]) — and in the player's sight (see
-/// [`sees`]).
+/// ([`EntityIndex::interactable`]) — and sighted by what the player's seat
+/// declares, so a seat granted a privilege may name what it reaches.
 pub fn interactable_to(world: &World, player: PlayerId, id: SimulationId) -> Option<Entity> {
     let entity = world.resource::<EntityIndex>().interactable(world, id)?;
-    sees(world, player, entity).then_some(entity)
+    sees(world, player, entity, Senses::SeatDeclared).then_some(entity)
 }
 
-/// Whether `player` may look at `entity` at all: the fog that hides a sprite
-/// must hide its stats and refuse orders against it too.
+/// Resolves `id` to remains `player` may name in a command, the way
+/// [`interactable_to`] resolves a standing entity.
+pub fn remains_interactable_to(
+    world: &World,
+    player: PlayerId,
+    id: SimulationId,
+) -> Option<Entity> {
+    let remains = world.resource::<EntityIndex>().remains(id)?;
+    sees(world, player, remains, Senses::SeatDeclared).then_some(remains)
+}
+
+/// Whether `player` makes `entity` out in full, by `senses`.
+pub fn sees(world: &World, player: PlayerId, entity: Entity, senses: Senses) -> bool {
+    sighting(world, player, entity, senses).is_seen()
+}
+
+/// [`sees`] for an `entity` whose type `def` the caller already holds.
+pub fn sees_of(
+    world: &World,
+    player: PlayerId,
+    def: &EntityTypeDef,
+    entity: Entity,
+    senses: Senses,
+) -> bool {
+    sighting_of(world, player, def, entity, senses).is_seen()
+}
+
+/// What `player` makes of `entity` this tick, by `senses`.
 ///
-/// No ownership shortcut: own and allied entities pass through the same grid (a
-/// unit's sight covers the cell it stands on, and team vision is merged), so the
-/// grid stays the one truth.
-///
-/// A scripted player is gated by the vision its seat declares: a fog-limited
-/// brain lives under the same rule as a human, an omniscient one legitimately
-/// names what fog hides. The seat is session state, so every node (and a
-/// replay) resolves its commands identically.
-pub fn sees(world: &World, player: PlayerId, entity: Entity) -> bool {
-    match world
-        .resource::<GameSession>()
-        .slot(player)
-        .and_then(PlayerSlot::ai_vision)
-    {
-        // A seat with no brain behind it is a human's, and a human reads the
-        // fog like any other.
-        None | Some(AiVision::Filtered) => in_sight(world, player, entity),
-        Some(AiVision::Omniscient) => true,
-    }
+/// An entity off the map — aboard, inside a site or a mine — is unseen by
+/// everyone, its own side included, whatever the vision; a side sees its own
+/// and its allies' on-map entities wherever they stand. Sight, detection and a
+/// field's concealment each answer over every cell the entity occupies, and any
+/// one of them settles the question. Omniscient vision lifts the fog and
+/// nothing else: a concealed entity still needs detection to be made out.
+/// A free seat, or a player id with no seat, makes out nothing.
+pub fn sighting(world: &World, player: PlayerId, entity: Entity, senses: Senses) -> Sighting {
+    sighting_of(world, player, entity_def::of(world, entity), entity, senses)
 }
 
-/// Whether `player` may look at `entity` with the vision given, rather than the
-/// one its seat declares — what a view rendered as somebody else would show.
-pub fn sees_as(world: &World, player: PlayerId, entity: Entity, vision: AiVision) -> bool {
-    match vision {
-        AiVision::Omniscient => true,
-        AiVision::Filtered => in_sight(world, player, entity),
-    }
-}
-
-/// Whether `player`'s team's vision covers the cell `entity` stands on.
-fn in_sight(world: &World, player: PlayerId, entity: Entity) -> bool {
-    let Some(location) = world.entity(entity).get::<LocationComponent>() else {
-        return false;
+/// [`sighting`] for an `entity` whose type `def` the caller already holds.
+pub fn sighting_of(
+    world: &World,
+    player: PlayerId,
+    def: &EntityTypeDef,
+    entity: Entity,
+    senses: Senses,
+) -> Sighting {
+    let session = world.resource::<GameSession>();
+    let (vision, detection) = match senses {
+        Senses::Ordinary => (AiVision::Filtered, AiDetection::Detectors),
+        Senses::Given(vision, detection) => (vision, detection),
+        Senses::SeatDeclared => match session.slot(player).and_then(PlayerSlot::senses) {
+            Some(pair) => pair,
+            None => return Sighting::Unseen,
+        },
     };
-    world.resource::<VisibilityGrid>().is_visible_to(
-        world.resource::<GameSession>(),
-        player,
-        location.position.x.to_num::<u32>(),
-        location.position.y.to_num::<u32>(),
-    )
+
+    let entity_ref = world.entity(entity);
+    if !entity_ref.contains::<LocationComponent>() {
+        return Sighting::Unseen;
+    }
+    // Off the map — aboard, inside a site or a mine — nobody sees it, its own
+    // side included: the owner knows it from what holds it, not by sight.
+    if entity_ref.contains::<HiddenComponent>() {
+        return Sighting::Unseen;
+    }
+    if owner::admits(
+        session,
+        Affiliation::Allied,
+        Some(player),
+        entity_def::owner(world, entity),
+    ) {
+        return Sighting::Seen;
+    }
+    // Every cell the entity stands on answers, not one of them: a hall is lit
+    // when any of its cells is, and found when a detector reaches any of
+    // them. Sight is stamped from the same footprint.
+    let footprint = entity_def::occupied_rect_of(world, def, entity);
+    let lit = match vision {
+        AiVision::Omniscient => true,
+        AiVision::Filtered => {
+            let grid = world.resource::<VisibilityGrid>();
+            footprint
+                .cells()
+                .any(|cell| grid.is_visible_to(session, player, cell.x, cell.y))
+        }
+    };
+    if !lit {
+        return Sighting::Unseen;
+    }
+    if !entity_ref.contains::<ConcealedComponent>() {
+        return Sighting::Seen;
+    }
+    let detected = match detection {
+        AiDetection::Everywhere => true,
+        AiDetection::Detectors => {
+            let standing_on = def
+                .location
+                .expect("validated content stands somewhere")
+                .occupation();
+            footprint.cells().any(|cell| {
+                fields::detects(world, player, cell, standing_on)
+                    || watches::detects(world, player, cell, standing_on)
+            })
+        }
+    };
+    if detected {
+        Sighting::Seen
+    } else {
+        Sighting::Glimpsed
+    }
 }

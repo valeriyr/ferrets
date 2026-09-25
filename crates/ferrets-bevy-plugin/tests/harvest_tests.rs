@@ -245,7 +245,7 @@ fn boxed_in_cancel_defers_reveal_until_cell_frees() {
     // Box the worker in — every cell is occupied, so it has nowhere to reappear —
     // then cancel the harvest while it is still inside the mine.
     utils::set_all_cells_statically_occupied(app.world_mut(), true);
-    utils::stop_orders(app.world_mut(), worker);
+    utils::force_cancel_orders(app.world_mut(), worker);
     utils::run_ticks(&mut app, 1);
 
     // The cancel cannot retry itself, so rather than forcing an overlap it queues
@@ -351,7 +351,7 @@ fn worked_source_records_crew_until_last_carrier_leaves() {
     );
 
     // One of the pair stops. The other is still at work, so the stand keeps its crew.
-    utils::stop_orders(app.world_mut(), first);
+    utils::force_cancel_orders(app.world_mut(), first);
     utils::run_ticks(&mut app, 1);
     assert_eq!(
         crew_of(&app, tree),
@@ -360,7 +360,7 @@ fn worked_source_records_crew_until_last_carrier_leaves() {
     );
 
     // With nobody left on it the mark goes with the last carrier out.
-    utils::stop_orders(app.world_mut(), second);
+    utils::force_cancel_orders(app.world_mut(), second);
     utils::run_ticks(&mut app, 1);
     assert!(crew_of(&app, tree).is_none());
 }
@@ -901,7 +901,7 @@ fn attached_carrier_waits_for_free_berth() {
     );
 
     // The first is called off; its berth is the third's on the next tick.
-    utils::stop_orders(app.world_mut(), first);
+    utils::force_cancel_orders(app.world_mut(), first);
     utils::run_ticks(&mut app, 2);
     assert!(app.world().get::<AttachedComponent>(third).is_some());
     assert_eq!(utils::cell_of(app.world(), third), CellPos::new(8, 5));
@@ -1299,7 +1299,7 @@ fn stopped_attached_carrier_steps_back_beside_source() {
     utils::run_ticks(&mut app, utils::APPLY);
     assert!(app.world().get::<AttachedComponent>(sylph).is_some());
 
-    utils::stop_orders(app.world_mut(), sylph);
+    utils::force_cancel_orders(app.world_mut(), sylph);
     utils::run_ticks(&mut app, 1);
     assert!(app.world().get::<AttachedComponent>(sylph).is_none());
     assert!(app.world().get::<HarvestingComponent>(sylph).is_none());

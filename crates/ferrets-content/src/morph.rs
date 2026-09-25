@@ -1,7 +1,7 @@
 //! Content-defined in-place transitions: what an entity can become, and on
 //! what terms.
 
-use crate::{quantity::Quantity, requirement::Requirement, skills::EntityCastCost};
+use crate::{cost::Cost, quantity::Quantity, requirement::Requirement};
 
 /// When a transition secures the ground its destination form stands on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -16,6 +16,8 @@ pub enum MorphPlacement {
     /// The destination footprint is set down at completion on the nearest
     /// free cells to where the entity stands: the transition always starts,
     /// and fizzles only when nothing within the placement search radius fits.
+    /// Only a form that can move lands this way; the registry refuses it for
+    /// a static one.
     Nearby,
 }
 
@@ -27,7 +29,8 @@ pub enum MorphCancel {
     Committed,
     /// Can be called off, but whatever was paid stays paid.
     Forfeit,
-    /// Can be called off with a full refund of whatever was paid.
+    /// Gives back what it cost when its owner calls it off, and keeps it when
+    /// the change is taken away.
     Refundable,
 }
 
@@ -73,7 +76,7 @@ pub struct MorphTransition {
     reason: MorphReason,
     /// What starting the transition costs, drawn when it starts. Every arm is
     /// checked before any is paid. Empty means free.
-    costs: Vec<EntityCastCost>,
+    costs: Vec<Cost>,
     /// Requirements gating the transition, read the same way as a type's own
     /// [`requires`](crate::entity_type_def::EntityTypeDef::requires) list.
     /// Empty means always available.
@@ -93,7 +96,7 @@ impl MorphTransition {
         cancel: MorphCancel,
         interrupted: MorphInterrupted,
         reason: MorphReason,
-        costs: Vec<EntityCastCost>,
+        costs: Vec<Cost>,
         requires: impl IntoIterator<Item = Requirement>,
     ) -> Self {
         let into = into.into();
@@ -162,7 +165,7 @@ impl MorphTransition {
 
     /// What starting the transition costs.
     #[inline]
-    pub fn costs(&self) -> &[EntityCastCost] {
+    pub fn costs(&self) -> &[Cost] {
         &self.costs
     }
 

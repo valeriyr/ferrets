@@ -2,25 +2,21 @@
 
 use bevy::prelude::*;
 use ferrets_content::{
-    attack::{AttackDef, Delivery, Slain, Weapon},
-    costs::{self, Cost},
+    cost::Cost,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     location::Solidity,
+    price::{self, Price},
     registry::ContentRegistry,
     requirement::Requirement,
     research::ResearchDef,
-    skills::{
-        Casting, EntityCastCost, EntityCastEffect, EntityCastTarget, Reach, SkillCaster, SkillDef,
-        SkillId,
-    },
+    skills::{Casting, EntityCastEffect, EntityCastTarget, Reach, SkillCaster, SkillDef},
     stats::ModifierOp,
 };
 use ferrets_geometry::cell_size::CellSize;
 use ferrets_math::FixedU64;
 use ferrets_simulation::{
-    command::{PlayerCommand, SkillCasterRef},
-    components::energy::EnergyComponent,
+    command::SkillCasterRef,
     player_research::PlayerResearch,
     session::{GameSession, player_slot::PlayerSlot, player_type::PlayerType},
 };
@@ -36,21 +32,13 @@ fn using_skill_applies_effect_and_spends_energy() {
     let mut app = app();
     let (mage, mage_id) =
         utils::create_entity(app.world_mut(), "mage", utils::pos(5, 5), Some(0)).unwrap();
-
-    let battle_focus = app
-        .world()
-        .resource::<ContentRegistry>()
-        .skill("battle_focus")
-        .expect("skill defined");
     let base = utils::effective_damage(&app, mage);
 
-    utils::push_command(
+    utils::use_skill(
         &mut app,
-        PlayerCommand::UseSkill {
-            skill: battle_focus,
-            caster: SkillCasterRef::Entity(mage_id),
-            target: None,
-        },
+        "battle_focus",
+        SkillCasterRef::Entity(mage_id),
+        None,
     );
     utils::run_ticks(&mut app, 5);
 
@@ -62,7 +50,7 @@ fn using_skill_applies_effect_and_spends_energy() {
     // 100 full − 30 cost, then +1 regen on the cast tick and each of the two
     // after it: regen runs after the spend within the same tick.
     assert_eq!(
-        energy(&app, mage),
+        utils::energy(&app, mage),
         FixedU64::from_num(73),
         "the cast spent exactly its 30-point cost"
     );
@@ -78,17 +66,8 @@ fn skill_with_resource_cost_pays_stockpile() {
     let (mage, mage_id) =
         utils::create_entity(app.world_mut(), "mage", utils::pos(5, 5), Some(0)).unwrap();
     utils::grant_gold(&mut app, 30);
-
-    let rally = skill(&app, "rally");
     let base = utils::effective_damage(&app, mage);
-    utils::push_command(
-        &mut app,
-        PlayerCommand::UseSkill {
-            skill: rally,
-            caster: SkillCasterRef::Entity(mage_id),
-            target: None,
-        },
-    );
+    utils::use_skill(&mut app, "rally", SkillCasterRef::Entity(mage_id), None);
     utils::run_ticks(&mut app, 5);
 
     assert_eq!(
@@ -109,17 +88,8 @@ fn skill_with_unaffordable_resource_cost_is_refused() {
     let (mage, mage_id) =
         utils::create_entity(app.world_mut(), "mage", utils::pos(5, 5), Some(0)).unwrap();
     utils::grant_gold(&mut app, 10);
-
-    let rally = skill(&app, "rally");
     let base = utils::effective_damage(&app, mage);
-    utils::push_command(
-        &mut app,
-        PlayerCommand::UseSkill {
-            skill: rally,
-            caster: SkillCasterRef::Entity(mage_id),
-            target: None,
-        },
-    );
+    utils::use_skill(&mut app, "rally", SkillCasterRef::Entity(mage_id), None);
     utils::run_ticks(&mut app, 5);
 
     assert_eq!(
@@ -139,17 +109,8 @@ fn skill_with_health_cost_pays_health() {
     let mut app = app();
     let (mage, mage_id) =
         utils::create_entity(app.world_mut(), "mage", utils::pos(5, 5), Some(0)).unwrap();
-
-    let sacrifice = skill(&app, "sacrifice");
     let base = utils::effective_damage(&app, mage);
-    utils::push_command(
-        &mut app,
-        PlayerCommand::UseSkill {
-            skill: sacrifice,
-            caster: SkillCasterRef::Entity(mage_id),
-            target: None,
-        },
-    );
+    utils::use_skill(&mut app, "sacrifice", SkillCasterRef::Entity(mage_id), None);
     utils::run_ticks(&mut app, 5);
 
     assert_eq!(
@@ -172,16 +133,8 @@ fn skill_with_lethal_health_cost_is_refused() {
 
     // The cost equals the mage's full health: surviving on zero is not
     // surviving, so the cast is refused.
-    let last_rite = skill(&app, "last_rite");
     let base = utils::effective_damage(&app, mage);
-    utils::push_command(
-        &mut app,
-        PlayerCommand::UseSkill {
-            skill: last_rite,
-            caster: SkillCasterRef::Entity(mage_id),
-            target: None,
-        },
-    );
+    utils::use_skill(&mut app, "last_rite", SkillCasterRef::Entity(mage_id), None);
     utils::run_ticks(&mut app, 5);
 
     assert_eq!(
@@ -205,18 +158,14 @@ fn skill_requirement_gates_cast() {
     let mut app = app();
     let (mage, mage_id) =
         utils::create_entity(app.world_mut(), "mage", utils::pos(5, 5), Some(0)).unwrap();
-
-    let war_secret = skill(&app, "war_secret");
     let base = utils::effective_damage(&app, mage);
 
     // Before the research, the cast is refused outright.
-    utils::push_command(
+    utils::use_skill(
         &mut app,
-        PlayerCommand::UseSkill {
-            skill: war_secret,
-            caster: SkillCasterRef::Entity(mage_id),
-            target: None,
-        },
+        "war_secret",
+        SkillCasterRef::Entity(mage_id),
+        None,
     );
     utils::run_ticks(&mut app, 5);
     assert_eq!(
@@ -235,13 +184,11 @@ fn skill_requirement_gates_cast() {
         .resource_mut::<PlayerResearch>()
         .mark_completed(0, arcana);
 
-    utils::push_command(
+    utils::use_skill(
         &mut app,
-        PlayerCommand::UseSkill {
-            skill: war_secret,
-            caster: SkillCasterRef::Entity(mage_id),
-            target: None,
-        },
+        "war_secret",
+        SkillCasterRef::Entity(mage_id),
+        None,
     );
     utils::run_ticks(&mut app, 5);
     assert_eq!(
@@ -287,22 +234,24 @@ fn app() -> App {
         };
         let battle_focus = registry.register_skill(
             "battle_focus",
-            costed(vec![EntityCastCost::Energy(FixedU64::from_num(30))]),
+            costed(vec![Cost::Energy(FixedU64::from_num(30))]),
         );
         let rally = registry.register_skill(
             "rally",
-            costed(vec![EntityCastCost::Resources(costs::cost([("gold", 25)]))]),
+            costed(vec![Cost::Resources(price::from([("gold", 25)]))]),
         );
         let sacrifice = registry.register_skill(
             "sacrifice",
-            costed(vec![EntityCastCost::Health(FixedU64::from_num(10))]),
+            costed(vec![Cost::Health(FixedU64::from_num(10))]),
         );
         let last_rite = registry.register_skill(
             "last_rite",
-            costed(vec![EntityCastCost::Health(FixedU64::from_num(50))]),
+            costed(vec![Cost::Health(FixedU64::from_num(50))]),
         );
-        let arcana = registry
-            .register_research("arcana", ResearchDef::new(Cost::new(), 5, None, Vec::new()));
+        let arcana = registry.register_research(
+            "arcana",
+            ResearchDef::new(Price::new(), 5, None, Vec::new()),
+        );
         let war_secret = registry.register_skill(
             "war_secret",
             SkillDef {
@@ -314,19 +263,7 @@ fn app() -> App {
             EntityTypeDef::new("mage")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
                 .with_health(50)
-                .with_attack(
-                    AttackDef::new(Weapon::new(
-                        utils::GROUND,
-                        Delivery::Instant,
-                        None,
-                        Slain::Remains,
-                    )),
-                    10,
-                    1,
-                    1,
-                    4,
-                    2,
-                )
+                .with_attack(utils::weapon(utils::GROUND), 10, 1, 1, 4, 2)
                 .with_energy(100, FixedU64::from_num(1))
                 .with_skills([battle_focus, rally, sacrifice, last_rite, war_secret]),
         );
@@ -334,19 +271,4 @@ fn app() -> App {
     app.world_mut().resource::<ContentRegistry>().validate();
     app.world_mut().resource_mut::<GameSession>().start();
     app
-}
-
-/// The registered id of `name`.
-fn skill(app: &App, name: &str) -> SkillId {
-    app.world()
-        .resource::<ContentRegistry>()
-        .skill(name)
-        .expect("skill defined")
-}
-
-fn energy(app: &App, entity: Entity) -> FixedU64 {
-    app.world()
-        .get::<EnergyComponent>(entity)
-        .unwrap()
-        .current()
 }

@@ -14,9 +14,10 @@ use ferrets_content::{
     berths::BerthGroup,
     brood::{Lingering, OrphanFate},
     build::BuilderAttendance,
-    costs,
+    cost::Cost,
     dying::{Bequest, LeftBy},
-    entity_buffs::{EntityBuffDef, EntityBuffId},
+    entity_buffs::{EntityBuffDef, EntityBuffId, Lasting},
+    entity_effect::EntityEffect,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     field::FieldId,
@@ -24,13 +25,14 @@ use ferrets_content::{
     location::Solidity,
     morph::{MorphCancel, MorphInterrupted, MorphPlacement, MorphReason, MorphTransition},
     player_buffs::PlayerBuffDef,
+    price,
     projectile::{Aim, ProjectileDef},
     quantity::Quantity,
     registry::ContentRegistry,
     requirement::Requirement,
     research::{ResearchDef, ResearchId},
     resource::{Banking, DepletionPolicy, HarvestData},
-    skills::{EntityCastCost, PlayerCastEffect, SkillCaster, SkillDef},
+    skills::{PlayerCastEffect, SkillCaster, SkillDef, SkillId},
     splash::{SplashDef, SplashShape},
     stack_rule::StackRule,
     stats::{EntityModifier, ModifierOp},
@@ -62,8 +64,9 @@ use ferrets_replay::{
     recorder::Recorder,
 };
 use ferrets_simulation::{
-    command::{PlayerCommand, SelectMode},
+    command::{PlayerCommand, SelectMode, SkillCasterRef, SkillTarget},
     components::{
+        energy::EnergyComponent,
         entity_info::EntityInfoComponent,
         entity_stats::StatsComponent,
         health::HealthComponent,
@@ -82,7 +85,7 @@ use ferrets_simulation::{
     input::{InputFrames, PlayerFrame},
     map::Map,
     movement_model::MovementModel,
-    order::AttackTarget,
+    order::{AttackTarget, Order},
     resources::PlayerResources,
     ruleset::{RemainsLimit, Ruleset},
     selection::Selection,
@@ -115,6 +118,20 @@ pub fn weapon(targets: impl Into<LayerMask>) -> AttackDef {
         None,
         Slain::Remains,
     ))
+}
+
+/// A one-cell solid mover named `name` on `occupation`: half a cell a tick,
+/// turning on the spot. No health, sight or weapon of its own.
+pub fn walker(name: &str, occupation: impl Into<LayerMask>) -> EntityTypeDef {
+    EntityTypeDef::new(name)
+        .with_location(occupation, CellSize::ONE, Solidity::Solid)
+        .with_movement(
+            FixedU64::from_num(0.5),
+            FixedU64::from_num(0.5),
+            FixedU64::ONE,
+            FixedU64::from_num(360),
+            FixedU64::from_num(360),
+        )
 }
 
 /// Creates an app with the simulation plugin on a 32×32 single-layer map,
@@ -503,7 +520,7 @@ pub fn morph_app(model: MovementModel) -> App {
                 )
                 .with_health(30)
                 .with_dying(2, [])
-                .with_cost([("gold", 10)])
+                .with_price([("gold", 10)])
                 .with_train_time(20)
                 .with_morphs([
                     MorphTransition::new(
@@ -547,7 +564,7 @@ pub fn morph_app(model: MovementModel) -> App {
                         MorphCancel::Committed,
                         MorphInterrupted::Reverts,
                         MorphReason::Change,
-                        vec![EntityCastCost::Health(FixedU64::from_num(10))],
+                        vec![Cost::Health(FixedU64::from_num(10))],
                         Vec::new(),
                     ),
                     MorphTransition::new(
@@ -571,7 +588,7 @@ pub fn morph_app(model: MovementModel) -> App {
                         MorphCancel::Refundable,
                         MorphInterrupted::Reverts,
                         MorphReason::Change,
-                        vec![EntityCastCost::Resources(costs::cost([("gold", 10)]))],
+                        vec![Cost::Resources(price::from([("gold", 10)]))],
                         Vec::new(),
                     ),
                 ]),
@@ -914,7 +931,7 @@ pub fn brood_app(model: MovementModel) -> App {
                         MorphCancel::Refundable,
                         MorphInterrupted::Reverts,
                         MorphReason::Production,
-                        vec![EntityCastCost::Resources(costs::cost([("gold", 10)]))],
+                        vec![Cost::Resources(price::from([("gold", 10)]))],
                         Vec::new(),
                     ),
                     MorphTransition::new(
@@ -925,7 +942,7 @@ pub fn brood_app(model: MovementModel) -> App {
                         MorphCancel::Refundable,
                         MorphInterrupted::Reverts,
                         MorphReason::Change,
-                        vec![EntityCastCost::Resources(costs::cost([("gold", 10)]))],
+                        vec![Cost::Resources(price::from([("gold", 10)]))],
                         [Requirement::EntityType("den".to_string())],
                     ),
                     MorphTransition::new(
@@ -936,7 +953,7 @@ pub fn brood_app(model: MovementModel) -> App {
                         MorphCancel::Refundable,
                         MorphInterrupted::Reverts,
                         MorphReason::Change,
-                        vec![EntityCastCost::Resources(costs::cost([("gold", 10)]))],
+                        vec![Cost::Resources(price::from([("gold", 10)]))],
                         Vec::new(),
                     ),
                     MorphTransition::new(
@@ -947,7 +964,7 @@ pub fn brood_app(model: MovementModel) -> App {
                         MorphCancel::Refundable,
                         MorphInterrupted::Dies,
                         MorphReason::Change,
-                        vec![EntityCastCost::Resources(costs::cost([("gold", 10)]))],
+                        vec![Cost::Resources(price::from([("gold", 10)]))],
                         Vec::new(),
                     ),
                     MorphTransition::new(
@@ -958,7 +975,7 @@ pub fn brood_app(model: MovementModel) -> App {
                         MorphCancel::Refundable,
                         MorphInterrupted::Reverts,
                         MorphReason::Change,
-                        vec![EntityCastCost::Resources(costs::cost([("gold", 10)]))],
+                        vec![Cost::Resources(price::from([("gold", 10)]))],
                         Vec::new(),
                     ),
                     MorphTransition::new(
@@ -969,7 +986,7 @@ pub fn brood_app(model: MovementModel) -> App {
                         MorphCancel::Refundable,
                         MorphInterrupted::Dies,
                         MorphReason::Change,
-                        vec![EntityCastCost::Resources(costs::cost([("gold", 10)]))],
+                        vec![Cost::Resources(price::from([("gold", 10)]))],
                         Vec::new(),
                     ),
                 ]),
@@ -1022,7 +1039,7 @@ pub fn brood_app(model: MovementModel) -> App {
                     MorphCancel::Refundable,
                     MorphInterrupted::Reverts,
                     MorphReason::Change,
-                    vec![EntityCastCost::Resources(costs::cost([("gold", 10)]))],
+                    vec![Cost::Resources(price::from([("gold", 10)]))],
                     vec![],
                 )]),
         );
@@ -1085,6 +1102,43 @@ pub fn run_ticks(app: &mut App, ticks: u32) {
     }
 }
 
+/// Runs `ticks` fixed updates feeding idle frames the way [`run_ticks`]
+/// does, except that `player`'s frame at tick `at` carries `commands` — the
+/// one way to issue commands as a non-local player, whose input never flows
+/// through `PendingInput`.
+pub fn run_ticks_commanding(
+    app: &mut App,
+    ticks: u32,
+    player: PlayerId,
+    at: u32,
+    commands: Vec<PlayerCommand>,
+) {
+    let mut commands = Some(commands);
+    for _ in 0..ticks {
+        let world = app.world_mut();
+        let (current_tick, local_player, players) = {
+            let session = world.resource::<GameSession>();
+            let players: Vec<PlayerId> = session.slots().iter().map(|slot| slot.id()).collect();
+            (session.tick(), session.local_player(), players)
+        };
+        for other in players {
+            if Some(other) == local_player {
+                continue;
+            }
+            let frame = match commands.take_if(|_| other == player && current_tick == at) {
+                Some(commands) => PlayerFrame {
+                    player,
+                    tick: current_tick,
+                    commands,
+                },
+                None => PlayerFrame::idle(other, current_tick),
+            };
+            world.resource_mut::<InputFrames>().push_frame(frame);
+        }
+        world.run_schedule(FixedUpdate);
+    }
+}
+
 /// Runs exactly `steps` fixed updates without synthesizing any input frames —
 /// for suites whose registered frame sources already feed every slot.
 pub fn run_steps(app: &mut App, steps: u32) {
@@ -1099,16 +1153,57 @@ pub fn order_queue_is_empty(world: &mut World, entity: Entity) -> bool {
         .is_some_and(|q| q.front().is_none())
 }
 
-/// Force-cancels everything `entity` is doing, standing in for a stop command.
+/// Force-cancels everything `entity` is doing, standing in for what takes an
+/// order away rather than calls it off: a death, a field switching the entity
+/// off, a transport pulling it aboard. Nothing is paid back.
 ///
-/// Not routed through `PlayerCommand::Stop`, because that reaches the selection and a
-/// worker off the map cannot be selected — a hidden builder or a carrier down a mine is
-/// exactly what these suites need to stop.
-pub fn stop_orders(world: &mut World, entity: Entity) {
+/// Not routed through a command, because the ones that force a queue reach it
+/// through the entity's own fate, and a worker off the map cannot be selected —
+/// a hidden builder or a carrier down a mine is exactly what these suites need
+/// to stop.
+pub fn force_cancel_orders(world: &mut World, entity: Entity) {
     world
         .get_mut::<OrderQueueComponent>(entity)
         .expect("simulation entities carry an order queue")
         .cancel_all(CancelPolicy::Force);
+}
+
+/// Softly cancels everything `entity` is doing, standing in for the player
+/// calling it off: each order answers for itself — a refundable change of form
+/// gives its price back, and nothing else pays anything.
+///
+/// Not routed through `PlayerCommand::Stop`, because that reaches the selection
+/// and a worker off the map cannot be selected.
+pub fn soft_cancel_orders(world: &mut World, entity: Entity) {
+    world
+        .get_mut::<OrderQueueComponent>(entity)
+        .expect("simulation entities carry an order queue")
+        .cancel_all(CancelPolicy::Soft);
+}
+
+/// Pushes a Morph order into `type_name` onto the entity's queue.
+pub fn order_morph(app: &mut App, entity: Entity, type_name: &str) {
+    app.world_mut()
+        .entity_mut(entity)
+        .get_mut::<OrderQueueComponent>()
+        .expect("simulation entities carry an order queue")
+        .push(
+            Order::Morph {
+                type_name: type_name.to_string(),
+            },
+            None,
+        );
+}
+
+/// Orders `trainer` to train one settler of [`supply_app`].
+pub fn train_settler(app: &mut App, trainer: SimulationId) {
+    push_command(
+        app,
+        PlayerCommand::TrainEntity {
+            trainer,
+            type_name: "settler".into(),
+        },
+    );
 }
 
 /// Asserts `entity` has been despawned: looking it up fails specifically because
@@ -1276,6 +1371,14 @@ pub fn current_health(app: &App, entity: Entity) -> FixedU64 {
         .current()
 }
 
+/// The entity's exact remaining energy, unrounded.
+pub fn energy(app: &App, entity: Entity) -> FixedU64 {
+    app.world()
+        .get::<EnergyComponent>(entity)
+        .expect("the entity carries an energy pool")
+        .current()
+}
+
 /// Removes `amount` health points directly, standing in for damage taken.
 pub fn wound(app: &mut App, entity: Entity, amount: &str) {
     app.world_mut()
@@ -1313,13 +1416,17 @@ pub fn register_entity_buff(
         .register_entity_buff(
             name,
             EntityBuffDef {
-                modifiers: vec![EntityModifier {
+                effects: vec![EntityEffect::Modifiers(vec![EntityModifier {
                     stat,
                     op,
                     magnitude: signed_fixed(magnitude),
-                }],
-                duration,
+                }])],
+                lasting: match duration {
+                    Some(ticks) => Lasting::For(ticks),
+                    None => Lasting::Forever,
+                },
                 stack_rule: StackRule::Refresh,
+                interrupted_by: Vec::new(),
             },
         )
 }
@@ -1887,7 +1994,7 @@ pub fn supply_app() -> App {
                 .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
                 .with_health(100)
                 .with_dying(2, [])
-                .with_cost([("gold", 20)])
+                .with_price([("gold", 20)])
                 .with_build_time(10)
                 .with_stat(EntityStatId::SUPPLY_PROVIDED, FixedU64::from_num(8)),
         );
@@ -1904,7 +2011,7 @@ pub fn supply_app() -> App {
                 )
                 .with_health(20)
                 .with_dying(2, [])
-                .with_cost([("gold", 10)])
+                .with_price([("gold", 10)])
                 .with_train_time(10)
                 .with_stat(EntityStatId::SUPPLY_COST, FixedU64::ONE),
         );
@@ -1986,7 +2093,7 @@ pub fn player_effects_app() -> App {
             SkillDef {
                 cooldown: 20,
                 caster: SkillCaster::Player {
-                    cost: costs::cost([("gold", 10)]),
+                    price: price::from([("gold", 10)]),
                     effect: PlayerCastEffect::ApplyBuff(drums_haste),
                 },
                 requires: Vec::new(),
@@ -2004,7 +2111,12 @@ pub fn player_effects_app() -> App {
 /// `halberdier` gated on the `smithing` research, and a `knight` gated on the
 /// "workshop" tag — one human player, session started.
 pub fn research_app() -> App {
-    let mut app = make_app(vec![PlayerSlot::occupied(0, PlayerType::Human, None, None)]);
+    research_app_seating(vec![PlayerSlot::occupied(0, PlayerType::Human, None, None)])
+}
+
+/// [`research_app`] seating `slots`.
+pub fn research_app_seating(slots: Vec<PlayerSlot>) -> App {
+    let mut app = make_app(slots);
     {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
         registry.register_resource("gold");
@@ -2025,7 +2137,7 @@ pub fn research_app() -> App {
         let smithing = registry.register_research(
             "smithing",
             ResearchDef::new(
-                costs::cost([("gold", 30)]),
+                price::from([("gold", 30)]),
                 10,
                 Some(sharp_blades),
                 Vec::new(),
@@ -2034,11 +2146,17 @@ pub fn research_app() -> App {
         let tactics = registry.register_research(
             "tactics",
             ResearchDef::new(
-                costs::cost([("gold", 20)]),
+                price::from([("gold", 20)]),
                 10,
                 None,
                 [Requirement::Research(smithing)],
             ),
+        );
+        // Gated by nothing, so a lab can hold it behind another topic and a
+        // cancel can reach an entry that has not started.
+        let masonry = registry.register_research(
+            "masonry",
+            ResearchDef::new(price::from([("gold", 20)]), 10, None, Vec::new()),
         );
         let soldier = |name: &str| {
             EntityTypeDef::new(name)
@@ -2053,7 +2171,7 @@ pub fn research_app() -> App {
                 .with_health(30)
                 .with_dying(2, [])
                 .with_attack(weapon(GROUND), 10, 1, 1, 4, 2)
-                .with_cost([("gold", 10)])
+                .with_price([("gold", 10)])
                 .with_train_time(5)
         };
         registry.register(soldier("pikeman"));
@@ -2065,7 +2183,7 @@ pub fn research_app() -> App {
                 .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
                 .with_health(100)
                 .with_dying(2, [])
-                .with_researcher([smithing, tactics])
+                .with_researcher([smithing, tactics, masonry])
                 .with_tags(["workshop"]),
         );
         registry.register(
@@ -2119,7 +2237,7 @@ pub fn annex_app() -> App {
         assert_eq!(registry.register_layer(AIR_LAYER), AIR);
         let signals = registry.register_research(
             "signals",
-            ResearchDef::new(costs::cost([("gold", 10)]), 20, None, Vec::new()),
+            ResearchDef::new(price::from([("gold", 10)]), 20, None, Vec::new()),
         );
         let annexes = [
             "lookout",
@@ -2214,9 +2332,10 @@ pub fn annex_app() -> App {
                 .with_sight_range(6)
                 .with_dying(2, [])
                 .with_tags(["building"])
-                .with_cost([("gold", 10)])
+                .with_price([("gold", 10)])
                 .with_build_time(4)
                 .with_researcher([signals])
+                .with_trainer(["signaler"])
                 .with_annex(
                     AloneConduct::Standing {
                         work: AnnexWork::Idles,
@@ -2235,7 +2354,7 @@ pub fn annex_app() -> App {
                 .with_health(40)
                 .with_dying(2, [])
                 .with_tags(["building"])
-                .with_cost([("gold", 10)])
+                .with_price([("gold", 10)])
                 .with_build_time(12)
                 .with_annex(
                     AloneConduct::Standing {
@@ -2251,7 +2370,7 @@ pub fn annex_app() -> App {
                 .with_health(30)
                 .with_dying(2, [])
                 .with_tags(["building"])
-                .with_cost([("gold", 10)])
+                .with_price([("gold", 10)])
                 .with_build_time(4)
                 .with_annex(AloneConduct::Razed, AnnexClaim::Bound),
         );
@@ -2264,7 +2383,7 @@ pub fn annex_app() -> App {
                 .with_stat(EntityStatId::HEALTH_DRAIN, FixedU64::ZERO)
                 .with_dying(2, [])
                 .with_tags(["building"])
-                .with_cost([("gold", 10)])
+                .with_price([("gold", 10)])
                 .with_build_time(4)
                 .with_annex(
                     AloneConduct::Standing {
@@ -2284,7 +2403,7 @@ pub fn annex_app() -> App {
                 .with_health(60)
                 .with_dying(2, [])
                 .with_tags(["building"])
-                .with_cost([("gold", 10)])
+                .with_price([("gold", 10)])
                 .with_build_time(4)
                 .with_annex(
                     AloneConduct::Standing {
@@ -2302,7 +2421,7 @@ pub fn annex_app() -> App {
                 .with_health(60)
                 .with_dying(2, [])
                 .with_tags(["building"])
-                .with_cost([("gold", 10)])
+                .with_price([("gold", 10)])
                 .with_build_time(4)
                 .with_annex(
                     AloneConduct::Standing {
@@ -2321,7 +2440,7 @@ pub fn annex_app() -> App {
                 .with_health(60)
                 .with_dying(2, [])
                 .with_tags(["building"])
-                .with_cost([("gold", 10)])
+                .with_price([("gold", 10)])
                 .with_build_time(4)
                 .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
                 .with_builder(
@@ -2345,7 +2464,7 @@ pub fn annex_app() -> App {
                 .with_health(60)
                 .with_dying(2, [])
                 .with_tags(["building"])
-                .with_cost([("gold", 10)])
+                .with_price([("gold", 10)])
                 .with_build_time(4)
                 .with_annex(
                     AloneConduct::Standing {
@@ -2368,11 +2487,20 @@ pub fn annex_app() -> App {
                 )
                 .with_health(20)
                 .with_dying(2, [])
-                .with_cost([("gold", 10)])
+                .with_price([("gold", 10)])
                 // Shorter than the lookout's build time, so a unit that trained
                 // alongside the annex instead of behind it would be out while
                 // the annex was still going up.
                 .with_train_time(2),
+        );
+        // What the lookout trains: slow enough that an entry is still in the
+        // queue when a primary lifts off and a rival lands in its place.
+        registry.register(
+            walker("signaler", GROUND)
+                .with_health(20)
+                .with_dying(2, [])
+                .with_price([("gold", 10)])
+                .with_train_time(40),
         );
         registry.register(
             EntityTypeDef::new("sentry")
@@ -2386,7 +2514,7 @@ pub fn annex_app() -> App {
                 )
                 .with_health(30)
                 .with_dying(2, [])
-                .with_cost([("gold", 10)])
+                .with_price([("gold", 10)])
                 .with_train_time(4)
                 .with_requires([Requirement::Annexed("lookout".to_string())]),
         );
@@ -2711,6 +2839,28 @@ pub fn research_id(app: &App, name: &str) -> ResearchId {
         .unwrap_or_else(|| panic!("research '{name}' is registered"))
 }
 
+/// The handle the given skill name resolves to in the app's registry.
+pub fn skill_id(app: &App, name: &str) -> SkillId {
+    app.world()
+        .resource::<ContentRegistry>()
+        .skill(name)
+        .unwrap_or_else(|| panic!("skill '{name}' is registered"))
+}
+
+/// Has the local player cast the named skill from `caster` at `target`; the
+/// cast lands once the command's input delay has run.
+pub fn use_skill(app: &mut App, skill: &str, caster: SkillCasterRef, target: Option<SkillTarget>) {
+    let skill = skill_id(app, skill);
+    push_command(
+        app,
+        PlayerCommand::UseSkill {
+            skill,
+            caster,
+            target,
+        },
+    );
+}
+
 /// The entity's speed stat after the tick's modifier fold — what the
 /// player-effect suites compare before and after an owner-wide modifier.
 pub fn effective_speed(app: &App, entity: Entity) -> FixedU64 {
@@ -2751,7 +2901,7 @@ pub fn register_orders_content(app: &mut App) {
                 .with_health(30)
                 .with_dying(2, [])
                 .with_attack(weapon(GROUND), 10, 1, 1, 4, 2)
-                .with_cost([("gold", 30)])
+                .with_price([("gold", 30)])
                 .with_train_time(4),
         );
         // A wide continuous mover: 2x2 footprint with the largest legal body
@@ -2793,7 +2943,7 @@ pub fn register_orders_content(app: &mut App) {
                 .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
                 .with_health(100)
                 .with_dying(2, [])
-                .with_cost([("gold", 50)])
+                .with_price([("gold", 50)])
                 .with_build_time(6)
                 .with_resource_storage(["gold", "wood"])
                 .with_berths([(
@@ -2822,7 +2972,7 @@ pub fn register_orders_content(app: &mut App) {
                 )
                 .with_health(20)
                 .with_dying(2, [])
-                .with_cost([("gold", 10)])
+                .with_price([("gold", 10)])
                 .with_train_time(2)
                 .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
                 .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
@@ -3046,9 +3196,29 @@ pub fn register_orders_content(app: &mut App) {
                 .with_sight_range(8)
                 .with_health(100)
                 .with_dying(2, [])
-                .with_cost([("gold", 40)])
+                .with_price([("gold", 40)])
                 .with_build_time(4)
                 .with_trainer(["soldier"]),
+        );
+        // Twenty ticks to train, where the soldier takes four: long enough that
+        // a cancel aimed at the entry in progress lands while it is still under
+        // way, and that the entry behind it can be watched starting over.
+        registry.register(
+            walker("recruit", GROUND)
+                .with_health(30)
+                .with_dying(1, [])
+                .with_price([("gold", 30)])
+                .with_train_time(20),
+        );
+        registry.register(
+            EntityTypeDef::new("academy")
+                .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
+                .with_sight_range(8)
+                .with_health(100)
+                .with_dying(2, [])
+                .with_price([("gold", 40)])
+                .with_build_time(4)
+                .with_trainer(["recruit"]),
         );
         // A plain obstacle, for walling sources off.
         registry.register(
@@ -3427,7 +3597,7 @@ pub fn register_orders_content(app: &mut App) {
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
                 .with_health(100)
                 .with_dying(2, [])
-                .with_cost([("gold", 20)])
+                .with_price([("gold", 20)])
                 .with_build_time(20)
                 .with_tags(["building"])
                 .with_resource_source("gold", DepletionPolicy::Destroy)
@@ -3479,7 +3649,7 @@ pub fn register_orders_content(app: &mut App) {
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
                 .with_health(100)
                 .with_dying(2, [])
-                .with_cost([("gold", 20)])
+                .with_price([("gold", 20)])
                 .with_build_time(20)
                 .with_tags(["building"])
                 .with_resource_source("gold", DepletionPolicy::Destroy)

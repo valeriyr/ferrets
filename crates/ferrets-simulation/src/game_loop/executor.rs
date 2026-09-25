@@ -21,7 +21,7 @@ use crate::{
         rally::{RallyPointComponent, RallyTarget},
         stance::StanceComponent,
         tags::TagsComponent,
-        train::TrainQueueComponent,
+        train::{TrainComponent, TrainQueueComponent},
     },
     control_groups::{CONTROL_GROUP_COUNT, ControlGroups},
     entity_def,
@@ -269,8 +269,15 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
                 CancelPolicy::from_bool(*flush),
             );
         }
-        PlayerCommand::CancelBuild { site } => build::cancel_site(world, player, *site),
-        PlayerCommand::CancelMorph { entity } => morph::cancel_change(world, player, *entity),
+        PlayerCommand::CancelTrain { trainer, slot } => {
+            cancel_train(world, player, *trainer, *slot)
+        }
+        PlayerCommand::CancelResearch {
+            researcher,
+            research,
+        } => cancel_research(world, player, *researcher, *research),
+        PlayerCommand::CancelBuild { site } => cancel_build(world, player, *site),
+        PlayerCommand::CancelMorph { entity } => cancel_morph(world, player, *entity),
         PlayerCommand::Repair { target, flush } => {
             if visibility::interactable_to(world, player, *target).is_none() {
                 return;
@@ -468,8 +475,8 @@ fn assist_construction(world: &World, entity: Entity, target: Entity) -> Option<
     })
 }
 
-/// Validates and executes a train command: pays the cost up front and enqueues
-/// the unit; production refunds on a force cancel.
+/// Validates and executes a train command: pays the price up front and enqueues
+/// the unit; a cancel aimed at the slot pays it back.
 fn train_entity(world: &mut World, player: PlayerId, trainer: SimulationId, type_name: &str) {
     let Some(entity) = find_owned_interactable(world, player, trainer) else {
         return;
@@ -485,13 +492,13 @@ fn train_entity(world: &mut World, player: PlayerId, trainer: SimulationId, type
         return;
     }
 
-    let Some((cost, supply_ok, requirements_ok)) = world
+    let Some((price, supply_ok, requirements_ok)) = world
         .resource::<ContentRegistry>()
         .entity(type_name)
         .filter(|def| def.train_time.is_some())
         .map(|def| {
             (
-                def.cost.clone(),
+                def.price.clone(),
                 supply::allows(world, player, def),
                 requirements::met(world, player, Some(entity), &def.requires),
             )
@@ -499,7 +506,7 @@ fn train_entity(world: &mut World, player: PlayerId, trainer: SimulationId, type
     else {
         return;
     };
-    // Supply is reserved here, where the resource cost is paid: the queue entry
+    // Supply is reserved here, where the price is paid: the queue entry
     // holds it from this moment and hands it to the unit it becomes.
     if !supply_ok {
         return;
@@ -511,11 +518,11 @@ fn train_entity(world: &mut World, player: PlayerId, trainer: SimulationId, type
     }
     if !world
         .resource::<PlayerResources>()
-        .can_afford(player, &cost)
+        .can_afford(player, &price)
     {
         return;
     }
-    resources::charge(world, player, cost, SpendCause::Training { trainer });
+    resources::charge(world, player, price, SpendCause::Training { trainer });
 
     world
         .entity_mut(entity)
@@ -535,8 +542,47 @@ fn train_entity(world: &mut World, player: PlayerId, trainer: SimulationId, type
     }
 }
 
-/// Validates and executes a research command: pays the cost up front and pushes
-/// the order; the work refunds on a force cancel.
+/// Validates and executes a cancel-training command: drops the entry at `slot`
+/// of the trainer's production queue and refunds its price.
+///
+/// Slot 0 is the unit in progress; dropping it restarts the entry behind it
+/// from no progress. Nothing happens for a trainer that is not the player's,
+/// for one with no production queue, or for a slot past the end of it. The
+/// Train order finishes on its own once the queue it works is empty.
+fn cancel_train(world: &mut World, player: PlayerId, trainer: SimulationId, slot: u8) {
+    let Some(entity) = find_owned_interactable(world, player, trainer) else {
+        return;
+    };
+    let type_name = {
+        let mut entity_mut = world.entity_mut(entity);
+        let Some(mut queue) = entity_mut.get_mut::<TrainQueueComponent>() else {
+            return;
+        };
+        match queue.0.remove(slot as usize) {
+            Some(type_name) => type_name,
+            None => return,
+        }
+    };
+
+    // The entry in progress carried the progress counter: what follows it
+    // starts fresh rather than inheriting ticks paid toward another type.
+    if slot == 0
+        && let Some(mut train_component) = world.entity_mut(entity).get_mut::<TrainComponent>()
+    {
+        train_component.progress = 0;
+    }
+
+    let price = world
+        .resource::<ContentRegistry>()
+        .entity(&type_name)
+        .expect("a queued entry names a type the registry minted it from")
+        .price
+        .clone();
+    resources::refund(world, player, price, SpendCause::Training { trainer });
+}
+
+/// Validates and executes a research command: pays the price up front and pushes
+/// the order; a cancel aimed at the topic pays it back.
 fn start_research(
     world: &mut World,
     player: PlayerId,
@@ -564,10 +610,10 @@ fn start_research(
 
     // Resolved defensively: the id arrives over the wire, and an id this
     // registry never minted is a peer to distrust, not a panic.
-    let Some((cost, requires)) = world
+    let Some((price, requires)) = world
         .resource::<ContentRegistry>()
         .research_def(research)
-        .map(|def| (def.cost.clone(), def.requires.clone()))
+        .map(|def| (def.price.clone(), def.requires.clone()))
     else {
         return;
     };
@@ -576,17 +622,125 @@ fn start_research(
     }
     if !world
         .resource::<PlayerResources>()
-        .can_afford(player, &cost)
+        .can_afford(player, &price)
     {
         return;
     }
-    resources::charge(world, player, cost, SpendCause::Research { research });
+    resources::charge(world, player, price, SpendCause::Research { research });
 
     let mut entity_mut = world.entity_mut(entity);
     let mut queue = entity_mut
         .get_mut::<OrderQueueComponent>()
         .expect("simulation entities always have an order queue");
     queue.push(Order::Research { research }, None);
+}
+
+/// Validates and executes a cancel-research command: calls off `research` on
+/// the researcher working it and refunds its price.
+///
+/// Nothing happens for a researcher that is not the player's, or for a topic
+/// that entity has neither queued nor under way. The entry is marked forced,
+/// so a topic still waiting in the queue drops as surely as the one in hand.
+fn cancel_research(
+    world: &mut World,
+    player: PlayerId,
+    researcher: SimulationId,
+    research: ResearchId,
+) {
+    let Some(entity) = find_owned_interactable(world, player, researcher) else {
+        return;
+    };
+    let mut entity_mut = world.entity_mut(entity);
+    let Some(mut queue) = entity_mut.get_mut::<OrderQueueComponent>() else {
+        return;
+    };
+    // Only the named topic is called off: the rest of the queue, production
+    // and other topics alike, is none of this command's business.
+    let Some(entry) = queue.0.iter_mut().find(
+        |entry| matches!(entry.order, Order::Research { research: queued } if queued == research),
+    ) else {
+        return;
+    };
+    // The entry stays in the queue until the order loop flushes it, a system
+    // set later, so a second command naming the same topic in one frame finds
+    // it again. The mandatory mark is what the refund is paid for: an entry
+    // already carrying one has been paid for once. An advisory mark is one a
+    // research entry refuses, so it has paid for nothing and is raised.
+    match entry.cancel {
+        Some(CancelPolicy::Force) => return,
+        Some(CancelPolicy::Soft) | None => entry.cancel = Some(CancelPolicy::Force),
+    }
+
+    let price = world
+        .resource::<ContentRegistry>()
+        .research_def(research)
+        .expect("a queued topic carries a registry-minted id")
+        .price
+        .clone();
+    resources::refund(world, player, price, SpendCause::Research { research });
+}
+
+/// Validates and executes a cancel-build command: tears down the unfinished
+/// `site` and refunds what it cost. Whoever is working it finds the site gone
+/// on its next tick and steps off.
+///
+/// Nothing happens for a site that is not the player's, is finished, or is
+/// already gone.
+fn cancel_build(world: &mut World, player: PlayerId, site: SimulationId) {
+    let Some(building) = find_owned_interactable(world, player, site) else {
+        return;
+    };
+    if !world
+        .entity(building)
+        .contains::<UnderConstructionComponent>()
+    {
+        return;
+    }
+    let price = entity_def::of(world, building).price.clone();
+    build::tear_down_site(world, building);
+    resources::refund(world, player, price, SpendCause::Construction { site });
+}
+
+/// Validates and executes a cancel-morph command: calls off the change of form
+/// `entity` is under.
+///
+/// The change answers on its own terms, as it does for any other cancel: a
+/// refundable one gives the costs back and returns the entity to what it was,
+/// a forfeit one keeps them, and a committed one holds until its window
+/// closes. Nothing happens for an entity that is not the player's or is not
+/// changing at all.
+fn cancel_morph(world: &mut World, player: PlayerId, entity: SimulationId) {
+    let Some(entity) = find_owned_interactable(world, player, entity) else {
+        return;
+    };
+    let mut entity_mut = world.entity_mut(entity);
+    let Some(mut queue) = entity_mut.get_mut::<OrderQueueComponent>() else {
+        return;
+    };
+    let Some(front) = queue.front_mut() else {
+        return;
+    };
+    // Only the change itself is called off: whatever else the entity has
+    // queued is none of this command's business.
+    match front.order {
+        Order::Morph { .. } => front.cancel = Some(CancelPolicy::Soft),
+        Order::Move { .. }
+        | Order::Attack { .. }
+        | Order::AttackMove { .. }
+        | Order::Patrol { .. }
+        | Order::Guard { .. }
+        | Order::Follow { .. }
+        | Order::Board { .. }
+        | Order::Load { .. }
+        | Order::Unload { .. }
+        | Order::Harvest { .. }
+        | Order::Build { .. }
+        | Order::Repair { .. }
+        | Order::Train
+        | Order::Research { .. }
+        | Order::Cast { .. }
+        | Order::Die => {}
+    }
 }
 
 /// Whether any of the player's entities is already working on or queued for
@@ -784,15 +938,15 @@ fn use_skill(
         return;
     }
     match (caster, &def.caster) {
-        (SkillCasterRef::Player, SkillCaster::Player { cost, effect }) => {
-            cast::by_player(world, player, skill, def.cooldown, cost, *effect);
+        (SkillCasterRef::Player, SkillCaster::Player { price, effect }) => {
+            cast::by_player(world, player, skill, def.cooldown, price, *effect);
         }
         (SkillCasterRef::Entity(_), SkillCaster::Entity { .. }) => {
             let Some(entity) = casting else {
                 return;
             };
             // Casting is something the caster does, so it goes through the
-            // queue like any other doing: what it was at is cancelled, the
+            // queue like any other doing: what it was at is canceled, the
             // order walks it into reach if the skill has one, and the cast
             // answers to the same gating, refusals and cancellation as the
             // rest. Judged before the queue is touched, though — a cast the

@@ -8,7 +8,7 @@
 use bevy_ecs::prelude::*;
 use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect};
 
-use ferrets_physics::body;
+use ferrets_pathfinder::layer_mask::LayerMask;
 
 use crate::{
     components::owner,
@@ -17,8 +17,10 @@ use crate::{
 };
 use ferrets_content::{
     affiliation::Affiliation,
+    entity_effect::EntityEffect,
     entity_type_def::EntityTypeDef,
-    field::{FieldCoverage, FieldEffect, FieldEffectKind, FieldId, FieldPlacement, FieldSide},
+    field::{FieldCoverage, FieldEffect, FieldId, FieldPlacement, FieldSide},
+    registry::ContentRegistry,
     stats::EntityModifier,
 };
 
@@ -235,16 +237,11 @@ impl PlayerMask {
     }
 }
 
-/// The cells of `rect` a placement rule with `coverage` reads.
-fn read_cells(rect: CellRect, coverage: FieldCoverage) -> Vec<CellPos> {
+/// Whether enough of `rect` answers `test` for `coverage` to be satisfied.
+fn covers_enough(rect: CellRect, coverage: FieldCoverage, test: impl Fn(CellPos) -> bool) -> bool {
     match coverage {
-        FieldCoverage::Anchor => vec![rect.origin],
-        FieldCoverage::Footprint => (0..rect.size.height)
-            .flat_map(|dy| {
-                (0..rect.size.width)
-                    .map(move |dx| CellPos::new(rect.origin.x + dx, rect.origin.y + dy))
-            })
-            .collect(),
+        FieldCoverage::Every => rect.cells().all(test),
+        FieldCoverage::Any => rect.cells().any(test),
     }
 }
 
@@ -286,69 +283,105 @@ pub fn allows_placement_in(
             field,
             of,
             coverage,
-        } => read_cells(rect, coverage)
-            .into_iter()
-            .all(|cell| grid.contains(cell) && grid.covers(session, field, cell, of, player)),
-        FieldPlacement::Forbids { field } => read_cells(rect, FieldCoverage::Footprint)
-            .into_iter()
-            .all(|cell| !grid.contains(cell) || grid.covered(field, cell).is_empty()),
+        } => covers_enough(rect, coverage, |cell| {
+            grid.contains(cell) && grid.covers(session, field, cell, of, player)
+        }),
+        FieldPlacement::Forbids { field } => covers_enough(rect, FieldCoverage::Every, |cell| {
+            !grid.contains(cell) || grid.covered(field, cell).is_empty()
+        }),
     })
 }
 
-/// Whether the effect applies to an entity owned by `player` whose anchor is
-/// `anchor`.
+/// Whether the effect applies to an entity owned by `player` standing on
+/// `footprint`: as much of it as the effect's coverage asks for is on the
+/// side of the field the effect names.
 fn effect_applies(
     grid: &FieldGrid,
     session: &GameSession,
     effect: &FieldEffect,
     player: Option<PlayerId>,
-    anchor: CellPos,
+    footprint: CellRect,
 ) -> bool {
-    let covered =
-        grid.contains(anchor) && grid.covers(session, effect.field(), anchor, effect.of(), player);
-    match effect.side() {
-        FieldSide::Inside => covered,
-        FieldSide::Outside => !covered,
-    }
-}
-
-/// The anchor cell and owner a field effect on `entity` is judged by.
-fn standing(world: &World, entity: Entity) -> (Option<PlayerId>, CellPos) {
-    (
-        entity_def::owner(world, entity),
-        body::anchor(entity_def::position(world, entity)),
-    )
+    covers_enough(footprint, effect.coverage(), |cell| {
+        let covered =
+            grid.contains(cell) && grid.covers(session, effect.field(), cell, effect.of(), player);
+        match effect.side() {
+            FieldSide::Inside => covered,
+            FieldSide::Outside => !covered,
+        }
+    })
 }
 
 /// Whether `entity` stands disabled: some field effect of its type says so
-/// for the side of the field its anchor cell is on.
+/// for as much of its footprint as that effect asks for.
 pub fn disabled(world: &World, entity: Entity) -> bool {
     let def = entity_def::of(world, entity);
     if def.field_effects.is_empty() {
         return false;
     }
-    let (player, anchor) = standing(world, entity);
     disabled_in(
         world.resource::<FieldGrid>(),
         world.resource::<GameSession>(),
         def,
-        player,
-        anchor,
+        entity_def::owner(world, entity),
+        entity_def::occupied_rect(world, entity),
     )
 }
 
-/// Whether an entity of `def` owned by `player` with its anchor at `anchor`
-/// stands disabled, against the given grid and session.
+/// Whether an entity of `def` owned by `player` standing on `footprint` stands
+/// disabled, against the given grid and session.
 pub fn disabled_in(
     grid: &FieldGrid,
     session: &GameSession,
     def: &EntityTypeDef,
     player: Option<PlayerId>,
-    anchor: CellPos,
+    footprint: CellRect,
 ) -> bool {
     def.field_effects.iter().any(|effect| match effect.kind() {
-        FieldEffectKind::Disabled => effect_applies(grid, session, effect, player, anchor),
-        FieldEffectKind::Modifiers(_) => false,
+        EntityEffect::Disable => effect_applies(grid, session, effect, player, footprint),
+        EntityEffect::Modifiers(_) | EntityEffect::Conceal => false,
+    })
+}
+
+/// Whether `entity` stands concealed by a field: some field effect of its
+/// type says so for as much of the entity's footprint as that effect asks
+/// for.
+pub fn concealed(world: &World, entity: Entity) -> bool {
+    concealed_of(world, entity_def::of(world, entity), entity)
+}
+
+/// [`concealed`] for an `entity` whose type `def` the caller already holds.
+pub fn concealed_of(world: &World, def: &EntityTypeDef, entity: Entity) -> bool {
+    if def.field_effects.is_empty() {
+        return false;
+    }
+    let player = entity_def::owner(world, entity);
+    let footprint = entity_def::occupied_rect_of(world, def, entity);
+    let grid = world.resource::<FieldGrid>();
+    let session = world.resource::<GameSession>();
+    def.field_effects.iter().any(|effect| match effect.kind() {
+        EntityEffect::Conceal => effect_applies(grid, session, effect, player, footprint),
+        EntityEffect::Modifiers(_) | EntityEffect::Disable => false,
+    })
+}
+
+/// Whether `player`'s side's detection over `cell` reaches something standing
+/// on `layers`: some field whose detection names one of them covers the cell
+/// for the player or an ally. A world with no field grid detects nothing.
+pub fn detects(world: &World, player: PlayerId, cell: CellPos, layers: LayerMask) -> bool {
+    let (Some(grid), Some(registry)) = (
+        world.get_resource::<FieldGrid>(),
+        world.get_resource::<ContentRegistry>(),
+    ) else {
+        return false;
+    };
+    if !grid.contains(cell) {
+        return false;
+    }
+    let session = world.resource::<GameSession>();
+    registry.detecting_fields().any(|(field, revealed)| {
+        revealed & layers != LayerMask::EMPTY
+            && grid.covers(session, field, cell, Affiliation::Allied, Some(player))
     })
 }
 
@@ -360,13 +393,14 @@ pub fn modifiers(world: &World, entity: Entity) -> Vec<EntityModifier> {
     }
     let grid = world.resource::<FieldGrid>();
     let session = world.resource::<GameSession>();
-    let (player, anchor) = standing(world, entity);
+    let player = entity_def::owner(world, entity);
+    let footprint = entity_def::occupied_rect(world, entity);
     def.field_effects
         .iter()
-        .filter(|effect| effect_applies(grid, session, effect, player, anchor))
+        .filter(|effect| effect_applies(grid, session, effect, player, footprint))
         .flat_map(|effect| match effect.kind() {
-            FieldEffectKind::Modifiers(modifiers) => modifiers.as_slice(),
-            FieldEffectKind::Disabled => &[],
+            EntityEffect::Modifiers(modifiers) => modifiers.as_slice(),
+            EntityEffect::Disable | EntityEffect::Conceal => &[],
         })
         .copied()
         .collect()

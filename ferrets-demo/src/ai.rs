@@ -14,7 +14,9 @@ use ferrets_script::{
     ai::view::content::ContentView,
     engine::{ScriptEngine, lua::LuaEngine},
 };
-use ferrets_simulation::session::{GameSession, ai_vision::AiVision, player_id::PlayerId};
+use ferrets_simulation::session::{
+    GameSession, ai_detection::AiDetection, ai_vision::AiVision, player_id::PlayerId,
+};
 
 /// The chassis every race brain runs on: pure helpers plus the economy, build,
 /// research, and attack routines. Prepended to each brain, so its locals are
@@ -30,7 +32,7 @@ const COMMON_AI: &str = r#"
     local OFFSETS = { { 0, 4 }, { 4, 4 }, { -4, 0 }, { 0, -4 }, { 4, -4 } }
 
     local function cost_of(type_name, kind)
-        for _, entry in ipairs(content.entities[type_name].cost) do
+        for _, entry in ipairs(content.entities[type_name].price) do
             if entry.kind == kind then return entry.amount end
         end
         return 0
@@ -255,8 +257,8 @@ const COMMON_AI: &str = r#"
             return
         end
         if not any_standing(hosts) then return end
-        local cost = content.researches[research].cost
-        local gold, wood = cost.gold or 0, cost.wood or 0
+        local price = content.researches[research].price
+        local gold, wood = price.gold or 0, price.wood or 0
         if budget.gold >= gold and budget.wood >= wood then
             for _, host in ipairs(hosts) do
                 if not host.under_construction then
@@ -283,7 +285,7 @@ const COMMON_AI: &str = r#"
     local function morph_cost_of(type_name, into, kind)
         for _, morph in ipairs(content.entities[type_name].morphs or {}) do
             if morph.into == into then
-                for _, entry in ipairs(morph.cost) do
+                for _, entry in ipairs(morph.price) do
                     if entry.kind == kind then return entry.amount end
                 end
                 return 0
@@ -364,6 +366,7 @@ const HUMAN_AI: &str = r#"
     define_ai("human", {
         period = 20,
         vision = "filtered",
+        detection = "detectors",
         think = function(state, view)
             local commands = {}
             local budget = budget_of(view)
@@ -472,6 +475,7 @@ const ORC_AI: &str = r#"
     define_ai("orc", {
         period = 20,
         vision = "filtered",
+        detection = "detectors",
         think = function(state, view)
             local commands = {}
             local budget = budget_of(view)
@@ -484,14 +488,18 @@ const ORC_AI: &str = r#"
             local grunts = group(groups, "grunt")
             local shamans = group(groups, "shaman")
             local wagons = group(groups, "war_wagon")
+            local watch_towers = group(groups, "watch_tower")
+            local guard_towers = group(groups, "guard_tower")
             local hall = halls[1]
 
             keep_workers(commands, budget, hall, halls, workers, "peon")
 
             -- The war camp, a first pig farm right after it — the frenzy
-            -- ritual waits on one — then a farm whenever headroom runs dry, and
+            -- ritual waits on one — then a farm whenever headroom runs dry,
             -- once production is fed, the siege works the wagons come from (it
-            -- requires the camp, so that part of the order is the content's).
+            -- requires the camp, so that part of the order is the content's),
+            -- and two watch towers after that: one kept as the eyes that find
+            -- a cloaked raider, the other hardened into the guard tower.
             local wanted = nil
             if #camps == 0 then
                 wanted = "war_camp"
@@ -501,9 +509,22 @@ const ORC_AI: &str = r#"
                 wanted = "pig_farm"
             elseif #works == 0 then
                 wanted = "siege_works"
+            elseif #watch_towers + #guard_towers < 2 then
+                wanted = "watch_tower"
             end
             local builder_id =
                 build_next(commands, state, view, workers, hall, wanted, budget)
+
+            -- A tower is hardened only while another watcher stands: the gun
+            -- that answers a flier costs the tower its detection, and the side
+            -- keeps one watcher.
+            if #watch_towers >= 2 and #guard_towers == 0 then
+                for _, t in ipairs(watch_towers) do
+                    if not t.under_construction and morph_one(commands, budget, t, "guard_tower") then
+                        break
+                    end
+                end
+            end
             local need_wood = (wanted ~= nil and budget.wood < cost_of(wanted, "wood"))
                 or (#works > 0 and budget.wood < cost_of("war_wagon", "wood"))
             assign_harvesters(commands, view, workers, need_wood, builder_id)
@@ -630,6 +651,7 @@ const SWARM_AI: &str = r#"
     define_ai("swarm", {
         period = 20,
         vision = "filtered",
+        detection = "detectors",
         think = function(state, view)
             local commands = {}
             local budget = budget_of(view)
@@ -747,6 +769,7 @@ const CONCLAVE_AI: &str = r#"
     define_ai("conclave", {
         period = 20,
         vision = "filtered",
+        detection = "detectors",
         think = function(state, view)
             local commands = {}
             local budget = budget_of(view)
@@ -780,8 +803,12 @@ const CONCLAVE_AI: &str = r#"
             -- The pending structure holds its price back from the army.
             reserve(budget, wanted)
 
+            -- An observer once two zealots stand, so the army marches with
+            -- an eye that sees through cloaks; zealots otherwise.
+            local observers = group(groups, "observer")
+            local next_unit = (#observers == 0 and #zealots >= 2) and "observer" or "zealot"
             for _, gateway in ipairs(gateways) do
-                if train_from(commands, budget, gateway, "zealot") then break end
+                if train_from(commands, budget, gateway, next_unit) then break end
             end
 
             attack_wave(commands, view, zealots, {}, hall)
@@ -800,6 +827,7 @@ const ELVES_AI: &str = r#"
     define_ai("elves", {
         period = 20,
         vision = "filtered",
+        detection = "detectors",
         think = function(state, view)
             local commands = {}
             local budget = budget_of(view)
@@ -910,6 +938,7 @@ const TERRAN_AI: &str = r#"
     define_ai("terran", {
         period = 20,
         vision = "filtered",
+        detection = "detectors",
         think = function(state, view)
             local commands = {}
             local budget = budget_of(view)
@@ -922,6 +951,7 @@ const TERRAN_AI: &str = r#"
             local comsats = group(groups, "comsat_station")
             local depots = group(groups, "supply_depot")
             local refineries = group(groups, "refinery")
+            local turrets = group(groups, "missile_turret")
             local marines = group(groups, "marine")
             local tanks = group(groups, "tank")
             local center = centers[1]
@@ -999,6 +1029,10 @@ const TERRAN_AI: &str = r#"
                     wanted = "supply_depot"
                 elseif #factories == 0 then
                     wanted = "factory"
+                -- One turret once the factory stands: the eyes that find a
+                -- cloaked raider, and the gun that answers a flier.
+                elseif #turrets == 0 then
+                    wanted = "missile_turret"
                 end
                 builder_id = build_next(commands, state, view, scvs, center,
                     wanted, budget, wanted and DOCKS[wanted])
@@ -1081,6 +1115,7 @@ const UNDEAD_AI: &str = r#"
     define_ai("undead", {
         period = 20,
         vision = "filtered",
+        detection = "detectors",
         think = function(state, view)
             local commands = {}
             local budget = budget_of(view)
@@ -1099,6 +1134,7 @@ const UNDEAD_AI: &str = r#"
             local mines = group(groups, "haunted_mine")
             local crypts = group(groups, "crypt")
             local ziggurats = group(groups, "ziggurat")
+            local spirit_towers = group(groups, "spirit_tower")
             local graveyards = group(groups, "graveyard")
             local temples = group(groups, "temple_of_the_damned")
             local ghouls = group(groups, "ghoul")
@@ -1115,6 +1151,17 @@ const UNDEAD_AI: &str = r#"
                 for _, n in ipairs(necropolises) do
                     if not n.under_construction
                         and morph_one(commands, budget, n, "halls_of_the_dead") then
+                        break
+                    end
+                end
+            end
+
+            -- One ziggurat is hardened into the spirit tower that sees
+            -- through cloaks, once a second stands to keep the headroom.
+            if #spirit_towers == 0 and #ziggurats >= 2 then
+                for _, z in ipairs(ziggurats) do
+                    if not z.under_construction
+                        and morph_one(commands, budget, z, "spirit_tower") then
                         break
                     end
                 end
@@ -1299,28 +1346,31 @@ fn race_brain(race: &str) -> Option<String> {
     }
 }
 
-/// The vision the race's demo brain declares — filled into the seat, so
-/// every node (and a replay) resolves the brain's commands identically. A
-/// race with no brain observes through the fog.
-pub fn race_vision(race: &str, registry: &ContentRegistry) -> AiVision {
+/// The vision and detection the race's demo brain declares — filled into the
+/// seat, so every node (and a replay) resolves the brain's commands
+/// identically. A race with no brain observes through the fog and detects
+/// through its detectors.
+pub fn race_senses(race: &str, registry: &ContentRegistry) -> (AiVision, AiDetection) {
     match race_brain(race) {
-        Some(script) => brain_vision(&script, registry),
-        None => AiVision::Filtered,
+        Some(script) => brain_senses(&script, registry),
+        None => (AiVision::Filtered, AiDetection::Detectors),
     }
 }
 
-/// The vision the boss brain declares, for the environment seats it drives.
-pub fn environment_vision(registry: &ContentRegistry) -> AiVision {
-    brain_vision(BOSS_AI_SCRIPT, registry)
+/// The vision and detection the boss brain declares, for the environment
+/// seats it drives.
+pub fn environment_senses(registry: &ContentRegistry) -> (AiVision, AiDetection) {
+    brain_senses(BOSS_AI_SCRIPT, registry)
 }
 
-/// The vision `script` declares. A brain that fails to load (reported when
-/// the brains install) observes through the fog.
-fn brain_vision(script: &str, registry: &ContentRegistry) -> AiVision {
+/// The vision and detection `script` declares. A brain that fails to load
+/// (reported when the brains install) observes through the fog and detects
+/// through its detectors.
+fn brain_senses(script: &str, registry: &ContentRegistry) -> (AiVision, AiDetection) {
     let content = ContentView::from_registry(registry);
     match LuaEngine.load_ai(script, &content) {
-        Ok(runtime) => runtime.vision(),
-        Err(_) => AiVision::Filtered,
+        Ok(runtime) => (runtime.vision(), runtime.detection()),
+        Err(_) => (AiVision::Filtered, AiDetection::Detectors),
     }
 }
 
@@ -1336,6 +1386,7 @@ pub const BOSS_AI_SCRIPT: &str = r#"
     define_ai("default", {
         period = 20,
         vision = "filtered",
+        detection = "detectors",
         think = function(state, view)
             local commands = {}
 

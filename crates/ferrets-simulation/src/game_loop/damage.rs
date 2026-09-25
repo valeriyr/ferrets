@@ -16,7 +16,12 @@ use crate::{
     simulation_id::SimulationId,
     spawn,
 };
-use ferrets_content::{attack::Slain, entity_stats::EntityStatId, entity_type_def::EntityTypeDef};
+use ferrets_content::{
+    attack::Slain, entity_buffs::Interruption, entity_stats::EntityStatId,
+    entity_type_def::EntityTypeDef,
+};
+
+use super::stats;
 
 /// The damage one full-strength hit from `attacker_def` deals to `target`.
 ///
@@ -86,6 +91,7 @@ pub fn apply(
         health.record_hit(attacker, tick);
         health.is_dead()
     };
+    stats::interrupt_entity_buffs(world, target, Interruption::Hit);
 
     // The attacker may already be gone — a shot outlives the weapon that fired
     // it — so the credit is whatever the index can still resolve, its dying

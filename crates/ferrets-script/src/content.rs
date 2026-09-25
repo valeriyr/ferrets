@@ -4,7 +4,9 @@ use ferrets_content::{
     affiliation::Affiliation,
     annex::{AnnexClaim, AnnexWork},
     attack::Slain,
+    concealment::Concealment,
     dying::DeathKind,
+    entity_buffs::Interruption,
     field::{FieldAction, FieldCoverage, FieldVision},
     location::Solidity,
     morph::{MorphCancel, MorphInterrupted, MorphPlacement, MorphReason},
@@ -95,7 +97,11 @@ pub(crate) fn solidity(value: &str) -> crate::Result<Solidity> {
     keyword(
         "solidity",
         value,
-        &[("solid", Solidity::Solid), ("passable", Solidity::Passable)],
+        &[
+            ("solid", Solidity::Solid),
+            ("underfoot", Solidity::Underfoot),
+            ("passable", Solidity::Passable),
+        ],
     )
 }
 
@@ -130,7 +136,7 @@ pub(crate) fn death_kind(value: &str) -> crate::Result<DeathKind> {
             ("unseated", DeathKind::Unseated),
             ("carried_down", DeathKind::CarriedDown),
             ("consumed", DeathKind::Consumed),
-            ("cancelled", DeathKind::Cancelled),
+            ("canceled", DeathKind::Canceled),
             ("depleted", DeathKind::Depleted),
             ("overbuilt", DeathKind::Overbuilt),
         ],
@@ -304,15 +310,37 @@ pub(crate) fn field_vision(value: &str) -> crate::Result<FieldVision> {
     )
 }
 
+/// Maps a concealment name to its enum.
+pub(crate) fn concealment(value: &str) -> crate::Result<Concealment> {
+    keyword(
+        "concealment",
+        value,
+        &[
+            ("exposed", Concealment::Exposed),
+            ("concealed", Concealment::Concealed),
+        ],
+    )
+}
+
+/// Maps an interruption name to its enum.
+pub(crate) fn interruption(value: &str) -> crate::Result<Interruption> {
+    keyword(
+        "interruption",
+        value,
+        &[
+            ("attack", Interruption::Attack),
+            ("cast", Interruption::Cast),
+            ("hit", Interruption::Hit),
+        ],
+    )
+}
+
 /// Maps a field coverage name to its enum.
 pub(crate) fn field_coverage(value: &str) -> crate::Result<FieldCoverage> {
     keyword(
         "field coverage",
         value,
-        &[
-            ("footprint", FieldCoverage::Footprint),
-            ("anchor", FieldCoverage::Anchor),
-        ],
+        &[("every", FieldCoverage::Every), ("any", FieldCoverage::Any)],
     )
 }
 

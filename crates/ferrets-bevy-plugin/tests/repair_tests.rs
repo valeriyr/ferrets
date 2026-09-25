@@ -8,12 +8,12 @@ use std::collections::BTreeSet;
 use bevy::prelude::*;
 use ferrets_content::{
     berths::BerthGroup,
-    costs,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     kinds::Kinds,
     location::Solidity,
     morph::{MorphCancel, MorphInterrupted, MorphPlacement, MorphReason, MorphTransition},
+    price,
     quantity::Quantity,
     registry::ContentRegistry,
     repair::{RepairCost, RepairRate},
@@ -227,7 +227,7 @@ fn energy_paid_repair_spends_worker_pool_not_treasury() {
     );
     // Half a point of energy per point of health, over 40 points restored.
     assert_eq!(
-        energy(&app, medic),
+        utils::energy(&app, medic),
         FixedU64::from_num(30),
         "the work came out of the worker's own pool"
     );
@@ -251,7 +251,7 @@ fn spent_medic_waits_at_patient_and_resumes_once_it_can_pay() {
         "the medic spends its last energy and stops there"
     );
     assert_eq!(
-        energy(&app, medic),
+        utils::energy(&app, medic),
         FixedU64::ZERO,
         "the pool is empty rather than overdrawn"
     );
@@ -573,7 +573,7 @@ fn mended_target_records_crew_until_last_worker_leaves() {
     );
 
     // One of the pair stops. The other is still mending, so the job keeps its crew.
-    utils::stop_orders(app.world_mut(), first);
+    utils::force_cancel_orders(app.world_mut(), first);
     utils::run_ticks(&mut app, 1);
     assert_eq!(
         crew_of(&app, depot),
@@ -582,7 +582,7 @@ fn mended_target_records_crew_until_last_worker_leaves() {
     );
 
     // The mark goes with the last worker off the job.
-    utils::stop_orders(app.world_mut(), second);
+    utils::force_cancel_orders(app.world_mut(), second);
     utils::run_ticks(&mut app, 1);
     assert!(crew_of(&app, depot).is_none());
 }
@@ -654,12 +654,12 @@ fn cancel_brings_hidden_worker_back_onto_map() {
     utils::run_ticks(&mut app, utils::APPLY + 4);
     assert!(app.world().get::<HiddenComponent>(worker).is_some());
 
-    utils::stop_orders(app.world_mut(), worker);
+    utils::force_cancel_orders(app.world_mut(), worker);
     utils::run_ticks(&mut app, 1);
 
     assert!(
         app.world().get::<HiddenComponent>(worker).is_none(),
-        "cancelling mid-job puts the worker back on the map"
+        "canceling mid-job puts the worker back on the map"
     );
     utils::assert_adjacent_to_footprint(app.world_mut(), worker, depot);
     assert!(utils::order_queue_is_empty(app.world_mut(), worker));
@@ -890,15 +890,7 @@ fn app() -> App {
                 .with_tags(["building"]),
         );
         registry.register(
-            EntityTypeDef::new("soldier")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
-                    FixedU64::ONE,
-                    FixedU64::from_num(360),
-                    FixedU64::from_num(360),
-                )
+            utils::walker("soldier", utils::GROUND)
                 .with_health(20)
                 .with_train_time(20),
         );
@@ -906,29 +898,13 @@ fn app() -> App {
         // it — the pair that shows a mender following its work.
         registry.register_tag("flesh");
         registry.register(
-            EntityTypeDef::new("casualty")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
-                    FixedU64::ONE,
-                    FixedU64::from_num(360),
-                    FixedU64::from_num(360),
-                )
+            utils::walker("casualty", utils::GROUND)
                 .with_health(100)
                 .with_train_time(20)
                 .with_tags(["flesh"]),
         );
         registry.register(
-            EntityTypeDef::new("orderly")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
-                    FixedU64::ONE,
-                    FixedU64::from_num(360),
-                    FixedU64::from_num(360),
-                )
+            utils::walker("orderly", utils::GROUND)
                 .with_health(30)
                 .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
                 .with_stat(EntityStatId::REPAIR_RANGE, FixedU64::ONE)
@@ -1012,15 +988,7 @@ fn app() -> App {
         // Pays out of its own energy at a flat rate, works alone, and reaches two
         // cells — the field-medic shape rather than the workshop one.
         registry.register(
-            EntityTypeDef::new("medic")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
-                    FixedU64::ONE,
-                    FixedU64::from_num(360),
-                    FixedU64::from_num(360),
-                )
+            utils::walker("medic", utils::GROUND)
                 .with_health(30)
                 .with_energy(50, FixedU64::ZERO)
                 .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
@@ -1044,7 +1012,7 @@ fn app() -> App {
                 crew: CrewLimit::Unlimited,
             },
             Some(5),
-            RepairCost::PerTick(costs::cost([("gold", 1)])),
+            RepairCost::PerTick(price::from([("gold", 1)])),
         ));
     }
     app.world_mut().resource::<ContentRegistry>().validate();
@@ -1058,7 +1026,7 @@ fn building(name: &str, repair_ratio: Option<FixedU64>) -> EntityTypeDef {
     let def = EntityTypeDef::new(name)
         .with_location(utils::GROUND, CellSize::new(2, 2), Solidity::Solid)
         .with_health(100)
-        .with_cost([("gold", 200)])
+        .with_price([("gold", 200)])
         .with_build_time(20)
         .with_tags(["building"]);
     match repair_ratio {
@@ -1096,15 +1064,7 @@ fn repairer(
     patience: Option<u32>,
     cost: RepairCost,
 ) -> EntityTypeDef {
-    let def = EntityTypeDef::new(name)
-        .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-        .with_movement(
-            FixedU64::from_num(0.5),
-            FixedU64::from_num(0.5),
-            FixedU64::ONE,
-            FixedU64::from_num(360),
-            FixedU64::from_num(360),
-        )
+    let def = utils::walker(name, utils::GROUND)
         .with_health(20)
         .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
         .with_stat(EntityStatId::REPAIR_RANGE, FixedU64::ONE);
@@ -1143,14 +1103,6 @@ fn crew_of(app: &App, target: Entity) -> Option<BTreeSet<SimulationId>> {
     app.world()
         .get::<UnderRepairComponent>(target)
         .map(|crew| crew.repairers.clone())
-}
-
-/// The worker's current energy.
-fn energy(app: &App, entity: Entity) -> FixedU64 {
-    app.world()
-        .get::<EnergyComponent>(entity)
-        .unwrap()
-        .current()
 }
 
 /// Refills `amount` energy directly, standing in for a pool that regenerated.

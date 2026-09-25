@@ -12,8 +12,8 @@ use bevy_ecs::prelude::*;
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 
 use ferrets_content::{
-    costs::Cost, dying::DeathKind, entity_type_def::EntityTypeId, research::ResearchId,
-    skills::SkillId,
+    dying::DeathKind, entity_buffs::EntityBuffId, entity_type_def::EntityTypeId, price::Price,
+    research::ResearchId, skills::SkillId,
 };
 
 use crate::{command::SkillTarget, session::player_id::PlayerId, simulation_id::SimulationId};
@@ -106,6 +106,13 @@ pub enum SpendCause {
         /// What is being mended.
         target: SimulationId,
     },
+    /// Keeping a buff up, billed as each payment falls due.
+    Upkeep {
+        /// The entity carrying the buff.
+        bearer: SimulationId,
+        /// The buff kept up.
+        buff: EntityBuffId,
+    },
 }
 
 /// Why an entity stopped existing.
@@ -121,8 +128,9 @@ pub enum DeathCause {
     },
     /// A resource source that ran out.
     Depleted,
-    /// Called off by its owner before it was finished.
-    Cancelled,
+    /// Ended before it was finished — called off, or abandoned by the work
+    /// that held it.
+    Canceled,
     /// Consumed by the construction site it founded.
     Consumed,
     /// A resource source taken off the map by the site raised over it, which
@@ -159,7 +167,7 @@ impl From<DeathCause> for DeathKind {
         match cause {
             DeathCause::Killed { .. } => DeathKind::Killed,
             DeathCause::Depleted => DeathKind::Depleted,
-            DeathCause::Cancelled => DeathKind::Cancelled,
+            DeathCause::Canceled => DeathKind::Canceled,
             DeathCause::Consumed => DeathKind::Consumed,
             DeathCause::Overbuilt => DeathKind::Overbuilt,
             DeathCause::PassengerLost { .. } => DeathKind::CarriedDown,
@@ -238,17 +246,17 @@ pub enum SimulationEvent {
         /// Who paid.
         player: PlayerId,
         /// The whole price, every kind of it — one act of paying, announced once.
-        cost: Cost,
+        price: Price,
         /// What the charge was for.
         cause: SpendCause,
     },
-    /// A charge was given back — a cancelled order, or one that turned out to be
+    /// A charge was given back — a canceled order, or one that turned out to be
     /// impossible after it had already paid.
     ResourcesRefunded {
         /// Who was paid back.
         player: PlayerId,
         /// The whole amount given back.
-        cost: Cost,
+        price: Price,
         /// The charge being reversed.
         cause: SpendCause,
     },

@@ -455,7 +455,7 @@ fn cues_for(
     };
     match event {
         SimulationEvent::DamageLanded { position, .. } => out.push((Cue::Hit, Some(*position))),
-        // Only a death an enemy caused: a cancelled site or a mined-out node
+        // Only a death an enemy caused: a canceled site or a mined-out node
         // going away is not an explosion.
         SimulationEvent::EntityDied {
             position,

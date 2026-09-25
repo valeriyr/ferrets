@@ -608,7 +608,7 @@ impl Map {
     /// The rect is filtered rather than asserted free, because the reserving
     /// entity's own standing claim may already hold destination cells on
     /// shared layers; those stay under the standing claim, and releasing only
-    /// what this call flipped is what lets a cancelled reservation leave the
+    /// what this call flipped is what lets a canceled reservation leave the
     /// standing claim intact.
     pub fn reserve_claim(
         &mut self,
@@ -723,6 +723,6 @@ impl Map {
 fn footing(location_def: &LocationDef) -> Footing {
     match location_def.solidity() {
         Solidity::Solid => Footing::Free,
-        Solidity::Passable => Footing::Shared,
+        Solidity::Underfoot | Solidity::Passable => Footing::Shared,
     }
 }

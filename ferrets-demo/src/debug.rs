@@ -2,7 +2,7 @@
 
 use bevy::{prelude::*, window::PrimaryWindow};
 use ferrets_bevy_plugin::{PendingInput, TickPacing};
-use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
+use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 
 use ferrets_content::{entity_stats::EntityStatId, registry::ContentRegistry};
@@ -19,7 +19,7 @@ use ferrets_simulation::{
     order::{AttackTarget, Order},
     selection::Selection,
     session::GameSession,
-    visibility::VisibilityGrid,
+    visibility::{Sighting, VisibilityGrid},
 };
 
 use crate::{
@@ -152,23 +152,38 @@ pub fn debug_readout(
     muted: Res<Muted>,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
-    entities: Query<(&EntityInfoComponent, &LocationComponent), Without<HiddenComponent>>,
+    entities: Query<
+        (
+            &EntityInfoComponent,
+            &LocationComponent,
+            &Visibility,
+            Option<&render::Sighted>,
+        ),
+        Without<HiddenComponent>,
+    >,
     mut text: Query<&mut Text, With<DebugText>>,
 ) {
     let cell = cursor_cell(&windows, &cameras);
     let cell_str = cell.map_or_else(|| "-".to_string(), |(x, y)| format!("({x},{y})"));
 
-    // What the hit-test finds under the cursor (the same test selection uses).
+    // What the hit-test finds under the cursor, by the same test selection uses:
+    // what the perspective makes out, never a fogged entity or a shimmer.
     let hover = cell
         .and_then(|(cx, cy)| {
-            entities.iter().find(|(info, location)| {
-                let ox = location.position.x.to_num::<u32>();
-                let oy = location.position.y.to_num::<u32>();
-                let size = registry.def(info.type_id()).location.unwrap().size();
-                cx >= ox && cx < ox + size.width && cy >= oy && cy < oy + size.height
-            })
+            entities
+                .iter()
+                .find(|(info, location, visibility, sighted)| {
+                    let ox = location.position.x.to_num::<u32>();
+                    let oy = location.position.y.to_num::<u32>();
+                    let size = registry.def(info.type_id()).location.unwrap().size();
+                    render::made_out(visibility, *sighted)
+                        && cx >= ox
+                        && cx < ox + size.width
+                        && cy >= oy
+                        && cy < oy + size.height
+                })
         })
-        .map(|(info, _)| format!("{} #{}", info.type_name(), info.id().0));
+        .map(|(info, ..)| format!("{} #{}", info.type_name(), info.id().0));
     let hover_str = hover.as_deref().unwrap_or("-");
 
     // Named by simulation id rather than counted: a report about one unit of a
@@ -236,12 +251,32 @@ pub fn draw_grid(
     fog: Res<VisibilityGrid>,
     watch: Res<render::ObserverPerspective>,
     reveal: Res<FogReveal>,
+    shimmering: Query<
+        (&EntityInfoComponent, &LocationComponent, &render::Sighted),
+        Without<HiddenComponent>,
+    >,
 ) {
     if !debug.grid {
         return;
     }
     let (w, h) = (map.width() as f32, map.height() as f32);
     let line = Color::srgba(0.0, 0.0, 0.0, 0.15);
+
+    // The footprints of what the perspective only glimpses: a filled cell
+    // there would pin the shimmer, so those cells are left unfilled.
+    let hidden_footprints: Vec<CellRect> = shimmering
+        .iter()
+        .filter(|(.., sighted)| match sighted.0 {
+            Sighting::Glimpsed => true,
+            Sighting::Seen | Sighting::Unseen => false,
+        })
+        .map(|(info, location, _)| {
+            CellRect::new(
+                body::anchor(location.position),
+                registry.def(info.type_id()).location.unwrap().size(),
+            )
+        })
+        .collect();
 
     // Fill occupied cells so the nav grid's occupancy is visible at a glance —
     // but only where this node can see, so fogged entities' footprints don't
@@ -250,8 +285,12 @@ pub fn draw_grid(
     if let Some(layer) = registry.layer(&debug.layer) {
         for y in 0..map.height() {
             for x in 0..map.width() {
-                if nav_grid.is_occupied(layer, CellPos::new(x, y))
+                let cell = CellPos::new(x, y);
+                if nav_grid.is_occupied(layer, cell)
                     && (reveal.0 || render::sees(&session, &watch, &fog, x, y))
+                    && !hidden_footprints
+                        .iter()
+                        .any(|footprint| footprint.contains(cell))
                 {
                     fill_cell(&mut gizmos, x, y);
                 }
@@ -286,7 +325,13 @@ pub fn draw_bodies(
     reveal: Res<FogReveal>,
     registry: Res<ContentRegistry>,
     movers: Query<
-        (&EntityInfoComponent, &LocationComponent, &StatsComponent),
+        (
+            &EntityInfoComponent,
+            &LocationComponent,
+            &StatsComponent,
+            &Visibility,
+            Option<&render::Sighted>,
+        ),
         Without<HiddenComponent>,
     >,
 ) {
@@ -301,12 +346,17 @@ pub fn draw_bodies(
         MovementModel::Continuous => {}
     }
 
-    for (info, location, stats) in &movers {
+    for (info, location, stats, visibility, sighted) in &movers {
         let def = registry.def(info.type_id());
         let claims = def
             .location
             .is_some_and(|location| location.solidity().claims_cells());
         if !def.can_move() || !claims {
+            continue;
+        }
+        // A body the perspective only glimpses is not outlined: the shimmer
+        // is all it shows, and a circle at its exact position would pin it.
+        if !render::made_out(visibility, sighted) {
             continue;
         }
         let cell = body::anchor(location.position);
@@ -426,10 +476,19 @@ pub fn draw_orders(
             &OrderQueueComponent,
             Option<&PatrolComponent>,
             &Visibility,
+            Option<&render::Sighted>,
         ),
         Without<HiddenComponent>,
     >,
-    targets: Query<(&EntityInfoComponent, &LocationComponent), Without<HiddenComponent>>,
+    targets: Query<
+        (
+            &EntityInfoComponent,
+            &LocationComponent,
+            &Visibility,
+            Option<&render::Sighted>,
+        ),
+        Without<HiddenComponent>,
+    >,
 ) {
     const MOVE: Color = Color::srgb(0.3, 0.85, 0.4);
     const COMBAT: Color = Color::srgb(1.0, 0.35, 0.25);
@@ -449,19 +508,23 @@ pub fn draw_orders(
         world_center(FixedUVec2::from(CellPos::from(position)), size).truncate()
     };
     let cell_center = |position: FixedUVec2| footprint_center(position, CellSize::ONE);
+    // The target end is judged as the unit is: a line to a target the
+    // perspective does not make out is not drawn.
     let entity_center = |id| {
         targets
             .iter()
             .find(|(info, ..)| info.id() == id)
-            .map(|(info, location)| {
+            .filter(|(_, _, visibility, sighted)| render::made_out(visibility, *sighted))
+            .map(|(info, location, ..)| {
                 let size = registry.def(info.type_id()).location.unwrap().size();
                 world_center(location.position, size).truncate()
             })
     };
 
-    for (info, location, queue, patrol, visibility) in &units {
-        // Don't reveal a fogged unit's orders (its sprite is hidden by fog).
-        if matches!(visibility, Visibility::Hidden) {
+    for (info, location, queue, patrol, visibility, sighted) in &units {
+        // Don't reveal the orders of a unit the fog hides or the perspective
+        // only glimpses.
+        if !render::made_out(visibility, sighted) {
             continue;
         }
         let size = registry.def(info.type_id()).location.unwrap().size();

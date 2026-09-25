@@ -195,7 +195,7 @@ pub fn menu_buttons(
                     MenuButton::Scenario => commands.insert_resource(ScenarioRequested),
                     // The dialog is opened (and the game entered) by start_watching,
                     // which runs in the menu; staying here keeps the menu responsive
-                    // if the dialog is cancelled.
+                    // if the dialog is canceled.
                     MenuButton::WatchReplay => commands.insert_resource(WatchReplayRequested),
                     MenuButton::Cycle(setting) => {
                         cycle_setting(*setting, &mut settings);

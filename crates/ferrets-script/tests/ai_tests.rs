@@ -6,12 +6,12 @@ use ferrets_content::{
     affiliation::Affiliation,
     annex::{AloneConduct, AnnexClaim, AnnexLife, AnnexWork},
     build::BuilderAttendance,
-    costs,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     kinds::Kinds,
     location::Solidity,
     player_buffs::PlayerBuffDef,
+    price::{self, Price},
     registry::ContentRegistry,
     requirement::Requirement,
     research::{ResearchDef, ResearchId},
@@ -30,7 +30,7 @@ use ferrets_script::{
         AiRuntime,
         view::{
             content::{AttackView, ContentView, EntityContentView, MorphView},
-            game::{EntityView, GameView, RemainsView},
+            game::{EntityView, GameView, Glimpse, RemainsView},
         },
     },
     engine::{ScriptEngine, lua::LuaEngine},
@@ -40,7 +40,7 @@ use ferrets_simulation::{
     command::{PlayerCommand, SelectMode, SkillCasterRef, SkillTarget},
     components::{rally::RallyTarget, stance::Stance},
     order::AttackTarget,
-    session::ai_vision::AiVision,
+    session::{ai_detection::AiDetection, ai_vision::AiVision},
     simulation_id::SimulationId,
 };
 
@@ -327,7 +327,7 @@ fn scripts_read_research_catalogue_and_state() {
     let source = ai_script(
         r#"function(state, view)
             local smithing = content.researches.smithing
-            if smithing.cost.gold ~= 30 then error("wrong cost") end
+            if smithing.price.gold ~= 30 then error("wrong cost") end
             if smithing.time ~= 200 then error("wrong time") end
             local wanted = smithing.requires[1]
             if wanted.kind ~= "entity_type" or wanted.name ~= "lab" then
@@ -455,8 +455,8 @@ fn reports_missing_define_ai_as_ai_error() {
 #[test]
 fn reports_second_define_ai_as_ai_error() {
     let source = r#"
-        define_ai("first", { period = 1, vision = "filtered", think = function() end })
-        define_ai("second", { period = 1, vision = "filtered", think = function() end })
+        define_ai("first", { period = 1, vision = "filtered", detection = "detectors", think = function() end })
+        define_ai("second", { period = 1, vision = "filtered", detection = "detectors", think = function() end })
     "#;
 
     let Err(error) = load_ai(source, &empty_content()) else {
@@ -472,7 +472,7 @@ fn reports_second_define_ai_as_ai_error() {
 #[test]
 fn accepts_integral_float_period() {
     let source = r#"
-        define_ai("divided", { period = 60 / 3, vision = "filtered", think = function() end })
+        define_ai("divided", { period = 60 / 3, vision = "filtered", detection = "detectors", think = function() end })
     "#;
 
     let runtime = load_ai(source, &empty_content()).expect("load ai");
@@ -488,10 +488,10 @@ fn requires_explicit_vision_and_reads_declaration() {
         define_ai("fair", { period = 1, think = function() end })
     "#;
     let filtered = r#"
-        define_ai("scout", { period = 1, vision = "filtered", think = function() end })
+        define_ai("scout", { period = 1, vision = "filtered", detection = "detectors", think = function() end })
     "#;
     let omniscient = r#"
-        define_ai("cheater", { period = 1, vision = "omniscient", think = function() end })
+        define_ai("cheater", { period = 1, vision = "omniscient", detection = "detectors", think = function() end })
     "#;
 
     let Err(error) = load_ai(missing, &empty_content()) else {
@@ -512,6 +512,57 @@ fn requires_explicit_vision_and_reads_declaration() {
             .expect("load ai")
             .vision(),
         AiVision::Omniscient
+    );
+}
+
+#[test]
+fn requires_explicit_detection_and_reads_declaration() {
+    // As with vision: omitting `detection` is an error, and a declaration is
+    // read back verbatim.
+    let missing = r#"
+        define_ai("blind", { period = 1, vision = "filtered", think = function() end })
+    "#;
+    let detectors = r#"
+        define_ai("honest", { period = 1, vision = "filtered", detection = "detectors", think = function() end })
+    "#;
+    let everywhere = r#"
+        define_ai("piercing", { period = 1, vision = "filtered", detection = "everywhere", think = function() end })
+    "#;
+
+    let Err(error) = load_ai(missing, &empty_content()) else {
+        panic!("must reject a definition with no detection");
+    };
+    assert!(
+        matches!(&error, ScriptError::AiError(m) if m.contains("must declare 'detection'")),
+        "got {error:?}"
+    );
+    assert_eq!(
+        load_ai(detectors, &empty_content())
+            .expect("load ai")
+            .detection(),
+        AiDetection::Detectors
+    );
+    assert_eq!(
+        load_ai(everywhere, &empty_content())
+            .expect("load ai")
+            .detection(),
+        AiDetection::Everywhere
+    );
+}
+
+#[test]
+fn reports_invalid_detection_as_ai_error() {
+    let source = r#"
+        define_ai("confused", { period = 1, vision = "filtered", detection = "xray", think = function() end })
+    "#;
+
+    let Err(error) = load_ai(source, &empty_content()) else {
+        panic!("must reject");
+    };
+
+    assert!(
+        matches!(&error, ScriptError::AiError(m) if m.contains("'detection' must be 'detectors' or 'everywhere'")),
+        "got {error:?}"
     );
 }
 
@@ -566,7 +617,7 @@ fn reports_non_function_think_as_ai_error() {
 #[test]
 fn exposes_name_and_period() {
     let source = r#"
-        define_ai("named", { period = 20, vision = "filtered", think = function() end })
+        define_ai("named", { period = 20, vision = "filtered", detection = "detectors", think = function() end })
     "#;
 
     let runtime = load_ai(source, &empty_content()).expect("load ai");
@@ -751,15 +802,23 @@ fn scripts_read_view_and_content_tables() {
             if hall.under_construction then error("under_construction") end
             if hall.stance ~= nil then error("hall stance") end
             if view.my_entities[2].stance ~= "flee" then error("worker stance") end
+            if not view.my_entities[2].concealed then error("worker concealed") end
+            if view.my_entities[1].concealed then error("hall concealed") end
+            if view.glimpses[1].x ~= 12 or view.glimpses[1].y ~= 9 then error("glimpse") end
+            -- The fixture builds a two by two glimpse: a rectangle, not a cell.
+            if view.glimpses[1].width ~= 2 or view.glimpses[1].height ~= 2 then
+                error("glimpse size")
+            end
+            if view.glimpses[2] ~= nil then error("one glimpse") end
             local mine = view.neutral_entities[1]
             if mine.resource_amount ~= 900 then error("resource_amount") end
             local worker = content.entities.peasant
-            if worker.cost[1].kind ~= "gold" then error("cost kind") end
+            if worker.price[1].kind ~= "gold" then error("cost kind") end
             if worker.train_time ~= 40 then error("train_time") end
             if not worker.can_move then error("can_move") end
             if worker.max_health ~= 30 then error("max_health") end
             if worker.morphs[1].into ~= "town_hall" then error("morph into") end
-            if worker.morphs[1].cost[1].amount ~= 400 then error("morph cost") end
+            if worker.morphs[1].price[1].amount ~= 400 then error("morph cost") end
             if worker.morphs[1].time ~= 200 then error("morph time") end
             local soldier = content.entities.soldier
             if soldier.morphs ~= nil then error("soldier morphs") end
@@ -767,7 +826,7 @@ fn scripts_read_view_and_content_tables() {
             if soldier.attack.attack_range ~= 1 then error("attack range") end
             if content.resources[1] ~= "gold" then error("resources") end
             local gold = view.resources.gold
-            return { { kind = "move", x = gold + worker.cost[1].amount, y = hall.x } }
+            return { { kind = "move", x = gold + worker.price[1].amount, y = hall.x } }
         end"#,
     );
     let mut runtime = load_ai(&source, &demo_like_content()).expect("load ai");
@@ -821,7 +880,9 @@ fn load_ai(source: &str, content: &ContentView) -> ferrets_script::Result<Box<dy
 /// states only the behaviour it exercises. Tests that pin a specific period,
 /// name, or vision spell out their own `define_ai`.
 fn ai_script(think: &str) -> String {
-    format!(r#"define_ai("test", {{ period = 1, vision = "filtered", think = {think} }})"#)
+    format!(
+        r#"define_ai("test", {{ period = 1, vision = "filtered", detection = "detectors", think = {think} }})"#
+    )
 }
 
 /// A brain that moves by its own think count, exercising persistent state.
@@ -829,6 +890,7 @@ const COUNTER: &str = r#"
     define_ai("counter", {
         period = 1,
         vision = "filtered",
+        detection = "detectors",
         think = function(state, view)
             state.count = (state.count or 0) + 1
             return { { kind = "move", x = state.count, y = 0 } }
@@ -853,7 +915,7 @@ fn research_content() -> (ContentView, ResearchId) {
     let smithing = registry.register_research(
         "smithing",
         ResearchDef::new(
-            costs::cost([("gold", 30)]),
+            price::from([("gold", 30)]),
             200,
             None,
             [Requirement::EntityType("lab".to_string())],
@@ -861,7 +923,7 @@ fn research_content() -> (ContentView, ResearchId) {
     );
     registry.register_research(
         "tactics",
-        ResearchDef::new(costs::Cost::new(), 100, None, Vec::new()),
+        ResearchDef::new(Price::new(), 100, None, Vec::new()),
     );
     let battle_focus = registry.register_skill(
         "battle_focus",
@@ -912,7 +974,7 @@ fn research_content() -> (ContentView, ResearchId) {
         SkillDef {
             cooldown: 10,
             caster: SkillCaster::Player {
-                cost: costs::Cost::new(),
+                price: Price::new(),
                 effect: PlayerCastEffect::ApplyBuff(drums),
             },
             requires: Vec::new(),
@@ -933,7 +995,7 @@ fn research_content() -> (ContentView, ResearchId) {
         EntityTypeDef::new("relay")
             .with_location(LayerId::new(1), CellSize::ONE, Solidity::Solid)
             .with_health(10)
-            .with_cost([("gold", 10)])
+            .with_price([("gold", 10)])
             .with_build_time(4)
             .with_annex(
                 AloneConduct::Standing {
@@ -982,7 +1044,7 @@ fn demo_like_content() -> ContentView {
         entities: vec![
             EntityContentView {
                 name: "peasant".to_string(),
-                cost: vec![("gold".to_string(), 50)],
+                price: vec![("gold".to_string(), 50)],
                 train_time: Some(40),
                 build_time: None,
                 trains: None,
@@ -998,14 +1060,14 @@ fn demo_like_content() -> ContentView {
                 requires: None,
                 morphs: Some(vec![MorphView {
                     into: "town_hall".to_string(),
-                    cost: vec![("gold".to_string(), 400)],
+                    price: vec![("gold".to_string(), 400)],
                     time: Some(200),
                 }]),
                 breeder: None,
             },
             EntityContentView {
                 name: "soldier".to_string(),
-                cost: vec![("gold".to_string(), 100)],
+                price: vec![("gold".to_string(), 100)],
                 train_time: Some(20),
                 build_time: None,
                 trains: None,
@@ -1051,6 +1113,7 @@ fn view_at_tick(tick: u32) -> GameView {
         ally_entities: Vec::new(),
         enemy_entities: Vec::new(),
         neutral_entities: Vec::new(),
+        glimpses: Vec::new(),
         remains: Vec::new(),
     }
 }
@@ -1080,6 +1143,7 @@ fn populated_view(tick: u32) -> GameView {
                 armor: None,
                 idle: false,
                 hidden: false,
+                concealed: false,
                 carrying: None,
                 train_queue: vec!["peasant".to_string()],
                 under_construction: false,
@@ -1103,6 +1167,7 @@ fn populated_view(tick: u32) -> GameView {
                 armor: None,
                 idle: true,
                 hidden: false,
+                concealed: true,
                 carrying: Some(("gold".to_string(), 3)),
                 train_queue: Vec::new(),
                 under_construction: false,
@@ -1129,6 +1194,7 @@ fn populated_view(tick: u32) -> GameView {
             armor: None,
             idle: true,
             hidden: false,
+            concealed: false,
             carrying: None,
             train_queue: Vec::new(),
             under_construction: false,
@@ -1140,6 +1206,12 @@ fn populated_view(tick: u32) -> GameView {
             broodlings: Vec::new(),
             bred_by: None,
             lifetime_left: None,
+        }],
+        glimpses: vec![Glimpse {
+            x: 12,
+            y: 9,
+            width: 2,
+            height: 2,
         }],
         remains: vec![RemainsView {
             id: 4,
@@ -1157,6 +1229,7 @@ fn think_error(body: &str) -> ScriptError {
         define_ai("failing", {{
             period = 1,
             vision = "filtered",
+            detection = "detectors",
             think = function(state, view)
                 {body}
             end,

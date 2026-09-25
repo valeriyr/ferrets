@@ -4,6 +4,7 @@ use ferrets_math::FixedU64;
 use ferrets_simulation::ruleset::{RemainsLimit, Ruleset};
 use ferrets_simulation::session::{
     GameResult, GameSession, Winner,
+    ai_detection::AiDetection,
     ai_hosting::AiHosting,
     ai_vision::AiVision,
     authority::Authority,
@@ -260,7 +261,8 @@ fn slot_team_round_trips() {
         PlayerSlot::occupied(
             1,
             PlayerType::Ai {
-                vision: AiVision::Filtered
+                vision: AiVision::Filtered,
+                detection: AiDetection::Detectors,
             },
             None,
             None
@@ -287,13 +289,14 @@ fn set_team_updates_slot() {
 
 #[test]
 fn environment_slot_is_occupied_raceless_teamless_ai() {
-    let slot = PlayerSlot::environment(4, AiVision::Filtered);
+    let slot = PlayerSlot::environment(4, AiVision::Filtered, AiDetection::Detectors);
 
     assert_eq!(slot.participation(), Some(Participation::Environment));
     assert_eq!(
         slot.player_type(),
         Some(PlayerType::Ai {
-            vision: AiVision::Filtered
+            vision: AiVision::Filtered,
+            detection: AiDetection::Detectors,
         })
     );
     assert_eq!(slot.race(), None);
@@ -301,26 +304,34 @@ fn environment_slot_is_occupied_raceless_teamless_ai() {
 }
 
 #[test]
-fn ai_vision_is_declared_by_scripted_seats_only() {
+fn seat_senses_are_declared_by_scripts_and_fixed_for_humans() {
     let scripted = PlayerSlot::occupied(
         0,
         PlayerType::Ai {
             vision: AiVision::Omniscient,
+            detection: AiDetection::Everywhere,
         },
         None,
         None,
     );
     let human = PlayerSlot::occupied(1, PlayerType::Human, None, None);
-    let environment = PlayerSlot::environment(2, AiVision::Filtered);
+    let environment = PlayerSlot::environment(2, AiVision::Filtered, AiDetection::Everywhere);
 
-    assert_eq!(scripted.ai_vision(), Some(AiVision::Omniscient));
-    assert_eq!(environment.ai_vision(), Some(AiVision::Filtered));
     assert_eq!(
-        human.ai_vision(),
-        None,
-        "a human observes through its screen"
+        scripted.senses(),
+        Some((AiVision::Omniscient, AiDetection::Everywhere))
     );
-    assert_eq!(PlayerSlot::free(3).ai_vision(), None);
+    assert_eq!(
+        environment.senses(),
+        Some((AiVision::Filtered, AiDetection::Everywhere))
+    );
+    // A human observes through its screen: the fog, and what its detectors
+    // make out.
+    assert_eq!(
+        human.senses(),
+        Some((AiVision::Filtered, AiDetection::Detectors))
+    );
+    assert_eq!(PlayerSlot::free(3).senses(), None, "nobody sits there");
 }
 
 #[test]
@@ -329,7 +340,8 @@ fn occupied_lobby_slot_participates_as_player_and_free_slot_as_nothing() {
         PlayerSlot::occupied(
             1,
             PlayerType::Ai {
-                vision: AiVision::Filtered
+                vision: AiVision::Filtered,
+                detection: AiDetection::Detectors,
             },
             None,
             None
@@ -347,7 +359,7 @@ fn is_environment_slot_answers_only_for_environment_occupancy() {
         vec![
             PlayerSlot::occupied(0, PlayerType::Human, None, None),
             PlayerSlot::free(1),
-            PlayerSlot::environment(2, AiVision::Filtered),
+            PlayerSlot::environment(2, AiVision::Filtered, AiDetection::Detectors),
         ],
     );
 
@@ -368,11 +380,12 @@ fn slot_accessors_partition_by_participation() {
                 2,
                 PlayerType::Ai {
                     vision: AiVision::Filtered,
+                    detection: AiDetection::Detectors,
                 },
                 None,
                 None,
             ),
-            PlayerSlot::environment(3, AiVision::Filtered),
+            PlayerSlot::environment(3, AiVision::Filtered, AiDetection::Detectors),
         ],
     );
 
@@ -385,7 +398,7 @@ fn slot_accessors_partition_by_participation() {
 #[test]
 #[should_panic(expected = "only an occupied lobby player slot can change team")]
 fn setting_team_on_environment_slot_panics() {
-    PlayerSlot::environment(4, AiVision::Filtered).set_team(Some(1));
+    PlayerSlot::environment(4, AiVision::Filtered, AiDetection::Detectors).set_team(Some(1));
 }
 
 #[test]
@@ -573,6 +586,7 @@ fn required_players_skips_free_slots() {
                 2,
                 PlayerType::Ai {
                     vision: AiVision::Filtered,
+                    detection: AiDetection::Detectors,
                 },
                 None,
                 None,
@@ -871,6 +885,7 @@ fn mixed_session(ai_hosting: AiHosting) -> GameSession {
                 2,
                 PlayerType::Ai {
                     vision: AiVision::Filtered,
+                    detection: AiDetection::Detectors,
                 },
                 Some("orc"),
                 None,

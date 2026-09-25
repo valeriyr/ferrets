@@ -1,10 +1,16 @@
 //! The growth state a field source carries across a form change.
 
 use ferrets_content::{
-    field::{FieldDecay, FieldDef, FieldGrowth, FieldId, FieldSourceDef, FieldVision},
+    detection::Detection,
+    field::{
+        Emission, FieldDecay, FieldDef, FieldGrowth, FieldId, FieldLayer, FieldSourceDef,
+        FieldVision,
+    },
     registry::ContentRegistry,
 };
-use ferrets_simulation::components::field_source::{FieldSourceState, FieldSourcesComponent};
+use ferrets_simulation::components::field_source::{
+    Emitted, FieldSourceState, FieldSourcesComponent,
+};
 
 //
 // ─── Carrying reach across a form change ──────────────────────────────────────
@@ -13,7 +19,13 @@ use ferrets_simulation::components::field_source::{FieldSourceState, FieldSource
 #[test]
 fn instant_source_spans_its_radius_whatever_it_took_over() {
     let field = creep();
-    let instant = FieldSourceDef::new(field, 6, FieldGrowth::Instant, None);
+    let instant = FieldSourceDef::new(
+        field,
+        6,
+        FieldGrowth::Instant,
+        Emission::Nothing,
+        Emission::Full,
+    );
 
     assert_eq!(
         FieldSourceState::carried(&instant, 2),
@@ -24,7 +36,13 @@ fn instant_source_spans_its_radius_whatever_it_took_over() {
 #[test]
 fn gradual_source_carries_reach_and_restarts_its_cycle() {
     let field = creep();
-    let gradual = FieldSourceDef::new(field, 6, gradual_growth(4, 1), None);
+    let gradual = FieldSourceDef::new(
+        field,
+        6,
+        gradual_growth(4, 1),
+        Emission::Nothing,
+        Emission::Full,
+    );
 
     let carried = FieldSourceState::carried(&gradual, 3);
 
@@ -35,7 +53,13 @@ fn gradual_source_carries_reach_and_restarts_its_cycle() {
 #[test]
 fn gradual_source_never_carries_reach_past_its_radius() {
     let field = creep();
-    let gradual = FieldSourceDef::new(field, 6, gradual_growth(4, 1), None);
+    let gradual = FieldSourceDef::new(
+        field,
+        6,
+        gradual_growth(4, 1),
+        Emission::Nothing,
+        Emission::Full,
+    );
 
     assert_eq!(FieldSourceState::carried(&gradual, 10).reach, 6);
 }
@@ -44,12 +68,25 @@ fn gradual_source_never_carries_reach_past_its_radius() {
 fn sources_without_predecessor_start_fresh() {
     let field = creep();
     let defs = [
-        FieldSourceDef::new(field, 6, gradual_growth(4, 1), None),
-        FieldSourceDef::new(field, 3, gradual_growth(2, 1), None),
+        FieldSourceDef::new(
+            field,
+            6,
+            gradual_growth(4, 1),
+            Emission::Nothing,
+            Emission::Full,
+        ),
+        FieldSourceDef::new(
+            field,
+            3,
+            gradual_growth(2, 1),
+            Emission::Nothing,
+            Emission::Full,
+        ),
     ];
     let previous = FieldSourcesComponent(vec![FieldSourceState {
         reach: 5,
         countdown: 0,
+        last_emitted: Emitted::Reach(5),
     }]);
 
     let carried = FieldSourcesComponent::carried(&defs, &previous);
@@ -76,6 +113,11 @@ fn creep() -> FieldId {
     let ground = registry.register_layer("ground");
     registry.register_field(
         "creep",
-        FieldDef::new(ground, FieldDecay::Never, FieldVision::Dark),
+        FieldDef::new(
+            FieldLayer::Passable(ground.into()),
+            FieldDecay::Never,
+            FieldVision::Dark,
+            Detection::Blind,
+        ),
     )
 }

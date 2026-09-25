@@ -9,28 +9,33 @@ use ferrets_content::{
     attack::{AttackDef, Delivery, Slain, Weapon},
     brood::{BroodlingDef, Lingering, OrphanFate},
     build::BuilderAttendance,
-    costs,
+    concealment::Concealment,
+    cost::Cost,
+    detection::Detection,
     dying::{Bequest, DeathKind, DyingDef, LeftBy},
+    entity_buffs::{EntityBuffDef, Interruption, Lasting},
+    entity_effect::EntityEffect,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     field::{
-        FieldAction, FieldCoverage, FieldDecay, FieldEffect, FieldEffectKind, FieldGrowth,
+        Emission, FieldAction, FieldCoverage, FieldDecay, FieldEffect, FieldGrowth, FieldLayer,
         FieldPlacement, FieldSide, FieldSourceDef, FieldVision,
     },
     kinds::{Kind, Kinds},
     location::Solidity,
     morph::{MorphCancel, MorphInterrupted, MorphPlacement, MorphReason},
     player_stats::PlayerStatId,
+    price::{self, Price},
     quantity::Quantity,
     repair::{RepairCost, RepairRate},
     requirement::Requirement,
     research::ResearchDef,
     resource::Banking,
     skills::{
-        Casting, EntityCastCost, EntityCastEffect, EntityCastTarget, PlayerCastEffect, Reach,
-        SkillCaster, SkillDef,
+        Casting, EntityCastEffect, EntityCastTarget, PlayerCastEffect, Reach, SkillCaster, SkillDef,
     },
     splash::{SplashDef, SplashShape},
+    stack_rule::StackRule,
     stand::StandingAct,
     stats::{EntityModifier, ModifierOp, PlayerModifier},
     transport::{PassengerConduct, PassengerFate},
@@ -83,7 +88,7 @@ fn loads_races_resources_and_entities() {
             7,
             3,
         )
-        .with_cost([("gold", 80)])
+        .with_price([("gold", 80)])
         .with_train_time(60);
 
     assert_eq!(registry.entity("archer"), Some(&expected));
@@ -229,7 +234,7 @@ fn parses_repairer_and_repair_ratio() {
         define_entity("depot", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
             stats = { max_health = 100 },
-            cost = { gold = 200 },
+            price = { gold = 200 },
             build_time = 20,
             repair_ratio = "0.5",
             tags = { "building" },
@@ -461,7 +466,7 @@ fn parses_flat_per_tick_repair_cost() {
 
     assert_eq!(
         repairer.cost(),
-        &RepairCost::PerTick(costs::cost([("gold", 2u32)]))
+        &RepairCost::PerTick(price::from([("gold", 2u32)]))
     );
     assert!(repairer.self_repair());
     assert_eq!(
@@ -522,11 +527,11 @@ fn parses_skill_with_buff_effect() {
         local GROUND = define_layer("ground")
 
         define_entity_buff("haste", {
-            duration = 20,
+            lasting = { ticks = 20 },
             stack = "refresh",
-            modifiers = {
+            effects = { { modifiers = {
                 { entity_stat = "damage", op = "percent", value = "1.0" },
-            },
+            } } },
         })
 
         define_skill("battle_focus", {
@@ -556,7 +561,7 @@ fn parses_skill_with_buff_effect() {
         Some(&SkillDef {
             cooldown: 5,
             caster: SkillCaster::Entity {
-                costs: vec![EntityCastCost::Energy(FixedU64::from_num(30))],
+                costs: vec![Cost::Energy(FixedU64::from_num(30))],
                 target: EntityCastTarget::Caster,
                 reach: Reach::Wherever,
                 casting: Casting::Instant,
@@ -573,11 +578,11 @@ fn parses_skill_requirements() {
         local GROUND = define_layer("ground")
 
         define_entity_buff("haste", {
-            duration = 20,
+            lasting = { ticks = 20 },
             stack = "refresh",
-            modifiers = {
+            effects = { { modifiers = {
                 { entity_stat = "damage", op = "percent", value = "1.0" },
-            },
+            } } },
         })
         define_research("arcana", { time = 100 })
         define_skill("war_secret", {
@@ -729,7 +734,7 @@ fn parses_player_cast_skill() {
         define_skill("war_cry", {
             caster = "player",
             cooldown = 30,
-            cost = { resources = { gold = 25 } },
+            price = { gold = 25 },
             effect = { apply_buff = "war_cry_haste" },
         })
     "#;
@@ -742,7 +747,7 @@ fn parses_player_cast_skill() {
         Some(&SkillDef {
             cooldown: 30,
             caster: SkillCaster::Player {
-                cost: costs::cost([("gold", 25)]),
+                price: price::from([("gold", 25)]),
                 effect: PlayerCastEffect::ApplyBuff(haste),
             },
             requires: Vec::new(),
@@ -847,11 +852,11 @@ fn parses_player_buff_with_both_modifier_lists() {
 fn player_stat_in_entity_modifier_list_errors() {
     let source = r#"
         define_entity_buff("confused", {
-            duration = 10,
+            lasting = { ticks = 10 },
             stack = "refresh",
-            modifiers = {
+            effects = { { modifiers = {
                 { player_stat = "max_supply", op = "flat", value = "1" },
-            },
+            } } },
         })
     "#;
     let Err(error) = content::load(&engine(), source) else {
@@ -1150,7 +1155,7 @@ fn parses_research_with_buff_and_requirements() {
             },
         })
         define_research("smithing", {
-            cost = { gold = 30 },
+            price = { gold = 30 },
             time = 200,
             buff = "sharp_blades",
             requires = { { entity_type = "lab" } },
@@ -1167,7 +1172,7 @@ fn parses_research_with_buff_and_requirements() {
 
     let smithing = registry.research("smithing").expect("smithing registered");
     let expected = ResearchDef::new(
-        costs::cost([("gold", 30)]),
+        price::from([("gold", 30)]),
         200,
         registry.player_buff("sharp_blades"),
         [Requirement::EntityType("lab".to_string())],
@@ -1176,7 +1181,7 @@ fn parses_research_with_buff_and_requirements() {
 
     // An omitted cost is free, an omitted buff a pure unlock.
     let tactics = registry.research("tactics").expect("tactics registered");
-    let expected = ResearchDef::new(costs::Cost::new(), 100, None, Vec::new());
+    let expected = ResearchDef::new(Price::new(), 100, None, Vec::new());
     assert_eq!(registry.research_def(tactics), Some(&expected));
 
     let lab = registry.entity("lab").expect("lab registered");
@@ -1555,7 +1560,7 @@ fn docks_and_annex_read_their_terms() {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
             stats = { max_health = 40, health_drain = "2" },
             tags = { "building" },
-            cost = { gold = 25 },
+            price = { gold = 25 },
             build_time = 10,
             annex = { alone = { work = "idles", life = { fades = "2" } }, claim = "seized" },
         })
@@ -1615,7 +1620,8 @@ fn watch_effect_reads_its_radius_and_duration() {
         *effect,
         EntityCastEffect::Watch {
             radius: 6,
-            duration: 40
+            duration: 40,
+            detection: Detection::Blind,
         }
     );
 }
@@ -2111,7 +2117,7 @@ fn attached_presence_reads_berths_and_stance() {
         define_entity("lodge", {
             location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
             stats = { max_health = 100 },
-            cost = { gold = 10 },
+            price = { gold = 10 },
             build_time = 4,
             berths = {
                 rim = { points = { { 1, 0 }, { "1.8", "1.0" }, { 1, "1.8" }, { "0.2", 1 } }, slots = 2 },
@@ -2202,7 +2208,7 @@ fn overbuilding_type_reads_its_source() {
         define_entity("shaft_house", {
             location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
             stats = { max_health = 100 },
-            cost = { gold = 10 },
+            price = { gold = 10 },
             build_time = 4,
             resource_source = { kind = "gold", depletion = "destroy" },
             overbuilds = "mine",
@@ -2480,7 +2486,7 @@ fn parses_fields_sources_placement_and_effects() {
     assert_eq!(registry.field_def(power).vision(), FieldVision::Dark);
     assert_eq!(
         registry.field_def(creep).layer(),
-        LayerMask::from(LayerId::new(1))
+        FieldLayer::Passable(LayerMask::from(LayerId::new(1)))
     );
 
     assert_eq!(
@@ -2492,13 +2498,20 @@ fn parses_fields_sources_placement_and_effects() {
                 cycle: 9,
                 initial_radius: 1,
             },
-            Some(1),
+            Emission::Held(1),
+            Emission::Full
         )]
     );
     let pylon = registry.entity("pylon").unwrap();
     assert_eq!(
         pylon.field_sources,
-        vec![FieldSourceDef::new(power, 6, FieldGrowth::Instant, None)]
+        vec![FieldSourceDef::new(
+            power,
+            6,
+            FieldGrowth::Instant,
+            Emission::Nothing,
+            Emission::Nothing
+        )]
     );
     assert_eq!(
         pylon.on_stand,
@@ -2515,7 +2528,7 @@ fn parses_fields_sources_placement_and_effects() {
             FieldPlacement::Requires {
                 field: power,
                 of: Affiliation::Own,
-                coverage: FieldCoverage::Anchor,
+                coverage: FieldCoverage::Any,
             },
             FieldPlacement::Forbids { field: creep },
         ]
@@ -2526,7 +2539,8 @@ fn parses_fields_sources_placement_and_effects() {
             power,
             Affiliation::Own,
             FieldSide::Outside,
-            FieldEffectKind::Disabled,
+            FieldCoverage::Every,
+            EntityEffect::Disable,
         )]
     );
     assert_eq!(
@@ -2535,7 +2549,8 @@ fn parses_fields_sources_placement_and_effects() {
             creep,
             Affiliation::Anyone,
             FieldSide::Inside,
-            FieldEffectKind::Modifiers(vec![EntityModifier {
+            FieldCoverage::Any,
+            EntityEffect::Modifiers(vec![EntityModifier {
                 stat: EntityStatId::SPEED,
                 op: ModifierOp::PercentAdd,
                 magnitude: FixedI64::from_str("0.3").unwrap(),
@@ -2569,7 +2584,7 @@ fn unknown_field_name_errors() {
         local GROUND = define_layer("ground")
         define_entity("hive", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            field_sources = { { field = "creep", radius = 3, growth = "instant" } },
+            field_sources = { { field = "creep", radius = 3, growth = "instant", while_constructing = "nothing", while_disabled = "full" } },
         })
     "#;
     let error = content::load(&engine(), source)
@@ -2588,12 +2603,54 @@ fn field_placement_rule_names_exactly_one_verb() {
         define_field("creep", { layer = GROUND, decay = "never" })
         define_entity("spore", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            field_placement = { { requires = "creep", forbids = "creep", of = "anyone", coverage = "anchor" } },
+            field_placement = { { requires = "creep", forbids = "creep", of = "anyone", coverage = "any" } },
         })
     "#;
     let error = content::load(&engine(), source).err().expect("two verbs");
     assert!(
         matches!(&error, ScriptError::ContentError(message) if message.contains("exactly one of requires or forbids")),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn unknown_field_coverage_errors() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_field("veil", { layer = "anywhere", decay = "instant" })
+        define_entity("zealot", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            field_effects = { { field = "veil", of = "allied", coverage = "half", inside = "conceal" } },
+        })
+    "#;
+    let error = content::load(&engine(), source)
+        .err()
+        .expect("bad coverage");
+    assert!(
+        matches!(&error, ScriptError::ContentError(message) if message.contains("field coverage must be 'every' or 'any', found 'half'")),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn field_effect_without_coverage_errors() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_field("veil", { layer = "anywhere", decay = "instant" })
+        define_entity("zealot", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            field_effects = { { field = "veil", of = "allied", inside = "conceal" } },
+        })
+    "#;
+    let error = content::load(&engine(), source)
+        .err()
+        .expect("missing coverage");
+    assert!(
+        matches!(
+            &error,
+            ScriptError::ContentError(message)
+                if message == "field 'coverage': error converting Lua nil to String (expected string or number)"
+        ),
         "{error:?}"
     );
 }
@@ -2839,6 +2896,297 @@ fn unknown_morph_interrupted_errors() {
 }
 
 //
+// ─── Concealment and detection ────────────────────────────────────────────────
+//
+
+#[test]
+fn type_reads_concealment_and_stands_exposed_unless_declared() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_entity("shade", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            concealment = "concealed",
+        })
+        define_entity("footman", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("content loads");
+    assert_eq!(
+        registry.entity("shade").unwrap().concealment,
+        Concealment::Concealed
+    );
+    assert_eq!(
+        registry.entity("footman").unwrap().concealment,
+        Concealment::Exposed
+    );
+}
+
+#[test]
+fn unknown_concealment_errors() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_entity("shade", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            concealment = "shadowy",
+        })
+    "#;
+    let error = content::load(&engine(), source)
+        .err()
+        .expect("bad concealment");
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("concealment must be 'exposed' or 'concealed', found 'shadowy'")),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn unknown_field_layer_errors() {
+    let source = r#"
+        define_field("mist", { layer = "everywhere", decay = "instant" })
+    "#;
+    let error = content::load(&engine(), source)
+        .err()
+        .expect("bad field layer");
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("field layer must be 'anywhere' or a layer mask, found 'everywhere'")),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn unknown_while_disabled_errors() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_field("power", { layer = GROUND, decay = "instant" })
+        define_entity("pylon", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            field_sources = {
+                { field = "power", radius = 6, growth = "instant", while_constructing = "nothing", while_disabled = "dims" },
+            },
+        })
+    "#;
+    let error = content::load(&engine(), source)
+        .err()
+        .expect("bad while_disabled");
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("while_disabled must be 'full', 'nothing', or a { held = cells } table, found 'dims'")),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn parses_buff_effects_lasting_and_interruptions() {
+    let source = r#"
+        define_resource("gold")
+        define_entity_buff("wind_walk", {
+            lasting = { ticks = 300 },
+            stack = "refresh",
+            interrupted_by = { "attack", "cast", "hit" },
+            effects = {
+                "conceal",
+                { modifiers = { { entity_stat = "speed", op = "percent", value = "0.5" } } },
+            },
+        })
+        define_entity_buff("cloaked", {
+            lasting = { upkeep = { cost = { energy = "0.25", resources = { gold = 1 } }, period = 20 } },
+            stack = "ignore",
+            effects = { "conceal" },
+        })
+        define_entity_buff("stunned", {
+            lasting = "forever",
+            stack = "ignore",
+            effects = { "disable" },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("content loads");
+    let def = |name: &str| registry.entity_buff_def(registry.entity_buff(name).expect("defined"));
+
+    assert_eq!(
+        *def("wind_walk"),
+        EntityBuffDef {
+            effects: vec![
+                EntityEffect::Conceal,
+                EntityEffect::Modifiers(vec![EntityModifier {
+                    stat: EntityStatId::SPEED,
+                    op: ModifierOp::PercentAdd,
+                    magnitude: FixedI64::from_str("0.5").unwrap(),
+                }]),
+            ],
+            lasting: Lasting::For(300),
+            stack_rule: StackRule::Refresh,
+            interrupted_by: vec![Interruption::Attack, Interruption::Cast, Interruption::Hit],
+        }
+    );
+    assert_eq!(
+        *def("cloaked"),
+        EntityBuffDef {
+            effects: vec![EntityEffect::Conceal],
+            lasting: Lasting::Upkeep {
+                costs: vec![
+                    Cost::Resources(price::from([("gold", 1)])),
+                    Cost::Energy(FixedU64::from_str("0.25").unwrap()),
+                ],
+                period: 20,
+            },
+            stack_rule: StackRule::Ignore,
+            interrupted_by: Vec::new(),
+        }
+    );
+    assert_eq!(
+        *def("stunned"),
+        EntityBuffDef {
+            effects: vec![EntityEffect::Disable],
+            lasting: Lasting::Forever,
+            stack_rule: StackRule::Ignore,
+            interrupted_by: Vec::new(),
+        }
+    );
+}
+
+#[test]
+fn unknown_interruption_errors() {
+    let source = r#"
+        define_entity_buff("wind_walk", {
+            lasting = "forever",
+            stack = "ignore",
+            interrupted_by = { "move" },
+        })
+    "#;
+    let error = content::load(&engine(), source)
+        .err()
+        .expect("bad interruption");
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("interruption must be 'attack', 'cast', or 'hit', found 'move'")),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn lasting_names_exactly_one_of_ticks_or_upkeep() {
+    for lasting in [
+        "{ ticks = 3, upkeep = { cost = { energy = \"1\" }, period = 1 } }",
+        "{ }",
+    ] {
+        let source = format!(
+            r#"
+            define_entity_buff("cloaked", {{
+                lasting = {lasting},
+                stack = "ignore",
+                effects = {{ "conceal" }},
+            }})
+            "#
+        );
+        let error = content::load(&engine(), &source)
+            .err()
+            .expect("bad lasting");
+        assert!(
+            matches!(&error, ScriptError::ContentError(m) if m.contains("a lasting table names exactly one of ticks or upkeep")),
+            "{lasting}: {error:?}"
+        );
+    }
+}
+
+#[test]
+fn unknown_lasting_errors() {
+    let source = r#"
+        define_entity_buff("cloaked", {
+            lasting = "briefly",
+            stack = "ignore",
+            effects = { "conceal" },
+        })
+    "#;
+    let error = content::load(&engine(), source).err().expect("bad lasting");
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("lasting must be 'forever', a { ticks = ... } table, or a { upkeep = ... } table, found 'briefly'")),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn unknown_entity_effect_errors() {
+    let source = r#"
+        define_entity_buff("cloaked", {
+            lasting = "forever",
+            stack = "ignore",
+            effects = { "hidden" },
+        })
+    "#;
+    let error = content::load(&engine(), source).err().expect("bad effect");
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("entity effect must be 'disable', 'conceal', or a { modifiers = ... } table, found 'hidden'")),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn field_effect_reads_concealed() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_field("veil", { layer = "anywhere", decay = "instant" })
+        define_entity("zealot", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            field_effects = { { field = "veil", of = "allied", coverage = "every", inside = "conceal" } },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("content loads");
+    let veil = registry.field("veil").expect("veil defined");
+    assert_eq!(
+        registry.entity("zealot").unwrap().field_effects,
+        vec![FieldEffect::new(
+            veil,
+            Affiliation::Allied,
+            FieldSide::Inside,
+            FieldCoverage::Every,
+            EntityEffect::Conceal,
+        )]
+    );
+}
+
+#[test]
+fn parses_field_detection_and_watch_detection() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        local AIR = define_layer("air")
+        define_field("true_sight", { layer = "anywhere", decay = "instant", detection = GROUND | AIR })
+        define_field("veil", { layer = "anywhere", decay = "instant" })
+        define_skill("scan", {
+            cooldown = 10,
+            caster = "entity",
+            target = "position",
+            effect = { watch = { radius = 6, duration = 40, detection = AIR } },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("content loads");
+    let ground = registry.layer("ground").expect("ground defined");
+    let air = registry.layer("air").expect("air defined");
+    let field = |name: &str| *registry.field_def(registry.field(name).expect("defined"));
+
+    assert_eq!(
+        field("true_sight").detection(),
+        Detection::Reveals(LayerMask::EMPTY | ground | air)
+    );
+    assert_eq!(field("true_sight").layer(), FieldLayer::Anywhere);
+    assert_eq!(field("veil").detection(), Detection::Blind);
+
+    let scan = registry
+        .skill("scan")
+        .and_then(|id| registry.skill_def(id))
+        .expect("scan defined");
+    let SkillCaster::Entity { effect, .. } = &scan.caster else {
+        panic!("scan is cast by an entity");
+    };
+    assert_eq!(
+        *effect,
+        EntityCastEffect::Watch {
+            radius: 6,
+            duration: 40,
+            detection: Detection::Reveals(LayerMask::EMPTY | air),
+        }
+    );
+}
+
+//
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 //
 
@@ -2886,7 +3234,7 @@ const ARCHER: &str = r#"
         },
         dying = { time = 2 },
         attack = { targets = GROUND },
-        cost = { gold = 80 },
+        price = { gold = 80 },
         train_time = 60,
     })
 "#;
@@ -2905,7 +3253,7 @@ const BASE: &str = r#"
         location = { occupation = GROUND, size = 1, solidity = "solid" },
         stats = { speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", max_health = 30, build_range = 1, harvest_range = 1 },
         dying = { time = 2 },
-        cost = { gold = 50 },
+        price = { gold = 50 },
         train_time = 40,
         builder = { builds = { "town_hall" }, attendance = { hidden = { crew = 1 } } },
         resource_carrier = {
@@ -2919,7 +3267,7 @@ const BASE: &str = r#"
         location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
         stats = { max_health = 800 },
         dying = { time = 2 },
-        cost = { gold = 400 },
+        price = { gold = 400 },
         build_time = 200,
         trainer = { "peasant" },
         resource_storage = { "gold", "wood" },
@@ -2938,7 +3286,7 @@ const FIELDS: &str = r#"
         stats = { max_health = 100 },
         build_time = 20,
         field_sources = {
-            { field = "creep", radius = 10, growth = { cycle = 9, initial_radius = 1 }, while_constructing = 1 },
+            { field = "creep", radius = 10, growth = { cycle = 9, initial_radius = 1 }, while_constructing = { held = 1 }, while_disabled = "full" },
         },
     })
 
@@ -2946,7 +3294,7 @@ const FIELDS: &str = r#"
         location = { occupation = GROUND, size = 1, solidity = "solid" },
         stats = { max_health = 100 },
         field_sources = {
-            { field = "power", radius = 6, growth = "instant" },
+            { field = "power", radius = 6, growth = "instant", while_constructing = "nothing", while_disabled = "nothing" },
         },
         on_stand = {
             { field = { field = "creep", radius = 6, action = "clear" } },
@@ -2957,11 +3305,11 @@ const FIELDS: &str = r#"
         location = { occupation = GROUND, size = 2, solidity = "solid" },
         stats = { max_health = 100 },
         field_placement = {
-            { requires = "power", of = "own", coverage = "anchor" },
+            { requires = "power", of = "own", coverage = "any" },
             { forbids = "creep" },
         },
         field_effects = {
-            { field = "power", of = "own", outside = "disabled" },
+            { field = "power", of = "own", coverage = "every", outside = "disable" },
         },
     })
 
@@ -2969,7 +3317,7 @@ const FIELDS: &str = r#"
         location = { occupation = GROUND, size = 1, solidity = "solid" },
         stats = { speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1, max_health = 20 },
         field_effects = {
-            { field = "creep", of = "anyone", inside = {
+            { field = "creep", of = "anyone", coverage = "any", inside = {
                 modifiers = { { entity_stat = "speed", op = "percent", value = "0.3" } },
             } },
         },
@@ -3056,10 +3404,7 @@ fn morph_transitions_round_trip() {
     assert_eq!(first.time(), Quantity::Stat(morph_time));
     assert_eq!(first.placement(), MorphPlacement::Revalidate);
     assert_eq!(first.cancel(), MorphCancel::Committed);
-    assert_eq!(
-        first.costs(),
-        [EntityCastCost::Energy(FixedU64::from_num(20))]
-    );
+    assert_eq!(first.costs(), [Cost::Energy(FixedU64::from_num(20))]);
     assert_eq!(first.requires(), [Requirement::Tag("winged".to_string())]);
 
     assert_eq!(second.into_type(), "statue");
@@ -3068,7 +3413,7 @@ fn morph_transitions_round_trip() {
     assert_eq!(second.cancel(), MorphCancel::Refundable);
     assert_eq!(
         second.costs(),
-        [EntityCastCost::Resources(costs::cost([("gold", 30)]))]
+        [Cost::Resources(price::from([("gold", 30)]))]
     );
     assert!(
         second.requires().is_empty(),

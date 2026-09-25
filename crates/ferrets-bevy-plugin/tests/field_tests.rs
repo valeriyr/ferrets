@@ -13,16 +13,19 @@ use ferrets_content::{
     affiliation::Affiliation,
     attack::{Delivery, Slain, Weapon},
     build::BuilderAttendance,
-    costs,
+    detection::Detection,
+    entity_buffs::{EntityBuffDef, Lasting},
+    entity_effect::EntityEffect,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     field::{
-        FieldAction, FieldCoverage, FieldDecay, FieldDef, FieldEffect, FieldEffectKind,
-        FieldGrowth, FieldId, FieldPlacement, FieldSide, FieldSourceDef, FieldVision,
+        Emission, FieldAction, FieldCoverage, FieldDecay, FieldDef, FieldEffect, FieldGrowth,
+        FieldId, FieldLayer, FieldPlacement, FieldSide, FieldSourceDef, FieldVision,
     },
     kinds::Kinds,
     location::Solidity,
     morph::{MorphCancel, MorphInterrupted, MorphPlacement, MorphReason, MorphTransition},
+    price,
     quantity::Quantity,
     registry::ContentRegistry,
     repair::{RepairCost, RepairRate},
@@ -30,6 +33,7 @@ use ferrets_content::{
     research::ResearchDef,
     resource::{Banking, DepletionPolicy, HarvestData},
     skills::{Casting, EntityCastEffect, EntityCastTarget, Reach, SkillCaster, SkillDef},
+    stack_rule::StackRule,
     stats::{EntityModifier, ModifierOp},
     transport::{PassengerConduct, PassengerFate},
     turret::{TurretDef, TurretMount, TurretStats, WeaponConduct},
@@ -44,16 +48,17 @@ use ferrets_simulation::{
     components::{
         research::ResearchComponent, resource::ResourceSourceComponent, train::TrainComponent,
     },
-    entity_def::{self, Operation, Switch},
+    entity_def::{self, Operation, Outage},
     events::{DeathCause, SimulationEvent},
     fields::{self, FieldGrid},
+    game_loop::stats,
     map_data::MapData,
     order::Order,
     player_research::PlayerResearch,
     requirements,
     session::{
-        GameSession, ai_vision::AiVision, player_id::PlayerId, player_slot::PlayerSlot,
-        player_type::PlayerType,
+        GameSession, ai_detection::AiDetection, ai_vision::AiVision, player_id::PlayerId,
+        player_slot::PlayerSlot, player_type::PlayerType,
     },
     visibility::{CellVisibility, VisibilityGrid},
 };
@@ -210,12 +215,55 @@ fn field_stops_at_terrain_its_layer_cannot_pass() {
     assert!(!utils::covered_by(&app, power, 13, 8, 0), "nor is it leapt");
 }
 
+#[test]
+fn field_lying_anywhere_crosses_terrain_no_layer_passes() {
+    let mut app = field_app();
+    let beam = {
+        let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
+        registry.register_terrain("grass", utils::GROUND);
+        registry.register_terrain("water", LayerMask::EMPTY);
+        let beam = registry.register_field(
+            "beam",
+            FieldDef::new(
+                FieldLayer::Anywhere,
+                FieldDecay::Instant,
+                FieldVision::Dark,
+                Detection::Blind,
+            ),
+        );
+        registry.register(
+            building("lamp", 1, 8).with_field_sources([FieldSourceDef::new(
+                beam,
+                3,
+                FieldGrowth::Instant,
+                Emission::Nothing,
+                Emission::Nothing,
+            )]),
+        );
+        beam
+    };
+    let mut data = MapData::new("walled", Projection::Isometric, 16, 16);
+    data.fill_terrain("grass");
+    for y in 0..16 {
+        data.set_terrain((12, y), "water");
+    }
+    instantiate_map(app.world_mut(), &data);
+    utils::create_owned(&mut app, "lamp", 10, 8, 0);
+
+    utils::run_ticks(&mut app, 1);
+
+    // The same column that stops power carries a field that lies anywhere,
+    // over the water and to the far bank.
+    assert!(utils::covered_by(&app, beam, 12, 8, 0), "over the water");
+    assert!(utils::covered_by(&app, beam, 13, 8, 0), "and past it");
+}
+
 //
 // ─── Placement ────────────────────────────────────────────────────────────────
 //
 
 #[test]
-fn placement_rules_read_footprint_anchor_and_affiliation() {
+fn placement_rules_read_coverage_and_affiliation() {
     let mut app = field_app();
     utils::place(&mut app, "hive", 10, 10, 0);
     utils::create_owned(&mut app, "pylon", 20, 10, 0);
@@ -236,7 +284,7 @@ fn placement_rules_read_footprint_anchor_and_affiliation() {
     );
     assert!(
         allows(&app, 0, "gateway", 23, 10),
-        "anchor powered, the rest not"
+        "one cell powered is enough for a rule asking for any"
     );
     assert!(!allows(&app, 0, "gateway", 24, 10));
     assert!(
@@ -372,21 +420,14 @@ fn checksum_ignores_field_coverage() {
     let mut app = field_app();
     let Fields { creep, .. } = fields(&app);
     let (_, overlord) = utils::create_owned(&mut app, "overlord", 20, 20, 0);
-    let spew = app
-        .world()
-        .resource::<ContentRegistry>()
-        .skill("spew")
-        .unwrap();
     utils::run_ticks(&mut app, 1);
     let before = checksum::state_checksum(app.world());
 
-    utils::push_command(
+    utils::use_skill(
         &mut app,
-        PlayerCommand::UseSkill {
-            skill: spew,
-            caster: SkillCasterRef::Entity(overlord),
-            target: Some(SkillTarget::Position(utils::pos(24, 24))),
-        },
+        "spew",
+        SkillCasterRef::Entity(overlord),
+        Some(SkillTarget::Position(utils::pos(24, 24))),
     );
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
@@ -495,6 +536,153 @@ fn disabled_trainer_queues_commands_and_holds_queue_until_powered_again() {
 }
 
 #[test]
+fn buff_disabled_trainer_queues_command_and_holds_it() {
+    let mut app = field_app();
+    utils::create_owned(&mut app, "pylon", 10, 10, 0);
+    let (gateway, gateway_id) = utils::create_owned(&mut app, "gateway", 12, 10, 0);
+    let dazed = app
+        .world_mut()
+        .resource_mut::<ContentRegistry>()
+        .register_entity_buff(
+            "dazed",
+            EntityBuffDef {
+                effects: vec![EntityEffect::Disable],
+                lasting: Lasting::For(12),
+                stack_rule: StackRule::Refresh,
+                interrupted_by: Vec::new(),
+            },
+        );
+    stats::apply_entity_buff(app.world_mut(), gateway, dazed);
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(
+        entity_def::operation(app.world(), gateway),
+        Operation::Disabled(Outage::Buff)
+    );
+
+    // A buff outage is a field outage to the trainer: the command queues and
+    // waits, nothing trains, and the work starts when the daze runs out —
+    // twelve ticks after the tick it was applied in, then four of training.
+    utils::push_command(
+        &mut app,
+        PlayerCommand::TrainEntity {
+            trainer: gateway_id,
+            type_name: "zealot".into(),
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    assert_eq!(utils::train_queue_len(app.world(), gateway), 1);
+    assert_eq!(utils::count_of_type(app.world_mut(), "zealot"), 0);
+    utils::run_ticks(&mut app, 7);
+    assert_eq!(
+        entity_def::operation(app.world(), gateway),
+        Operation::Disabled(Outage::Buff)
+    );
+    assert_eq!(utils::count_of_type(app.world_mut(), "zealot"), 0);
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(
+        entity_def::operation(app.world(), gateway),
+        Operation::Operating
+    );
+    utils::run_ticks(&mut app, 4);
+    assert_eq!(utils::count_of_type(app.world_mut(), "zealot"), 1);
+}
+
+#[test]
+fn disabled_source_halts_its_field_when_declared() {
+    let mut app = field_app();
+    let (relay, _) = utils::create_owned(&mut app, "relay", 13, 10, 0);
+    utils::run_ticks(&mut app, 1);
+    let (gateway, _) = utils::create_owned(&mut app, "gateway", 15, 10, 0);
+    utils::run_ticks(&mut app, 1);
+    let Fields { power, .. } = fields(&app);
+    assert!(utils::covered_by(&app, power, 15, 10, 0));
+    assert_eq!(
+        entity_def::operation(app.world(), gateway),
+        Operation::Operating
+    );
+
+    // A rival hive's creep reaches under the relay: switched off, its power
+    // goes at once, and the gateway stands disabled in turn.
+    utils::place(&mut app, "hive", 10, 10, 1);
+    utils::run_ticks(&mut app, 3);
+    assert_eq!(
+        entity_def::operation(app.world(), relay),
+        Operation::Disabled(Outage::Field)
+    );
+    assert!(!utils::covered_by(&app, power, 15, 10, 0));
+    assert_eq!(
+        entity_def::operation(app.world(), gateway),
+        Operation::Disabled(Outage::Field)
+    );
+}
+
+#[test]
+fn coverage_decides_what_partly_powered_footprint_answers() {
+    let mut app = field_app();
+    // A pylon at (10, 10) powers three cells around itself, so the column
+    // x = 13 is powered and x = 14 is not. Both buildings span those two
+    // columns: two of their four cells are powered and two are not.
+    utils::place(&mut app, "pylon", 10, 10, 0);
+    let forge = utils::place(&mut app, "forge", 13, 10, 0);
+    let chapel = utils::place(&mut app, "chapel", 13, 13, 0);
+    utils::run_ticks(&mut app, 3);
+    let Fields { power, .. } = fields(&app);
+    assert!(utils::covered_by(&app, power, 13, 10, 0));
+    assert!(!utils::covered_by(&app, power, 14, 10, 0));
+
+    // The forge idles outside power only where EVERY cell is outside it, and
+    // two of its cells are inside, so it runs.
+    assert_eq!(
+        entity_def::operation(app.world(), forge),
+        Operation::Operating
+    );
+    // The chapel idles where ANY cell is outside, and two of its cells are.
+    assert_eq!(
+        entity_def::operation(app.world(), chapel),
+        Operation::Disabled(Outage::Field)
+    );
+}
+
+#[test]
+fn disabled_source_holds_declared_patch() {
+    let mut app = field_app();
+    let (lantern, _) = utils::create_owned(&mut app, "lantern", 13, 10, 0);
+    utils::run_ticks(&mut app, 2);
+    let Fields { power, .. } = fields(&app);
+    assert!(utils::covered_by(&app, power, 16, 10, 0));
+
+    // Switched off by the rival's creep, the lantern holds one cell of power
+    // around itself and no more: (14, 10) is a cell out, (15, 10) two.
+    utils::place(&mut app, "hive", 10, 10, 1);
+    utils::run_ticks(&mut app, 3);
+    assert_eq!(
+        entity_def::operation(app.world(), lantern),
+        Operation::Disabled(Outage::Field)
+    );
+    assert!(utils::covered_by(&app, power, 14, 10, 0));
+    assert!(!utils::covered_by(&app, power, 15, 10, 0));
+}
+
+#[test]
+fn disabled_source_keeps_projecting_when_declared() {
+    let mut app = field_app();
+    let (beacon, _) = utils::create_owned(&mut app, "beacon", 13, 10, 0);
+    utils::run_ticks(&mut app, 2);
+    let Fields { creep, .. } = fields(&app);
+    assert!(utils::covered_by(&app, creep, 16, 10, 0));
+
+    // The rival's creep switches the beacon off, but its own creep is
+    // declared to project on regardless.
+    utils::place(&mut app, "hive", 10, 10, 1);
+    utils::run_ticks(&mut app, 3);
+    assert_eq!(
+        entity_def::operation(app.world(), beacon),
+        Operation::Disabled(Outage::Field)
+    );
+    assert!(utils::covered_by(&app, creep, 16, 10, 0));
+}
+
+#[test]
 fn disabled_cannon_does_not_fire() {
     let mut app = field_app();
     utils::create_owned(&mut app, "cannon", 12, 10, 0);
@@ -570,7 +758,7 @@ fn attacking_cannon_losing_power_drops_its_target_in_one_tick() {
 
     assert!(
         utils::order_queue_is_empty(app.world_mut(), cannon),
-        "the attack is cancelled the tick power goes"
+        "the attack is canceled the tick power goes"
     );
     let health = utils::health(&app, dummy);
     utils::run_ticks(&mut app, 20);
@@ -737,7 +925,7 @@ fn probe_losing_power_drops_queued_moves_in_one_tick() {
 
     assert!(
         utils::order_queue_is_empty(app.world_mut(), probe),
-        "both walks are cancelled together"
+        "both walks are canceled together"
     );
 }
 
@@ -932,11 +1120,17 @@ fn script_view_reads_disabled_structure() {
     let gateway_id = utils::create_owned(&mut app, "gateway", 12, 10, 0).1;
     utils::run_ticks(&mut app, 1);
     let gateway_view = |app: &App| {
-        game_view(app.world(), 0, "conclave", AiVision::Omniscient)
-            .my_entities
-            .into_iter()
-            .find(|entity| entity.id == gateway_id.0)
-            .expect("the gateway is the player's")
+        game_view(
+            app.world(),
+            0,
+            "conclave",
+            AiVision::Omniscient,
+            AiDetection::Detectors,
+        )
+        .my_entities
+        .into_iter()
+        .find(|entity| entity.id == gateway_id.0)
+        .expect("the gateway is the player's")
     };
     assert!(
         gateway_view(&app).disabled,
@@ -963,7 +1157,7 @@ fn walking_builder_losing_power_gives_up_its_build() {
 
     assert!(
         utils::order_queue_is_empty(app.world_mut(), probe),
-        "a build with no site raised is cancelled with the walk"
+        "a build with no site raised is canceled with the walk"
     );
     // The depleted pylon lingers its one dying tick; no site takes its place.
     utils::run_ticks(&mut app, 1);
@@ -1007,7 +1201,7 @@ fn probe_mends_disabled_gateway() {
     utils::run_ticks(&mut app, 1);
     assert_eq!(
         entity_def::operation(app.world(), gateway),
-        Operation::Disabled(Switch::Field),
+        Operation::Disabled(Outage::Field),
         "the gateway stands past the pylon's reach"
     );
     utils::wound(&mut app, gateway, "40");
@@ -1115,19 +1309,12 @@ fn position_cast_covers_cells_that_then_decay_unsustained() {
     let mut app = field_app();
     let Fields { creep, .. } = fields(&app);
     let (_, overlord) = utils::create_owned(&mut app, "overlord", 20, 20, 0);
-    let spew = app
-        .world()
-        .resource::<ContentRegistry>()
-        .skill("spew")
-        .unwrap();
 
-    utils::push_command(
+    utils::use_skill(
         &mut app,
-        PlayerCommand::UseSkill {
-            skill: spew,
-            caster: SkillCasterRef::Entity(overlord),
-            target: Some(SkillTarget::Position(utils::pos(24, 20))),
-        },
+        "spew",
+        SkillCasterRef::Entity(overlord),
+        Some(SkillTarget::Position(utils::pos(24, 20))),
     );
     utils::run_ticks(&mut app, utils::APPLY);
     assert!(utils::covered_by(&app, creep, 24, 20, 0));
@@ -1147,21 +1334,14 @@ fn position_cast_clears_orphaned_coverage() {
     let Fields { creep, .. } = fields(&app);
     let hive = utils::place(&mut app, "hive", 10, 10, 0);
     let (_, overlord) = utils::create_owned(&mut app, "overlord", 20, 20, 0);
-    let scour = app
-        .world()
-        .resource::<ContentRegistry>()
-        .skill("scour")
-        .unwrap();
     utils::run_ticks(&mut app, 1);
 
     // Sustained creep shrugs the cast off.
-    utils::push_command(
+    utils::use_skill(
         &mut app,
-        PlayerCommand::UseSkill {
-            skill: scour,
-            caster: SkillCasterRef::Entity(overlord),
-            target: Some(SkillTarget::Position(utils::pos(13, 10))),
-        },
+        "scour",
+        SkillCasterRef::Entity(overlord),
+        Some(SkillTarget::Position(utils::pos(13, 10))),
     );
     utils::run_ticks(&mut app, utils::APPLY);
     assert!(utils::covered_by(&app, creep, 13, 10, 0));
@@ -1169,13 +1349,11 @@ fn position_cast_clears_orphaned_coverage() {
     // Orphaned creep goes.
     utils::deplete(&mut app, hive);
     utils::run_ticks(&mut app, 1);
-    utils::push_command(
+    utils::use_skill(
         &mut app,
-        PlayerCommand::UseSkill {
-            skill: scour,
-            caster: SkillCasterRef::Entity(overlord),
-            target: Some(SkillTarget::Position(utils::pos(11, 10))),
-        },
+        "scour",
+        SkillCasterRef::Entity(overlord),
+        Some(SkillTarget::Position(utils::pos(11, 10))),
     );
     utils::run_ticks(&mut app, utils::APPLY);
     assert!(!covered_by_anyone(&app, creep, 11, 10));
@@ -1190,23 +1368,16 @@ fn position_cast_clears_orphaned_coverage() {
 fn watching_field_reveals_covered_cells_to_whoever_covers_them() {
     let mut app = field_app();
     let (_, overlord) = utils::create_owned(&mut app, "overlord", 20, 20, 0);
-    let spew = app
-        .world()
-        .resource::<ContentRegistry>()
-        .skill("spew")
-        .unwrap();
 
     // Nothing of player 0's sees out to (24, 20) before the creep gets there.
     utils::run_ticks(&mut app, 1);
     assert_eq!(seen_by(&app, 0, 24, 20), CellVisibility::Unexplored);
 
-    utils::push_command(
+    utils::use_skill(
         &mut app,
-        PlayerCommand::UseSkill {
-            skill: spew,
-            caster: SkillCasterRef::Entity(overlord),
-            target: Some(SkillTarget::Position(utils::pos(24, 20))),
-        },
+        "spew",
+        SkillCasterRef::Entity(overlord),
+        Some(SkillTarget::Position(utils::pos(24, 20))),
     );
     // One tick past the command's own delay: a cast is an order, so the
     // creep is laid in the order phase, which the tick's fog pass has
@@ -1245,19 +1416,12 @@ fn ally_sees_through_watched_field_and_enemy_does_not() {
         PlayerSlot::occupied(2, PlayerType::Human, None, Some(2)),
     ]);
     let (_, overlord) = utils::create_owned(&mut app, "overlord", 20, 20, 0);
-    let spew = app
-        .world()
-        .resource::<ContentRegistry>()
-        .skill("spew")
-        .unwrap();
 
-    utils::push_command(
+    utils::use_skill(
         &mut app,
-        PlayerCommand::UseSkill {
-            skill: spew,
-            caster: SkillCasterRef::Entity(overlord),
-            target: Some(SkillTarget::Position(utils::pos(24, 20))),
-        },
+        "spew",
+        SkillCasterRef::Entity(overlord),
+        Some(SkillTarget::Position(utils::pos(24, 20))),
     );
     // One tick past the command's own delay: a cast is an order, so the
     // creep is laid in the order phase, which the tick's fog pass has
@@ -1303,21 +1467,6 @@ fn fields(app: &App) -> Fields {
     }
 }
 
-/// A one-cell walker with a little health and no sight of its own.
-fn mover(name: &str) -> EntityTypeDef {
-    EntityTypeDef::new(name)
-        .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-        .with_movement(
-            FixedU64::from_num(0.5),
-            FixedU64::from_num(0.5),
-            FixedU64::ONE,
-            FixedU64::from_num(360),
-            FixedU64::from_num(360),
-        )
-        .with_health(20)
-        .with_dying(1, [])
-}
-
 /// A square structure of `side` cells that takes `build_time` ticks to raise.
 fn building(name: &str, side: u32, build_time: u32) -> EntityTypeDef {
     EntityTypeDef::new(name)
@@ -1351,14 +1500,20 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
         let creep = registry.register_field(
             "creep",
             FieldDef::new(
-                utils::GROUND,
+                FieldLayer::Passable(utils::GROUND.into()),
                 FieldDecay::Gradual { cycle: 2 },
                 FieldVision::Watched,
+                Detection::Blind,
             ),
         );
         let power = registry.register_field(
             "power",
-            FieldDef::new(utils::GROUND, FieldDecay::Instant, FieldVision::Dark),
+            FieldDef::new(
+                FieldLayer::Passable(utils::GROUND.into()),
+                FieldDecay::Instant,
+                FieldVision::Dark,
+                Detection::Blind,
+            ),
         );
 
         // Creep sources: a hive that grows from one ring outward and a nest
@@ -1371,7 +1526,8 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                     cycle: 2,
                     initial_radius: 1,
                 },
-                None,
+                Emission::Nothing,
+                Emission::Full,
             )]),
         );
         registry.register(
@@ -1382,7 +1538,8 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                     cycle: 1,
                     initial_radius: 1,
                 },
-                Some(1),
+                Emission::Held(1),
+                Emission::Full,
             )]),
         );
         // Creep readers: a spore that needs creep under its whole footprint, a
@@ -1394,7 +1551,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 .with_field_placement([FieldPlacement::Requires {
                     field: creep,
                     of: Affiliation::Anyone,
-                    coverage: FieldCoverage::Footprint,
+                    coverage: FieldCoverage::Every,
                 }])
                 .with_morphs([MorphTransition::new(
                     "tower",
@@ -1414,7 +1571,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
             FieldPlacement::Requires {
                 field: creep,
                 of: Affiliation::Anyone,
-                coverage: FieldCoverage::Footprint,
+                coverage: FieldCoverage::Every,
             },
         ]));
         registry.register(
@@ -1434,16 +1591,19 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
         )]));
         // Creep effects: a zergling twice as fast on anyone's creep, a larva
         // that withers off it.
-        registry.register(mover("zergling").with_field_effects([FieldEffect::new(
-            creep,
-            Affiliation::Anyone,
-            FieldSide::Inside,
-            FieldEffectKind::Modifiers(vec![modifier(
-                EntityStatId::SPEED,
-                ModifierOp::PercentAdd,
-                "1.0",
+        registry.register(
+            utils::walker("zergling", utils::GROUND).with_field_effects([FieldEffect::new(
+                creep,
+                Affiliation::Anyone,
+                FieldSide::Inside,
+                FieldCoverage::Any,
+                EntityEffect::Modifiers(vec![modifier(
+                    EntityStatId::SPEED,
+                    ModifierOp::PercentAdd,
+                    "1.0",
+                )]),
             )]),
-        )]));
+        );
         registry.register(
             EntityTypeDef::new("larva")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
@@ -1456,7 +1616,8 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                     creep,
                     Affiliation::Anyone,
                     FieldSide::Outside,
-                    FieldEffectKind::Modifiers(vec![modifier(
+                    FieldCoverage::Every,
+                    EntityEffect::Modifiers(vec![modifier(
                         EntityStatId::HEALTH_DRAIN,
                         ModifierOp::FlatAdd,
                         "1",
@@ -1464,10 +1625,13 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 )]),
         );
 
-        // Power: a pylon, and structures that need its owner's power under
-        // their anchor and stand disabled outside it. The gateway may turn into
-        // a warpgate; a probe raises and mends them, gathers crystal, and is
-        // itself frozen off its owner's power; a hangar shelters zealots.
+        // Power: a pylon; a relay, a lantern and a beacon that an enemy's
+        // creep under them switches off — the relay then drops its power, the
+        // lantern holds one cell of it, the beacon's own creep projects on;
+        // and structures that need its owner's power under their anchor and
+        // stand disabled outside it. The gateway may turn into a warpgate; a
+        // probe raises and mends them, gathers crystal, and is itself frozen
+        // off its owner's power; a hangar shelters zealots.
         registry.register_tag("structure");
         registry.register_resource("crystal");
         let unpowered_idles = || {
@@ -1475,7 +1639,8 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 power,
                 Affiliation::Own,
                 FieldSide::Outside,
-                FieldEffectKind::Disabled,
+                FieldCoverage::Every,
+                EntityEffect::Disable,
             )
         };
         registry.register(
@@ -1483,13 +1648,84 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 power,
                 3,
                 FieldGrowth::Instant,
-                None,
+                Emission::Nothing,
+                Emission::Nothing,
             )]),
         );
         registry.register(
-            mover("zealot")
+            building("relay", 1, 8)
+                .with_field_sources([FieldSourceDef::new(
+                    power,
+                    3,
+                    FieldGrowth::Instant,
+                    Emission::Nothing,
+                    Emission::Nothing,
+                )])
+                .with_field_effects([FieldEffect::new(
+                    creep,
+                    Affiliation::Enemy,
+                    FieldSide::Inside,
+                    FieldCoverage::Any,
+                    EntityEffect::Disable,
+                )]),
+        );
+        registry.register(
+            building("lantern", 1, 8)
+                .with_field_sources([FieldSourceDef::new(
+                    power,
+                    3,
+                    FieldGrowth::Instant,
+                    Emission::Nothing,
+                    Emission::Held(1),
+                )])
+                .with_field_effects([FieldEffect::new(
+                    creep,
+                    Affiliation::Enemy,
+                    FieldSide::Inside,
+                    FieldCoverage::Any,
+                    EntityEffect::Disable,
+                )]),
+        );
+        registry.register(
+            building("beacon", 1, 8)
+                .with_field_sources([FieldSourceDef::new(
+                    creep,
+                    3,
+                    FieldGrowth::Instant,
+                    Emission::Nothing,
+                    Emission::Full,
+                )])
+                .with_field_effects([FieldEffect::new(
+                    creep,
+                    Affiliation::Enemy,
+                    FieldSide::Inside,
+                    FieldCoverage::Any,
+                    EntityEffect::Disable,
+                )]),
+        );
+        registry.register(
+            utils::walker("zealot", utils::GROUND)
                 .with_train_time(4)
                 .with_stat(EntityStatId::CARGO_SIZE, FixedU64::ONE),
+        );
+        // Two by two, one switched off unless EVERY cell is powered and one
+        // unless ANY is: the same ground answers differently, which is the
+        // whole of what the coverage knob buys.
+        registry.register(
+            building("forge", 2, 4)
+                .with_tags(["structure"])
+                .with_field_effects([unpowered_idles()]),
+        );
+        registry.register(
+            building("chapel", 2, 4)
+                .with_tags(["structure"])
+                .with_field_effects([FieldEffect::new(
+                    power,
+                    Affiliation::Own,
+                    FieldSide::Outside,
+                    FieldCoverage::Any,
+                    EntityEffect::Disable,
+                )]),
         );
         registry.register(
             building("gateway", 2, 4)
@@ -1498,7 +1734,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 .with_field_placement([FieldPlacement::Requires {
                     field: power,
                     of: Affiliation::Own,
-                    coverage: FieldCoverage::Anchor,
+                    coverage: FieldCoverage::Any,
                 }])
                 .with_morphs([MorphTransition::new(
                     "warpgate",
@@ -1519,7 +1755,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
         let lore = registry.register_research(
             "lore",
             ResearchDef::new(
-                costs::cost(Vec::<(String, u32)>::new()),
+                price::from(Vec::<(String, u32)>::new()),
                 10,
                 None,
                 Vec::new(),
@@ -1555,16 +1791,19 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 )])
                 .with_field_effects([unpowered_idles()]),
         );
-        registry.register(mover("acolyte").with_field_effects([FieldEffect::new(
-            power,
-            Affiliation::Own,
-            FieldSide::Inside,
-            FieldEffectKind::Modifiers(vec![modifier(
-                EntityStatId::SPEED,
-                ModifierOp::PercentAdd,
-                "1.0",
-            )]),
-        )]));
+        registry.register(utils::walker("acolyte", utils::GROUND).with_field_effects([
+            FieldEffect::new(
+                power,
+                Affiliation::Own,
+                FieldSide::Inside,
+                FieldCoverage::Any,
+                EntityEffect::Modifiers(vec![modifier(
+                    EntityStatId::SPEED,
+                    ModifierOp::PercentAdd,
+                    "1.0",
+                )]),
+            ),
+        ]));
         registry.register(
             building("cannon", 1, 20)
                 .with_attack(utils::weapon(utils::GROUND), 10, 6, 6, 2, 1)
@@ -1595,11 +1834,12 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                     power,
                     Affiliation::Anyone,
                     FieldSide::Outside,
-                    FieldEffectKind::Disabled,
+                    FieldCoverage::Every,
+                    EntityEffect::Disable,
                 )]),
         );
         registry.register(
-            mover("probe")
+            utils::walker("probe", utils::GROUND)
                 .with_stat(EntityStatId::BUILD_RANGE, FixedU64::from_num(3))
                 .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
                 .with_stat(EntityStatId::REPAIR_RANGE, FixedU64::from_num(2))
@@ -1679,10 +1919,10 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 requires: Vec::new(),
             },
         );
-        registry.register(mover("overlord").with_skills([spew, scour]));
+        registry.register(utils::walker("overlord", utils::GROUND).with_skills([spew, scour]));
 
         registry.register(
-            mover("worker")
+            utils::walker("worker", utils::GROUND)
                 .with_stat(EntityStatId::BUILD_RANGE, FixedU64::from_num(3))
                 .with_builder(
                     ["spore", "bunker", "gateway", "pylon", "hive", "nest"],

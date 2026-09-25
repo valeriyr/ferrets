@@ -86,7 +86,7 @@ pub enum PlayerCommand {
     AttackMove { target: FixedUVec2, flush: bool },
     /// Issues a patrol order to the current selection: walk back and forth
     /// between each unit's current position and `target`, engaging hostiles
-    /// noticed on the way, until cancelled.
+    /// noticed on the way, until canceled.
     /// `flush` cancels existing orders before issuing this one; `false` appends.
     Patrol { target: FixedUVec2, flush: bool },
     /// Issues a guard order to the current selection: stay near the entity
@@ -124,11 +124,21 @@ pub enum PlayerCommand {
         position: FixedUVec2,
         flush: bool,
     },
+    /// Drops one entry from the `trainer`'s production queue, refunding its
+    /// price. Slot 0 is the unit in progress and the rest queue behind it; a
+    /// slot past the end of the queue is ignored.
+    CancelTrain { trainer: SimulationId, slot: u8 },
+    /// Calls off `research` on the `researcher` working it, refunding its
+    /// price. A topic that entity has neither queued nor under way is ignored.
+    CancelResearch {
+        researcher: SimulationId,
+        research: ResearchId,
+    },
     /// Tears down the unfinished `site` the issuing player owns, refunding its
-    /// cost; whoever was working it is released.
+    /// price; whoever was working it is released.
     CancelBuild { site: SimulationId },
     /// Calls off the change of form `entity` is under, on that change's own
-    /// terms: a refundable one gives the price back, a committed one holds.
+    /// terms: a refundable one gives what it cost back, a committed one holds.
     CancelMorph { entity: SimulationId },
     /// Issues a repair order against `target` to every selected entity that can
     /// mend it.

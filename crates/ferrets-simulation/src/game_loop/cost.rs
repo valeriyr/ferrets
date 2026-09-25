@@ -1,9 +1,9 @@
-//! Paying an entity cast's multi-arm cost: resources from the owner's
-//! stockpile, energy and health from the entity's own pools.
+//! Paying an entity's multi-arm cost: resources from the owner's stockpile,
+//! energy and health from the entity's own pools.
 //!
-//! Everything priced in [`EntityCastCost`] terms charges the same way, so it
-//! draws through this module: every arm is checked before any is paid, and
-//! nothing ever half-charges.
+//! Everything priced in [`Cost`] terms charges the same way, so it draws
+//! through this module: every arm is checked before any is paid, and nothing
+//! ever half-charges.
 
 use bevy_ecs::{entity::Entity, world::World};
 use ferrets_math::FixedU64;
@@ -15,17 +15,12 @@ use crate::{
     resources::{self, PlayerResources},
     session::player_id::PlayerId,
 };
-use ferrets_content::{costs::Cost, entity_stats::EntityStatId, skills::EntityCastCost};
+use ferrets_content::{cost::Cost, entity_stats::EntityStatId, price::Price};
 
 /// Whether every arm of the cost is payable right now. Checked in full before
-/// any is paid, so a cast never half-charges. A health cost must leave the
+/// any is paid, so nothing ever half-charges. A health cost must leave the
 /// entity alive: what could not be survived is refused.
-pub(super) fn can_pay(
-    world: &World,
-    entity: Entity,
-    player: PlayerId,
-    costs: &[EntityCastCost],
-) -> bool {
+pub(super) fn can_pay(world: &World, entity: Entity, player: PlayerId, costs: &[Cost]) -> bool {
     let (resources, energy_cost, health_cost) = folded(costs);
     if !world
         .resource::<PlayerResources>()
@@ -57,7 +52,7 @@ pub(super) fn pay(
     world: &mut World,
     entity: Entity,
     player: PlayerId,
-    costs: &[EntityCastCost],
+    costs: &[Cost],
     cause: SpendCause,
 ) {
     let (resources, energy_cost, health_cost) = folded(costs);
@@ -82,7 +77,7 @@ pub(super) fn refund(
     world: &mut World,
     entity: Entity,
     player: PlayerId,
-    costs: &[EntityCastCost],
+    costs: &[Cost],
     cause: SpendCause,
 ) {
     let (resources, energy_cost, health_cost) = folded(costs);
@@ -104,21 +99,39 @@ pub(super) fn refund(
     }
 }
 
+/// `costs` taken `stacks` times over, so a bearer carrying several stacks of a
+/// buff pays for every one of them.
+pub(super) fn times(costs: &[Cost], stacks: u32) -> Vec<Cost> {
+    costs
+        .iter()
+        .map(|cost| match cost {
+            Cost::Resources(price) => Cost::Resources(
+                price
+                    .iter()
+                    .map(|(kind, amount)| (kind.clone(), *amount * stacks))
+                    .collect(),
+            ),
+            Cost::Energy(amount) => Cost::Energy(*amount * FixedU64::from_num(stacks)),
+            Cost::Health(amount) => Cost::Health(*amount * FixedU64::from_num(stacks)),
+        })
+        .collect()
+}
+
 /// The costs folded into one total per pool, so a check covers every arm that
-/// draws from that pool.
-fn folded(costs: &[EntityCastCost]) -> (Cost, FixedU64, FixedU64) {
-    let mut resources = Cost::new();
+/// draws from that pool: the stockpile price, the energy and the health drawn.
+fn folded(costs: &[Cost]) -> (Price, FixedU64, FixedU64) {
+    let mut resources = Price::new();
     let mut energy = FixedU64::ZERO;
     let mut health = FixedU64::ZERO;
     for cost in costs {
         match cost {
-            EntityCastCost::Resources(cost) => {
-                for (kind, amount) in cost {
+            Cost::Resources(price) => {
+                for (kind, amount) in price {
                     *resources.entry(kind.clone()).or_default() += amount;
                 }
             }
-            EntityCastCost::Energy(amount) => energy += *amount,
-            EntityCastCost::Health(amount) => health += *amount,
+            Cost::Energy(amount) => energy += *amount,
+            Cost::Health(amount) => health += *amount,
         }
     }
     (resources, energy, health)

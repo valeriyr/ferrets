@@ -202,6 +202,21 @@ fn command(table: &Table, index: usize, names: &CommandNames) -> crate::Result<P
                 flush: flush(table, index)?,
             })
         }
+        "cancel_train" => Ok(PlayerCommand::CancelTrain {
+            trainer: SimulationId(integer(table, index, "trainer")?),
+            slot: u8::try_from(integer(table, index, "slot")?)
+                .map_err(|_| field_error(index, "slot", "slot out of range"))?,
+        }),
+        "cancel_research" => {
+            let name: String = field(table, index, "research")?;
+            let research = names.researches.get(&name).copied().ok_or_else(|| {
+                field_error(index, "research", &format!("unknown research '{name}'"))
+            })?;
+            Ok(PlayerCommand::CancelResearch {
+                researcher: SimulationId(integer(table, index, "researcher")?),
+                research,
+            })
+        }
         "cancel_build" => Ok(PlayerCommand::CancelBuild {
             site: SimulationId(integer(table, index, "site")?),
         }),

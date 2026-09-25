@@ -10,22 +10,22 @@ use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSi
 
 use crate::{
     components::{
-        build::UnderConstructionComponent, field_source::FieldSourcesComponent,
+        field_source::{Emitted, FieldSourcesComponent},
         hidden::HiddenComponent,
     },
-    entity_def,
+    entity_def::{self, Operation},
     entity_index::EntityIndex,
     fields::FieldGrid,
     map::Map,
     session::player_id::PlayerId,
 };
 use ferrets_content::{
-    field::{FieldAction, FieldDecay, FieldDef, FieldGrowth, FieldId},
+    field::{Emission, FieldAction, FieldDecay, FieldDef, FieldGrowth, FieldId, FieldLayer},
     registry::ContentRegistry,
 };
 
 /// One source's projection this tick.
-struct Emission {
+struct Patch {
     /// The field projected.
     field: FieldId,
     /// The player whose cover it is.
@@ -40,15 +40,20 @@ struct Emission {
 ///
 /// Sources are read from the alive index, so a dying source stops projecting
 /// the tick it dies. Under construction a source projects its
-/// `while_constructing` radius, if any, and does not grow. Standing, a gradual
-/// source grows one cell per cycle up to its radius. Sustained cells are
+/// `while_constructing` emission and disabled its `while_disabled` one — one
+/// of: all it would project operating, a held patch, or nothing; its growth
+/// stands where it was, and never below a patch it held. A field outage is
+/// read from the grid as it stands before this pass rewrites it, so a source
+/// switched off by losing a field follows one tick after the field does; a
+/// buff or construction outage is read as it is. Operating, a gradual source
+/// grows one cell per cycle up to its radius. Sustained cells are
 /// re-derived from scratch, covered cells absorb them, and the rest decays per
 /// field: at once, from the edge inward every cycle, or never.
 ///
 /// Every fold is either commutative or reads a snapshot taken before the pass
 /// writes, so source order cannot reach the grid.
 pub fn recompute_fields(world: &mut World) {
-    let mut emissions: Vec<Emission> = Vec::new();
+    let mut patches: Vec<Patch> = Vec::new();
 
     for (_, entity) in world.resource::<EntityIndex>().alive_entries() {
         let entity_ref = world.entity(entity);
@@ -63,7 +68,7 @@ pub fn recompute_fields(world: &mut World) {
             continue;
         };
         let footprint = entity_def::occupied_rect(world, entity);
-        let constructing = entity_ref.contains::<UnderConstructionComponent>();
+        let operation = entity_def::operation(world, entity);
         let sources = def.field_sources.clone();
 
         let mut entity_mut = world.entity_mut(entity);
@@ -71,22 +76,27 @@ pub fn recompute_fields(world: &mut World) {
             .get_mut::<FieldSourcesComponent>()
             .expect("a type with field sources carries their state");
         for (source, state) in sources.iter().zip(component.0.iter_mut()) {
-            let reach = if constructing {
-                match source.while_constructing() {
-                    Some(radius) => radius,
-                    None => continue,
+            let emission = match operation {
+                Operation::Operating => Emission::Full,
+                Operation::UnderConstruction => source.while_constructing(),
+                Operation::Disabled(_) => source.while_disabled(),
+            };
+            let reach = match emission {
+                Emission::Nothing => {
+                    state.last_emitted = Emitted::Nothing;
+                    continue;
                 }
-            } else {
-                match source.growth() {
+                // A held patch is kept rather than shrunk when the source
+                // operates again: its growth carries on from there.
+                Emission::Held(radius) => {
+                    if state.reach < radius {
+                        state.reach = radius;
+                    }
+                    radius
+                }
+                Emission::Full => match source.growth() {
                     FieldGrowth::Instant => source.radius(),
                     FieldGrowth::Gradual { cycle, .. } => {
-                        // A patch projected while constructing is kept rather
-                        // than shrunk when the source stands.
-                        if let Some(radius) = source.while_constructing()
-                            && state.reach < radius
-                        {
-                            state.reach = radius;
-                        }
                         if state.reach < source.radius() {
                             state.countdown -= 1;
                             if state.countdown == 0 {
@@ -96,9 +106,10 @@ pub fn recompute_fields(world: &mut World) {
                         }
                         state.reach
                     }
-                }
+                },
             };
-            emissions.push(Emission {
+            state.last_emitted = Emitted::Reach(reach);
+            patches.push(Patch {
                 field: source.field(),
                 player,
                 footprint,
@@ -117,14 +128,14 @@ pub fn recompute_fields(world: &mut World) {
             .collect()
     };
     let map = world.resource::<Map>();
-    let sustained: Vec<(FieldId, PlayerId, Vec<CellPos>)> = emissions
+    let sustained: Vec<(FieldId, PlayerId, Vec<CellPos>)> = patches
         .iter()
-        .map(|emission| {
-            let def = &fields[emission.field.index()].1;
+        .map(|patch| {
+            let def = &fields[patch.field.index()].1;
             (
-                emission.field,
-                emission.player,
-                flood(map, def, emission.footprint, emission.reach),
+                patch.field,
+                patch.player,
+                flood(map, def, patch.footprint, patch.reach),
             )
         })
         .collect();
@@ -245,7 +256,11 @@ fn flood(map: &Map, def: &FieldDef, footprint: CellRect, reach: u32) -> Vec<Cell
                 continue;
             }
             visited[index(next)] = true;
-            if !map.nav_grid().is_terrain_passable_by(def.layer(), next) {
+            let lies_there = match def.layer() {
+                FieldLayer::Anywhere => true,
+                FieldLayer::Passable(layers) => map.nav_grid().is_terrain_passable_by(layers, next),
+            };
+            if !lies_there {
                 continue;
             }
             queue.push_back(next);

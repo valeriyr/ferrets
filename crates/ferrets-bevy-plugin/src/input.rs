@@ -15,4 +15,9 @@ impl PendingInput {
     pub fn push(&mut self, command: PlayerCommand) {
         self.commands.push(command);
     }
+
+    /// The commands queued for the next frame, in the order they were pushed.
+    pub fn queued(&self) -> &[PlayerCommand] {
+        &self.commands
+    }
 }

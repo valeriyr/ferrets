@@ -379,18 +379,7 @@ fn app() -> App {
                     2,
                 ),
         );
-        registry.register(
-            EntityTypeDef::new("runner")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
-                    FixedU64::ONE,
-                    FixedU64::from_num(360),
-                    FixedU64::from_num(360),
-                )
-                .with_health(60),
-        );
+        registry.register(utils::walker("runner", utils::GROUND).with_health(60));
         registry.register(
             EntityTypeDef::new("tank")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)

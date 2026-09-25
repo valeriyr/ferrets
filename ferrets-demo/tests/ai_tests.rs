@@ -8,7 +8,8 @@ use ferrets_bevy_plugin::{SimulationPlugin, ai::AiPlugin};
 use ferrets_content::registry::ContentRegistry;
 use ferrets_demo::{
     ai::{
-        conclave_ai, elves_ai, human_ai, install_demo_ai, orc_ai, swarm_ai, terran_ai, undead_ai,
+        self, conclave_ai, elves_ai, human_ai, install_demo_ai, orc_ai, swarm_ai, terran_ai,
+        undead_ai,
     },
     content::CONTENT,
     map, ruleset, setup,
@@ -27,9 +28,10 @@ use ferrets_simulation::{
     movement_model::MovementModel,
     player_research::PlayerResearch,
     session::{
-        GameSession, ai_hosting::AiHosting, ai_vision::AiVision, authority::Authority,
-        drop_policy::DropPolicy, finish_policy::FinishPolicy, local_role::LocalRole,
-        player_id::PlayerId, player_slot::PlayerSlot, player_type::PlayerType,
+        GameSession, ai_detection::AiDetection, ai_hosting::AiHosting, ai_vision::AiVision,
+        authority::Authority, drop_policy::DropPolicy, finish_policy::FinishPolicy,
+        local_role::LocalRole, player_id::PlayerId, player_slot::PlayerSlot,
+        player_type::PlayerType,
     },
     spawn,
 };
@@ -54,6 +56,27 @@ fn ai_scripts_load() {
 }
 
 #[test]
+fn demo_seats_carry_what_their_brains_declare() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content");
+
+    // Every demo brain plays fair: fog-limited, detecting through its
+    // detectors — and the seat the lobby builds for a race says exactly that.
+    for race in [
+        "human", "orc", "swarm", "conclave", "elves", "terran", "undead",
+    ] {
+        assert_eq!(
+            ai::race_senses(race, &registry),
+            (AiVision::Filtered, AiDetection::Detectors),
+            "{race}"
+        );
+    }
+    assert_eq!(
+        ai::environment_senses(&registry),
+        (AiVision::Filtered, AiDetection::Detectors)
+    );
+}
+
+#[test]
 fn field_races_ai_build_economy_and_army() {
     let slots = vec![
         // An idle human for the waves to march on.
@@ -62,6 +85,7 @@ fn field_races_ai_build_economy_and_army() {
             1,
             PlayerType::Ai {
                 vision: AiVision::Filtered,
+                detection: AiDetection::Detectors,
             },
             Some("swarm"),
             Some(1),
@@ -70,6 +94,7 @@ fn field_races_ai_build_economy_and_army() {
             2,
             PlayerType::Ai {
                 vision: AiVision::Filtered,
+                detection: AiDetection::Detectors,
             },
             Some("conclave"),
             Some(1),
@@ -123,11 +148,13 @@ fn field_races_ai_build_economy_and_army() {
     );
     assert_eq!(count_owned(world, 1, "drone"), 5);
     // The conclave's structures warped in on their own after a probe placed
-    // them: the gateway in the nexus's power, a pylon, the cannon.
+    // them: the gateway in the nexus's power, a pylon, the cannon. One
+    // observer is trained once two zealots stand, in a zealot's place.
     assert_eq!(count_owned(world, 2, "gateway"), 1);
     assert_eq!(count_owned(world, 2, "pylon"), 3);
     assert_eq!(count_owned(world, 2, "photon_cannon"), 1);
-    assert_eq!(count_owned(world, 2, "zealot"), 16);
+    assert_eq!(count_owned(world, 2, "observer"), 1);
+    assert_eq!(count_owned(world, 2, "zealot"), 15);
     assert_eq!(count_owned(world, 2, "probe"), 5);
 }
 
@@ -139,6 +166,7 @@ fn elves_ai_builds_economy_and_army() {
             1,
             PlayerType::Ai {
                 vision: AiVision::Filtered,
+                detection: AiDetection::Detectors,
             },
             Some("elves"),
             Some(1),
@@ -181,6 +209,8 @@ fn elves_ai_builds_economy_and_army() {
     // nothing ever stored.
     assert_eq!(count_owned(world, 1, "entangled_mine"), 1);
     assert_eq!(count_owned(world, 1, "ancient_of_war"), 1);
+    // The one protector, rooted: the elves' detector.
+    assert_eq!(count_owned(world, 1, "ancient_protector"), 1);
     assert_eq!(count_owned(world, 1, "moon_well"), 3);
     assert_eq!(count_owned(world, 1, "huntress"), 24);
     assert_eq!(count_owned(world, 1, "wisp"), 4);
@@ -194,6 +224,7 @@ fn terran_ai_builds_economy_and_army() {
             1,
             PlayerType::Ai {
                 vision: AiVision::Filtered,
+                detection: AiDetection::Detectors,
             },
             Some("terran"),
             Some(1),
@@ -233,15 +264,18 @@ fn terran_ai_builds_economy_and_army() {
     // The refinery went up over the nearest seam first — without it no SCV
     // draws gold at all — and the SCVs worked it; the barracks followed
     // for marines, then the factory with a tech lab docked to it — which is
-    // what would let a tank be trained — and the station on the command
-    // center. Whether it gets as far as a tank is not asserted; that the lab
-    // docked to the factory unlocks one is `annex_tests`' to say.
+    // what would let a tank be trained — the station on the command
+    // center, and one missile turret once the factory stood, whose price is
+    // five marines the line does not get to. Whether it gets as far as a
+    // tank is not asserted; that the lab docked to the factory unlocks one is
+    // `annex_tests`' to say.
     assert_eq!(count_owned(world, 1, "refinery"), 1);
     assert_eq!(count_owned(world, 1, "barracks"), 1);
     assert_eq!(count_owned(world, 1, "factory"), 1);
     assert_eq!(count_owned(world, 1, "tech_lab"), 1);
     assert_eq!(count_owned(world, 1, "comsat_station"), 1);
-    assert_eq!(count_owned(world, 1, "marine"), 22);
+    assert_eq!(count_owned(world, 1, "missile_turret"), 1);
+    assert_eq!(count_owned(world, 1, "marine"), 17);
     // The brain's own worker cap, reached and held: MAX_WORKERS is five.
     assert_eq!(count_owned(world, 1, "scv"), 5);
 }
@@ -254,6 +288,7 @@ fn undead_ai_builds_economy_and_army() {
             1,
             PlayerType::Ai {
                 vision: AiVision::Filtered,
+                detection: AiDetection::Detectors,
             },
             Some("undead"),
             Some(1),
@@ -297,7 +332,10 @@ fn undead_ai_builds_economy_and_army() {
     // necromancer is not asserted: that depends on how the fighting goes.
     assert_eq!(count_owned(world, 1, "haunted_mine"), 1);
     assert_eq!(count_owned(world, 1, "crypt"), 1);
-    assert_eq!(count_owned(world, 1, "ziggurat"), 2);
+    // Two ziggurats fed the headroom; once the second stood, the first was
+    // hardened into the spirit tower that sees through cloaks.
+    assert_eq!(count_owned(world, 1, "ziggurat"), 1);
+    assert_eq!(count_owned(world, 1, "spirit_tower"), 1);
     assert_eq!(count_owned(world, 1, "ghoul"), 25);
     // And the hall grew: the temple, and every necromancer behind it, is
     // gated on a hall past the necropolis, so a brain that never grows one
@@ -325,6 +363,7 @@ fn ai_builds_economy_and_army() {
             1,
             PlayerType::Ai {
                 vision: AiVision::Filtered,
+                detection: AiDetection::Detectors,
             },
             Some("human"),
             Some(1),
@@ -333,6 +372,7 @@ fn ai_builds_economy_and_army() {
             2,
             PlayerType::Ai {
                 vision: AiVision::Filtered,
+                detection: AiDetection::Detectors,
             },
             Some("orc"),
             Some(1),
@@ -379,14 +419,22 @@ fn ai_builds_economy_and_army() {
     assert_eq!(count_owned(world, 1, "training_camp"), 1);
     assert_eq!(count_owned(world, 2, "war_camp"), 1);
     assert_eq!(count_owned(world, 1, "blacksmith"), 1);
+    // The one bunker the human brain raises: its detector.
+    assert_eq!(count_owned(world, 1, "bunker"), 1);
     assert_eq!(count_owned(world, 1, "archer"), 9);
     assert_eq!(count_owned(world, 1, "mortar"), 2);
-    assert_eq!(count_owned(world, 2, "grunt"), 9);
+    // Two watch towers and one hardening come out of the same gold as the
+    // grunts, so the army is five.
+    assert_eq!(count_owned(world, 2, "grunt"), 5);
     assert_eq!(count_owned(world, 2, "shaman"), 2);
     // The orc siege line: the works that requires the camp, and the pair of
     // wagons it trains — the demo's turreted mover.
     assert_eq!(count_owned(world, 2, "siege_works"), 1);
     assert_eq!(count_owned(world, 2, "war_wagon"), 2);
+    // Two watch towers raised: one kept as the detector, the other hardened
+    // into the guard tower once the pair stood.
+    assert_eq!(count_owned(world, 2, "watch_tower"), 1);
+    assert_eq!(count_owned(world, 2, "guard_tower"), 1);
     for (player, research) in [(1, "iron_weapons"), (2, "frenzy_ritual")] {
         let id = world
             .resource::<ContentRegistry>()
@@ -420,7 +468,7 @@ fn boss_mans_its_fleet_and_defends_lake() {
         PlayerSlot::free(1),
         PlayerSlot::free(2),
         PlayerSlot::free(3),
-        PlayerSlot::environment(map::BOSS, AiVision::Filtered),
+        PlayerSlot::environment(map::BOSS, AiVision::Filtered, AiDetection::Detectors),
     ];
     let mut app = App::new();
     app.add_plugins(SimulationPlugin::new(
@@ -500,6 +548,7 @@ fn ai_economy_runs_under_continuous_movement() {
             1,
             PlayerType::Ai {
                 vision: AiVision::Filtered,
+                detection: AiDetection::Detectors,
             },
             Some("human"),
             Some(1),
@@ -508,6 +557,7 @@ fn ai_economy_runs_under_continuous_movement() {
             2,
             PlayerType::Ai {
                 vision: AiVision::Filtered,
+                detection: AiDetection::Detectors,
             },
             Some("orc"),
             Some(1),

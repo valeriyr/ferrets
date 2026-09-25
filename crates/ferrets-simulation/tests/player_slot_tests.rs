@@ -6,6 +6,7 @@ use ferrets_simulation::{
     ruleset::{RemainsLimit, Ruleset},
     scenario::{Scenario, ScenarioPlayer},
     session::{
+        ai_detection::AiDetection,
         ai_vision::AiVision,
         player_slot::{self, PlayerSlot},
         player_type::PlayerType,
@@ -18,13 +19,15 @@ use ferrets_simulation::{
 
 #[test]
 fn vacant_slots_mirror_map_seats_by_id() {
-    let slots = player_slot::vacant_slots(&scene_map(), AiVision::Filtered);
+    // The environment seat carries what the caller declares for it, both axes.
+    let slots =
+        player_slot::vacant_slots(&scene_map(), AiVision::Omniscient, AiDetection::Everywhere);
 
     assert_eq!(
         slots,
         vec![
             PlayerSlot::free(0),
-            PlayerSlot::environment(1, AiVision::Filtered),
+            PlayerSlot::environment(1, AiVision::Omniscient, AiDetection::Everywhere),
             PlayerSlot::free(2),
         ],
     );
@@ -40,22 +43,26 @@ fn scenario_slots_seat_cast_and_leave_uncast_seats_vacant() {
         seat: 2,
         player_type: PlayerType::Ai {
             vision: AiVision::Filtered,
+            detection: AiDetection::Everywhere,
         },
         race: Some("orc".to_string()),
         team: Some(1),
     }]);
 
-    let slots = player_slot::scenario_slots(&scenario, AiVision::Filtered);
+    // The cast seat keeps its own declaration; the environment seat takes the
+    // caller's.
+    let slots = player_slot::scenario_slots(&scenario, AiVision::Filtered, AiDetection::Detectors);
 
     assert_eq!(
         slots,
         vec![
             PlayerSlot::free(0),
-            PlayerSlot::environment(1, AiVision::Filtered),
+            PlayerSlot::environment(1, AiVision::Filtered, AiDetection::Detectors),
             PlayerSlot::occupied(
                 2,
                 PlayerType::Ai {
-                    vision: AiVision::Filtered
+                    vision: AiVision::Filtered,
+                    detection: AiDetection::Everywhere,
                 },
                 Some("orc"),
                 Some(1)
@@ -69,7 +76,7 @@ fn scenario_slots_seat_cast_and_leave_uncast_seats_vacant() {
 fn scenario_casting_undeclared_seat_panics() {
     let scenario = mission(vec![cast(5)]);
 
-    player_slot::scenario_slots(&scenario, AiVision::Filtered);
+    player_slot::scenario_slots(&scenario, AiVision::Filtered, AiDetection::Detectors);
 }
 
 #[test]
@@ -77,7 +84,7 @@ fn scenario_casting_undeclared_seat_panics() {
 fn scenario_casting_seat_twice_panics() {
     let scenario = mission(vec![cast(0), cast(0)]);
 
-    player_slot::scenario_slots(&scenario, AiVision::Filtered);
+    player_slot::scenario_slots(&scenario, AiVision::Filtered, AiDetection::Detectors);
 }
 
 #[test]
@@ -85,7 +92,7 @@ fn scenario_casting_seat_twice_panics() {
 fn scenario_casting_environment_seat_panics() {
     let scenario = mission(vec![cast(1)]);
 
-    player_slot::scenario_slots(&scenario, AiVision::Filtered);
+    player_slot::scenario_slots(&scenario, AiVision::Filtered, AiDetection::Detectors);
 }
 
 //

@@ -1,17 +1,36 @@
 //! The buff store both buff sites share.
 //!
-//! It tracks only identity, stacks, and remaining time, and is generic over
-//! the buff id kind so both sites share one stacking and expiry
+//! It tracks only identity, stacks, and the term each instance runs on, and is
+//! generic over the buff id kind so both sites share one stacking and expiry
 //! implementation.
 
 use ferrets_content::stack_rule::StackRule;
 
+/// The term one buff instance runs on, with what is left of it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Term {
+    /// Until something removes it.
+    Forever,
+    /// For a while yet.
+    For {
+        /// Ticks until it runs out.
+        remaining: u32,
+    },
+    /// Until a payment is missed.
+    Upkeep {
+        /// Ticks between payments.
+        period: u32,
+        /// Ticks until the next payment falls due.
+        due_in: u32,
+    },
+}
+
 /// One active buff instance: its registered id (the stacking and removal
-/// identity), its remaining ticks, and how many stacks are active.
+/// identity), the term it runs on, and how many stacks are active.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ActiveBuff<BuffId> {
     id: BuffId,
-    remaining: Option<u32>,
+    term: Term,
     stacks: u32,
 }
 
@@ -29,22 +48,24 @@ impl<BuffId> Default for BuffsStore<BuffId> {
 }
 
 impl<BuffId: Copy + PartialEq> BuffsStore<BuffId> {
-    /// Applies the buff `id` with the given lifetime, resolving stacking against
-    /// any active instance of the same id per `stack_rule`.
-    pub fn apply(&mut self, id: BuffId, stack_rule: StackRule, duration: Option<u32>) {
+    /// Applies the buff `id` on the given term, resolving stacking against any
+    /// active instance of the same id per `stack_rule`. A refreshed or stacked
+    /// instance runs on the fresh term, except an upkeep, which keeps counting
+    /// down to the payment it was already due.
+    pub fn apply(&mut self, id: BuffId, stack_rule: StackRule, term: Term) {
         if let Some(existing) = self.active.iter_mut().find(|a| a.id == id) {
             match stack_rule {
                 StackRule::Ignore => {}
-                StackRule::Refresh => existing.remaining = duration,
+                StackRule::Refresh => existing.term = refreshed(existing.term, term),
                 StackRule::StackToCap(cap) => {
                     existing.stacks = (existing.stacks + 1).min(cap.max(1));
-                    existing.remaining = duration;
+                    existing.term = refreshed(existing.term, term);
                 }
             }
         } else {
             self.active.push(ActiveBuff {
                 id,
-                remaining: duration,
+                term,
                 stacks: 1,
             });
         }
@@ -57,17 +78,27 @@ impl<BuffId: Copy + PartialEq> BuffsStore<BuffId> {
         self.active.len() != before
     }
 
-    /// Decrements each timed buff by one tick and drops any that reached zero.
-    /// Returns `true` if anything expired.
-    pub fn tick_down(&mut self) -> bool {
+    /// Advances every term by one tick: a timed buff that runs out is dropped,
+    /// and an upkeep whose payment falls due this tick is returned, in
+    /// application order, with its next payment set a period away.
+    pub fn tick_down(&mut self) -> Vec<(BuffId, u32)> {
+        let mut due = Vec::new();
         for active in &mut self.active {
-            if let Some(remaining) = active.remaining.as_mut() {
-                *remaining = remaining.saturating_sub(1);
+            match &mut active.term {
+                Term::Forever => {}
+                Term::For { remaining } => *remaining = remaining.saturating_sub(1),
+                Term::Upkeep { period, due_in } => {
+                    *due_in = due_in.saturating_sub(1);
+                    if *due_in == 0 {
+                        due.push((active.id, active.stacks));
+                        *due_in = *period;
+                    }
+                }
             }
         }
-        let before = self.active.len();
-        self.active.retain(|active| active.remaining != Some(0));
-        self.active.len() != before
+        self.active
+            .retain(|active| !matches!(active.term, Term::For { remaining: 0 }));
+        due
     }
 
     /// The active buffs as `(id, stacks)` pairs.
@@ -78,5 +109,15 @@ impl<BuffId: Copy + PartialEq> BuffsStore<BuffId> {
     /// `true` when no buffs are active.
     pub fn is_empty(&self) -> bool {
         self.active.is_empty()
+    }
+}
+
+/// The term an active instance on `existing` runs on once the buff is applied
+/// again on `term`: a timed or open-ended one takes the fresh term, an upkeep
+/// keeps its own, the next payment falling due when it was going to.
+fn refreshed(existing: Term, term: Term) -> Term {
+    match existing {
+        Term::Forever | Term::For { .. } => term,
+        Term::Upkeep { .. } => existing,
     }
 }

@@ -4,7 +4,17 @@
 
 mod utils;
 
-use ferrets_geometry::cell_pos::CellPos;
+use bevy::prelude::App;
+use ferrets_content::{
+    cost::Cost,
+    entity_type_def::EntityTypeDef,
+    location::Solidity,
+    morph::{MorphCancel, MorphInterrupted, MorphPlacement, MorphReason, MorphTransition},
+    price,
+    quantity::Quantity,
+    registry::ContentRegistry,
+};
+use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize, projection::Projection};
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_simulation::{
     command::PlayerCommand,
@@ -23,6 +33,7 @@ use ferrets_simulation::{
     map::Map,
     movement_model::MovementModel,
     order::Order,
+    session::{GameSession, player_slot::PlayerSlot, player_type::PlayerType},
     simulation_id::SimulationId,
     spawn,
 };
@@ -43,7 +54,7 @@ fn same_layer_growth_lands_under_continuous_model() {
     // One tick so the rebuilt claim plane holds the whelp's footprint.
     utils::run_ticks(&mut app, 1);
 
-    order_morph(&mut app, whelp, "giant");
+    utils::order_morph(&mut app, whelp, "giant");
     utils::run_ticks(&mut app, 15);
 
     assert_eq!(type_name_of(&app, whelp), "giant");
@@ -54,7 +65,7 @@ fn same_layer_growth_lands_under_cell_model() {
     let mut app = utils::morph_app(MovementModel::Cell);
     let (whelp, _) = utils::create_owned(&mut app, "whelp", 10, 10, 0);
 
-    order_morph(&mut app, whelp, "giant");
+    utils::order_morph(&mut app, whelp, "giant");
     utils::run_ticks(&mut app, 15);
 
     assert_eq!(type_name_of(&app, whelp), "giant");
@@ -68,7 +79,7 @@ fn odd_growth_settles_on_lattice_under_cell_model() {
     let mut app = utils::morph_app(MovementModel::Cell);
     let (whelp, whelp_id) = utils::create_owned(&mut app, "whelp", 10, 10, 0);
 
-    order_morph(&mut app, whelp, "ogre");
+    utils::order_morph(&mut app, whelp, "ogre");
     utils::run_ticks(&mut app, 15);
 
     assert_eq!(type_name_of(&app, whelp), "ogre");
@@ -93,7 +104,7 @@ fn odd_growth_keeps_middle_under_continuous_model() {
     let (whelp, _) = utils::create_owned(&mut app, "whelp", 10, 10, 0);
     utils::run_ticks(&mut app, 1);
 
-    order_morph(&mut app, whelp, "ogre");
+    utils::order_morph(&mut app, whelp, "ogre");
     utils::run_ticks(&mut app, 15);
 
     assert_eq!(type_name_of(&app, whelp), "ogre");
@@ -111,7 +122,7 @@ fn unrooting_swaps_static_footprint_for_claim() {
     let mut app = utils::morph_app(MovementModel::Cell);
     let (shrine, _) = utils::create_owned(&mut app, "shrine", 10, 10, 0);
 
-    order_morph(&mut app, shrine, "golem");
+    utils::order_morph(&mut app, shrine, "golem");
     utils::run_ticks(&mut app, 15);
 
     assert_eq!(type_name_of(&app, shrine), "golem");
@@ -143,7 +154,7 @@ fn instant_change_pays_from_old_pools() {
     let mut app = utils::morph_app(MovementModel::Continuous);
     let (whelp, _) = utils::create_owned(&mut app, "whelp", 10, 10, 0);
 
-    order_morph(&mut app, whelp, "husk");
+    utils::order_morph(&mut app, whelp, "husk");
     utils::run_ticks(&mut app, 3);
 
     assert_eq!(type_name_of(&app, whelp), "husk");
@@ -169,7 +180,7 @@ fn zero_time_change_dying_on_refused_landing_dies_for_good() {
     let (whelp, _) = utils::create_owned(&mut app, "whelp", 10, 10, 0);
     utils::set_all_cells_statically_occupied(app.world_mut(), true);
 
-    order_morph(&mut app, whelp, "boulder");
+    utils::order_morph(&mut app, whelp, "boulder");
     utils::run_ticks(&mut app, 1 + 2 + 1);
 
     utils::assert_despawned(app.world_mut(), whelp);
@@ -190,7 +201,7 @@ fn changed_trainer_is_not_sent_to_its_own_rally_point() {
 
     // The golem can walk, so a rally wrongly owed would carry it off; a
     // change of form sends nobody, and it stands where it unrooted.
-    order_morph(&mut app, shrine, "golem");
+    utils::order_morph(&mut app, shrine, "golem");
     utils::run_ticks(&mut app, 11 + 5);
 
     assert_eq!(type_name_of(&app, shrine), "golem");
@@ -205,7 +216,7 @@ fn form_without_pool_sheds_pool_component() {
     let mut app = utils::morph_app(MovementModel::Continuous);
     let (whelp, whelp_id) = utils::create_owned(&mut app, "whelp", 10, 10, 0);
 
-    order_morph(&mut app, whelp, "wisp");
+    utils::order_morph(&mut app, whelp, "wisp");
     utils::run_ticks(&mut app, 15);
 
     assert_eq!(type_name_of(&app, whelp), "wisp");
@@ -230,13 +241,13 @@ fn form_without_pool_sheds_pool_component() {
 fn form_gaining_pool_starts_it_full() {
     let mut app = utils::morph_app(MovementModel::Continuous);
     let (whelp, _) = utils::create_owned(&mut app, "whelp", 10, 10, 0);
-    order_morph(&mut app, whelp, "wisp");
+    utils::order_morph(&mut app, whelp, "wisp");
     utils::run_ticks(&mut app, 15);
     assert_eq!(type_name_of(&app, whelp), "wisp");
 
     // Back into a form with health: the pool starts full — there is no old
     // proportion to carry when the old form had no pool at all.
-    order_morph(&mut app, whelp, "whelp");
+    utils::order_morph(&mut app, whelp, "whelp");
     utils::run_ticks(&mut app, 15);
 
     assert_eq!(type_name_of(&app, whelp), "whelp");
@@ -251,7 +262,7 @@ fn form_gaining_pool_starts_it_full() {
 }
 
 //
-// ─── Cancelling ────────────────────────────────────────────────────────────────
+// ─── Canceling ────────────────────────────────────────────────────────────────
 //
 
 #[test]
@@ -274,7 +285,7 @@ fn queued_committed_change_drops_before_it_starts() {
             },
             None,
         );
-    order_morph(&mut app, whelp, "husk");
+    utils::order_morph(&mut app, whelp, "husk");
     utils::run_ticks(&mut app, 2);
 
     app.world_mut()
@@ -301,7 +312,7 @@ fn interim_form_is_worn_until_change_lands() {
     let (whelp, _) = utils::create_owned(&mut app, "whelp", 10, 10, 0);
     utils::grant_gold(&mut app, 10);
 
-    order_morph(&mut app, whelp, "wyrm");
+    utils::order_morph(&mut app, whelp, "wyrm");
 
     // Paid and in its chrysalis the tick the change starts; a full whelp is
     // a full chrysalis.
@@ -327,7 +338,7 @@ fn interim_form_settles_onto_cell_mover_stood_on() {
         .position = utils::part_way("10.6", "10.3");
     utils::run_ticks(&mut app, 1);
 
-    order_morph(&mut app, whelp, "wyrm");
+    utils::order_morph(&mut app, whelp, "wyrm");
     utils::run_ticks(&mut app, 1);
 
     assert_eq!(type_name_of(&app, whelp), "chrysalis");
@@ -350,16 +361,16 @@ fn interim_form_settles_onto_cell_mover_stood_on() {
 }
 
 #[test]
-fn cancelled_change_takes_interim_form_off() {
+fn canceled_change_takes_interim_form_off() {
     let mut app = utils::morph_app(MovementModel::Continuous);
     let (whelp, _) = utils::create_owned(&mut app, "whelp", 10, 10, 0);
     utils::grant_gold(&mut app, 10);
 
-    order_morph(&mut app, whelp, "wyrm");
+    utils::order_morph(&mut app, whelp, "wyrm");
     utils::run_ticks(&mut app, 3);
     assert_eq!(type_name_of(&app, whelp), "chrysalis");
 
-    utils::stop_orders(app.world_mut(), whelp);
+    utils::soft_cancel_orders(app.world_mut(), whelp);
     utils::run_ticks(&mut app, 1);
 
     // Back to a whelp with the price returned.
@@ -368,18 +379,63 @@ fn cancelled_change_takes_interim_form_off() {
 }
 
 #[test]
+fn cancel_morph_command_calls_off_change_and_pays_its_price_back() {
+    let mut app = utils::morph_app(MovementModel::Continuous);
+    let (whelp, whelp_id) = utils::create_owned(&mut app, "whelp", 10, 10, 0);
+    utils::grant_gold(&mut app, 10);
+
+    utils::order_morph(&mut app, whelp, "wyrm");
+    utils::run_ticks(&mut app, 3);
+    assert_eq!(type_name_of(&app, whelp), "chrysalis");
+    // 10 granted − 10 for the wyrm.
+    assert_eq!(utils::gold(app.world()), 0);
+
+    // The player's own command, rather than a helper reaching past it.
+    utils::push_command(&mut app, PlayerCommand::CancelMorph { entity: whelp_id });
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+
+    assert_eq!(type_name_of(&app, whelp), "whelp");
+    assert_eq!(
+        utils::gold(app.world()),
+        10,
+        "a refundable change pays back"
+    );
+}
+
+#[test]
+fn change_taken_away_keeps_price_spent_though_it_is_refundable() {
+    let mut app = utils::morph_app(MovementModel::Continuous);
+    let (whelp, _) = utils::create_owned(&mut app, "whelp", 10, 10, 0);
+    utils::grant_gold(&mut app, 10);
+
+    utils::order_morph(&mut app, whelp, "wyrm");
+    utils::run_ticks(&mut app, 3);
+    assert_eq!(type_name_of(&app, whelp), "chrysalis");
+    // 10 granted − 10 for the wyrm.
+    assert_eq!(utils::gold(app.world()), 0);
+
+    // The same refundable change as the test above, taken away rather than
+    // called off: the form still reverts, and the price stays spent.
+    utils::force_cancel_orders(app.world_mut(), whelp);
+    utils::run_ticks(&mut app, 1);
+
+    assert_eq!(type_name_of(&app, whelp), "whelp");
+    assert_eq!(utils::gold(app.world()), 0);
+}
+
+#[test]
 fn dying_entity_keeps_interim_form() {
     let mut app = utils::morph_app(MovementModel::Continuous);
     let (whelp, _) = utils::create_owned(&mut app, "whelp", 10, 10, 0);
     utils::grant_gold(&mut app, 10);
-    order_morph(&mut app, whelp, "wyrm");
+    utils::order_morph(&mut app, whelp, "wyrm");
     utils::run_ticks(&mut app, 3);
     assert_eq!(type_name_of(&app, whelp), "chrysalis");
 
     spawn::destroy_entity(app.world_mut(), whelp);
     utils::run_ticks(&mut app, 1);
 
-    // The cancelled change does not dress the corpse as a whelp again.
+    // The canceled change does not dress the corpse as a whelp again.
     assert_eq!(type_name_of(&app, whelp), "chrysalis");
 }
 
@@ -392,7 +448,7 @@ fn fizzled_change_takes_interim_form_off() {
     utils::create_owned(&mut app, "whelp", 11, 10, 0);
     utils::grant_gold(&mut app, 10);
 
-    order_morph(&mut app, whelp, "wyrm");
+    utils::order_morph(&mut app, whelp, "wyrm");
     utils::run_ticks(&mut app, 1);
     assert_eq!(type_name_of(&app, whelp), "chrysalis");
 
@@ -456,7 +512,7 @@ fn production_refused_while_form_changes() {
     let (shrine, shrine_id) = utils::create_owned(&mut app, "shrine", 10, 10, 0);
     utils::grant_gold(&mut app, 10);
 
-    order_morph(&mut app, shrine, "golem");
+    utils::order_morph(&mut app, shrine, "golem");
     utils::run_ticks(&mut app, 2);
     utils::push_command(
         &mut app,
@@ -511,7 +567,7 @@ fn change_refused_while_workers_sit_in_berths() {
     );
 
     // The berth given up, the same command is taken.
-    utils::stop_orders(app.world_mut(), sylph);
+    utils::force_cancel_orders(app.world_mut(), sylph);
     utils::run_ticks(&mut app, 1);
     command_morph(&mut app, house_id, "walking_shaft");
     utils::run_ticks(&mut app, utils::APPLY + 6);
@@ -525,7 +581,7 @@ fn rooting_puts_static_footprint_back() {
     let mut app = utils::morph_app(MovementModel::Cell);
     let (golem, _) = utils::create_owned(&mut app, "golem", 10, 10, 0);
 
-    order_morph(&mut app, golem, "shrine");
+    utils::order_morph(&mut app, golem, "shrine");
     utils::run_ticks(&mut app, 15);
 
     assert_eq!(type_name_of(&app, golem), "shrine");
@@ -561,7 +617,7 @@ fn change_dropping_paid_queue_panics() {
         .0
         .push_back("whelp".to_string());
 
-    order_morph(&mut app, shrine, "golem");
+    utils::order_morph(&mut app, shrine, "golem");
     utils::run_ticks(&mut app, 15);
 }
 
@@ -620,7 +676,7 @@ fn change_between_cells_keeps_position_of_form_that_moves() {
 
     // Ten ticks of changing, and both forms claim a single cell, so nothing
     // recentres either.
-    order_morph(&mut app, whelp, "wisp");
+    utils::order_morph(&mut app, whelp, "wisp");
     utils::run_ticks(&mut app, 11);
     assert_eq!(type_name_of(&app, whelp), "wisp", "it changed");
 
@@ -633,8 +689,103 @@ fn change_between_cells_keeps_position_of_form_that_moves() {
 }
 
 //
+// ─── What stands underfoot ─────────────────────────────────────────────────────
+//
+
+#[test]
+fn change_into_static_form_is_refused_over_burrowed_entity() {
+    let mut app = underfoot_app();
+    utils::create_owned(&mut app, "mole", 10, 10, 0);
+    // The mole claims nothing on the grid, so the digger stands on its cell.
+    // The den would hold that ground, and the change reserves its footprint
+    // at issue: it is refused there, as a site founded on the cell is, before
+    // anything is paid.
+    let (digger, _) = utils::create_owned(&mut app, "digger", 10, 10, 0);
+    utils::grant_gold(&mut app, 10);
+
+    utils::order_morph(&mut app, digger, "den");
+    utils::run_ticks(&mut app, 4);
+
+    assert_eq!(type_name_of(&app, digger), "digger");
+    assert_eq!(utils::gold(app.world()), 10, "nothing was paid");
+    assert!(utils::order_queue_is_empty(app.world_mut(), digger));
+}
+
+#[test]
+fn burrowed_form_changing_in_place_is_not_refused_by_its_own_footprint() {
+    let mut app = underfoot_app();
+    let (mole, _) = utils::create_owned(&mut app, "mole", 10, 10, 0);
+
+    // Both forms stand underfoot on the one cell: the ground the vole needs is
+    // what the mole itself holds, which is no reason to refuse it.
+    utils::order_morph(&mut app, mole, "vole");
+    utils::run_ticks(&mut app, 4);
+
+    assert_eq!(type_name_of(&app, mole), "vole");
+}
+
+//
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 //
+
+/// One human on a cell-model map with a `mole` and a `vole` that stand
+/// underfoot, the mole changing into the vole in place, and a `digger` that
+/// changes into a static `den` on its own cell for 10 gold, reserving the
+/// ground. Session started.
+fn underfoot_app() -> App {
+    let mut app = utils::make_app(vec![PlayerSlot::occupied(0, PlayerType::Human, None, None)]);
+    utils::install_map(&mut app, Projection::Isometric, MovementModel::Cell);
+    {
+        let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
+        registry.register_resource("gold");
+        registry.register(
+            EntityTypeDef::new("mole")
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Underfoot)
+                .with_health(20)
+                .with_morphs([change("vole", MorphPlacement::Reserve, Vec::new())]),
+        );
+        registry.register(
+            EntityTypeDef::new("vole")
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Underfoot)
+                .with_health(20),
+        );
+        registry.register(
+            utils::walker("digger", utils::GROUND)
+                .with_health(30)
+                .with_dying(2, [])
+                .with_morphs([change(
+                    "den",
+                    MorphPlacement::Reserve,
+                    vec![Cost::Resources(price::from([("gold", 10)]))],
+                )]),
+        );
+        registry.register(
+            EntityTypeDef::new("den")
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_health(50)
+                .with_dying(2, []),
+        );
+        registry.validate();
+    }
+    app.world_mut().resource_mut::<GameSession>().start();
+    app
+}
+
+/// A two-tick refundable change of form into `into`, its ground secured per
+/// `placement`, drawing `costs` when it starts.
+fn change(into: &str, placement: MorphPlacement, costs: Vec<Cost>) -> MorphTransition {
+    MorphTransition::new(
+        into,
+        None,
+        Quantity::Constant(2),
+        placement,
+        MorphCancel::Refundable,
+        MorphInterrupted::Reverts,
+        MorphReason::Change,
+        costs,
+        Vec::new(),
+    )
+}
 
 /// The type an entity currently is.
 fn type_name_of(app: &bevy::prelude::App, entity: bevy::prelude::Entity) -> String {
@@ -657,18 +808,4 @@ fn command_morph(app: &mut bevy::prelude::App, entity: SimulationId, type_name: 
             flush: true,
         },
     );
-}
-
-/// Pushes a Morph order into `type_name` onto the entity's queue.
-fn order_morph(app: &mut bevy::prelude::App, entity: bevy::prelude::Entity, type_name: &str) {
-    app.world_mut()
-        .entity_mut(entity)
-        .get_mut::<OrderQueueComponent>()
-        .unwrap()
-        .push(
-            Order::Morph {
-                type_name: type_name.to_string(),
-            },
-            None,
-        );
 }

@@ -7,11 +7,12 @@ mod utils;
 
 use std::f32::consts::{FRAC_1_SQRT_2, SQRT_2};
 
-use bevy::prelude::*;
+use bevy::{ecs::system::RunSystemOnce, prelude::*};
 use ferrets_demo::{
     minimap::{self, Canvas},
-    render::FogReveal,
+    render::{FogReveal, Sighted},
 };
+use ferrets_simulation::visibility::Sighting;
 
 //
 // ─── Widget geometry ──────────────────────────────────────────────────────────
@@ -376,6 +377,34 @@ fn composition_covers_whole_map() {
     assert_eq!(canvas.bytes().len(), 96 * 96 * 4);
 }
 
+#[test]
+fn glimpsed_entity_paints_no_blip() {
+    // The map revealed, so the ground under the blip is the terrain itself and
+    // the stamp alone decides whether anything is painted over it.
+    let mut app = utils::view_app();
+    app.world_mut().resource_mut::<FogReveal>().0 = true;
+    utils::compose_minimap(&mut app);
+    let ground = painted(&app, 5, 5);
+
+    let (rival, _) = utils::create_entity(app.world_mut(), "grunt", utils::at_cell(5, 5), Some(1))
+        .expect("the demo content defines a grunt");
+    app.world_mut()
+        .entity_mut(rival)
+        .insert(Sighted(Sighting::Glimpsed));
+    recompose(&mut app);
+    assert_eq!(
+        painted(&app, 5, 5),
+        ground,
+        "a glimpse is a shimmer on the field and nothing on the map"
+    );
+
+    app.world_mut()
+        .entity_mut(rival)
+        .insert(Sighted(Sighting::Seen));
+    recompose(&mut app);
+    assert_ne!(painted(&app, 5, 5), ground, "made out, it is painted");
+}
+
 //
 // ─── Following the world's look ───────────────────────────────────────────────
 //
@@ -446,6 +475,13 @@ fn painted(app: &App, x: u32, y: u32) -> [u8; 4] {
         .canvas()
         .get(x, y)
         .expect("cell inside the demo map")
+}
+
+/// Composes the minimap again, as the next frame would.
+fn recompose(app: &mut App) {
+    app.world_mut()
+        .run_system_once(minimap::refresh_minimap)
+        .expect("minimap composes");
 }
 
 /// The turn and flattening the widget is currently pointed by, composed the way

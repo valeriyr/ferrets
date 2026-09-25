@@ -12,21 +12,21 @@ use crate::{
         train::{TrainComponent, TrainQueueComponent},
     },
     entity_def,
-    events::{SpawnCause, SpendCause},
+    events::SpawnCause,
     map::Map,
     order::Order,
-    rally, resources,
+    rally,
     spawn::{self, FieldReach},
 };
 use ferrets_content::registry::ContentRegistry;
 
 /// Whether `entity` may start a Train: its type trains and it stands raised.
-/// A disabled trainer is admitted and waits.
+/// A disabled trainer is admitted and waits; an orphaned annex is not.
 pub fn can_start(world: &World, entity: Entity, _order: &Order) -> Result<(), Refusal> {
     if entity_def::of(world, entity).trainer.is_none() {
         return Err(Refusal::Incapable);
     }
-    orders::requires_not_idle(world, entity)
+    orders::admits_queued_work(world, entity)
 }
 
 /// Called once when a Train order becomes the front `New` entry.
@@ -52,8 +52,8 @@ pub fn prepare(entity: Entity, order: &Order, world: &mut World) -> OrderState {
 
 /// Called for every Train entry that has a cancel policy.
 ///
-/// A soft cancel is refused — production continues. A force cancel refunds every
-/// queued entry to the owner, clears the queue, and finishes.
+/// A soft cancel is refused and production carries on. A force cancel empties
+/// the queue and finishes, and what its entries cost stays spent.
 pub fn cancel_processing(
     entity: Entity,
     _order: &Order,
@@ -64,39 +64,18 @@ pub fn cancel_processing(
     match policy {
         CancelPolicy::Soft => Processing::state(OrderState::InProcessing),
         CancelPolicy::Force => {
-            let owner = entity_def::owner(world, entity);
-            let queued: Vec<String> = world
-                .entity_mut(entity)
-                .get_mut::<TrainQueueComponent>()
-                .map(|mut q| q.0.drain(..).collect())
-                .unwrap_or_default();
-
-            if let Some(player) = owner {
-                for type_name in &queued {
-                    let cost = world
-                        .resource::<ContentRegistry>()
-                        .entity(type_name)
-                        .map(|def| def.cost.clone())
-                        .unwrap_or_default();
-                    resources::refund(
-                        world,
-                        player,
-                        cost,
-                        SpendCause::Training {
-                            trainer: entity_def::simulation_id(world, entity),
-                        },
-                    );
-                }
+            let mut entity_mut = world.entity_mut(entity);
+            if let Some(mut queue) = entity_mut.get_mut::<TrainQueueComponent>() {
+                queue.0.clear();
             }
-
-            world.entity_mut(entity).remove::<TrainComponent>();
+            entity_mut.remove::<TrainComponent>();
             Processing::state(OrderState::Finished)
         }
     }
 }
 
 /// Whether a Train can stand through a soft cancel: always — only a force
-/// cancel takes production away, refunding it.
+/// cancel takes production away.
 pub fn survives_soft_cancel() -> bool {
     true
 }

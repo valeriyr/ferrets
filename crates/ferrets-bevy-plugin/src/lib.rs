@@ -59,7 +59,7 @@
 //! auto_engage        — exclusive system; stance-driven target acquisition for idle
 //!                      entities
 //! tick_orders        — exclusive system; full order lifecycle for alive entities:
-//!                        prepare phase: flush cancelled entries, New → InProcessing,
+//!                        prepare phase: flush canceled entries, New → InProcessing,
 //!                          Suspended → resumed, insert driver components
 //!                        watch phase: suspended watchers may interrupt their running
 //!                          sub-order (attack-move/guard scanning mid-walk)
@@ -445,16 +445,19 @@ impl Plugin for SimulationPlugin {
                     ApplyDeferred,
                     systems::process_dying,
                     // Refresh fields, let what has just come to stand act on
-                    // them, then refresh fog of war, before anything acts on
-                    // either: dead sources are gone, a standing act sees this
-                    // tick's sustained cells, what stands inside or outside a
-                    // field is judged before stats fold it in, and this tick's
-                    // acquisition and AI see current-tick visibility — dead
-                    // entities no longer granting sight, and a field that
-                    // grants vision read as it stands this tick.
+                    // them, refit the concealment marker from this tick's
+                    // fields and buffs, then refresh fog of war, before
+                    // anything acts on any of it: dead sources are gone, a
+                    // standing act sees this tick's sustained cells, what
+                    // stands inside or outside a field is judged before stats
+                    // fold it in, and this tick's acquisition and AI see
+                    // current-tick visibility and concealment — dead entities
+                    // no longer granting sight, and a field that grants vision
+                    // read as it stands this tick.
                     (
                         systems::recompute_fields,
                         systems::perform_standing_acts,
+                        systems::refit_concealment,
                         systems::recompute_visibility,
                     )
                         .chain(),

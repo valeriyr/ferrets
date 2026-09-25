@@ -103,7 +103,7 @@ pub fn survives_soft_cancel() -> bool {
 ///
 /// Walk to within own `load_range` of the target (suspending on a chase move,
 /// following it as it moves), then take it in: the target's own orders are
-/// force-cancelled — a walk cut down mid-crossing settles onto its claimed
+/// force-canceled — a walk cut down mid-crossing settles onto its claimed
 /// cell first — and it disappears aboard through the same transfer boarding
 /// uses, cooldown included. Everything is re-checked at arrival; a target that
 /// stopped qualifying on the way ends the order.

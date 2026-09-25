@@ -12,8 +12,8 @@ pub enum RallyTarget {
     /// Walk to a world position.
     Position(FixedUVec2),
     /// Resolve the intent against an entity when the unit spawns (e.g. harvest
-    /// a source, attack a hostile). A target gone by then leaves the unit at
-    /// its spawn cell.
+    /// a source, attack a hostile). A target gone by then, or one the unit's
+    /// owner cannot make out, leaves the unit at its spawn cell.
     Entity(SimulationId),
 }
 

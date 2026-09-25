@@ -16,8 +16,9 @@ use ferrets_content::{
     transport::PassengerFate,
     work::Attachment,
 };
-use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
+use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
 use ferrets_math::{FixedU64, facing::Facing, fixed_uvec2::FixedUVec2};
+use ferrets_pathfinder::layer_mask::LayerMask;
 use ferrets_physics::body;
 
 use crate::{
@@ -27,6 +28,7 @@ use crate::{
         attached::AttachedComponent,
         brood::{BredComponent, BroodComponent},
         build::OverbuiltComponent,
+        concealed::ConcealedComponent,
         dying::{DiedComponent, DyingComponent, Passing, RemainsComponent},
         energy::EnergyComponent,
         entity_info::EntityInfoComponent,
@@ -55,6 +57,7 @@ use crate::{
     entity_def,
     entity_index::EntityIndex,
     events::{DeathCause, EventRecord, SimulationEvent, SpawnCause},
+    game_loop::orders,
     map::{Map, OccupancyClass},
     movement_model::{self, MovementModel},
     order::Order,
@@ -119,15 +122,14 @@ pub fn create_entity(
         !movement_model::is_mid_crossing(position),
         "entities spawn at rest: position must lie exactly on a cell origin"
     );
-    let location_def = world
-        .resource::<ContentRegistry>()
-        .entity(type_name)?
-        .location?;
+    // Both come off one borrow: the whole definition is never cloned for a
+    // placement test that reads two of its fields.
+    let (location_def, occupancy) = {
+        let def = world.resource::<ContentRegistry>().entity(type_name)?;
+        (def.location?, OccupancyClass::of(def))
+    };
     let location = LocationComponent::new(position, DEFAULT_FACING);
-    if !world
-        .resource::<Map>()
-        .can_place_entity(&location, &location_def)
-    {
+    if !ground_takes(world, &location, location_def, occupancy, None) {
         return None;
     }
 
@@ -136,6 +138,37 @@ pub fn create_entity(
     // above.
     restore_footprint(world, entity);
     Some((entity, id))
+}
+
+/// What the entity being placed holds on the map already: a form changing in
+/// place overlaps its own cells, and never stands in its own way.
+#[derive(Debug, Clone, Copy)]
+pub struct Own {
+    /// The entity itself.
+    pub entity: Entity,
+    /// Where it stands.
+    pub location: LocationComponent,
+    /// The form it wears there.
+    pub def: LocationDef,
+    /// The plane its footprint marks.
+    pub class: OccupancyClass,
+}
+
+/// Whether the ground takes a footprint of `to` at `placed` on the plane
+/// `occupancy` selects: every cell free on the grid, and nothing standing
+/// underfoot in it. `own` is what the entity being placed holds already.
+pub fn ground_takes(
+    world: &World,
+    placed: &LocationComponent,
+    to: LocationDef,
+    occupancy: OccupancyClass,
+    own: Option<Own>,
+) -> bool {
+    world.resource::<Map>().can_place_entity_over_own(
+        placed,
+        &to,
+        own.as_ref().map(|own| (&own.location, &own.def, own.class)),
+    ) && nothing_underfoot(world, placed, to, occupancy, own.map(|own| own.entity))
 }
 
 /// Brings an entity of the given type into the world at `location`, owned by
@@ -368,11 +401,10 @@ fn spawn_remains(
     let location = LocationComponent::new(position, DEFAULT_FACING);
     // Remains that claim nothing are laid down whatever stands there: a mover
     // in the cell a body falls in shares it with the body. Remains that do
-    // claim their cells — rubble — can genuinely be blocked.
+    // claim their cells — rubble — can genuinely be blocked, by what the grid
+    // marks and by what has dug in under it.
     if location_def.solidity().claims_cells()
-        && !world
-            .resource::<Map>()
-            .can_place_entity(&location, &location_def)
+        && !ground_takes(world, &location, location_def, class, None)
     {
         return;
     }
@@ -923,7 +955,7 @@ pub(crate) fn uncover_source(world: &mut World, entity: Entity) {
 /// Starts the dying phase for an alive entity.
 ///
 /// The entity immediately leaves the alive set: it is removed from every
-/// player's selection, all queued orders are force-cancelled, and a `Die` order
+/// player's selection, all queued orders are force-canceled, and a `Die` order
 /// is queued. The entity stays in the world as dying — still holding its
 /// footprint on the nav grid under the cell model, while the continuous
 /// rebuild stops counting its body — until the `Die` order completes and
@@ -968,7 +1000,7 @@ fn start_dying(world: &mut World, entity: Entity, passing: Passing) {
         .expect("simulation entity must have LocationComponent");
 
     // The entity keeps its footprint through the dying phase, but the movement
-    // state that knows which cell a crossing claimed is about to be cancelled —
+    // state that knows which cell a crossing claimed is about to be canceled —
     // so a mid-crossing entity snaps onto its claimed cell. Continuous
     // movers die where they stand: their positions are free points and their
     // claim already tracks the cell they round to.
@@ -1079,9 +1111,9 @@ fn announce_death(world: &mut World, entity: Entity, cause: DeathCause, slain: S
 /// Hands `entity` to `to`, announcing the capture, with `by` naming what took
 /// it.
 ///
-/// The entity keeps everything it holds: its health, its pools, and the orders
-/// in its queue, which carry on for their new owner. It leaves every player's
-/// selection and control groups, the two stores that hold ids.
+/// The entity keeps its health and its pools. Its orders are dropped and what
+/// they took stays spent, and it leaves every player's selection and control
+/// groups, the two stores that hold ids.
 ///
 /// Panics if `to` already owns it.
 pub fn change_owner(world: &mut World, entity: Entity, to: PlayerId, by: SimulationId) {
@@ -1092,6 +1124,16 @@ pub fn change_owner(world: &mut World, entity: Entity, to: PlayerId, by: Simulat
     );
 
     let id = entity_def::simulation_id(world, entity);
+    // Whatever it was doing was the old owner's business: the orders go, and
+    // what they took stays spent — losing the entity loses the work in it.
+    // Dropping them can start a death, on a change of form whose type declares
+    // one when interrupted, and what died under the old owner is not captured.
+    orders::drop_all(world, entity);
+    match world.resource::<EntityIndex>().alive(id) {
+        Some(_) => {}
+        None => return,
+    }
+
     world.resource_mut::<Selection>().remove(id);
     world.resource_mut::<ControlGroups>().remove(id);
     world.entity_mut(entity).insert(OwnerComponent::new(to));
@@ -1333,6 +1375,10 @@ pub(crate) fn fit_components(
             def.base_stat(EntityStatId::LIFETIME).is_some(),
         )
     };
+    // Whether the entity stands concealed is read against the type, the buffs
+    // and the fields as they are now, so a landing and a spawn are fitted by
+    // the same reads the tick's refit makes.
+    let concealed = entity_def::concealed(world, entity);
     // A rally point serves whatever releases units: the trainer, the holder,
     // the breeder whose broodlings make units by a change of form, and the
     // form making one that way now.
@@ -1364,11 +1410,10 @@ pub(crate) fn fit_components(
     // type-constant config stays on the definition, read via its handle.
     //
     // Losing a role drops its state where it stands, which is right for
-    // everything except a queue whose entries were paid for up front: a
-    // trainer that becomes something else would take its unbuilt units with
-    // it, unrefunded. The order lifecycle owns that refund — a flushed Train
-    // order gives every entry back — so whatever arrives here has already
-    // been emptied, and debug builds hold the lifecycle to it.
+    // everything except a queue whose entries were paid for up front. The
+    // order lifecycle empties that queue before a type change reaches here —
+    // a flushed Train order clears it, and what its entries cost stays spent —
+    // and debug builds hold the lifecycle to it.
     debug_assert!(
         trainer
             || entity_mut
@@ -1380,6 +1425,7 @@ pub(crate) fn fit_components(
     // keeps a timed life keeps the age with it: what is summoned for forty
     // seconds has forty seconds whatever it turns into.
     fit_default::<LifetimeComponent>(&mut entity_mut, timed_life);
+    fit_default::<ConcealedComponent>(&mut entity_mut, concealed);
     fit_default::<TrainQueueComponent>(&mut entity_mut, trainer);
     fit_default::<TransporterComponent>(&mut entity_mut, transporter);
     fit_default::<ResourceSourceComponent>(&mut entity_mut, source);
@@ -1504,7 +1550,7 @@ pub(crate) fn fit_components(
 /// Inserts a default `C` when the type wants one and it is absent, removes it
 /// when the type does not, and leaves an existing one untouched — so whatever
 /// live state it holds survives.
-fn fit_default<C: Component + Default>(entity: &mut EntityWorldMut, wanted: bool) {
+pub(crate) fn fit_default<C: Component + Default>(entity: &mut EntityWorldMut, wanted: bool) {
     match (wanted, entity.contains::<C>()) {
         (true, false) => {
             entity.insert(C::default());
@@ -1514,4 +1560,53 @@ fn fit_default<C: Component + Default>(entity: &mut EntityWorldMut, wanted: bool
         }
         (true, true) | (false, false) => {}
     }
+}
+
+/// Whether nothing standing underfoot in a footprint of `location_def` at
+/// `location` keeps it from being raised there, `placing` being the entity
+/// the footprint is for when it is one already standing.
+///
+/// The navigation grid answers for everything that claims its cells; this
+/// answers for what claims none and is still there
+/// ([`Solidity::Underfoot`](ferrets_content::location::Solidity::Underfoot)):
+/// a mover crosses it, a static footprint is not raised over it. A mover
+/// being placed is never refused by it.
+fn nothing_underfoot(
+    world: &World,
+    location: &LocationComponent,
+    location_def: LocationDef,
+    occupancy: OccupancyClass,
+    placing: Option<Entity>,
+) -> bool {
+    match occupancy {
+        OccupancyClass::Claim => return true,
+        OccupancyClass::Static => {}
+    }
+    let footprint = CellRect::new(body::anchor(location.position), location_def.size());
+    !world
+        .resource::<EntityIndex>()
+        .alive_entries()
+        .into_iter()
+        .any(|(_, entity)| {
+            if placing == Some(entity) {
+                return false;
+            }
+            // An entity off the map holds no ground: its position is stale.
+            if world.entity(entity).contains::<HiddenComponent>() {
+                return false;
+            }
+            let standing_def = entity_def::of(world, entity);
+            let Some(standing_location) = standing_def.location else {
+                return false;
+            };
+            // What claims its cells is the grid's to refuse; what neither
+            // claims nor holds ground stops nothing.
+            if standing_location.solidity().claims_cells()
+                || !standing_location.solidity().holds_ground()
+            {
+                return false;
+            }
+            standing_location.occupation() & location_def.occupation() != LayerMask::EMPTY
+                && entity_def::footprint_rect_of(world, standing_def, entity).intersects(footprint)
+        })
 }

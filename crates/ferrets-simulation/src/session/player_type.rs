@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::session::ai_vision::AiVision;
+use crate::session::{ai_detection::AiDetection, ai_vision::AiVision};
 
 /// Who occupies a player slot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -13,5 +13,7 @@ pub enum PlayerType {
     Ai {
         /// How much of the map the script observes.
         vision: AiVision,
+        /// How the script makes out what is concealed.
+        detection: AiDetection,
     },
 }

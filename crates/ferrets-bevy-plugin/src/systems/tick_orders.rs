@@ -14,7 +14,7 @@ pub fn tick_orders(world: &mut World) {
     process(world);
 }
 
-/// Flush cancelled entries and prepare the front order for every alive entity.
+/// Flush canceled entries and prepare the front order for every alive entity.
 fn prepare(world: &mut World) {
     for entity in alive_entities(world) {
         if world.entity(entity).contains::<DyingComponent>() {

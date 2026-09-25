@@ -1,7 +1,7 @@
 //! Casting: the Cast order an entity works through, and the casts that belong
 //! to a player rather than to anything on the map.
 //!
-//! An entity's cast is an order like any other — queued, cancelled and
+//! An entity's cast is an order like any other — queued, canceled and
 //! replaced like a walk — which walks the caster into the skill's reach first
 //! when it declares one, and lands where it stands when it does not. A
 //! player's cast has no caster to send anywhere, so it happens where the
@@ -13,9 +13,10 @@
 use bevy_ecs::{entity::Entity, world::World};
 use ferrets_content::{
     attack::Slain,
-    costs::Cost,
+    entity_buffs::Interruption,
     entity_type_def::EntityTypeId,
     kinds::Kinds,
+    price::Price,
     registry::ContentRegistry,
     skills::{
         Casting, EntityCastEffect, EntityCastTarget, PlayerCastEffect, Reach, SkillCaster,
@@ -26,9 +27,8 @@ use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::fixed_uvec2::FixedUVec2;
 
 use super::{
-    cast_cost,
     chase::{self, Destination},
-    damage,
+    cost, damage,
     orders::{self, Processing, Refusal},
     stats,
 };
@@ -43,7 +43,6 @@ use crate::{
         owner,
     },
     entity_def,
-    entity_index::EntityIndex,
     events::{EventRecord, SimulationEvent, SpawnCause, SpendCause},
     game_loop::fields,
     map::Map,
@@ -229,16 +228,19 @@ pub fn by_player(
     player: PlayerId,
     skill: SkillId,
     cooldown: u32,
-    cost: &Cost,
+    price: &Price,
     effect: PlayerCastEffect,
 ) {
     if !world.resource::<PlayerSkills>().ready(player, skill) {
         return;
     }
-    if !world.resource::<PlayerResources>().can_afford(player, cost) {
+    if !world
+        .resource::<PlayerResources>()
+        .can_afford(player, price)
+    {
         return;
     }
-    resources::charge(world, player, cost.clone(), SpendCause::Skill { skill });
+    resources::charge(world, player, price.clone(), SpendCause::Skill { skill });
 
     match effect {
         PlayerCastEffect::ApplyBuff(buff) => stats::apply_player_buff(world, player, buff),
@@ -340,10 +342,11 @@ fn now(
     let Some(plan) = judge(world, player, *effect, aim) else {
         return;
     };
-    if !cast_cost::can_pay(world, caster, player, costs) {
+    if !cost::can_pay(world, caster, player, costs) {
         return;
     }
-    cast_cost::pay(world, caster, player, costs, SpendCause::Skill { skill });
+    cost::pay(world, caster, player, costs, SpendCause::Skill { skill });
+    stats::interrupt_entity_buffs(world, caster, Interruption::Cast);
 
     let caster_id = entity_def::simulation_id(world, caster);
     // The cast is announced against what it landed on, and a body it landed on
@@ -403,9 +406,8 @@ fn aim(
             };
             // Anyone's body serves: what fell there stopped belonging to
             // anybody when it fell.
-            let remains = world.resource::<EntityIndex>().remains(id)?;
-            (visibility::sees(world, player, remains) && names(world, remains, kinds))
-                .then_some(CastAim::Remains(remains))
+            let remains = visibility::remains_interactable_to(world, player, id)?;
+            names(world, remains, kinds).then_some(CastAim::Remains(remains))
         }
         EntityCastTarget::Standing { side, kinds } => {
             let SkillTarget::Entity(id) = target? else {
@@ -556,10 +558,16 @@ fn apply_effect(
             fields::apply_action(world, player, field, center, radius, action);
             return;
         }
-        EntityCastEffect::Watch { radius, duration } => {
+        EntityCastEffect::Watch {
+            radius,
+            duration,
+            detection,
+        } => {
             let center = aimed_cell(world, aim);
             let caster_id = entity_def::simulation_id(world, caster);
-            watches::open(world, player, caster_id, center, radius, duration);
+            watches::open(
+                world, player, caster_id, center, radius, duration, detection,
+            );
             return;
         }
         EntityCastEffect::ApplyBuff(_)

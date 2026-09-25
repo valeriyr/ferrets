@@ -15,7 +15,10 @@ use ferrets_simulation::{
     components::{rally::RallyTarget, stance::Stance},
     input::PlayerFrame,
     order::AttackTarget,
-    session::{drop_policy::DropPolicy, finish_policy::FinishPolicy},
+    session::{
+        ai_detection::AiDetection, ai_vision::AiVision, drop_policy::DropPolicy,
+        finish_policy::FinishPolicy, player_slot::PlayerSlot, player_type::PlayerType,
+    },
     simulation_id::SimulationId,
 };
 
@@ -68,6 +71,29 @@ fn lobby_state_control_round_trips() {
         finish_policy: FinishPolicy::Endless,
     })));
     assert_eq!(decode(&encode(&message).unwrap()).unwrap(), message);
+}
+
+#[test]
+fn player_slot_with_declared_senses_round_trips() {
+    // The lobby wire names an AI seat by `Occupant::Ai` alone and every node
+    // derives its senses from the race's brain; the slot list a game starts
+    // from carries the pair itself, and both axes must survive the codec.
+    let slot = PlayerSlot::occupied(
+        1,
+        PlayerType::Ai {
+            vision: AiVision::Omniscient,
+            detection: AiDetection::Everywhere,
+        },
+        Some("orc"),
+        Some(2),
+    );
+    let back: PlayerSlot =
+        bcs::from_bytes(&bcs::to_bytes(&slot).unwrap()).expect("a slot reads back");
+    assert_eq!(back, slot);
+    assert_eq!(
+        back.senses(),
+        Some((AiVision::Omniscient, AiDetection::Everywhere))
+    );
 }
 
 #[test]

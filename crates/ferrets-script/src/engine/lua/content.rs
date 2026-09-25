@@ -10,18 +10,21 @@ use ferrets_content::{
     berths::BerthGroup,
     brood::{Lingering, OrphanFate},
     build::BuilderAttendance,
-    costs::Cost,
+    cost::Cost,
+    detection::Detection,
     dying::{Bequest, LeftBy},
-    entity_buffs::EntityBuffDef,
+    entity_buffs::{EntityBuffDef, Lasting},
+    entity_effect::EntityEffect,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     field::{
-        FieldDecay, FieldDef, FieldEffect, FieldEffectKind, FieldGrowth, FieldId, FieldPlacement,
-        FieldSide, FieldSourceDef, FieldVision,
+        Emission, FieldDecay, FieldDef, FieldEffect, FieldGrowth, FieldId, FieldLayer,
+        FieldPlacement, FieldSide, FieldSourceDef, FieldVision,
     },
     kinds::{Kind, Kinds},
     morph::{MorphInterrupted, MorphReason, MorphTransition},
     player_buffs::PlayerBuffDef,
+    price::Price,
     projectile::ProjectileDef,
     quantity::Quantity,
     registry::ContentRegistry,
@@ -30,8 +33,7 @@ use ferrets_content::{
     research::{ResearchDef, ResearchId},
     resource::{Banking, HarvestData},
     skills::{
-        Casting, EntityCastCost, EntityCastEffect, EntityCastTarget, PlayerCastEffect, Reach,
-        SkillCaster, SkillDef,
+        Casting, EntityCastEffect, EntityCastTarget, PlayerCastEffect, Reach, SkillCaster, SkillDef,
     },
     splash::SplashDef,
     stand::StandingAct,
@@ -246,8 +248,8 @@ fn build_entity(
             None => def.with_leaves(leaves),
         };
     }
-    if let Some(cost) = optional::<Table>(table, "cost")? {
-        def = def.with_cost(pairs::<u32>(&cost, "cost")?);
+    if let Some(price) = optional::<Table>(table, "price")? {
+        def = def.with_price(pairs::<u32>(&price, "price")?);
     }
     if let Some(train_time) = optional::<u32>(table, "train_time")? {
         def = def.with_train_time(train_time);
@@ -383,6 +385,9 @@ fn build_entity(
     }
     if let Some(targetable) = optional::<u32>(table, "targetable")? {
         def = def.with_targetable(LayerMask::from(targetable));
+    }
+    if let Some(concealment) = optional::<String>(table, "concealment")? {
+        def = def.with_concealment(content::concealment(&concealment)?);
     }
     if let Some(morphs) = optional::<Vec<Table>>(table, "morphs")? {
         def = def.with_morphs(parse_morphs(morphs, registry)?);
@@ -1083,15 +1088,15 @@ fn field_error(field: &str, error: mlua::Error) -> ScriptError {
 
 /// Reads one skill: `{ caster, cooldown, ... }` — the `caster` arm decides the
 /// remaining fields. An entity cast reads `{ cost?, target, range?, effect }`;
-/// a player cast reads `{ cost?, effect }` and takes no target (the cast lands
-/// on the casting player). A missing `cost` block is a free skill, and a
+/// a player cast reads `{ price?, effect }` and takes no target (the cast lands
+/// on the casting player). A missing `cost` block (a player cast's `price`) is a free skill, and a
 /// missing `range` a cast that lands from wherever the caster stands.
 fn parse_skill(table: &Table, registry: &ContentRegistry) -> crate::Result<SkillDef> {
     let cooldown = required::<u32>(table, "cooldown")?;
     let caster = match required::<String>(table, "caster")?.as_str() {
         "entity" => SkillCaster::Entity {
             costs: match optional::<Table>(table, "cost")? {
-                Some(cost) => parse_entity_cast_cost(&cost)?,
+                Some(cost) => parse_costs(&cost)?,
                 None => Vec::new(),
             },
             target: parse_cast_target(&required::<Value>(table, "target")?)?,
@@ -1107,9 +1112,9 @@ fn parse_skill(table: &Table, registry: &ContentRegistry) -> crate::Result<Skill
                 ));
             }
             SkillCaster::Player {
-                cost: match optional::<Table>(table, "cost")? {
-                    Some(cost) => parse_player_cast_cost(&cost)?,
-                    None => Cost::new(),
+                price: match optional::<Table>(table, "price")? {
+                    Some(price) => pairs::<u32>(&price, "price")?.into_iter().collect(),
+                    None => Price::new(),
                 },
                 effect: parse_player_effect(&required::<Table>(table, "effect")?, registry)?,
             }
@@ -1130,14 +1135,14 @@ fn parse_skill(table: &Table, registry: &ContentRegistry) -> crate::Result<Skill
     })
 }
 
-/// Reads a research definition: a `cost` table of resource amounts, the
+/// Reads a research definition: a `price` table of resource amounts, the
 /// research `time` in ticks, an optional player `buff` applied on completion,
 /// and optional `requires` entries. The buff name resolves in the player-buff
 /// registry.
 fn parse_research(table: &Table, registry: &ContentRegistry) -> crate::Result<ResearchDef> {
-    let cost: Cost = match optional::<Table>(table, "cost")? {
-        Some(cost) => pairs::<u32>(&cost, "cost")?.into_iter().collect(),
-        None => Cost::new(),
+    let price: Price = match optional::<Table>(table, "price")? {
+        Some(price) => pairs::<u32>(&price, "price")?.into_iter().collect(),
+        None => Price::new(),
     };
     let time = required::<u32>(table, "time")?;
     let buff = match optional::<String>(table, "buff")? {
@@ -1147,24 +1152,24 @@ fn parse_research(table: &Table, registry: &ContentRegistry) -> crate::Result<Re
         None => None,
     };
     let requires = parse_requires(table, registry)?;
-    Ok(ResearchDef::new(cost, time, buff, requires))
+    Ok(ResearchDef::new(price, time, buff, requires))
 }
 
-/// Reads an entity cast's `cost` block: any of `resources` (a table of
-/// amounts), `energy`, and `health` (decimal strings) — each present entry one
-/// price a cast pays.
-fn parse_entity_cast_cost(cost: &Table) -> crate::Result<Vec<EntityCastCost>> {
+/// Reads a `cost` block — a skill's, a change of form's or an upkeep's: any of
+/// `resources` (a table of amounts), `energy`, and `health` (decimal strings),
+/// each present entry one cost the entity pays.
+fn parse_costs(cost: &Table) -> crate::Result<Vec<Cost>> {
     let mut costs = Vec::new();
     if let Some(resources) = optional::<Table>(cost, "resources")? {
-        costs.push(EntityCastCost::Resources(
+        costs.push(Cost::Resources(
             pairs::<u32>(&resources, "resources")?.into_iter().collect(),
         ));
     }
     if let Some(energy) = optional::<String>(cost, "energy")? {
-        costs.push(EntityCastCost::Energy(content::fixed(&energy)?));
+        costs.push(Cost::Energy(content::fixed(&energy)?));
     }
     if let Some(health) = optional::<String>(cost, "health")? {
-        costs.push(EntityCastCost::Health(content::fixed(&health)?));
+        costs.push(Cost::Health(content::fixed(&health)?));
     }
     if costs.is_empty() {
         return Err(ScriptError::ContentError(
@@ -1234,7 +1239,7 @@ fn parse_morphs(
             None => MorphReason::Change,
         };
         let costs = match optional::<Table>(&entry, "cost")? {
-            Some(cost) => parse_entity_cast_cost(&cost)?,
+            Some(cost) => parse_costs(&cost)?,
             None => Vec::new(),
         };
         let requires = parse_requires(&entry, registry)?;
@@ -1251,13 +1256,6 @@ fn parse_morphs(
         ));
     }
     Ok(transitions)
-}
-
-/// Reads a player cast's `cost` block: a `resources` table of amounts — the
-/// only pool a player has.
-fn parse_player_cast_cost(cost: &Table) -> crate::Result<Cost> {
-    let resources = required::<Table>(cost, "resources")?;
-    Ok(pairs::<u32>(&resources, "resources")?.into_iter().collect())
 }
 
 /// Reads how long a cast holds its caster: `cast = { point = ..., period = ... }`
@@ -1327,6 +1325,7 @@ fn parse_entity_effect(
         Ok(EntityCastEffect::Watch {
             radius: required::<u32>(&watch, "radius")?,
             duration: required::<u32>(&watch, "duration")?,
+            detection: parse_detection(&watch)?,
         })
     } else if let Some(summon) = optional::<Table>(table, "summon")? {
         let name = required::<String>(&summon, "entity")?;
@@ -1345,18 +1344,47 @@ fn parse_entity_effect(
     }
 }
 
-/// Reads a field definition: the `layer` mask its cells must pass, its
-/// `decay` — `"instant"`, `"never"`, or a `{ cycle = ticks }` table — and its
+/// Reads a field definition: the `layer` its cells lie on — `"anywhere"`
+/// or the mask they must be passable on — its
+/// `decay` — `"instant"`, `"never"`, or a `{ cycle = ticks }` table — its
 /// `vision` — `"dark"` unless declared, or `"watched"` to put covered cells in
-/// sight of whoever covers them.
+/// sight of whoever covers them — and its `detection`, the layer mask of what
+/// it reveals, blind unless declared (a watch's `detection` reads the same).
 fn parse_field(table: &Table) -> crate::Result<FieldDef> {
-    let layer = LayerMask::from(required::<u32>(table, "layer")?);
+    let layer = parse_field_layer(required::<Value>(table, "layer")?)?;
     let decay = parse_field_decay(required::<Value>(table, "decay")?)?;
     let vision = match optional::<String>(table, "vision")? {
         Some(name) => content::field_vision(&name)?,
         None => FieldVision::Dark,
     };
-    Ok(FieldDef::new(layer, decay, vision))
+    Ok(FieldDef::new(layer, decay, vision, parse_detection(table)?))
+}
+
+/// Reads where a field lies: `"anywhere"`, or the layer mask its cells must
+/// be passable on.
+fn parse_field_layer(value: Value) -> crate::Result<FieldLayer> {
+    match &value {
+        Value::String(name) if name == "anywhere" => Ok(FieldLayer::Anywhere),
+        Value::Integer(layers) => Ok(FieldLayer::Passable(LayerMask::from(
+            u32::try_from(*layers).map_err(|_| {
+                content::unexpected("field layer", &["a layer mask"], &layers.to_string())
+            })?,
+        ))),
+        other => Err(content::unexpected(
+            "field layer",
+            &["'anywhere'", "a layer mask"],
+            &found(other),
+        )),
+    }
+}
+
+/// Reads what a cover detects: its `detection` layer mask, or blind when none
+/// is declared.
+fn parse_detection(table: &Table) -> crate::Result<Detection> {
+    match optional::<u32>(table, "detection")? {
+        None => Ok(Detection::Blind),
+        Some(layers) => Ok(Detection::Reveals(LayerMask::from(layers))),
+    }
 }
 
 /// Reads a field's decay: `"instant"`, `"never"`, or `{ cycle = ticks }`.
@@ -1392,20 +1420,65 @@ fn parse_field_growth(value: Value) -> crate::Result<FieldGrowth> {
     }
 }
 
-/// Reads what a field does to an entity: `"disabled"` or `{ modifiers = { ... } }`.
-fn parse_field_effect_kind(
+/// Reads what a source projects while idle, declared under `what`: `"full"`,
+/// `"nothing"`, or `{ held = cells }`.
+fn parse_emission(what: &str, value: Value) -> crate::Result<Emission> {
+    keyword_or_table(
+        what,
+        &value,
+        &[("full", Emission::Full), ("nothing", Emission::Nothing)],
+        &["a { held = cells } table"],
+        |held| Ok(Emission::Held(required::<u32>(held, "held")?)),
+    )
+}
+
+/// Reads one effect a buff or a field has on an entity: `"disable"`,
+/// `"conceal"`, or `{ modifiers = { ... } }`.
+fn parse_entity_effect_kind(
     value: Value,
     registry: &ContentRegistry,
-) -> crate::Result<FieldEffectKind> {
+) -> crate::Result<EntityEffect> {
     match &value {
-        Value::String(name) if name == "disabled" => Ok(FieldEffectKind::Disabled),
-        Value::Table(table) => Ok(FieldEffectKind::Modifiers(parse_entity_modifiers(
+        Value::String(name) if name == "disable" => Ok(EntityEffect::Disable),
+        Value::String(name) if name == "conceal" => Ok(EntityEffect::Conceal),
+        Value::Table(table) => Ok(EntityEffect::Modifiers(parse_entity_modifiers(
             &required::<Vec<Table>>(table, "modifiers")?,
             registry,
         )?)),
         other => Err(content::unexpected(
-            "field effect",
-            &["'disabled'", "a { modifiers = ... } table"],
+            "entity effect",
+            &["'disable'", "'conceal'", "a { modifiers = ... } table"],
+            &found(other),
+        )),
+    }
+}
+
+/// Reads how long a buff lasts: `"forever"`, `{ ticks = n }`, or
+/// `{ upkeep = { cost = <cost table>, period = ticks } }` — the cost table a
+/// skill's `cost` takes, paid once every `period` ticks.
+fn parse_lasting(value: Value) -> crate::Result<Lasting> {
+    match &value {
+        Value::String(name) if name == "forever" => Ok(Lasting::Forever),
+        Value::Table(table) => match (
+            optional::<u32>(table, "ticks")?,
+            optional::<Table>(table, "upkeep")?,
+        ) {
+            (Some(ticks), None) => Ok(Lasting::For(ticks)),
+            (None, Some(upkeep)) => Ok(Lasting::Upkeep {
+                costs: parse_costs(&required::<Table>(&upkeep, "cost")?)?,
+                period: required::<u32>(&upkeep, "period")?,
+            }),
+            (Some(_), Some(_)) | (None, None) => Err(ScriptError::ContentError(
+                "a lasting table names exactly one of ticks or upkeep".to_string(),
+            )),
+        },
+        other => Err(content::unexpected(
+            "lasting",
+            &[
+                "'forever'",
+                "a { ticks = ... } table",
+                "a { upkeep = ... } table",
+            ],
             &found(other),
         )),
     }
@@ -1434,7 +1507,8 @@ fn field_by_name(name: &str, registry: &ContentRegistry) -> crate::Result<FieldI
 
 /// Reads the `field_sources` list: each entry names a `field`, a `radius`, a
 /// `growth` — `"instant"` or `{ cycle = ticks, initial_radius = cells }` — and
-/// an optional `while_constructing` radius.
+/// what it projects `while_constructing` and `while_disabled`: `"full"`,
+/// `"nothing"`, or `{ held = cells }`.
 fn parse_field_sources(
     sources: &[Table],
     registry: &ContentRegistry,
@@ -1447,7 +1521,14 @@ fn parse_field_sources(
                 field_id(entry, registry)?,
                 required::<u32>(entry, "radius")?,
                 growth,
-                optional::<u32>(entry, "while_constructing")?,
+                parse_emission(
+                    "while_constructing",
+                    required::<Value>(entry, "while_constructing")?,
+                )?,
+                parse_emission(
+                    "while_disabled",
+                    required::<Value>(entry, "while_disabled")?,
+                )?,
             ))
         })
         .collect()
@@ -1624,8 +1705,8 @@ fn parse_field_placement(
 }
 
 /// Reads the `field_effects` list: each entry names a `field` and `of`, and
-/// exactly one of `inside` or `outside` holding either
-/// `{ modifiers = {...} }` or the string `"disabled"`.
+/// exactly one of `inside` or `outside` holding an entity effect —
+/// `{ modifiers = {...} }`, `"disable"`, or `"conceal"`.
 fn parse_field_effects(
     effects: &[Table],
     registry: &ContentRegistry,
@@ -1645,11 +1726,12 @@ fn parse_field_effects(
                     ));
                 }
             };
-            let kind = parse_field_effect_kind(value, registry)?;
+            let kind = parse_entity_effect_kind(value, registry)?;
             Ok(FieldEffect::new(
                 field_id(entry, registry)?,
                 content::affiliation(&required::<String>(entry, "of")?)?,
                 side,
+                content::field_coverage(&required::<String>(entry, "coverage")?)?,
                 kind,
             ))
         })
@@ -1679,12 +1761,28 @@ fn parse_player_effect(
     }
 }
 
-/// Reads an entity buff definition: `{ duration?, stack, modifiers }`.
+/// Reads an entity buff definition: `{ effects?, lasting, stack, interrupted_by? }`.
+/// Each effect is read as a field effect's is; `interrupted_by` lists interruptions.
 fn parse_entity_buff(table: &Table, registry: &ContentRegistry) -> crate::Result<EntityBuffDef> {
+    let effects = match optional::<Vec<Value>>(table, "effects")? {
+        Some(values) => values
+            .into_iter()
+            .map(|value| parse_entity_effect_kind(value, registry))
+            .collect::<crate::Result<Vec<_>>>()?,
+        None => Vec::new(),
+    };
+    let interrupted_by = match optional::<Vec<String>>(table, "interrupted_by")? {
+        Some(names) => names
+            .iter()
+            .map(|name| content::interruption(name))
+            .collect::<crate::Result<Vec<_>>>()?,
+        None => Vec::new(),
+    };
     Ok(EntityBuffDef {
-        duration: optional::<u32>(table, "duration")?,
+        effects,
+        lasting: parse_lasting(required::<Value>(table, "lasting")?)?,
         stack_rule: content::stack_rule(&required::<String>(table, "stack")?)?,
-        modifiers: parse_entity_modifiers(&required::<Vec<Table>>(table, "modifiers")?, registry)?,
+        interrupted_by,
     })
 }
 

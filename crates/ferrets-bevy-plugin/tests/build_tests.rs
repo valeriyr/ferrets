@@ -12,8 +12,11 @@ use ferrets_content::{
     registry::ContentRegistry,
     work::{CrewLimit, WorkPresence},
 };
-use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
+use ferrets_geometry::{
+    cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize, projection::Projection,
+};
 use ferrets_math::{FixedU64, facing::Facing};
+use ferrets_pathfinder::{mover_shape::MoverShape, nav_grid::NavGrid};
 use ferrets_simulation::{
     command::PlayerCommand,
     components::{
@@ -28,6 +31,7 @@ use ferrets_simulation::{
     entity_index::EntityIndex,
     events::{DeathCause, SimulationEvent},
     map::Map,
+    movement_model::MovementModel,
     order::{AttackTarget, Order},
     session::{GameSession, player_slot::PlayerSlot, player_type::PlayerType},
     simulation_id::SimulationId,
@@ -95,7 +99,39 @@ fn build_constructs_building() {
 }
 
 #[test]
-fn cancelling_build_refunds_and_restores_builder() {
+fn builder_death_inside_site_keeps_price_spent() {
+    let mut app = utils::orders_app();
+    let (worker, worker_id) = utils::create_owned(&mut app, "worker", 5, 5, 0);
+    utils::grant_gold(&mut app, 80);
+
+    utils::push_command(
+        &mut app,
+        PlayerCommand::BuildEntity {
+            builder: worker_id,
+            type_name: "depot".into(),
+            position: utils::pos(10, 10),
+            flush: true,
+        },
+    );
+
+    // Wait until construction has started: the price is paid and the builder
+    // works from inside the site.
+    utils::run_ticks(&mut app, 12);
+    assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
+    // 80 granted − 50 for the depot.
+    assert_eq!(utils::gold(app.world_mut()), 30);
+
+    spawn::destroy_entity(app.world_mut(), worker);
+    utils::run_ticks(&mut app, 6);
+
+    // The site goes down with the builder that was raising it, and what it
+    // cost goes with them: nothing pays a site back but a cancel aimed at it.
+    assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 0);
+    assert_eq!(utils::gold(app.world_mut()), 30);
+}
+
+#[test]
+fn force_cancel_brings_hidden_builder_back_and_keeps_price_spent() {
     let mut app = utils::orders_app();
     let (worker, worker_id) = utils::create_owned(&mut app, "worker", 5, 5, 0);
     utils::grant_gold(&mut app, 80);
@@ -115,13 +151,14 @@ fn cancelling_build_refunds_and_restores_builder() {
     assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
     assert_eq!(utils::gold(app.world_mut()), 30);
 
-    utils::stop_orders(app.world_mut(), worker);
+    utils::force_cancel_orders(app.world_mut(), worker);
 
-    // The cancel destroys the unfinished building, refunds the cost, and the
-    // builder reappears next to the site.
+    // The order taken away destroys the unfinished building and the builder
+    // reappears next to the site. Only CancelBuild pays a site back, so the 50
+    // the depot cost stays spent.
     utils::run_ticks(&mut app, 1);
     assert!(app.world_mut().get::<HiddenComponent>(worker).is_none());
-    assert_eq!(utils::gold(app.world_mut()), 80);
+    assert_eq!(utils::gold(app.world_mut()), 30);
     utils::run_ticks(&mut app, 3);
     assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 0);
     utils::run_ticks(&mut app, 1);
@@ -543,7 +580,7 @@ fn builder_that_works_alone_turns_away_from_site_another_holds() {
 }
 
 #[test]
-fn cancelling_one_of_crew_leaves_site_standing() {
+fn canceling_one_of_crew_leaves_site_standing() {
     let mut app = utils::orders_app();
     let (first, first_id) = utils::create_owned(&mut app, "carpenter", 9, 10, 0);
     let (_, second_id) = utils::create_owned(&mut app, "carpenter", 12, 11, 0);
@@ -554,7 +591,7 @@ fn cancelling_one_of_crew_leaves_site_standing() {
     utils::run_ticks(&mut app, utils::APPLY);
     assert_eq!(under_construction(app.world_mut()), 1);
 
-    utils::stop_orders(app.world_mut(), first);
+    utils::force_cancel_orders(app.world_mut(), first);
     utils::run_ticks(&mut app, 1);
 
     assert_eq!(
@@ -586,7 +623,7 @@ fn raised_site_records_crew_until_last_builder_leaves() {
     );
 
     // One of the pair stops. The site keeps standing, and keeps the other builder.
-    utils::stop_orders(app.world_mut(), first);
+    utils::force_cancel_orders(app.world_mut(), first);
     utils::run_ticks(&mut app, 1);
     assert_eq!(
         crew_of_site(app.world_mut()),
@@ -596,7 +633,7 @@ fn raised_site_records_crew_until_last_builder_leaves() {
 
     // The last builder out empties the crew and, having worked in the open, leaves
     // the site standing halted rather than tearing it down.
-    utils::stop_orders(app.world_mut(), second);
+    utils::force_cancel_orders(app.world_mut(), second);
     utils::run_ticks(&mut app, 1);
     assert!(crew_of_site(app.world_mut()).is_empty());
     assert_eq!(site_work(app.world_mut()), Some(SiteWork::Halted));
@@ -623,7 +660,7 @@ fn open_builder_ordered_away_leaves_site_halted_with_its_progress() {
     assert_eq!(site_progress(app.world_mut()), 2);
     assert_eq!(utils::gold(app.world_mut()), 30);
 
-    utils::stop_orders(app.world_mut(), mason);
+    utils::force_cancel_orders(app.world_mut(), mason);
     utils::run_ticks(&mut app, 4);
     assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
     assert_eq!(site_work(app.world_mut()), Some(SiteWork::Halted));
@@ -649,7 +686,7 @@ fn halted_site_is_taken_up_by_next_builder_and_finished() {
 
     order_depot(&mut app, mason_id);
     utils::run_ticks(&mut app, utils::APPLY + 2);
-    utils::stop_orders(app.world_mut(), mason);
+    utils::force_cancel_orders(app.world_mut(), mason);
     utils::run_ticks(&mut app, 1);
     assert_eq!(site_work(app.world_mut()), Some(SiteWork::Halted));
 
@@ -673,7 +710,7 @@ fn builder_that_leaves_sites_to_themselves_takes_up_halted_one_on_its_own_terms(
 
     order_depot(&mut app, mason_id);
     utils::run_ticks(&mut app, utils::APPLY + 2);
-    utils::stop_orders(app.world_mut(), mason);
+    utils::force_cancel_orders(app.world_mut(), mason);
     utils::run_ticks(&mut app, 1);
     assert_eq!(site_work(app.world_mut()), Some(SiteWork::Halted));
 
@@ -817,7 +854,7 @@ fn attached_builder_killed_at_work_leaves_site_halted() {
 }
 
 //
-// ─── Cancelling a site ─────────────────────────────────────────────────────────
+// ─── Canceling a site ─────────────────────────────────────────────────────────
 //
 
 #[test]
@@ -1017,7 +1054,7 @@ fn consumed_builder_works_site_hidden_and_is_consumed_when_it_completes() {
 }
 
 #[test]
-fn cancelling_consumed_builder_brings_it_back_and_refunds_site() {
+fn force_cancel_brings_consumed_builder_back_and_keeps_price_spent() {
     let mut app = recording_orders_app();
     let (larva, larva_id) = utils::create_owned(&mut app, "larva", 5, 5, 0);
     utils::grant_gold(&mut app, 80);
@@ -1029,21 +1066,21 @@ fn cancelling_consumed_builder_brings_it_back_and_refunds_site() {
 
     let site = utils::single_owned_of_type(app.world_mut(), "depot", 0);
     let site_id = entity_def::simulation_id(app.world(), site);
-    utils::stop_orders(app.world_mut(), larva);
+    utils::force_cancel_orders(app.world_mut(), larva);
     // The cancel lands next tick; the abandoned site then dies over its two
     // ticks and is removed.
     utils::run_ticks(&mut app, 6);
 
-    // The site is abandoned and refunded; the larva stands beside where it was,
-    // alive and counted again.
+    // The site is abandoned and the larva stands beside where it was, alive
+    // and counted again. Nothing is paid back: 80 granted − 50 for the depot.
     let world = app.world_mut();
     assert_eq!(utils::count_of_type(world, "depot"), 0);
-    assert_eq!(utils::gold(world), 80);
+    assert_eq!(utils::gold(world), 30);
     assert!(world.get::<HiddenComponent>(larva).is_none());
     assert_eq!(supply::used(world, 0), FixedU64::ONE);
     assert_eq!(
         deaths(&app),
-        vec![(site_id, DeathCause::Cancelled)],
+        vec![(site_id, DeathCause::Canceled)],
         "the site is the one death, and the builder was not spent"
     );
 }
@@ -1069,8 +1106,79 @@ fn consumed_builder_survives_placement_that_fails() {
 }
 
 //
+// ─── Solidity and placement ───────────────────────────────────────────────────
+//
+
+#[test]
+fn static_footprint_is_not_raised_over_what_stands_underfoot() {
+    let mut app = solidity_app();
+    assert!(place(&mut app, "mole", 10, 10).is_some());
+
+    // The mole claims no cell, so the grid is clear, and it is still there:
+    // a depot is refused on it and raised one cell over.
+    assert!(
+        place(&mut app, "depot", 10, 10).is_none(),
+        "the ground is held"
+    );
+    assert!(place(&mut app, "depot", 12, 10).is_some());
+}
+
+#[test]
+fn static_footprint_is_raised_over_what_holds_nothing() {
+    let mut app = solidity_app();
+    assert!(place(&mut app, "pebble", 10, 10).is_some());
+
+    // A fully passable body yields its ground: the depot goes up over it.
+    assert!(place(&mut app, "depot", 10, 10).is_some());
+}
+
+#[test]
+fn mover_crosses_what_stands_underfoot() {
+    let mut app = solidity_app();
+    assert!(place(&mut app, "mole", 10, 10).is_some());
+
+    // What movers do is the grid's business, and the mole claims nothing
+    // there: a walker stands on the same cell.
+    assert!(place(&mut app, "worker", 10, 10).is_some());
+}
+
+#[test]
+fn static_footprint_is_raised_over_what_stands_underfoot_on_another_layer() {
+    let mut app = solidity_app();
+    assert!(place(&mut app, "kite", 10, 10).is_some());
+
+    // The kite holds the air and the depot claims the ground, so they share no
+    // layer and the kite refuses nothing.
+    assert!(
+        place(&mut app, "depot", 10, 10).is_some(),
+        "an underfoot body refuses only a footprint that shares its layers"
+    );
+}
+
+#[test]
+fn static_footprint_is_raised_over_underfoot_body_that_is_off_map() {
+    let mut app = solidity_app();
+    let mole = place(&mut app, "mole", 10, 10).expect("the mole stands");
+    // Off the map — aboard, inside a site or down a mine — it holds no ground,
+    // and the position it still carries is stale.
+    app.world_mut().entity_mut(mole).insert(HiddenComponent);
+
+    assert!(
+        place(&mut app, "depot", 10, 10).is_some(),
+        "what is off the map holds no ground"
+    );
+}
+
+//
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 //
+
+/// Creates an entity of `type_name` at `(x, y)` for player 0, or `None` when
+/// the ground refuses it.
+fn place(app: &mut App, type_name: &str, x: u32, y: u32) -> Option<Entity> {
+    utils::create_entity(app.world_mut(), type_name, utils::pos(x, y), Some(0))
+        .map(|(entity, _)| entity)
+}
 
 /// Orders `builder` to raise a depot on the one site the sharing suite uses.
 fn order_depot(app: &mut App, builder: SimulationId) {
@@ -1085,6 +1193,58 @@ fn order_depot(app: &mut App, builder: SimulationId) {
     );
 }
 
+/// The orders roster on a two-layer map, with a `mole` that stands underfoot
+/// and a `pebble` that holds nothing at all, both one cell of ground, and a
+/// `kite` that stands underfoot on the air layer. Two humans, session started.
+fn solidity_app() -> App {
+    let mut app = utils::make_app(vec![
+        PlayerSlot::occupied(0, PlayerType::Human, None, None),
+        PlayerSlot::occupied(1, PlayerType::Human, None, None),
+    ]);
+    // Two layers, so a body that holds one of them can be shown not to refuse
+    // a footprint on the other.
+    {
+        let mut grid = NavGrid::new(32, 32);
+        grid.add_layer(utils::GROUND);
+        grid.add_layer(utils::AIR);
+        ferrets_bevy_plugin::map::install_map(
+            app.world_mut(),
+            Map::new(
+                "test",
+                Projection::Isometric,
+                MovementModel::Cell,
+                grid,
+                vec![],
+                &[MoverShape::point(utils::GROUND)],
+            ),
+        );
+    }
+    {
+        let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
+        assert_eq!(registry.register_layer(utils::AIR_LAYER), utils::AIR);
+        registry.register(
+            EntityTypeDef::new("mole")
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Underfoot)
+                .with_health(20),
+        );
+        registry.register(
+            EntityTypeDef::new("pebble")
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Passable)
+                .with_health(20),
+        );
+        // The same underfoot body a layer up, to show that holding ground on
+        // one layer says nothing about another.
+        registry.register(
+            EntityTypeDef::new("kite")
+                .with_location(utils::AIR, CellSize::ONE, Solidity::Underfoot)
+                .with_health(20),
+        );
+    }
+    utils::register_orders_content(&mut app);
+    app.world_mut().resource_mut::<GameSession>().start();
+    app
+}
+
 /// The economy content roster plus a `surveyor` that raises depots from three
 /// cells out.
 fn surveyor_app() -> App {
@@ -1095,15 +1255,7 @@ fn surveyor_app() -> App {
     {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
         registry.register(
-            EntityTypeDef::new("surveyor")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
-                    FixedU64::ONE,
-                    FixedU64::from_num(360),
-                    FixedU64::from_num(360),
-                )
+            utils::walker("surveyor", utils::GROUND)
                 .with_health(20)
                 .with_stat(EntityStatId::BUILD_RANGE, FixedU64::from_num(3))
                 .with_builder(

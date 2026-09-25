@@ -16,12 +16,13 @@ use ferrets_content::{entity_stats::EntityStatId, registry::ContentRegistry};
 use ferrets_geometry::cell_pos::CellPos;
 use ferrets_script::ai::{
     AiRuntime,
-    view::game::{EntityView, GameView, RemainsView},
+    view::game::{EntityView, GameView, Glimpse, RemainsView},
 };
 use ferrets_simulation::{
     components::{
         brood::{BredComponent, BroodComponent},
         build::UnderConstructionComponent,
+        concealed::ConcealedComponent,
         dying::RemainsComponent,
         energy::EnergyComponent,
         entity_info::EntityInfoComponent,
@@ -44,11 +45,12 @@ use ferrets_simulation::{
     player_research::PlayerResearch,
     resources::PlayerResources,
     session::{
-        GameSession, ai_vision::AiVision, player_id::PlayerId, player_slot::PlayerSlot,
+        GameSession, ai_detection::AiDetection, ai_vision::AiVision, player_id::PlayerId,
         player_type::PlayerType,
     },
     simulation_id::SimulationId,
-    supply, visibility,
+    supply,
+    visibility::{self, Senses, Sighting},
 };
 
 use crate::{
@@ -202,15 +204,20 @@ pub fn supply_ai_input(world: &mut World) {
         }
         let commands = match runtimes.0.get_mut(&player) {
             Some(runtime) if is_think_tick(tick, player, runtime.period()) => {
-                // The seat's vision, not the runtime's: the seat is what the
-                // executor resolves the commands by, so the view must be built
-                // from the same declaration on every node.
-                let vision = world
+                // The seat's vision and detection, not the runtime's: the seat
+                // is what the executor resolves the commands by, so the view
+                // must be built from the same declaration on every node.
+                let slot = world
                     .resource::<GameSession>()
                     .slot(player)
-                    .and_then(PlayerSlot::ai_vision)
-                    .unwrap_or(AiVision::Filtered);
-                let view = game_view(world, player, &race, vision);
+                    .unwrap_or_else(|| panic!("player {player} holds no seat"));
+                let (vision, detection) = match slot.player_type() {
+                    Some(PlayerType::Ai { vision, detection }) => (vision, detection),
+                    Some(PlayerType::Human) | None => {
+                        panic!("a brain thinks only for a scripted seat, not player {player}'s")
+                    }
+                };
+                let view = game_view(world, player, &race, vision, detection);
                 match runtime.think(&view) {
                     Ok(commands) => commands,
                     Err(error) => {
@@ -239,7 +246,13 @@ fn is_think_tick(tick: u32, player: PlayerId, period: u32) -> bool {
 /// Snapshots everything `player`'s brain observes this tick. Entity lists are
 /// in ascending simulation-id order; only integers, strings, and booleans are
 /// captured, so the snapshot is identical on every node with identical state.
-pub fn game_view(world: &World, player: PlayerId, race: &str, vision: AiVision) -> GameView {
+pub fn game_view(
+    world: &World,
+    player: PlayerId,
+    race: &str,
+    vision: AiVision,
+    detection: AiDetection,
+) -> GameView {
     let map = world.resource::<Map>();
     let resources = world
         .resource::<PlayerResources>()
@@ -253,32 +266,45 @@ pub fn game_view(world: &World, player: PlayerId, race: &str, vision: AiVision) 
     let mut ally_entities = Vec::new();
     let mut enemy_entities = Vec::new();
     let mut neutral_entities = Vec::new();
+    let mut glimpses = Vec::new();
     for (id, entity) in world.resource::<EntityIndex>().alive_entries() {
         let entity_ref = world.entity(entity);
         let owner = entity_def::owner(world, entity);
-        // A brain keeps seeing its own hidden entities (a worker inside a mine
-        // still counts toward its economy); other players' hidden entities are
-        // omitted, matching what its commands could target.
-        let hidden = entity_ref.contains::<HiddenComponent>();
-        if hidden && owner != Some(player) {
-            continue;
-        }
-        let disabled = matches!(entity_def::operation(world, entity), Operation::Disabled(_));
-        let view = entity_view(&entity_ref, id, hidden, disabled);
+        // A brain keeps its side's hidden entities in view (a worker inside a
+        // mine still counts toward its economy) — by ownership, since nobody
+        // sights what is off the map; the sighting below leaves out everyone
+        // else's, matching what its commands could target.
+        // The view is built only for an entity the brain keeps: it allocates
+        // its strings and lists, and most of another side is unseen.
+        let view = |entity_ref: &EntityRef| {
+            entity_view(entity_ref, id, entity_def::operation(world, entity))
+        };
         match owner {
             // Own and allied entities are always seen; enemy and neutral ones
-            // only when the brain's team can see their cell (unless the AI is
-            // omniscient, in which case fog does not filter its view).
-            Some(owner) if owner == player => my_entities.push(view),
-            Some(owner) if session.are_allied(player, owner) => ally_entities.push(view),
-            Some(_) => {
-                if visibility::sees_as(world, player, entity, vision) {
-                    enemy_entities.push(view);
-                }
+            // only as the seat's vision and detection make them out — fog
+            // lifted by omniscient vision, a cloak pierced by detection
+            // everywhere. A glimpse is a position and nothing more.
+            Some(owner) if owner == player => my_entities.push(view(&entity_ref)),
+            Some(owner) if session.are_allied(player, owner) => {
+                ally_entities.push(view(&entity_ref))
             }
-            None => {
-                if visibility::sees_as(world, player, entity, vision) {
-                    neutral_entities.push(view);
+            Some(_) | None => {
+                match visibility::sighting(world, player, entity, Senses::Given(vision, detection))
+                {
+                    Sighting::Seen => match owner {
+                        Some(_) => enemy_entities.push(view(&entity_ref)),
+                        None => neutral_entities.push(view(&entity_ref)),
+                    },
+                    Sighting::Glimpsed => {
+                        let footprint = entity_def::occupied_rect(world, entity);
+                        glimpses.push(Glimpse {
+                            x: footprint.origin.x,
+                            y: footprint.origin.y,
+                            width: footprint.size.width,
+                            height: footprint.size.height,
+                        });
+                    }
+                    Sighting::Unseen => {}
                 }
             }
         }
@@ -301,7 +327,8 @@ pub fn game_view(world: &World, player: PlayerId, race: &str, vision: AiVision) 
         ally_entities,
         enemy_entities,
         neutral_entities,
-        remains: remains_views(world, player, vision),
+        remains: remains_views(world, player, vision, detection),
+        glimpses,
     }
 }
 
@@ -338,8 +365,9 @@ fn research_views(world: &World, player: PlayerId) -> (Vec<String>, Vec<String>)
     (researched, researching)
 }
 
-/// Snapshots one entity to its integer view.
-fn entity_view(entity: &EntityRef, id: SimulationId, hidden: bool, disabled: bool) -> EntityView {
+/// Snapshots one entity to its integer view, `operation` being the state it
+/// is in to carry out its type's work.
+fn entity_view(entity: &EntityRef, id: SimulationId, operation: Operation) -> EntityView {
     let cell = entity
         .get::<LocationComponent>()
         .map_or(CellPos::new(0, 0), |location| {
@@ -365,7 +393,8 @@ fn entity_view(entity: &EntityRef, id: SimulationId, hidden: bool, disabled: boo
         idle: entity
             .get::<OrderQueueComponent>()
             .is_none_or(|queue| queue.front().is_none()),
-        hidden,
+        hidden: entity.contains::<HiddenComponent>(),
+        concealed: entity.contains::<ConcealedComponent>(),
         carrying: entity
             .get::<ResourceCarrierComponent>()
             .and_then(|carrier| carrier.kind.clone().map(|kind| (kind, carrier.amount))),
@@ -373,7 +402,10 @@ fn entity_view(entity: &EntityRef, id: SimulationId, hidden: bool, disabled: boo
             .get::<TrainQueueComponent>()
             .map_or_else(Vec::new, |queue| queue.0.iter().cloned().collect()),
         under_construction: entity.contains::<UnderConstructionComponent>(),
-        disabled,
+        disabled: match operation {
+            Operation::Disabled(_) => true,
+            Operation::Operating | Operation::UnderConstruction => false,
+        },
         stance: entity
             .get::<StanceComponent>()
             .map(|stance| stance.0.name().to_string()),
@@ -412,13 +444,18 @@ fn lifetime_left(entity: &EntityRef) -> Option<u32> {
 }
 
 /// Snapshots the remains the brain may see, oldest first.
-fn remains_views(world: &World, player: PlayerId, vision: AiVision) -> Vec<RemainsView> {
+fn remains_views(
+    world: &World,
+    player: PlayerId,
+    vision: AiVision,
+    detection: AiDetection,
+) -> Vec<RemainsView> {
     world
         .resource::<EntityIndex>()
         .remains_entries()
         .into_iter()
         .filter_map(|(id, entity)| {
-            if !visibility::sees_as(world, player, entity, vision) {
+            if !visibility::sees(world, player, entity, Senses::Given(vision, detection)) {
                 return None;
             }
             let entity_ref = world.entity(entity);

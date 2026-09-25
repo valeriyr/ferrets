@@ -9,9 +9,9 @@ use crate::{
     annex,
     components::{
         attached::AttachedComponent, build::UnderConstructionComponent,
-        entity_info::EntityInfoComponent, entity_stats::StatsComponent, hidden::HiddenComponent,
-        location::LocationComponent, morph::MorphComponent, order_queue::OrderQueueComponent,
-        owner::OwnerComponent,
+        entity_buffs::BuffsComponent, entity_info::EntityInfoComponent,
+        entity_stats::StatsComponent, hidden::HiddenComponent, location::LocationComponent,
+        morph::MorphComponent, order_queue::OrderQueueComponent, owner::OwnerComponent,
     },
     fields,
     map::OccupancyClass,
@@ -23,6 +23,8 @@ use ferrets_content::{
     annex::AnnexDef,
     attack::Weapon,
     build::BuilderAttendance,
+    concealment::Concealment,
+    entity_effect::EntityEffect,
     entity_stats::EntityStatId,
     entity_type_def::{EntityTypeDef, EntityTypeId},
     morph::MorphTransition,
@@ -115,13 +117,15 @@ pub fn stands_on_grid(world: &World, entity: Entity) -> bool {
     !entity_ref.contains::<HiddenComponent>() && !entity_ref.contains::<AttachedComponent>()
 }
 
-/// What switched a standing entity off.
+/// The kind of outage a standing entity is under.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Switch {
+pub enum Outage {
     /// A field effect over the ground it stands on.
     Field,
+    /// A buff it carries.
+    Buff,
     /// It is an annex with no primary, on terms that stop it working.
-    Alone,
+    Orphaned,
 }
 
 /// Whether an entity is in a state to carry out its type's work.
@@ -132,7 +136,41 @@ pub enum Operation {
     /// Still being raised.
     UnderConstruction,
     /// Standing, but switched off.
-    Disabled(Switch),
+    Disabled(Outage),
+}
+
+/// Whether an active buff on `entity` carries an effect `wanted` picks out.
+pub fn buff_effect_applies(
+    world: &World,
+    entity: Entity,
+    wanted: impl Fn(&EntityEffect) -> bool,
+) -> bool {
+    let Some(buffs) = world.entity(entity).get::<BuffsComponent>() else {
+        return false;
+    };
+    let registry = world.resource::<ContentRegistry>();
+    buffs
+        .active()
+        .any(|(id, _)| registry.entity_buff_def(id).effects.iter().any(&wanted))
+}
+
+/// Whether something conceals `entity` now: its type, an active buff, or a
+/// field it declares a concealing effect for.
+pub fn concealed(world: &World, entity: Entity) -> bool {
+    let def = of(world, entity);
+    match def.concealment {
+        Concealment::Concealed => true,
+        // Most entities are exposed by type, carry no buff and declare no
+        // concealing effect: they are done in two reads.
+        Concealment::Exposed => {
+            buff_effect_applies(world, entity, |effect| {
+                matches!(effect, EntityEffect::Conceal)
+            }) || (def.field_effects.iter().any(|effect| match effect.kind() {
+                EntityEffect::Conceal => true,
+                EntityEffect::Modifiers(_) | EntityEffect::Disable => false,
+            }) && fields::concealed_of(world, def, entity))
+        }
+    }
 }
 
 /// Whether a change of form is under way on `entity`: it wears its origin or
@@ -151,9 +189,13 @@ pub fn operation(world: &World, entity: Entity) -> Operation {
     if entity_ref.contains::<UnderConstructionComponent>() {
         Operation::UnderConstruction
     } else if fields::disabled(world, entity) {
-        Operation::Disabled(Switch::Field)
+        Operation::Disabled(Outage::Field)
+    } else if buff_effect_applies(world, entity, |effect| {
+        matches!(effect, EntityEffect::Disable)
+    }) {
+        Operation::Disabled(Outage::Buff)
     } else if annex::idles_alone(world, entity) {
-        Operation::Disabled(Switch::Alone)
+        Operation::Disabled(Outage::Orphaned)
     } else {
         Operation::Operating
     }
@@ -273,7 +315,14 @@ pub fn effective_stat_u32(world: &World, entity: Entity, stat: EntityStatId) -> 
 ///
 /// Panics if `entity` is not a simulation entity, or its type declares no location.
 pub fn footprint(world: &World, entity: Entity) -> (FixedUVec2, CellSize) {
-    let size = of(world, entity)
+    footprint_of(world, of(world, entity), entity)
+}
+
+/// [`footprint`] for an `entity` whose type `def` the caller already holds.
+///
+/// Panics if `entity` is not a simulation entity, or `def` declares no location.
+pub fn footprint_of(world: &World, def: &EntityTypeDef, entity: Entity) -> (FixedUVec2, CellSize) {
+    let size = def
         .location
         .expect("validated content defines a location")
         .size();
@@ -288,8 +337,16 @@ pub fn footprint(world: &World, entity: Entity) -> (FixedUVec2, CellSize) {
 ///
 /// Panics if `entity` is not a simulation entity, or its type declares no location.
 pub fn footprint_rect(world: &World, entity: Entity) -> CellRect {
-    let (position, size) = footprint(world, entity);
-    let anchor = match OccupancyClass::of(of(world, entity)) {
+    footprint_rect_of(world, of(world, entity), entity)
+}
+
+/// [`footprint_rect`] for an `entity` whose type `def` the caller already
+/// holds.
+///
+/// Panics if `entity` is not a simulation entity, or `def` declares no location.
+pub fn footprint_rect_of(world: &World, def: &EntityTypeDef, entity: Entity) -> CellRect {
+    let (position, size) = footprint_of(world, def, entity);
+    let anchor = match OccupancyClass::of(def) {
         OccupancyClass::Static => body::anchor(position),
         OccupancyClass::Claim => CellPos::from(position),
     };
@@ -302,7 +359,15 @@ pub fn footprint_rect(world: &World, entity: Entity) -> CellRect {
 ///
 /// Panics if `entity` is not a simulation entity, or its type declares no location.
 pub fn occupied_rect(world: &World, entity: Entity) -> CellRect {
-    let (position, size) = footprint(world, entity);
+    occupied_rect_of(world, of(world, entity), entity)
+}
+
+/// [`occupied_rect`] for an `entity` whose type `def` the caller already
+/// holds.
+///
+/// Panics if `entity` is not a simulation entity, or `def` declares no location.
+pub fn occupied_rect_of(world: &World, def: &EntityTypeDef, entity: Entity) -> CellRect {
+    let (position, size) = footprint_of(world, def, entity);
     CellRect::new(body::anchor(position), size)
 }
 
@@ -417,7 +482,7 @@ fn serves(world: &World, target: Option<Entity>) -> impl Fn(&ContentRegistry, &W
 /// Zero where none is kept — reachable only when a morph takes the serving
 /// weapon away mid-fight. An order on a named target then ends on its every-tick
 /// reachability check; one on a bare cell holds at a zero reach, which walks the
-/// body no further than adjacency, until it is cancelled.
+/// body no further than adjacency, until it is canceled.
 fn longest(
     world: &World,
     entity: Entity,

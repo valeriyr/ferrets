@@ -8,12 +8,6 @@ mod utils;
 use std::f32::consts::FRAC_1_SQRT_2;
 
 use bevy::{ecs::system::RunSystemOnce, prelude::*};
-use ferrets_demo::{
-    render::{self, Directional, DrawnBearings, DrawnFacing, PrevPos},
-    time::NOMINAL_TICK_HZ,
-};
-use ferrets_math::facing::Facing;
-
 use ferrets_content::{
     attack::{Delivery, Slain, Weapon},
     entity_stats::EntityStatId,
@@ -22,11 +16,53 @@ use ferrets_content::{
     registry::ContentRegistry,
     turret::{TurretDef, TurretMount, TurretStats, WeaponConduct},
 };
-use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
-use ferrets_math::FixedU64;
-use ferrets_simulation::components::{
-    hidden::HiddenComponent, location::LocationComponent, turret::TurretsComponent,
+use ferrets_demo::{
+    render::{self, Directional, DrawnBearings, DrawnFacing, PrevPos, Sighted},
+    time::NOMINAL_TICK_HZ,
 };
+use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
+use ferrets_math::{FixedU64, facing::Facing};
+use ferrets_simulation::{
+    components::{
+        hidden::HiddenComponent, location::LocationComponent, owner::OwnerComponent,
+        turret::TurretsComponent,
+    },
+    session::{GameSession, player_id::PlayerId},
+    visibility::Sighting,
+};
+
+#[test]
+fn glimpsed_entity_hides_body_sprite_and_shows_it_once_seen() {
+    // A glimpse owes a presence and no more: its sprite carries the owner's
+    // color and the type's own outline, so the body stays hidden and
+    // draw_glimpses puts a neutral shape where it stands.
+    let mut app = utils::view_app();
+    let worker = spawn_worker(&mut app, "20");
+
+    app.world_mut()
+        .entity_mut(worker)
+        .insert(Sighted(Sighting::Glimpsed));
+    app.world_mut()
+        .run_system_once(render::interpolate_sprites)
+        .expect("the interpolation runs");
+    assert_eq!(
+        app.world().get::<Visibility>(worker),
+        Some(&Visibility::Hidden),
+        "the body a glimpse would name its side and type by stays hidden"
+    );
+
+    app.world_mut()
+        .entity_mut(worker)
+        .insert(Sighted(Sighting::Seen));
+    app.world_mut()
+        .run_system_once(render::interpolate_sprites)
+        .expect("the interpolation runs");
+    assert_eq!(
+        app.world().get::<Visibility>(worker),
+        Some(&Visibility::Visible),
+        "and is drawn again the moment the side makes it out"
+    );
+}
 
 #[test]
 fn reveal_snaps_interpolation_anchor_to_where_entity_reappeared() {
@@ -288,6 +324,159 @@ fn walking_gun_draws_hull_and_gun_apart() {
 }
 
 //
+// ─── Sightings ────────────────────────────────────────────────────────────────
+//
+
+/// The stamp folds the whole footprint: a rival building lit at one cell is
+/// made out, and the cell is the corner farthest from the one it anchors at,
+/// which is the cell the rule used to read alone.
+#[test]
+fn refresh_sightings_stamps_footprint_lit_at_one_corner() {
+    let mut app = utils::view_app();
+    // Sight is a circle of eight cells around the grunt at (17, 18). The hall
+    // spans (10, 10) to (12, 12): its far corner (12, 12) is √(5² + 6²) = 7.81
+    // cells away and lit, while (11, 12) at √(6² + 6²) = 8.49 and (12, 11) at
+    // √(5² + 7²) = 8.60 are not.
+    spawn_owned_at(&mut app, "grunt", 17, 18, 0);
+    let hall = spawn_owned_at(&mut app, "great_hall", 10, 10, 1);
+    utils::run_ticks(&mut app, 2);
+
+    app.world_mut()
+        .run_system_once(render::refresh_sightings)
+        .expect("the sighting pass runs");
+
+    assert_eq!(
+        app.world().get::<Sighted>(hall),
+        Some(&Sighted(Sighting::Seen)),
+        "any one lit cell of a footprint settles it"
+    );
+}
+
+/// A concealed rival under sight and no detector is a presence and no more.
+#[test]
+fn refresh_sightings_stamps_undetected_cloak_under_sight_as_glimpsed() {
+    let mut app = utils::view_app();
+    // Two cells from the grunt, well inside its eight cells of sight; the
+    // side fields no detector, and the templar is cloaked by its type.
+    spawn_owned_at(&mut app, "grunt", 20, 20, 0);
+    let templar = spawn_owned_at(&mut app, "dark_templar", 22, 20, 1);
+    utils::run_ticks(&mut app, 2);
+
+    app.world_mut()
+        .run_system_once(render::refresh_sightings)
+        .expect("the sighting pass runs");
+
+    assert_eq!(
+        app.world().get::<Sighted>(templar),
+        Some(&Sighted(Sighting::Glimpsed)),
+        "lit and undetected is glimpsed"
+    );
+}
+
+//
+// ─── Glimpses and crews ───────────────────────────────────────────────────────
+//
+
+/// The rings of a glimpse sit on the cell the entity is over: a flier is drawn
+/// lifted off it, and the lift is taken back out, so nothing about the rings
+/// tells a flier from a walker.
+#[test]
+fn glimpse_center_is_ground_point_under_lifted_flier() {
+    let mut app = utils::view_app();
+    // Unsmoothed, the sprite stands on the tick's own position rather than
+    // part way toward it.
+    app.world_mut().insert_resource(render::Smoothing(false));
+    let wraith = spawn_at(&mut app, "wraith", 20, 20);
+    let grunt = spawn_at(&mut app, "grunt", 24, 24);
+    draw(&mut app);
+
+    // A one-cell body at (20, 20) is centered at (20.5, 20.5) cells, which is
+    // (20.5 × 32, −20.5 × 32) = (656, −656) pixels, the demo's y pointing
+    // down; the one at (24, 24) is at (24.5 × 32, −24.5 × 32) = (784, −784).
+    let world = app.world();
+    let registry = world.resource::<ContentRegistry>();
+    let flier = registry
+        .entity("wraith")
+        .expect("the demo defines a wraith");
+    let walker = registry.entity("grunt").expect("the demo defines a grunt");
+    let lifted = world.get::<Transform>(wraith).expect("a drawn flier");
+    let standing = world.get::<Transform>(grunt).expect("a drawn walker");
+
+    assert_ne!(
+        lifted.translation.y, -656.0,
+        "a flier is drawn lifted off the cell it is over"
+    );
+    assert_eq!(
+        render::glimpse_center(lifted, registry, flier),
+        Vec2::new(656.0, -656.0),
+        "and its glimpse is centered on the cell, the lift taken back out"
+    );
+    assert_eq!(standing.translation.truncate(), Vec2::new(784.0, -784.0));
+    assert_eq!(
+        render::glimpse_center(standing, registry, walker),
+        Vec2::new(784.0, -784.0),
+        "a walker's glimpse is where it is drawn"
+    );
+}
+
+/// The work marker's dots count the viewed side's own crew wherever it is,
+/// and a rival's crew only where the perspective makes it out; a glimpsed or
+/// unseen rival is a shimmer beside the tree and not a dot on it.
+#[test]
+fn crew_counts_own_side_anywhere_and_rival_only_when_made_out() {
+    // The demo map seats players 0 and 1 on no team, so 1 is 0's rival.
+    let app = utils::view_app();
+    let session = app.world().resource::<GameSession>();
+    let own = OwnerComponent::new(0);
+    let rival = OwnerComponent::new(1);
+    let seen = Sighted(Sighting::Seen);
+    let glimpsed = Sighted(Sighting::Glimpsed);
+    let unseen = Sighted(Sighting::Unseen);
+
+    // One of the viewed side's own inside a job: its body is hidden, and it
+    // counts all the same.
+    assert!(render::crew_counts(
+        session,
+        Some(0),
+        Some(&own),
+        &Visibility::Hidden,
+        None
+    ));
+    // A rival seen in full counts.
+    assert!(render::crew_counts(
+        session,
+        Some(0),
+        Some(&rival),
+        &Visibility::Visible,
+        Some(&seen)
+    ));
+    // A rival only glimpsed does not: its body is hidden and it is not made out.
+    assert!(!render::crew_counts(
+        session,
+        Some(0),
+        Some(&rival),
+        &Visibility::Hidden,
+        Some(&glimpsed)
+    ));
+    // A rival unseen does not.
+    assert!(!render::crew_counts(
+        session,
+        Some(0),
+        Some(&rival),
+        &Visibility::Hidden,
+        Some(&unseen)
+    ));
+    // With no viewed player the whole map is watched, and every member counts.
+    assert!(render::crew_counts(
+        session,
+        None,
+        Some(&rival),
+        &Visibility::Hidden,
+        Some(&unseen)
+    ));
+}
+
+//
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 //
 
@@ -406,11 +595,20 @@ fn nose_of(rotation: Quat) -> Vec2 {
     (rotation * Vec3::Y).truncate()
 }
 
-/// Spawns `type_name` at a cell, with its sprite attached.
+/// Spawns `type_name` at a cell for the local player, with its sprite attached.
 fn spawn_at(app: &mut App, type_name: &str, x: u32, y: u32) -> Entity {
-    let (entity, _) =
-        utils::create_entity(app.world_mut(), type_name, utils::at_cell(x, y), Some(0))
-            .unwrap_or_else(|| panic!("{type_name} spawns"));
+    spawn_owned_at(app, type_name, x, y, 0)
+}
+
+/// Spawns `type_name` at a cell for `owner`, with its sprite attached.
+fn spawn_owned_at(app: &mut App, type_name: &str, x: u32, y: u32, owner: PlayerId) -> Entity {
+    let (entity, _) = utils::create_entity(
+        app.world_mut(),
+        type_name,
+        utils::at_cell(x, y),
+        Some(owner),
+    )
+    .unwrap_or_else(|| panic!("{type_name} spawns"));
     app.world_mut()
         .run_system_once(render::attach_sprites)
         .expect("sprites attach");

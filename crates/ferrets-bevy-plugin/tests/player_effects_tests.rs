@@ -5,11 +5,12 @@ mod utils;
 
 use bevy::prelude::*;
 use ferrets_content::{
-    costs::Cost,
-    entity_buffs::EntityBuffDef,
+    entity_buffs::{EntityBuffDef, Lasting},
+    entity_effect::EntityEffect,
     entity_stats::EntityStatId,
     player_buffs::{PlayerBuffDef, PlayerBuffId},
     player_stats::PlayerStatId,
+    price::Price,
     registry::ContentRegistry,
     skills::{PlayerCastEffect, SkillCaster, SkillDef},
     stack_rule::StackRule,
@@ -79,9 +80,10 @@ fn buff_and_unit_modifier_fold_together() {
         .register_entity_buff(
             "haste",
             EntityBuffDef {
-                modifiers: vec![speed_percent("1")],
-                duration: Some(5),
+                effects: vec![EntityEffect::Modifiers(vec![speed_percent("1")])],
+                lasting: Lasting::For(5),
                 stack_rule: StackRule::Refresh,
+                interrupted_by: Vec::new(),
             },
         );
     game_loop::stats::apply_entity_buff(app.world_mut(), runner, haste);
@@ -168,20 +170,8 @@ fn player_skill_cast_boosts_then_expires() {
     utils::grant_gold(&mut app, 30);
     utils::run_ticks(&mut app, 1);
     let base = utils::effective_speed(&app, runner);
-    let drums = app
-        .world()
-        .resource::<ContentRegistry>()
-        .skill("drums")
-        .expect("drums is registered");
 
-    utils::push_command(
-        &mut app,
-        PlayerCommand::UseSkill {
-            skill: drums,
-            caster: SkillCasterRef::Player,
-            target: None,
-        },
-    );
+    utils::use_skill(&mut app, "drums", SkillCasterRef::Player, None);
     utils::run_ticks(&mut app, utils::APPLY + 1);
     assert_eq!(utils::gold(app.world()), 20, "the cast pays its cost");
     assert_eq!(
@@ -191,14 +181,7 @@ fn player_skill_cast_boosts_then_expires() {
     );
 
     // A second cast during the cooldown is refused: nothing paid, nothing stacked.
-    utils::push_command(
-        &mut app,
-        PlayerCommand::UseSkill {
-            skill: drums,
-            caster: SkillCasterRef::Player,
-            target: None,
-        },
-    );
+    utils::use_skill(&mut app, "drums", SkillCasterRef::Player, None);
     utils::run_ticks(&mut app, utils::APPLY + 1);
     assert_eq!(utils::gold(app.world()), 20);
     assert_eq!(utils::effective_speed(&app, runner), base + base);
@@ -209,14 +192,7 @@ fn player_skill_cast_boosts_then_expires() {
 
     // Past the cooldown a fresh cast pays and boosts again.
     utils::run_ticks(&mut app, 10);
-    utils::push_command(
-        &mut app,
-        PlayerCommand::UseSkill {
-            skill: drums,
-            caster: SkillCasterRef::Player,
-            target: None,
-        },
-    );
+    utils::use_skill(&mut app, "drums", SkillCasterRef::Player, None);
     utils::run_ticks(&mut app, utils::APPLY + 1);
     assert_eq!(utils::gold(app.world()), 10);
     assert_eq!(utils::effective_speed(&app, runner), base + base);
@@ -295,7 +271,7 @@ fn free_skill(buff: PlayerBuffId) -> SkillDef {
     SkillDef {
         cooldown: 10,
         caster: SkillCaster::Player {
-            cost: Cost::new(),
+            price: Price::new(),
             effect: PlayerCastEffect::ApplyBuff(buff),
         },
         requires: Vec::new(),

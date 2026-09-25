@@ -12,11 +12,15 @@ use crate::{
     attack::{AttackDef, Delivery, Weapon},
     brood::BroodlingDef,
     build::BuilderAttendance,
-    entity_buffs::{EntityBuffDef, EntityBuffId},
+    cost::Cost,
+    detection::Detection,
+    entity_buffs::{EntityBuffDef, EntityBuffId, Lasting},
+    entity_effect::EntityEffect,
     entity_stats::{ENTITY_BUILTIN_STATS, EntityStatDef, EntityStatId},
     entity_type_def::{EntityTypeDef, EntityTypeId},
-    field::{FieldDef, FieldEffectKind, FieldGrowth, FieldId},
+    field::{Emission, FieldDef, FieldGrowth, FieldId, FieldLayer},
     kinds::{Kind, Kinds},
+    morph::MorphPlacement,
     player_buffs::{PlayerBuffDef, PlayerBuffId},
     player_stats::{PLAYER_BUILTIN_STATS, PlayerStatId},
     projectile::{Aim, ProjectileDef, ProjectileId},
@@ -25,8 +29,8 @@ use crate::{
     requirement::{Requirement, Scope},
     research::{ResearchDef, ResearchId},
     skills::{
-        Casting, EntityCastCost, EntityCastEffect, EntityCastTarget, PlayerCastEffect, Reach,
-        SkillCaster, SkillDef, SkillId,
+        Casting, EntityCastEffect, EntityCastTarget, PlayerCastEffect, Reach, SkillCaster,
+        SkillDef, SkillId,
     },
     stand::StandingAct,
     tags,
@@ -427,7 +431,10 @@ impl ContentRegistry {
     /// everywhere. Re-registering a name keeps the first definition and returns
     /// its existing id.
     ///
-    /// Panics if `name` is empty.
+    /// Panics if `name` is empty, the buff lasts for no tick at all, its
+    /// upkeep names nothing or an unregistered resource kind, a modifier list
+    /// is empty or touches an unregistered entity stat, or the buff does
+    /// nothing at all — no effect, no upkeep, and no interruption.
     pub fn register_entity_buff(
         &mut self,
         name: impl Into<String>,
@@ -439,6 +446,65 @@ impl ContentRegistry {
         if let Some(&id) = self.entity_buffs.get(&name) {
             return id;
         }
+
+        match &buff.lasting {
+            Lasting::For(ticks) => {
+                assert!(*ticks > 0, "entity buff '{name}' lasts for no time at all")
+            }
+            Lasting::Upkeep { costs, period } => {
+                assert!(
+                    !costs.is_empty(),
+                    "entity buff '{name}' has an upkeep that costs nothing"
+                );
+                assert!(
+                    *period > 0,
+                    "entity buff '{name}' pays its upkeep every zero ticks"
+                );
+                for cost in costs {
+                    match cost {
+                        Cost::Resources(resources) => {
+                            for kind in resources.keys() {
+                                assert!(
+                                    self.has_resource(kind),
+                                    "entity buff '{name}' costs unregistered resource kind '{kind}'"
+                                );
+                            }
+                        }
+                        // Whether the pool exists is the carrying type's
+                        // business, checked when a type declares a skill that
+                        // applies the buff (see [`Self::validate_skills`]).
+                        Cost::Energy(_) | Cost::Health(_) => {}
+                    }
+                }
+            }
+            Lasting::Forever => {}
+        }
+        for effect in &buff.effects {
+            match effect {
+                EntityEffect::Modifiers(modifiers) => {
+                    assert!(
+                        !modifiers.is_empty(),
+                        "entity buff '{name}' has an effect with no modifiers"
+                    );
+                    for modifier in modifiers {
+                        assert!(
+                            modifier.stat.index() < self.entity_stats.len(),
+                            "entity buff '{name}' modifies an unregistered entity stat"
+                        );
+                    }
+                }
+                EntityEffect::Disable | EntityEffect::Conceal => {}
+            }
+        }
+        // A buff that does nothing and ends on nothing is a name and no more;
+        // one with an upkeep at least drains, and one with an interruption at
+        // least marks that it was cut short.
+        assert!(
+            !buff.effects.is_empty()
+                || matches!(buff.lasting, Lasting::Upkeep { .. })
+                || !buff.interrupted_by.is_empty(),
+            "entity buff '{name}' does nothing at all"
+        );
 
         let id = EntityBuffId::from_index(self.entity_buff_defs.len());
         self.entity_buffs.insert(name, id);
@@ -638,7 +704,8 @@ impl ContentRegistry {
     /// returns its existing id.
     ///
     /// Panics if `name` is empty, the skill costs an unregistered resource
-    /// kind, or its effect references a buff this registry never minted.
+    /// kind, its effect references a buff this registry never minted, or its
+    /// watch detects on an unregistered layer.
     pub fn register_skill(&mut self, name: impl Into<String>, skill: SkillDef) -> SkillId {
         let name = name.into();
         assert!(!name.is_empty(), "skill name must not be empty");
@@ -675,7 +742,7 @@ impl ContentRegistry {
                 }
                 for cost in costs {
                     match cost {
-                        EntityCastCost::Resources(resources) => {
+                        Cost::Resources(resources) => {
                             for kind in resources.keys() {
                                 assert!(
                                     self.has_resource(kind),
@@ -686,7 +753,7 @@ impl ContentRegistry {
                         // Whether the pool exists is the carrying type's
                         // business, checked when a type declares the skill
                         // (see [`Self::validate_skills`]).
-                        EntityCastCost::Energy(_) | EntityCastCost::Health(_) => {}
+                        Cost::Energy(_) | Cost::Health(_) => {}
                     }
                 }
                 match effect {
@@ -701,8 +768,13 @@ impl ContentRegistry {
                         field.index() < self.field_defs.len(),
                         "skill '{name}' acts on an unregistered field"
                     ),
-                    EntityCastEffect::Watch { duration, .. } => {
-                        assert!(*duration > 0, "skill '{name}' watches for no time at all")
+                    EntityCastEffect::Watch {
+                        duration,
+                        detection,
+                        ..
+                    } => {
+                        assert!(*duration > 0, "skill '{name}' watches for no time at all");
+                        self.validate_detection(&format!("skill '{name}'"), *detection);
                     }
                     EntityCastEffect::Summon { entity_type, count } => {
                         let summoned = self.defs.get(entity_type.index()).unwrap_or_else(|| {
@@ -753,8 +825,8 @@ impl ContentRegistry {
                     (EntityCastTarget::Caster | EntityCastTarget::Standing { .. }, _) => {}
                 }
             }
-            SkillCaster::Player { cost, effect } => {
-                for kind in cost.keys() {
+            SkillCaster::Player { price, effect } => {
+                for kind in price.keys() {
                     assert!(
                         self.has_resource(kind),
                         "skill '{name}' costs unregistered resource kind '{kind}'"
@@ -840,7 +912,7 @@ impl ContentRegistry {
         let name = name.into();
         assert!(!name.is_empty(), "research name must not be empty");
 
-        for kind in research.cost.keys() {
+        for kind in research.price.keys() {
             assert!(
                 self.has_resource(kind),
                 "research '{name}' costs unregistered resource kind '{kind}'"
@@ -941,8 +1013,8 @@ impl ContentRegistry {
     ///
     /// The layers the field covers must be registered first.
     ///
-    /// Panics if `name` is empty, the field is already registered, or its
-    /// layer mask includes an unregistered layer.
+    /// Panics if `name` is empty, the field is already registered, it lies on
+    /// an unregistered layer, or it detects on one.
     pub fn register_field(&mut self, name: impl Into<String>, field: FieldDef) -> FieldId {
         let name = name.into();
         assert!(!name.is_empty(), "field name must not be empty");
@@ -950,11 +1022,17 @@ impl ContentRegistry {
             !self.fields.contains_key(&name),
             "field '{name}' is already registered"
         );
-        let unregistered = field.layer() & !self.registered_layers();
-        assert!(
-            unregistered == LayerMask::EMPTY,
-            "field '{name}' covers unregistered layers {unregistered}"
-        );
+        match field.layer() {
+            FieldLayer::Anywhere => {}
+            FieldLayer::Passable(layers) => {
+                let unregistered = layers & !self.registered_layers();
+                assert!(
+                    unregistered == LayerMask::EMPTY,
+                    "field '{name}' covers unregistered layers {unregistered}"
+                );
+            }
+        }
+        self.validate_detection(&format!("field '{name}'"), field.detection());
 
         let id = FieldId::from_index(self.field_defs.len());
         self.fields.insert(name, id);
@@ -987,6 +1065,18 @@ impl ContentRegistry {
     /// Every registered field handle, in registration order.
     pub fn field_ids(&self) -> impl Iterator<Item = FieldId> {
         (0..self.field_defs.len()).map(FieldId::from_index)
+    }
+
+    /// Every field whose detection reveals something, with the layers it
+    /// reveals, in registration order.
+    pub fn detecting_fields(&self) -> impl Iterator<Item = (FieldId, LayerMask)> + '_ {
+        self.field_defs
+            .iter()
+            .enumerate()
+            .filter_map(|(index, field)| match field.detection() {
+                Detection::Blind => None,
+                Detection::Reveals(layers) => Some((FieldId::from_index(index), layers)),
+            })
     }
 
     /// Returns the mask of every registered navigation layer.
@@ -1039,6 +1129,13 @@ impl ContentRegistry {
                 !into.is_remains(),
                 "{owner} names remains, which only a death may leave"
             );
+            match morph.placement() {
+                MorphPlacement::Nearby => assert!(
+                    into.can_move(),
+                    "{owner} lands nearby, which only a form that can move does"
+                ),
+                MorphPlacement::Reserve | MorphPlacement::Revalidate => {}
+            }
             self.validate_requires(&owner, morph.requires());
             // A time read from a stat the type never declares would silently
             // mean an instant change — the same validates-but-lies class as a
@@ -1080,7 +1177,7 @@ impl ContentRegistry {
             }
             for cost in morph.costs() {
                 match cost {
-                    EntityCastCost::Resources(resources) => {
+                    Cost::Resources(resources) => {
                         for kind in resources.keys() {
                             assert!(
                                 self.has_resource(kind),
@@ -1088,11 +1185,11 @@ impl ContentRegistry {
                             );
                         }
                     }
-                    EntityCastCost::Energy(_) => assert!(
+                    Cost::Energy(_) => assert!(
                         def.has_energy(),
                         "{owner} has an energy cost but no max_energy stat"
                     ),
-                    EntityCastCost::Health(_) => assert!(
+                    Cost::Health(_) => assert!(
                         def.has_health(),
                         "{owner} has a health cost but no health pool"
                     ),
@@ -1229,19 +1326,49 @@ impl ContentRegistry {
                     // Kinds were checked when the skill was registered; the
                     // stockpile is the owner's, not the type's, so there is
                     // nothing type-level left to require.
-                    EntityCastCost::Resources(_) => {}
-                    EntityCastCost::Energy(_) => assert!(
+                    Cost::Resources(_) => {}
+                    Cost::Energy(_) => assert!(
                         def.has_energy(),
                         "entity type '{}' has skill '{}' with an energy cost but no max_energy stat",
                         def.name,
                         self.skill_name(skill).unwrap_or("<unregistered>"),
                     ),
-                    EntityCastCost::Health(_) => assert!(
+                    Cost::Health(_) => assert!(
                         def.has_health(),
                         "entity type '{}' has skill '{}' with a health cost but no health pool",
                         def.name,
                         self.skill_name(skill).unwrap_or("<unregistered>"),
                     ),
+                }
+            }
+            // A buff a self-cast puts on the caster draws its upkeep from the
+            // caster's own pools, so the caster must have them; a buff cast on
+            // something else draws from whatever it lands on, which only the
+            // cast can know.
+            if let SkillCaster::Entity {
+                target: EntityCastTarget::Caster,
+                effect: EntityCastEffect::ApplyBuff(buff),
+                ..
+            } = &skill_def.caster
+                && let Lasting::Upkeep { costs: upkeep, .. } =
+                    &self.entity_buff_defs[buff.index()].lasting
+            {
+                for cost in upkeep {
+                    match cost {
+                        Cost::Resources(_) => {}
+                        Cost::Energy(_) => assert!(
+                            def.has_energy(),
+                            "entity type '{}' has skill '{}' keeping up a buff from energy but no max_energy stat",
+                            def.name,
+                            self.skill_name(skill).unwrap_or("<unregistered>"),
+                        ),
+                        Cost::Health(_) => assert!(
+                            def.has_health(),
+                            "entity type '{}' has skill '{}' keeping up a buff from health but no health pool",
+                            def.name,
+                            self.skill_name(skill).unwrap_or("<unregistered>"),
+                        ),
+                    }
                 }
             }
         }
@@ -1266,17 +1393,26 @@ impl ContentRegistry {
                 ),
                 FieldGrowth::Instant => {}
             }
-            if let Some(reach) = source.while_constructing() {
-                assert!(
+            match source.while_constructing() {
+                Emission::Full | Emission::Held(_) => assert!(
                     def.build_time.is_some(),
                     "entity type '{}' projects a field while constructing but is never constructed",
                     def.name
-                );
-                assert!(
-                    reach <= source.radius(),
-                    "entity type '{}' projects a field beyond its radius while constructing",
-                    def.name
-                );
+                ),
+                Emission::Nothing => {}
+            }
+            for (emission, when) in [
+                (source.while_constructing(), "constructing"),
+                (source.while_disabled(), "disabled"),
+            ] {
+                match emission {
+                    Emission::Held(reach) => assert!(
+                        reach <= source.radius(),
+                        "entity type '{}' projects a field beyond its radius while {when}",
+                        def.name
+                    ),
+                    Emission::Full | Emission::Nothing => {}
+                }
             }
         }
         for rule in &def.field_placement {
@@ -1302,7 +1438,7 @@ impl ContentRegistry {
                 def.name
             );
             match effect.kind() {
-                FieldEffectKind::Modifiers(modifiers) => {
+                EntityEffect::Modifiers(modifiers) => {
                     assert!(
                         !modifiers.is_empty(),
                         "entity type '{}' has a field effect with no modifiers",
@@ -1328,8 +1464,23 @@ impl ContentRegistry {
                         );
                     }
                 }
-                FieldEffectKind::Disabled => {}
+                EntityEffect::Disable | EntityEffect::Conceal => {}
             }
+        }
+    }
+
+    /// Checks that a detection reveals registered layers only. A blind one
+    /// names none.
+    fn validate_detection(&self, owner: &str, detection: Detection) {
+        match detection {
+            Detection::Reveals(layers) => {
+                let unregistered = layers & !self.registered_layers();
+                assert!(
+                    unregistered == LayerMask::EMPTY,
+                    "{owner} detects on unregistered layers {unregistered}"
+                );
+            }
+            Detection::Blind => {}
         }
     }
 
@@ -1742,8 +1893,8 @@ impl ContentRegistry {
                  repair_cost_factor",
                 def.name
             ),
-            RepairCost::PerTick(cost) => {
-                for kind in cost.keys() {
+            RepairCost::PerTick(price) => {
+                for kind in price.keys() {
                     assert!(
                         self.has_resource(kind),
                         "entity type '{}' charges unregistered resource kind '{kind}' \
@@ -1783,8 +1934,8 @@ impl ContentRegistry {
             );
         };
 
-        for kind in def.cost.keys() {
-            check_kind(kind, "cost");
+        for kind in def.price.keys() {
+            check_kind(kind, "price");
         }
         if let Some(source) = &def.resource_source {
             check_kind(source.kind(), "resource source");

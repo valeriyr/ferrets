@@ -18,10 +18,10 @@ use ferrets_simulation::{
     command::PlayerCommand,
     input::{InputFrames, PlayerFrame, SYNC_LATENCY},
     session::{
-        GameResult, GameSession, Winner, ai_hosting::AiHosting, ai_vision::AiVision,
-        authority::Authority, defeat_conduct::DefeatConduct, drop_policy::DropPolicy,
-        elimination_scope::EliminationScope, finish_policy::FinishPolicy, game_speed::GameSpeed,
-        player_slot::PlayerSlot, player_type::PlayerType,
+        GameResult, GameSession, Winner, ai_detection::AiDetection, ai_hosting::AiHosting,
+        ai_vision::AiVision, authority::Authority, defeat_conduct::DefeatConduct,
+        drop_policy::DropPolicy, elimination_scope::EliminationScope, finish_policy::FinishPolicy,
+        game_speed::GameSpeed, player_slot::PlayerSlot, player_type::PlayerType,
     },
     simulation_id::SimulationId,
 };
@@ -730,6 +730,7 @@ fn host_with_local_ai_drops_lone_silent_client() {
             2,
             PlayerType::Ai {
                 vision: AiVision::Filtered,
+                detection: AiDetection::Detectors,
             },
             None,
             None,
@@ -963,7 +964,7 @@ fn peer_consensus_drops_silent_player_despite_environment_slot() {
         PlayerSlot::occupied(0, PlayerType::Human, None, None),
         PlayerSlot::occupied(1, PlayerType::Human, None, None),
         PlayerSlot::occupied(2, PlayerType::Human, None, None),
-        PlayerSlot::environment(3, AiVision::Filtered),
+        PlayerSlot::environment(3, AiVision::Filtered, AiDetection::Detectors),
     ];
     let mut host = utils::net_app_with_slots(a, roster.clone(), Authority::Peers, slots.clone());
     let mut peer = utils::net_app_with_slots(b, roster, Authority::Peers, slots);

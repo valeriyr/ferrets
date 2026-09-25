@@ -6,6 +6,7 @@ use ferrets_math::FixedU64;
 
 use crate::{
     annex,
+    buffs_store::Term,
     components::{
         build::UnderConstructionComponent, energy::EnergyComponent, entity_buffs::BuffsComponent,
         entity_skills::SkillsComponent, entity_stats::StatsComponent, health::HealthComponent,
@@ -13,8 +14,9 @@ use crate::{
     },
     entity_def,
     entity_index::EntityIndex,
-    events::DeathCause,
+    events::{DeathCause, SpendCause},
     fields,
+    game_loop::cost,
     player_buffs::PlayerBuffs,
     player_skills::PlayerSkills,
     player_stats::PlayerStats,
@@ -22,7 +24,8 @@ use crate::{
     spawn,
 };
 use ferrets_content::{
-    entity_buffs::EntityBuffId,
+    entity_buffs::{EntityBuffId, Interruption, Lasting},
+    entity_effect::EntityEffect,
     entity_stats::EntityStatId,
     player_buffs::PlayerBuffId,
     registry::ContentRegistry,
@@ -36,14 +39,55 @@ pub fn apply_entity_buff(world: &mut World, entity: Entity, id: EntityBuffId) {
         return;
     }
     let def = world.resource::<ContentRegistry>().entity_buff_def(id);
-    let (stack_rule, duration) = (def.stack_rule, def.duration);
+    // The tick of application ages the term once before anything reads it,
+    // so the seat is one above the term: a buff for `n` ticks stands through
+    // the `n` ticks after the one it landed in, and an upkeep's first payment
+    // falls a full period after it.
+    let term = match &def.lasting {
+        Lasting::Forever => Term::Forever,
+        Lasting::For(ticks) => Term::For {
+            remaining: *ticks + 1,
+        },
+        Lasting::Upkeep { period, .. } => Term::Upkeep {
+            period: *period,
+            due_in: *period + 1,
+        },
+    };
+    let stack_rule = def.stack_rule;
     let mut entity_mut = world.entity_mut(entity);
     if let Some(mut buffs) = entity_mut.get_mut::<BuffsComponent>() {
-        buffs.apply(id, stack_rule, duration);
+        buffs.apply(id, stack_rule, term);
     } else {
         let mut buffs = BuffsComponent::default();
-        buffs.apply(id, stack_rule, duration);
+        buffs.apply(id, stack_rule, term);
         entity_mut.insert(buffs);
+    }
+}
+
+/// Takes off `entity` every buff whose definition names `interruption` as
+/// what cuts it short. An entity carrying no buffs at all carries none to cut.
+pub fn interrupt_entity_buffs(world: &mut World, entity: Entity, interruption: Interruption) {
+    let Some(buffs) = world.entity(entity).get::<BuffsComponent>() else {
+        return;
+    };
+    let registry = world.resource::<ContentRegistry>();
+    let interrupted: Vec<EntityBuffId> = buffs
+        .active()
+        .map(|(id, _)| id)
+        .filter(|&id| {
+            registry
+                .entity_buff_def(id)
+                .interrupted_by
+                .contains(&interruption)
+        })
+        .collect();
+    if interrupted.is_empty() {
+        return;
+    }
+    if let Some(mut buffs) = world.entity_mut(entity).get_mut::<BuffsComponent>() {
+        for id in interrupted {
+            buffs.remove(id);
+        }
     }
 }
 
@@ -131,12 +175,47 @@ pub fn recompute_player_stats(world: &mut World) {
     }
 }
 
-/// Ages every entity's timed buffs by one tick, dropping any that expire.
-/// Expiries take effect at the next tick's recompute snapshots.
+/// Ages every entity's buffs by one tick: timed ones that ran out are dropped,
+/// and an upkeep whose payment falls due is paid from the bearer's pools and
+/// its owner's stockpile — or dropped, the tick it cannot be. Expiries take
+/// effect at the next tick's recompute snapshots.
+///
+/// Nobody pays for the unowned: an upkeep on an ownerless bearer ends at its
+/// first due tick.
 pub fn process_entity_buffs(world: &mut World) {
     for (_, entity) in world.resource::<EntityIndex>().alive_entries() {
-        if let Some(mut buffs) = world.entity_mut(entity).get_mut::<BuffsComponent>() {
-            buffs.tick_down();
+        let due = match world.entity_mut(entity).get_mut::<BuffsComponent>() {
+            Some(mut buffs) => buffs.tick_down(),
+            None => continue,
+        };
+        for (id, stacks) in due {
+            // Cloned off the registry borrow, which the payment needs released,
+            // and taken once per stack: the modifiers are applied per stack, so
+            // the upkeep is owed per stack too.
+            let costs = match &world
+                .resource::<ContentRegistry>()
+                .entity_buff_def(id)
+                .lasting
+            {
+                Lasting::Upkeep { costs, .. } => cost::times(costs, stacks),
+                Lasting::Forever | Lasting::For(_) => {
+                    unreachable!("the store reports a payment due on an upkeep alone")
+                }
+            };
+            match entity_def::owner(world, entity) {
+                Some(player) if cost::can_pay(world, entity, player, &costs) => {
+                    let bearer = entity_def::simulation_id(world, entity);
+                    cost::pay(
+                        world,
+                        entity,
+                        player,
+                        &costs,
+                        SpendCause::Upkeep { bearer, buff: id },
+                    );
+                }
+                // Unaffordable, or nobody's to pay for: the buff ends.
+                Some(_) | None => remove_entity_buff(world, entity, id),
+            }
         }
     }
 }
@@ -151,10 +230,16 @@ pub fn process_player_buffs(world: &mut World) {
 /// resolves a re-application, exactly as on an entity.
 pub fn apply_player_buff(world: &mut World, player: PlayerId, id: PlayerBuffId) {
     let def = world.resource::<ContentRegistry>().player_buff_def(id);
-    let (stack_rule, duration) = (def.stack_rule, def.duration);
+    // The content still states a lifetime as an optional tick count, where
+    // absence means forever; the store takes the term outright.
+    let term = match def.duration {
+        Some(ticks) => Term::For { remaining: ticks },
+        None => Term::Forever,
+    };
+    let stack_rule = def.stack_rule;
     world
         .resource_mut::<PlayerBuffs>()
-        .apply(player, id, stack_rule, duration);
+        .apply(player, id, stack_rule, term);
 }
 
 /// Takes the player-level buff `id` off `player`, however much of it was left.
@@ -292,8 +377,15 @@ fn entity_buff_modifiers(
     let mut modifiers = Vec::new();
     for (id, stacks) in buffs.active() {
         let buff = registry.entity_buff_def(id);
-        for _ in 0..stacks {
-            modifiers.extend_from_slice(&buff.modifiers);
+        for effect in &buff.effects {
+            match effect {
+                EntityEffect::Modifiers(granted) => {
+                    for _ in 0..stacks {
+                        modifiers.extend_from_slice(granted);
+                    }
+                }
+                EntityEffect::Disable | EntityEffect::Conceal => {}
+            }
         }
     }
     modifiers

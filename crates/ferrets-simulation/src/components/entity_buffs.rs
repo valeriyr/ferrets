@@ -5,7 +5,7 @@
 
 use bevy_ecs::prelude::*;
 
-use crate::buffs_store::BuffsStore;
+use crate::buffs_store::{BuffsStore, Term};
 use ferrets_content::{entity_buffs::EntityBuffId, stack_rule::StackRule};
 
 /// The active buffs on an entity.
@@ -13,10 +13,10 @@ use ferrets_content::{entity_buffs::EntityBuffId, stack_rule::StackRule};
 pub struct BuffsComponent(BuffsStore<EntityBuffId>);
 
 impl BuffsComponent {
-    /// Applies the buff `id` with the given lifetime, resolving stacking against
-    /// any active instance of the same id per `stack_rule`.
-    pub fn apply(&mut self, id: EntityBuffId, stack_rule: StackRule, duration: Option<u32>) {
-        self.0.apply(id, stack_rule, duration);
+    /// Applies the buff `id` on the given term, resolving stacking against any
+    /// active instance of the same id per `stack_rule`.
+    pub fn apply(&mut self, id: EntityBuffId, stack_rule: StackRule, term: Term) {
+        self.0.apply(id, stack_rule, term);
     }
 
     /// Removes every active instance of `id`. Returns `true` if any was removed.
@@ -24,9 +24,10 @@ impl BuffsComponent {
         self.0.remove(id)
     }
 
-    /// Decrements each timed buff by one tick and drops any that reached zero.
-    /// Returns `true` if anything expired.
-    pub fn tick_down(&mut self) -> bool {
+    /// Advances every term by one tick, dropping the timed buffs that ran out
+    /// and returning the upkeeps whose payment falls due this tick, each with
+    /// the number of stacks it is owed for.
+    pub fn tick_down(&mut self) -> Vec<(EntityBuffId, u32)> {
         self.0.tick_down()
     }
 

@@ -1,7 +1,8 @@
 //! Research and requirements: a research pays at issue, is worked by its
 //! hosting building, completes once per player, and lands its buff through the
 //! ordinary stat fold; requirement lists gate production and research commands
-//! against what currently stands and what has been researched.
+//! against what currently stands and what has been researched; and a player's
+//! cancel gives the price back where losing the researcher does not.
 
 mod utils;
 
@@ -11,6 +12,7 @@ use ferrets_simulation::{
     command::PlayerCommand,
     components::build::{SiteWork, UnderConstructionComponent},
     player_research::PlayerResearch,
+    resources::PlayerResources,
     simulation_id::SimulationId,
     spawn,
 };
@@ -105,31 +107,35 @@ fn research_under_way_blocks_second_start() {
 }
 
 #[test]
-fn force_cancel_refunds_and_frees_topic() {
+fn force_cancel_keeps_price_spent_and_frees_topic() {
     let mut app = utils::research_app();
     let (lab, lab_id) = utils::create_owned(&mut app, "lab", 10, 10, 0);
     utils::grant_gold(&mut app, 50);
 
     start_research(&mut app, lab_id, "smithing");
     utils::run_ticks(&mut app, utils::APPLY + 4);
+    // 50 granted − 30 for smithing.
     assert_eq!(utils::gold(app.world()), 20);
 
-    utils::stop_orders(app.world_mut(), lab);
+    utils::force_cancel_orders(app.world_mut(), lab);
     utils::run_ticks(&mut app, 1);
 
-    // The full price comes back and the progress is discarded.
-    assert_eq!(utils::gold(app.world()), 50);
+    // Work taken away rather than called off pays nothing back, so the 30
+    // stays spent and the progress is discarded.
+    assert_eq!(utils::gold(app.world()), 20);
     assert!(!completed(&app, "smithing"));
 
     // The topic is free again: a fresh start runs to completion.
+    utils::grant_gold(&mut app, 30);
     start_research(&mut app, lab_id, "smithing");
     utils::run_ticks(&mut app, utils::APPLY + 15);
     assert!(completed(&app, "smithing"));
+    // 20 left + 30 granted − 30 for the second attempt.
     assert_eq!(utils::gold(app.world()), 20);
 }
 
 #[test]
-fn researcher_death_refunds_and_frees_topic() {
+fn researcher_death_keeps_price_spent_and_frees_topic() {
     let mut app = utils::research_app();
     let (first, first_id) = utils::create_owned(&mut app, "lab", 10, 10, 0);
     let (_, second_id) = utils::create_owned(&mut app, "lab", 20, 20, 0);
@@ -137,21 +143,23 @@ fn researcher_death_refunds_and_frees_topic() {
 
     start_research(&mut app, first_id, "smithing");
     utils::run_ticks(&mut app, utils::APPLY + 4);
+    // 100 granted − 30 for smithing.
     assert_eq!(utils::gold(app.world()), 70);
 
     spawn::destroy_entity(app.world_mut(), first);
     utils::run_ticks(&mut app, 5);
 
-    // Death force-cancels the queue, so the price comes back and the progress
-    // is discarded — the same path a dying trainer's queue refunds through.
+    // A researcher lost takes its payment with it: the 30 stays spent and the
+    // progress is discarded, as a dying trainer's queue does.
     assert!(!completed(&app, "smithing"));
-    assert_eq!(utils::gold(app.world()), 100);
+    assert_eq!(utils::gold(app.world()), 70);
 
     // Nothing holds the topic: the second lab starts it fresh.
     start_research(&mut app, second_id, "smithing");
     utils::run_ticks(&mut app, utils::APPLY + 15);
     assert!(completed(&app, "smithing"));
-    assert_eq!(utils::gold(app.world()), 70);
+    // 70 left − 30 for the second attempt.
+    assert_eq!(utils::gold(app.world()), 40);
 }
 
 #[test]
@@ -300,6 +308,181 @@ fn requirement_loss_keeps_queued_production() {
 }
 
 //
+// ─── Canceling ──────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn cancel_research_refunds_topic_and_frees_it() {
+    let mut app = utils::research_app();
+    let (_, lab_id) = utils::create_owned(&mut app, "lab", 10, 10, 0);
+    utils::grant_gold(&mut app, 50);
+
+    start_research(&mut app, lab_id, "smithing");
+    utils::run_ticks(&mut app, utils::APPLY + 4);
+    // 50 granted − 30 for smithing.
+    assert_eq!(utils::gold(app.world()), 20);
+
+    cancel_research(&mut app, lab_id, "smithing");
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+
+    // The player called it off, so the full 30 comes back.
+    assert_eq!(utils::gold(app.world()), 50);
+    assert!(!completed(&app, "smithing"));
+
+    // The topic is free again: a fresh start runs to completion.
+    start_research(&mut app, lab_id, "smithing");
+    utils::run_ticks(&mut app, utils::APPLY + 15);
+    assert!(completed(&app, "smithing"));
+    // 50 − 30 for the second attempt.
+    assert_eq!(utils::gold(app.world()), 20);
+}
+
+#[test]
+fn cancel_research_ignores_topic_not_in_flight() {
+    let mut app = utils::research_app();
+    let (_, lab_id) = utils::create_owned(&mut app, "lab", 10, 10, 0);
+    utils::grant_gold(&mut app, 50);
+
+    start_research(&mut app, lab_id, "smithing");
+    utils::run_ticks(&mut app, utils::APPLY + 4);
+    // 50 granted − 30 for smithing.
+    assert_eq!(utils::gold(app.world()), 20);
+
+    // A topic this lab is not working pays nothing and stops nothing.
+    cancel_research(&mut app, lab_id, "tactics");
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    assert_eq!(utils::gold(app.world()), 20);
+
+    utils::run_ticks(&mut app, 15);
+    assert!(completed(&app, "smithing"));
+}
+
+#[test]
+fn cancel_research_reaches_topic_still_waiting_its_turn() {
+    let mut app = utils::research_app();
+    let (_, lab_id) = utils::create_owned(&mut app, "lab", 10, 10, 0);
+    utils::grant_gold(&mut app, 100);
+
+    // Two topics on one lab: smithing runs, masonry waits behind it.
+    start_research(&mut app, lab_id, "smithing");
+    start_research(&mut app, lab_id, "masonry");
+    utils::run_ticks(&mut app, utils::APPLY + 2);
+    // 100 granted − 30 for smithing − 20 for masonry.
+    assert_eq!(utils::gold(app.world()), 50);
+
+    cancel_research(&mut app, lab_id, "masonry");
+    utils::run_ticks(&mut app, utils::APPLY);
+    // 50 + the 20 masonry cost, given back though it never started.
+    assert_eq!(utils::gold(app.world()), 70);
+
+    // Smithing is untouched and still completes; masonry never does.
+    utils::run_ticks(&mut app, 25);
+    assert!(completed(&app, "smithing"));
+    assert!(!completed(&app, "masonry"));
+}
+
+#[test]
+fn cancel_research_twice_in_one_frame_pays_once() {
+    let mut app = utils::research_app();
+    let (_, lab_id) = utils::create_owned(&mut app, "lab", 10, 10, 0);
+    utils::grant_gold(&mut app, 50);
+
+    start_research(&mut app, lab_id, "smithing");
+    utils::run_ticks(&mut app, utils::APPLY + 4);
+    // 50 granted − 30 for smithing.
+    assert_eq!(utils::gold(app.world()), 20);
+
+    // Both commands land in one frame: the second finds the entry the first
+    // already marked and pays nothing for it.
+    cancel_research(&mut app, lab_id, "smithing");
+    cancel_research(&mut app, lab_id, "smithing");
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+
+    // 20 + the 30 smithing cost, once: not 80.
+    assert_eq!(utils::gold(app.world()), 50);
+    utils::run_ticks(&mut app, 15);
+    assert!(!completed(&app, "smithing"));
+}
+
+#[test]
+fn cancel_research_beside_stop_in_one_frame_still_refunds_and_drops_topic() {
+    for order in ["cancel then stop", "stop then cancel"] {
+        let mut app = utils::research_app();
+        let (_, lab_id) = utils::create_owned(&mut app, "lab", 10, 10, 0);
+        utils::grant_gold(&mut app, 50);
+        // The stop reads the selection, so the lab is selected ahead of it.
+        utils::select(&mut app, lab_id);
+        start_research(&mut app, lab_id, "smithing");
+        utils::run_ticks(&mut app, utils::APPLY + 4);
+        // 50 granted − 30 for smithing.
+        assert_eq!(utils::gold(app.world()), 20, "{order}");
+
+        // The stop's advisory mark neither hides the entry from the cancel
+        // nor demotes the mandatory mark the cancel leaves, whichever lands
+        // first: the topic is paid back once and dropped.
+        let cancel = PlayerCommand::CancelResearch {
+            researcher: lab_id,
+            research: utils::research_id(&app, "smithing"),
+        };
+        let commands = match order {
+            "cancel then stop" => [cancel, PlayerCommand::Stop],
+            "stop then cancel" => [PlayerCommand::Stop, cancel],
+            _ => unreachable!("the two orders above"),
+        };
+        for command in commands {
+            utils::push_command(&mut app, command);
+        }
+        utils::run_ticks(&mut app, utils::APPLY + 1);
+
+        // 20 + the 30 smithing cost.
+        assert_eq!(utils::gold(app.world()), 50, "{order}");
+        utils::run_ticks(&mut app, 15);
+        assert!(!completed(&app, "smithing"), "{order}");
+    }
+}
+
+#[test]
+fn cancel_research_ignores_rival_researcher() {
+    let mut app = utils::research_app_seating(utils::human_slots(2));
+    // The rival's lab, started on smithing in the rival's own frame.
+    let (_, lab_id) = utils::create_owned(&mut app, "lab", 20, 20, 1);
+    app.world_mut()
+        .resource_mut::<PlayerResources>()
+        .add(1, "gold", 50);
+    let smithing = utils::research_id(&app, "smithing");
+    let due = utils::tick(&app) + utils::APPLY;
+    utils::run_ticks_commanding(
+        &mut app,
+        utils::APPLY + 1,
+        1,
+        due,
+        vec![PlayerCommand::StartResearch {
+            researcher: lab_id,
+            research: smithing,
+        }],
+    );
+    // 50 granted − 30 for smithing.
+    assert_eq!(rival_gold(&app), 20);
+
+    cancel_research(&mut app, lab_id, "smithing");
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+
+    assert_eq!(
+        utils::gold(app.world()),
+        0,
+        "a player cancels only its own research, and is paid nothing for a rival's"
+    );
+    assert_eq!(rival_gold(&app), 20, "the rival keeps what it paid");
+    utils::run_ticks(&mut app, 15);
+    assert!(
+        app.world()
+            .resource::<PlayerResearch>()
+            .is_completed(1, smithing),
+        "and its topic completes"
+    );
+}
+
+//
 // ─── Helpers ────────────────────────────────────────────────────────────────
 //
 
@@ -332,4 +515,21 @@ fn completed(app: &App, name: &str) -> bool {
     app.world()
         .resource::<PlayerResearch>()
         .is_completed(0, research)
+}
+
+/// Calls off `name` on `researcher`.
+fn cancel_research(app: &mut App, researcher: SimulationId, name: &str) {
+    let research = utils::research_id(app, name);
+    utils::push_command(
+        app,
+        PlayerCommand::CancelResearch {
+            researcher,
+            research,
+        },
+    );
+}
+
+/// Player 1's stockpile of gold.
+fn rival_gold(app: &App) -> u32 {
+    app.world().resource::<PlayerResources>().amount(1, "gold")
 }

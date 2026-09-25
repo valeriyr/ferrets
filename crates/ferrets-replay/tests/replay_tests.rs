@@ -15,9 +15,11 @@ use ferrets_simulation::{
     movement_model::MovementModel,
     ruleset::{RemainsLimit, Ruleset},
     session::{
-        ai_vision::AiVision, elimination_scope::EliminationScope, finish_policy::FinishPolicy,
-        player_id::PlayerId, player_slot::PlayerSlot, player_type::PlayerType,
+        ai_detection::AiDetection, ai_vision::AiVision, elimination_scope::EliminationScope,
+        finish_policy::FinishPolicy, player_id::PlayerId, player_slot::PlayerSlot,
+        player_type::PlayerType,
     },
+    simulation_id::SimulationId,
     skirmish::Skirmish,
 };
 
@@ -61,6 +63,41 @@ fn round_trips_scenario_header() {
     let replay = Replay::read(buffer.bytes().as_slice()).expect("read replay");
 
     assert_eq!(replay.header(), &header);
+}
+
+#[test]
+fn frame_with_every_cancel_command_round_trips() {
+    let buffer = SharedBuffer::default();
+    // The four cancels in one frame: a command the replay dropped would refund
+    // on the recording node alone.
+    let cancels = vec![
+        PlayerCommand::CancelTrain {
+            trainer: SimulationId(7),
+            slot: 2,
+        },
+        PlayerCommand::CancelResearch {
+            researcher: SimulationId(8),
+            // A research id is a registration index; one is read from its
+            // two bytes here, no registry being at hand.
+            research: bcs::from_bytes(&3u16.to_le_bytes()).expect("a research id is an index"),
+        },
+        PlayerCommand::CancelMorph {
+            entity: SimulationId(9),
+        },
+        PlayerCommand::CancelBuild {
+            site: SimulationId(10),
+        },
+    ];
+    {
+        let mut recorder = Recorder::new(buffer.clone(), &header()).expect("start recording");
+        recorder
+            .record(&record(0, &[(1, cancels.clone())], None))
+            .expect("record 0");
+    }
+
+    let replay = Replay::read(buffer.bytes().as_slice()).expect("read replay");
+
+    assert_eq!(replay.inputs_at(0), &[(1, cancels)]);
 }
 
 #[test]
@@ -155,10 +192,13 @@ fn rejects_unsupported_format_version() {
 fn header() -> ReplayHeader {
     let slots = vec![
         PlayerSlot::occupied(0, PlayerType::Human, Some("human"), None),
+        // A seat with both cheats declared, so a round trip that lost either
+        // axis would read back differently.
         PlayerSlot::occupied(
             1,
             PlayerType::Ai {
-                vision: AiVision::Filtered,
+                vision: AiVision::Omniscient,
+                detection: AiDetection::Everywhere,
             },
             Some("orc"),
             None,

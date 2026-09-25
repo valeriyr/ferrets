@@ -7,7 +7,7 @@ use ferrets_content::player_stats::PlayerStatId;
 use ferrets_math::FixedU64;
 use ferrets_simulation::{
     command::PlayerCommand, components::build::UnderConstructionComponent,
-    player_stats::PlayerStats, simulation_id::SimulationId, spawn, supply,
+    player_stats::PlayerStats, spawn, supply,
 };
 
 //
@@ -20,7 +20,7 @@ fn train_blocked_without_headroom() {
     let (lodge, lodge_id) = utils::create_owned(&mut app, "lodge", 10, 10, 0);
     utils::grant_gold(&mut app, 50);
 
-    train_settler(&mut app, lodge_id);
+    utils::train_settler(&mut app, lodge_id);
     utils::run_ticks(&mut app, 10);
 
     // Nothing provides supply, so the order is refused outright: nothing
@@ -41,7 +41,7 @@ fn provider_grants_headroom_and_training_proceeds() {
     assert_eq!(supply::provided(app.world(), 0), FixedU64::from_num(8));
     assert_eq!(supply::used(app.world(), 0), FixedU64::ZERO);
 
-    train_settler(&mut app, lodge_id);
+    utils::train_settler(&mut app, lodge_id);
     utils::run_ticks(&mut app, 20);
 
     assert_eq!(utils::count_of_type(app.world_mut(), "settler"), 1);
@@ -64,7 +64,7 @@ fn queued_units_reserve_supply() {
     utils::grant_gold(&mut app, 100);
 
     for _ in 0..3 {
-        train_settler(&mut app, lodge_id);
+        utils::train_settler(&mut app, lodge_id);
     }
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
@@ -93,7 +93,7 @@ fn provider_death_blocks_new_training_only() {
     let (camp, _) = utils::create_owned(&mut app, "camp", 20, 20, 0);
     utils::grant_gold(&mut app, 50);
 
-    train_settler(&mut app, lodge_id);
+    utils::train_settler(&mut app, lodge_id);
     utils::run_ticks(&mut app, 20);
     assert_eq!(utils::count_of_type(app.world_mut(), "settler"), 1);
 
@@ -104,7 +104,7 @@ fn provider_death_blocks_new_training_only() {
     assert_eq!(supply::provided(app.world(), 0), FixedU64::ZERO);
     assert_eq!(supply::used(app.world(), 0), FixedU64::ONE);
 
-    train_settler(&mut app, lodge_id);
+    utils::train_settler(&mut app, lodge_id);
     utils::run_ticks(&mut app, 20);
     assert_eq!(utils::count_of_type(app.world_mut(), "settler"), 1);
     assert_eq!(utils::gold(app.world()), 40);
@@ -117,7 +117,7 @@ fn queued_unit_finishes_after_provider_dies() {
     let (camp, _) = utils::create_owned(&mut app, "camp", 20, 20, 0);
     utils::grant_gold(&mut app, 50);
 
-    train_settler(&mut app, lodge_id);
+    utils::train_settler(&mut app, lodge_id);
     utils::run_ticks(&mut app, utils::APPLY + 1);
     assert_eq!(utils::train_queue_len(app.world(), lodge), 1);
     assert_eq!(utils::gold(app.world()), 40);
@@ -212,23 +212,8 @@ fn zero_cost_type_trains_over_cap() {
     assert_eq!(utils::gold(app.world()), 40);
 
     // ...while a costed settler from the same trainer stays refused.
-    train_settler(&mut app, lodge_id);
+    utils::train_settler(&mut app, lodge_id);
     utils::run_ticks(&mut app, 20);
     assert_eq!(utils::count_of_type(app.world_mut(), "settler"), 1);
     assert_eq!(utils::gold(app.world()), 40);
-}
-
-//
-// ─── Helpers ────────────────────────────────────────────────────────────────
-//
-
-/// Orders `trainer` to train one settler.
-fn train_settler(app: &mut bevy::prelude::App, trainer: SimulationId) {
-    utils::push_command(
-        app,
-        PlayerCommand::TrainEntity {
-            trainer,
-            type_name: "settler".into(),
-        },
-    );
 }

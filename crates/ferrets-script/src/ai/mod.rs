@@ -8,6 +8,7 @@
 //! define_ai("default", {
 //!     period = 20,                        -- ticks between think calls
 //!     vision = "filtered",                -- "filtered" (fog applies) or "omniscient"
+//!     detection = "detectors",            -- "detectors" (its own) or "everywhere"
 //!     think = function(state, view)
 //!         return { { kind = "stop" } }    -- an array of command tables
 //!     end,
@@ -51,7 +52,10 @@
 
 pub mod view;
 
-use ferrets_simulation::{command::PlayerCommand, session::ai_vision::AiVision};
+use ferrets_simulation::{
+    command::PlayerCommand,
+    session::{ai_detection::AiDetection, ai_vision::AiVision},
+};
 
 use crate::ai::view::game::GameView;
 
@@ -68,6 +72,9 @@ pub trait AiRuntime {
 
     /// How much of the map this brain observes (see [`AiVision`]).
     fn vision(&self) -> AiVision;
+
+    /// How this brain makes out what is concealed (see [`AiDetection`]).
+    fn detection(&self) -> AiDetection;
 
     /// Runs one think step against `view`, returning the commands the script
     /// produced.

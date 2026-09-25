@@ -18,6 +18,7 @@ use crate::{
     entity_index::EntityIndex,
     order::Order,
     session::GameSession,
+    visibility::{self, Senses},
 };
 
 /// How close a guard stays to the entity it guards, in grid cells.
@@ -90,7 +91,8 @@ pub fn survives_soft_cancel() -> bool {
 /// Advance a Guard order by one tick.
 ///
 /// Each tick:
-/// 1. If the guarded entity is gone, the order finishes.
+/// 1. If the guarded entity is gone, or the guard's player can no longer make
+///    it out, the order finishes.
 /// 2. On due ticks, scan for an engagement — whoever recently hit the ward
 ///    first, then the guard's own surroundings — and suspend into a leashed
 ///    attack on a hit.
@@ -108,6 +110,14 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
     let Some(ward) = world.resource::<EntityIndex>().interactable(world, ward_id) else {
         return Processing::state(OrderState::Finished);
     };
+    // Guarding what the guard's player can no longer make out would be a
+    // tracking beacon through fog or cloak, so the order lapses with the sight
+    // — judged as the command that gave it was.
+    if let Some(owner) = entity_def::owner(world, entity)
+        && !visibility::sees(world, owner, ward, Senses::SeatDeclared)
+    {
+        return Processing::state(OrderState::Finished);
+    }
 
     let id = entity_def::simulation_id(world, entity);
     let tick = world.resource::<GameSession>().tick();

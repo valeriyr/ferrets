@@ -95,7 +95,7 @@ pub fn start_recording(world: &mut World) {
 
 /// Opens a replay through the file dialog, configures the session from its
 /// header, and enters the game in playback. Runs in the menu; a no-op unless a
-/// watch was requested, and a no-op if the dialog is cancelled.
+/// watch was requested, and a no-op if the dialog is canceled.
 pub fn start_watching(world: &mut World) {
     if world.remove_resource::<WatchReplayRequested>().is_none() {
         return;

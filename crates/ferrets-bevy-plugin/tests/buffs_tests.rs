@@ -1,4 +1,4 @@
-//! Buff pipeline: a buff modifies effective stats for its duration, then reverts.
+//! Buff pipeline: a buff modifies effective stats for its term, then reverts.
 
 use ferrets_content::{entity_stats::EntityStatId, stats::ModifierOp};
 use ferrets_simulation::game_loop;
@@ -35,11 +35,14 @@ fn buff_modifies_effective_stat_then_reverts_on_expiry() {
         "a +100% buff doubles the effective stat this tick"
     );
 
-    utils::run_ticks(&mut app, 2);
+    // A three-tick term is seated at four, because the tick of application
+    // ages it once before anything reads it. So it stands through ticks 1 to 4
+    // and the store drops it at the end of the fourth.
+    utils::run_ticks(&mut app, 3);
     assert_eq!(
         utils::effective_damage(&app, soldier),
         base + base,
-        "the buff still applies on the last tick of its duration"
+        "the buff still applies on the last tick of its term"
     );
 
     utils::run_ticks(&mut app, 1);

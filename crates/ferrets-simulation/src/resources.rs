@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use bevy_ecs::prelude::*;
-use ferrets_content::costs::Cost;
+use ferrets_content::price::Price;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -57,75 +57,76 @@ impl PlayerResources {
         *stock = stock.saturating_add(amount);
     }
 
-    /// Adds every arm of `cost` to the player's stockpile.
+    /// Adds every kind of `price` to the player's stockpile.
     ///
     /// The multi-kind form of [`Self::add`], and the inverse of
     /// [`Self::withdraw`]. Announces nothing; [`refund`] is the announcing
     /// counterpart.
-    pub fn deposit(&mut self, player: PlayerId, cost: &Cost) {
-        for (kind, amount) in cost {
+    pub fn deposit(&mut self, player: PlayerId, price: &Price) {
+        for (kind, amount) in price {
             self.add(player, kind, *amount);
         }
     }
 
-    /// Returns `true` if the player can pay `cost`.
-    pub fn can_afford(&self, player: PlayerId, cost: &Cost) -> bool {
-        cost.iter()
+    /// Returns `true` if the player can pay `price`.
+    pub fn can_afford(&self, player: PlayerId, price: &Price) -> bool {
+        price
+            .iter()
             .all(|(kind, amount)| self.amount(player, kind) >= *amount)
     }
 
-    /// Subtracts every arm of `cost` from the player's stockpile.
+    /// Subtracts every kind of `price` from the player's stockpile.
     ///
     /// The inverse of [`Self::deposit`]. Announces nothing; [`charge`] is the
     /// announcing counterpart.
     ///
     /// Panics if the player cannot afford it — check with [`Self::can_afford`] first.
-    pub fn withdraw(&mut self, player: PlayerId, cost: &Cost) {
+    pub fn withdraw(&mut self, player: PlayerId, price: &Price) {
         assert!(
-            self.can_afford(player, cost),
-            "player {player} cannot afford {cost:?}"
+            self.can_afford(player, price),
+            "player {player} cannot afford {price:?}"
         );
-        for (kind, amount) in cost {
+        for (kind, amount) in price {
             *self.0[player as usize].get_mut(kind).unwrap() -= amount;
         }
     }
 }
 
-/// Charges `cost` to `player` and announces what was spent. An empty `cost`
+/// Charges `price` to `player` and announces what was spent. An empty `price`
 /// charges nothing and announces nothing.
 ///
 /// Panics if the player cannot afford it — check with
 /// [`PlayerResources::can_afford`] first.
-pub fn charge(world: &mut World, player: PlayerId, cost: Cost, cause: SpendCause) {
-    if cost.is_empty() {
+pub fn charge(world: &mut World, player: PlayerId, price: Price, cause: SpendCause) {
+    if price.is_empty() {
         return;
     }
     world
         .resource_mut::<PlayerResources>()
-        .withdraw(player, &cost);
+        .withdraw(player, &price);
     world
         .resource_mut::<EventRecord>()
         .emit(SimulationEvent::ResourcesSpent {
             player,
-            cost,
+            price,
             cause,
         });
 }
 
-/// Gives `cost` back to `player` and announces the refund. An empty `cost`
+/// Gives `price` back to `player` and announces the refund. An empty `price`
 /// returns nothing and announces nothing.
-pub fn refund(world: &mut World, player: PlayerId, cost: Cost, cause: SpendCause) {
-    if cost.is_empty() {
+pub fn refund(world: &mut World, player: PlayerId, price: Price, cause: SpendCause) {
+    if price.is_empty() {
         return;
     }
     world
         .resource_mut::<PlayerResources>()
-        .deposit(player, &cost);
+        .deposit(player, &price);
     world
         .resource_mut::<EventRecord>()
         .emit(SimulationEvent::ResourcesRefunded {
             player,
-            cost,
+            price,
             cause,
         });
 }

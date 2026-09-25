@@ -82,6 +82,12 @@ pub fn run() {
         // entering InGame once the lobby has configured the session.
         .add_systems(Startup, (camera::spawn_camera, content::register_all))
         .add_systems(Update, (view::sync_view, view::apply_view).chain())
+        // Stated once here rather than on every reader: whatever joins
+        // ReadsSightings runs after the stamp it reads.
+        .configure_sets(
+            Update,
+            render::ReadsSightings.after(render::refresh_sightings),
+        )
         // Main menu.
         .add_systems(OnEnter(GameState::Menu), menu::setup_menu)
         .add_systems(OnExit(GameState::Menu), menu::teardown_menu)
@@ -160,8 +166,8 @@ pub fn run() {
             Update,
             (
                 input::track_leading,
-                input::selection_input,
-                input::order_input,
+                input::selection_input.in_set(render::ReadsSightings),
+                input::order_input.in_set(render::ReadsSightings),
                 input::stance_input,
                 input::control_group_input,
                 // HUD button clicks emit commands / set placement mode, so they
@@ -174,6 +180,8 @@ pub fn run() {
                     hud::morph_card_input,
                     hud::cancel_build_card_input,
                     hud::cancel_morph_card_input,
+                    hud::cancel_train_card_input,
+                    hud::cancel_research_card_input,
                     hud::select_brood_card_input,
                     hud::skill_card_input,
                     hud::player_skill_card_input,
@@ -183,8 +191,8 @@ pub fn run() {
                 ),
                 minimap::order_input,
                 input::order_mode_input,
-                input::targeting_input,
-                input::placement_input,
+                input::targeting_input.in_set(render::ReadsSightings),
+                input::placement_input.in_set(render::ReadsSightings),
                 // F2 sandbox spawn issues a Spawn command, so it counts as input too.
                 debug::spawn_debug,
             )
@@ -200,7 +208,9 @@ pub fn run() {
         // viewer is an observer, and reading a unit is half of watching.
         .add_systems(
             Update,
-            input::inspect_input.run_if(in_state(GameState::InGame).and(not(input::commands_live))),
+            input::inspect_input
+                .in_set(render::ReadsSightings)
+                .run_if(in_state(GameState::InGame).and(not(input::commands_live))),
         )
         // Viewing, HUD, debug, and rendering run for both live games and playback.
         .add_systems(
@@ -226,7 +236,7 @@ pub fn run() {
                 hud::update_player_skill_cooldown,
                 hud::update_skill_cooldowns,
                 hud::update_group_roster,
-                hud::update_selection,
+                hud::update_selection.in_set(render::ReadsSightings),
                 hud::update_objectives,
                 // Nested so the group stays inside Bevy's tuple size limit; the
                 // tallies are shown with the banner, so they belong together.
@@ -234,8 +244,8 @@ pub fn run() {
                 hud::update_replay_note,
                 hud::leave_button,
                 debug::toggle_debug,
-                debug::debug_readout,
-                debug::draw_grid,
+                debug::debug_readout.in_set(render::ReadsSightings),
+                debug::draw_grid.in_set(render::ReadsSightings),
                 // Reads the fog Visibility that interpolate_sprites writes, so it
                 // must run after it — otherwise a fogged unit's orders can flash.
                 debug::draw_orders.after(render::interpolate_sprites),
@@ -245,14 +255,21 @@ pub fn run() {
                     // Before the interpolation it corrects, so a reappearance
                     // never draws a frame of the slide it would otherwise make.
                     render::snap_revealed,
-                    render::interpolate_sprites,
+                    // The sighting each sprite is drawn by is stamped first.
+                    (render::refresh_sightings, render::interpolate_sprites).chain(),
                     render::update_fog_overlay,
                     render::update_field_overlay,
                     render::draw_ghosts,
                     // Before the selection ring and the bars, so a flier's
                     // shadow sits under both rather than over them.
                     render::draw_air_shadows,
-                    render::draw_selection,
+                    // Nested to stay inside Bevy's tuple size limit; all
+                    // three mark out an entity where it stands.
+                    (
+                        render::draw_selection,
+                        render::draw_detected,
+                        render::draw_glimpses,
+                    ),
                     (render::draw_casts, render::draw_skill_pulses),
                     render::draw_puffs,
                     render::draw_shots,
@@ -263,7 +280,7 @@ pub fn run() {
                     render::draw_watch_patches,
                     render::draw_work_markers,
                     render::draw_status_bars,
-                    (render::tint_under_construction, render::fade_remains),
+                    (render::shade_sprites, render::fade_remains),
                 )
                     .chain(),
             )
@@ -271,7 +288,11 @@ pub fn run() {
         )
         .add_systems(
             Update,
-            (debug::draw_hierarchy, debug::draw_bodies).run_if(in_state(GameState::InGame)),
+            (
+                debug::draw_hierarchy,
+                debug::draw_bodies.in_set(render::ReadsSightings),
+            )
+                .run_if(in_state(GameState::InGame)),
         )
         // Per tick rather than per frame: what the simulation announced is
         // retired at the end of the tick that announced it, and a frame can span

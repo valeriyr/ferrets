@@ -4,7 +4,7 @@
 
 use ferrets_pathfinder::layer_mask::LayerMask;
 
-use crate::{affiliation::Affiliation, stats::EntityModifier};
+use crate::{affiliation::Affiliation, detection::Detection, entity_effect::EntityEffect};
 
 /// A handle to a registered field kind, assigned in registration order.
 ///
@@ -50,39 +50,71 @@ pub enum FieldVision {
     Watched,
 }
 
+/// Where a field may lie.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FieldLayer {
+    /// Any cell of the map.
+    Anywhere,
+    /// The cells passable on every one of these layers.
+    Passable(LayerMask),
+}
+
 /// One kind of field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FieldDef {
-    /// The layers a cell's terrain must pass for the field to cover it. An
-    /// empty mask covers any cell.
-    layer: LayerMask,
+    /// Where its cells may lie.
+    layer: FieldLayer,
     /// What happens to covered cells no source sustains.
     decay: FieldDecay,
     /// What covering a cell does for the sight of the players covering it.
     vision: FieldVision,
+    /// What covering a cell does for the players covering it against the
+    /// concealed entities standing there.
+    detection: Detection,
 }
 
 impl FieldDef {
     /// Creates a new `FieldDef` with the given data.
     ///
-    /// Panics if a gradual decay has a zero cycle.
-    pub fn new(layer: impl Into<LayerMask>, decay: FieldDecay, vision: FieldVision) -> Self {
+    /// Panics if a gradual decay has a zero cycle, if the field lies on cells
+    /// passable on no layer at all, or if the detection reveals no layer at all.
+    pub fn new(
+        layer: FieldLayer,
+        decay: FieldDecay,
+        vision: FieldVision,
+        detection: Detection,
+    ) -> Self {
+        match layer {
+            FieldLayer::Passable(layers) => assert!(
+                layers != LayerMask::EMPTY,
+                "a field passable on no layer lies anywhere; declare it so"
+            ),
+            FieldLayer::Anywhere => {}
+        }
         match decay {
             FieldDecay::Gradual { cycle } => {
                 assert!(cycle > 0, "decay cycle must be positive");
             }
             FieldDecay::Instant | FieldDecay::Never => {}
         }
+        match detection {
+            Detection::Reveals(layers) => assert!(
+                layers != LayerMask::EMPTY,
+                "a field revealing no layer detects nothing; declare it blind"
+            ),
+            Detection::Blind => {}
+        }
         Self {
-            layer: layer.into(),
+            layer,
             decay,
             vision,
+            detection,
         }
     }
 
-    /// The layers a cell's terrain must pass for the field to cover it.
+    /// Where its cells may lie.
     #[inline]
-    pub fn layer(&self) -> LayerMask {
+    pub fn layer(&self) -> FieldLayer {
         self.layer
     }
 
@@ -96,6 +128,13 @@ impl FieldDef {
     #[inline]
     pub fn vision(&self) -> FieldVision {
         self.vision
+    }
+
+    /// What covering a cell does for the players covering it against the
+    /// concealed entities standing there.
+    #[inline]
+    pub fn detection(&self) -> Detection {
+        self.detection
     }
 }
 
@@ -123,6 +162,18 @@ pub enum FieldAction {
     Clear,
 }
 
+/// What a source projects while the entity it belongs to is not operating.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Emission {
+    /// As much as when the entity operates.
+    Full,
+    /// A patch this many cells out from the footprint, no farther than the
+    /// source's radius.
+    Held(u32),
+    /// Nothing; what it covered recedes by the field's decay.
+    Nothing,
+}
+
 /// One field an entity type projects, and how.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FieldSourceDef {
@@ -133,9 +184,10 @@ pub struct FieldSourceDef {
     radius: u32,
     /// How the reach comes to cover the radius.
     growth: FieldGrowth,
-    /// A radius projected while the source is still under construction.
-    /// `None` projects nothing until it stands.
-    while_constructing: Option<u32>,
+    /// What it projects while the entity is still under construction.
+    while_constructing: Emission,
+    /// What it projects while the entity is disabled.
+    while_disabled: Emission,
 }
 
 impl FieldSourceDef {
@@ -146,7 +198,8 @@ impl FieldSourceDef {
         field: FieldId,
         radius: u32,
         growth: FieldGrowth,
-        while_constructing: Option<u32>,
+        while_constructing: Emission,
+        while_disabled: Emission,
     ) -> Self {
         match growth {
             FieldGrowth::Gradual { cycle, .. } => {
@@ -159,6 +212,7 @@ impl FieldSourceDef {
             radius,
             growth,
             while_constructing,
+            while_disabled,
         }
     }
 
@@ -180,20 +234,27 @@ impl FieldSourceDef {
         self.growth
     }
 
-    /// The radius projected while under construction, if any.
+    /// What it projects while the entity is under construction.
     #[inline]
-    pub fn while_constructing(&self) -> Option<u32> {
+    pub fn while_constructing(&self) -> Emission {
         self.while_constructing
+    }
+
+    /// What it projects while the entity is disabled.
+    #[inline]
+    pub fn while_disabled(&self) -> Emission {
+        self.while_disabled
     }
 }
 
-/// Which cells of a footprint a placement rule reads.
+/// How much of a footprint must answer a field's question for the answer to
+/// stand.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FieldCoverage {
     /// Every cell of the footprint.
-    Footprint,
-    /// The anchor cell alone.
-    Anchor,
+    Every,
+    /// Any one cell of it.
+    Any,
 }
 
 /// One rule a field imposes on where an entity type may be placed.
@@ -228,24 +289,14 @@ impl FieldPlacement {
 /// Which side of a field an effect applies on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FieldSide {
-    /// The entity's anchor cell is covered.
+    /// Enough of the entity's footprint is covered, as its coverage asks.
     Inside,
-    /// The entity's anchor cell is not covered.
+    /// Enough of the entity's footprint is uncovered, as its coverage asks.
     Outside,
 }
 
-/// What a field effect does to the entity while it applies.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FieldEffectKind {
-    /// Folds the modifiers into the entity's effective stats.
-    Modifiers(Vec<EntityModifier>),
-    /// The entity stands but does not operate: it starts no order but Train
-    /// and Research, which wait, and neither fights, hunts, casts nor moves.
-    Disabled,
-}
-
-/// One effect a field has on an entity type, while its anchor cell is on the
-/// given side of the field.
+/// One effect a field has on an entity type, while enough of its footprint is
+/// on the given side of the field.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FieldEffect {
     /// The field read.
@@ -254,17 +305,26 @@ pub struct FieldEffect {
     of: Affiliation,
     /// The side of the field the effect applies on.
     side: FieldSide,
+    /// How much of the bearer's footprint must be on that side.
+    coverage: FieldCoverage,
     /// What the effect does.
-    kind: FieldEffectKind,
+    kind: EntityEffect,
 }
 
 impl FieldEffect {
     /// Creates a new `FieldEffect` with the given data.
-    pub fn new(field: FieldId, of: Affiliation, side: FieldSide, kind: FieldEffectKind) -> Self {
+    pub fn new(
+        field: FieldId,
+        of: Affiliation,
+        side: FieldSide,
+        coverage: FieldCoverage,
+        kind: EntityEffect,
+    ) -> Self {
         Self {
             field,
             of,
             side,
+            coverage,
             kind,
         }
     }
@@ -287,9 +347,15 @@ impl FieldEffect {
         self.side
     }
 
+    /// How much of the bearer's footprint must be on that side.
+    #[inline]
+    pub fn coverage(&self) -> FieldCoverage {
+        self.coverage
+    }
+
     /// What the effect does.
     #[inline]
-    pub fn kind(&self) -> &FieldEffectKind {
+    pub fn kind(&self) -> &EntityEffect {
         &self.kind
     }
 }

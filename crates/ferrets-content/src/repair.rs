@@ -2,7 +2,7 @@
 
 use ferrets_math::FixedU64;
 
-use crate::{costs::Cost, kinds::Kinds, work::WorkPresence};
+use crate::{kinds::Kinds, price::Price, work::WorkPresence};
 
 /// How fast the work goes, before the repairer's `repair_speed` stat scales it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -21,13 +21,13 @@ pub enum RepairRate {
 pub enum RepairCost {
     /// Nothing.
     Free,
-    /// A share of the target's own cost, in proportion to the health restored,
+    /// A share of the target's own price, in proportion to the health restored,
     /// scaled by the repairer's `repair_cost_factor` stat. Mending a third of a
     /// pool costs a third of the price, so the bill does not depend on how many
     /// workers attend.
     ProRata,
     /// A fixed amount each tick, charged for every worker on the job.
-    PerTick(Cost),
+    PerTick(Price),
     /// The repairer's own energy, per point of health restored. Spent from its pool
     /// rather than the owner's stockpile, so the limit is the worker's stamina and
     /// its regeneration rather than the economy.

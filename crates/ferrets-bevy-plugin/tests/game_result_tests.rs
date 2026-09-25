@@ -13,6 +13,7 @@ use ferrets_geometry::cell_size::CellSize;
 use ferrets_simulation::{
     session::{
         GameResult, GameSession, Winner,
+        ai_detection::AiDetection,
         ai_vision::AiVision,
         defeat_conduct::DefeatConduct,
         elimination_scope::EliminationScope,
@@ -481,7 +482,11 @@ fn bases_app_with_environment(teams: &[Option<TeamId>]) -> (App, Vec<Entity>, En
         .enumerate()
         .map(|(id, team)| PlayerSlot::occupied(id as PlayerId, PlayerType::Human, None, *team))
         .collect();
-    slots.push(PlayerSlot::environment(environment, AiVision::Filtered));
+    slots.push(PlayerSlot::environment(
+        environment,
+        AiVision::Filtered,
+        AiDetection::Detectors,
+    ));
 
     let mut app = utils::make_app(slots);
     app.world_mut()

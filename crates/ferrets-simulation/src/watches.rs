@@ -6,9 +6,14 @@
 //! holds is in force.
 
 use bevy_ecs::prelude::*;
-use ferrets_geometry::cell_pos::CellPos;
+use ferrets_content::detection::Detection;
+use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize, projection};
+use ferrets_pathfinder::layer_mask::LayerMask;
 
-use crate::{session::player_id::PlayerId, simulation_id::SimulationId};
+use crate::{
+    session::{GameSession, player_id::PlayerId},
+    simulation_id::SimulationId,
+};
 
 /// One patch of map in a player's sight for a while yet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,12 +24,32 @@ pub struct Watch {
     /// What cast it, for a reader that wants to name the source of a patch.
     /// It does not decide the watch's life: a watch outlives its caster.
     pub caster: SimulationId,
-    /// The cell it is centred on.
+    /// The cell it is centered on.
     pub center: CellPos,
-    /// How far from the centre it reaches, in cells.
+    /// How far from the center it reaches, in cells.
     pub radius: u32,
     /// Ticks it still holds for.
     pub remaining: u32,
+    /// What it does for the player against the concealed entities standing on
+    /// the patch.
+    pub detection: Detection,
+}
+
+impl Watch {
+    /// Every cell of the patch, row-major, unclipped to any map.
+    pub fn cells(&self) -> Vec<CellPos> {
+        projection::circle_cells(self.patch(), self.radius)
+    }
+
+    /// Whether the patch holds `cell`.
+    fn holds(&self, cell: CellPos) -> bool {
+        projection::in_circle(cell, self.patch(), self.radius)
+    }
+
+    /// The footprint the radius reaches out from: the center cell alone.
+    fn patch(&self) -> CellRect {
+        CellRect::new(self.center, CellSize::ONE)
+    }
 }
 
 /// Every watch in force, in the order it was cast.
@@ -51,8 +76,23 @@ impl Watches {
     }
 }
 
-/// Puts a watch in force for `player`, `radius` cells around `center` and
-/// holding for `duration` ticks, cast by `caster`.
+/// Whether a watch in force for `player` or an ally holds `cell` and detects on
+/// one of `layers`.
+pub fn detects(world: &World, player: PlayerId, cell: CellPos, layers: LayerMask) -> bool {
+    let session = world.resource::<GameSession>();
+    world.resource::<Watches>().in_force().iter().any(|watch| {
+        session.are_allied(player, watch.player)
+            && match watch.detection {
+                Detection::Blind => false,
+                Detection::Reveals(revealed) => revealed & layers != LayerMask::EMPTY,
+            }
+            && watch.holds(cell)
+    })
+}
+
+/// Puts a watch in force for `player`, `radius` cells around `center`,
+/// holding for `duration` ticks and detecting as `detection` says, cast by
+/// `caster`.
 pub fn open(
     world: &mut World,
     player: PlayerId,
@@ -60,12 +100,17 @@ pub fn open(
     center: CellPos,
     radius: u32,
     duration: u32,
+    detection: Detection,
 ) {
+    // The tick of the cast ages the watch once before the next recompute
+    // reads it, so the seat is one above the duration: the patch holds
+    // through the `duration` ticks after the one it was cast in.
     world.resource_mut::<Watches>().add(Watch {
         player,
         caster,
         center,
         radius,
-        remaining: duration,
+        remaining: duration + 1,
+        detection,
     });
 }

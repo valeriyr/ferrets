@@ -146,7 +146,7 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
 /// Takes `passenger` aboard `holder`: the passenger turns to the door, leaves
 /// the map, joins the crew, and starts the holder's boarding cooldown.
 ///
-/// Whatever else the passenger had queued is force-cancelled — an entity off
+/// Whatever else the passenger had queued is force-canceled — an entity off
 /// the map must not keep walking its old orders. (A passenger boarding on its
 /// own initiative has its queue held out of the world during its dispatch, so
 /// for it this is a no-op; its board order is the front entry anyway.)

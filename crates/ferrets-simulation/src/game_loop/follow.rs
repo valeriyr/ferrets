@@ -15,6 +15,7 @@ use crate::{
     entity_def,
     entity_index::EntityIndex,
     order::Order,
+    visibility::{self, Senses},
 };
 
 /// How close the entity stays to its follow target, in grid cells.
@@ -100,6 +101,14 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
     let Some(target) = world.resource::<EntityIndex>().interactable(world, target) else {
         return Processing::state(OrderState::Finished);
     };
+    // Following what the follower's player can no longer make out would be a
+    // tracking beacon through fog or cloak, so the order lapses with the sight
+    // — judged as the command that gave it was.
+    if let Some(owner) = entity_def::owner(world, entity)
+        && !visibility::sees(world, owner, target, Senses::SeatDeclared)
+    {
+        return Processing::state(OrderState::Finished);
+    }
 
     match chase::advance_to_entity(
         &mut follow_component.last_chase,

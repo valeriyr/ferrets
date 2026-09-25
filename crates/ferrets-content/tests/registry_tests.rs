@@ -14,20 +14,24 @@ use ferrets_content::{
     berths::BerthGroup,
     brood::OrphanFate,
     build::BuilderAttendance,
-    costs::{self, Cost},
+    concealment::Concealment,
+    cost::Cost,
+    detection::Detection,
     dying::{Bequest, DeathKind, DyingDef, LeftBy},
-    entity_buffs::EntityBuffDef,
+    entity_buffs::{EntityBuffDef, Interruption, Lasting},
+    entity_effect::EntityEffect,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     field::{
-        FieldAction, FieldCoverage, FieldDecay, FieldDef, FieldEffect, FieldEffectKind,
-        FieldGrowth, FieldId, FieldPlacement, FieldSide, FieldSourceDef, FieldVision,
+        Emission, FieldAction, FieldCoverage, FieldDecay, FieldDef, FieldEffect, FieldGrowth,
+        FieldId, FieldLayer, FieldPlacement, FieldSide, FieldSourceDef, FieldVision,
     },
     kinds::Kinds,
     location::Solidity,
     morph::{MorphCancel, MorphInterrupted, MorphPlacement, MorphReason, MorphTransition},
     player_buffs::{PlayerBuffDef, PlayerBuffId},
     player_stats::PlayerStatId,
+    price::{self, Price},
     quantity::Quantity,
     registry::ContentRegistry,
     repair::{RepairCost, RepairRate},
@@ -35,8 +39,7 @@ use ferrets_content::{
     research::{ResearchDef, ResearcherDef},
     resource::{Banking, DepletionPolicy, HarvestData},
     skills::{
-        Casting, EntityCastCost, EntityCastEffect, EntityCastTarget, PlayerCastEffect, Reach,
-        SkillCaster, SkillDef,
+        Casting, EntityCastEffect, EntityCastTarget, PlayerCastEffect, Reach, SkillCaster, SkillDef,
     },
     stack_rule::StackRule,
     stand::StandingAct,
@@ -126,7 +129,7 @@ fn register_accepts_definitions_without_resources() {
 fn register_accepts_registered_kinds() {
     gold_registry_with(
         utils::standing("worker", GROUND)
-            .with_cost([("gold", 10)])
+            .with_price([("gold", 10)])
             .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
             .with_resource_source("gold", DepletionPolicy::Destroy)
             .with_resource_carrier([(
@@ -147,9 +150,9 @@ fn register_accepts_registered_kinds() {
 }
 
 #[test]
-#[should_panic(expected = "unregistered resource kind 'wood' in its cost")]
-fn register_rejects_unknown_cost_kind() {
-    gold_registry_with(utils::standing("worker", GROUND).with_cost([("wood", 10)]));
+#[should_panic(expected = "unregistered resource kind 'wood' in its price")]
+fn register_rejects_unknown_price_kind() {
+    gold_registry_with(utils::standing("worker", GROUND).with_price([("wood", 10)]));
 }
 
 #[test]
@@ -1032,7 +1035,7 @@ fn register_rejects_costed_skill_without_energy_pool() {
         SkillDef {
             cooldown: 10,
             caster: SkillCaster::Entity {
-                costs: vec![EntityCastCost::Energy(FixedU64::from_num(25))],
+                costs: vec![Cost::Energy(FixedU64::from_num(25))],
                 target: EntityCastTarget::Caster,
                 reach: Reach::Wherever,
                 casting: Casting::Instant,
@@ -1082,7 +1085,7 @@ fn register_rejects_skill_costing_unregistered_resource() {
         SkillDef {
             cooldown: 10,
             caster: SkillCaster::Entity {
-                costs: vec![EntityCastCost::Resources(costs::cost([("wood", 5)]))],
+                costs: vec![Cost::Resources(price::from([("wood", 5)]))],
                 target: EntityCastTarget::Caster,
                 reach: Reach::Wherever,
                 casting: Casting::Instant,
@@ -1104,7 +1107,7 @@ fn register_accepts_resource_costed_skill_without_pools() {
         SkillDef {
             cooldown: 10,
             caster: SkillCaster::Entity {
-                costs: vec![EntityCastCost::Resources(costs::cost([("gold", 25)]))],
+                costs: vec![Cost::Resources(price::from([("gold", 25)]))],
                 target: EntityCastTarget::Caster,
                 reach: Reach::Wherever,
                 casting: Casting::Instant,
@@ -1130,7 +1133,7 @@ fn register_rejects_health_costed_skill_without_health_pool() {
         SkillDef {
             cooldown: 10,
             caster: SkillCaster::Entity {
-                costs: vec![EntityCastCost::Health(FixedU64::from_num(5))],
+                costs: vec![Cost::Health(FixedU64::from_num(5))],
                 target: EntityCastTarget::Caster,
                 reach: Reach::Wherever,
                 casting: Casting::Instant,
@@ -1530,13 +1533,14 @@ fn register_rejects_entity_cast_skill_with_unregistered_buff() {
     let buff = foreign.register_entity_buff(
         "haste",
         EntityBuffDef {
-            modifiers: vec![EntityModifier {
+            effects: vec![EntityEffect::Modifiers(vec![EntityModifier {
                 stat: EntityStatId::SPEED,
                 op: ModifierOp::PercentAdd,
                 magnitude: FixedI64::ONE,
-            }],
-            duration: Some(10),
+            }])],
+            lasting: Lasting::For(10),
             stack_rule: StackRule::Refresh,
+            interrupted_by: Vec::new(),
         },
     );
     utils::ground_registry().register_skill(
@@ -1565,7 +1569,7 @@ fn register_rejects_player_cast_skill_costing_unregistered_resource() {
         SkillDef {
             cooldown: 10,
             caster: SkillCaster::Player {
-                cost: costs::cost([("gold", 25)]),
+                price: price::from([("gold", 25)]),
                 effect: PlayerCastEffect::ApplyBuff(haste),
             },
             requires: Vec::new(),
@@ -1766,11 +1770,11 @@ fn register_research_assigns_ids_and_resolves_names() {
 
     let smithing = registry.register_research(
         "smithing",
-        ResearchDef::new(costs::cost([("gold", 30)]), 10, Some(buff), Vec::new()),
+        ResearchDef::new(price::from([("gold", 30)]), 10, Some(buff), Vec::new()),
     );
     let tactics = registry.register_research(
         "tactics",
-        ResearchDef::new(Cost::new(), 5, None, [Requirement::Research(smithing)]),
+        ResearchDef::new(Price::new(), 5, None, [Requirement::Research(smithing)]),
     );
 
     assert!(registry.has_research("smithing"));
@@ -1782,7 +1786,7 @@ fn register_research_assigns_ids_and_resolves_names() {
     // Re-registering a name keeps the first definition and returns its id.
     let again = registry.register_research(
         "smithing",
-        ResearchDef::new(Cost::new(), 99, None, Vec::new()),
+        ResearchDef::new(Price::new(), 99, None, Vec::new()),
     );
     assert_eq!(again, smithing);
     assert_eq!(registry.research_def(smithing).unwrap().research_time, 10);
@@ -1792,7 +1796,7 @@ fn register_research_assigns_ids_and_resolves_names() {
 #[should_panic(expected = "research name must not be empty")]
 fn register_research_rejects_empty_name() {
     utils::ground_registry()
-        .register_research("", ResearchDef::new(Cost::new(), 10, None, Vec::new()));
+        .register_research("", ResearchDef::new(Price::new(), 10, None, Vec::new()));
 }
 
 #[test]
@@ -1800,7 +1804,7 @@ fn register_research_rejects_empty_name() {
 fn register_research_rejects_unknown_cost_kind() {
     utils::ground_registry().register_research(
         "smithing",
-        ResearchDef::new(costs::cost([("gold", 30)]), 10, None, Vec::new()),
+        ResearchDef::new(price::from([("gold", 30)]), 10, None, Vec::new()),
     );
 }
 
@@ -1812,14 +1816,14 @@ fn register_research_rejects_unregistered_buff() {
     let buff = haste_buff(&mut foreign);
     utils::ground_registry().register_research(
         "smithing",
-        ResearchDef::new(Cost::new(), 10, Some(buff), Vec::new()),
+        ResearchDef::new(Price::new(), 10, Some(buff), Vec::new()),
     );
 }
 
 #[test]
 #[should_panic(expected = "research_time must be greater than 0")]
 fn research_def_rejects_zero_time() {
-    ResearchDef::new(Cost::new(), 0, None, Vec::new());
+    ResearchDef::new(Price::new(), 0, None, Vec::new());
 }
 
 #[test]
@@ -1834,7 +1838,7 @@ fn register_rejects_unregistered_hosted_research() {
     let mut foreign = ContentRegistry::default();
     let research = foreign.register_research(
         "smithing",
-        ResearchDef::new(Cost::new(), 10, None, Vec::new()),
+        ResearchDef::new(Price::new(), 10, None, Vec::new()),
     );
     utils::ground_registry().register(utils::standing("lab", GROUND).with_researcher([research]));
 }
@@ -2310,7 +2314,7 @@ fn validate_accepts_type_tag_and_research_requirements() {
     let smithing = registry.register_research(
         "smithing",
         ResearchDef::new(
-            Cost::new(),
+            Price::new(),
             10,
             None,
             [Requirement::EntityType("lab".to_string())],
@@ -2367,7 +2371,7 @@ fn validate_rejects_unknown_research_requirement() {
     registry.register_research(
         "smithing",
         ResearchDef::new(
-            Cost::new(),
+            Price::new(),
             10,
             None,
             [Requirement::EntityType("chapel".to_string())],
@@ -2395,7 +2399,7 @@ fn validate_accepts_research_requirement_on_skill() {
     let haste = haste_buff(&mut registry);
     let war_drums = registry.register_research(
         "war_drums",
-        ResearchDef::new(Cost::new(), 10, None, Vec::new()),
+        ResearchDef::new(Price::new(), 10, None, Vec::new()),
     );
     let mut skill = player_cast(haste);
     skill.requires = vec![Requirement::Research(war_drums)];
@@ -2510,6 +2514,38 @@ fn validate_rejects_transition_into_unregistered_type() {
                 FixedU64::from_num(360),
             )
             .with_morphs([morph_into("flier")]),
+    );
+
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'walker' morphing into 'keep' lands nearby, which only a form that can move does"
+)]
+fn validate_rejects_nearby_landing_into_form_that_cannot_move() {
+    let mut registry = utils::ground_registry();
+    registry.register(utils::standing("keep", GROUND));
+    registry.register(
+        utils::standing("walker", GROUND)
+            .with_movement(
+                FixedU64::ONE,
+                FixedU64::from_num(0.5),
+                FixedU64::ONE,
+                FixedU64::from_num(360),
+                FixedU64::from_num(360),
+            )
+            .with_morphs([MorphTransition::new(
+                "keep",
+                None,
+                Quantity::Constant(20),
+                MorphPlacement::Nearby,
+                MorphCancel::Committed,
+                MorphInterrupted::Reverts,
+                MorphReason::Change,
+                Vec::new(),
+                Vec::new(),
+            )]),
     );
 
     registry.validate();
@@ -2675,7 +2711,7 @@ fn validate_rejects_transition_with_energy_cost_but_no_energy_pool() {
                 MorphCancel::Committed,
                 MorphInterrupted::Reverts,
                 MorphReason::Change,
-                vec![EntityCastCost::Energy(FixedU64::from_num(20))],
+                vec![Cost::Energy(FixedU64::from_num(20))],
                 Vec::new(),
             )]),
     );
@@ -2714,7 +2750,7 @@ fn validate_rejects_transition_with_unregistered_resource_cost() {
                 MorphCancel::Committed,
                 MorphInterrupted::Reverts,
                 MorphReason::Change,
-                vec![EntityCastCost::Resources(costs::cost([("gold", 50)]))],
+                vec![Cost::Resources(price::from([("gold", 50)]))],
                 Vec::new(),
             )]),
     );
@@ -2795,8 +2831,8 @@ fn validate_accepts_transition_with_payable_costs() {
                 MorphInterrupted::Reverts,
                 MorphReason::Change,
                 vec![
-                    EntityCastCost::Resources(costs::cost([("gold", 50)])),
-                    EntityCastCost::Energy(FixedU64::from_num(20)),
+                    Cost::Resources(price::from([("gold", 50)])),
+                    Cost::Energy(FixedU64::from_num(20)),
                 ],
                 Vec::new(),
             )]),
@@ -2913,13 +2949,14 @@ fn register_accepts_field_sources_placement_and_effects() {
             .with_field_placement([FieldPlacement::Requires {
                 field: creep,
                 of: Affiliation::Anyone,
-                coverage: FieldCoverage::Footprint,
+                coverage: FieldCoverage::Every,
             }])
             .with_field_effects([FieldEffect::new(
                 creep,
                 Affiliation::Anyone,
                 FieldSide::Inside,
-                FieldEffectKind::Modifiers(vec![EntityModifier {
+                FieldCoverage::Any,
+                EntityEffect::Modifiers(vec![EntityModifier {
                     stat: EntityStatId::MAX_HEALTH,
                     op: ModifierOp::PercentAdd,
                     magnitude: FixedI64::ONE,
@@ -2945,7 +2982,12 @@ fn validate_rejects_standing_act_on_unregistered_field() {
     // A handle minted by another registry, which this one never registered.
     let foreign = utils::ground_registry().register_field(
         "blight",
-        FieldDef::new(GROUND, FieldDecay::Never, FieldVision::Dark),
+        FieldDef::new(
+            FieldLayer::Passable(GROUND.into()),
+            FieldDecay::Never,
+            FieldVision::Dark,
+            Detection::Blind,
+        ),
     );
     registry.register(
         utils::standing("pylon", GROUND)
@@ -2990,11 +3032,21 @@ fn register_keeps_field_vision() {
     let mut registry = utils::ground_registry();
     let watched = registry.register_field(
         "creep",
-        FieldDef::new(GROUND, FieldDecay::Never, FieldVision::Watched),
+        FieldDef::new(
+            FieldLayer::Passable(GROUND.into()),
+            FieldDecay::Never,
+            FieldVision::Watched,
+            Detection::Blind,
+        ),
     );
     let dark = registry.register_field(
         "power",
-        FieldDef::new(GROUND, FieldDecay::Instant, FieldVision::Dark),
+        FieldDef::new(
+            FieldLayer::Passable(GROUND.into()),
+            FieldDecay::Instant,
+            FieldVision::Dark,
+            Detection::Blind,
+        ),
     );
 
     assert_eq!(registry.field_def(watched).vision(), FieldVision::Watched);
@@ -3014,7 +3066,12 @@ fn register_rejects_duplicate_field() {
 fn register_rejects_field_over_unregistered_layer() {
     utils::ground_registry().register_field(
         "creep",
-        FieldDef::new(utils::WATER, FieldDecay::Instant, FieldVision::Dark),
+        FieldDef::new(
+            FieldLayer::Passable(utils::WATER.into()),
+            FieldDecay::Instant,
+            FieldVision::Dark,
+            Detection::Blind,
+        ),
     );
 }
 
@@ -3048,7 +3105,8 @@ fn register_rejects_effect_of_foreign_field() {
             creep,
             Affiliation::Own,
             FieldSide::Outside,
-            FieldEffectKind::Disabled,
+            FieldCoverage::Every,
+            EntityEffect::Disable,
         ),
     ]));
 }
@@ -3056,7 +3114,12 @@ fn register_rejects_effect_of_foreign_field() {
 #[test]
 #[should_panic(expected = "decay cycle must be positive")]
 fn field_rejects_zero_decay_cycle() {
-    FieldDef::new(GROUND, FieldDecay::Gradual { cycle: 0 }, FieldVision::Dark);
+    FieldDef::new(
+        FieldLayer::Passable(GROUND.into()),
+        FieldDecay::Gradual { cycle: 0 },
+        FieldVision::Dark,
+        Detection::Blind,
+    );
 }
 
 #[test]
@@ -3072,7 +3135,8 @@ fn register_rejects_source_starting_beyond_radius() {
                 cycle: 2,
                 initial_radius: 5,
             },
-            None,
+            Emission::Nothing,
+            Emission::Full,
         )]),
     );
 }
@@ -3087,7 +3151,13 @@ fn register_rejects_source_constructing_beyond_radius() {
     registry.register(
         utils::standing("hive", GROUND)
             .with_build_time(4)
-            .with_field_sources([FieldSourceDef::new(creep, 3, FieldGrowth::Instant, Some(5))]),
+            .with_field_sources([FieldSourceDef::new(
+                creep,
+                3,
+                FieldGrowth::Instant,
+                Emission::Held(5),
+                Emission::Full,
+            )]),
     );
 }
 
@@ -3103,7 +3173,24 @@ fn register_rejects_source_constructing_on_type_never_built() {
             creep,
             3,
             FieldGrowth::Instant,
-            Some(1),
+            Emission::Held(1),
+            Emission::Full,
+        )]),
+    );
+}
+
+#[test]
+#[should_panic(expected = "entity type 'hive' projects a field beyond its radius while disabled")]
+fn register_rejects_source_holding_beyond_radius_while_disabled() {
+    let mut registry = utils::ground_registry();
+    let creep = creep_field(&mut registry);
+    registry.register(
+        utils::standing("hive", GROUND).with_field_sources([FieldSourceDef::new(
+            creep,
+            3,
+            FieldGrowth::Instant,
+            Emission::Nothing,
+            Emission::Held(4),
         )]),
     );
 }
@@ -3118,7 +3205,8 @@ fn register_rejects_field_effect_with_no_modifiers() {
             creep,
             Affiliation::Anyone,
             FieldSide::Inside,
-            FieldEffectKind::Modifiers(Vec::new()),
+            FieldCoverage::Any,
+            EntityEffect::Modifiers(Vec::new()),
         )]),
     );
 }
@@ -3137,7 +3225,8 @@ fn register_rejects_field_effect_on_stat_type_lacks() {
                 creep,
                 Affiliation::Anyone,
                 FieldSide::Outside,
-                FieldEffectKind::Modifiers(vec![EntityModifier {
+                FieldCoverage::Every,
+                EntityEffect::Modifiers(vec![EntityModifier {
                     stat: EntityStatId::HEALTH_DRAIN,
                     op: ModifierOp::FlatAdd,
                     magnitude: FixedI64::from_num(1),
@@ -3162,6 +3251,7 @@ fn register_rejects_watch_that_lasts_no_time() {
                 effect: EntityCastEffect::Watch {
                     radius: 3,
                     duration: 0,
+                    detection: Detection::Blind,
                 },
             },
             requires: Vec::new(),
@@ -3715,6 +3805,259 @@ fn register_rejects_cast_on_foreign_field() {
 }
 
 //
+// ─── Concealment and detection ────────────────────────────────────────────────
+//
+
+#[test]
+fn register_keeps_type_concealment() {
+    let mut registry = utils::ground_registry();
+    registry.register(utils::standing("shade", GROUND).with_concealment(Concealment::Concealed));
+    registry.register(utils::standing("footman", GROUND));
+    assert_eq!(
+        registry.entity("shade").unwrap().concealment,
+        Concealment::Concealed
+    );
+    assert_eq!(
+        registry.entity("footman").unwrap().concealment,
+        Concealment::Exposed
+    );
+}
+
+#[test]
+fn register_accepts_buff_that_only_conceals() {
+    let mut registry = utils::ground_registry();
+    let cloak = registry.register_entity_buff("cloak", concealing(Lasting::Forever));
+    assert_eq!(
+        registry.entity_buff_def(cloak).effects,
+        vec![EntityEffect::Conceal]
+    );
+}
+
+#[test]
+fn register_accepts_buff_that_only_names_interruption() {
+    let mut registry = utils::ground_registry();
+    let marked = registry.register_entity_buff(
+        "marked",
+        EntityBuffDef {
+            effects: Vec::new(),
+            lasting: Lasting::Forever,
+            stack_rule: StackRule::Ignore,
+            interrupted_by: vec![Interruption::Attack],
+        },
+    );
+    assert_eq!(
+        registry.entity_buff_def(marked).interrupted_by,
+        vec![Interruption::Attack]
+    );
+}
+
+#[test]
+#[should_panic(expected = "entity buff 'cloak' lasts for no time at all")]
+fn register_rejects_buff_lasting_no_time() {
+    utils::ground_registry().register_entity_buff("cloak", concealing(Lasting::For(0)));
+}
+
+#[test]
+#[should_panic(expected = "entity buff 'cloak' has an upkeep that costs nothing")]
+fn register_rejects_upkeep_costing_nothing() {
+    utils::ground_registry().register_entity_buff(
+        "cloak",
+        concealing(Lasting::Upkeep {
+            costs: Vec::new(),
+            period: 1,
+        }),
+    );
+}
+
+#[test]
+#[should_panic(expected = "entity buff 'cloak' pays its upkeep every zero ticks")]
+fn register_rejects_upkeep_paid_every_zero_ticks() {
+    utils::ground_registry().register_entity_buff(
+        "cloak",
+        concealing(Lasting::Upkeep {
+            costs: vec![Cost::Energy(FixedU64::ONE)],
+            period: 0,
+        }),
+    );
+}
+
+#[test]
+#[should_panic(expected = "entity buff 'cloak' costs unregistered resource kind 'gas'")]
+fn register_rejects_upkeep_in_unregistered_resource() {
+    utils::ground_registry().register_entity_buff(
+        "cloak",
+        concealing(Lasting::Upkeep {
+            costs: vec![Cost::Resources(price::from([("gas", 1)]))],
+            period: 20,
+        }),
+    );
+}
+
+#[test]
+#[should_panic(expected = "entity buff 'nothing' does nothing at all")]
+fn register_rejects_buff_doing_nothing() {
+    utils::ground_registry().register_entity_buff(
+        "nothing",
+        EntityBuffDef {
+            effects: Vec::new(),
+            lasting: Lasting::For(10),
+            stack_rule: StackRule::Ignore,
+            interrupted_by: Vec::new(),
+        },
+    );
+}
+
+#[test]
+fn register_keeps_field_detection() {
+    let mut registry = utils::ground_registry();
+    let true_sight = registry.register_field(
+        "true_sight",
+        FieldDef::new(
+            FieldLayer::Anywhere,
+            FieldDecay::Instant,
+            FieldVision::Dark,
+            Detection::Reveals(GROUND.into()),
+        ),
+    );
+    assert_eq!(
+        registry.field_def(true_sight).detection(),
+        Detection::Reveals(GROUND.into())
+    );
+}
+
+#[test]
+#[should_panic(expected = "a field passable on no layer lies anywhere; declare it so")]
+fn field_rejects_passable_on_no_layer() {
+    FieldDef::new(
+        FieldLayer::Passable(LayerMask::EMPTY),
+        FieldDecay::Instant,
+        FieldVision::Dark,
+        Detection::Blind,
+    );
+}
+
+#[test]
+#[should_panic(expected = "a field revealing no layer detects nothing; declare it blind")]
+fn field_rejects_detection_revealing_no_layer() {
+    FieldDef::new(
+        FieldLayer::Passable(GROUND.into()),
+        FieldDecay::Instant,
+        FieldVision::Dark,
+        Detection::Reveals(LayerMask::EMPTY),
+    );
+}
+
+#[test]
+#[should_panic(expected = "field 'sonar' detects on unregistered layers")]
+fn register_rejects_field_detecting_unregistered_layer() {
+    utils::ground_registry().register_field(
+        "sonar",
+        FieldDef::new(
+            FieldLayer::Passable(GROUND.into()),
+            FieldDecay::Instant,
+            FieldVision::Dark,
+            Detection::Reveals(utils::WATER.into()),
+        ),
+    );
+}
+
+#[test]
+#[should_panic(expected = "skill 'scan' detects on unregistered layers")]
+fn register_rejects_watch_detecting_unregistered_layer() {
+    utils::ground_registry().register_skill(
+        "scan",
+        SkillDef {
+            cooldown: 1,
+            caster: SkillCaster::Entity {
+                costs: Vec::new(),
+                target: EntityCastTarget::Position,
+                reach: Reach::Wherever,
+                casting: Casting::Instant,
+                effect: EntityCastEffect::Watch {
+                    radius: 3,
+                    duration: 5,
+                    detection: Detection::Reveals(utils::WATER.into()),
+                },
+            },
+            requires: Vec::new(),
+        },
+    );
+}
+
+#[test]
+#[should_panic(expected = "entity buff 'hollow' has an effect with no modifiers")]
+fn register_rejects_buff_effect_with_no_modifiers() {
+    let mut registry = utils::ground_registry();
+    registry.register_entity_buff(
+        "hollow",
+        EntityBuffDef {
+            effects: vec![EntityEffect::Modifiers(Vec::new())],
+            lasting: Lasting::Forever,
+            stack_rule: StackRule::Ignore,
+            interrupted_by: Vec::new(),
+        },
+    );
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'ghost' has skill 'bleed' keeping up a buff from health but no health pool"
+)]
+fn register_rejects_self_cast_health_upkeep_on_type_without_health() {
+    let mut registry = utils::ground_registry();
+    let bleeding = registry.register_entity_buff(
+        "bleeding",
+        concealing(Lasting::Upkeep {
+            costs: vec![Cost::Health(FixedU64::ONE)],
+            period: 1,
+        }),
+    );
+    let skill = registry.register_skill("bleed", self_cast(EntityCastEffect::ApplyBuff(bleeding)));
+    registry.register(utils::standing("ghost", GROUND).with_skills([skill]));
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'ghost' has skill 'cloak' keeping up a buff from energy but no max_energy stat"
+)]
+fn register_rejects_self_cast_upkeep_from_pool_type_lacks() {
+    let mut registry = utils::ground_registry();
+    let cloak = registry.register_entity_buff(
+        "cloak",
+        concealing(Lasting::Upkeep {
+            costs: vec![Cost::Energy(FixedU64::ONE)],
+            period: 1,
+        }),
+    );
+    let skill = registry.register_skill("cloak", self_cast(EntityCastEffect::ApplyBuff(cloak)));
+    registry.register(
+        utils::standing("ghost", GROUND)
+            .with_health(40)
+            .with_skills([skill]),
+    );
+}
+
+#[test]
+fn register_accepts_self_cast_upkeep_from_pool_type_carries() {
+    let mut registry = utils::ground_registry();
+    let cloak = registry.register_entity_buff(
+        "cloak",
+        concealing(Lasting::Upkeep {
+            costs: vec![Cost::Energy(FixedU64::ONE)],
+            period: 1,
+        }),
+    );
+    let skill = registry.register_skill("cloak", self_cast(EntityCastEffect::ApplyBuff(cloak)));
+    registry.register(
+        utils::standing("ghost", GROUND)
+            .with_health(40)
+            .with_stat(EntityStatId::MAX_ENERGY, FixedU64::from_num(50))
+            .with_skills([skill]),
+    );
+    registry.validate();
+}
+
+//
 // ─── Breeder and broodling ───────────────────────────────────────────────────
 //
 
@@ -3915,7 +4258,7 @@ fn player_cast(buff: PlayerBuffId) -> SkillDef {
     SkillDef {
         cooldown: 10,
         caster: SkillCaster::Player {
-            cost: Cost::new(),
+            price: Price::new(),
             effect: PlayerCastEffect::ApplyBuff(buff),
         },
         requires: Vec::new(),
@@ -3996,15 +4339,51 @@ fn morph_into(into: &str) -> MorphTransition {
     )
 }
 
+/// A buff that conceals its carrier and nothing else, lasting as given.
+fn concealing(lasting: Lasting) -> EntityBuffDef {
+    EntityBuffDef {
+        effects: vec![EntityEffect::Conceal],
+        lasting,
+        stack_rule: StackRule::Ignore,
+        interrupted_by: Vec::new(),
+    }
+}
+
+/// A free, instant skill an entity casts on itself with the given effect.
+fn self_cast(effect: EntityCastEffect) -> SkillDef {
+    SkillDef {
+        cooldown: 1,
+        caster: SkillCaster::Entity {
+            costs: Vec::new(),
+            target: EntityCastTarget::Caster,
+            reach: Reach::Wherever,
+            casting: Casting::Instant,
+            effect,
+        },
+        requires: Vec::new(),
+    }
+}
+
 /// A gradually receding ground field named "creep", registered into `registry`.
 fn creep_field(registry: &mut ContentRegistry) -> FieldId {
     registry.register_field(
         "creep",
-        FieldDef::new(GROUND, FieldDecay::Gradual { cycle: 4 }, FieldVision::Dark),
+        FieldDef::new(
+            FieldLayer::Passable(GROUND.into()),
+            FieldDecay::Gradual { cycle: 4 },
+            FieldVision::Dark,
+            Detection::Blind,
+        ),
     )
 }
 
 /// An instant emitter of `field` reaching three cells.
 fn emitter(field: FieldId) -> FieldSourceDef {
-    FieldSourceDef::new(field, 3, FieldGrowth::Instant, None)
+    FieldSourceDef::new(
+        field,
+        3,
+        FieldGrowth::Instant,
+        Emission::Nothing,
+        Emission::Full,
+    )
 }

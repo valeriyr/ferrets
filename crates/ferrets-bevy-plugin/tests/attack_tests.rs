@@ -3,16 +3,9 @@
 mod utils;
 
 use bevy::prelude::{App, Entity};
-use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize, projection::Projection};
+use ferrets_geometry::{cell_pos::CellPos, projection::Projection};
 
-use ferrets_content::{
-    attack::{AttackDef, Delivery, Slain, Weapon},
-    entity_stats::EntityStatId,
-    entity_type_def::EntityTypeDef,
-    location::Solidity,
-    registry::ContentRegistry,
-    stats::ModifierOp,
-};
+use ferrets_content::{entity_stats::EntityStatId, registry::ContentRegistry, stats::ModifierOp};
 use ferrets_math::{
     FixedU64,
     facing::{self, Facing},
@@ -219,31 +212,11 @@ fn send_to_entity_does_not_attack_ally() {
     {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
         registry.register(
-            EntityTypeDef::new("soldier")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+            utils::walker("soldier", utils::GROUND)
                 .with_sight_range(8)
-                .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
-                    FixedU64::ONE,
-                    FixedU64::from_num(360),
-                    FixedU64::from_num(360),
-                )
                 .with_health(30)
                 .with_dying(2, [])
-                .with_attack(
-                    AttackDef::new(Weapon::new(
-                        utils::GROUND,
-                        Delivery::Instant,
-                        None,
-                        Slain::Remains,
-                    )),
-                    10,
-                    1,
-                    1,
-                    4,
-                    2,
-                ),
+                .with_attack(utils::weapon(utils::GROUND), 10, 1, 1, 4, 2),
         );
         registry.validate();
     }

@@ -11,9 +11,10 @@ use ferrets_simulation::{
     movement_model::MovementModel,
     resources::{self, PlayerResources},
     session::{
-        GameResult, GameSession, ai_hosting::AiHosting, ai_vision::AiVision, authority::Authority,
-        drop_policy::DropPolicy, finish_policy::FinishPolicy, local_role::LocalRole,
-        player_slot::PlayerSlot, player_type::PlayerType,
+        GameResult, GameSession, ai_detection::AiDetection, ai_hosting::AiHosting,
+        ai_vision::AiVision, authority::Authority, drop_policy::DropPolicy,
+        finish_policy::FinishPolicy, local_role::LocalRole, player_slot::PlayerSlot,
+        player_type::PlayerType,
     },
     simulation_id::SimulationId,
     statistics::Statistics,
@@ -34,7 +35,7 @@ fn finished_game_reports_what_each_player_spent() {
     spawn_panel(&mut app);
 
     // A charge the tallies will have folded by the time the panel is filled.
-    let cost = ferrets_content::costs::cost([("gold", 25)]);
+    let price = ferrets_content::price::from([("gold", 25)]);
     app.world_mut()
         .resource_mut::<PlayerResources>()
         .add(0, "gold", 100);
@@ -42,7 +43,7 @@ fn finished_game_reports_what_each_player_spent() {
     resources::charge(
         world,
         0,
-        cost,
+        price,
         SpendCause::Training {
             trainer: SimulationId(1),
         },
@@ -91,7 +92,7 @@ fn free_and_environment_seats_get_no_row() {
             PlayerSlot::occupied(0, PlayerType::Human, Some("human"), None),
             PlayerSlot::occupied(1, PlayerType::Human, Some("orc"), None),
             PlayerSlot::free(2),
-            PlayerSlot::environment(3, AiVision::Omniscient),
+            PlayerSlot::environment(3, AiVision::Omniscient, AiDetection::Detectors),
         ],
         ferrets_demo::map::NAME,
         Authority::Host {

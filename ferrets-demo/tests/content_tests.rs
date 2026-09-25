@@ -6,21 +6,26 @@ use ferrets_content::{
     attack::Slain,
     brood::{BroodlingDef, Lingering, OrphanFate},
     build::BuilderAttendance,
-    costs,
+    concealment::Concealment,
+    cost::Cost,
+    detection::Detection,
     dying::DeathKind,
+    entity_buffs::{Interruption, Lasting},
+    entity_effect::EntityEffect,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
-    field::{FieldAction, FieldCoverage, FieldEffectKind, FieldPlacement, FieldSide, FieldVision},
+    field::{
+        FieldAction, FieldCoverage, FieldDef, FieldLayer, FieldPlacement, FieldSide, FieldVision,
+    },
     kinds::{Kind, Kinds},
     location::Solidity,
     morph::{MorphCancel, MorphInterrupted, MorphPlacement, MorphReason},
+    price,
     quantity::Quantity,
     registry::ContentRegistry,
     requirement::Requirement,
     resource::Banking,
-    skills::{
-        EntityCastCost, EntityCastEffect, EntityCastTarget, PlayerCastEffect, Reach, SkillCaster,
-    },
+    skills::{EntityCastEffect, EntityCastTarget, PlayerCastEffect, Reach, SkillCaster},
     stand::StandingAct,
     targeting,
     work::{Attachment, BerthStance, CrewLimit, WorkPresence},
@@ -403,7 +408,7 @@ fn swarm_structures_are_built_by_drone_they_consume() {
             .entity(name)
             .expect("swarm structure is registered");
         assert!(
-            structure.build_time.is_some() && !structure.cost.is_empty(),
+            structure.build_time.is_some() && !structure.price.is_empty(),
             "'{name}' is built and priced like any other structure"
         );
     }
@@ -483,11 +488,11 @@ fn hatchery_breeds_larvae_that_grow_into_drones_swarmlings_and_overlords() {
         .iter()
         .find(|effect| effect.side() == FieldSide::Outside)
         .and_then(|effect| match effect.kind() {
-            FieldEffectKind::Modifiers(modifiers) => modifiers
+            EntityEffect::Modifiers(modifiers) => modifiers
                 .iter()
                 .find(|modifier| modifier.stat == EntityStatId::HEALTH_DRAIN)
                 .map(|modifier| modifier.magnitude),
-            FieldEffectKind::Disabled => None,
+            EntityEffect::Disable | EntityEffect::Conceal => None,
         })
         .expect("a larva drains off creep");
     // 1.25 a tick over the 20 ticks of a second is the whole pool of 25.
@@ -573,7 +578,7 @@ fn hatchery_grows_into_hive_inside_cocoon_that_carries_its_brood() {
     // Nothing raises a hive, so it carries what a hatchery cost plus the
     // growth's own price, over both spans: 400 gold and 200 ticks raising the
     // hatchery, 150 gold, 100 wood and 200 ticks growing out of it.
-    assert_eq!(hive.cost, costs::cost([("gold", 550), ("wood", 100)]));
+    assert_eq!(hive.price, price::from([("gold", 550), ("wood", 100)]));
     assert_eq!(hive.build_time, Some(400));
     let drone = registry.entity("drone").expect("drone is registered");
     let builder = drone.builder.as_ref().expect("the drone builds");
@@ -613,7 +618,7 @@ fn killed_swarm_structures_burst_into_hatchlings_that_expire() {
         Some(400)
     );
     assert!(
-        hatchling.cost.is_empty() && hatchling.train_time.is_none(),
+        hatchling.price.is_empty() && hatchling.train_time.is_none(),
         "spawn is left by a death, never bought"
     );
     assert_eq!(
@@ -649,7 +654,7 @@ fn killed_swarm_structures_burst_into_hatchlings_that_expire() {
         assert_eq!(burst.count(), 2);
         assert!(
             burst.left_by(DeathKind::Killed)
-                && !burst.left_by(DeathKind::Cancelled)
+                && !burst.left_by(DeathKind::Canceled)
                 && !burst.left_by(DeathKind::Decayed),
             "'{name}' spills only what is killed out of it"
         );
@@ -662,8 +667,9 @@ fn swarmling_grows_into_ravager_inside_cocoon() {
     let swarmling = registry
         .entity("swarmling")
         .expect("swarmling is registered");
-    let [growth] = swarmling.morphs.as_slice() else {
-        panic!("the swarmling has exactly one change of form");
+    // Growing is the first of its changes of form; digging in is the other.
+    let [growth, _burrow] = swarmling.morphs.as_slice() else {
+        panic!("the swarmling has exactly two changes of form");
     };
 
     assert_eq!(growth.into_type(), "ravager");
@@ -678,7 +684,7 @@ fn swarmling_grows_into_ravager_inside_cocoon() {
         growth
             .costs()
             .iter()
-            .any(|cost| matches!(cost, EntityCastCost::Resources(_))),
+            .any(|cost| matches!(cost, Cost::Resources(_))),
         "growing costs the stockpile"
     );
 
@@ -743,7 +749,7 @@ fn conclave_probe_places_sites_and_nexus_projects_power() {
         assert!(
             def.field_placement.iter().any(|rule| matches!(
                 rule,
-                FieldPlacement::Requires { field, coverage: FieldCoverage::Footprint, .. }
+                FieldPlacement::Requires { field, coverage: FieldCoverage::Every, .. }
                     if *field == power
             )),
             "'{name}' needs power under its whole footprint"
@@ -769,7 +775,7 @@ fn war_drums_rallies_owned_units_for_stockpile_price() {
     let def = registry
         .skill_def(war_drums)
         .expect("handle came from this registry");
-    let SkillCaster::Player { cost, effect } = &def.caster else {
+    let SkillCaster::Player { price, effect } = &def.caster else {
         panic!("war_drums is a player cast");
     };
     let PlayerCastEffect::ApplyBuff(buff) = effect else {
@@ -783,7 +789,7 @@ fn war_drums_rallies_owned_units_for_stockpile_price() {
         "the rallying call moves the army's speed, or casting it changes nothing visible"
     );
     assert!(
-        cost.contains_key("gold"),
+        price.contains_key("gold"),
         "the cast is paid from the stockpile, or it costs the player nothing"
     );
 }
@@ -941,10 +947,10 @@ fn only_melee_and_siege_exclude_air() {
     let air = registry.layer(map::AIR).expect("air layer is registered");
 
     // Every weapon declares its layers; what stays deliberate per type is what
-    // it leaves out. Only the melee blades and bites, the shells, the flat
-    // guns of the wagon and the tank, and the undead's flat gun and raised
-    // blades cannot answer what flies. The swarm's spawn bites like the
-    // swarmling it is too young to be.
+    // it leaves out. Only the melee blades and bites — the dark templar's
+    // among them — the shells, the flat guns of the wagon and the tank, and
+    // the undead's flat gun and raised blades cannot answer what flies. The
+    // swarm's spawn bites like the swarmling it is too young to be.
     let grounded: Vec<&str> = registry
         .entities()
         .filter(|def| def.can_attack())
@@ -957,6 +963,7 @@ fn only_melee_and_siege_exclude_air() {
         [
             "ancient_of_war_uprooted",
             "ancient_protector_uprooted",
+            "dark_templar",
             "ghoul",
             "grunt",
             "hatchling",
@@ -1230,10 +1237,7 @@ fn gryphon_edges_wear_different_terms() {
     );
     assert_eq!(take_off.placement(), MorphPlacement::Revalidate);
     assert_eq!(take_off.cancel(), MorphCancel::Committed);
-    assert_eq!(
-        take_off.costs(),
-        [EntityCastCost::Energy(FixedU64::from_num(20))]
-    );
+    assert_eq!(take_off.costs(), [Cost::Energy(FixedU64::from_num(20))]);
 
     let aloft = registry
         .entity("gryphon_aloft")
@@ -1247,7 +1251,7 @@ fn gryphon_edges_wear_different_terms() {
     assert_eq!(landing.cancel(), MorphCancel::Committed);
     assert!(landing.costs().is_empty(), "landing is free");
     assert!(
-        aloft.train_time.is_none() && aloft.cost.is_empty(),
+        aloft.train_time.is_none() && aloft.price.is_empty(),
         "the airborne form is not producible, only changeable into"
     );
 }
@@ -1266,10 +1270,7 @@ fn tower_upgrade_is_paid_and_refundable() {
     assert_eq!(upgrade.cancel(), MorphCancel::Refundable);
     assert_eq!(
         upgrade.costs(),
-        [EntityCastCost::Resources(costs::cost([
-            ("gold", 80),
-            ("wood", 20)
-        ]))]
+        [Cost::Resources(price::from([("gold", 80), ("wood", 20)]))]
     );
 
     let upgraded = registry
@@ -1283,8 +1284,8 @@ fn tower_upgrade_is_paid_and_refundable() {
     // and 70 ticks raising the watch tower, 80 gold, 20 wood and 60 ticks
     // upgrading it.
     assert_eq!(
-        upgraded.cost,
-        costs::cost([("gold", 200), ("wood", 60)]),
+        upgraded.price,
+        price::from([("gold", 200), ("wood", 60)]),
         "a peon mends the upgraded tower against what it cost to have"
     );
     assert_eq!(upgraded.build_time, Some(130));
@@ -1376,8 +1377,8 @@ fn planted_tank_is_priced_and_paced_like_one_that_rolls() {
     // 150 gold and 100 wood to train the tank, nothing more to dig in, over a
     // hundred ticks of training and sixty of planting.
     assert_eq!(
-        planted.cost,
-        costs::cost([("gold", 150), ("wood", 100)]),
+        planted.price,
+        price::from([("gold", 150), ("wood", 100)]),
         "an SCV bills a share of what the tank cost to have planted"
     );
     assert_eq!(planted.train_time, Some(160));
@@ -1495,7 +1496,7 @@ fn undead_price_headroom_and_ghoul_like_other_races() {
         ziggurat.base_stat_as_u32(EntityStatId::SUPPLY_PROVIDED),
         Some(10)
     );
-    assert_eq!(ziggurat.cost, costs::cost([("gold", 80), ("wood", 30)]));
+    assert_eq!(ziggurat.price, price::from([("gold", 80), ("wood", 30)]));
 
     // And the ghoul stands in the line for one supply, like every other
     // race's, swinging eight damage every eight ticks.
@@ -1518,7 +1519,7 @@ fn hardened_towers_and_grown_halls_carry_what_they_cost() {
             !produced(&registry, tower),
             "'{tower}' is only hardened into"
         );
-        assert_eq!(def.cost, costs::cost([("gold", gold), ("wood", wood)]));
+        assert_eq!(def.price, price::from([("gold", gold), ("wood", wood)]));
         assert_eq!(def.build_time, Some(170));
     }
 
@@ -1527,7 +1528,7 @@ fn hardened_towers_and_grown_halls_carry_what_they_cost() {
     for (hall, gold, time) in [("halls_of_the_dead", 500, 300), ("black_citadel", 650, 420)] {
         let def = registry.entity(hall).expect("hall is registered");
         assert!(!produced(&registry, hall), "'{hall}' is only grown into");
-        assert_eq!(def.cost, costs::cost([("gold", gold)]));
+        assert_eq!(def.price, price::from([("gold", gold)]));
         assert_eq!(def.build_time, Some(time));
     }
 }
@@ -1562,6 +1563,290 @@ fn haunted_mine_seats_five_acolytes_in_star() {
 }
 
 //
+// ─── Concealment and detection ────────────────────────────────────────────────
+//
+
+#[test]
+fn true_sight_is_dark_and_reveals_ground_and_air() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    let ground = registry
+        .layer(map::GROUND)
+        .expect("ground layer is registered");
+    let air = registry.layer(map::AIR).expect("air layer is registered");
+
+    // A detector sees by its own eyes; the field only says what hides under
+    // it is seen. Over any cell, so a lake shelters no cloaked flier.
+    let true_sight = field_def(&registry, "true_sight");
+    assert_eq!(true_sight.vision(), FieldVision::Dark);
+    assert_eq!(true_sight.detection(), Detection::Reveals(ground | air));
+    assert_eq!(true_sight.layer(), FieldLayer::Anywhere);
+
+    // Nothing else detects: creep watches, the veil hides, the rest are dark.
+    for field in ["creep", "power", "blight", "veil"] {
+        assert_eq!(
+            field_def(&registry, field).detection(),
+            Detection::Blind,
+            "'{field}' detects nothing"
+        );
+    }
+}
+
+#[test]
+fn every_race_has_detector_sourcing_true_sight() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    let true_sight = registry
+        .field("true_sight")
+        .expect("true_sight is registered");
+
+    for (detector, radius) in [
+        ("photon_cannon", 7),
+        ("observer", 9),
+        ("overlord", 8),
+        ("missile_turret", 7),
+        ("bunker", 6),
+        ("watch_tower", 8),
+        ("ancient_protector", 7),
+        ("spirit_tower", 7),
+    ] {
+        let def = registry.entity(detector).expect("detector is registered");
+        let source = def
+            .field_sources
+            .iter()
+            .find(|source| source.field() == true_sight)
+            .unwrap_or_else(|| panic!("'{detector}' sources true sight"));
+        assert_eq!(source.radius(), radius, "'{detector}' detects to {radius}");
+    }
+    for blind in [
+        "dark_templar",
+        "wraith",
+        "arbiter",
+        "marine",
+        "zealot",
+        "guard_tower",
+        "ancient_protector_uprooted",
+        "nerubian_tower",
+    ] {
+        let def = registry.entity(blind).expect("type is registered");
+        assert!(
+            def.field_sources
+                .iter()
+                .all(|source| source.field() != true_sight),
+            "'{blind}' detects nothing"
+        );
+    }
+}
+
+#[test]
+fn dark_templar_observer_and_burrowed_swarmling_are_concealed_by_type() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    for concealed in ["dark_templar", "observer", "swarmling_burrowed"] {
+        let def = registry.entity(concealed).expect("type is registered");
+        assert_eq!(def.concealment, Concealment::Concealed, "'{concealed}'");
+    }
+    // The wraith hides by its cloak, not by what it is; the swarmling above
+    // ground hides by nothing.
+    for exposed in ["wraith", "swarmling", "zealot", "arbiter", "marine"] {
+        let def = registry.entity(exposed).expect("type is registered");
+        assert_eq!(def.concealment, Concealment::Exposed, "'{exposed}'");
+    }
+}
+
+#[test]
+fn cloak_is_buff_kept_up_from_energy_that_nothing_but_decloak_ends() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    let cloaked = registry
+        .entity_buff("cloaked")
+        .expect("cloaked is registered");
+    let buff = registry.entity_buff_def(cloaked);
+
+    assert_eq!(buff.effects, vec![EntityEffect::Conceal]);
+    assert_eq!(
+        buff.lasting,
+        Lasting::Upkeep {
+            costs: vec![Cost::Energy(FixedU64::lit("0.25"))],
+            period: 1,
+        }
+    );
+    assert!(
+        buff.interrupted_by.is_empty(),
+        "shooting and casting keep the cloak"
+    );
+
+    // Two buttons: one puts the buff on for a price, the other takes it off.
+    let cloak = skill_effect(&registry, "cloak");
+    assert_eq!(cloak, EntityCastEffect::ApplyBuff(cloaked));
+    let decloak = skill_effect(&registry, "decloak");
+    assert_eq!(decloak, EntityCastEffect::RemoveBuff(cloaked));
+
+    let wraith = registry.entity("wraith").expect("wraith is registered");
+    assert!(wraith.has_energy(), "the cloak is paid from a pool it has");
+    assert_eq!(
+        wraith.skills,
+        vec![
+            registry.skill("cloak").expect("cloak is registered"),
+            registry.skill("decloak").expect("decloak is registered"),
+        ]
+    );
+}
+
+#[test]
+fn huntress_ambush_conceals_until_she_strikes_or_is_struck() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    let ambushing = registry
+        .entity_buff("ambushing")
+        .expect("ambushing is registered");
+    let buff = registry.entity_buff_def(ambushing);
+
+    assert_eq!(buff.effects, vec![EntityEffect::Conceal]);
+    // Fifteen seconds at 20 Hz.
+    assert_eq!(buff.lasting, Lasting::For(300));
+    assert_eq!(
+        buff.interrupted_by,
+        vec![Interruption::Attack, Interruption::Hit]
+    );
+
+    assert_eq!(
+        skill_effect(&registry, "ambush"),
+        EntityCastEffect::ApplyBuff(ambushing)
+    );
+    let huntress = registry.entity("huntress").expect("huntress is registered");
+    assert_eq!(
+        huntress.skills,
+        vec![registry.skill("ambush").expect("ambush is registered")]
+    );
+}
+
+#[test]
+fn arbiter_veils_its_side_but_not_itself() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    let veil = registry.field("veil").expect("veil is registered");
+
+    let arbiter = registry.entity("arbiter").expect("arbiter is registered");
+    let [source] = arbiter.field_sources.as_slice() else {
+        panic!("the arbiter projects exactly one field");
+    };
+    assert_eq!((source.field(), source.radius()), (veil, 4));
+    assert!(
+        arbiter.field_effects.is_empty(),
+        "the veil conceals nothing of the arbiter's own"
+    );
+
+    // Every conclave unit answers to an allied veil over every cell it stands
+    // on — the deliberate exception in decision 18's table, since a body half
+    // out of the veil is half in the open.
+    for veiled in ["probe", "zealot", "dark_templar", "observer"] {
+        let def = registry.entity(veiled).expect("type is registered");
+        let effect = def
+            .field_effects
+            .iter()
+            .find(|effect| effect.field() == veil)
+            .unwrap_or_else(|| panic!("'{veiled}' answers to the veil"));
+        assert_eq!(
+            (effect.of(), effect.side(), effect.coverage(), effect.kind()),
+            (
+                Affiliation::Allied,
+                FieldSide::Inside,
+                FieldCoverage::Every,
+                &EntityEffect::Conceal
+            ),
+            "'{veiled}'"
+        );
+    }
+}
+
+#[test]
+fn declared_coverage_matches_what_each_effect_means() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+
+    // The table decision 18 settled: an effect that takes something away asks
+    // for every cell, so a body part way out keeps it; one that gives
+    // something asks for any, so a toe in is enough.
+    for (type_name, field_name, expected) in [
+        ("gateway", "power", FieldCoverage::Every),
+        ("photon_cannon", "power", FieldCoverage::Every),
+        ("swarmling", "creep", FieldCoverage::Any),
+        ("zealot", "veil", FieldCoverage::Every),
+        ("dark_templar", "veil", FieldCoverage::Every),
+    ] {
+        let def = registry
+            .entity(type_name)
+            .unwrap_or_else(|| panic!("'{type_name}' is registered"));
+        let field = registry
+            .field(field_name)
+            .unwrap_or_else(|| panic!("'{field_name}' is registered"));
+        let effect = def
+            .field_effects
+            .iter()
+            .find(|e| e.field() == field)
+            .unwrap_or_else(|| panic!("'{type_name}' answers to '{field_name}'"));
+        assert_eq!(
+            effect.coverage(),
+            expected,
+            "'{type_name}' against '{field_name}'"
+        );
+    }
+}
+
+#[test]
+fn scanner_sweep_detects_what_it_watches() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    let ground = registry
+        .layer(map::GROUND)
+        .expect("ground layer is registered");
+    let air = registry.layer(map::AIR).expect("air layer is registered");
+
+    let EntityCastEffect::Watch { detection, .. } = skill_effect(&registry, "scanner_sweep") else {
+        panic!("the sweep is a watch");
+    };
+    assert_eq!(detection, Detection::Reveals(ground | air));
+}
+
+#[test]
+fn burrow_is_researched_at_hall_and_dug_out_onto_nearest_ground() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    let burrow = registry.research("burrow").expect("burrow is registered");
+    for hall in ["hatchery", "hive"] {
+        let def = registry.entity(hall).expect("hall is registered");
+        assert!(
+            def.researcher
+                .as_ref()
+                .is_some_and(|researcher| researcher.can_research(burrow)),
+            "'{hall}' researches burrow"
+        );
+    }
+
+    let swarmling = registry
+        .entity("swarmling")
+        .expect("swarmling is registered");
+    let digging = swarmling
+        .morphs
+        .iter()
+        .find(|change| change.into_type() == "swarmling_burrowed")
+        .expect("the swarmling digs in");
+    assert_eq!(digging.requires(), [Requirement::Research(burrow)]);
+    assert_eq!(digging.placement(), MorphPlacement::Reserve);
+    assert_eq!(digging.cancel(), MorphCancel::Committed);
+    assert!(digging.costs().is_empty(), "digging in is free");
+
+    // Under the ground it claims no cell, so a swarmling walks over it, but
+    // it is still there and nothing is raised on top of it; it moves nowhere
+    // and bites nothing, and comes up wherever the nearest free ground is.
+    let burrowed = registry
+        .entity("swarmling_burrowed")
+        .expect("swarmling_burrowed is registered");
+    assert_eq!(
+        burrowed.location.map(|location| location.solidity()),
+        Some(Solidity::Underfoot)
+    );
+    assert!(!burrowed.can_move() && !burrowed.can_attack());
+    let [surfacing] = burrowed.morphs.as_slice() else {
+        panic!("a burrowed swarmling has exactly one change of form");
+    };
+    assert_eq!(surfacing.into_type(), "swarmling");
+    assert_eq!(surfacing.placement(), MorphPlacement::Nearby);
+}
+
+//
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 //
 
@@ -1576,6 +1861,28 @@ fn forbids(registry: &ContentRegistry, def: &EntityTypeDef, field: &str) -> bool
     def.field_placement.iter().any(
         |placement| matches!(placement, FieldPlacement::Forbids { field } if *field == refused),
     )
+}
+
+/// The registered field definition of the named field.
+fn field_def(registry: &ContentRegistry, name: &str) -> FieldDef {
+    let field = registry
+        .field(name)
+        .unwrap_or_else(|| panic!("field '{name}' is registered"));
+    *registry.field_def(field)
+}
+
+/// What the named entity-cast skill does at its aim.
+fn skill_effect(registry: &ContentRegistry, name: &str) -> EntityCastEffect {
+    let skill = registry
+        .skill(name)
+        .unwrap_or_else(|| panic!("skill '{name}' is registered"));
+    let def = registry
+        .skill_def(skill)
+        .expect("handle came from this registry");
+    let SkillCaster::Entity { effect, .. } = &def.caster else {
+        panic!("'{name}' is cast by an entity");
+    };
+    *effect
 }
 
 /// Whether any registered type raises or trains the named one.

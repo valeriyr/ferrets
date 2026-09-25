@@ -8,7 +8,6 @@ use ferrets_content::{
     entity_type_def::EntityTypeDef, location::Solidity, registry::ContentRegistry,
 };
 use ferrets_geometry::cell_size::CellSize;
-use ferrets_math::FixedU64;
 use ferrets_replay::{buffer::SharedBuffer, recorder::Recorder, replay::Replay};
 use ferrets_simulation::{
     command::PlayerCommand,
@@ -492,18 +491,7 @@ fn base_app() -> App {
     {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
         assert_eq!(registry.register_layer(GROUND_LAYER), GROUND);
-        registry.register(
-            EntityTypeDef::new("soldier")
-                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-                .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
-                    FixedU64::ONE,
-                    FixedU64::from_num(360),
-                    FixedU64::from_num(360),
-                )
-                .with_health(30),
-        );
+        registry.register(utils::walker("soldier", GROUND).with_health(30));
         registry.validate();
     }
     app.world_mut().resource_mut::<GameSession>().start();

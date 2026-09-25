@@ -46,11 +46,11 @@ fn kill_is_heard_where_it_happened() {
 }
 
 #[test]
-fn cancelled_death_makes_no_sound() {
+fn canceled_death_makes_no_sound() {
     let mut app = sound_app();
     let world = app.world_mut();
     let (site, _) = utils::create_entity(world, "grunt", utils::at_cell(6, 6), Some(0)).unwrap();
-    spawn::despawn_entity(world, site, DeathCause::Cancelled);
+    spawn::despawn_entity(world, site, DeathCause::Canceled);
     play(&mut app);
 
     assert!(

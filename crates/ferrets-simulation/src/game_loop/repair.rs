@@ -33,8 +33,8 @@ use crate::{
     simulation_id::SimulationId,
 };
 use ferrets_content::{
-    costs::Cost,
     entity_stats::EntityStatId,
+    price::Price,
     repair::{RepairCost, RepairRate, RepairerDef},
     work::WorkPresence,
 };
@@ -254,7 +254,7 @@ fn accepts(world: &World, entity: Entity, target: Entity) -> bool {
     if matches!(repairer.rate(), RepairRate::Production) && !target_def.is_production_repairable() {
         return false;
     }
-    if matches!(repairer.cost(), RepairCost::ProRata) && target_def.cost.is_empty() {
+    if matches!(repairer.cost(), RepairCost::ProRata) && target_def.price.is_empty() {
         return false;
     }
     // Mending an enemy is never the intent, and a neutral belongs to nobody.
@@ -339,8 +339,8 @@ fn charge(
     owed: &Carried,
 ) -> Option<Carried> {
     let (due, carried) = match repairer_of(world, entity).cost() {
-        RepairCost::Free => (Cost::new(), owed.clone()),
-        RepairCost::PerTick(cost) => (cost.clone(), owed.clone()),
+        RepairCost::Free => (Price::new(), owed.clone()),
+        RepairCost::PerTick(price) => (price.clone(), owed.clone()),
         // Paid out of the worker rather than the treasury, and in one piece: energy
         // is already fractional, so there is nothing to carry between ticks.
         RepairCost::Energy(per_health) => {
@@ -356,8 +356,8 @@ fn charge(
         // inside is safe.
         RepairCost::ProRata => {
             let factor = effective(world, entity, EntityStatId::REPAIR_COST_FACTOR);
-            let target_cost = entity_def::of(world, target).cost.clone();
-            pro_rata(&target_cost, restored, max_health, factor, owed)
+            let target_price = entity_def::of(world, target).price.clone();
+            pro_rata(&target_price, restored, max_health, factor, owed)
         }
     };
 
@@ -385,15 +385,15 @@ fn charge(
 /// shedding a fraction on every tick. A job can still end owing less than one unit
 /// of a resource, which is never charged — the same on every peer.
 fn pro_rata(
-    target_cost: &Cost,
+    target_price: &Price,
     restored: FixedU64,
     max_health: FixedU64,
     factor: FixedU64,
     owed: &Carried,
-) -> (Cost, Carried) {
-    let mut due = Cost::new();
+) -> (Price, Carried) {
+    let mut due = Price::new();
     let mut carried = owed.clone();
-    for (kind, &amount) in target_cost {
+    for (kind, &amount) in target_price {
         let share = FixedU64::from_num(amount)
             .saturating_mul(factor)
             .saturating_mul(restored)

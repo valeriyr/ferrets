@@ -12,6 +12,7 @@ pub mod brood;
 pub mod build;
 pub mod cast;
 pub mod chase;
+pub mod concealed;
 pub mod dying;
 pub mod energy;
 pub mod entity_buffs;

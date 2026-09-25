@@ -88,6 +88,7 @@ fn entity(type_name: &str, under_construction: bool) -> EntityView {
         armor: None,
         idle: true,
         hidden: false,
+        concealed: false,
         carrying: None,
         train_queue: Vec::new(),
         under_construction,
@@ -118,6 +119,7 @@ fn view_with(my_entities: Vec<EntityView>) -> GameView {
         ally_entities: Vec::new(),
         enemy_entities: Vec::new(),
         neutral_entities: Vec::new(),
+        glimpses: Vec::new(),
         remains: Vec::new(),
     }
 }

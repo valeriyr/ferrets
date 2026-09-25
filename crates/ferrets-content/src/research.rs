@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{costs::Cost, player_buffs::PlayerBuffId, requirement::Requirement};
+use crate::{player_buffs::PlayerBuffId, price::Price, requirement::Requirement};
 
 /// A handle to a registered research, assigned in registration order.
 ///
@@ -32,7 +32,7 @@ impl ResearchId {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResearchDef {
     /// Price to research, paid when the research is commanded. Empty means free.
-    pub cost: Cost,
+    pub price: Price,
     /// Ticks a researcher works to complete the research.
     pub research_time: u32,
     /// The player buff applied to the researching player on completion. `None`
@@ -48,7 +48,7 @@ impl ResearchDef {
     ///
     /// Panics if `research_time` is `0`.
     pub fn new(
-        cost: Cost,
+        price: Price,
         research_time: u32,
         buff: Option<PlayerBuffId>,
         requires: impl IntoIterator<Item = Requirement>,
@@ -57,7 +57,7 @@ impl ResearchDef {
         let requires: Vec<Requirement> = requires.into_iter().collect();
 
         Self {
-            cost,
+            price,
             research_time,
             buff,
             requires,

@@ -3,13 +3,25 @@
 use bevy_ecs::prelude::*;
 use ferrets_content::field::{FieldGrowth, FieldSourceDef};
 
+/// What a source put on the grid at the last recompute.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Emitted {
+    /// Nothing: not recomputed yet, or emitting nothing while constructing
+    /// or disabled.
+    Nothing,
+    /// A patch reaching this many cells from the footprint.
+    Reach(u32),
+}
+
 /// The live state of one declared field source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FieldSourceState {
-    /// How far from the footprint the source currently reaches, in cells.
+    /// How far from the footprint the source's growth has come, in cells.
     pub reach: u32,
     /// Ticks until the reach grows by one cell.
     pub countdown: u32,
+    /// What it put on the grid at the last recompute.
+    pub last_emitted: Emitted,
 }
 
 impl FieldSourceState {
@@ -22,7 +34,11 @@ impl FieldSourceState {
                 initial_radius,
             } => (initial_radius, cycle),
         };
-        Self { reach, countdown }
+        Self {
+            reach,
+            countdown,
+            last_emitted: Emitted::Nothing,
+        }
     }
 
     /// The state a source of `def` has once it spans its whole radius.

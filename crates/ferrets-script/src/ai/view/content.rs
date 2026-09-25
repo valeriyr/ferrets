@@ -3,13 +3,14 @@
 
 use ferrets_content::{
     affiliation::Affiliation,
+    cost::Cost,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     quantity::Quantity,
     registry::ContentRegistry,
     requirement::Requirement,
     research::ResearchId,
-    skills::{EntityCastCost, EntityCastTarget, SkillCaster, SkillId},
+    skills::{EntityCastTarget, SkillCaster, SkillId},
 };
 
 /// One requirement as a script reads it: the kind of thing wanted, and its
@@ -78,8 +79,8 @@ impl ContentView {
                     ResearchContentView {
                         name: name.to_string(),
                         id,
-                        cost: def
-                            .cost
+                        price: def
+                            .price
                             .iter()
                             .map(|(kind, amount)| (kind.clone(), *amount))
                             .collect(),
@@ -146,7 +147,7 @@ pub struct ResearchContentView {
     /// scripts name researches, commands carry ids.
     pub id: ResearchId,
     /// Price per resource kind, in ascending kind order. Empty means free.
-    pub cost: Vec<(String, u32)>,
+    pub price: Vec<(String, u32)>,
     /// Ticks a researcher works to complete the research.
     pub time: u32,
     /// What must hold to start it. `None` when nothing must.
@@ -157,7 +158,7 @@ pub struct ResearchContentView {
 pub struct EntityContentView {
     pub name: String,
     /// Price per resource kind, in ascending kind order. Empty means free.
-    pub cost: Vec<(String, u32)>,
+    pub price: Vec<(String, u32)>,
     pub train_time: Option<u32>,
     pub build_time: Option<u32>,
     /// Trainable types. `None` when instances cannot train.
@@ -204,7 +205,7 @@ pub struct MorphView {
     pub into: String,
     /// The stockpile price per resource kind, in ascending kind order. Empty
     /// means the change draws nothing from the stockpile.
-    pub cost: Vec<(String, u32)>,
+    pub price: Vec<(String, u32)>,
     /// Ticks the change takes. `None` when the time is read from a stat.
     pub time: Option<u32>,
 }
@@ -221,8 +222,8 @@ impl EntityContentView {
     pub fn from_def(def: &EntityTypeDef, registry: &ContentRegistry) -> EntityContentView {
         EntityContentView {
             name: def.name.clone(),
-            cost: def
-                .cost
+            price: def
+                .price
                 .iter()
                 .map(|(kind, amount)| (kind.clone(), *amount))
                 .collect(),
@@ -274,15 +275,15 @@ impl EntityContentView {
                     .iter()
                     .map(|transition| MorphView {
                         into: transition.into_type().to_string(),
-                        cost: transition
+                        price: transition
                             .costs()
                             .iter()
                             .flat_map(|cost| match cost {
-                                EntityCastCost::Resources(resources) => resources
+                                Cost::Resources(resources) => resources
                                     .iter()
                                     .map(|(kind, amount)| (kind.clone(), *amount))
                                     .collect(),
-                                EntityCastCost::Energy(_) | EntityCastCost::Health(_) => Vec::new(),
+                                Cost::Energy(_) | Cost::Health(_) => Vec::new(),
                             })
                             .collect(),
                         time: match transition.time() {

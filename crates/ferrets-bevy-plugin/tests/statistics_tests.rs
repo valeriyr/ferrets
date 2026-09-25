@@ -12,6 +12,7 @@ use bevy::prelude::*;
 use ferrets_content::{
     affiliation::Affiliation,
     attack::Slain,
+    detection::Detection,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     kinds::Kinds,
@@ -25,6 +26,7 @@ use ferrets_math::FixedU64;
 use ferrets_simulation::{
     command::{PlayerCommand, SkillCasterRef, SkillTarget},
     components::resource::ResourceSourceComponent,
+    entity_def,
     entity_index::EntityIndex,
     events::{DeathCause, EventRecord, SimulationEvent, SpawnCause, SpendCause},
     game_loop::damage,
@@ -262,7 +264,7 @@ fn finished_building_counts_toward_production_naming_finisher() {
 }
 
 #[test]
-fn cancelled_site_does_not_count_toward_production() {
+fn canceled_site_does_not_count_toward_production() {
     let mut app = utils::orders_app();
     let (worker, worker_id) = utils::create_owned(&mut app, "worker", 5, 5, 0);
     utils::grant_gold(&mut app, 80);
@@ -278,7 +280,7 @@ fn cancelled_site_does_not_count_toward_production() {
     );
     // Far enough for the site to have started and paid.
     utils::run_ticks(&mut app, 12);
-    utils::stop_orders(app.world_mut(), worker);
+    utils::force_cancel_orders(app.world_mut(), worker);
     utils::run_ticks(&mut app, 2);
 
     let depot = type_id(&app, "depot");
@@ -313,12 +315,12 @@ fn killed_entity_counts_as_loss_for_owner_and_kill_for_attacker() {
 }
 
 #[test]
-fn cancelled_entity_is_neither_loss_nor_kill() {
+fn canceled_entity_is_neither_loss_nor_kill() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
     let (entity, _) = utils::create_entity(world, "soldier", utils::pos(4, 4), Some(0)).unwrap();
 
-    spawn::despawn_entity(world, entity, DeathCause::Cancelled);
+    spawn::despawn_entity(world, entity, DeathCause::Canceled);
     utils::run_ticks(&mut app, 1);
 
     let soldier = type_id(&app, "soldier");
@@ -432,7 +434,7 @@ fn dying_attacker_keeps_kill_and_damage_credit() {
     let (victim, _) = utils::create_entity(world, "soldier", utils::pos(6, 4), Some(1)).unwrap();
 
     // The attacker starts dying, then a shot it already fired lands.
-    spawn::despawn_entity(world, attacker_entity, DeathCause::Cancelled);
+    spawn::despawn_entity(world, attacker_entity, DeathCause::Canceled);
     damage::apply(
         world,
         attacker,
@@ -486,14 +488,14 @@ fn passengers_lost_with_killed_transport_count_for_both_sides() {
 }
 
 #[test]
-fn cancelled_transport_takes_passengers_without_loss_or_kill() {
+fn canceled_transport_takes_passengers_without_loss_or_kill() {
     let mut app = utils::transport_app();
     let (wagon_entity, wagon) = utils::create_owned(&mut app, "wagon", 10, 10, 0);
     let (_, rider) = utils::create_owned(&mut app, "rifleman", 12, 10, 0);
     utils::send_to(&mut app, rider, wagon);
     utils::run_until_aboard(&mut app, wagon_entity, 1, 30);
 
-    spawn::despawn_entity(app.world_mut(), wagon_entity, DeathCause::Cancelled);
+    spawn::despawn_entity(app.world_mut(), wagon_entity, DeathCause::Canceled);
     utils::run_ticks(&mut app, 1);
 
     let statistics = app.world().resource::<Statistics>();
@@ -600,9 +602,9 @@ fn seeding_stockpile_is_not_gathering() {
 }
 
 #[test]
-fn cancelled_build_records_refund_beside_charge() {
+fn canceled_build_records_refund_beside_charge() {
     let mut app = utils::orders_app();
-    let (worker, worker_id) = utils::create_owned(&mut app, "worker", 5, 5, 0);
+    let (_, worker_id) = utils::create_owned(&mut app, "worker", 5, 5, 0);
     utils::grant_gold(&mut app, 80);
 
     utils::push_command(
@@ -622,14 +624,14 @@ fn cancelled_build_records_refund_beside_charge() {
         "starting the site charges the depot's price"
     );
 
-    utils::stop_orders(app.world_mut(), worker);
-    utils::run_ticks(&mut app, 2);
+    cancel_site(&mut app);
+    utils::run_ticks(&mut app, utils::APPLY + 2);
 
     let tally = app.world().resource::<Statistics>().player(0);
     assert_eq!(
         tally.refunded("gold"),
         50,
-        "cancelling gives the whole charge back, and says so"
+        "canceling gives the whole charge back, and says so"
     );
     assert_eq!(
         tally.spent("gold"),
@@ -641,7 +643,7 @@ fn cancelled_build_records_refund_beside_charge() {
 #[test]
 fn charge_and_refund_name_same_reason() {
     let mut app = utils::orders_app();
-    let (worker, worker_id) = utils::create_owned(&mut app, "worker", 5, 5, 0);
+    let (_, worker_id) = utils::create_owned(&mut app, "worker", 5, 5, 0);
     utils::grant_gold(&mut app, 80);
     utils::record_announcements(&mut app);
 
@@ -655,14 +657,14 @@ fn charge_and_refund_name_same_reason() {
         },
     );
     utils::run_ticks(&mut app, 12);
-    utils::stop_orders(app.world_mut(), worker);
-    utils::run_ticks(&mut app, 2);
+    cancel_site(&mut app);
+    utils::run_ticks(&mut app, utils::APPLY + 2);
 
     let seen = app.world().resource::<Announced>();
     assert_eq!(
         seen.charged(),
         seen.refunded(),
-        "cancelling names exactly the reason it was charged for, so the two net out"
+        "canceling names exactly the reason it was charged for, so the two net out"
     );
     assert!(
         matches!(seen.charged().as_slice(), [SpendCause::Construction { .. }]),
@@ -921,20 +923,8 @@ fn player_skill_cast_counts_toward_skills_cast() {
     utils::create_owned(&mut app, "runner", 5, 5, 0);
     utils::grant_gold(&mut app, 30);
     utils::run_ticks(&mut app, 1);
-    let drums = app
-        .world()
-        .resource::<ferrets_content::registry::ContentRegistry>()
-        .skill("drums")
-        .expect("drums is registered");
 
-    utils::push_command(
-        &mut app,
-        PlayerCommand::UseSkill {
-            skill: drums,
-            caster: SkillCasterRef::Player,
-            target: None,
-        },
-    );
+    utils::use_skill(&mut app, "drums", SkillCasterRef::Player, None);
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
     assert_eq!(
@@ -1102,6 +1092,7 @@ fn ground_skill_app() -> (App, ferrets_content::skills::SkillId) {
                     effect: EntityCastEffect::Watch {
                         radius: 2,
                         duration: 5,
+                        detection: Detection::Blind,
                     },
                 },
                 requires: Vec::new(),
@@ -1139,20 +1130,12 @@ fn repair_app() -> App {
             EntityTypeDef::new("hall")
                 .with_location(utils::GROUND, CellSize::new(2, 2), Solidity::Solid)
                 .with_health(100)
-                .with_cost([("gold", 50)])
+                .with_price([("gold", 50)])
                 .with_build_time(10)
                 .with_tags(["building"]),
         );
         registry.register(
-            EntityTypeDef::new("fixer")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
-                    FixedU64::ONE,
-                    FixedU64::from_num(360),
-                    FixedU64::from_num(360),
-                )
+            utils::walker("fixer", utils::GROUND)
                 .with_health(30)
                 .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
                 .with_stat(EntityStatId::REPAIR_RANGE, FixedU64::ONE)
@@ -1307,4 +1290,11 @@ impl Announced {
             })
             .collect()
     }
+}
+
+/// Cancels the one depot site standing for player 0, the way its owner would.
+fn cancel_site(app: &mut App) {
+    let depot = utils::single_owned_of_type(app.world_mut(), "depot", 0);
+    let site = entity_def::simulation_id(app.world(), depot);
+    utils::push_command(app, PlayerCommand::CancelBuild { site });
 }

@@ -4,6 +4,7 @@
 use bevy::prelude::*;
 use ferrets_content::{
     attack::Slain,
+    cost::Cost,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     kinds::Kinds,
@@ -11,17 +12,16 @@ use ferrets_content::{
     player_buffs::PlayerBuffDef,
     quantity::Quantity,
     registry::ContentRegistry,
-    skills::{
-        Casting, EntityCastCost, EntityCastEffect, EntityCastTarget, Reach, SkillCaster, SkillDef,
-    },
+    skills::{Casting, EntityCastEffect, EntityCastTarget, Reach, SkillCaster, SkillDef},
     stack_rule::StackRule,
     stats::{EntityModifier, ModifierOp},
 };
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::{FixedI64, FixedU64};
 use ferrets_simulation::{
+    buffs_store::Term,
     command::{PlayerCommand, SkillCasterRef, SkillTarget},
-    components::{energy::EnergyComponent, entity_info::EntityInfoComponent},
+    components::entity_info::EntityInfoComponent,
     entity_def,
     entity_index::EntityIndex,
     events::{SimulationEvent, SpawnCause},
@@ -497,18 +497,11 @@ fn cast_that_kills_its_caster_ends_as_death() {
     // The queue is out of the world while an order runs, so a caster the cast
     // killed would keep a dying phase nothing counts down unless the order
     // itself says it died.
-    let skill = app
-        .world()
-        .resource::<ContentRegistry>()
-        .skill("self_immolate")
-        .expect("the skill is registered");
-    utils::push_command(
+    utils::use_skill(
         &mut app,
-        PlayerCommand::UseSkill {
-            skill,
-            caster: SkillCasterRef::Entity(necromancer),
-            target: None,
-        },
+        "self_immolate",
+        SkillCasterRef::Entity(necromancer),
+        None,
     );
     utils::run_ticks(&mut app, utils::APPLY + 8);
 
@@ -647,7 +640,7 @@ fn app() -> App {
                 SkillDef {
                     cooldown: 10,
                     caster: SkillCaster::Entity {
-                        costs: vec![EntityCastCost::Energy(FixedU64::from_num(40))],
+                        costs: vec![Cost::Energy(FixedU64::from_num(40))],
                         target: EntityCastTarget::Fallen { kinds: Kinds::Any },
                         reach,
                         casting: Casting::Instant,
@@ -706,7 +699,7 @@ fn app() -> App {
                 SkillDef {
                     cooldown: 2,
                     caster: SkillCaster::Entity {
-                        costs: vec![EntityCastCost::Energy(FixedU64::from_num(40))],
+                        costs: vec![Cost::Energy(FixedU64::from_num(40))],
                         target: EntityCastTarget::Fallen { kinds: Kinds::Any },
                         reach: Reach::Within(Quantity::Constant(4)),
                         casting: Casting::Delayed {
@@ -736,7 +729,7 @@ fn app() -> App {
                 SkillDef {
                     cooldown: 10,
                     caster: SkillCaster::Entity {
-                        costs: vec![EntityCastCost::Energy(FixedU64::from_num(40))],
+                        costs: vec![Cost::Energy(FixedU64::from_num(40))],
                         target: EntityCastTarget::Fallen { kinds: Kinds::Any },
                         reach: Reach::Within(Quantity::Constant(4)),
                         casting: Casting::Delayed {
@@ -786,17 +779,9 @@ fn app() -> App {
             Reach::Wherever,
         );
         registry.register(
-            EntityTypeDef::new("necromancer")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+            utils::walker("necromancer", utils::GROUND)
                 .with_health(40)
                 .with_sight_range(20)
-                .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
-                    FixedU64::ONE,
-                    FixedU64::from_num(360),
-                    FixedU64::from_num(360),
-                )
                 .with_energy(100, FixedU64::ZERO)
                 .with_stat(ritual_time, FixedU64::from_num(10))
                 .with_skills([
@@ -833,7 +818,7 @@ fn apply_buff(app: &mut App, name: &str) {
         PlayerId::from(0u8),
         buff,
         StackRule::Ignore,
-        None,
+        Term::Forever,
     );
 }
 
@@ -880,18 +865,11 @@ fn raise(app: &mut App, caster: SimulationId, body: SimulationId) {
 
 /// Commands `caster` to cast `skill` on `body`.
 fn cast(app: &mut App, caster: SimulationId, body: SimulationId, skill: &str) {
-    let skill = app
-        .world()
-        .resource::<ContentRegistry>()
-        .skill(skill)
-        .expect("the skill is registered");
-    utils::push_command(
+    utils::use_skill(
         app,
-        PlayerCommand::UseSkill {
-            skill,
-            caster: SkillCasterRef::Entity(caster),
-            target: Some(SkillTarget::Entity(body)),
-        },
+        skill,
+        SkillCasterRef::Entity(caster),
+        Some(SkillTarget::Entity(body)),
     );
 }
 
@@ -937,9 +915,5 @@ fn energy(app: &App, caster: SimulationId) -> FixedU64 {
         .resource::<EntityIndex>()
         .alive(caster)
         .expect("the caster is standing");
-    app.world()
-        .entity(entity)
-        .get::<EnergyComponent>()
-        .expect("a caster carries an energy pool")
-        .current()
+    utils::energy(app, entity)
 }

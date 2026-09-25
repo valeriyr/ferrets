@@ -18,6 +18,7 @@ use ferrets_simulation::{
     game_loop,
     map::Map,
     spawn,
+    visibility::{self, Senses, Sighting},
 };
 use utils::{
     APPLY, GROUND, cell_of, create_owned, health, passengers_of, pos, push_command, run_ticks,
@@ -50,6 +51,34 @@ fn unit_boards_transport_and_leaves_map_and_selection() {
         !selection(&app).contains(&rifleman_id),
         "a unit off the map leaves the selection"
     );
+}
+
+#[test]
+fn passenger_aboard_is_seen_by_nobody() {
+    let mut app = transport_app();
+    let (wagon, wagon_id) = create_owned(&mut app, "wagon", 10, 10, 0);
+    let (rifleman, rifleman_id) = create_owned(&mut app, "rifleman", 14, 10, 0);
+    // The rival stands beside the wagon, so its cell is in the rival's sight.
+    create_owned(&mut app, "rifleman", 11, 11, 2);
+    send_to(&mut app, rifleman_id, wagon_id);
+    run_until_aboard(&mut app, wagon, 1, 40);
+    run_ticks(&mut app, 1);
+
+    // The wagon is in plain sight; what rides inside it is off the map, and
+    // sight reaches nothing there — not the rival's, not the owner's, not an
+    // ally's. The owner knows its passenger from the wagon's cargo list.
+    let world = app.world();
+    assert_eq!(
+        visibility::sighting(world, 2, wagon, Senses::SeatDeclared),
+        Sighting::Seen
+    );
+    for player in [2, 0, 1] {
+        assert_eq!(
+            visibility::sighting(world, player, rifleman, Senses::SeatDeclared),
+            Sighting::Unseen,
+            "player {player}"
+        );
+    }
 }
 
 #[test]
@@ -290,7 +319,7 @@ fn transport_fetches_targeted_unit_aboard() {
         app.world()
             .get::<OrderQueueComponent>(grunt)
             .is_some_and(|queue| queue.front().is_none()),
-        "the fetched unit's own orders are cancelled"
+        "the fetched unit's own orders are canceled"
     );
 }
 

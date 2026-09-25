@@ -11,6 +11,7 @@ use ferrets_content::{
     research::ResearchId,
     skills::{EntityCastTarget, SkillCaster, SkillId},
 };
+use ferrets_geometry::cell_rect::CellRect;
 use ferrets_math::fixed_uvec2::FixedUVec2;
 use ferrets_physics::body;
 use ferrets_simulation::{
@@ -18,6 +19,7 @@ use ferrets_simulation::{
     command::{PlayerCommand, SelectMode, SkillCasterRef},
     components::{
         build::UnderConstructionComponent,
+        concealed::ConcealedComponent,
         energy::EnergyComponent,
         entity_buffs::BuffsComponent,
         entity_info::EntityInfoComponent,
@@ -27,10 +29,11 @@ use ferrets_simulation::{
         hidden::HiddenComponent,
         location::LocationComponent,
         morph::MorphComponent,
-        order_queue::OrderQueueComponent,
+        order_queue::{OrderEntry, OrderQueueComponent},
         owner::OwnerComponent,
         resource::{ResourceCarrierComponent, ResourceSourceComponent},
         stance::StanceComponent,
+        train::TrainQueueComponent,
     },
     control_groups::{CONTROL_GROUP_COUNT, ControlGroups},
     entity_def::{self, Operation},
@@ -54,11 +57,13 @@ use ferrets_simulation::{
 
 use crate::{
     input::{InputMode, Leading, TargetedOrder},
+    render::{self, Sighted},
     states::{GameState, InGameUi},
     time::SpeedStep,
 };
 
-const BUTTON_NORMAL: Color = Color::srgb(0.20, 0.20, 0.24);
+/// A raised card button at rest.
+pub const BUTTON_NORMAL: Color = Color::srgb(0.20, 0.20, 0.24);
 const BUTTON_HOVERED: Color = Color::srgb(0.30, 0.30, 0.38);
 // Build buttons get a cooler tint so they stay distinct from train buttons on an
 // entity that can do both.
@@ -70,9 +75,9 @@ const SKILL_HOVERED: Color = Color::srgb(0.38, 0.26, 0.44);
 // Research buttons get a teal tint so upgrades read apart from everything else.
 const RESEARCH_NORMAL: Color = Color::srgb(0.14, 0.28, 0.26);
 const RESEARCH_HOVERED: Color = Color::srgb(0.20, 0.40, 0.38);
-// A produce/research button whose action the executor would refuse right now —
-// requirements unmet, or the research already done or under way.
-const CARD_DISABLED: Color = Color::srgb(0.12, 0.12, 0.13);
+/// A card button whose action the executor would refuse right now:
+/// requirements unmet, the research done or under way, nothing to call off.
+pub const CARD_DISABLED: Color = Color::srgb(0.12, 0.12, 0.13);
 // The supply readout turns red the moment there is no headroom left.
 const SUPPLY_NORMAL: Color = Color::srgb(0.85, 0.9, 0.85);
 const SUPPLY_BLOCKED: Color = Color::srgb(1.0, 0.35, 0.3);
@@ -156,6 +161,14 @@ pub struct CancelBuildButton;
 /// is under.
 #[derive(Component)]
 pub struct CancelMorphButton;
+
+/// A command-card button that drops the unit the leading trainer is producing.
+#[derive(Component)]
+pub struct CancelTrainButton;
+
+/// A command-card button that calls off the topic the leading researcher works.
+#[derive(Component)]
+pub struct CancelResearchButton;
 
 /// Replaces the selection with every living broodling the local player has.
 #[derive(Component)]
@@ -617,6 +630,7 @@ pub fn update_help(
 /// for the single selected entity, or a count when several are selected.
 pub fn update_selection(
     session: Res<GameSession>,
+    watch: Res<render::ObserverPerspective>,
     selection: Res<Selection>,
     registry: Res<ContentRegistry>,
     fields: Res<FieldGrid>,
@@ -632,6 +646,8 @@ pub fn update_selection(
         Option<&EnergyComponent>,
         Option<&BuffsComponent>,
         Option<&UnderConstructionComponent>,
+        Has<ConcealedComponent>,
+        Option<&Sighted>,
     )>,
     inspected: Res<crate::input::Inspected>,
     mut text: Query<&mut Text, With<SelectionText>>,
@@ -661,6 +677,8 @@ pub fn update_selection(
                     energy,
                     buffs,
                     under_construction,
+                    concealed,
+                    sighted,
                 )| {
                     let def = registry.def(info.type_id());
                     // The simulation id rides along with the name: it is the
@@ -672,6 +690,20 @@ pub fn update_selection(
                         pretty_name(info.type_name()),
                         info.id().0
                     )];
+                    // A side knows its own wherever they are: a worker down a
+                    // mine or inside the site it raises is off the map, which
+                    // carries no sighting even for the player who owns it.
+                    // What the side does not own keeps its name and nothing
+                    // live once the perspective stops making it out — a pick
+                    // that cloaked, or walked into fog.
+                    let own = match (render::viewed_player(&session, &watch), owner) {
+                        (Some(watched), Some(owner)) => owner.player() == watched,
+                        (Some(_), None) | (None, _) => false,
+                    };
+                    if !own && !render::stamped(sighted).is_seen() {
+                        parts.push("out of sight".to_string());
+                        return parts.join("   ");
+                    }
                     // The effective ceiling, so a modifier that moves max health shows in
                     // the denominator instead of leaving the reading out of step with it.
                     let max_health = stats
@@ -738,12 +770,20 @@ pub fn update_selection(
                         &session,
                         def,
                         owner.map(|owner| owner.player()),
-                        body::anchor(location.position),
+                        CellRect::new(
+                            body::anchor(location.position),
+                            def.location
+                                .expect("a drawn entity stands somewhere")
+                                .size(),
+                        ),
                     );
                     match (under_construction, disabled) {
                         (Some(_), _) => parts.push("under construction".to_string()),
                         (None, true) => parts.push("disabled".to_string()),
                         (None, false) => {}
+                    }
+                    if concealed {
+                        parts.push("concealed".to_string());
                     }
                     parts.join("   ")
                 },
@@ -790,7 +830,7 @@ pub fn update_objectives(
 /// takes over.
 pub fn update_spectator_note(
     session: Res<GameSession>,
-    watch: Res<crate::render::ObserverPerspective>,
+    watch: Res<render::ObserverPerspective>,
     mut text: Query<&mut Text, With<SpectatorText>>,
 ) {
     let message = if session.result().is_some() {
@@ -1028,6 +1068,8 @@ pub fn update_command_card(
             With<MorphButton>,
             With<CancelBuildButton>,
             With<CancelMorphButton>,
+            With<CancelTrainButton>,
+            With<CancelResearchButton>,
             With<SelectBroodButton>,
         )>,
     >,
@@ -1096,20 +1138,35 @@ pub fn update_command_card(
     let Some(id) = leading.0 else {
         return;
     };
-    let def = entities
+    // The card commands the player's own: an enemy or a neutral picked out to
+    // look at shows its stats in the panel and no buttons here, since every
+    // command the buttons would give is the simulation's to refuse.
+    let Some((def, owner)) = entities
         .iter()
         .find(|(info, ..)| info.id() == id)
-        .map(|(info, ..)| registry.def(info.type_id()));
+        .map(|(info, _, owner)| (registry.def(info.type_id()), owner))
+    else {
+        return;
+    };
+    let own = session
+        .local_player()
+        .is_some_and(|local| owner.is_some_and(|owner| owner.player() == local));
+    if !own {
+        return;
+    }
     let trains = def
-        .and_then(|def| def.trainer.as_ref())
+        .trainer
+        .as_ref()
         .map(|trainer| trainer.trains().map(String::from).collect::<Vec<_>>())
         .unwrap_or_default();
     let builds = def
-        .and_then(|def| def.builder.as_ref())
+        .builder
+        .as_ref()
         .map(|builder| builder.builds().map(String::from).collect::<Vec<_>>())
         .unwrap_or_default();
     let researches: Vec<(ResearchId, String)> = def
-        .and_then(|def| def.researcher.as_ref())
+        .researcher
+        .as_ref()
         .map(|researcher| {
             researcher
                 .researches()
@@ -1123,27 +1180,23 @@ pub fn update_command_card(
         })
         .unwrap_or_default();
     let skills: Vec<(SkillId, String)> = def
-        .map(|def| {
-            def.skills
-                .iter()
-                .map(|&id| (id, pretty_name(registry.skill_name(id).unwrap_or("skill"))))
-                .collect()
-        })
-        .unwrap_or_default();
-    let transports = def.is_some_and(|def| def.can_transport());
+        .skills
+        .iter()
+        .map(|&id| (id, pretty_name(registry.skill_name(id).unwrap_or("skill"))))
+        .collect();
+    let trains_any = !trains.is_empty();
+    let researches_any = !researches.is_empty();
+    let transports = def.can_transport();
     let own_site = session.local_player().is_some_and(|local| {
         sites
             .iter()
             .any(|(info, owner)| info.id() == id && owner.player() == local)
     });
     let morphs: Vec<String> = def
-        .map(|def| {
-            def.morphs
-                .iter()
-                .map(|transition| transition.into_type().to_string())
-                .collect()
-        })
-        .unwrap_or_default();
+        .morphs
+        .iter()
+        .map(|transition| transition.into_type().to_string())
+        .collect();
 
     commands.entity(card).with_children(|parent| {
         for name in trains {
@@ -1175,6 +1228,15 @@ pub fn update_command_card(
             parent.spawn((
                 card_button(&pretty_name(&name), SKILL_NORMAL),
                 MorphButton { type_name: name },
+            ));
+        }
+        if trains_any {
+            parent.spawn((CancelTrainButton, card_button("Cancel Unit", BUTTON_NORMAL)));
+        }
+        if researches_any {
+            parent.spawn((
+                CancelResearchButton,
+                card_button("Cancel Research", BUTTON_NORMAL),
             ));
         }
         if own_site {
@@ -1391,6 +1453,48 @@ pub fn cancel_morph_card_input(
     }
 }
 
+/// Drops the unit the leading trainer is producing when the cancel button is
+/// clicked, refunding its price. Slot 0 is the one in progress; the executor
+/// ignores a click on an empty queue.
+pub fn cancel_train_card_input(
+    buttons: Query<&Interaction, (With<CancelTrainButton>, Changed<Interaction>)>,
+    leading: Res<Leading>,
+    mut pending: ResMut<PendingInput>,
+) {
+    for interaction in &buttons {
+        if matches!(interaction, Interaction::Pressed)
+            && let Some(trainer) = leading.0
+        {
+            pending.push(PlayerCommand::CancelTrain { trainer, slot: 0 });
+        }
+    }
+}
+
+/// Calls off the topic the leading researcher works when the cancel button is
+/// clicked, refunding its price. The topic comes from the researcher's own
+/// order queue, so a researcher working nothing sends no command.
+pub fn cancel_research_card_input(
+    buttons: Query<&Interaction, (With<CancelResearchButton>, Changed<Interaction>)>,
+    researchers: Query<(&EntityInfoComponent, &OrderQueueComponent)>,
+    leading: Res<Leading>,
+    mut pending: ResMut<PendingInput>,
+) {
+    for interaction in &buttons {
+        if matches!(interaction, Interaction::Pressed)
+            && let Some(researcher) = leading.0
+            && let Some(research) = researchers
+                .iter()
+                .filter(|(info, _)| info.id() == researcher)
+                .find_map(|(_, queue)| queue.0.iter().find_map(working_topic))
+        {
+            pending.push(PlayerCommand::CancelResearch {
+                researcher,
+                research,
+            });
+        }
+    }
+}
+
 /// Starts the button's research on the leading researcher when clicked. The
 /// executor holds every gate (requirements, completion, the one-per-topic
 /// rule), so a click that slips past the greyed-out tint is still refused.
@@ -1428,6 +1532,10 @@ enum CardAction {
     Morph(String),
     /// Calls off the change of form the leading entity is under.
     CancelMorph,
+    /// Drops the unit the leading trainer is producing.
+    CancelTrain,
+    /// Calls off the topic the leading researcher works.
+    CancelResearch,
 }
 
 /// Recolors the gated card buttons from what the executor would currently
@@ -1490,6 +1598,17 @@ pub fn update_card_availability(world: &mut World) {
             })
     };
 
+    let producing = |world: &World| {
+        leading
+            .and_then(|entity| world.entity(entity).get::<TrainQueueComponent>())
+            .is_some_and(|queue| !queue.0.is_empty())
+    };
+    let researching = |world: &World| {
+        leading
+            .and_then(|entity| world.entity(entity).get::<OrderQueueComponent>())
+            .is_some_and(|queue| queue.0.iter().any(|entry| working_topic(entry).is_some()))
+    };
+
     let mut buttons: Vec<(Entity, Interaction, CardAction)> = Vec::new();
     let mut query = world.query::<(
         Entity,
@@ -1501,9 +1620,22 @@ pub fn update_card_availability(world: &mut World) {
         Option<&PlayerSkillButton>,
         Option<&MorphButton>,
         Option<&CancelMorphButton>,
+        Option<&CancelTrainButton>,
+        Option<&CancelResearchButton>,
     )>();
-    for (entity, interaction, train, build, research, skill, player_skill, morph_button, cancel) in
-        query.iter(world)
+    for (
+        entity,
+        interaction,
+        train,
+        build,
+        research,
+        skill,
+        player_skill,
+        morph_button,
+        cancel,
+        cancel_train,
+        cancel_research,
+    ) in query.iter(world)
     {
         let action = if let Some(button) = train {
             CardAction::Train(button.type_name.clone())
@@ -1519,6 +1651,10 @@ pub fn update_card_availability(world: &mut World) {
             CardAction::Morph(button.type_name.clone())
         } else if cancel.is_some() {
             CardAction::CancelMorph
+        } else if cancel_train.is_some() {
+            CardAction::CancelTrain
+        } else if cancel_research.is_some() {
+            CardAction::CancelResearch
         } else {
             continue;
         };
@@ -1601,6 +1737,9 @@ pub fn update_card_availability(world: &mut World) {
             // window stands open, so the button greys out rather than doing
             // nothing when it is clicked.
             CardAction::CancelMorph => (calls_off(world), BUTTON_NORMAL, BUTTON_HOVERED),
+            // Nothing queued and nothing under way is nothing to call off.
+            CardAction::CancelTrain => (producing(world), BUTTON_NORMAL, BUTTON_HOVERED),
+            CardAction::CancelResearch => (researching(world), BUTTON_NORMAL, BUTTON_HOVERED),
         };
 
         let color = match (available, interaction) {
@@ -1909,4 +2048,13 @@ fn pretty_name(type_name: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// The topic an order-queue entry works, if it is a research entry.
+fn working_topic(entry: &OrderEntry) -> Option<ResearchId> {
+    if let Order::Research { research } = entry.order {
+        Some(research)
+    } else {
+        None
+    }
 }

@@ -6,10 +6,14 @@ use ferrets_pathfinder::layer_mask::LayerMask;
 /// Whether an entity's footprint blocks the cells it stands on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Solidity {
-    /// The footprint claims the entity's layers; others collide with it.
+    /// The footprint claims the entity's layers: others collide with it, and
+    /// no footprint is raised over it.
     Solid,
-    /// The entity is placed and collides on its layers, but never claims them;
-    /// others pass through it freely, and passable entities can share cells.
+    /// The footprint claims nothing, so movers cross it freely, but the
+    /// entity is still there: no static footprint is raised over it.
+    Underfoot,
+    /// The footprint holds nothing at all: movers cross it, anything may be
+    /// raised over it, and entities of this solidity can share cells.
     Passable,
 }
 
@@ -19,6 +23,16 @@ impl Solidity {
     pub fn claims_cells(self) -> bool {
         match self {
             Solidity::Solid => true,
+            Solidity::Underfoot | Solidity::Passable => false,
+        }
+    }
+
+    /// Whether a footprint of this solidity keeps a static one from being
+    /// raised over the cells it covers.
+    #[inline]
+    pub fn holds_ground(self) -> bool {
+        match self {
+            Solidity::Solid | Solidity::Underfoot => true,
             Solidity::Passable => false,
         }
     }

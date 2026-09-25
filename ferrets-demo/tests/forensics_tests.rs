@@ -6,25 +6,37 @@
 //!
 //! Run with: `FREP=replays/<stamp>.frep cargo test -p ferrets-demo --test
 //! forensics_tests -- --ignored --nocapture`
+//!
+//! `CONCEAL=<type substring>` prints every tick the concealment marker of a
+//! matching entity flips, with the veil coverage under every cell of its
+//! footprint and the fold the simulation makes of it, within the
+//! `FOCUS_FROM`/`FOCUS_TO` range. `FIELD_MAP=<field>,<tick>` prints that
+//! field's coverage as a map at that tick, with every source of it marked.
 
 use std::{collections::BTreeMap, fs::File, io::BufReader};
 
 use bevy::prelude::*;
+use ferrets_content::registry::ContentRegistry;
 use ferrets_demo::playback;
+use ferrets_geometry::cell_pos::CellPos;
 use ferrets_math::{
     FixedI64, FixedU64,
     facing::{self, Facing},
     fixed_uvec2::FixedUVec2,
     fixed_vec2::FixedVec2,
 };
+use ferrets_physics::body;
 use ferrets_replay::replay::Replay;
 use ferrets_simulation::{
     components::{
-        entity_info::EntityInfoComponent, hidden::HiddenComponent, location::LocationComponent,
-        movement::MoveComponent, order_queue::OrderQueueComponent, owner::OwnerComponent,
-        resource::ResourceCarrierComponent,
+        concealed::ConcealedComponent, entity_info::EntityInfoComponent, hidden::HiddenComponent,
+        location::LocationComponent, movement::MoveComponent, order_queue::OrderQueueComponent,
+        owner::OwnerComponent, resource::ResourceCarrierComponent,
     },
+    entity_def,
     entity_index::EntityIndex,
+    fields::{self, FieldGrid},
+    map::Map,
     session::{GameSession, player_id::PlayerId},
     simulation_id::SimulationId,
 };
@@ -70,11 +82,71 @@ fn replay_forensics() {
         .and_then(|tick| tick.parse().ok())
         .unwrap_or(u32::MAX);
 
+    let conceal: Option<String> = std::env::var("CONCEAL").ok();
+    let field_map: Option<(String, u32)> = std::env::var("FIELD_MAP").ok().and_then(|spec| {
+        let (name, tick) = spec.split_once(',')?;
+        Some((name.to_string(), tick.parse().ok()?))
+    });
+    let mut was_concealed: BTreeMap<SimulationId, bool> = BTreeMap::new();
+
     let mut tracks: BTreeMap<SimulationId, (String, Vec<Sample>)> = BTreeMap::new();
     for _ in 0..last + 10 {
         ferrets_bevy_plugin::run_tick(app.world_mut());
         let world = app.world_mut();
         let tick = world.resource::<GameSession>().tick();
+        if let Some(wanted) = &conceal
+            && (focus_from..=focus_to).contains(&tick)
+        {
+            let registry = world.resource::<ContentRegistry>();
+            let veil = registry.field("veil");
+            for (id, entity) in world.resource::<EntityIndex>().alive_entries() {
+                let entity_ref = world.entity(entity);
+                let Some(info) = entity_ref.get::<EntityInfoComponent>() else {
+                    continue;
+                };
+                if !info.type_name().contains(wanted.as_str()) {
+                    continue;
+                }
+                let concealed = entity_ref.contains::<ConcealedComponent>();
+                let before = was_concealed.insert(id, concealed);
+                if before == Some(concealed) {
+                    continue;
+                }
+                let location = entity_ref.get::<LocationComponent>();
+                let anchor = location.map(|location| body::anchor(location.position));
+                // The veil over every cell the body occupies, and the fold the
+                // simulation makes of them by the type's own coverage rule: a
+                // covered anchor beside a marker that just went is a wide body
+                // part way out of the veil.
+                let def = registry.def(info.type_id());
+                let covered = match (veil, location) {
+                    (Some(veil), Some(_)) => {
+                        let grid = world.resource::<FieldGrid>();
+                        let cells: Vec<String> = entity_def::occupied_rect_of(world, def, entity)
+                            .cells()
+                            .map(|cell| {
+                                format!("({},{}) {:?}", cell.x, cell.y, grid.covered(veil, cell))
+                            })
+                            .collect();
+                        format!(
+                            "fold {} cells [{}]",
+                            fields::concealed_of(world, def, entity),
+                            cells.join(" ")
+                        )
+                    }
+                    _ => "n/a".to_string(),
+                };
+                let hidden = entity_ref.contains::<HiddenComponent>();
+                let front = entity_ref
+                    .get::<OrderQueueComponent>()
+                    .and_then(|queue| queue.0.front().map(|entry| format!("{:?}", entry.order)));
+                println!(
+                    "t{tick} {id:?} {} concealed {concealed} (was {before:?}) pos {:?} anchor {anchor:?} veil {covered} hidden {hidden} front {front:?}",
+                    info.type_name(),
+                    location.map(|location| location.position),
+                );
+            }
+        }
         if let Some(focus) = focus
             && (focus_from..=focus_to).contains(&tick)
             && let Some(entity) = world.resource::<EntityIndex>().alive(SimulationId(focus))
@@ -118,6 +190,53 @@ fn replay_forensics() {
             println!(
                 "t{tick} owner {owner:?} form {form:?} pos {position:?} facing {facing:?} carried {carried:?} hidden {hidden} front {front:?} move {movement:?}"
             );
+        }
+        if let Some((name, at)) = &field_map
+            && tick == *at
+        {
+            let registry = world.resource::<ContentRegistry>();
+            let field = registry.field(name).expect("the field is registered");
+            let map = world.resource::<Map>();
+            let grid = world.resource::<FieldGrid>();
+            let mut sources: Vec<(String, CellPos)> = Vec::new();
+            for (_, entity) in world.resource::<EntityIndex>().alive_entries() {
+                let entity_ref = world.entity(entity);
+                let (Some(info), Some(location)) = (
+                    entity_ref.get::<EntityInfoComponent>(),
+                    entity_ref.get::<LocationComponent>(),
+                ) else {
+                    continue;
+                };
+                if registry
+                    .def(info.type_id())
+                    .field_sources
+                    .iter()
+                    .any(|source| source.field() == field)
+                {
+                    sources.push((
+                        info.type_name().to_string(),
+                        body::anchor(location.position),
+                    ));
+                }
+            }
+            println!(
+                "field '{name}' at t{tick}; sources {sources:?}; '#' covered, 'S' source anchor"
+            );
+            for y in 0..map.height() {
+                let row: String = (0..map.width())
+                    .map(|x| {
+                        let cell = CellPos::new(x, y);
+                        if sources.iter().any(|(_, anchor)| *anchor == cell) {
+                            'S'
+                        } else if grid.covered(field, cell).is_empty() {
+                            '.'
+                        } else {
+                            '#'
+                        }
+                    })
+                    .collect();
+                println!("{y:3} {row}");
+            }
         }
         let entries = world.resource::<EntityIndex>().alive_entries();
         for (id, entity) in entries {

@@ -20,8 +20,8 @@ use ferrets_simulation::{
     input::{InputFrames, PlayerFrame, SYNC_LATENCY},
     resources::PlayerResources,
     session::{
-        GameSession, ai_vision::AiVision, finish_policy::FinishPolicy, player_id::PlayerId,
-        player_slot::PlayerSlot, player_type::PlayerType,
+        GameSession, ai_detection::AiDetection, ai_vision::AiVision, finish_policy::FinishPolicy,
+        player_id::PlayerId, player_slot::PlayerSlot, player_type::PlayerType,
     },
 };
 
@@ -37,6 +37,7 @@ fn ai_slots_without_runtimes_get_idle_frames_and_free_slots_get_none() {
             1,
             PlayerType::Ai {
                 vision: AiVision::Filtered,
+                detection: AiDetection::Detectors,
             },
             Some("human"),
             None,
@@ -66,6 +67,7 @@ fn ai_commands_land_only_on_staggered_think_ticks() {
             1,
             PlayerType::Ai {
                 vision: AiVision::Filtered,
+                detection: AiDetection::Detectors,
             },
             Some("human"),
             None,
@@ -74,6 +76,7 @@ fn ai_commands_land_only_on_staggered_think_ticks() {
             2,
             PlayerType::Ai {
                 vision: AiVision::Filtered,
+                detection: AiDetection::Detectors,
             },
             Some("orc"),
             None,
@@ -118,6 +121,7 @@ fn blocked_ticks_do_not_rethink() {
             2,
             PlayerType::Ai {
                 vision: AiVision::Filtered,
+                detection: AiDetection::Detectors,
             },
             Some("human"),
             None,
@@ -166,6 +170,7 @@ fn replay_playback_gates_ai_sources_off() {
             1,
             PlayerType::Ai {
                 vision: AiVision::Filtered,
+                detection: AiDetection::Detectors,
             },
             Some("human"),
             None,
@@ -198,10 +203,12 @@ fn game_view_classifies_and_snapshots_entities() {
             1,
             PlayerType::Ai {
                 vision: AiVision::Filtered,
+                detection: AiDetection::Detectors,
             },
             Some("human"),
-            None,
+            Some(1),
         ),
+        PlayerSlot::occupied(2, PlayerType::Human, None, Some(1)),
     ]);
     utils::register_orders_content(&mut app);
     let world = app.world_mut();
@@ -211,6 +218,11 @@ fn game_view_classifies_and_snapshots_entities() {
     let (_, _) = utils::create_entity(world, "worker", utils::pos(10, 10), Some(0)).unwrap();
     let (hidden_enemy, _) =
         utils::create_entity(world, "worker", utils::pos(12, 10), Some(0)).unwrap();
+    // The ally's, one of them hidden and both far from anything the brain
+    // sees on its own.
+    let (_, _) = utils::create_entity(world, "worker", utils::pos(25, 25), Some(2)).unwrap();
+    let (hidden_ally, _) =
+        utils::create_entity(world, "worker", utils::pos(27, 25), Some(2)).unwrap();
     let (mine, _) = utils::create_entity(world, "mine", utils::pos(2, 2), None).unwrap();
     world
         .get_mut::<ResourceSourceComponent>(mine)
@@ -218,9 +230,16 @@ fn game_view_classifies_and_snapshots_entities() {
         .amount = 900;
     world.entity_mut(hidden_own).insert(HiddenComponent);
     world.entity_mut(hidden_enemy).insert(HiddenComponent);
+    world.entity_mut(hidden_ally).insert(HiddenComponent);
     world.resource_mut::<PlayerResources>().add(1, "gold", 120);
 
-    let view = game_view(world, 1, "human", AiVision::Omniscient);
+    let view = game_view(
+        world,
+        1,
+        "human",
+        AiVision::Omniscient,
+        AiDetection::Detectors,
+    );
 
     assert_eq!(view.player, 1);
     assert_eq!(view.race, "human");
@@ -237,6 +256,11 @@ fn game_view_classifies_and_snapshots_entities() {
     assert!(worker.idle && !worker.hidden && !worker.under_construction);
     assert!(worker.carrying.is_none() && worker.resource_amount.is_none());
     assert!(view.my_entities[1].hidden);
+
+    // An ally's entities are listed by ownership, the hidden one flagged, as
+    // the brain's own are.
+    assert_eq!(view.ally_entities.len(), 2);
+    assert!(!view.ally_entities[0].hidden && view.ally_entities[1].hidden);
 
     // Hidden enemies are omitted; the neutral source exposes its remainder.
     assert_eq!(view.enemy_entities.len(), 1);
@@ -267,6 +291,7 @@ const STOPPER: &str = r#"
     define_ai("stopper", {
         period = 4,
         vision = "filtered",
+        detection = "detectors",
         think = function(state, view)
             return { { kind = "stop" } }
         end,
@@ -278,6 +303,7 @@ const COUNTER: &str = r#"
     define_ai("counter", {
         period = 1,
         vision = "filtered",
+        detection = "detectors",
         think = function(state, view)
             state.count = (state.count or 0) + 1
             return { { kind = "move", x = state.count, y = 0 } }
@@ -290,6 +316,7 @@ const PATROL: &str = r#"
     define_ai("patrol", {
         period = 5,
         vision = "filtered",
+        detection = "detectors",
         think = function(state, view)
             local unit = view.my_entities[1]
             if unit == nil then return end
@@ -329,6 +356,7 @@ fn run_ai_session() -> Vec<u64> {
             1,
             PlayerType::Ai {
                 vision: AiVision::Filtered,
+                detection: AiDetection::Detectors,
             },
             Some("human"),
             None,
@@ -337,6 +365,7 @@ fn run_ai_session() -> Vec<u64> {
             2,
             PlayerType::Ai {
                 vision: AiVision::Filtered,
+                detection: AiDetection::Detectors,
             },
             Some("orc"),
             None,
@@ -377,6 +406,7 @@ fn empty_replay() -> Replay {
                 1,
                 PlayerType::Ai {
                     vision: AiVision::Filtered,
+                    detection: AiDetection::Detectors,
                 },
                 Some("human"),
                 None,

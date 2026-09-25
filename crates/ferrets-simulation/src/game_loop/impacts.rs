@@ -10,7 +10,7 @@ use ferrets_geometry::{
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_pathfinder::layer_mask::LayerMask;
 
-use super::damage;
+use super::{damage, stats};
 use crate::{
     components::{
         dying::DyingComponent, entity_info::EntityInfoComponent, health::HealthComponent,
@@ -25,6 +25,7 @@ use crate::{
 };
 use ferrets_content::{
     attack::{Delivery, Slain, Weapon},
+    entity_buffs::Interruption,
     entity_type_def::EntityTypeDef,
     projectile::Aim,
     registry::ContentRegistry,
@@ -42,6 +43,10 @@ use ferrets_content::{
 /// without applies the damage now. A target-following shot damages `target` wherever
 /// it has moved to and centres its blast there; a cell-aimed one commits to the cell
 /// `target` occupied at release, so a target that keeps moving escapes it.
+///
+/// Firing is the attacker's attack: every buff of its that an attack cuts
+/// short ends here, whatever weapon fired and whether or not the shot then
+/// finds a victim.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn deliver(
     world: &mut World,
@@ -72,6 +77,9 @@ pub(super) fn deliver(
         )
         .map(Weapon::delivery)
         .expect("a delivering entity has the weapon it fired");
+
+    stats::interrupt_entity_buffs(world, attacker, Interruption::Attack);
+
     match delivery {
         Delivery::Instant => {
             let def = entity_def::of(world, attacker).clone();

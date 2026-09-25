@@ -13,13 +13,14 @@ use crate::{
     berths::{BerthGroup, BerthsDef},
     brood::{BreederDef, BroodlingDef, OrphanFate},
     build::{BuilderAttendance, BuilderDef},
-    costs::{self, Cost},
+    concealment::Concealment,
     dying::{Bequest, DyingDef},
     entity_stats::EntityStatId,
     field::{FieldEffect, FieldPlacement, FieldSourceDef},
     kinds::Kinds,
     location::{LocationDef, Solidity},
     morph::{MorphReason, MorphTransition},
+    price::{self, Price},
     quantity::Quantity,
     repair::{RepairCost, RepairRate, RepairerDef},
     requirement::Requirement,
@@ -113,6 +114,9 @@ pub struct EntityTypeDef {
     pub targetable: Option<LayerMask>,
     /// Activated skills instances of this type can use, by registered id.
     pub skills: Vec<SkillId>,
+    /// How instances stand toward a side that is not their own: seen wherever
+    /// its sight reaches, or only where its detection reaches as well.
+    pub concealment: Concealment,
     /// The fields instances project, and how. Empty means instances project
     /// no field.
     pub field_sources: Vec<FieldSourceDef>,
@@ -130,7 +134,7 @@ pub struct EntityTypeDef {
     pub selection: SelectionDef,
 
     /// Price to train or construct one instance. Empty means free.
-    pub cost: Cost,
+    pub price: Price,
     /// Ticks to train one instance. `None` means the type cannot be trained.
     pub train_time: Option<u32>,
     /// Ticks to construct one instance. `None` means the type cannot be built.
@@ -201,12 +205,13 @@ impl EntityTypeDef {
             morphs: Vec::new(),
             targetable: None,
             skills: Vec::new(),
+            concealment: Concealment::Exposed,
             field_sources: Vec::new(),
             field_placement: Vec::new(),
             field_effects: Vec::new(),
             on_stand: Vec::new(),
             selection: SelectionDef::default(),
-            cost: Cost::new(),
+            price: Price::new(),
             train_time: None,
             build_time: None,
             trainer: None,
@@ -564,6 +569,13 @@ impl EntityTypeDef {
         self
     }
 
+    /// Sets how instances stand toward a side that is not their own (see
+    /// [`concealment`](Self::concealment)).
+    pub fn with_concealment(mut self, concealment: Concealment) -> Self {
+        self.concealment = concealment;
+        self
+    }
+
     /// Adds fields instances of this type project (see
     /// [`field_sources`](Self::field_sources)).
     pub fn with_field_sources(mut self, sources: impl IntoIterator<Item = FieldSourceDef>) -> Self {
@@ -605,15 +617,15 @@ impl EntityTypeDef {
     /// entries.
     ///
     /// Panics if an entry has an empty resource kind or a zero amount.
-    pub fn with_cost(mut self, cost: impl IntoIterator<Item = (impl Into<String>, u32)>) -> Self {
-        let cost = costs::cost(cost);
+    pub fn with_price(mut self, price: impl IntoIterator<Item = (impl Into<String>, u32)>) -> Self {
+        let price = price::from(price);
 
-        for (kind, amount) in &cost {
-            assert!(!kind.is_empty(), "cost resource kinds must not be empty");
-            assert!(*amount > 0, "cost amounts must be greater than 0");
+        for (kind, amount) in &price {
+            assert!(!kind.is_empty(), "price resource kinds must not be empty");
+            assert!(*amount > 0, "price amounts must be greater than 0");
         }
 
-        self.cost = cost;
+        self.price = price;
         self
     }
 

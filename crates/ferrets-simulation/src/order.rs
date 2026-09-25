@@ -57,7 +57,7 @@ pub enum Order {
     },
     /// Attack what `target` names — an entity, or a cell for a weapon that sends its
     /// shots to one. An entity target ends the order once it is gone or unreachable; a
-    /// cell is never gone, so a ground attack keeps firing until it is cancelled. A
+    /// cell is never gone, so a ground attack keeps firing until it is canceled. A
     /// leash additionally breaks the attack off when the target strays too far —
     /// automatic engagements set one, explicit ones do not.
     Attack {
@@ -68,7 +68,7 @@ pub enum Order {
     /// and resuming toward the position after each fight.
     AttackMove { target: FixedUVec2 },
     /// Walk back and forth between the position the order started at and
-    /// `target`, engaging hostiles noticed on the way, until cancelled.
+    /// `target`, engaging hostiles noticed on the way, until canceled.
     Patrol { target: FixedUVec2 },
     /// Stay near the entity with the given id and engage hostiles that
     /// threaten it or come close, until it is gone.

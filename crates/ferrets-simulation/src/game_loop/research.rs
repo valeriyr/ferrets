@@ -31,7 +31,7 @@ pub fn can_start(world: &World, entity: Entity, order: &Order) -> Result<(), Ref
     {
         return Err(Refusal::Incapable);
     }
-    orders::requires_not_idle(world, entity)
+    orders::admits_queued_work(world, entity)
 }
 
 /// Called once when a Research order becomes the front `New` entry.
@@ -55,48 +55,41 @@ pub fn prepare(entity: Entity, order: &Order, world: &mut World) -> OrderState {
 
 /// Called for every Research entry that has a cancel policy.
 ///
-/// A soft cancel is refused — the work continues. A force cancel refunds the
-/// full cost to the owner, discards the progress, and finishes.
+/// A soft cancel is refused and the work carries on. A force cancel discards
+/// the progress and finishes, and what the topic cost stays spent.
 pub fn cancel_processing(
     entity: Entity,
     order: &Order,
     policy: CancelPolicy,
-    _entry_state: OrderState,
+    entry_state: OrderState,
     world: &mut World,
 ) -> Processing {
-    let Order::Research { research } = order else {
+    let Order::Research { .. } = order else {
         unreachable!("cancel_processing called with a non-Research order");
     };
 
     match policy {
         CancelPolicy::Soft => Processing::state(OrderState::InProcessing),
         CancelPolicy::Force => {
-            let owner = entity_def::owner(world, entity);
-            if let Some(player) = owner {
-                let cost = world
-                    .resource::<ContentRegistry>()
-                    .research_def(*research)
-                    .expect("research orders carry a registry-minted id")
-                    .cost
-                    .clone();
-                resources::refund(
-                    world,
-                    player,
-                    cost,
-                    SpendCause::Research {
-                        research: *research,
-                    },
-                );
+            // A queued entry was never prepared, so the driver on the entity
+            // belongs to the topic running in front of it and is not this
+            // entry's to take.
+            match entry_state {
+                OrderState::New => {}
+                OrderState::InProcessing | OrderState::Suspended => {
+                    world.entity_mut(entity).remove::<ResearchComponent>();
+                }
+                OrderState::Finished => {
+                    unreachable!("Finished entries never stay in the queue")
+                }
             }
-
-            world.entity_mut(entity).remove::<ResearchComponent>();
             Processing::state(OrderState::Finished)
         }
     }
 }
 
 /// Whether a Research can stand through a soft cancel: always — only a force
-/// cancel takes the work away, refunding it.
+/// cancel takes the work away.
 pub fn survives_soft_cancel() -> bool {
     true
 }
@@ -115,12 +108,12 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
     let Some(player) = entity_def::owner(world, entity) else {
         return Processing::state(OrderState::Finished);
     };
-    let (cost, research_time, buff) = {
+    let (price, research_time, buff) = {
         let def = world
             .resource::<ContentRegistry>()
             .research_def(research)
             .expect("research orders carry a registry-minted id");
-        (def.cost.clone(), def.research_time, def.buff)
+        (def.price.clone(), def.research_time, def.buff)
     };
 
     // Completed in the meantime — nothing left to work toward, so the payment
@@ -132,7 +125,7 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
         .resource::<PlayerResearch>()
         .is_completed(player, research)
     {
-        resources::refund(world, player, cost, SpendCause::Research { research });
+        resources::refund(world, player, price, SpendCause::Research { research });
         return Processing::state(OrderState::Finished);
     }
 

@@ -41,6 +41,16 @@ pub(super) fn game_table(lua: &Lua, view: &GameView) -> mlua::Result<Table> {
         entities_table(lua, &view.neutral_entities)?,
     )?;
     table.set("remains", remains_table(lua, &view.remains)?)?;
+    let glimpses = lua.create_table()?;
+    for (index, glimpse) in view.glimpses.iter().enumerate() {
+        let ground = lua.create_table()?;
+        ground.set("x", glimpse.x)?;
+        ground.set("y", glimpse.y)?;
+        ground.set("width", glimpse.width)?;
+        ground.set("height", glimpse.height)?;
+        glimpses.set(index + 1, ground)?;
+    }
+    table.set("glimpses", glimpses)?;
     Ok(table)
 }
 
@@ -79,6 +89,7 @@ fn entity_table(lua: &Lua, entity: &EntityView) -> mlua::Result<Table> {
     table.set("armor", entity.armor)?;
     table.set("idle", entity.idle)?;
     table.set("hidden", entity.hidden)?;
+    table.set("concealed", entity.concealed)?;
     if let Some((kind, amount)) = &entity.carrying {
         let carrying = lua.create_table()?;
         carrying.set("kind", kind.as_str())?;
@@ -120,11 +131,11 @@ pub(super) fn content_table(lua: &Lua, content: &ContentView) -> mlua::Result<Ta
     let researches = lua.create_table()?;
     for research in &content.researches {
         let entry = lua.create_table()?;
-        let cost = lua.create_table()?;
-        for (kind, amount) in &research.cost {
-            cost.set(kind.as_str(), *amount)?;
+        let price = lua.create_table()?;
+        for (kind, amount) in &research.price {
+            price.set(kind.as_str(), *amount)?;
         }
-        entry.set("cost", cost)?;
+        entry.set("price", price)?;
         entry.set("time", research.time)?;
         entry.set(
             "requires",
@@ -152,7 +163,7 @@ pub(super) fn content_table(lua: &Lua, content: &ContentView) -> mlua::Result<Ta
 fn entity_content_table(lua: &Lua, entity: &EntityContentView) -> mlua::Result<Table> {
     let table = lua.create_table()?;
 
-    table.set("cost", cost_table(lua, &entity.cost)?)?;
+    table.set("price", price_table(lua, &entity.price)?)?;
 
     table.set("train_time", entity.train_time)?;
     table.set("build_time", entity.build_time)?;
@@ -191,7 +202,7 @@ fn entity_content_table(lua: &Lua, entity: &EntityContentView) -> mlua::Result<T
         for (index, morph) in morphs.iter().enumerate() {
             let entry = lua.create_table()?;
             entry.set("into", morph.into.as_str())?;
-            entry.set("cost", cost_table(lua, &morph.cost)?)?;
+            entry.set("price", price_table(lua, &morph.price)?)?;
             entry.set("time", morph.time)?;
             array.set(index + 1, entry)?;
         }
@@ -208,9 +219,9 @@ fn entity_content_table(lua: &Lua, entity: &EntityContentView) -> mlua::Result<T
 }
 
 /// Encodes a price as an array of `{ kind, amount }` entries.
-fn cost_table(lua: &Lua, cost: &[(String, u32)]) -> mlua::Result<Table> {
+fn price_table(lua: &Lua, price: &[(String, u32)]) -> mlua::Result<Table> {
     let table = lua.create_table()?;
-    for (index, (kind, amount)) in cost.iter().enumerate() {
+    for (index, (kind, amount)) in price.iter().enumerate() {
         let entry = lua.create_table()?;
         entry.set("kind", kind.as_str())?;
         entry.set("amount", *amount)?;

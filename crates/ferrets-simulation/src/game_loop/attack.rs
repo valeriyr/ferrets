@@ -30,6 +30,7 @@ use crate::{
     impacts::FiredFrom,
     map::Map,
     order::{AttackTarget, Order},
+    visibility::{self, Senses},
 };
 
 /// What a weapon is fighting by this tick: its four measurements as the
@@ -152,13 +153,29 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
             // form change moves the answer: a target that takes off mid-fight
             // leaves this weapon's layers, and chasing it would swing forever at
             // something no hit can land on.
-            if !targeting::reaches(
-                entity_def::weapon_targets(world, entity),
-                entity_def::of(world, target),
-            ) {
+            let target_def = entity_def::of(world, target);
+            if !targeting::reaches(entity_def::weapon_targets(world, entity), target_def) {
                 return Processing::state(OrderState::Finished);
             }
-            let (at, size) = entity_def::footprint(world, target);
+            // Sight is re-judged every tick too: a target that walks into fog
+            // or cloaks mid-fight is one the attacker's player can no longer
+            // make out, and the order lapses by the senses it was given
+            // under. A fight the unit picked for itself was picked by the
+            // ordinary ones, and a seat's privilege reaches what it orders,
+            // never what its units do on their own; an explicit order lapses
+            // as the command that gave it would be refused, so a seat that
+            // names what fog hides keeps what it named. An ownerless attacker
+            // has no side to see with.
+            let senses = match order.attack_leash() {
+                Some(_) => Senses::Ordinary,
+                None => Senses::SeatDeclared,
+            };
+            if let Some(owner) = entity_def::owner(world, entity)
+                && !visibility::sees_of(world, owner, target_def, target, senses)
+            {
+                return Processing::state(OrderState::Finished);
+            }
+            let (at, size) = entity_def::footprint_of(world, target_def, target);
             (Some(target), at, size)
         }
         AttackTarget::Position(cell) => (None, cell, CellSize::ONE),

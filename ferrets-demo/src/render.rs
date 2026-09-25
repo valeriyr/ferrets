@@ -7,12 +7,15 @@
 //! smooth and stays locked to the simulation cadence (it can never outrun it).
 //! Unit shapes rotate to point in their facing direction.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
-use bevy::prelude::*;
+use bevy::{prelude::*, sprite_render::AlphaMode2d};
 use ferrets_content::{
+    affiliation::Affiliation,
+    detection::Detection,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
+    field::FieldId,
     quantity::Quantity,
     registry::ContentRegistry,
     resource::ResourceSourceDef,
@@ -34,10 +37,12 @@ use ferrets_simulation::{
         brood::{BredComponent, BroodComponent},
         build::{BuildComponent, SiteWork, UnderConstructionComponent},
         cast::{CastComponent, CastStage},
+        concealed::ConcealedComponent,
         dying::{DyingComponent, RemainsComponent},
         energy::EnergyComponent,
         entity_info::EntityInfoComponent,
         entity_stats::StatsComponent,
+        field_source::{Emitted, FieldSourcesComponent},
         health::HealthComponent,
         hidden::HiddenComponent,
         lifetime::LifetimeComponent,
@@ -61,9 +66,12 @@ use ferrets_simulation::{
     impacts::PendingImpacts,
     order::Order,
     selection::Selection,
-    session::{GameSession, local_role::LocalRole, player_id::PlayerId},
+    session::{
+        GameSession, ai_detection::AiDetection, ai_vision::AiVision, local_role::LocalRole,
+        player_id::PlayerId, player_mask::PlayerMask, player_slot::PlayerSlot,
+    },
     simulation_id::SimulationId,
-    visibility::{CellVisibility, VisibilityGrid},
+    visibility::{self, CellVisibility, Senses, Sighting, VisibilityGrid},
     watches::Watches,
 };
 
@@ -156,6 +164,28 @@ impl DrawnBearings {
 /// Marks an entity that already has its render components attached.
 #[derive(Component)]
 pub struct Renderable;
+
+/// What this node's perspective makes of a simulation entity this frame.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Sighted(pub Sighting);
+
+/// The sighting an entity is stamped with; a missing stamp is `Unseen`.
+pub fn stamped(sighted: Option<&Sighted>) -> Sighting {
+    match sighted {
+        Some(sighted) => sighted.0,
+        None => Sighting::Unseen,
+    }
+}
+
+/// Whether the perspective makes an entity out in full: its sprite is drawn
+/// and its stamp is `Seen`.
+pub fn made_out(visibility: &Visibility, sighted: Option<&Sighted>) -> bool {
+    match visibility {
+        Visibility::Hidden => return false,
+        Visibility::Visible | Visibility::Inherited => {}
+    }
+    stamped(sighted).is_seen()
+}
 
 /// Marks a renderable whose body sprite is drawn along its look rather than square
 /// to the map — carried by anything that can walk, since a body's look is where it
@@ -548,18 +578,39 @@ enum Shape {
     Citadel,
     /// Main buildings and resource sources — a square.
     Square,
+    /// A burrowed swarmling — a low mound, a wide flattened disc with a darker
+    /// slit across it where the body went under.
+    Burrow,
+    /// The wraith — a narrow dart with a swept wing bar behind its nose, the
+    /// flier that fights.
+    Wraith,
+    /// The observer — a small disc bearing a lighter lens ring, the flier that
+    /// only looks.
+    Observer,
+    /// The arbiter — a wide saucer with a darker rim and a pale core, the
+    /// flier that veils what it flies over.
+    Arbiter,
+    /// The missile turret — a square pad; the rack on it is drawn from the
+    /// gun it mounts, like the fortress's.
+    Pad,
 }
 
 /// Picks a shape from the entity type name. Add new types here.
 fn shape_for(type_name: &str) -> Shape {
     match type_name {
         "peasant" | "peon" | "drone" | "probe" | "wisp" | "scv" | "acolyte" => Shape::Circle,
-        "grunt" | "swarmling" | "ravager" | "zealot" | "huntress" | "ghoul" => Shape::Diamond,
+        "grunt" | "swarmling" | "ravager" | "zealot" | "dark_templar" | "huntress" | "ghoul" => {
+            Shape::Diamond
+        }
+        "swarmling_burrowed" => Shape::Burrow,
         "skeleton" => Shape::Skeleton,
         "hatchling" => Shape::Spawn,
         "archer" | "marine" => Shape::Triangle,
+        "wraith" => Shape::Wraith,
         "mortar" => Shape::Pentagon,
         "medic" | "shaman" | "necromancer" => Shape::Cross,
+        "observer" => Shape::Observer,
+        "arbiter" => Shape::Arbiter,
         "ship" => Shape::Ship,
         "training_camp"
         | "war_camp"
@@ -579,6 +630,7 @@ fn shape_for(type_name: &str) -> Shape {
         "siege_works" | "factory" | "factory_aloft" => Shape::Octagon,
         "watch_tower" => Shape::WatchTower,
         "guard_tower" | "photon_cannon" => Shape::GuardTower,
+        "missile_turret" => Shape::Pad,
         "spirit_tower" => Shape::SpiritTower,
         "nerubian_tower" => Shape::NerubianTower,
         "tumor" | "cocoon" | "hive_cocoon" | "egg" => Shape::Pod,
@@ -1183,6 +1235,81 @@ pub fn attach_sprites(
                 let px = Vec2::new(size.width as f32, size.height as f32) * CELL_PX * 0.85;
                 entity.insert(Sprite::from_color(color, px));
             }
+            Shape::Burrow => {
+                // A low mound: a wide flattened disc with a darker slit across
+                // it, the body under the ground and the ground closed over it.
+                entity.insert((
+                    Mesh2d(meshes.add(Ellipse::new(radius * 0.95, radius * 0.6))),
+                    MeshMaterial2d(materials.add(color.darker(0.08))),
+                ));
+                entity.with_children(|parent| {
+                    parent.spawn((
+                        Mesh2d(meshes.add(Rectangle::new(radius * 1.2, radius * 0.16))),
+                        MeshMaterial2d(materials.add(color.darker(0.3))),
+                        Transform::from_translation(Vec3::new(0.0, 0.0, 0.1)),
+                    ));
+                });
+            }
+            Shape::Wraith => {
+                // A narrow dart with a swept wing bar behind its nose: the
+                // fighter among the fliers, pointing where it flies.
+                entity.insert((
+                    Mesh2d(meshes.add(Triangle2d::new(
+                        Vec2::new(0.0, radius),
+                        Vec2::new(-radius * 0.45, -radius * 0.8),
+                        Vec2::new(radius * 0.45, -radius * 0.8),
+                    ))),
+                    MeshMaterial2d(materials.add(color)),
+                ));
+                entity.with_children(|parent| {
+                    parent.spawn((
+                        Mesh2d(meshes.add(Rectangle::new(radius * 1.8, radius * 0.22))),
+                        MeshMaterial2d(materials.add(color.darker(0.15))),
+                        Transform::from_translation(Vec3::new(0.0, -radius * 0.35, 0.1)),
+                    ));
+                });
+            }
+            Shape::Observer => {
+                // A small disc bearing a lighter lens ring: the flier that only
+                // looks.
+                entity.insert((
+                    Mesh2d(meshes.add(Circle::new(radius * 0.7))),
+                    MeshMaterial2d(materials.add(color)),
+                ));
+                entity.with_children(|parent| {
+                    parent.spawn((
+                        Mesh2d(meshes.add(Annulus::new(radius * 0.3, radius * 0.45))),
+                        MeshMaterial2d(materials.add(color.lighter(0.3))),
+                        Transform::from_translation(Vec3::new(0.0, 0.0, 0.1)),
+                    ));
+                });
+            }
+            Shape::Arbiter => {
+                // A wide saucer with a darker rim and a pale core: the flier
+                // that veils what it flies over.
+                entity.insert((
+                    Mesh2d(meshes.add(Circle::new(radius))),
+                    MeshMaterial2d(materials.add(color.darker(0.12))),
+                ));
+                entity.with_children(|parent| {
+                    parent.spawn((
+                        Mesh2d(meshes.add(Circle::new(radius * 0.7))),
+                        MeshMaterial2d(materials.add(color)),
+                        Transform::from_translation(Vec3::new(0.0, 0.0, 0.1)),
+                    ));
+                    parent.spawn((
+                        Mesh2d(meshes.add(Circle::new(radius * 0.25))),
+                        MeshMaterial2d(materials.add(color.lighter(0.35))),
+                        Transform::from_translation(Vec3::new(0.0, 0.0, 0.2)),
+                    ));
+                });
+            }
+            Shape::Pad => {
+                // A square pad, lower than a tower's base; the rack on it is
+                // drawn from the gun it mounts.
+                let px = Vec2::new(size.width as f32, size.height as f32) * CELL_PX * 0.7;
+                entity.insert(Sprite::from_color(color, px));
+            }
         }
         // An ancient on the move carries its roots: four darker squares at the
         // corners of its footprint, which is what tells a walker from a stand
@@ -1403,19 +1530,16 @@ pub fn snap_revealed(
 }
 
 /// Interpolates each sprite between its previous and current sim position by the
-/// fixed-step overstep, turns it toward its look at [`TURN_RATE`], and hides
-/// off-map entities (run in `Update`).
+/// fixed-step overstep, turns it toward its look between its two ticks'
+/// bearings, and hides off-map and unseen entities and the body of a glimpsed
+/// one (run in `Update`).
 ///
 /// Both the walk and the turn are what [`Smoothing`] switches off, leaving each
 /// sprite on the tick's own position and look.
 pub fn interpolate_sprites(
     fixed: Res<Time<Fixed>>,
     smoothing: Res<Smoothing>,
-    session: Res<GameSession>,
     registry: Res<ContentRegistry>,
-    fog: Res<VisibilityGrid>,
-    watch: Res<ObserverPerspective>,
-    reveal: Res<FogReveal>,
     mut query: Query<(
         &EntityInfoComponent,
         &LocationComponent,
@@ -1424,8 +1548,8 @@ pub fn interpolate_sprites(
         &mut DrawnFacing,
         &mut Transform,
         &mut Visibility,
-        Option<&HiddenComponent>,
-        Option<&OwnerComponent>,
+        Has<HiddenComponent>,
+        Option<&Sighted>,
         Option<&Directional>,
         Option<(&TurretsComponent, &PrevBearings, &mut DrawnBearings)>,
     )>,
@@ -1446,7 +1570,7 @@ pub fn interpolate_sprites(
         mut transform,
         mut visibility,
         hidden,
-        owner,
+        sighted,
         directional,
         turret,
     ) in &mut query
@@ -1474,25 +1598,229 @@ pub fn interpolate_sprites(
                 .map(|(turret, &was)| between(was, turret.bearing, alpha))
                 .collect();
         }
-        // Own and allied entities always draw; an enemy or neutral one is hidden
-        // while its cell is not in the local team's vision (fog of war). Building
-        // ghosts (draw_ghosts) stand in for last-seen enemy structures.
-        let fogged = !reveal.0
-            && match owner {
-                Some(owner) if allied_with_local(&session, owner.player()) => false,
-                _ => !sees(
-                    &session,
-                    &watch,
-                    &fog,
-                    location.position.x.to_num::<u32>(),
-                    location.position.y.to_num::<u32>(),
-                ),
-            };
-        *visibility = if hidden.is_some() || fogged {
-            Visibility::Hidden
-        } else {
-            Visibility::Visible
+        // Unseen is fog and a glimpse is a presence without a body: neither
+        // body is drawn.
+        visibility.set_if_neq(match (hidden, stamped(sighted)) {
+            (true, _) | (false, Sighting::Unseen | Sighting::Glimpsed) => Visibility::Hidden,
+            (false, Sighting::Seen) => Visibility::Visible,
+        });
+    }
+}
+
+/// The shimmer a glimpse is owed (run in `Update`): a neutral shape the size of
+/// the footprint, wherever a glimpsed entity stands, shivering a pixel or two
+/// about that point. The shiver and the breathing of the rings advance with
+/// the frame clock, `Time<Virtual>`.
+///
+/// Nothing of the entity itself is drawn — no side color, no type outline, no
+/// facing, no lift.
+pub fn draw_glimpses(
+    mut gizmos: Gizmos,
+    registry: Res<ContentRegistry>,
+    time: Res<Time<Virtual>>,
+    query: Query<
+        (&EntityInfoComponent, &Transform, &Sighted),
+        (With<Renderable>, Without<HiddenComponent>),
+    >,
+) {
+    /// How strongly the nearer ring is drawn.
+    const GLIMPSE_ALPHA: f32 = 0.30;
+    /// How much of that the outer ring keeps, so the edge falls away.
+    const GLIMPSE_FALLOFF: f32 = 0.45;
+    /// How far the rings breathe, as a share of their radius.
+    const GLIMPSE_SWELL: f32 = 0.08;
+    /// Segments per ring: enough to read as round, few enough to shimmer.
+    const GLIMPSE_SEGMENTS: u32 = 18;
+    /// How far the rings shiver about the glimpsed point, in pixels.
+    const GLIMPSE_SHIVER: f32 = 1.5;
+
+    let now = time.elapsed_secs();
+    for (info, transform, sighted) in &query {
+        match sighted.0 {
+            Sighting::Glimpsed => {}
+            Sighting::Seen | Sighting::Unseen => continue,
+        }
+        let def = registry.def(info.type_id());
+        let size = def.location.unwrap().size();
+        let seed = info.id().0 as f32;
+        let shiver =
+            Vec2::new((now * 17.0 + seed).sin(), (now * 23.0 + seed * 0.7).cos()) * GLIMPSE_SHIVER;
+        let center = glimpse_center(transform, &registry, def) + shiver;
+        // Two rings breathing out of phase, which reads as a distortion in the
+        // air rather than an outline of anything: the shape says how much
+        // ground is disturbed and nothing about what disturbs it.
+        let radius = size.width.max(size.height) as f32 * CELL_PX * 0.45;
+        for (ring, phase) in [(0.78, 0.0), (1.0, std::f32::consts::PI)] {
+            let swell = 1.0 + (now * 2.6 + seed + phase).sin() * GLIMPSE_SWELL;
+            let alpha = GLIMPSE_ALPHA * if ring < 1.0 { 1.0 } else { GLIMPSE_FALLOFF };
+            gizmos
+                .circle_2d(
+                    Isometry2d::from_translation(center),
+                    radius * ring * swell,
+                    Color::srgba(0.82, 0.86, 0.95, alpha),
+                )
+                .resolution(GLIMPSE_SEGMENTS);
+        }
+    }
+}
+
+/// The ground point a glimpse of a type of `def` drawn at `transform` is
+/// centered on: the drawn position less the type's lift, the cell the entity
+/// is over.
+pub fn glimpse_center(
+    transform: &Transform,
+    registry: &ContentRegistry,
+    def: &EntityTypeDef,
+) -> Vec2 {
+    transform.translation.truncate() - lift(registry, def).truncate()
+}
+
+/// What [`refresh_sightings`] judges every drawn entity by.
+#[derive(Debug, Clone, Copy)]
+enum SightingJudge {
+    /// Everything is seen: the fog is lifted, or the perspective is the whole
+    /// map.
+    Everything,
+    /// A seat's declared senses, the watched side's.
+    Seat {
+        /// The player whose side is watched.
+        player: PlayerId,
+        /// How the seat sees through the fog.
+        vision: AiVision,
+        /// How the seat makes out what is concealed.
+        detection: AiDetection,
+    },
+    /// A watched player id with no seat, which makes out nothing.
+    NoSeat,
+}
+
+/// System set for everything that reads the sighting stamp
+/// [`refresh_sightings`] writes, ordered after that pass.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ReadsSightings;
+
+/// What the sightings were last stamped from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SightingsKey {
+    /// The tick the stamps were judged at.
+    tick: u32,
+    /// The player whose side was viewed, or none for the whole map.
+    viewed: Option<PlayerId>,
+    /// Whether the fog reveal was on.
+    reveal: bool,
+}
+
+/// Stamps every drawn entity with what this node's perspective makes of it
+/// (run in `Update`): the local player's side, the side a spectator watches,
+/// or everything when the spectator watches the whole map or the fog is
+/// lifted.
+///
+/// The pass runs once per change of the tick, the perspective or the fog
+/// reveal, and writes a stamp only where it differs from the one already
+/// there; a freshly attached sprite is stamped the frame it appears. The
+/// viewed seat's senses are resolved once per pass.
+pub fn refresh_sightings(world: &mut World, mut last: Local<Option<SightingsKey>>) {
+    let viewed = viewed_player(
+        world.resource::<GameSession>(),
+        world.resource::<ObserverPerspective>(),
+    );
+    let reveal = world.resource::<FogReveal>().0;
+    let tick = world.resource::<GameSession>().tick();
+    let key = SightingsKey {
+        tick,
+        viewed,
+        reveal,
+    };
+    let unchanged = *last == Some(key);
+    *last = Some(key);
+    let judge = match (reveal, viewed) {
+        (true, _) | (false, None) => SightingJudge::Everything,
+        (false, Some(player)) => {
+            let declared = world
+                .resource::<GameSession>()
+                .slot(player)
+                .and_then(PlayerSlot::senses);
+            match declared {
+                Some((vision, detection)) => SightingJudge::Seat {
+                    player,
+                    vision,
+                    detection,
+                },
+                None => SightingJudge::NoSeat,
+            }
+        }
+    };
+    let drawn: Vec<(Entity, bool)> = world
+        .query_filtered::<(Entity, Has<Sighted>), With<Renderable>>()
+        .iter(world)
+        .collect();
+    for (entity, stamped) in drawn {
+        if unchanged && stamped {
+            continue;
+        }
+        let sighting = match judge {
+            SightingJudge::Everything => Sighting::Seen,
+            SightingJudge::NoSeat => Sighting::Unseen,
+            SightingJudge::Seat {
+                player,
+                vision,
+                detection,
+            } => visibility::sighting(world, player, entity, Senses::Given(vision, detection)),
         };
+        let mut entity_mut = world.entity_mut(entity);
+        match entity_mut.get::<Sighted>() {
+            Some(before) if before.0 == sighting => {}
+            Some(_) | None => {
+                entity_mut.insert(Sighted(sighting));
+            }
+        }
+    }
+}
+
+/// Rings a concealed enemy the perspective makes out (run in `Update`): the
+/// mark that says a detector, not the eye, is what shows it. A perspective
+/// that watches the whole map, or one under the fog reveal, sees everything
+/// by right and rings nothing.
+pub fn draw_detected(
+    mut gizmos: Gizmos,
+    session: Res<GameSession>,
+    watch: Res<ObserverPerspective>,
+    reveal: Res<FogReveal>,
+    registry: Res<ContentRegistry>,
+    query: Query<
+        (
+            &EntityInfoComponent,
+            &Transform,
+            &Sighted,
+            Option<&OwnerComponent>,
+        ),
+        (
+            With<Renderable>,
+            With<ConcealedComponent>,
+            Without<HiddenComponent>,
+        ),
+    >,
+) {
+    if reveal.0 {
+        return;
+    }
+    let Some(viewed) = viewed_player(&session, &watch) else {
+        return;
+    };
+    for (info, transform, sighted, owner) in &query {
+        if !sighted.0.is_seen() {
+            continue;
+        }
+        if owner.is_some_and(|owner| session.are_allied(viewed, owner.player())) {
+            continue;
+        }
+        let size = registry.def(info.type_id()).location.unwrap().size();
+        let radius = size.width.max(size.height) as f32 * CELL_PX * 0.55;
+        gizmos.circle_2d(
+            transform.translation.truncate(),
+            radius,
+            Color::srgba(1.0, 0.3, 0.3, 0.9),
+        );
     }
 }
 
@@ -1505,14 +1833,20 @@ pub fn draw_air_shadows(
     mut gizmos: Gizmos,
     registry: Res<ContentRegistry>,
     query: Query<
-        (&EntityInfoComponent, &Transform, &Visibility),
+        (
+            &EntityInfoComponent,
+            &Transform,
+            &Visibility,
+            Option<&Sighted>,
+            Has<ConcealedComponent>,
+        ),
         (With<Renderable>, Without<HiddenComponent>),
     >,
 ) {
     const SHADOW: Color = Color::srgba(0.0, 0.0, 0.0, 0.35);
 
-    for (info, transform, visibility) in &query {
-        if matches!(visibility, Visibility::Hidden) {
+    for (info, transform, visibility, sighted, concealed) in &query {
+        if !made_out(visibility, sighted) {
             continue;
         }
         let def = registry.def(info.type_id());
@@ -1521,10 +1855,11 @@ pub fn draw_air_shadows(
         }
         let size = def.location.unwrap().size();
         let ground = transform.translation.truncate() - Vec2::new(0.0, AIR_LIFT_PX);
+        // A concealed flier's shadow fades with it.
         gizmos.circle_2d(
             ground,
             size.width.min(size.height) as f32 * CELL_PX * 0.3,
-            SHADOW,
+            faded(SHADOW, presence_alpha(sighted, concealed)),
         );
     }
 }
@@ -1536,8 +1871,16 @@ pub fn draw_selection(
     selection: Res<Selection>,
     inspected: Res<crate::input::Inspected>,
     registry: Res<ContentRegistry>,
+    watch: Res<ObserverPerspective>,
     query: Query<
-        (&EntityInfoComponent, &Transform, &Visibility),
+        (
+            &EntityInfoComponent,
+            &Transform,
+            &Visibility,
+            Option<&Sighted>,
+            Option<&FieldSourcesComponent>,
+            Option<&OwnerComponent>,
+        ),
         (With<Renderable>, Without<HiddenComponent>),
     >,
 ) {
@@ -1563,8 +1906,12 @@ pub fn draw_selection(
     if rings.iter().all(|(selected, ..)| selected.is_empty()) {
         return;
     }
-    for (info, transform, visibility) in &query {
-        if matches!(visibility, Visibility::Hidden) {
+    let viewed = viewed_player(&session, &watch);
+    for (info, transform, visibility, sighted, sources, owner) in &query {
+        // A ring around what the perspective only glimpses would give it
+        // away: another player's selection is shown only where this side
+        // makes the unit out.
+        if !made_out(visibility, sighted) {
             continue;
         }
         // Several watchers can hold the same entity — the inspection plus a
@@ -1581,6 +1928,35 @@ pub fn draw_selection(
                     * (0.7 + rings_drawn as f32 * 0.12);
                 gizmos.circle_2d(transform.translation.truncate(), radius, *color);
                 rings_drawn += 1;
+            }
+        }
+        // A selected source of the viewed side shows how far each field it
+        // projects reaches now: what it put on the grid, from the footprint's
+        // edge, in the field's own color, on the ground — a flier's field lies
+        // under it, not at its altitude. A halted or unbuilt source shows no
+        // ring, and another side's reach is its own to know, as on the
+        // overlay; an observer watching the whole map sees every side's.
+        let side_of_view = match viewed {
+            None => true,
+            Some(viewed) => owner.is_some_and(|owner| session.are_allied(viewed, owner.player())),
+        };
+        if rings_drawn > 0
+            && side_of_view
+            && let Some(sources) = sources
+        {
+            let def = registry.def(info.type_id());
+            let size = def.location.unwrap().size();
+            let ground = transform.translation.truncate() - lift(&registry, def).truncate();
+            for (source, state) in def.field_sources.iter().zip(&sources.0) {
+                let Emitted::Reach(reach) = state.last_emitted else {
+                    continue;
+                };
+                let radius = (reach as f32 + size.width.max(size.height) as f32 / 2.0) * CELL_PX;
+                gizmos.circle_2d(
+                    ground,
+                    radius,
+                    field_reach_color(&registry, source.field()).with_alpha(0.35),
+                );
             }
         }
     }
@@ -1753,7 +2129,12 @@ pub fn draw_skill_pulses(
     reveal: Res<FogReveal>,
     mut pulses: ResMut<SkillPulses>,
     rendered: Query<
-        (&EntityInfoComponent, &Transform, &Visibility),
+        (
+            &EntityInfoComponent,
+            &Transform,
+            &Visibility,
+            Option<&Sighted>,
+        ),
         (With<Renderable>, Without<HiddenComponent>),
     >,
 ) {
@@ -1766,10 +2147,10 @@ pub fn draw_skill_pulses(
         let at = match target {
             SkillTarget::Entity(id) => rendered
                 .iter()
-                .find(|(info, _, visibility)| {
-                    info.id() == id && !matches!(visibility, Visibility::Hidden)
+                .find(|(info, _, visibility, sighted)| {
+                    info.id() == id && made_out(visibility, *sighted)
                 })
-                .map(|(_, transform, _)| transform.translation),
+                .map(|(_, transform, _, _)| transform.translation),
             SkillTarget::Position(position) => {
                 let cell = CellPos::from(position);
                 (reveal.0 || sees(&session, &watch, &grid, cell.x, cell.y))
@@ -1808,18 +2189,19 @@ pub fn draw_casts(
             Option<&StatsComponent>,
             &Transform,
             &Visibility,
+            Option<&Sighted>,
         ),
         (With<Renderable>, Without<HiddenComponent>),
     >,
 ) {
-    for (cast, orders, stats, transform, visibility) in &casters {
+    for (cast, orders, stats, transform, visibility, sighted) in &casters {
         // Only while the caster is still working at it: past its point the
         // cast has gone off, and what is left is the caster standing.
         match cast.stage {
             CastStage::Working if cast.phase > 0 => {}
             CastStage::Working | CastStage::Holding => continue,
         }
-        if matches!(visibility, Visibility::Hidden) {
+        if !made_out(visibility, sighted) {
             continue;
         }
         let Some(point) = cast_point(&registry, orders, stats) else {
@@ -1978,7 +2360,15 @@ pub fn draw_rally(
         &OwnerComponent,
         &RallyPointComponent,
     )>,
-    targets: Query<(&EntityInfoComponent, &LocationComponent), Without<HiddenComponent>>,
+    targets: Query<
+        (
+            &EntityInfoComponent,
+            &LocationComponent,
+            &Visibility,
+            Option<&Sighted>,
+        ),
+        Without<HiddenComponent>,
+    >,
 ) {
     const COLOR: Color = Color::srgb(1.0, 0.65, 0.2);
 
@@ -2000,13 +2390,18 @@ pub fn draw_rally(
                 world_center(FixedUVec2::from(CellPos::from(position)), CellSize::ONE)
             }
             RallyTarget::Entity(id) => {
-                // A vanished target leaves nothing to point at.
-                let Some((target_info, target_location)) = targets
-                    .iter()
-                    .find(|(target_info, ..)| target_info.id() == id)
+                // A vanished target leaves nothing to point at, and one the
+                // perspective does not make out is not pointed at.
+                let Some((target_info, target_location, target_visibility, target_sighted)) =
+                    targets
+                        .iter()
+                        .find(|(target_info, ..)| target_info.id() == id)
                 else {
                     continue;
                 };
+                if !made_out(target_visibility, target_sighted) {
+                    continue;
+                }
                 let target_size = registry.def(target_info.type_id()).location.unwrap().size();
                 world_center(target_location.position, target_size)
             }
@@ -2039,15 +2434,18 @@ pub fn draw_facing(
             &Visibility,
             Option<&Directional>,
             Option<&DrawnBearings>,
+            Option<&Sighted>,
+            Has<ConcealedComponent>,
         ),
         Without<HiddenComponent>,
     >,
 ) {
-    for (info, drawn, transform, visibility, directional, guns) in &query {
-        // Don't trace a unit hidden by fog (interpolate_sprites set its visibility).
-        if matches!(visibility, Visibility::Hidden) {
+    for (info, drawn, transform, visibility, directional, guns, sighted, concealed) in &query {
+        if !made_out(visibility, sighted) {
             continue;
         }
+        // The traces fade with the body they belong to.
+        let alpha = presence_alpha(sighted, concealed);
         let def = registry.def(info.type_id());
         let size = def.location.unwrap().size();
         let length = size.width.min(size.height) as f32 * CELL_PX * 0.6;
@@ -2055,7 +2453,7 @@ pub fn draw_facing(
         // A body that turns traces where it goes, from its own middle.
         if directional.is_some() {
             let line = facing_line(drawn.bearing());
-            gizmos.line_2d(center, center + line * length, LOOK_COLOR);
+            gizmos.line_2d(center, center + line * length, faded(LOOK_COLOR, alpha));
         }
         // Each gun traces where it is trained, from where it sits: a hull driving
         // one way with its guns round another shows every one of them, and a keep
@@ -2067,7 +2465,11 @@ pub fn draw_facing(
         for (mount, &bearing) in def.turrets.iter().zip(guns.bearings()) {
             let at = center + mounted_at(transform, def, mount);
             let reach = mount.size().width.min(mount.size().height) as f32 * CELL_PX * 0.45;
-            gizmos.line_2d(at, at + facing_line(bearing) * reach, BEARING_COLOR);
+            gizmos.line_2d(
+                at,
+                at + facing_line(bearing) * reach,
+                faded(BEARING_COLOR, alpha),
+            );
         }
     }
 }
@@ -2154,10 +2556,65 @@ pub fn spawn_terrain_tiles(
 }
 
 /// The tint a covered cell is drawn in, by field name: creep and blight are
-/// shown whoever's they are, power only where it is the viewed player's own.
-pub(crate) const CREEP_TINT: Color = Color::srgba(0.55, 0.2, 0.65, 0.5);
-pub(crate) const POWER_TINT: Color = Color::srgba(0.25, 0.55, 1.0, 0.28);
-pub(crate) const BLIGHT_TINT: Color = Color::srgba(0.16, 0.16, 0.17, 0.6);
+/// shown whoever's they are; power where it is the viewed player's own; true
+/// sight and the veil where they are the viewed side's, its allies' included,
+/// as the simulation reads them; and all of them to an observer watching the
+/// whole map. A cell several fields cover wears them layered in this order.
+const CREEP_TINT: Color = Color::srgba(0.55, 0.2, 0.65, 0.5);
+const BLIGHT_TINT: Color = Color::srgba(0.16, 0.16, 0.17, 0.6);
+const POWER_TINT: Color = Color::srgba(0.25, 0.55, 1.0, 0.28);
+const TRUE_SIGHT_TINT: Color = Color::srgba(0.6, 0.9, 1.0, 0.22);
+const VEIL_TINT: Color = Color::srgba(0.75, 0.6, 1.0, 0.3);
+
+/// Whose coverage of a field the overlay shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Shown {
+    /// Anyone's: the field marks the ground for all to see.
+    Anyone,
+    /// The viewed player's own alone: where another side's reaches is theirs
+    /// to know. An observer watching the whole map has no side, and sees
+    /// every side's.
+    Own,
+    /// The viewed player's side's, allies included: what the simulation reads
+    /// for the side. An observer watching the whole map sees every side's.
+    Allied,
+}
+
+impl Shown {
+    /// Whether ground covered by `covering` is shown to `viewed` under this
+    /// rule. An observer watching the whole map has no side, and is shown
+    /// every side's.
+    pub(crate) fn admits(
+        self,
+        session: &GameSession,
+        viewed: Option<PlayerId>,
+        covering: &PlayerMask,
+    ) -> bool {
+        match (self, viewed) {
+            (Shown::Anyone, _) | (Shown::Own | Shown::Allied, None) => !covering.is_empty(),
+            (Shown::Own, Some(player)) => covering.contains(player),
+            (Shown::Allied, Some(player)) => {
+                covering.satisfies(session, Affiliation::Allied, Some(player))
+            }
+        }
+    }
+}
+
+/// The outline color of a field's reach, by content name: the tint its
+/// covered cells wear, or for a field that tints no cell — a detector's true
+/// sight, the veil — a color of its own.
+pub(crate) fn field_reach_color(registry: &ContentRegistry, field: FieldId) -> Color {
+    match registry.field_name(field) {
+        Some("power") => POWER_TINT.with_alpha(0.9),
+        Some("creep") => CREEP_TINT.with_alpha(0.9),
+        Some("blight") => Color::srgba(0.55, 0.55, 0.6, 0.9),
+        Some("veil") => VEIL_TINT.with_alpha(0.9),
+        _ => match registry.field_def(field).detection() {
+            Detection::Reveals(_) => TRUE_SIGHT_TINT.with_alpha(0.9),
+            Detection::Blind => Color::srgba(0.9, 0.9, 0.9, 0.9),
+        },
+    }
+}
 
 /// The player whose own fields this node draws: the local player, or the
 /// side an observer is watching.
@@ -2168,36 +2625,63 @@ pub(crate) fn viewed_player(
     session.local_player().or(watch.0)
 }
 
-/// Tints each field tile by what covers its cell.
+/// Tints each field tile by what covers its cell, every shown field layered
+/// over the ones before it. Coverage changes only with the tick or the
+/// perspective, so the pass runs once per change of those.
 pub fn update_field_overlay(
     session: Res<GameSession>,
     registry: Res<ContentRegistry>,
     fields: Res<FieldGrid>,
     watch: Res<ObserverPerspective>,
     mut tiles: Query<(&FieldTile, &mut Sprite)>,
+    mut last: Local<Option<(u32, Option<PlayerId>)>>,
 ) {
-    let creep = registry.field("creep");
-    let power = registry.field("power");
-    let blight = registry.field("blight");
     let viewed = viewed_player(&session, &watch);
+    if *last == Some((session.tick(), viewed)) {
+        return;
+    }
+    *last = Some((session.tick(), viewed));
+    let layers: Vec<(FieldId, Color, Shown)> = [
+        ("creep", CREEP_TINT, Shown::Anyone),
+        ("blight", BLIGHT_TINT, Shown::Anyone),
+        ("power", POWER_TINT, Shown::Own),
+        ("true_sight", TRUE_SIGHT_TINT, Shown::Allied),
+        ("veil", VEIL_TINT, Shown::Allied),
+    ]
+    .into_iter()
+    .filter_map(|(name, tint, shown)| registry.field(name).map(|field| (field, tint, shown)))
+    .collect();
     for (tile, mut sprite) in &mut tiles {
         let cell = CellPos::new(tile.x, tile.y);
-        let color = if creep.is_some_and(|creep| !fields.covered(creep, cell).is_empty()) {
-            CREEP_TINT
-        } else if blight.is_some_and(|blight| !fields.covered(blight, cell).is_empty()) {
-            BLIGHT_TINT
-        } else if let (Some(power), Some(player)) = (power, viewed)
-            && fields.covered(power, cell).contains(player)
-        {
-            POWER_TINT
-        } else {
-            Color::NONE
-        };
+        let mut color = Color::NONE;
+        for (field, tint, shown) in &layers {
+            let covering = fields.covered(*field, cell);
+            if shown.admits(&session, viewed, &covering) {
+                color = over(color, *tint);
+            }
+        }
         // Write only on change, as the fog does.
         if sprite.color != color {
             sprite.color = color;
         }
     }
+}
+
+/// `tint` laid over `under`, both straight-alpha sRGB.
+fn over(under: Color, tint: Color) -> Color {
+    let (u, t) = (under.to_srgba(), tint.to_srgba());
+    let alpha = t.alpha + u.alpha * (1.0 - t.alpha);
+    if alpha <= 0.0 {
+        return Color::NONE;
+    }
+    let channel =
+        |top: f32, below: f32| (top * t.alpha + below * u.alpha * (1.0 - t.alpha)) / alpha;
+    Color::srgba(
+        channel(t.red, u.red),
+        channel(t.green, u.green),
+        channel(t.blue, u.blue),
+        alpha,
+    )
 }
 
 /// Darkens each fog tile by the local team's knowledge of its cell: black when
@@ -2245,14 +2729,21 @@ pub fn draw_ghosts(
             &LocationComponent,
             &TagsComponent,
             Option<&OwnerComponent>,
+            Option<&Sighted>,
         ),
         Without<HiddenComponent>,
     >,
 ) {
+    let viewed = viewed_player(&session, &watch);
     let mut alive = HashSet::new();
-    for (info, location, tags, owner) in &buildings {
-        let own_team = owner.is_some_and(|o| allied_with_local(&session, o.player()));
-        if own_team || !tags.contains(tags::BUILDING) {
+    let mut seen = HashSet::new();
+    for (info, location, tags, owner, sighted) in &buildings {
+        // The whole-map view has no rival to remember.
+        let own_side = match viewed {
+            None => true,
+            Some(viewed) => owner.is_some_and(|owner| session.are_allied(viewed, owner.player())),
+        };
+        if own_side || !tags.contains(tags::BUILDING) {
             continue;
         }
         alive.insert(info.id());
@@ -2260,7 +2751,12 @@ pub fn draw_ghosts(
             location.position.x.to_num::<u32>(),
             location.position.y.to_num::<u32>(),
         );
-        if sees(&session, &watch, &fog, x, y) {
+        // A building the perspective only glimpses leaves no ghost: a
+        // shimmer is all it was owed while in sight. The stamp judges the
+        // whole footprint, so a hall lit only at a corner is seen and
+        // snapshotted though its origin cell is not.
+        if stamped(sighted).is_seen() {
+            seen.insert(info.id());
             let size = registry.def(info.type_id()).location.unwrap().size();
             ghosts.0.insert(
                 info.id(),
@@ -2279,10 +2775,11 @@ pub fn draw_ghosts(
             // Seen again: keep only if the building is still there (else it was
             // destroyed while we were away, so drop the stale ghost).
             CellVisibility::Visible => alive.contains(id),
-            // Remembered but unseen: draw the ghost in its last-known place
-            // (unless the whole map is revealed, when the real entities show).
+            // Remembered but unseen: draw the ghost in its last-known place,
+            // unless the whole map is revealed or the building is seen by
+            // another cell of its footprint, when the real entity shows.
             CellVisibility::Explored => {
-                if !reveal.0 {
+                if !reveal.0 && !seen.contains(id) {
                     let iso = Isometry2d::from_translation(ghost.center);
                     let color = Color::srgba(0.55, 0.55, 0.62, 0.6);
                     match &ghost.shape {
@@ -2322,9 +2819,13 @@ fn ghost_shape(type_name: &str, size: CellSize) -> GhostShape {
             sides: 8,
             circumradius,
         },
-        Shape::Circle | Shape::Pod | Shape::Grub | Shape::Hive => {
-            GhostShape::Circle { circumradius }
-        }
+        Shape::Circle
+        | Shape::Pod
+        | Shape::Grub
+        | Shape::Hive
+        | Shape::Burrow
+        | Shape::Observer
+        | Shape::Arbiter => GhostShape::Circle { circumradius },
         // Everything else is ghosted by its footprint: the shapes that are
         // squares outright, and the ones whose outline is a square with
         // something drawn on top of it.
@@ -2351,6 +2852,8 @@ fn ghost_shape(type_name: &str, size: CellSize) -> GhostShape {
         | Shape::Dish
         | Shape::Lab
         | Shape::Refinery
+        | Shape::Wraith
+        | Shape::Pad
         | Shape::Tank { .. } => GhostShape::Rect {
             extent: Vec2::new(size.width as f32, size.height as f32) * CELL_PX * 0.85,
         },
@@ -2407,6 +2910,7 @@ pub fn draw_work_links(
             Option<&HarvestComponent>,
             Option<&BuildComponent>,
             Option<&RepairComponent>,
+            Option<&Sighted>,
         ),
         Without<HiddenComponent>,
     >,
@@ -2419,8 +2923,8 @@ pub fn draw_work_links(
             .map(|(_, transform)| transform.translation.truncate())
     };
 
-    for (transform, queue, visibility, harvest, build, repair) in &workers {
-        if matches!(visibility, Visibility::Hidden) {
+    for (transform, queue, visibility, harvest, build, repair, sighted) in &workers {
+        if !made_out(visibility, sighted) {
             continue;
         }
         let Some(entry) = queue.0.front() else {
@@ -2497,11 +3001,11 @@ pub fn draw_watch_patches(
     watch: Res<ObserverPerspective>,
     watches: Res<Watches>,
 ) {
+    let viewed = viewed_player(&session, &watch);
     for held in watches.in_force() {
-        let shown = match (session.local_player(), watch.0) {
-            (Some(_), _) => allied_with_local(&session, held.player),
-            (None, Some(player)) => session.are_allied(player, held.player),
-            (None, None) => true,
+        let shown = match viewed {
+            None => true,
+            Some(viewed) => session.are_allied(viewed, held.player),
         };
         if !shown {
             continue;
@@ -2525,19 +3029,30 @@ pub fn draw_brood_ties(
     mut gizmos: Gizmos,
     // Anchored on the interpolated transforms, so the tie glides with the
     // bodies it joins.
-    broodlings: Query<(&BredComponent, &Transform, &Visibility), Without<HiddenComponent>>,
-    breeders: Query<(&EntityInfoComponent, &Transform, &Visibility), Without<HiddenComponent>>,
+    broodlings: Query<
+        (&BredComponent, &Transform, &Visibility, Option<&Sighted>),
+        Without<HiddenComponent>,
+    >,
+    breeders: Query<
+        (
+            &EntityInfoComponent,
+            &Transform,
+            &Visibility,
+            Option<&Sighted>,
+        ),
+        Without<HiddenComponent>,
+    >,
 ) {
-    for (bred, transform, visibility) in &broodlings {
-        if matches!(visibility, Visibility::Hidden) {
+    for (bred, transform, visibility, sighted) in &broodlings {
+        if !made_out(visibility, sighted) {
             continue;
         }
         let Some(end) = breeders
             .iter()
-            .find(|(breeder, _, visible)| {
-                breeder.id() == bred.by && !matches!(visible, Visibility::Hidden)
+            .find(|(breeder, _, visible, sighted)| {
+                breeder.id() == bred.by && made_out(visible, *sighted)
             })
-            .map(|(_, transform, _)| transform.translation.truncate())
+            .map(|(_, transform, _, _)| transform.translation.truncate())
         else {
             continue;
         };
@@ -2565,16 +3080,25 @@ pub fn draw_annex_bonds(
             &AnnexComponent,
             &Transform,
             &Visibility,
+            Option<&Sighted>,
         ),
         (
             Without<HiddenComponent>,
             Without<UnderConstructionComponent>,
         ),
     >,
-    primaries: Query<(&EntityInfoComponent, &Transform, &Visibility), Without<HiddenComponent>>,
+    primaries: Query<
+        (
+            &EntityInfoComponent,
+            &Transform,
+            &Visibility,
+            Option<&Sighted>,
+        ),
+        Without<HiddenComponent>,
+    >,
 ) {
-    for (info, annex, transform, visibility) in &annexes {
-        if matches!(visibility, Visibility::Hidden) {
+    for (info, annex, transform, visibility, sighted) in &annexes {
+        if !made_out(visibility, sighted) {
             continue;
         }
         let start = transform.translation.truncate();
@@ -2584,10 +3108,10 @@ pub fn draw_annex_bonds(
                 gizmos.circle_2d(start, plug, ANNEX_BOND_COLOR);
                 if let Some(end) = primaries
                     .iter()
-                    .find(|(primary, _, visible)| {
-                        primary.id() == primary_id && !matches!(visible, Visibility::Hidden)
+                    .find(|(primary, _, visible, sighted)| {
+                        primary.id() == primary_id && made_out(visible, *sighted)
                     })
-                    .map(|(_, transform, _)| transform.translation.truncate())
+                    .map(|(_, transform, _, _)| transform.translation.truncate())
                 {
                     gizmos.line_2d(start, end, ANNEX_BOND_COLOR);
                 }
@@ -2603,13 +3127,14 @@ pub fn draw_annex_bonds(
 }
 
 /// Marks the jobs themselves: a ring in the verb's color around a source being
-/// worked or an entity being mended, and a dot per crew member above it, so a
-/// stacked crew is countable at a glance (run in `Update`). An unfinished site
-/// shows its crew dots too, and a grey ring while it stands halted; its own
-/// state is the translucent shape (see [`tint_under_construction`]) and the
-/// progress bar (see [`draw_status_bars`]).
+/// worked or an entity being mended, and a dot per counted crew member above
+/// it (run in `Update`). An unfinished site shows its crew dots too, and a
+/// gray ring while it stands halted; its own state is the translucent shape
+/// (see [`shade_sprites`]) and the progress bar (see [`draw_status_bars`]).
 pub fn draw_work_markers(
     mut gizmos: Gizmos,
+    session: Res<GameSession>,
+    watch: Res<ObserverPerspective>,
     registry: Res<ContentRegistry>,
     cameras: Query<&Transform, With<Camera2d>>,
     // Anchored on the interpolated transforms, so a ring follows a walking
@@ -2622,13 +3147,32 @@ pub fn draw_work_markers(
             Option<&UnderHarvestComponent>,
             Option<&UnderRepairComponent>,
             Option<&UnderConstructionComponent>,
+            Option<&Sighted>,
         ),
         Without<HiddenComponent>,
     >,
+    crew: Query<(
+        &EntityInfoComponent,
+        Option<&OwnerComponent>,
+        &Visibility,
+        Option<&Sighted>,
+    )>,
 ) {
     let camera = cameras.single().ok().cloned().unwrap_or_default();
-    for (info, transform, visibility, harvest, repair, construction) in &jobs {
-        if matches!(visibility, Visibility::Hidden) {
+    let viewed = viewed_player(&session, &watch);
+    let counted_of = |ids: &BTreeSet<SimulationId>| {
+        ids.iter()
+            .filter(|&&id| {
+                crew.iter()
+                    .find(|(member, ..)| member.id() == id)
+                    .is_some_and(|(_, owner, visibility, sighted)| {
+                        crew_counts(&session, viewed, owner, visibility, sighted)
+                    })
+            })
+            .count()
+    };
+    for (info, transform, visibility, harvest, repair, construction, sighted) in &jobs {
+        if !made_out(visibility, sighted) {
             continue;
         }
         if harvest.is_none() && repair.is_none() && construction.is_none() {
@@ -2638,18 +3182,20 @@ pub fn draw_work_markers(
         let center = transform.translation.truncate();
         let radius = size.width.max(size.height) as f32 * CELL_PX * 0.55;
 
-        let mut crew = 0;
+        let mut counted = 0;
         if let Some(harvest) = harvest {
             gizmos.circle_2d(center, radius, HARVEST_WORK_COLOR);
-            crew += harvest.carriers.len();
+            counted += counted_of(&harvest.carriers);
         }
         if let Some(repair) = repair {
             gizmos.circle_2d(center, radius + 2.0, REPAIR_WORK_COLOR);
-            crew += repair.repairers.len();
+            counted += counted_of(&repair.repairers);
         }
         if let Some(construction) = construction {
             match &construction.work {
-                SiteWork::Crew { builders } => crew += builders.len(),
+                SiteWork::Crew { builders } => {
+                    counted += counted_of(builders);
+                }
                 SiteWork::Halted => {
                     gizmos.circle_2d(center, radius + 4.0, HALTED_SITE_COLOR);
                 }
@@ -2668,8 +3214,8 @@ pub fn draw_work_markers(
         };
         let top = size.height as f32 * CELL_PX / 2.0 + 13.0;
         let gap = 7.0;
-        let left = -(crew.saturating_sub(1) as f32) * gap / 2.0;
-        for i in 0..crew {
+        let left = -(counted.saturating_sub(1) as f32) * gap / 2.0;
+        for i in 0..counted {
             gizmos.circle_2d(
                 anchored(Vec2::new(left + i as f32 * gap, top)),
                 2.5,
@@ -2677,6 +3223,24 @@ pub fn draw_work_markers(
             );
         }
     }
+}
+
+/// Whether a crew member is counted on the marker of what it works: one of
+/// the viewed side's own, inside the job or on the map, or a rival's the
+/// perspective makes out. With no viewed player, every member counts.
+pub fn crew_counts(
+    session: &GameSession,
+    viewed: Option<PlayerId>,
+    owner: Option<&OwnerComponent>,
+    visibility: &Visibility,
+    sighted: Option<&Sighted>,
+) -> bool {
+    let own_side = match (viewed, owner) {
+        (None, _) => true,
+        (Some(viewed), Some(owner)) => session.are_allied(viewed, owner.player()),
+        (Some(_), None) => false,
+    };
+    own_side || made_out(visibility, sighted)
 }
 
 /// Draws slim bars over entities — energy, then health, then what is left of a
@@ -2708,6 +3272,7 @@ pub fn draw_status_bars(
             Option<&MorphComponent>,
             Option<&TransporterComponent>,
             Option<&BroodComponent>,
+            Option<&Sighted>,
         ),
         Without<HiddenComponent>,
     >,
@@ -2728,9 +3293,12 @@ pub fn draw_status_bars(
         morph,
         transporter,
         brood,
+        sighted,
     ) in &query
     {
-        if matches!(visibility, Visibility::Hidden) {
+        // A glimpse is a presence and no more: nothing about it is read out.
+        // A concealed unit made out shows its bars as plainly as any other.
+        if !made_out(visibility, sighted) {
             continue;
         }
         let def = registry.def(info.type_id());
@@ -2904,28 +3472,49 @@ pub fn draw_status_bars(
     }
 }
 
-/// Fades a site to translucent while it is under construction and back to solid
-/// when it finishes, so an unfinished building reads as one (run in `Update`).
-pub fn tint_under_construction(
+/// Shades each drawn entity by its state (run in `Update`): part way through
+/// while under construction, barely there when concealed and made out, and
+/// solid otherwise. The parts a silhouette is
+/// drawn from shade with it. Bodies on the ground fade on their own
+/// ([`fade_remains`]) and are left alone here.
+pub fn shade_sprites(
     mut materials: ResMut<Assets<ColorMaterial>>,
     query: Query<
         (
             &MeshMaterial2d<ColorMaterial>,
             Has<UnderConstructionComponent>,
+            Has<ConcealedComponent>,
+            Option<&Sighted>,
+            Option<&Children>,
         ),
-        With<Renderable>,
+        (With<Renderable>, Without<RemainsComponent>),
     >,
+    parts: Query<&MeshMaterial2d<ColorMaterial>, Without<RemainsComponent>>,
 ) {
-    for (material, under_construction) in &query {
-        let alpha = if under_construction { 0.45 } else { 1.0 };
-        // Read first, write only on a change: `get_mut` alone would mark every
-        // material dirty every frame.
-        if materials
-            .get(&material.0)
-            .is_some_and(|m| m.color.alpha() != alpha)
-            && let Some(material) = materials.get_mut(&material.0)
-        {
-            material.color.set_alpha(alpha);
+    /// How strongly a site going up is drawn.
+    const UNDER_CONSTRUCTION: f32 = 0.45;
+
+    for (material, under_construction, concealed, sighted, children) in &query {
+        let alpha = if under_construction {
+            UNDER_CONSTRUCTION
+        } else {
+            presence_alpha(sighted, concealed)
+        };
+        let drawn = children
+            .into_iter()
+            .flatten()
+            .filter_map(|&child| parts.get(child).ok())
+            .chain(std::iter::once(material));
+        for material in drawn {
+            // Read first, write only on a change: `get_mut` alone would mark
+            // every material dirty every frame.
+            if materials
+                .get(&material.0)
+                .is_some_and(|m| m.color.alpha() != alpha)
+                && let Some(material) = materials.get_mut(&material.0)
+            {
+                shade(material, alpha);
+            }
         }
     }
 }
@@ -2933,8 +3522,7 @@ pub fn tint_under_construction(
 /// Fades every body on the ground as it decays, so a fresh corpse reads as
 /// fresher than one about to go (run in `Update`).
 ///
-/// A site going up is tinted by the same means ([`tint_under_construction`]);
-/// the two never meet on one entity, since remains are never built.
+/// Everything else is shaded by [`shade_sprites`], which leaves bodies alone.
 pub fn fade_remains(
     registry: Res<ContentRegistry>,
     mut materials: ResMut<Assets<ColorMaterial>>,
@@ -2971,14 +3559,42 @@ pub fn fade_remains(
             .filter_map(|&child| parts.get(child).ok())
             .chain(std::iter::once(material));
         for material in drawn {
-            // Read first, write only on a change, as the construction tint does.
+            // Read first, write only on a change, as the shading does.
             if materials
                 .get(&material.0)
                 .is_some_and(|m| m.color.alpha() != alpha)
                 && let Some(material) = materials.get_mut(&material.0)
             {
-                material.color.set_alpha(alpha);
+                shade(material, alpha);
             }
         }
     }
+}
+
+/// Sets a material's alpha, and the alpha mode that lets the alpha show.
+fn shade(material: &mut ColorMaterial, alpha: f32) {
+    material.color.set_alpha(alpha);
+    material.alpha_mode = if alpha < 1.0 {
+        AlphaMode2d::Blend
+    } else {
+        AlphaMode2d::Opaque
+    };
+}
+
+/// How strongly a concealed unit the perspective makes out is drawn — its
+/// own, an ally's, or a detected enemy's — and everything drawn about it.
+const CONCEALED_ALPHA: f32 = 0.1;
+
+/// How strongly an entity and everything drawn about it is shown for what the
+/// perspective makes of it: faint when concealed and made out, full otherwise.
+fn presence_alpha(sighted: Option<&Sighted>, concealed: bool) -> f32 {
+    match (stamped(sighted), concealed) {
+        (Sighting::Seen, true) => CONCEALED_ALPHA,
+        (Sighting::Seen, false) | (Sighting::Glimpsed, _) | (Sighting::Unseen, _) => 1.0,
+    }
+}
+
+/// `color` with its alpha scaled by `alpha`.
+fn faded(color: Color, alpha: f32) -> Color {
+    color.with_alpha(color.alpha() * alpha)
 }

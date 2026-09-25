@@ -4,7 +4,7 @@
 use bevy::prelude::*;
 use ferrets_content::{
     affiliation::Affiliation,
-    attack::{AttackDef, Delivery, Slain, Weapon},
+    attack::Slain,
     dying::{Bequest, DeathKind, LeftBy},
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
@@ -135,11 +135,11 @@ fn type_that_names_no_deaths_leaves_body() {
 }
 
 #[test]
-fn cancelled_construction_leaves_no_body_under_its_own_rule() {
+fn canceled_construction_leaves_no_body_under_its_own_rule() {
     let mut app = app(RemainsLimit::Unbounded);
     let (soldier, _) = utils::create_owned(&mut app, "soldier", 5, 5, 0);
 
-    spawn::despawn_entity(app.world_mut(), soldier, DeathCause::Cancelled);
+    spawn::despawn_entity(app.world_mut(), soldier, DeathCause::Canceled);
     utils::run_ticks(&mut app, 4);
 
     assert!(
@@ -173,6 +173,30 @@ fn body_is_set_down_under_standing_mover() {
         CellPos::new(5, 5),
         "and it lies where the wraith fell, not beside the soldier standing there"
     );
+}
+
+#[test]
+fn solid_remains_are_not_laid_over_burrowed_entity() {
+    let mut app = app(RemainsLimit::Unbounded);
+    let (_, killer) = utils::create_owned(&mut app, "soldier", 12, 12, 1);
+    // The mole claims nothing on the grid, so the cart stands on its cell; the
+    // rubble the cart leaves would hold that ground, and is refused as a site
+    // founded there is.
+    utils::create_owned(&mut app, "mole", 5, 5, 0);
+    let (cart, _) = utils::create_owned(&mut app, "cart", 5, 5, 0);
+
+    kill(&mut app, cart, killer, Slain::Remains);
+    assert!(
+        bodies(&app).is_empty(),
+        "no rubble is laid over what has dug in"
+    );
+
+    // On open ground the same death lays it.
+    let (cart, _) = utils::create_owned(&mut app, "cart", 8, 5, 0);
+    kill(&mut app, cart, killer, Slain::Remains);
+    let left = bodies(&app);
+    assert_eq!(left.len(), 1);
+    assert_eq!(utils::cell_of(app.world(), left[0]), CellPos::new(8, 5));
 }
 
 //
@@ -418,8 +442,9 @@ fn death_type_does_not_name_leaves_none_of_it() {
 
 /// App with two players, a `corpse` type, a `soldier` leaving one by the
 /// engine's own rule, a `wraith` that claims no cells, a `sapper` leaving one
-/// only when something kills it, and a `hive` that leaves two `broodling`s
-/// standing when something kills it.
+/// only when something kills it, a `hive` that leaves two `broodling`s
+/// standing when something kills it, a `cart` leaving `rubble` that claims its
+/// cell, and a `mole` that stands underfoot.
 fn app(limit: RemainsLimit) -> App {
     let mut app = utils::make_app_under(
         vec![
@@ -441,19 +466,7 @@ fn app(limit: RemainsLimit) -> App {
             EntityTypeDef::new("soldier")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
                 .with_health(30)
-                .with_attack(
-                    AttackDef::new(Weapon::new(
-                        utils::GROUND,
-                        Delivery::Instant,
-                        None,
-                        Slain::Remains,
-                    )),
-                    10,
-                    1,
-                    1,
-                    4,
-                    2,
-                )
+                .with_attack(utils::weapon(utils::GROUND), 10, 1, 1, 4, 2)
                 .with_dying(2, utils::leaves("corpse")),
         );
         registry.register(
@@ -498,15 +511,7 @@ fn app(limit: RemainsLimit) -> App {
         // What rides in it: a body-leaving unit carrying the cargo size and
         // the legs that boarding asks for.
         registry.register(
-            EntityTypeDef::new("rider")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
-                    FixedU64::ONE,
-                    FixedU64::from_num(360),
-                    FixedU64::from_num(360),
-                )
+            utils::walker("rider", utils::GROUND)
                 .with_health(30)
                 .with_stat(EntityStatId::CARGO_SIZE, FixedU64::ONE)
                 .with_dying(
@@ -520,15 +525,7 @@ fn app(limit: RemainsLimit) -> App {
         );
         // A carrier that takes its passengers down with it.
         registry.register(
-            EntityTypeDef::new("wagon")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
-                    FixedU64::ONE,
-                    FixedU64::from_num(360),
-                    FixedU64::from_num(360),
-                )
+            utils::walker("wagon", utils::GROUND)
                 .with_health(60)
                 .with_dying(2, [])
                 .with_stat(EntityStatId::CARGO_CAPACITY, FixedU64::from_num(4))
@@ -582,6 +579,23 @@ fn app(limit: RemainsLimit) -> App {
                         LeftBy::Named(vec![DeathKind::Killed]),
                     )],
                 ),
+        );
+        // A body that holds the ground it lies on, and what leaves one.
+        registry.register(
+            EntityTypeDef::new("rubble")
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_tags(["remains"])
+                .with_stat(EntityStatId::LIFETIME, FixedU64::from_num(600)),
+        );
+        registry.register(
+            utils::walker("cart", utils::GROUND)
+                .with_health(30)
+                .with_dying(2, utils::leaves("rubble")),
+        );
+        registry.register(
+            EntityTypeDef::new("mole")
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Underfoot)
+                .with_health(20),
         );
     }
     app.world_mut().resource::<ContentRegistry>().validate();

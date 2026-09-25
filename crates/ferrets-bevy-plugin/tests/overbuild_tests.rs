@@ -69,7 +69,7 @@ fn site_needs_source_under_it() {
 }
 
 #[test]
-fn cancelled_site_gives_mine_back_with_its_gold() {
+fn canceled_site_gives_mine_back_with_its_gold() {
     let mut app = utils::orders_app();
     let (_, sylph_id) = utils::create_owned(&mut app, "sylph", 8, 10, 0);
     let (mine, _) =

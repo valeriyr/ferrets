@@ -129,6 +129,14 @@ struct Offer {
     anchor: CellPos,
 }
 
+/// A seized annex standing with a primary, whose owner it follows.
+struct Handover {
+    /// The annex.
+    annex: Entity,
+    /// The primary it stands with.
+    primary: SimulationId,
+}
+
 /// Re-derives every annex's primary, applies what an annex with none does, and
 /// hands over the annexes a claim gives away.
 pub fn advance(world: &mut World) {
@@ -143,11 +151,34 @@ pub fn advance(world: &mut World) {
         let found = primary_among(world, annex, &offers);
         docked.push((annex, found));
     }
+    let mut handovers: Vec<Handover> = Vec::new();
     for &(annex, found) in &docked {
-        settle(world, annex, found);
+        handovers.extend(settle(world, annex, found));
     }
     rebuild_docks(world, &docked, &offers);
     tend_sites(world, &offers);
+    // Hands change once the docks stand rebuilt: a seized annex drops its
+    // orders as it changes owner, and a build or a change of form among them
+    // may tear down or replace an entity the snapshot above still names. The
+    // taker is read as each hand-over runs, so an annex docked with a primary
+    // that itself changed hands this tick follows it in the same tick.
+    for handover in handovers {
+        // An earlier hand-over in this same loop may have taken the primary or
+        // the annex off the map: dropping a seized annex's orders can end a
+        // change of form that its type declares dies when interrupted. What is
+        // already gone has no hands left to change.
+        if world.get_entity(handover.annex).is_err() {
+            continue;
+        }
+        let Some(primary) = world.resource::<EntityIndex>().alive(handover.primary) else {
+            continue;
+        };
+        let taker = entity_def::owner(world, primary)
+            .expect("a seized annex docks only with a primary that has an owner");
+        if entity_def::owner(world, handover.annex) != Some(taker) {
+            spawn::change_owner(world, handover.annex, taker, handover.primary);
+        }
+    }
     for &(annex, found) in &docked {
         match found {
             Docking::Alone => stand_alone(world, annex),
@@ -319,13 +350,14 @@ fn claim_admits(
     }
 }
 
-/// Records the primary `annex` now stands with, and hands the annex over when
-/// the primary it stands with is another player's and the claim allows it.
+/// Records the primary `annex` now stands with, and returns the hand-over to
+/// judge once every bond is settled when the claim lets that primary's owner
+/// take it.
 ///
 /// The claim is judged every tick a bond stands, not only on the tick it
 /// forms: a primary that is itself a seized annex changes hands without its
 /// own dock changing, and what stands in that dock follows it.
-fn settle(world: &mut World, annex: Entity, found: Docking) {
+fn settle(world: &mut World, annex: Entity, found: Docking) -> Option<Handover> {
     if primary_of(world, annex) != found {
         world
             .entity_mut(annex)
@@ -334,22 +366,14 @@ fn settle(world: &mut World, annex: Entity, found: Docking) {
             .docked_to = found;
     }
     let Docking::Primary(primary_id) = found else {
-        return;
+        return None;
     };
-    let primary = world
-        .resource::<EntityIndex>()
-        .alive(primary_id)
-        .expect("a bond was settled from an offer, and only a living primary offers a dock");
-    let claim = terms(world, annex).claim();
-    match claim {
-        AnnexClaim::Bound | AnnexClaim::Allied => {}
-        AnnexClaim::Seized => {
-            let taker = entity_def::owner(world, primary)
-                .expect("a seized annex docks only with a primary that has an owner");
-            if entity_def::owner(world, annex) != Some(taker) {
-                spawn::change_owner(world, annex, taker, primary_id);
-            }
-        }
+    match terms(world, annex).claim() {
+        AnnexClaim::Bound | AnnexClaim::Allied => None,
+        AnnexClaim::Seized => Some(Handover {
+            annex,
+            primary: primary_id,
+        }),
     }
 }
 

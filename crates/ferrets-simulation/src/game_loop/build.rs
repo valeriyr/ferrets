@@ -89,9 +89,9 @@ pub fn prepare_suspended(_entity: Entity, _order: &Order, _world: &mut World) ->
 /// Called for every Build entry that has a cancel policy.
 ///
 /// Construction stops immediately under both policies. The site's fate is the
-/// last builder's to decide as it leaves — torn down and refunded, or left
-/// standing halted — so pulling one worker off a shared site leaves the rest
-/// to finish it.
+/// last builder's to decide as it leaves — torn down, or left standing halted
+/// — so pulling one worker off a shared site leaves the rest to finish it.
+/// Nothing is paid back: only a cancel aimed at the site refunds it.
 pub fn cancel_processing(
     entity: Entity,
     order: &Order,
@@ -153,10 +153,10 @@ pub fn survives_soft_cancel() -> bool {
 ///
 /// Until the site is taken up: walk to within the builder's `build_range` of it
 /// (suspending on a chase move), then either join a matching site already under way
-/// there, or pay the cost and place one. The order finishes early if the site is
+/// there, or pay the price and place one. The order finishes early if the site is
 /// blocked — which includes a builder of its own standing in the footprint, since a
 /// builder that works in the open is never moved out of the way — if the site is
-/// already held by a builder that will not share it, or if the cost cannot be paid.
+/// already held by a builder that will not share it, or if the price cannot be paid.
 ///
 /// After that: every builder on the site advances the same progress counter by one
 /// tick's work. When the build time is reached the construction marker is removed,
@@ -174,7 +174,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
         return Processing::state(OrderState::Finished);
     };
 
-    let (build_time, building_location_def, cost) = {
+    let (build_time, building_location_def, price) = {
         let registry = world.resource::<ContentRegistry>();
         let type_def = registry.entity(type_name).expect("type checked in prepare");
         (
@@ -182,7 +182,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
             type_def
                 .location
                 .expect("validated content defines a location"),
-            type_def.cost.clone(),
+            type_def.price.clone(),
         )
     };
     let site_anchor = CellPos::from(position);
@@ -254,7 +254,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
             }
             if !world
                 .resource::<PlayerResources>()
-                .can_afford(player, &cost)
+                .can_afford(player, &price)
             {
                 return Processing::state(OrderState::Finished);
             }
@@ -339,7 +339,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
             resources::charge(
                 world,
                 player,
-                cost,
+                price,
                 SpendCause::Construction {
                     site: building_sim_id,
                 },
@@ -414,23 +414,9 @@ pub fn advance_sites_without_builder(world: &mut World) {
     }
 }
 
-/// Tears down the unfinished `site` for `player` and refunds what it cost.
-/// Whoever is working it finds the site gone on its next tick and steps off.
-///
-/// Nothing happens for a site that is not the player's, is finished, or is
-/// already gone.
-pub fn cancel_site(world: &mut World, player: PlayerId, site: SimulationId) {
-    let Some(building) = world.resource::<EntityIndex>().interactable(world, site) else {
-        return;
-    };
-    if entity_def::owner(world, building) != Some(player)
-        || !world
-            .entity(building)
-            .contains::<UnderConstructionComponent>()
-    {
-        return;
-    }
-    tear_down_site(world, building, site);
+/// Removes the unfinished `building` from the map, paying nothing back.
+pub(super) fn tear_down_site(world: &mut World, building: Entity) {
+    spawn::despawn_entity(world, building, DeathCause::Canceled);
 }
 
 /// Removes the construction marker from `building` and announces the
@@ -447,8 +433,9 @@ fn complete_site(world: &mut World, building: Entity, builder: SimulationId) {
     world.resource_mut::<EventRecord>().emit(announced);
 }
 
-/// Destroys an unfinished site and refunds what it cost, called by the last builder
-/// to walk away from a site its attendance does not leave standing.
+/// Destroys an unfinished site, called by the last builder to walk away from a
+/// site its attendance does not leave standing. What the site cost stays
+/// spent: only a cancel aimed at the site pays it back.
 fn abandon_site(world: &mut World, entity: Entity, site: SimulationId) {
     let building = world
         .resource::<EntityIndex>()
@@ -465,7 +452,7 @@ fn abandon_site(world: &mut World, entity: Entity, site: SimulationId) {
         entity_def::owner(world, entity),
         "a builder works only its owner's sites"
     );
-    tear_down_site(world, building, site);
+    tear_down_site(world, building);
 }
 
 /// Leaves the unfinished `site` standing without a crew, its progress kept,
@@ -488,18 +475,6 @@ fn halt_site(world: &mut World, site: SimulationId) {
         SiteWork::Unattended { .. } | SiteWork::Halted => {
             unreachable!("only a crewed site is left halted")
         }
-    }
-}
-
-/// Removes the unfinished `building` from the map and refunds its owner what
-/// it cost.
-fn tear_down_site(world: &mut World, building: Entity, site: SimulationId) {
-    let owner = entity_def::owner(world, building);
-    let cost = entity_def::of(world, building).cost.clone();
-
-    spawn::despawn_entity(world, building, DeathCause::Cancelled);
-    if let Some(player) = owner {
-        resources::refund(world, player, cost, SpendCause::Construction { site });
     }
 }
 

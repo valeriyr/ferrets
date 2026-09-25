@@ -3,7 +3,7 @@
 //! they hold over patches of the map.
 
 use bevy_ecs::{prelude::*, world::World};
-use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize, projection};
+use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, projection};
 
 use crate::{
     components::{
@@ -15,7 +15,7 @@ use crate::{
     map::Map,
     session::player_id::PlayerId,
     visibility::VisibilityGrid,
-    watches::Watches,
+    watches::{Watch, Watches},
 };
 use ferrets_content::{entity_stats::EntityStatId, field::FieldVision, registry::ContentRegistry};
 
@@ -89,21 +89,17 @@ pub fn recompute_visibility(world: &mut World) {
 
     // The patches watches hold. Everything the store holds is in force: a
     // watch is dropped by the pass that takes its last tick off it.
-    let watched_patches: Vec<(PlayerId, CellPos, u32)> = world
-        .resource::<Watches>()
-        .in_force()
-        .iter()
-        .map(|watch| (watch.player, watch.center, watch.radius))
-        .collect();
+    let watches: Vec<Watch> = world.resource::<Watches>().in_force().to_vec();
     let watch_cells: Vec<(PlayerId, CellPos)> = {
         let map = world.resource::<Map>();
-        watched_patches
-            .into_iter()
-            .flat_map(|(player, center, radius)| {
-                projection::circle_cells(CellRect::new(center, CellSize::new(1, 1)), radius)
+        watches
+            .iter()
+            .flat_map(|watch| {
+                watch
+                    .cells()
                     .into_iter()
                     .filter(|&cell| map.contains(cell))
-                    .map(move |cell| (player, cell))
+                    .map(move |cell| (watch.player, cell))
             })
             .collect()
     };

@@ -10,7 +10,7 @@ use crate::{
     map::Map,
     session::GameSession,
     simulation_id::SimulationId,
-    visibility::VisibilityGrid,
+    visibility::{self, Senses},
 };
 use ferrets_content::targeting;
 use ferrets_pathfinder::layer_mask::LayerMask;
@@ -142,22 +142,9 @@ pub(super) fn qualifies(
 
     // A weapon that cannot reach the target's layers never acquires it, so a
     // melee unit ignores what flies over it instead of following it forever.
-    if !targeting::reaches(targets, entity_def::of(world, target)) {
+    let target_def = entity_def::of(world, target);
+    if !targeting::reaches(targets, target_def) {
         return false;
-    }
-
-    // Fog of war: a unit only auto-engages what its team can see. An ownerless
-    // attacker has no team vision, so it is not fog-limited.
-    if let Some(seeker_owner) = entity_def::owner(world, seeker) {
-        let position = entity_def::position(world, target);
-        if !world.resource::<VisibilityGrid>().is_visible_to(
-            world.resource::<GameSession>(),
-            seeker_owner,
-            position.x.to_num::<u32>(),
-            position.y.to_num::<u32>(),
-        ) {
-            return false;
-        }
     }
 
     // Both footprints, not a point against a rect: a wide seeker reaches as far
@@ -166,11 +153,25 @@ pub(super) fn qualifies(
     // cell the seeker stands on and measuring to the target's own footprint is
     // the chase's measure exactly — a seeker must not pick out a target its
     // chase then declines to reach, nor pass over one it could already hit.
-    world.resource::<Map>().projection().in_range_for_rects(
+    // Range first: it is a few subtractions, where the sighting below reads
+    // the grid and the fields, and most of a battle stands out of range.
+    if !world.resource::<Map>().projection().in_range_for_rects(
         entity_def::standing_rect(world, seeker),
-        entity_def::footprint_rect(world, target),
+        entity_def::footprint_rect_of(world, target_def, target),
         range,
-    )
+    ) {
+        return false;
+    }
+
+    // Fog of war: a unit only auto-engages what its team makes out, a concealed
+    // target only under its team's detection. An ownerless attacker has no team
+    // vision, so it is not sight-limited.
+    match entity_def::owner(world, seeker) {
+        Some(seeker_owner) => {
+            visibility::sees_of(world, seeker_owner, target_def, target, Senses::Ordinary)
+        }
+        None => true,
+    }
 }
 
 /// The entity's most recent attacker, while the hit is still fresh (see

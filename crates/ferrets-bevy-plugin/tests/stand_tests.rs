@@ -7,9 +7,13 @@ mod utils;
 use bevy::prelude::*;
 use ferrets_content::{
     build::BuilderAttendance,
+    detection::Detection,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
-    field::{FieldAction, FieldDecay, FieldDef, FieldGrowth, FieldId, FieldSourceDef, FieldVision},
+    field::{
+        Emission, FieldAction, FieldDecay, FieldDef, FieldGrowth, FieldId, FieldLayer,
+        FieldSourceDef, FieldVision,
+    },
     location::Solidity,
     morph::{MorphCancel, MorphInterrupted, MorphPlacement, MorphReason, MorphTransition},
     quantity::Quantity,
@@ -161,18 +165,11 @@ fn form_change_keeps_standing_act_performed() {
 /// Player 0's overlord spews a patch of blight on the cell and the ticks apply.
 fn spew_at(app: &mut App, x: u32, y: u32) {
     let (_, overlord) = utils::create_owned(app, "overlord", 20, 20, 0);
-    let spew = app
-        .world()
-        .resource::<ContentRegistry>()
-        .skill("spew")
-        .unwrap();
-    utils::push_command(
+    utils::use_skill(
         app,
-        PlayerCommand::UseSkill {
-            skill: spew,
-            caster: SkillCasterRef::Entity(overlord),
-            target: Some(SkillTarget::Position(utils::pos(x, y))),
-        },
+        "spew",
+        SkillCasterRef::Entity(overlord),
+        Some(SkillTarget::Position(utils::pos(x, y))),
     );
     utils::run_ticks(app, utils::APPLY);
 }
@@ -183,20 +180,6 @@ fn blight(app: &App) -> FieldId {
         .resource::<ContentRegistry>()
         .field("blight")
         .unwrap()
-}
-
-fn mover(name: &str) -> EntityTypeDef {
-    EntityTypeDef::new(name)
-        .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-        .with_movement(
-            FixedU64::from_num(0.5),
-            FixedU64::from_num(0.5),
-            FixedU64::ONE,
-            FixedU64::from_num(360),
-            FixedU64::from_num(360),
-        )
-        .with_health(20)
-        .with_dying(1, [])
 }
 
 fn building(name: &str, side: u32, build_time: u32) -> EntityTypeDef {
@@ -218,7 +201,12 @@ fn stand_app() -> App {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
         let blight = registry.register_field(
             "blight",
-            FieldDef::new(utils::GROUND, FieldDecay::Never, FieldVision::Dark),
+            FieldDef::new(
+                FieldLayer::Passable(utils::GROUND.into()),
+                FieldDecay::Never,
+                FieldVision::Dark,
+                Detection::Blind,
+            ),
         );
 
         registry.register(
@@ -226,7 +214,8 @@ fn stand_app() -> App {
                 blight,
                 4,
                 FieldGrowth::Instant,
-                None,
+                Emission::Nothing,
+                Emission::Full,
             )]),
         );
 
@@ -277,11 +266,11 @@ fn stand_app() -> App {
                 requires: Vec::new(),
             },
         );
-        registry.register(mover("overlord").with_skills([spew]));
+        registry.register(utils::walker("overlord", utils::GROUND).with_skills([spew]));
         // Sight enough to see where it builds: the build command is gated on
         // the fog.
         registry.register(
-            mover("drone")
+            utils::walker("drone", utils::GROUND)
                 .with_sight_range(4)
                 .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
                 .with_builder(
