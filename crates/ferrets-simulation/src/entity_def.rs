@@ -24,6 +24,7 @@ use ferrets_content::{
     attack::Weapon,
     build::BuilderAttendance,
     concealment::Concealment,
+    entity_buffs::EntityBuffId,
     entity_effect::EntityEffect,
     entity_stats::EntityStatId,
     entity_type_def::{EntityTypeDef, EntityTypeId},
@@ -152,6 +153,24 @@ pub fn buff_effect_applies(
     buffs
         .active()
         .any(|(id, _)| registry.entity_buff_def(id).effects.iter().any(&wanted))
+}
+
+/// Whether `entity` takes orders and runs none now. An entity with no order
+/// queue runs none, but is not idle.
+pub fn idle(world: &World, entity: Entity) -> bool {
+    world
+        .entity(entity)
+        .get::<OrderQueueComponent>()
+        .is_some_and(|queue| queue.front().is_none())
+}
+
+/// Whether `entity` bears the buff `id` now. An entity with no buffs bears
+/// none.
+pub fn bears(world: &World, entity: Entity, id: EntityBuffId) -> bool {
+    world
+        .entity(entity)
+        .get::<BuffsComponent>()
+        .is_some_and(|buffs| buffs.contains(id))
 }
 
 /// Whether something conceals `entity` now: its type, an active buff, or a

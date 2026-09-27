@@ -8,6 +8,7 @@ use ferrets_content::{
     registry::ContentRegistry,
 };
 use ferrets_geometry::cell_size::CellSize;
+use ferrets_math::FixedU64;
 use ferrets_pathfinder::{layer_id::LayerId, layer_mask::LayerMask};
 
 /// The navigation layers these tests register, in the order a registry mints
@@ -47,4 +48,10 @@ pub fn weapon(targets: impl Into<LayerMask>) -> AttackDef {
         None,
         Slain::Remains,
     ))
+}
+
+/// A fixed-point value parsed from decimal digits.
+pub fn fixed(text: &str) -> FixedU64 {
+    text.parse()
+        .unwrap_or_else(|_| panic!("'{text}' is a value"))
 }

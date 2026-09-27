@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 
 use bevy::prelude::*;
 use ferrets_bevy_plugin::ai::{AiPlugin, AiRuntimes, game_view, install_ai_runtimes};
+use ferrets_content::{entity_stats::EntityStatId, stats::ModifierOp};
 use ferrets_replay::{buffer::SharedBuffer, recorder::Recorder, replay::Replay};
 use ferrets_script::{
     ai::view::content::ContentView,
@@ -16,7 +17,11 @@ use ferrets_script::{
 use ferrets_simulation::{
     checksum::{self, CHECKSUM_INTERVAL},
     command::PlayerCommand,
-    components::{hidden::HiddenComponent, resource::ResourceSourceComponent},
+    components::{
+        hidden::HiddenComponent, order_queue::OrderQueueComponent,
+        resource::ResourceSourceComponent,
+    },
+    game_loop,
     input::{InputFrames, PlayerFrame, SYNC_LATENCY},
     resources::PlayerResources,
     session::{
@@ -228,6 +233,8 @@ fn game_view_classifies_and_snapshots_entities() {
         .get_mut::<ResourceSourceComponent>(mine)
         .unwrap()
         .amount = 900;
+    // The source takes no orders.
+    world.entity_mut(mine).remove::<OrderQueueComponent>();
     world.entity_mut(hidden_own).insert(HiddenComponent);
     world.entity_mut(hidden_enemy).insert(HiddenComponent);
     world.entity_mut(hidden_ally).insert(HiddenComponent);
@@ -267,6 +274,55 @@ fn game_view_classifies_and_snapshots_entities() {
     assert_eq!(view.neutral_entities.len(), 1);
     assert_eq!(view.neutral_entities[0].resource_amount, Some(900));
     assert!(view.neutral_entities[0].health.is_none());
+    // Taking no orders, the source is not idle, where the worker is.
+    assert!(!view.neutral_entities[0].idle);
+}
+
+#[test]
+fn game_view_names_borne_buffs_in_application_order() {
+    let mut app = utils::make_app(vec![PlayerSlot::occupied(
+        0,
+        PlayerType::Ai {
+            vision: AiVision::Filtered,
+            detection: AiDetection::Detectors,
+        },
+        Some("human"),
+        None,
+    )]);
+    utils::register_orders_content(&mut app);
+    let swift = utils::register_entity_buff(
+        &mut app,
+        "swift",
+        EntityStatId::SPEED,
+        ModifierOp::PercentAdd,
+        "0.5",
+        None,
+    );
+    let tough = utils::register_entity_buff(
+        &mut app,
+        "tough",
+        EntityStatId::MAX_HEALTH,
+        ModifierOp::FlatAdd,
+        "5",
+        None,
+    );
+    let (worker, _) = utils::create_owned(&mut app, "worker", 5, 5, 0);
+    utils::create_owned(&mut app, "worker", 7, 5, 0);
+    game_loop::stats::apply_entity_buff(app.world_mut(), worker, tough);
+    game_loop::stats::apply_entity_buff(app.world_mut(), worker, swift);
+
+    let view = game_view(
+        app.world(),
+        0,
+        "human",
+        AiVision::Filtered,
+        AiDetection::Detectors,
+    );
+    assert_eq!(
+        view.my_entities[0].buffs,
+        vec!["tough".to_string(), "swift".to_string()]
+    );
+    assert!(view.my_entities[1].buffs.is_empty());
 }
 
 //

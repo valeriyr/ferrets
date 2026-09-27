@@ -330,19 +330,20 @@ fn canceled_entity_is_neither_loss_nor_kill() {
 }
 
 #[test]
-fn decayed_entity_is_neither_loss_nor_kill() {
+fn decayed_entity_is_loss_nobody_is_credited_with() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
     let (entity, _) = utils::create_entity(world, "soldier", utils::pos(4, 4), Some(0)).unwrap();
 
-    // Withering off the ground that sustained it, or standing with no primary
-    // on terms that raze it: nobody took it and nobody is credited.
+    // Withering off the ground that sustained it, burned down under its
+    // line, or standing with no primary on terms that raze it: the owner
+    // lost it, and nobody took it.
     spawn::despawn_entity(world, entity, DeathCause::Decayed);
     utils::run_ticks(&mut app, 1);
 
     let soldier = type_id(&app, "soldier");
     let statistics = app.world().resource::<Statistics>();
-    assert_eq!(statistics.player(0).lost(soldier), 0);
+    assert_eq!(statistics.player(0).lost(soldier), 1);
     assert_eq!(statistics.player(1).killed(soldier), 0);
 }
 

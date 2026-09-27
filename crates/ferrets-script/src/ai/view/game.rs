@@ -75,7 +75,7 @@ pub struct EntityView {
     pub damage: Option<u32>,
     /// Effective flat armor.
     pub armor: Option<u32>,
-    /// `true` when the order queue is empty.
+    /// `true` when the entity takes orders and runs none.
     pub idle: bool,
     /// `true` when the entity is temporarily off the map (e.g. harvesting
     /// inside a source).
@@ -83,6 +83,9 @@ pub struct EntityView {
     /// `true` while the entity is concealed: not seen by a side that is not
     /// its own unless that side's detection covers a cell it stands on.
     pub concealed: bool,
+    /// The names of the buffs the entity bears, in the order they were
+    /// applied. Empty when it bears none.
+    pub buffs: Vec<String>,
     /// The carried resource load, when any.
     pub carrying: Option<(String, u32)>,
     /// In-flight production, front first. Empty when nothing is queued.

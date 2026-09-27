@@ -270,7 +270,11 @@ pub fn run() {
                         render::draw_detected,
                         render::draw_glimpses,
                     ),
-                    (render::draw_casts, render::draw_skill_pulses),
+                    (
+                        render::draw_casts,
+                        render::draw_skill_pulses,
+                        render::draw_flames,
+                    ),
                     render::draw_puffs,
                     render::draw_shots,
                     render::draw_facing,
@@ -303,6 +307,7 @@ pub fn run() {
                 render::collect_skill_pulses,
                 render::collect_puffs,
                 sound::play_cues,
+                sound::play_fire_cues,
             )
                 .in_set(GameSet)
                 .run_if(in_state(GameState::InGame)),

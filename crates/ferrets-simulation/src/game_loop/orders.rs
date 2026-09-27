@@ -27,12 +27,14 @@ use super::{
 use crate::{
     components::{
         build::BuildComponent,
-        order_queue::{CancelPolicy, OrderQueueComponent, OrderState},
+        order_queue::{CancelPolicy, IdlenessComponent, OrderQueueComponent, OrderState},
     },
     entity_def::{self, Operation, Outage},
+    entity_index::EntityIndex,
     map::Map,
     movement_model::{self, MovementModel},
     order::Order,
+    session::GameSession,
 };
 
 /// Why an entity may not start an order now.
@@ -633,6 +635,25 @@ pub fn process_tick(entity: Entity, queue: &mut OrderQueueComponent, world: &mut
         )),
         "after process, front must be New, InProcessing, Suspended, or queue must be empty"
     );
+}
+
+/// Fits every alive entity's [`IdlenessComponent`] to its queue: one that is
+/// not [`entity_def::idle`] is busy, and one that is is idle since the tick it
+/// was first found so.
+pub fn note_idleness(world: &mut World) {
+    let tick = world.resource::<GameSession>().tick();
+    for (_, entity) in world.resource::<EntityIndex>().alive_entries() {
+        let idle = entity_def::idle(world, entity);
+        let was = world.entity(entity).get::<IdlenessComponent>().copied();
+        let now = match (idle, was) {
+            (false, _) => IdlenessComponent::Busy,
+            (true, Some(IdlenessComponent::Busy) | None) => IdlenessComponent::IdleSince(tick),
+            (true, Some(was)) => was,
+        };
+        if was != Some(now) {
+            world.entity_mut(entity).insert(now);
+        }
+    }
 }
 
 /// Prepare the front entry until it is `InProcessing` or the queue is empty.

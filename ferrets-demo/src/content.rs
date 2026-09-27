@@ -876,6 +876,19 @@ pub const CONTENT: &str = r#"
         -- Siege leads a mixed selection, like the mortar it answers.
         selection = { priority = 10 },
     })
+    -- Cornered and trained for it: a grunt under 30% of its health hits
+    -- half again as hard once the ritual is known. A shaman down to his last
+    -- twenty points of energy recovers breath faster than a rested one.
+    define_entity_buff("enraged", {
+        lasting = { as_long_as = { all = { { health = { under_share = "0.3" } }, { research = "frenzy_ritual" } } } },
+        stack = "ignore",
+        effects = { { modifiers = { { entity_stat = "damage", op = "percent", value = "0.5" } } } },
+    })
+    define_entity_buff("spent", {
+        lasting = { as_long_as = { energy = { under = 20 } } },
+        stack = "ignore",
+        effects = { { modifiers = { { entity_stat = "energy_regen", op = "flat", value = "0.2" } } } },
+    })
     define_entity("grunt", {
         race = "orc",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
@@ -902,6 +915,7 @@ pub const CONTENT: &str = r#"
         -- Blood rite: the grunt buys the archer's frenzy with its own blood and
         -- a little gold — regeneration (above) walks the price off afterwards.
         skills = { "blood_rite" },
+        passives = { "enraged" },
         price = { gold = 90 },
         train_time = 70,
         selection = { priority = 10 },
@@ -922,6 +936,7 @@ pub const CONTENT: &str = r#"
         dying = FALLS,
         tags = { "biological" },
         skills = { "second_wind" },
+        passives = { "spent" },
         price = { gold = 120 },
         train_time = 80,
         -- Support trails combat units in a mixed selection, like the medic.
@@ -1655,6 +1670,13 @@ pub const CONTENT: &str = r#"
         target = "caster",
         effect = { apply_buff = "ambushing" },
     })
+    -- Two seconds standing still and a huntress is not there to an enemy
+    -- without detection; a step or a swing shows her.
+    define_entity_buff("shadowmeld", {
+        lasting = { as_long_as = { idle_for = 40 } },
+        stack = "ignore",
+        effects = { "conceal" },
+    })
     define_entity("huntress", {
         race = "elves",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
@@ -1672,9 +1694,32 @@ pub const CONTENT: &str = r#"
         train_time = 55,
         selection = { priority = 10 },
         skills = { "ambush" },
+        passives = { "shadowmeld" },
     })
 
     -- ── The Terrans ─────────────────────────────────────────────────────────
+    -- Every Terran building burns: under 34% of its health it bears the
+    -- fire, which drains three points a second at 20 Hz until an SCV mends it
+    -- back over the line or it burns down. The drain lands on `health_drain`,
+    -- so each building declares the stat at nothing for the fire to move.
+    define_entity_buff("on_fire", {
+        lasting = { as_long_as = { health = { under_share = "0.34" } } },
+        stack = "ignore",
+        effects = { { modifiers = { { entity_stat = "health_drain", op = "flat", value = "0.15" } } } },
+    })
+    -- The marine's field dressing: two points a second, ten seconds after the
+    -- last hit landed. Nothing else mends a marine.
+    define_entity_buff("combat_drugs", {
+        lasting = { as_long_as = { unhurt_for = 200 } },
+        stack = "ignore",
+        effects = { { modifiers = { { entity_stat = "health_regen", op = "flat", value = "0.1" } } } },
+    })
+    -- A shot-up tank crawls until it is patched.
+    define_entity_buff("limping", {
+        lasting = { as_long_as = { health = { under_share = "0.5" } } },
+        stack = "ignore",
+        effects = { { modifiers = { { entity_stat = "speed", op = "percent", value = "-0.3" } } } },
+    })
     -- The race that takes its buildings with it. The command center, the
     -- barracks and the factory lift off into the air layer and set down again
     -- wherever the ground is clear, leaving whatever was docked beside them
@@ -1774,7 +1819,7 @@ pub const CONTENT: &str = r#"
     define_entity("command_center", {
         race = "terran",
         location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
-        stats = { max_health = 800, sight_range = 9, supply_provided = 10, build_range = 1 },
+        stats = { max_health = 800, sight_range = 9, supply_provided = 10, build_range = 1, health_drain = "0" },
         dying = { time = 2 },
         price = { gold = 400 },
         build_time = 200,
@@ -1786,6 +1831,7 @@ pub const CONTENT: &str = r#"
         docks = { { at = { 3, 0 }, accepts = { types = { "comsat_station" } } } },
         berths = { rim = { points = rim(3, 3), slots = 1 } },
         tags = { "building" },
+        passives = { "on_fire" },
         morphs = {
             { into = "command_center_aloft", time = LIFTS.time, placement = LIFTS.placement, cancel = LIFTS.cancel },
         },
@@ -1798,10 +1844,11 @@ pub const CONTENT: &str = r#"
         location = { occupation = AIR, size = { 3, 3 }, solidity = "solid" },
         stats = {
             speed = "0.12", turn_rate = 6, pivot_rate = 6, pivot_angle = 90, radius = "1.5", weight = 12,
-            max_health = 800, sight_range = 9, supply_provided = 10,
+            max_health = 800, sight_range = 9, supply_provided = 10, health_drain = "0",
         },
         dying = { time = 2 },
         tags = { "building" },
+        passives = { "on_fire" },
         selection = { priority = 6 },
         morphs = {
             { into = "command_center", time = LANDS.time, placement = LANDS.placement, cancel = LANDS.cancel },
@@ -1813,7 +1860,7 @@ pub const CONTENT: &str = r#"
     define_entity("barracks", {
         race = "terran",
         location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
-        stats = { max_health = 500, sight_range = 6 },
+        stats = { max_health = 500, sight_range = 6, health_drain = "0" },
         dying = { time = 2 },
         price = { gold = 150 },
         build_time = 100,
@@ -1821,6 +1868,7 @@ pub const CONTENT: &str = r#"
         trainer = { "marine" },
         berths = { rim = { points = rim(3, 3), slots = 1 } },
         tags = { "building" },
+        passives = { "on_fire" },
         morphs = {
             { into = "barracks_aloft", time = LIFTS.time, placement = LIFTS.placement, cancel = LIFTS.cancel },
         },
@@ -1830,10 +1878,11 @@ pub const CONTENT: &str = r#"
         location = { occupation = AIR, size = { 3, 3 }, solidity = "solid" },
         stats = {
             speed = "0.15", turn_rate = 6, pivot_rate = 6, pivot_angle = 90, radius = "1.5", weight = 10,
-            max_health = 500, sight_range = 6,
+            max_health = 500, sight_range = 6, health_drain = "0",
         },
         dying = { time = 2 },
         tags = { "building" },
+        passives = { "on_fire" },
         selection = { priority = 6 },
         morphs = {
             { into = "barracks", time = LANDS.time, placement = LANDS.placement, cancel = LANDS.cancel },
@@ -1843,7 +1892,7 @@ pub const CONTENT: &str = r#"
     define_entity("factory", {
         race = "terran",
         location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
-        stats = { max_health = 500, sight_range = 6, build_range = 1 },
+        stats = { max_health = 500, sight_range = 6, build_range = 1, health_drain = "0" },
         dying = { time = 2 },
         price = { gold = 200, wood = 100 },
         build_time = 120,
@@ -1853,6 +1902,7 @@ pub const CONTENT: &str = r#"
         docks = { { at = { 3, 0 }, accepts = { types = { "tech_lab" } } } },
         berths = { rim = { points = rim(3, 3), slots = 1 } },
         tags = { "building" },
+        passives = { "on_fire" },
         morphs = {
             { into = "factory_aloft", time = LIFTS.time, placement = LIFTS.placement, cancel = LIFTS.cancel },
         },
@@ -1862,10 +1912,11 @@ pub const CONTENT: &str = r#"
         location = { occupation = AIR, size = { 3, 3 }, solidity = "solid" },
         stats = {
             speed = "0.15", turn_rate = 6, pivot_rate = 6, pivot_angle = 90, radius = "1.5", weight = 10,
-            max_health = 500, sight_range = 6,
+            max_health = 500, sight_range = 6, health_drain = "0",
         },
         dying = { time = 2 },
         tags = { "building" },
+        passives = { "on_fire" },
         selection = { priority = 6 },
         morphs = {
             { into = "factory", time = LANDS.time, placement = LANDS.placement, cancel = LANDS.cancel },
@@ -1880,7 +1931,7 @@ pub const CONTENT: &str = r#"
         race = "terran",
         location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
         stats = {
-            max_health = 250, sight_range = 6,
+            max_health = 250, sight_range = 6, health_drain = "0",
             -- Two hundred to a pool that refills slowly: four sweeps held in
             -- reserve, and a wait between them.
             max_energy = 200, energy_regen = "0.2",
@@ -1890,6 +1941,7 @@ pub const CONTENT: &str = r#"
         build_time = 80,
         skills = { "scanner_sweep" },
         tags = { "building" },
+        passives = { "on_fire" },
         annex = { alone = { work = "idles", life = "endures" }, claim = "seized" },
     })
 
@@ -1927,7 +1979,7 @@ pub const CONTENT: &str = r#"
         race = "terran",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
         stats = {
-            max_health = 200, armor = 1,
+            max_health = 200, armor = 1, health_drain = "0",
             damage = 12, attack_range = 7, acquire_range = 8, attack_period = 15, damage_point = 5,
             sight_range = 9,
         },
@@ -1936,6 +1988,7 @@ pub const CONTENT: &str = r#"
         build_time = 60,
         berths = { rim = { points = rim(1, 1), slots = 1 } },
         tags = { "building" },
+        passives = { "on_fire" },
         turrets = {
             { turret = "missile_rack" },
         },
@@ -1950,23 +2003,25 @@ pub const CONTENT: &str = r#"
     define_entity("tech_lab", {
         race = "terran",
         location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
-        stats = { max_health = 300, sight_range = 5 },
+        stats = { max_health = 300, sight_range = 5, health_drain = "0" },
         dying = { time = 2 },
         price = { gold = 50, wood = 25 },
         build_time = 80,
         researcher = { "siege_tech" },
         tags = { "building" },
+        passives = { "on_fire" },
         annex = { alone = { work = "idles", life = "endures" }, claim = "seized" },
     })
 
     define_entity("supply_depot", {
         race = "terran",
         location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
-        stats = { max_health = 200, sight_range = 3, supply_provided = 6 },
+        stats = { max_health = 200, sight_range = 3, supply_provided = 6, health_drain = "0" },
         dying = { time = 2 },
         price = { gold = 40, wood = 20 },
         build_time = 60,
         tags = { "building" },
+        passives = { "on_fire" },
         berths = { rim = { points = rim(2, 2), slots = 1 } },
     })
 
@@ -1976,11 +2031,12 @@ pub const CONTENT: &str = r#"
     define_entity("refinery", {
         race = "terran",
         location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
-        stats = { max_health = 500, sight_range = 4 },
+        stats = { max_health = 500, sight_range = 4, health_drain = "0" },
         dying = { time = 2 },
         price = { gold = 75 },
         build_time = 90,
         tags = { "building" },
+        passives = { "on_fire" },
         resource_source = { kind = "gold", depletion = "persist" },
         overbuilds = "gold_mine",
         -- The `rim` is where an SCV stands to *raise* it. Working the gold
@@ -1996,6 +2052,7 @@ pub const CONTENT: &str = r#"
             speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 2, max_health = 45,
             damage = 6, attack_range = 4, acquire_range = 7, attack_period = 8, damage_point = 3,
             sight_range = 8,
+            health_regen = "0",
             supply_cost = 1,
             cargo_size = 1,
         },
@@ -2006,6 +2063,7 @@ pub const CONTENT: &str = r#"
         attack = { targets = GROUND | WATER | AIR },
         price = { gold = 60 },
         train_time = 45,
+        passives = { "combat_drugs" },
     })
 
     -- The tank: the demo's other 2x2 gun, and the counterpart to the orc
@@ -2016,8 +2074,9 @@ pub const CONTENT: &str = r#"
     --
     -- Sieged it plants itself: it gives up its engine for twice the reach and
     -- twice the shell, and the change is the ancients' rooting — reserving the
-    -- ground going down, revalidating it coming back up. Only a factory with
-    -- a tech lab builds one, and only siege mechanics let it dig in.
+    -- ground going down, revalidating it coming back up. A factory builds one
+    -- with a tech lab docked, or without once siege mechanics are known, and
+    -- only siege mechanics let it dig in.
     local function tank(name, extra)
         local def = {
             race = "terran",
@@ -2044,7 +2103,10 @@ pub const CONTENT: &str = r#"
         attack = { targets = GROUND | WATER },
         price = { gold = 150, wood = 100 },
         train_time = 100,
-        requires = { { annexed = "tech_lab" } },
+        -- A factory builds tanks with a tech lab docked, and keeps building
+        -- them without one once siege mechanics are known.
+        requires = { any = { { annexed = "tech_lab" }, { research = "siege_tech" } } },
+        passives = { "limping" },
         morphs = {
             { into = "siege_tank", time = 60, placement = "reserve", cancel = "committed",
               requires = { { research = "siege_tech" } } },
@@ -2207,6 +2269,13 @@ pub const CONTENT: &str = r#"
         buff = "skeletal_longevity",
     })
 
+    -- Unhurt, the necromancer's mana comes quicker; once wounded, only blight
+    -- brings him back to it.
+    define_entity_buff("composed", {
+        lasting = { as_long_as = { health = { at_least_share = 1 } } },
+        stack = "ignore",
+        effects = { { modifiers = { { entity_stat = "energy_regen", op = "flat", value = "0.2" } } } },
+    })
     define_entity("necromancer", {
         race = "undead",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
@@ -2225,6 +2294,7 @@ pub const CONTENT: &str = r#"
         tags = { "biological" },
         attack = { targets = GROUND | WATER, projectile = "arrow" },
         skills = { "raise_dead" },
+        passives = { "composed" },
         field_effects = { HEALS_ON_BLIGHT },
     })
 

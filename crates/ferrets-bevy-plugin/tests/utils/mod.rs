@@ -97,6 +97,7 @@ use ferrets_simulation::{
     simulation_id::SimulationId,
     skirmish::Skirmish,
     spawn::{self, FieldReach},
+    visibility::{self, Senses, Sighting},
 };
 
 /// The single navigation layer the harness content declares.
@@ -245,15 +246,28 @@ pub fn skirmish_header(slots: Vec<PlayerSlot>, finish_policy: FinishPolicy) -> R
     )
 }
 
-/// A value written as decimal digits rather than a float, so the number the
-/// digits name is the one under test.
+/// A fixed-point value parsed from decimal digits.
 pub fn fixed(text: &str) -> FixedU64 {
     FixedU64::from_str(text).unwrap_or_else(|_| panic!("'{text}' is a value"))
 }
 
-/// The same, where the value can point downwards.
+/// A signed fixed-point value parsed from decimal digits.
 pub fn signed_fixed(text: &str) -> FixedI64 {
     FixedI64::from_str(text).unwrap_or_else(|_| panic!("'{text}' is a signed value"))
+}
+
+/// A modifier adding `magnitude`, written as decimal digits, to `stat`.
+pub fn flat(stat: EntityStatId, magnitude: &str) -> EntityModifier {
+    EntityModifier {
+        stat,
+        op: ModifierOp::FlatAdd,
+        magnitude: signed_fixed(magnitude),
+    }
+}
+
+/// What `player`'s side makes of `entity` now.
+pub fn sighting_of(app: &App, player: PlayerId, entity: Entity) -> Sighting {
+    visibility::sighting(app.world(), player, entity, Senses::SeatDeclared)
 }
 
 pub fn pos(x: u32, y: u32) -> FixedUVec2 {
@@ -2178,6 +2192,11 @@ pub fn research_app_seating(slots: Vec<PlayerSlot>) -> App {
         registry.register(soldier("halberdier").with_requires([Requirement::Research(smithing)]));
         registry
             .register(soldier("knight").with_requires([Requirement::Tag("workshop".to_string())]));
+        // Either research admits the crossbowman: the one `any` in the fixture.
+        registry.register(soldier("crossbowman").with_requires([Requirement::Any(vec![
+            Requirement::Research(tactics),
+            Requirement::Research(masonry),
+        ])]));
         registry.register(
             EntityTypeDef::new("lab")
                 .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
@@ -2191,7 +2210,7 @@ pub fn research_app_seating(slots: Vec<PlayerSlot>) -> App {
                 .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
                 .with_health(100)
                 .with_dying(2, [])
-                .with_trainer(["pikeman", "halberdier", "knight"]),
+                .with_trainer(["pikeman", "halberdier", "knight", "crossbowman"]),
         );
     }
     app.world_mut().resource::<ContentRegistry>().validate();

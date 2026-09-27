@@ -58,6 +58,12 @@ impl EntityIndex {
         self.alive.iter().map(|(&id, &e)| (id, e)).collect()
     }
 
+    /// The alive entities with their ids in ascending [`SimulationId`] order,
+    /// without collecting them.
+    pub fn alive_iter(&self) -> impl Iterator<Item = (&SimulationId, &Entity)> {
+        self.alive.iter()
+    }
+
     /// Returns all dying entities with their ids in ascending [`SimulationId`] order.
     pub fn dying_entries(&self) -> Vec<(SimulationId, Entity)> {
         self.dying.iter().map(|(&id, &e)| (id, e)).collect()

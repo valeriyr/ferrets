@@ -5,17 +5,40 @@ mod utils;
 
 use bevy::{ecs::system::RunSystemOnce, prelude::*};
 use ferrets_bevy_plugin::PendingInput;
-use ferrets_content::registry::ContentRegistry;
+use ferrets_content::{
+    entity_buffs::{EntityBuffDef, Lasting},
+    entity_effect::EntityEffect,
+    entity_stats::EntityStatId,
+    entity_type_def::EntityTypeDef,
+    location::Solidity,
+    morph::{MorphCancel, MorphInterrupted, MorphPlacement, MorphReason, MorphTransition},
+    quantity::Quantity,
+    registry::ContentRegistry,
+    requirement::{Bound, Requirement, Threshold},
+    stack_rule::StackRule,
+};
 use ferrets_demo::{
     hud::{self, SelectionText},
     input::{Inspected, Leading},
     render::{ObserverPerspective, Sighted},
 };
+use ferrets_geometry::cell_size::CellSize;
+use ferrets_math::FixedU64;
 use ferrets_simulation::{
     command::{PlayerCommand, SelectMode},
-    components::{order_queue::OrderQueueComponent, train::TrainQueueComponent},
+    components::{
+        build::{SiteWork, UnderConstructionComponent},
+        entity_skills::SkillsComponent,
+        health::HealthComponent,
+        order_queue::OrderQueueComponent,
+        train::TrainQueueComponent,
+    },
+    game_loop,
     movement_model::MovementModel,
     order::Order,
+    player_research::PlayerResearch,
+    resources::PlayerResources,
+    session::GameSession,
     visibility::Sighting,
 };
 
@@ -359,6 +382,296 @@ fn cancel_buttons_gray_out_with_nothing_to_call_off() {
     );
 }
 
+#[test]
+fn hovered_card_button_names_its_price_or_what_it_lacks() {
+    let mut app = card_app();
+    app.world_mut().spawn((hud::CommandCard, Node::default()));
+    app.world_mut().spawn((hud::CardHint, Text::new("")));
+
+    // A factory with no tech lab docked and no siege tech: the tank's button
+    // is grayed and says what either branch would take; the wraith's is live
+    // and says what it costs — 150 gold, 100 wood and 90 ticks, 4.5 s.
+    let (_, factory) =
+        utils::create_entity(app.world_mut(), "factory", utils::at_cell(20, 20), Some(0))
+            .expect("the demo content defines a factory");
+    app.world_mut().insert_resource(Leading(Some(factory)));
+    app.world_mut()
+        .run_system_once(hud::update_command_card)
+        .expect("the command card system runs");
+
+    let buttons: Vec<Entity> = app
+        .world_mut()
+        .query_filtered::<Entity, With<hud::TrainButton>>()
+        .iter(app.world())
+        .collect();
+    assert_eq!(buttons.len(), 2, "a tank and a wraith");
+    assert_eq!(
+        hover_each::<hud::TrainButton>(&mut app),
+        vec![
+            "150 gold, 100 wood, 4.5 s".to_string(),
+            "Needs (a Tech Lab docked or Siege Tech)".to_string(),
+        ]
+    );
+
+    // Nothing hovered, nothing said.
+    for button in &buttons {
+        *app.world_mut().get_mut::<Interaction>(*button).unwrap() = Interaction::None;
+    }
+    recolor_card(&mut app);
+    assert_eq!(hint_text(&mut app), "");
+}
+
+#[test]
+fn hovered_skill_names_its_cost_or_why_it_cannot_cast() {
+    let mut app = card_app();
+    app.world_mut().spawn((hud::CommandCard, Node::default()));
+    app.world_mut().spawn((hud::CardHint, Text::new("")));
+    let (archer, archer_id) =
+        utils::create_entity(app.world_mut(), "archer", utils::at_cell(20, 20), Some(0))
+            .expect("the demo content defines an archer");
+    app.world_mut().insert_resource(Leading(Some(archer_id)));
+    app.world_mut()
+        .run_system_once(hud::update_command_card)
+        .expect("the command card system runs");
+    hover_only::<hud::SkillButton>(&mut app);
+
+    // Battle focus: 30 energy, and 80 ticks of cooldown, 4.0 s.
+    recolor_card(&mut app);
+    assert_eq!(hint_text(&mut app), "30 energy, 4.0 s cooldown");
+
+    let battle_focus = app
+        .world()
+        .resource::<ContentRegistry>()
+        .skill("battle_focus")
+        .expect("the demo content defines battle focus");
+    app.world_mut()
+        .get_mut::<SkillsComponent>(archer)
+        .expect("an archer carries its skills")
+        .start_cooldown(battle_focus, 80);
+    recolor_card(&mut app);
+    assert_eq!(hint_text(&mut app), "Cooling down");
+
+    app.world_mut()
+        .get_mut::<SkillsComponent>(archer)
+        .unwrap()
+        .start_cooldown(battle_focus, 0);
+    app.world_mut()
+        .entity_mut(archer)
+        .insert(UnderConstructionComponent {
+            progress: 0,
+            work: SiteWork::Crew {
+                builders: Default::default(),
+            },
+        });
+    recolor_card(&mut app);
+    assert_eq!(hint_text(&mut app), "Still under construction");
+
+    app.world_mut()
+        .entity_mut(archer)
+        .remove::<UnderConstructionComponent>();
+    let stunned = {
+        let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
+        registry.register_entity_buff(
+            "stunned",
+            EntityBuffDef {
+                effects: vec![EntityEffect::Disable],
+                lasting: Lasting::Forever,
+                stack_rule: StackRule::Ignore,
+                interrupted_by: Vec::new(),
+            },
+        )
+    };
+    game_loop::stats::apply_entity_buff(app.world_mut(), archer, stunned);
+    recolor_card(&mut app);
+    assert_eq!(hint_text(&mut app), "Switched off");
+
+    // Led by something that knows no battle focus, or by nothing at all.
+    let (_, grunt_id) =
+        utils::create_entity(app.world_mut(), "grunt", utils::at_cell(24, 20), Some(0))
+            .expect("the demo content defines a grunt");
+    app.world_mut().insert_resource(Leading(Some(grunt_id)));
+    recolor_card(&mut app);
+    assert_eq!(hint_text(&mut app), "It cannot cast this");
+    app.world_mut().insert_resource(Leading(None));
+    recolor_card(&mut app);
+    assert_eq!(hint_text(&mut app), "Nothing selected can cast it");
+}
+
+#[test]
+fn hovered_skill_names_health_it_costs() {
+    let mut app = card_app();
+    app.world_mut().spawn((hud::CommandCard, Node::default()));
+    app.world_mut().spawn((hud::CardHint, Text::new("")));
+    let frenzy_ritual = app
+        .world()
+        .resource::<ContentRegistry>()
+        .research("frenzy_ritual")
+        .expect("the demo content defines the frenzy ritual");
+    app.world_mut()
+        .resource_mut::<PlayerResearch>()
+        .mark_completed(0, frenzy_ritual);
+    let (_, grunt) =
+        utils::create_entity(app.world_mut(), "grunt", utils::at_cell(20, 20), Some(0))
+            .expect("the demo content defines a grunt");
+    app.world_mut().insert_resource(Leading(Some(grunt)));
+    app.world_mut()
+        .run_system_once(hud::update_command_card)
+        .expect("the command card system runs");
+    hover_only::<hud::SkillButton>(&mut app);
+
+    // Blood rite: 10 gold and 8 health, and 160 ticks of cooldown, 8.0 s.
+    recolor_card(&mut app);
+    assert_eq!(hint_text(&mut app), "10 gold, 8 health, 8.0 s cooldown");
+}
+
+#[test]
+fn hovered_player_skill_names_its_price_and_cooldown() {
+    let mut app = card_app();
+    app.world_mut().insert_resource(Leading(None));
+    app.world_mut()
+        .run_system_once(hud::setup_hud)
+        .expect("the HUD sets up");
+    app.world_mut()
+        .resource_mut::<PlayerResources>()
+        .add(0, "gold", 50);
+    hover_only::<hud::PlayerSkillButton>(&mut app);
+
+    // War drums: 50 gold, and 300 ticks of cooldown, 15.0 s.
+    recolor_card(&mut app);
+    assert_eq!(hint_text(&mut app), "50 gold, 15.0 s cooldown");
+}
+
+#[test]
+fn hovered_build_buttons_name_their_price_and_time() {
+    let mut app = card_app();
+    app.world_mut().spawn((hud::CommandCard, Node::default()));
+    app.world_mut().spawn((hud::CardHint, Text::new("")));
+    app.world_mut()
+        .resource_mut::<PlayerResources>()
+        .add(0, "gold", 1000);
+    let (_, drone) =
+        utils::create_entity(app.world_mut(), "drone", utils::at_cell(20, 20), Some(0))
+            .expect("the demo content defines a drone");
+    app.world_mut().insert_resource(Leading(Some(drone)));
+    app.world_mut()
+        .run_system_once(hud::update_command_card)
+        .expect("the command card system runs");
+
+    // A spawning pit is 200 gold and 100 wood in 120 ticks, 6.0 s; a tumor 25
+    // gold in 40, 2.0 s; a hatchery 400 gold in 200, 10.0 s.
+    assert_eq!(
+        hover_each::<hud::BuildButton>(&mut app),
+        vec![
+            "200 gold, 100 wood, 6.0 s".to_string(),
+            "25 gold, 2.0 s".to_string(),
+            "400 gold, 10.0 s".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn hovered_morph_names_its_price() {
+    let mut app = card_app();
+    app.world_mut().spawn((hud::CommandCard, Node::default()));
+    app.world_mut().spawn((hud::CardHint, Text::new("")));
+    app.world_mut()
+        .resource_mut::<PlayerResources>()
+        .add(0, "gold", 100);
+    app.world_mut()
+        .resource_mut::<PlayerResources>()
+        .add(0, "wood", 100);
+    let (_, tower) = utils::create_entity(
+        app.world_mut(),
+        "watch_tower",
+        utils::at_cell(20, 20),
+        Some(0),
+    )
+    .expect("the demo content defines a watch tower");
+    utils::select(&mut app, tower, SelectMode::Replace);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    app.world_mut().insert_resource(Leading(Some(tower)));
+    app.world_mut()
+        .run_system_once(hud::update_command_card)
+        .expect("the command card system runs");
+    hover_only::<hud::MorphButton>(&mut app);
+
+    // Into a guard tower: 80 gold and 20 wood.
+    recolor_card(&mut app);
+    assert_eq!(hint_text(&mut app), "80 gold, 20 wood");
+}
+
+#[test]
+fn grayed_button_names_unmet_part_of_requirement_tree() {
+    let mut app = card_app();
+    app.world_mut().spawn((hud::CommandCard, Node::default()));
+    app.world_mut().spawn((hud::CardHint, Text::new("")));
+    register_totem(&mut app);
+    let (totem, totem_id) =
+        utils::create_entity(app.world_mut(), "totem", utils::at_cell(20, 20), Some(0))
+            .expect("the fixture registers a totem");
+    // Hit this tick, and given an order it has not started.
+    let tick = app.world().resource::<GameSession>().tick();
+    app.world_mut()
+        .get_mut::<HealthComponent>(totem)
+        .unwrap()
+        .record_hit(totem_id, tick);
+    app.world_mut()
+        .get_mut::<OrderQueueComponent>(totem)
+        .unwrap()
+        .push(
+            Order::Morph {
+                type_name: "watch_tower".to_string(),
+            },
+            None,
+        );
+    app.world_mut().insert_resource(Leading(Some(totem_id)));
+    app.world_mut()
+        .run_system_once(hud::update_command_card)
+        .expect("the command card system runs");
+    hover_only::<hud::MorphButton>(&mut app);
+
+    // An `any` with no branch met names each branch; one with a branch met
+    // (health at least a tenth) says nothing; an `all` names each unmet
+    // branch and not the met one (sight at least 1). Under 0.34 of the
+    // health reads 34%; 40 ticks idle is 2.0 s, 200 unhurt 10.0 s.
+    recolor_card(&mut app);
+    assert_eq!(
+        hint_text(&mut app),
+        "Needs (a Spawning Pit or Frenzy Ritual) and health under 34% and energy at least 50 and Sight Range at least 99 and standing idle and 2.0 s idle and 10.0 s unhurt"
+    );
+
+    // Led by nothing, the button names the change it cannot start.
+    app.world_mut().insert_resource(Leading(None));
+    recolor_card(&mut app);
+    assert_eq!(
+        hint_text(&mut app),
+        "Nothing selected can become a Watch Tower now"
+    );
+}
+
+#[test]
+fn hovered_research_names_its_price_and_time() {
+    let mut app = card_app();
+    app.world_mut().spawn((hud::CommandCard, Node::default()));
+    app.world_mut().spawn((hud::CardHint, Text::new("")));
+    let (_, blacksmith) = utils::create_entity(
+        app.world_mut(),
+        "blacksmith",
+        utils::at_cell(26, 26),
+        Some(0),
+    )
+    .expect("the demo content defines a blacksmith");
+    app.world_mut().insert_resource(Leading(Some(blacksmith)));
+    app.world_mut()
+        .run_system_once(hud::update_command_card)
+        .expect("the command card system runs");
+    hover_only::<hud::ResearchButton>(&mut app);
+
+    // Iron weapons: 100 gold, 50 wood and 200 ticks, 10.0 s.
+    recolor_card(&mut app);
+    assert_eq!(hint_text(&mut app), "100 gold, 50 wood, 10.0 s");
+}
+
 //
 // ─── Helpers ────────────────────────────────────────────────────────────────
 //
@@ -409,4 +722,114 @@ fn card_app() -> App {
     app.world_mut().init_resource::<Inspected>();
     app.world_mut().init_resource::<ObserverPerspective>();
     app
+}
+
+/// What the card's hint line reads.
+fn hint_text(app: &mut App) -> String {
+    let mut query = app.world_mut().query::<(&Text, &hud::CardHint)>();
+    let (text, _) = query.single(app.world()).expect("one hint line");
+    text.0.clone()
+}
+
+/// What the hint line reads with each button carrying the marker component
+/// hovered in turn, sorted.
+fn hover_each<C: Component>(app: &mut App) -> Vec<String> {
+    let buttons: Vec<Entity> = app
+        .world_mut()
+        .query_filtered::<Entity, With<C>>()
+        .iter(app.world())
+        .collect();
+    let mut hints: Vec<String> = Vec::new();
+    for hovered in &buttons {
+        for button in &buttons {
+            *app.world_mut().get_mut::<Interaction>(*button).unwrap() = if button == hovered {
+                Interaction::Hovered
+            } else {
+                Interaction::None
+            };
+        }
+        recolor_card(app);
+        hints.push(hint_text(app));
+    }
+    hints.sort();
+    hints
+}
+
+/// Registers the `totem`: a ground piece with 100 health, 40 energy and sight
+/// 5, whose one change of form, into a watch tower, requires any of a
+/// spawning pit or the frenzy ritual; any of health at least a tenth or the
+/// frenzy ritual; all of health under 0.34 of its maximum, energy at least 50,
+/// sight at least 99 and sight at least 1; standing idle; 40 ticks idle; and
+/// 200 ticks unhurt.
+fn register_totem(app: &mut App) {
+    let ground = {
+        let registry = app.world().resource::<ContentRegistry>();
+        registry.layer("ground").expect("the demo declares ground")
+    };
+    let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
+    let frenzy_ritual = registry
+        .research("frenzy_ritual")
+        .expect("the demo content defines the frenzy ritual");
+    registry.register(
+        EntityTypeDef::new("totem")
+            .with_location(ground, CellSize::ONE, Solidity::Solid)
+            .with_health(100)
+            .with_energy(40, FixedU64::ZERO)
+            .with_stat(EntityStatId::SIGHT_RANGE, FixedU64::from_num(5))
+            .with_morphs([MorphTransition::new(
+                "watch_tower",
+                None,
+                Quantity::Constant(10),
+                MorphPlacement::Reserve,
+                MorphCancel::Refundable,
+                MorphInterrupted::Reverts,
+                MorphReason::Change,
+                Vec::new(),
+                [
+                    Requirement::Any(vec![
+                        Requirement::EntityType("spawning_pit".to_string()),
+                        Requirement::Research(frenzy_ritual),
+                    ]),
+                    Requirement::Any(vec![
+                        Requirement::Health(Bound::Share(Threshold::AtLeast(utils::fixed("0.1")))),
+                        Requirement::Research(frenzy_ritual),
+                    ]),
+                    Requirement::All(vec![
+                        Requirement::Health(Bound::Share(Threshold::Under(utils::fixed("0.34")))),
+                        Requirement::Energy(Bound::Amount(Threshold::AtLeast(FixedU64::from_num(
+                            50,
+                        )))),
+                        Requirement::Stat {
+                            stat: EntityStatId::SIGHT_RANGE,
+                            bound: Bound::Amount(Threshold::AtLeast(FixedU64::from_num(99))),
+                        },
+                        Requirement::Stat {
+                            stat: EntityStatId::SIGHT_RANGE,
+                            bound: Bound::Amount(Threshold::AtLeast(FixedU64::ONE)),
+                        },
+                    ]),
+                    Requirement::Idle,
+                    Requirement::IdleFor(40),
+                    Requirement::UnhurtFor(200),
+                ],
+            )]),
+    );
+}
+
+/// Hovers the one button carrying the marker component, and no other.
+fn hover_only<C: Component>(app: &mut App) {
+    let hovered: Vec<Entity> = app
+        .world_mut()
+        .query_filtered::<Entity, With<C>>()
+        .iter(app.world())
+        .collect();
+    assert_eq!(hovered.len(), 1, "one button of the kind on the card");
+    let mut buttons = app.world_mut().query::<(Entity, &mut Interaction)>();
+    for (button, mut interaction) in buttons.iter_mut(app.world_mut()) {
+        *interaction = if button == hovered[0] {
+            Interaction::Hovered
+        } else {
+            Interaction::None
+        };
+    }
 }

@@ -12,7 +12,7 @@
 //! skills — are progress reports, heard only on their owner's node; a node with
 //! no player of its own (an observer) hears every player's.
 
-use std::{sync::Arc, time::Duration};
+use std::{collections::BTreeSet, sync::Arc, time::Duration};
 
 use bevy::{
     audio::{
@@ -22,10 +22,12 @@ use bevy::{
     prelude::*,
     window::PrimaryWindow,
 };
+use ferrets_content::registry::ContentRegistry;
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::fixed_uvec2::FixedUVec2;
 use ferrets_simulation::{
     command::SkillTarget,
+    components::{entity_buffs::BuffsComponent, hidden::HiddenComponent},
     entity_def,
     entity_index::EntityIndex,
     events::{DeathCause, EventRecord, SimulationEvent},
@@ -83,6 +85,8 @@ enum Cue {
     Research,
     /// A timed life running out.
     Expiry,
+    /// Something of the watched side catching fire.
+    Fire,
 }
 
 impl Cue {
@@ -108,6 +112,8 @@ impl Cue {
             Cue::Research => tone(0.45, 440.0, 660.0, 0.02, 5.0),
             // A thin fall to nothing: what was called up is gone again.
             Cue::Expiry => tone(0.20, 480.0, 160.0, 0.10, 12.0),
+            // Low, long and mostly noise: something has caught.
+            Cue::Fire => tone(0.40, 160.0, 110.0, 0.7, 6.0),
         }
     }
 }
@@ -180,6 +186,7 @@ pub struct Cues {
     completed: Handle<GeneratedCue>,
     research: Handle<GeneratedCue>,
     expiry: Handle<GeneratedCue>,
+    fire: Handle<GeneratedCue>,
 }
 
 impl Cues {
@@ -195,6 +202,7 @@ impl Cues {
             Cue::Completed => self.completed.clone(),
             Cue::Research => self.research.clone(),
             Cue::Expiry => self.expiry.clone(),
+            Cue::Fire => self.fire.clone(),
         }
     }
 }
@@ -274,6 +282,7 @@ pub fn build_cues(mut commands: Commands, mut assets: ResMut<Assets<GeneratedCue
         completed: built(Cue::Completed),
         research: built(Cue::Research),
         expiry: built(Cue::Expiry),
+        fire: built(Cue::Fire),
     });
 }
 
@@ -384,36 +393,10 @@ pub fn play_cues(world: &mut World) {
             break;
         }
         match position {
-            Some(position) => {
-                let cell = CellPos::from(position);
-                let visible = world.resource::<FogReveal>().0
-                    || render::sees(
-                        world.resource::<GameSession>(),
-                        world.resource::<ObserverPerspective>(),
-                        world.resource::<VisibilityGrid>(),
-                        cell.x,
-                        cell.y,
-                    );
-                if !visible {
-                    continue;
-                }
-                let at = world_center(position, CellSize::ONE);
-                if !is_audible(at, middle, view_width) {
-                    continue;
-                }
-                let handle = world.resource::<Cues>().handle(cue);
-                world.spawn((
-                    PlayingCue,
-                    AudioPlayer(handle),
-                    PlaybackSettings {
-                        mode: PlaybackMode::Despawn,
-                        spatial: true,
-                        spatial_scale: Some(falloff_scale(zoom)),
-                        ..default()
-                    },
-                    Transform::from_translation(at),
-                ));
-            }
+            Some(position) => match play_at(world, cue, position, middle, view_width, zoom) {
+                Placed::Playing => {}
+                Placed::OutOfSight | Placed::OutOfEarshot => continue,
+            },
             None => {
                 let handle = world.resource::<Cues>().handle(cue);
                 world.spawn((
@@ -428,6 +411,117 @@ pub fn play_cues(world: &mut World) {
         }
         sounding += 1;
     }
+}
+
+/// The entities whose fire this node hears — its own side's and neutral ones,
+/// every side's for an observer — burning as of the last tick.
+#[derive(Resource, Default)]
+struct FiresHeard(BTreeSet<Entity>);
+
+/// Plays the fire cue once for each entity whose fire this node hears — its
+/// own side's and neutral ones, every side's for an observer — that has caught
+/// fire since the last tick and that the watched player makes out (run in
+/// `FixedLast`). A fire caught out of sight is not heard later.
+pub fn play_fire_cues(world: &mut World) {
+    if !world.contains_resource::<Cues>() {
+        return;
+    }
+    let Some(on_fire) = world
+        .resource::<ContentRegistry>()
+        .entity_buff(render::ON_FIRE)
+    else {
+        return;
+    };
+    let local = world.resource::<GameSession>().local_role();
+    let mut burning: Vec<Entity> = Vec::new();
+    let mut query = world.query_filtered::<(Entity, &BuffsComponent), Without<HiddenComponent>>();
+    for (entity, buffs) in query.iter(world) {
+        if buffs.contains(on_fire) && own_milestone(local, entity_def::owner(world, entity)) {
+            burning.push(entity);
+        }
+    }
+    let mut fires = world.get_resource_or_init::<FiresHeard>();
+    fires.0.retain(|heard| burning.contains(heard));
+    let lit: Vec<Entity> = burning
+        .into_iter()
+        .filter(|&entity| fires.0.insert(entity))
+        .collect();
+    let judge = render::sighting_judge(world);
+    let caught: Vec<FixedUVec2> = lit
+        .into_iter()
+        .filter(|&entity| render::judged(world, judge, entity).is_seen())
+        .map(|entity| entity_def::position(world, entity))
+        .collect();
+    if caught.is_empty() {
+        return;
+    }
+    let Some((middle, view_width, zoom)) = view(world) else {
+        return;
+    };
+    let mut sounding = world
+        .query_filtered::<(), With<PlayingCue>>()
+        .iter(world)
+        .count();
+    for position in caught {
+        if sounding >= MAX_CONCURRENT_CUES {
+            break;
+        }
+        match play_at(world, Cue::Fire, position, middle, view_width, zoom) {
+            Placed::Playing => sounding += 1,
+            Placed::OutOfSight | Placed::OutOfEarshot => {}
+        }
+    }
+}
+
+/// What became of a cue placed on the map.
+enum Placed {
+    /// It is sounding.
+    Playing,
+    /// The watched player does not see its cell.
+    OutOfSight,
+    /// Its place is beyond earshot of the view.
+    OutOfEarshot,
+}
+
+/// Plays `cue` at `position` when the watched player sees the cell and the
+/// place is within earshot of the view.
+fn play_at(
+    world: &mut World,
+    cue: Cue,
+    position: FixedUVec2,
+    middle: Vec2,
+    view_width: f32,
+    zoom: f32,
+) -> Placed {
+    let cell = CellPos::from(position);
+    let visible = world.resource::<FogReveal>().0
+        || render::sees(
+            world.resource::<GameSession>(),
+            world.resource::<ObserverPerspective>(),
+            world.resource::<VisibilityGrid>(),
+            cell.x,
+            cell.y,
+        );
+    if !visible {
+        return Placed::OutOfSight;
+    }
+    let at = world_center(position, CellSize::ONE);
+    if !is_audible(at, middle, view_width) {
+        return Placed::OutOfEarshot;
+    }
+    let handle = world.resource::<Cues>().handle(cue);
+    world.spawn((
+        PlayingCue,
+        AudioPlayer(handle),
+        PlaybackSettings {
+            mode: PlaybackMode::Despawn,
+            spatial: true,
+            spatial_scale: Some(falloff_scale(zoom)),
+            ..default()
+        },
+        Transform::from_translation(at),
+    ));
+    Placed::Playing
 }
 
 /// The cues one announcement is worth, appended to `out` with the place each
@@ -573,10 +667,11 @@ fn despawn_finished_cues(
     }
 }
 
-/// Drops every cue still playing when a game ends, so nothing carries into the
-/// next one.
+/// Drops every cue still playing when a game ends, and forgets which fires
+/// were heard, so nothing carries into the next one.
 pub fn reset_per_game(mut commands: Commands, cues: Query<Entity, With<PlayingCue>>) {
     for entity in cues.iter() {
         commands.entity(entity).despawn();
     }
+    commands.remove_resource::<FiresHeard>();
 }

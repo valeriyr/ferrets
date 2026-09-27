@@ -2,6 +2,8 @@
 //! snapshots, and return command tables that round-trip to player commands;
 //! malformed scripts and results surface as errors rather than panics.
 
+mod utils;
+
 use ferrets_content::{
     affiliation::Affiliation,
     annex::{AloneConduct, AnnexClaim, AnnexLife, AnnexWork},
@@ -13,7 +15,7 @@ use ferrets_content::{
     player_buffs::PlayerBuffDef,
     price::{self, Price},
     registry::ContentRegistry,
-    requirement::Requirement,
+    requirement::{Bound, Requirement, Threshold},
     research::{ResearchDef, ResearchId},
     skills::{
         Casting, EntityCastEffect, EntityCastTarget, PlayerCastEffect, Reach, SkillCaster, SkillDef,
@@ -301,7 +303,32 @@ fn scripts_read_skill_catalogue() {
 }
 
 #[test]
-fn scripts_read_every_requirement_kind() {
+fn scripts_read_requirement_nodes_and_state_leaves() {
+    let source = ai_script(
+        r#"function(state, view)
+            local outpost = content.entities.outpost
+            local either = outpost.requires[1]
+            if either.kind ~= "any" or #either.items ~= 2 then error("wrong any") end
+            if either.items[1].kind ~= "entity_type" or either.items[1].name ~= "lab" then error("wrong first branch") end
+            local both = either.items[2]
+            if both.kind ~= "all" or #both.items ~= 7 then error("wrong all") end
+            if both.items[1].kind ~= "health" or both.items[1].under_share ~= "0.5" then error("wrong health") end
+            if both.items[2].kind ~= "stat" or both.items[2].name ~= "speed" or both.items[2].at_least ~= "1" then error("wrong stat") end
+            if both.items[3].kind ~= "idle" then error("wrong idle") end
+            if both.items[4].kind ~= "idle_for" or both.items[4].ticks ~= 40 then error("wrong idle_for") end
+            if both.items[5].kind ~= "unhurt_for" or both.items[5].ticks ~= 200 then error("wrong unhurt_for") end
+            if both.items[6].kind ~= "energy" or both.items[6].under ~= "20" then error("wrong energy") end
+            if both.items[7].kind ~= "stat" or both.items[7].at_least_share ~= "1.5" then error("wrong stat share") end
+            return {}
+        end"#,
+    );
+    let (content, _) = research_content();
+    let mut runtime = load_ai(&source, &content).expect("load ai");
+    assert!(runtime.think(&empty_view()).is_ok());
+}
+
+#[test]
+fn scripts_read_every_named_requirement_kind() {
     let source = ai_script(
         r#"function(state, view)
             local hub = content.entities.hub
@@ -804,6 +831,9 @@ fn scripts_read_view_and_content_tables() {
             if view.my_entities[2].stance ~= "flee" then error("worker stance") end
             if not view.my_entities[2].concealed then error("worker concealed") end
             if view.my_entities[1].concealed then error("hall concealed") end
+            local buffs = view.my_entities[2].buffs
+            if #buffs ~= 2 or buffs[1] ~= "shadowmeld" or buffs[2] ~= "on_fire" then error("worker buffs") end
+            if #view.my_entities[1].buffs ~= 0 then error("hall buffs") end
             if view.glimpses[1].x ~= 12 or view.glimpses[1].y ~= 9 then error("glimpse") end
             -- The fixture builds a two by two glimpse: a rectangle, not a cell.
             if view.glimpses[1].width ~= 2 or view.glimpses[1].height ~= 2 then
@@ -980,17 +1010,20 @@ fn research_content() -> (ContentView, ResearchId) {
             requires: Vec::new(),
         },
     );
+    // The lab is the workshop the hub asks for by tag, so the tag has a
+    // carrier and the hub can be unlocked.
+    registry.register_tag("workshop");
     registry.register(
         EntityTypeDef::new("lab")
             .with_location(LayerId::new(1), CellSize::ONE, Solidity::Solid)
+            .with_tags(["workshop"])
             .with_researcher([smithing])
             .with_energy(50, FixedU64::ONE)
             .with_skills([battle_focus, second_wind]),
     );
     // A primary offering one dock and the annex that stands in it, so a
     // requirement list may name an annex the registry will accept — and one
-    // list naming all four kinds, which is what a script reads them off.
-    registry.register_tag("workshop");
+    // list naming all four named kinds, which is what a script reads them off.
     registry.register(
         EntityTypeDef::new("relay")
             .with_location(LayerId::new(1), CellSize::ONE, Solidity::Solid)
@@ -1023,6 +1056,29 @@ fn research_content() -> (ContentView, ResearchId) {
                 Requirement::Research(smithing),
                 Requirement::Annexed("relay".to_string()),
             ]),
+    );
+    registry.register(
+        EntityTypeDef::new("outpost")
+            .with_location(LayerId::new(1), CellSize::ONE, Solidity::Solid)
+            .with_health(20)
+            .with_requires([Requirement::Any(vec![
+                Requirement::EntityType("lab".to_string()),
+                Requirement::All(vec![
+                    Requirement::Health(Bound::Share(Threshold::Under(utils::fixed("0.5")))),
+                    Requirement::Stat {
+                        stat: EntityStatId::SPEED,
+                        bound: Bound::Amount(Threshold::AtLeast(FixedU64::ONE)),
+                    },
+                    Requirement::Idle,
+                    Requirement::IdleFor(40),
+                    Requirement::UnhurtFor(200),
+                    Requirement::Energy(Bound::Amount(Threshold::Under(FixedU64::from_num(20)))),
+                    Requirement::Stat {
+                        stat: EntityStatId::SPEED,
+                        bound: Bound::Share(Threshold::AtLeast(utils::fixed("1.5"))),
+                    },
+                ]),
+            ])]),
     );
     registry.validate();
     (ContentView::from_registry(&registry), smithing)
@@ -1144,6 +1200,7 @@ fn populated_view(tick: u32) -> GameView {
                 idle: false,
                 hidden: false,
                 concealed: false,
+                buffs: Vec::new(),
                 carrying: None,
                 train_queue: vec!["peasant".to_string()],
                 under_construction: false,
@@ -1168,6 +1225,7 @@ fn populated_view(tick: u32) -> GameView {
                 idle: true,
                 hidden: false,
                 concealed: true,
+                buffs: vec!["shadowmeld".to_string(), "on_fire".to_string()],
                 carrying: Some(("gold".to_string(), 3)),
                 train_queue: Vec::new(),
                 under_construction: false,
@@ -1195,6 +1253,7 @@ fn populated_view(tick: u32) -> GameView {
             idle: true,
             hidden: false,
             concealed: false,
+            buffs: Vec::new(),
             carrying: None,
             train_queue: Vec::new(),
             under_construction: false,

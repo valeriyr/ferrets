@@ -16,6 +16,14 @@ use crate::{
     statistics::Statistics,
 };
 
+/// Whose kill a loss is.
+enum Loss {
+    /// This player's kill.
+    Credited(PlayerId),
+    /// Nobody's kill: a neutral attacker, or a health pool drained to nothing.
+    Uncredited,
+}
+
 /// Folds everything the tick announced into the tallies.
 ///
 /// What an entity is and whose it is are read off the entity an announcement
@@ -90,22 +98,27 @@ fn fold(
             cause,
             ..
         } => {
-            // A loss is something fire took: an owner canceling its own
-            // construction, a builder spent on its site, or a resource node
-            // running dry, is neither a loss nor anyone's kill. A passenger's
-            // death traces to whoever brought its carrier down.
-            let Some(by_owner) = fire_behind(*cause, deaths) else {
-                return;
-            };
-            if let Some(player) = owner {
-                statistics.record_lost(*player, *entity_type);
-            }
-            if let Some(killer) = by_owner {
-                // Downing your own or an ally's earns no kill; the victim
-                // already counted it as a loss.
-                if !same_side(world, killer, *owner) {
-                    statistics.record_killed(killer, *entity_type);
+            // A loss is something fire took, or a decay: an owner canceling
+            // its own construction, a builder spent on its site, or a resource
+            // node running dry, is neither a loss nor anyone's kill. A
+            // passenger's death traces to whatever brought its carrier down.
+            match fire_behind(*cause, deaths) {
+                Some(Loss::Credited(killer)) => {
+                    if let Some(player) = owner {
+                        statistics.record_lost(*player, *entity_type);
+                    }
+                    // Downing your own or an ally's earns no kill; the victim
+                    // already counted it as a loss.
+                    if !same_side(world, killer, *owner) {
+                        statistics.record_killed(killer, *entity_type);
+                    }
                 }
+                Some(Loss::Uncredited) => {
+                    if let Some(player) = owner {
+                        statistics.record_lost(*player, *entity_type);
+                    }
+                }
+                None => {}
             }
         }
         SimulationEvent::DamageLanded {
@@ -200,31 +213,34 @@ fn same_side(world: &World, player: PlayerId, other: Option<PlayerId>) -> bool {
     }
 }
 
-/// The owner behind the killing hit — `Some(None)` for a neutral attacker — or
-/// `None` for a death no fire caused.
+/// Whose kill a death was, or `None` for a death that was no loss.
 ///
 /// A passenger lost with its carrier died to whatever took the carrier down, so
 /// the chain of holders is followed to the death that started it. A holder with
 /// no announced death of its own ends the chase: nothing traces the loss to a
 /// shot.
-fn fire_behind(
-    mut cause: DeathCause,
-    deaths: &BTreeMap<SimulationId, DeathCause>,
-) -> Option<Option<PlayerId>> {
+fn fire_behind(mut cause: DeathCause, deaths: &BTreeMap<SimulationId, DeathCause>) -> Option<Loss> {
     loop {
         match cause {
-            DeathCause::Killed { by_owner, .. } => return Some(by_owner),
+            DeathCause::Killed { by_owner, .. } => {
+                return Some(match by_owner {
+                    Some(killer) => Loss::Credited(killer),
+                    None => Loss::Uncredited,
+                });
+            }
             DeathCause::PassengerLost { holder } | DeathCause::Orphaned { of: holder } => {
                 match deaths.get(&holder) {
                     Some(holder_cause) => cause = *holder_cause,
                     None => return None,
                 }
             }
+            // A health pool drained to nothing — a fading annex, a building
+            // burned down — is a loss nobody is credited with.
+            DeathCause::Decayed => return Some(Loss::Uncredited),
             DeathCause::Depleted
             | DeathCause::Canceled
             | DeathCause::Consumed
             | DeathCause::Overbuilt
-            | DeathCause::Decayed
             | DeathCause::Unseated { .. }
             // A timed life running out is nobody's kill and nobody's loss: a
             // summon was never a standing army.

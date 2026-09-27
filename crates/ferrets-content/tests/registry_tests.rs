@@ -35,7 +35,7 @@ use ferrets_content::{
     quantity::Quantity,
     registry::ContentRegistry,
     repair::{RepairCost, RepairRate},
-    requirement::Requirement,
+    requirement::{Bound, Requirement, Threshold},
     research::{ResearchDef, ResearcherDef},
     resource::{Banking, DepletionPolicy, HarvestData},
     skills::{
@@ -2327,7 +2327,11 @@ fn validate_accepts_type_tag_and_research_requirements() {
         Requirement::Tag(tags::BUILDING.to_string()),
         Requirement::Research(smithing),
     ]));
-    registry.register(utils::standing("lab", GROUND).with_researcher([smithing]));
+    registry.register(
+        utils::standing("lab", GROUND)
+            .with_researcher([smithing])
+            .with_tags([tags::BUILDING]),
+    );
     registry.validate();
 }
 
@@ -2404,6 +2408,629 @@ fn validate_accepts_research_requirement_on_skill() {
     let mut skill = player_cast(haste);
     skill.requires = vec![Requirement::Research(war_drums)];
     registry.register_skill("war_cry", skill);
+    registry.validate();
+}
+
+#[test]
+fn validate_accepts_nested_nodes_and_state_leaves() {
+    let mut registry = utils::ground_registry();
+    registry.register(utils::standing("lab", GROUND));
+    registry.register(
+        utils::standing("knight", GROUND).with_requires([Requirement::Any(vec![
+            Requirement::EntityType("lab".to_string()),
+            Requirement::All(vec![
+                Requirement::Health(Bound::Share(Threshold::Under(utils::fixed("0.5")))),
+                Requirement::Energy(Bound::Amount(Threshold::AtLeast(FixedU64::ONE))),
+                Requirement::Stat {
+                    stat: EntityStatId::SPEED,
+                    bound: Bound::Amount(Threshold::Under(FixedU64::from_num(2))),
+                },
+                Requirement::Idle,
+                Requirement::IdleFor(40),
+                Requirement::UnhurtFor(200),
+            ]),
+        ])]),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'knight' requires a list of nothing; a requirement names at least one thing"
+)]
+fn validate_rejects_empty_node() {
+    let mut registry = utils::ground_registry();
+    registry.register(utils::standing("knight", GROUND).with_requires([Requirement::Any(vec![])]));
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'knight' requires health at a share of 1.5 of its maximum; a pool holds at most 1"
+)]
+fn validate_rejects_pool_share_over_whole() {
+    let mut registry = utils::ground_registry();
+    registry.register(
+        utils::standing("knight", GROUND).with_requires([Requirement::Health(Bound::Share(
+            Threshold::Under(utils::fixed("1.5")),
+        ))]),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'knight' requires energy at a share of none; a share is above 0"
+)]
+fn validate_rejects_share_of_none() {
+    let mut registry = utils::ground_registry();
+    registry.register(
+        utils::standing("knight", GROUND).with_requires([Requirement::Energy(Bound::Share(
+            Threshold::AtLeast(FixedU64::ZERO),
+        ))]),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(expected = "entity type 'knight' requires health under nothing, which is never met")]
+fn validate_rejects_amount_under_nothing() {
+    let mut registry = utils::ground_registry();
+    registry.register(
+        utils::standing("knight", GROUND).with_requires([Requirement::Health(Bound::Amount(
+            Threshold::Under(FixedU64::ZERO),
+        ))]),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'knight' requires energy at least nothing, which always holds"
+)]
+fn validate_rejects_amount_at_least_nothing() {
+    let mut registry = utils::ground_registry();
+    registry.register(
+        utils::standing("knight", GROUND).with_requires([Requirement::Energy(Bound::Amount(
+            Threshold::AtLeast(FixedU64::ZERO),
+        ))]),
+    );
+    registry.validate();
+}
+
+#[test]
+fn validate_accepts_stat_share_over_whole() {
+    let mut registry = utils::ground_registry();
+    // Hasted to at least half again its base speed: a stat's share is open.
+    registry.register(
+        utils::standing("knight", GROUND).with_requires([Requirement::Stat {
+            stat: EntityStatId::SPEED,
+            bound: Bound::Share(Threshold::AtLeast(utils::fixed("1.5"))),
+        }]),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'knight' requires idling for no ticks at all; idle_for is at least one"
+)]
+fn validate_rejects_idle_for_zero() {
+    let mut registry = utils::ground_registry();
+    registry.register(utils::standing("knight", GROUND).with_requires([Requirement::IdleFor(0)]));
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'knight' requires no hit for no ticks at all; unhurt_for is at least one"
+)]
+fn validate_rejects_unhurt_for_zero() {
+    let mut registry = utils::ground_registry();
+    registry.register(utils::standing("knight", GROUND).with_requires([Requirement::UnhurtFor(0)]));
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity buff 'swollen' holds while it judges 'max_health', which its own modifiers move"
+)]
+fn validate_rejects_while_buff_moving_stat_it_is_judged_on() {
+    let mut registry = utils::ground_registry();
+    registry.register_entity_buff(
+        "swollen",
+        EntityBuffDef {
+            effects: vec![EntityEffect::Modifiers(vec![EntityModifier {
+                stat: EntityStatId::MAX_HEALTH,
+                op: ModifierOp::PercentAdd,
+                magnitude: FixedI64::ONE,
+            }])],
+            lasting: Lasting::While(Requirement::Health(Bound::Share(Threshold::AtLeast(
+                utils::fixed("0.5"),
+            )))),
+            stack_rule: StackRule::Ignore,
+            interrupted_by: Vec::new(),
+        },
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity buff 'charged' holds while it judges 'max_energy', which its own modifiers move"
+)]
+fn validate_rejects_while_buff_on_energy_share_moving_maximum() {
+    let mut registry = utils::ground_registry();
+    registry.register_entity_buff(
+        "charged",
+        EntityBuffDef {
+            effects: vec![EntityEffect::Modifiers(vec![EntityModifier {
+                stat: EntityStatId::MAX_ENERGY,
+                op: ModifierOp::FlatAdd,
+                magnitude: FixedI64::from_num(10),
+            }])],
+            lasting: Lasting::While(Requirement::Energy(Bound::Share(Threshold::AtLeast(
+                utils::fixed("0.5"),
+            )))),
+            stack_rule: StackRule::Ignore,
+            interrupted_by: Vec::new(),
+        },
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity buff 'sprint' holds while it judges 'speed', which its own modifiers move"
+)]
+fn validate_rejects_while_buff_on_stat_amount_moving_that_stat() {
+    let mut registry = utils::ground_registry();
+    registry.register_entity_buff(
+        "sprint",
+        EntityBuffDef {
+            effects: vec![EntityEffect::Modifiers(vec![EntityModifier {
+                stat: EntityStatId::SPEED,
+                op: ModifierOp::FlatAdd,
+                magnitude: FixedI64::ONE,
+            }])],
+            lasting: Lasting::While(Requirement::Stat {
+                stat: EntityStatId::SPEED,
+                bound: Bound::Amount(Threshold::Under(FixedU64::ONE)),
+            }),
+            stack_rule: StackRule::Ignore,
+            interrupted_by: Vec::new(),
+        },
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity buff 'crippled' holds on an amount of a pool capped by 'max_health', which its own modifiers lower"
+)]
+fn validate_rejects_while_buff_on_amount_lowering_maximum() {
+    let mut registry = utils::ground_registry();
+    // Under 100 health lowers a 200 maximum by 60% to 80, which the pool can
+    // never climb past to end it.
+    registry.register_entity_buff(
+        "crippled",
+        EntityBuffDef {
+            effects: vec![EntityEffect::Modifiers(vec![EntityModifier {
+                stat: EntityStatId::MAX_HEALTH,
+                op: ModifierOp::PercentAdd,
+                magnitude: "-0.6".parse().expect("-0.6 is a value"),
+            }])],
+            lasting: Lasting::While(Requirement::Health(Bound::Amount(Threshold::Under(
+                FixedU64::from_num(100),
+            )))),
+            stack_rule: StackRule::Ignore,
+            interrupted_by: Vec::new(),
+        },
+    );
+    registry.validate();
+}
+
+#[test]
+fn validate_accepts_while_buff_on_amount_raising_maximum() {
+    let mut registry = utils::ground_registry();
+    // An amount of health is capped by the maximum, so a buff held on one may
+    // raise it.
+    registry.register_entity_buff(
+        "rallied",
+        EntityBuffDef {
+            effects: vec![EntityEffect::Modifiers(vec![EntityModifier {
+                stat: EntityStatId::MAX_HEALTH,
+                op: ModifierOp::PercentAdd,
+                magnitude: FixedI64::ONE,
+            }])],
+            lasting: Lasting::While(Requirement::Health(Bound::Amount(Threshold::AtLeast(
+                FixedU64::from_num(50),
+            )))),
+            stack_rule: StackRule::Ignore,
+            interrupted_by: Vec::new(),
+        },
+    );
+    registry.validate();
+}
+
+#[test]
+fn validate_accepts_while_buff_moving_pool_under_its_line() {
+    let mut registry = utils::ground_registry();
+    let on_fire = registry.register_entity_buff(
+        "on_fire",
+        EntityBuffDef {
+            effects: vec![EntityEffect::Modifiers(vec![EntityModifier {
+                stat: EntityStatId::HEALTH_DRAIN,
+                op: ModifierOp::FlatAdd,
+                magnitude: FixedI64::from_num(2),
+            }])],
+            lasting: Lasting::While(Requirement::Health(Bound::Share(Threshold::Under(
+                utils::fixed("0.34"),
+            )))),
+            stack_rule: StackRule::Ignore,
+            interrupted_by: Vec::new(),
+        },
+    );
+    registry.register(
+        utils::standing("depot", GROUND)
+            .with_health(100)
+            .with_stat(EntityStatId::HEALTH_DRAIN, FixedU64::ZERO)
+            .with_passives([on_fire]),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'depot' bears passive 'on_fire', which modifies 'health_drain' it does not carry"
+)]
+fn validate_rejects_passive_modifying_stat_bearer_lacks() {
+    let mut registry = utils::ground_registry();
+    let on_fire = registry.register_entity_buff(
+        "on_fire",
+        EntityBuffDef {
+            effects: vec![EntityEffect::Modifiers(vec![EntityModifier {
+                stat: EntityStatId::HEALTH_DRAIN,
+                op: ModifierOp::FlatAdd,
+                magnitude: FixedI64::from_num(2),
+            }])],
+            lasting: Lasting::While(Requirement::Health(Bound::Share(Threshold::Under(
+                utils::fixed("0.34"),
+            )))),
+            stack_rule: StackRule::Ignore,
+            interrupted_by: Vec::new(),
+        },
+    );
+    registry.register(
+        utils::standing("depot", GROUND)
+            .with_health(100)
+            .with_passives([on_fire]),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity buff 'lit' requires the entity type 'beacon', which is not registered"
+)]
+fn validate_rejects_while_buff_naming_unregistered_type() {
+    let mut registry = utils::ground_registry();
+    registry.register_entity_buff(
+        "lit",
+        EntityBuffDef {
+            effects: vec![EntityEffect::Conceal],
+            lasting: Lasting::While(Requirement::EntityType("beacon".to_string())),
+            stack_rule: StackRule::Ignore,
+            interrupted_by: Vec::new(),
+        },
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'depot' bears passive 'thick_hide', which does not hold on a requirement"
+)]
+fn validate_rejects_passive_not_holding_on_requirement() {
+    let mut registry = utils::ground_registry();
+    let thick_hide = registry.register_entity_buff(
+        "thick_hide",
+        EntityBuffDef {
+            effects: vec![EntityEffect::Modifiers(vec![EntityModifier {
+                stat: EntityStatId::ARMOR,
+                op: ModifierOp::FlatAdd,
+                magnitude: FixedI64::ONE,
+            }])],
+            lasting: Lasting::Forever,
+            stack_rule: StackRule::Ignore,
+            interrupted_by: Vec::new(),
+        },
+    );
+    registry.register(
+        utils::standing("depot", GROUND)
+            .with_health(100)
+            .with_stat(EntityStatId::ARMOR, FixedU64::ZERO)
+            .with_passives([thick_hide]),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(expected = "entity type 'depot' bears a passive this registry never registered")]
+fn validate_rejects_passive_registered_elsewhere() {
+    // A buff minted by another registry: its index names nothing here.
+    let foreign = utils::ground_registry().register_entity_buff(
+        "lit",
+        EntityBuffDef {
+            effects: vec![EntityEffect::Conceal],
+            lasting: Lasting::While(Requirement::Idle),
+            stack_rule: StackRule::Ignore,
+            interrupted_by: Vec::new(),
+        },
+    );
+    let mut registry = utils::ground_registry();
+    registry.register(
+        utils::standing("depot", GROUND)
+            .with_health(100)
+            .with_passives([foreign]),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(expected = "entity type 'depot' bears passive 'on_fire' twice")]
+fn validate_rejects_passive_named_twice() {
+    let mut registry = utils::ground_registry();
+    let on_fire = registry.register_entity_buff(
+        "on_fire",
+        EntityBuffDef {
+            effects: vec![EntityEffect::Conceal],
+            lasting: Lasting::While(Requirement::Idle),
+            stack_rule: StackRule::Ignore,
+            interrupted_by: Vec::new(),
+        },
+    );
+    registry.register(
+        utils::standing("depot", GROUND)
+            .with_health(100)
+            .with_passives([on_fire, on_fire]),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(expected = "entity type 'knight' requires a stat this registry never registered")]
+fn validate_rejects_stat_requirement_on_stat_registered_elsewhere() {
+    // A stat minted by another registry: its index is one past this one's
+    // built-ins, which this registry never registered.
+    let girth = utils::ground_registry().register_entity_stat("girth", FixedU64::ZERO);
+    let mut registry = utils::ground_registry();
+    registry.register(
+        utils::standing("knight", GROUND).with_requires([Requirement::Stat {
+            stat: girth,
+            bound: Bound::Amount(Threshold::Under(FixedU64::ONE)),
+        }]),
+    );
+    registry.validate();
+}
+
+//
+// ─── Unlockability ────────────────────────────────────────────────────────────
+//
+
+// A requirement is met in some order of unlocking, from the things that
+// require nothing up. A cycle with no way in is refused; an `any` with a free
+// branch is a way in.
+
+#[test]
+#[should_panic(
+    expected = "entity type 'chapel' requires the entity type 'keep', which can never be unlocked"
+)]
+fn validate_rejects_two_types_requiring_each_other() {
+    let mut registry = utils::ground_registry();
+    registry.register(
+        utils::standing("chapel", GROUND)
+            .with_requires([Requirement::EntityType("keep".to_string())]),
+    );
+    registry.register(
+        utils::standing("keep", GROUND)
+            .with_requires([Requirement::EntityType("chapel".to_string())]),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'keep' requires the research 'masonry', which can never be unlocked"
+)]
+fn validate_rejects_research_and_type_requiring_each_other() {
+    let mut registry = utils::ground_registry();
+    let masonry = registry.register_research(
+        "masonry",
+        ResearchDef::new(
+            Price::new(),
+            5,
+            None,
+            [Requirement::EntityType("keep".to_string())],
+        ),
+    );
+    registry.register(
+        utils::standing("keep", GROUND)
+            .with_requires([Requirement::Research(masonry)])
+            .with_researcher([masonry]),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "research 'masonry' requires a type carrying the tag 'hall', which can never be unlocked"
+)]
+fn validate_rejects_research_requiring_tag_nothing_carries() {
+    let mut registry = utils::ground_registry();
+    registry.register_tag("hall");
+    let masonry = registry.register_research(
+        "masonry",
+        ResearchDef::new(
+            Price::new(),
+            5,
+            None,
+            [Requirement::Tag("hall".to_string())],
+        ),
+    );
+    registry.register(utils::standing("lab", GROUND).with_researcher([masonry]));
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "skill 'haste' requires a type carrying the tag 'hall', which can never be unlocked"
+)]
+fn validate_rejects_skill_requiring_tag_nothing_carries() {
+    let mut registry = utils::ground_registry();
+    registry.register_tag("hall");
+    let buff = haste_buff(&mut registry);
+    let mut skill = player_cast(buff);
+    skill.requires = vec![Requirement::Tag("hall".to_string())];
+    registry.register_skill("haste", skill);
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'hall' changing into 'keep' requires a type carrying the tag 'forge', which can never be unlocked"
+)]
+fn validate_rejects_change_of_form_requiring_tag_nothing_carries() {
+    let mut registry = utils::ground_registry();
+    registry.register_tag("forge");
+    registry.register(utils::standing("keep", GROUND));
+    registry.register(
+        utils::standing("hall", GROUND).with_morphs([MorphTransition::new(
+            "keep",
+            None,
+            Quantity::Constant(20),
+            MorphPlacement::Reserve,
+            MorphCancel::Committed,
+            MorphInterrupted::Reverts,
+            MorphReason::Change,
+            Vec::new(),
+            [Requirement::Tag("forge".to_string())],
+        )]),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'chapel' requires a type carrying the tag 'holy', which can never be unlocked"
+)]
+fn validate_rejects_cycle_through_tag() {
+    let mut registry = utils::ground_registry();
+    registry.register_tag("holy");
+    // The chapel needs something holy; the only holy thing needs the chapel.
+    registry.register(
+        utils::standing("chapel", GROUND).with_requires([Requirement::Tag("holy".to_string())]),
+    );
+    registry.register(
+        utils::standing("shrine", GROUND)
+            .with_tags(["holy"])
+            .with_requires([Requirement::EntityType("chapel".to_string())]),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'chapel' requires one of the entity type 'keep', a type carrying the tag 'holy', which can never be unlocked"
+)]
+fn validate_names_every_dead_branch_of_any() {
+    let mut registry = utils::ground_registry();
+    registry.register_tag("holy");
+    registry.register(
+        utils::standing("chapel", GROUND).with_requires([Requirement::Any(vec![
+            Requirement::EntityType("keep".to_string()),
+            Requirement::Tag("holy".to_string()),
+        ])]),
+    );
+    registry.register(
+        utils::standing("keep", GROUND)
+            .with_requires([Requirement::EntityType("chapel".to_string())]),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'keep' requires 'lookout' docked, which can never be unlocked"
+)]
+fn validate_rejects_annex_requirement_that_can_never_be_unlocked() {
+    let mut registry = utils::ground_registry();
+    registry.register(
+        EntityTypeDef::new("keep")
+            .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
+            .with_health(100)
+            .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
+            .with_builder(
+                ["lookout"],
+                BuilderAttendance::Crew(WorkPresence::Present {
+                    crew: CrewLimit::ONE,
+                }),
+            )
+            .with_docks([(CellPos::new(2, 0), Kinds::types(["lookout"]))])
+            .with_requires([Requirement::Annexed("lookout".to_string())]),
+    );
+    registry.register(
+        EntityTypeDef::new("lookout")
+            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+            .with_health(10)
+            .with_build_time(4)
+            .with_annex(
+                AloneConduct::Standing {
+                    work: AnnexWork::Works,
+                    life: AnnexLife::Endures,
+                },
+                AnnexClaim::Bound,
+            )
+            .with_requires([Requirement::EntityType("keep".to_string())]),
+    );
+    registry.validate();
+}
+
+#[test]
+fn validate_accepts_cycle_with_free_branch() {
+    let mut registry = utils::ground_registry();
+    registry.register(utils::standing("hall", GROUND));
+    // chapel needs keep or hall; keep needs chapel. The hall lets chapel in,
+    // and chapel lets keep in.
+    registry.register(
+        utils::standing("chapel", GROUND).with_requires([Requirement::Any(vec![
+            Requirement::EntityType("keep".to_string()),
+            Requirement::EntityType("hall".to_string()),
+        ])]),
+    );
+    registry.register(
+        utils::standing("keep", GROUND)
+            .with_requires([Requirement::EntityType("chapel".to_string())]),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity buff 'lit' requires a type carrying the tag 'hall', which can never be unlocked"
+)]
+fn validate_rejects_while_buff_on_tag_nothing_carries() {
+    let mut registry = utils::ground_registry();
+    registry.register_tag("hall");
+    registry.register_entity_buff(
+        "lit",
+        EntityBuffDef {
+            effects: vec![EntityEffect::Conceal],
+            lasting: Lasting::While(Requirement::Tag("hall".to_string())),
+            stack_rule: StackRule::Ignore,
+            interrupted_by: Vec::new(),
+        },
+    );
     registry.validate();
 }
 
@@ -3269,6 +3896,36 @@ fn register_rejects_player_cast_asking_something_of_actor() {
     // of — and the scope is read off the requirement itself, so the name it
     // carries never has to resolve.
     skill.requires = vec![Requirement::Annexed("lookout".to_string())];
+    registry.register_skill("haste", skill);
+}
+
+#[test]
+#[should_panic(expected = "player-cast skill 'haste' requires something of an acting entity")]
+fn register_rejects_player_cast_with_actor_leaf_under_node() {
+    let mut registry = utils::ground_registry();
+    let buff = haste_buff(&mut registry);
+    let mut skill = player_cast(buff);
+    // A node asks of the actor as soon as one leaf under it does, however
+    // deep: the health line sits under an any inside an all.
+    skill.requires = vec![Requirement::All(vec![
+        Requirement::Tag("hall".to_string()),
+        Requirement::Any(vec![
+            Requirement::Tag("keep".to_string()),
+            Requirement::Health(Bound::Share(Threshold::Under(utils::fixed("0.5")))),
+        ]),
+    ])];
+    registry.register_skill("haste", skill);
+}
+
+#[test]
+fn register_accepts_player_cast_with_player_leaves_under_node() {
+    let mut registry = utils::ground_registry();
+    let buff = haste_buff(&mut registry);
+    let mut skill = player_cast(buff);
+    skill.requires = vec![Requirement::Any(vec![
+        Requirement::Tag("hall".to_string()),
+        Requirement::Tag("keep".to_string()),
+    ])];
     registry.register_skill("haste", skill);
 }
 

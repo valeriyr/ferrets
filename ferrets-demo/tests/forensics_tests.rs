@@ -12,6 +12,8 @@
 //! footprint and the fold the simulation makes of it, within the
 //! `FOCUS_FROM`/`FOCUS_TO` range. `FIELD_MAP=<field>,<tick>` prints that
 //! field's coverage as a map at that tick, with every source of it marked.
+//! `PASSIVES=<type substring>` prints every tick the set of buffs a matching
+//! entity bears changes, with its pools, within the same range.
 
 use std::{collections::BTreeMap, fs::File, io::BufReader};
 
@@ -29,7 +31,8 @@ use ferrets_physics::body;
 use ferrets_replay::replay::Replay;
 use ferrets_simulation::{
     components::{
-        concealed::ConcealedComponent, entity_info::EntityInfoComponent, hidden::HiddenComponent,
+        concealed::ConcealedComponent, energy::EnergyComponent, entity_buffs::BuffsComponent,
+        entity_info::EntityInfoComponent, health::HealthComponent, hidden::HiddenComponent,
         location::LocationComponent, movement::MoveComponent, order_queue::OrderQueueComponent,
         owner::OwnerComponent, resource::ResourceCarrierComponent,
     },
@@ -88,6 +91,8 @@ fn replay_forensics() {
         Some((name.to_string(), tick.parse().ok()?))
     });
     let mut was_concealed: BTreeMap<SimulationId, bool> = BTreeMap::new();
+    let passives: Option<String> = std::env::var("PASSIVES").ok();
+    let mut bore: BTreeMap<SimulationId, Vec<String>> = BTreeMap::new();
 
     let mut tracks: BTreeMap<SimulationId, (String, Vec<Sample>)> = BTreeMap::new();
     for _ in 0..last + 10 {
@@ -144,6 +149,45 @@ fn replay_forensics() {
                     "t{tick} {id:?} {} concealed {concealed} (was {before:?}) pos {:?} anchor {anchor:?} veil {covered} hidden {hidden} front {front:?}",
                     info.type_name(),
                     location.map(|location| location.position),
+                );
+            }
+        }
+        if let Some(wanted) = &passives
+            && (focus_from..=focus_to).contains(&tick)
+        {
+            let registry = world.resource::<ContentRegistry>();
+            for (id, entity) in world.resource::<EntityIndex>().alive_entries() {
+                let entity_ref = world.entity(entity);
+                let Some(info) = entity_ref.get::<EntityInfoComponent>() else {
+                    continue;
+                };
+                if !info.type_name().contains(wanted.as_str()) {
+                    continue;
+                }
+                let names: Vec<String> =
+                    entity_ref
+                        .get::<BuffsComponent>()
+                        .map_or_else(Vec::new, |buffs| {
+                            buffs
+                                .active()
+                                .map(|(buff, _)| {
+                                    registry.entity_buff_name(buff).unwrap_or("?").to_string()
+                                })
+                                .collect()
+                        });
+                let before = bore.insert(id, names.clone());
+                if before.as_ref() == Some(&names) {
+                    continue;
+                }
+                let health = entity_ref
+                    .get::<HealthComponent>()
+                    .map(|health| health.current());
+                let energy = entity_ref
+                    .get::<EnergyComponent>()
+                    .map(|energy| energy.current());
+                println!(
+                    "t{tick} {id:?} {} bears {names:?} (was {before:?}) health {health:?} energy {energy:?}",
+                    info.type_name(),
                 );
             }
         }

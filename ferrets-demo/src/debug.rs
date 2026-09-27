@@ -28,6 +28,7 @@ use crate::{
     render::{self, CELL_PX, FogReveal, Smoothing, world_center},
     sound::Muted,
     states::InGameUi,
+    time,
 };
 
 /// Toggleable debug options.
@@ -223,9 +224,12 @@ pub fn debug_readout(
     let wanted_hz = held_hz / pacing.throttle.to_num::<f32>();
 
     if let Ok(mut text) = text.single_mut() {
+        // Game time at the nominal cadence, so it reads the same whatever the
+        // game is throttled to.
         **text = format!(
-            "tick {} | {held_hz:.1}/{wanted_hz:.0} Hz | {} | {} | sound {} | layer {} | cursor {} | hover {} | LMB {} RMB {} | selected {} | {}",
+            "tick {} ({}) | {held_hz:.1}/{wanted_hz:.0} Hz | {} | {} | sound {} | layer {} | cursor {} | hover {} | LMB {} RMB {} | selected {} | {}",
             session.tick(),
+            time::clock_text(time::seconds(session.tick())),
             model_str,
             if smoothing.0 { "smoothed" } else { "per tick" },
             if muted.0 { "off" } else { "on" },

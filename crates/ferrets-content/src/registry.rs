@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use bevy_ecs::prelude::*;
 use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
-use ferrets_math::FixedU64;
+use ferrets_math::{FixedI64, FixedU64};
 use ferrets_pathfinder::{layer_id::LayerId, layer_mask::LayerMask};
 
 use crate::{
@@ -26,7 +26,7 @@ use crate::{
     projectile::{Aim, ProjectileDef, ProjectileId},
     quantity::Quantity,
     repair::RepairCost,
-    requirement::{Requirement, Scope},
+    requirement::{Bound, Requirement, Scope, Threshold},
     research::{ResearchDef, ResearchId},
     skills::{
         Casting, EntityCastEffect, EntityCastTarget, PlayerCastEffect, Reach, SkillCaster,
@@ -187,6 +187,7 @@ impl ContentRegistry {
             self.validate_carries(def);
             self.validate_repairs(def);
             self.validate_requires(&format!("entity type '{}'", def.name), &def.requires);
+            self.validate_passives(def);
             self.validate_bonus_damage_vs(def);
             self.validate_traversable(def);
             self.validate_morphs(def);
@@ -213,6 +214,10 @@ impl ContentRegistry {
             );
             self.validate_aim(name, &self.skill_defs[id.index()]);
         }
+        for (name, &id) in &self.entity_buffs {
+            self.validate_while(name, &self.entity_buff_defs[id.index()]);
+        }
+        self.validate_requirements_attainable();
     }
 
     /// Returns the definition for the given type name, or `None` if not registered.
@@ -477,7 +482,9 @@ impl ContentRegistry {
                     }
                 }
             }
-            Lasting::Forever => {}
+            // The requirement is checked once the registry is complete, in
+            // [`Self::validate`]: it may name types registered after the buff.
+            Lasting::Forever | Lasting::While(_) => {}
         }
         for effect in &buff.effects {
             match effect {
@@ -1499,42 +1506,401 @@ impl ContentRegistry {
         }
     }
 
-    /// Checks that every requirement entry resolves to exactly one vocabulary:
-    /// the kind it names, and that no name serves as both an entity type and a
-    /// tag.
+    /// Checks every requirement entry — see [`Self::validate_requirement`].
     fn validate_requires(&self, owner: &str, requires: &[Requirement]) {
         for entry in requires {
-            match entry {
-                Requirement::EntityType(name) => {
-                    assert!(
-                        self.defs_by_name.contains_key(name),
-                        "{owner} requires the entity type '{name}', which is not registered"
-                    );
-                    assert!(
-                        !self.tags.contains(name),
-                        "{owner} requires the entity type '{name}', which is also a registered tag"
-                    );
+            self.validate_requirement(owner, entry);
+        }
+    }
+
+    /// Checks one requirement and everything under it: a node names at least
+    /// one requirement, a name resolves to exactly one registered thing, a
+    /// research was minted here, a stat is registered, a bound passes
+    /// [`Self::validate_bound`] (a pool's [`Self::validate_pool_bound`]), and a
+    /// stretch of ticks is at least one.
+    fn validate_requirement(&self, owner: &str, requirement: &Requirement) {
+        match requirement {
+            Requirement::All(items) | Requirement::Any(items) => {
+                assert!(
+                    !items.is_empty(),
+                    "{owner} requires a list of nothing; a requirement names at least one thing"
+                );
+                for item in items {
+                    self.validate_requirement(owner, item);
                 }
-                Requirement::Tag(name) => {
-                    assert!(
-                        self.tags.contains(name),
-                        "{owner} requires the tag '{name}', which is not registered"
-                    );
-                    assert!(
-                        !self.defs_by_name.contains_key(name),
-                        "{owner} requires the tag '{name}', which is also a registered entity type"
-                    );
+            }
+            Requirement::EntityType(name) => {
+                assert!(
+                    self.defs_by_name.contains_key(name),
+                    "{owner} requires the entity type '{name}', which is not registered"
+                );
+                assert!(
+                    !self.tags.contains(name),
+                    "{owner} requires the entity type '{name}', which is also a registered tag"
+                );
+            }
+            Requirement::Tag(name) => {
+                assert!(
+                    self.tags.contains(name),
+                    "{owner} requires the tag '{name}', which is not registered"
+                );
+                assert!(
+                    !self.defs_by_name.contains_key(name),
+                    "{owner} requires the tag '{name}', which is also a registered entity type"
+                );
+            }
+            Requirement::Research(research) => assert!(
+                research.index() < self.research_defs.len(),
+                "{owner} requires a research this registry never minted"
+            ),
+            Requirement::Annexed(name) => {
+                let annex = self.entity(name).is_some_and(|def| def.annex.is_some());
+                assert!(
+                    annex,
+                    "{owner} requires '{name}' docked, which is not a registered annex"
+                );
+            }
+            Requirement::Health(bound) => self.validate_pool_bound(owner, "health", *bound),
+            Requirement::Energy(bound) => self.validate_pool_bound(owner, "energy", *bound),
+            Requirement::Stat { stat, bound } => {
+                assert!(
+                    stat.index() < self.entity_stat_defs.len(),
+                    "{owner} requires a stat this registry never registered"
+                );
+                self.validate_bound(
+                    owner,
+                    self.entity_stat_name(*stat)
+                        .expect("the stat was checked registered above"),
+                    *bound,
+                );
+            }
+            Requirement::Idle => {}
+            Requirement::IdleFor(ticks) => assert!(
+                *ticks > 0,
+                "{owner} requires idling for no ticks at all; idle_for is at least one"
+            ),
+            Requirement::UnhurtFor(ticks) => assert!(
+                *ticks > 0,
+                "{owner} requires no hit for no ticks at all; unhurt_for is at least one"
+            ),
+        }
+    }
+
+    /// Checks one bound on `what`: an amount and a share are each above none.
+    fn validate_bound(&self, owner: &str, what: &str, bound: Bound) {
+        match bound {
+            Bound::Amount(Threshold::Under(amount)) => assert!(
+                amount > FixedU64::ZERO,
+                "{owner} requires {what} under nothing, which is never met"
+            ),
+            Bound::Amount(Threshold::AtLeast(amount)) => assert!(
+                amount > FixedU64::ZERO,
+                "{owner} requires {what} at least nothing, which always holds"
+            ),
+            Bound::Share(threshold) => assert!(
+                threshold.number() > FixedU64::ZERO,
+                "{owner} requires {what} at a share of none; a share is above 0"
+            ),
+        }
+    }
+
+    /// Checks one bound on the pool `what`, as [`Self::validate_bound`] does,
+    /// and a share of its maximum at most the whole of it.
+    fn validate_pool_bound(&self, owner: &str, what: &str, bound: Bound) {
+        self.validate_bound(owner, what, bound);
+        match bound {
+            Bound::Share(threshold) => {
+                let share = threshold.number();
+                assert!(
+                    share <= FixedU64::ONE,
+                    "{owner} requires {what} at a share of {share} of its maximum; a pool holds at most 1"
+                );
+            }
+            Bound::Amount(_) => {}
+        }
+    }
+
+    /// Checks that every requirement can be met in some order of unlocking:
+    /// a type or a research is unlockable once its requirement is met with
+    /// what is unlockable already, from the ones that require nothing up;
+    /// what never joins — two types requiring each other, a research
+    /// requiring a type that requires the research — is refused, as is any
+    /// skill, change of form or buff whose requirement names it. A leaf that
+    /// reads an entity's state is taken as met.
+    fn validate_requirements_attainable(&self) {
+        let mut types: BTreeSet<&str> = BTreeSet::new();
+        let mut researches = vec![false; self.research_defs.len()];
+        loop {
+            let mut grew = false;
+            for def in &self.defs {
+                if !types.contains(def.name.as_str())
+                    && self.attainable_all(&def.requires, &types, &researches)
+                {
+                    types.insert(def.name.as_str());
+                    grew = true;
                 }
-                Requirement::Research(research) => assert!(
-                    research.index() < self.research_defs.len(),
-                    "{owner} requires a research this registry never minted"
+            }
+            for (index, def) in self.research_defs.iter().enumerate() {
+                if !researches[index] && self.attainable_all(&def.requires, &types, &researches) {
+                    researches[index] = true;
+                    grew = true;
+                }
+            }
+            if !grew {
+                break;
+            }
+        }
+        let unlocked = |owner: &str, requires: &[Requirement]| {
+            if let Some(words) = requires
+                .iter()
+                .find_map(|entry| self.unattainable_words(entry, &types, &researches))
+            {
+                panic!("{owner} requires {words}, which can never be unlocked");
+            }
+        };
+        for def in &self.defs {
+            let owner = format!("entity type '{}'", def.name);
+            unlocked(&owner, &def.requires);
+            for morph in &def.morphs {
+                unlocked(
+                    &format!("{owner} changing into '{}'", morph.into_type()),
+                    morph.requires(),
+                );
+            }
+        }
+        for (name, &id) in &self.researches {
+            unlocked(
+                &format!("research '{name}'"),
+                &self.research_defs[id.index()].requires,
+            );
+        }
+        for (name, &id) in &self.skills {
+            unlocked(
+                &format!("skill '{name}'"),
+                &self.skill_defs[id.index()].requires,
+            );
+        }
+        for (name, &id) in &self.entity_buffs {
+            match &self.entity_buff_defs[id.index()].lasting {
+                Lasting::While(requirement) => unlocked(
+                    &format!("entity buff '{name}'"),
+                    std::slice::from_ref(requirement),
                 ),
-                Requirement::Annexed(name) => {
-                    let annex = self.entity(name).is_some_and(|def| def.annex.is_some());
-                    assert!(
-                        annex,
-                        "{owner} requires '{name}' docked, which is not a registered annex"
-                    );
+                Lasting::Forever | Lasting::For(_) | Lasting::Upkeep { .. } => {}
+            }
+        }
+    }
+
+    /// The first thing under `requirement` that cannot be met with exactly
+    /// `types` unlocked and the `researches` marked completed, in words — or
+    /// `None` when the requirement is attainable. An `any` with no live branch
+    /// names every branch.
+    fn unattainable_words(
+        &self,
+        requirement: &Requirement,
+        types: &BTreeSet<&str>,
+        researches: &[bool],
+    ) -> Option<String> {
+        if self.attainable(requirement, types, researches) {
+            return None;
+        }
+        Some(match requirement {
+            Requirement::All(items) => items
+                .iter()
+                .find_map(|item| self.unattainable_words(item, types, researches))
+                .expect("an unmet all has an unmet branch"),
+            Requirement::Any(items) => format!(
+                "one of {}",
+                items
+                    .iter()
+                    .map(|item| self
+                        .unattainable_words(item, types, researches)
+                        .expect("an unmet any has no met branch"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            Requirement::EntityType(name) => format!("the entity type '{name}'"),
+            Requirement::Annexed(name) => format!("'{name}' docked"),
+            Requirement::Tag(tag) => format!("a type carrying the tag '{tag}'"),
+            Requirement::Research(research) => format!(
+                "the research '{}'",
+                self.research_name(*research)
+                    .expect("a requirement's research was checked minted here")
+            ),
+            Requirement::Health(_)
+            | Requirement::Energy(_)
+            | Requirement::Stat { .. }
+            | Requirement::Idle
+            | Requirement::IdleFor(_)
+            | Requirement::UnhurtFor(_) => unreachable!("a state leaf is taken as met"),
+        })
+    }
+
+    /// Whether every one of `requires` is attainable — see [`Self::attainable`].
+    fn attainable_all(
+        &self,
+        requires: &[Requirement],
+        types: &BTreeSet<&str>,
+        researches: &[bool],
+    ) -> bool {
+        requires
+            .iter()
+            .all(|entry| self.attainable(entry, types, researches))
+    }
+
+    /// Whether `requirement` is met with exactly `types` unlocked and exactly
+    /// the `researches` marked completed, a state leaf taken as met.
+    fn attainable(
+        &self,
+        requirement: &Requirement,
+        types: &BTreeSet<&str>,
+        researches: &[bool],
+    ) -> bool {
+        match requirement {
+            Requirement::All(items) => items
+                .iter()
+                .all(|item| self.attainable(item, types, researches)),
+            Requirement::Any(items) => items
+                .iter()
+                .any(|item| self.attainable(item, types, researches)),
+            Requirement::EntityType(name) | Requirement::Annexed(name) => {
+                types.contains(name.as_str())
+            }
+            Requirement::Tag(tag) => self
+                .defs
+                .iter()
+                .any(|def| def.tags.contains(tag) && types.contains(def.name.as_str())),
+            Requirement::Research(research) => researches[research.index()],
+            Requirement::Health(_)
+            | Requirement::Energy(_)
+            | Requirement::Stat { .. }
+            | Requirement::Idle
+            | Requirement::IdleFor(_)
+            | Requirement::UnhurtFor(_) => true,
+        }
+    }
+
+    /// Checks a buff that holds `While`: its requirement resolves like any
+    /// other, and its own modifiers leave alone every stat the requirement is
+    /// judged on, and never lower the maximum that caps a pool it reads an
+    /// amount of.
+    fn validate_while(&self, name: &str, buff: &EntityBuffDef) {
+        let requirement = match &buff.lasting {
+            Lasting::While(requirement) => requirement,
+            Lasting::Forever | Lasting::For(_) | Lasting::Upkeep { .. } => return,
+        };
+        /// Which of the buff's own modifiers on a stat its requirement judges
+        /// are refused.
+        enum Refused {
+            /// Every one: the stat is what the requirement reads, or the
+            /// maximum a share of a pool is taken of.
+            Any,
+            /// One that lowers it: the maximum that caps a pool the
+            /// requirement reads an amount of.
+            Lowering,
+        }
+        let owner = format!("entity buff '{name}'");
+        self.validate_requirement(&owner, requirement);
+        let judged: Vec<(EntityStatId, Refused)> = requirement
+            .leaves()
+            .into_iter()
+            .filter_map(|leaf| match leaf {
+                Requirement::Health(Bound::Share(_)) => {
+                    Some((EntityStatId::MAX_HEALTH, Refused::Any))
+                }
+                Requirement::Energy(Bound::Share(_)) => {
+                    Some((EntityStatId::MAX_ENERGY, Refused::Any))
+                }
+                Requirement::Health(Bound::Amount(_)) => {
+                    Some((EntityStatId::MAX_HEALTH, Refused::Lowering))
+                }
+                Requirement::Energy(Bound::Amount(_)) => {
+                    Some((EntityStatId::MAX_ENERGY, Refused::Lowering))
+                }
+                Requirement::Stat { stat, .. } => Some((*stat, Refused::Any)),
+                Requirement::All(_)
+                | Requirement::Any(_)
+                | Requirement::EntityType(_)
+                | Requirement::Tag(_)
+                | Requirement::Research(_)
+                | Requirement::Annexed(_)
+                | Requirement::Idle
+                | Requirement::IdleFor(_)
+                | Requirement::UnhurtFor(_) => None,
+            })
+            .collect();
+        for effect in &buff.effects {
+            match effect {
+                EntityEffect::Modifiers(modifiers) => {
+                    for modifier in modifiers {
+                        let stat = || {
+                            self.entity_stat_name(modifier.stat)
+                                .expect("a buff's modifiers name registered stats")
+                        };
+                        for (judged_stat, refused) in &judged {
+                            if *judged_stat != modifier.stat {
+                                continue;
+                            }
+                            match refused {
+                                Refused::Any => panic!(
+                                    "{owner} holds while it judges '{}', which its own modifiers move",
+                                    stat()
+                                ),
+                                Refused::Lowering => assert!(
+                                    modifier.magnitude >= FixedI64::ZERO,
+                                    "{owner} holds on an amount of a pool capped by '{}', which its own modifiers lower",
+                                    stat()
+                                ),
+                            }
+                        }
+                    }
+                }
+                EntityEffect::Disable | EntityEffect::Conceal => {}
+            }
+        }
+    }
+
+    /// Checks the buffs a type bears of itself: each registered here, none
+    /// named twice, each held `While` a requirement, and every stat one
+    /// modifies carried by the type.
+    fn validate_passives(&self, def: &EntityTypeDef) {
+        let mut seen: BTreeSet<EntityBuffId> = BTreeSet::new();
+        for &passive in &def.passives {
+            assert!(
+                passive.index() < self.entity_buff_defs.len(),
+                "entity type '{}' bears a passive this registry never registered",
+                def.name
+            );
+            let name = self
+                .entity_buff_name(passive)
+                .expect("the passive was checked registered above");
+            assert!(
+                seen.insert(passive),
+                "entity type '{}' bears passive '{name}' twice",
+                def.name
+            );
+            let buff = &self.entity_buff_defs[passive.index()];
+            match &buff.lasting {
+                Lasting::While(_) => {}
+                Lasting::Forever | Lasting::For(_) | Lasting::Upkeep { .. } => panic!(
+                    "entity type '{}' bears passive '{name}', which does not hold on a requirement",
+                    def.name
+                ),
+            }
+            for effect in &buff.effects {
+                match effect {
+                    EntityEffect::Modifiers(modifiers) => {
+                        for modifier in modifiers {
+                            assert!(
+                                def.base_stats.contains_key(&modifier.stat),
+                                "entity type '{}' bears passive '{name}', which modifies '{}' it does not carry",
+                                def.name,
+                                self.entity_stat_name(modifier.stat)
+                                    .expect("a buff's modifiers name registered stats")
+                            );
+                        }
+                    }
+                    EntityEffect::Disable | EntityEffect::Conceal => {}
                 }
             }
         }

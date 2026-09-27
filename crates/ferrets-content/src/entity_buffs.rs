@@ -5,7 +5,9 @@
 //! carrier — its effects descend, never climb, so nothing here can touch the
 //! owner's player stats.
 
-use crate::{cost::Cost, entity_effect::EntityEffect, stack_rule::StackRule};
+use crate::{
+    cost::Cost, entity_effect::EntityEffect, requirement::Requirement, stack_rule::StackRule,
+};
 
 /// A handle to a registered entity buff, assigned in registration order.
 ///
@@ -43,6 +45,8 @@ pub enum Lasting {
         /// Ticks between payments.
         period: u32,
     },
+    /// For as long as its carrier meets the requirement, judged every tick.
+    While(Requirement),
 }
 
 /// What cuts a buff short before its lasting runs out.

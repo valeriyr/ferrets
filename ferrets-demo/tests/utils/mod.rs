@@ -101,6 +101,11 @@ pub fn scenario_app(model: MovementModel) -> App {
 /// mission's map is 32×32 and all grass, so anything about water, rivers, fords
 /// or two sides has to be tested here instead.
 pub fn demo_map_app(model: MovementModel) -> App {
+    demo_map_app_as(LocalRole::Player(0), model)
+}
+
+/// [`demo_map_app`] on a node playing `role`.
+pub fn demo_map_app_as(role: LocalRole, model: MovementModel) -> App {
     let slots = vec![
         PlayerSlot::occupied(0, PlayerType::Human, Some("human"), None),
         PlayerSlot::occupied(1, PlayerType::Human, Some("orc"), None),
@@ -113,7 +118,7 @@ pub fn demo_map_app(model: MovementModel) -> App {
     let mut app = App::new();
     app.add_plugins(SimulationPlugin::new(
         GameSession::configured(
-            LocalRole::Player(0),
+            role,
             slots,
             ferrets_demo::map::NAME,
             Authority::Host {
@@ -255,4 +260,10 @@ pub fn point_minimap(app: &mut App, diamond: bool) {
     app.world_mut()
         .run_system_once(minimap::follow_view)
         .expect("minimap follows the view");
+}
+
+/// A fixed-point value parsed from decimal digits.
+pub fn fixed(text: &str) -> FixedU64 {
+    text.parse()
+        .unwrap_or_else(|_| panic!("'{text}' is a value"))
 }

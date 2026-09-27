@@ -15,6 +15,7 @@ use crate::{
     build::{BuilderAttendance, BuilderDef},
     concealment::Concealment,
     dying::{Bequest, DyingDef},
+    entity_buffs::EntityBuffId,
     entity_stats::EntityStatId,
     field::{FieldEffect, FieldPlacement, FieldSourceDef},
     kinds::Kinds,
@@ -114,6 +115,9 @@ pub struct EntityTypeDef {
     pub targetable: Option<LayerMask>,
     /// Activated skills instances of this type can use, by registered id.
     pub skills: Vec<SkillId>,
+    /// The buffs instances bear of themselves, by registered id, each held
+    /// `While` its requirement is met. Empty means instances bear none.
+    pub passives: Vec<EntityBuffId>,
     /// How instances stand toward a side that is not their own: seen wherever
     /// its sight reaches, or only where its detection reaches as well.
     pub concealment: Concealment,
@@ -205,6 +209,7 @@ impl EntityTypeDef {
             morphs: Vec::new(),
             targetable: None,
             skills: Vec::new(),
+            passives: Vec::new(),
             concealment: Concealment::Exposed,
             field_sources: Vec::new(),
             field_placement: Vec::new(),
@@ -566,6 +571,13 @@ impl EntityTypeDef {
     /// Adds activated skills instances of this type can use (see [`skills`](Self::skills)).
     pub fn with_skills(mut self, skills: impl IntoIterator<Item = SkillId>) -> Self {
         self.skills.extend(skills);
+        self
+    }
+
+    /// Adds buffs instances of this type bear of themselves (see
+    /// [`passives`](Self::passives)).
+    pub fn with_passives(mut self, passives: impl IntoIterator<Item = EntityBuffId>) -> Self {
+        self.passives.extend(passives);
         self
     }
 

@@ -12,6 +12,34 @@ use ferrets_simulation::session::game_speed::GameSpeed;
 /// second. The engine never states a rate of its own — it scales this one by the
 /// session's speed.
 pub const NOMINAL_TICK_HZ: f64 = 20.0;
+
+/// A stretch of ticks as seconds at the nominal cadence.
+pub fn seconds(ticks: u32) -> f64 {
+    f64::from(ticks) / NOMINAL_TICK_HZ
+}
+
+/// A stretch of whole seconds as ticks at the nominal cadence.
+pub fn ticks(seconds: u32) -> u32 {
+    seconds * NOMINAL_TICK_HZ as u32
+}
+
+/// Seconds written as a game clock in whole seconds, every field two digits:
+/// `12:07`, and `01:12:07` once there are hours.
+pub fn clock_text(seconds: f64) -> String {
+    let whole = seconds.max(0.0).floor() as u64;
+    let (hours, minutes, seconds) = (whole / 3600, (whole % 3600) / 60, whole % 60);
+    if hours > 0 {
+        format!("{hours:02}:{minutes:02}:{seconds:02}")
+    } else {
+        format!("{minutes:02}:{seconds:02}")
+    }
+}
+
+/// Seconds written to a tenth: `2.3 s`.
+pub fn seconds_text(seconds: f64) -> String {
+    format!("{seconds:.1} s")
+}
+
 /// A speed the game offers. The engine takes any positive factor; these are the
 /// steps a player may pick from, and the top two are fast-forward — offered only
 /// where nobody is competing (a replay, or a game off the network).

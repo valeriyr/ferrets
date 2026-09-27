@@ -42,4 +42,10 @@ impl EnergyComponent {
     pub fn regenerate(&mut self, regen: FixedU64, max: FixedU64) {
         self.current = (self.current + regen).min(max);
     }
+
+    /// Removes `amount` energy, saturating at `0`.
+    #[inline]
+    pub fn drain(&mut self, amount: FixedU64) {
+        self.current = self.current.saturating_sub(amount);
+    }
 }

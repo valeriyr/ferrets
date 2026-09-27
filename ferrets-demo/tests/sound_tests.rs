@@ -12,7 +12,9 @@ use bevy::{
     window::PrimaryWindow,
 };
 use ferrets_bevy_plugin::TickPacing;
-use ferrets_content::{attack::Slain, registry::ContentRegistry, skills::SkillId};
+use ferrets_content::{
+    attack::Slain, entity_buffs::EntityBuffId, registry::ContentRegistry, skills::SkillId,
+};
 use ferrets_demo::{
     debug::{self, DebugState, DebugText},
     input::InputMode,
@@ -23,8 +25,12 @@ use ferrets_geometry::cell_pos::CellPos;
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_simulation::{
     command::SkillTarget,
+    components::health::HealthComponent,
+    entity_def,
     events::{DeathCause, EventRecord, SimulationEvent},
+    game_loop,
     movement_model::MovementModel,
+    session::{local_role::LocalRole, player_id::PlayerId},
     simulation_id::SimulationId,
     spawn,
 };
@@ -165,6 +171,155 @@ fn enemy_research_at_visible_lab_is_not_heard() {
         cue_cells(&mut app).is_empty(),
         "seeing the lab does not mean seeing what finished inside it"
     );
+}
+
+//
+// ─── Fire ────────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn own_building_catching_fire_is_heard_once_where_it_stands() {
+    let mut app = sound_app();
+    let depot = burning_depot(&mut app, 0);
+    let cell = CellPos::from(entity_def::position(app.world(), depot));
+
+    play_fire(&mut app);
+    assert_eq!(cue_cells(&mut app), vec![cell]);
+
+    // Still burning a tick later: the fire was heard when it caught.
+    play_fire(&mut app);
+    assert_eq!(cue_count(&mut app), 1);
+}
+
+#[test]
+fn fire_that_goes_out_and_catches_again_is_heard_again() {
+    let mut app = sound_app();
+    let depot = burning_depot(&mut app, 0);
+    play_fire(&mut app);
+    assert_eq!(cue_count(&mut app), 1);
+
+    // Out for a tick, then alight again: one more cue, two in all.
+    let on_fire = fire(&app);
+    game_loop::stats::remove_entity_buff(app.world_mut(), depot, on_fire);
+    play_fire(&mut app);
+    game_loop::stats::apply_entity_buff(app.world_mut(), depot, on_fire);
+    play_fire(&mut app);
+    assert_eq!(cue_count(&mut app), 2);
+}
+
+#[test]
+fn enemy_fire_is_not_heard_by_player() {
+    let mut app = sound_app();
+    burning_depot(&mut app, 1);
+    play_fire(&mut app);
+    assert_eq!(cue_count(&mut app), 0);
+}
+
+#[test]
+fn fire_caught_out_of_sight_is_not_heard_later() {
+    // An observer watching player 1, who sees nothing of player 0's depot.
+    let mut app = sound_app_as(LocalRole::Observer);
+    app.insert_resource(FogReveal(false));
+    app.insert_resource(ObserverPerspective(Some(1)));
+    burning_depot(&mut app, 0);
+    utils::run_ticks(&mut app, 1);
+
+    play_fire(&mut app);
+    assert_eq!(
+        cue_count(&mut app),
+        0,
+        "a fire nobody watched catch is silent"
+    );
+
+    // Watching its owner, who sees it burning: it caught before, so it is
+    // not news now.
+    app.insert_resource(ObserverPerspective(Some(0)));
+    play_fire(&mut app);
+    assert_eq!(cue_count(&mut app), 0);
+}
+
+#[test]
+fn observer_hears_fire_of_every_side() {
+    let mut app = sound_app_as(LocalRole::Observer);
+    burning_depot(&mut app, 1);
+    play_fire(&mut app);
+    assert_eq!(cue_count(&mut app), 1);
+}
+
+#[test]
+fn fire_in_sight_of_watched_side_is_heard() {
+    // An observer watching player 1, whose marine stands beside player 0's
+    // depot.
+    let mut app = sound_app_as(LocalRole::Observer);
+    app.insert_resource(FogReveal(false));
+    app.insert_resource(ObserverPerspective(Some(1)));
+    utils::create_entity(app.world_mut(), "marine", utils::at_cell(11, 8), Some(1))
+        .expect("the demo content defines a marine");
+    burning_depot(&mut app, 0);
+    utils::run_ticks(&mut app, 1);
+
+    play_fire(&mut app);
+    assert_eq!(cue_count(&mut app), 1);
+}
+
+#[test]
+fn concealed_fire_in_sight_of_watched_side_is_not_heard() {
+    // As above, but the depot is concealed from a side that cannot detect
+    // it: its cell is in sight, yet the depot is only glimpsed.
+    let mut app = sound_app_as(LocalRole::Observer);
+    app.insert_resource(FogReveal(false));
+    app.insert_resource(ObserverPerspective(Some(1)));
+    utils::create_entity(app.world_mut(), "marine", utils::at_cell(11, 8), Some(1))
+        .expect("the demo content defines a marine");
+    let depot = burning_depot(&mut app, 0);
+    let ambushing = app
+        .world()
+        .resource::<ContentRegistry>()
+        .entity_buff("ambushing")
+        .expect("the demo content defines the ambush");
+    game_loop::stats::apply_entity_buff(app.world_mut(), depot, ambushing);
+    utils::run_ticks(&mut app, 1);
+
+    play_fire(&mut app);
+    assert_eq!(cue_count(&mut app), 0);
+}
+
+#[test]
+fn fires_catching_at_once_stop_at_ceiling() {
+    let mut app = sound_app();
+    let on_fire = fire(&app);
+    // Seven depots in each of two rows, three cells apart: 14 fires.
+    for step in 0..14u32 {
+        let world = app.world_mut();
+        let (depot, _) = utils::create_entity(
+            world,
+            "supply_depot",
+            utils::at_cell(4 + 3 * (step % 7), 8 + 4 * (step / 7)),
+            Some(0),
+        )
+        .expect("the demo content defines a supply depot");
+        game_loop::stats::apply_entity_buff(world, depot, on_fire);
+    }
+    // 14 fires against a ceiling of 12: 12 sound.
+    play_fire(&mut app);
+    assert_eq!(cue_count(&mut app), sound::MAX_CONCURRENT_CUES);
+}
+
+#[test]
+fn new_game_hears_fire_burning_on_from_last_one() {
+    let mut app = sound_app();
+    burning_depot(&mut app, 0);
+    play_fire(&mut app);
+    assert_eq!(cue_count(&mut app), 1);
+
+    // The reset silences the cue and forgets the fire, so the next pass hears
+    // it catch again.
+    app.world_mut()
+        .run_system_once(sound::reset_per_game)
+        .expect("the per-game sound state resets");
+    assert_eq!(cue_count(&mut app), 0);
+    play_fire(&mut app);
+    assert_eq!(cue_count(&mut app), 1);
 }
 
 //
@@ -379,7 +534,12 @@ fn debug_readout_reports_whether_sound_is_on() {
 /// A demo map app with the pieces the cue systems read, and every waveform
 /// built. Fog is revealed, so a test asserts about cues rather than sight.
 fn sound_app() -> App {
-    let mut app = utils::demo_map_app(MovementModel::Cell);
+    sound_app_as(LocalRole::Player(0))
+}
+
+/// [`sound_app`] on a node playing `role`.
+fn sound_app_as(role: LocalRole) -> App {
+    let mut app = utils::demo_map_app_as(role, MovementModel::Cell);
     app.add_plugins((TaskPoolPlugin::default(), AssetPlugin::default()));
     app.init_asset::<sound::GeneratedCue>()
         .init_resource::<ObserverPerspective>()
@@ -392,6 +552,37 @@ fn sound_app() -> App {
     app.world_mut()
         .spawn((Camera2d, Transform::default(), sound::listener()));
     app
+}
+
+/// A supply depot of `owner`'s with a quarter of its health left, under the
+/// fire's line, bearing the fire.
+fn burning_depot(app: &mut App, owner: PlayerId) -> Entity {
+    let on_fire = fire(app);
+    let world = app.world_mut();
+    let (depot, _) = utils::create_entity(world, "supply_depot", utils::at_cell(8, 8), Some(owner))
+        .expect("the demo content defines a supply depot");
+    let mut health = world
+        .get_mut::<HealthComponent>(depot)
+        .expect("a supply depot has health");
+    let lost = health.current() * utils::fixed("0.75");
+    health.drain(lost);
+    game_loop::stats::apply_entity_buff(world, depot, on_fire);
+    depot
+}
+
+/// The demo's fire.
+fn fire(app: &App) -> EntityBuffId {
+    app.world()
+        .resource::<ContentRegistry>()
+        .entity_buff("on_fire")
+        .expect("the demo content defines the fire")
+}
+
+/// Runs the fire cue system once.
+fn play_fire(app: &mut App) {
+    app.world_mut()
+        .run_system_once(sound::play_fire_cues)
+        .expect("the fire cues play");
 }
 
 /// Runs the tick's cue systems over whatever the record holds.

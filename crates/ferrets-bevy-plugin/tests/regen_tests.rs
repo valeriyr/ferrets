@@ -150,11 +150,50 @@ fn entity_under_construction_does_not_regenerate() {
 }
 
 //
+// ─── Energy flow ────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn energy_drains_by_its_stat_and_floors_at_empty() {
+    let mut app = app();
+    let (lamp, _) = utils::create_owned(&mut app, "lamp", 5, 5, 0);
+
+    // 20 energy draining 3 a tick with no regeneration: 20 − 6 × 3 = 2 after
+    // six ticks, then the seventh takes it to empty and it stays there.
+    utils::run_ticks(&mut app, 6);
+    assert_eq!(utils::energy(&app, lamp), FixedU64::from_num(2));
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(utils::energy(&app, lamp), FixedU64::ZERO);
+    utils::run_ticks(&mut app, 3);
+    assert_eq!(utils::energy(&app, lamp), FixedU64::ZERO);
+}
+
+#[test]
+fn energy_regenerates_before_it_drains() {
+    let mut app = app();
+    let (lamp, _) = utils::create_owned(&mut app, "lamp", 5, 5, 0);
+    let trickle = utils::register_entity_buff(
+        &mut app,
+        "trickle",
+        EntityStatId::ENERGY_REGEN,
+        ModifierOp::FlatAdd,
+        "1",
+        None,
+    );
+    game_loop::stats::apply_entity_buff(app.world_mut(), lamp, trickle);
+
+    // Each tick heals 1 (capped at 20) then drains 3: 20 → 17 → 15 → 13.
+    utils::run_ticks(&mut app, 3);
+    assert_eq!(utils::energy(&app, lamp), FixedU64::from_num(13));
+}
+
+//
 // ─── Helpers ────────────────────────────────────────────────────────────────
 //
 
 /// One human player, a `troll` that regenerates half a point per tick toward its
-/// 40, and a `dummy` of the same size that regenerates nothing.
+/// 40, a `dummy` of the same size that regenerates nothing, and a `lamp` whose
+/// 20 energy drains three a tick.
 fn app() -> App {
     let mut app = utils::make_app(vec![PlayerSlot::occupied(0, PlayerType::Human, None, None)]);
     {
@@ -170,6 +209,13 @@ fn app() -> App {
             EntityTypeDef::new("dummy")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
                 .with_health(20),
+        );
+        registry.register(
+            EntityTypeDef::new("lamp")
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_health(20)
+                .with_energy(20, FixedU64::ZERO)
+                .with_stat(EntityStatId::ENERGY_DRAIN, FixedU64::from_num(3)),
         );
     }
     app.world_mut().resource::<ContentRegistry>().validate();

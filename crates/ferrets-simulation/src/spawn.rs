@@ -57,7 +57,7 @@ use crate::{
     entity_def,
     entity_index::EntityIndex,
     events::{DeathCause, EventRecord, SimulationEvent, SpawnCause},
-    game_loop::orders,
+    game_loop::{orders, stats},
     map::{Map, OccupancyClass},
     movement_model::{self, MovementModel},
     order::Order,
@@ -205,14 +205,16 @@ fn conjure(
     let entity = entity_mut.id();
 
     seed_stats(world, entity, &base_stats);
-    // Current-value pools, seeded to full from their max stats. A morph rescales
-    // them instead, which is why filling them is the spawn's own business.
-    if let Some(&max_health) = base_stats.get(&EntityStatId::MAX_HEALTH) {
+    stats::recompute_stats_of(world, entity);
+    // Current-value pools, seeded full to their effective max stats. A morph
+    // rescales them instead, which is why filling them is the spawn's own
+    // business.
+    if let Some(max_health) = entity_def::effective_stat(world, entity, EntityStatId::MAX_HEALTH) {
         world
             .entity_mut(entity)
             .insert(HealthComponent::full(max_health));
     }
-    if let Some(&max_energy) = base_stats.get(&EntityStatId::MAX_ENERGY) {
+    if let Some(max_energy) = entity_def::effective_stat(world, entity, EntityStatId::MAX_ENERGY) {
         world
             .entity_mut(entity)
             .insert(EnergyComponent::full(max_energy));
@@ -1376,8 +1378,8 @@ pub(crate) fn fit_components(
         )
     };
     // Whether the entity stands concealed is read against the type, the buffs
-    // and the fields as they are now, so a landing and a spawn are fitted by
-    // the same reads the tick's refit makes.
+    // and the fields as they are now, by the same reads the tick's refit
+    // makes.
     let concealed = entity_def::concealed(world, entity);
     // A rally point serves whatever releases units: the trainer, the holder,
     // the breeder whose broodlings make units by a change of form, and the

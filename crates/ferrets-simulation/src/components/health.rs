@@ -35,6 +35,12 @@ impl HealthComponent {
         }
     }
 
+    /// Sets the remaining health points to `current`, keeping the last hit.
+    #[inline]
+    pub fn refill(&mut self, current: FixedU64) {
+        self.current = current;
+    }
+
     /// Returns the most recent damage source, if the entity has ever been hit.
     #[inline]
     pub fn last_hit(&self) -> Option<LastHit> {

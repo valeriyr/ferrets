@@ -25,6 +25,7 @@ use ferrets_simulation::{
         concealed::ConcealedComponent,
         dying::RemainsComponent,
         energy::EnergyComponent,
+        entity_buffs::BuffsComponent,
         entity_info::EntityInfoComponent,
         entity_stats::StatsComponent,
         health::HealthComponent,
@@ -277,7 +278,13 @@ pub fn game_view(
         // The view is built only for an entity the brain keeps: it allocates
         // its strings and lists, and most of another side is unseen.
         let view = |entity_ref: &EntityRef| {
-            entity_view(entity_ref, id, entity_def::operation(world, entity))
+            entity_view(
+                world.resource::<ContentRegistry>(),
+                entity_ref,
+                id,
+                entity_def::operation(world, entity),
+                entity_def::idle(world, entity),
+            )
         };
         match owner {
             // Own and allied entities are always seen; enemy and neutral ones
@@ -366,8 +373,15 @@ fn research_views(world: &World, player: PlayerId) -> (Vec<String>, Vec<String>)
 }
 
 /// Snapshots one entity to its integer view, `operation` being the state it
-/// is in to carry out its type's work.
-fn entity_view(entity: &EntityRef, id: SimulationId, operation: Operation) -> EntityView {
+/// is in to carry out its type's work and `idle` whether it takes orders and
+/// runs none.
+fn entity_view(
+    registry: &ContentRegistry,
+    entity: &EntityRef,
+    id: SimulationId,
+    operation: Operation,
+    idle: bool,
+) -> EntityView {
     let cell = entity
         .get::<LocationComponent>()
         .map_or(CellPos::new(0, 0), |location| {
@@ -390,11 +404,22 @@ fn entity_view(entity: &EntityRef, id: SimulationId, operation: Operation) -> En
         armor: entity
             .get::<StatsComponent>()
             .and_then(|stats| stats.effective_as_u32(EntityStatId::ARMOR)),
-        idle: entity
-            .get::<OrderQueueComponent>()
-            .is_none_or(|queue| queue.front().is_none()),
+        idle,
         hidden: entity.contains::<HiddenComponent>(),
         concealed: entity.contains::<ConcealedComponent>(),
+        buffs: entity
+            .get::<BuffsComponent>()
+            .map_or_else(Vec::new, |buffs| {
+                buffs
+                    .active()
+                    .map(|(id, _)| {
+                        registry
+                            .entity_buff_name(id)
+                            .expect("an active buff was minted by this registry")
+                            .to_string()
+                    })
+                    .collect()
+            }),
         carrying: entity
             .get::<ResourceCarrierComponent>()
             .and_then(|carrier| carrier.kind.clone().map(|kind| (kind, carrier.amount))),

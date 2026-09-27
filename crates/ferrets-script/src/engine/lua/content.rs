@@ -29,7 +29,7 @@ use ferrets_content::{
     quantity::Quantity,
     registry::ContentRegistry,
     repair::{RepairCost, RepairRate},
-    requirement::Requirement,
+    requirement::{Bound, Requirement, Threshold},
     research::{ResearchDef, ResearchId},
     resource::{Banking, HarvestData},
     skills::{
@@ -46,6 +46,30 @@ use ferrets_pathfinder::layer_mask::LayerMask;
 use mlua::{Lua, Table, Value};
 
 use crate::{content, error::ScriptError};
+
+/// The keys a requirement table may name, one of them each.
+const REQUIREMENT_KEYS: [&str; 11] = [
+    "all",
+    "any",
+    "entity_type",
+    "tag",
+    "research",
+    "annexed",
+    "health",
+    "energy",
+    "stat",
+    "idle_for",
+    "unhurt_for",
+];
+
+/// A requirement table as written: one requirement naming its key, or a bare
+/// list of them.
+enum Group {
+    /// A table naming one requirement key.
+    One(Requirement),
+    /// A bare list, every entry of which holds.
+    List(Vec<Requirement>),
+}
 
 /// Installs the `define_*` globals, each registering into `registry` — the one
 /// assigner of every derived id, so what a script observes (the layer id
@@ -414,6 +438,17 @@ fn build_entity(
             })
             .collect::<crate::Result<Vec<_>>>()?;
         def = def.with_skills(ids);
+    }
+    if let Some(passives) = optional::<Vec<String>>(table, "passives")? {
+        let ids = passives
+            .iter()
+            .map(|name| {
+                registry.entity_buff(name).ok_or_else(|| {
+                    ScriptError::ContentError(format!("entity buff '{name}' is not defined"))
+                })
+            })
+            .collect::<crate::Result<Vec<_>>>()?;
+        def = def.with_passives(ids);
     }
 
     Ok(def)
@@ -1453,23 +1488,38 @@ fn parse_entity_effect_kind(
     }
 }
 
-/// Reads how long a buff lasts: `"forever"`, `{ ticks = n }`, or
+/// Reads how long a buff lasts: `"forever"`, `{ ticks = n }`,
 /// `{ upkeep = { cost = <cost table>, period = ticks } }` — the cost table a
-/// skill's `cost` takes, paid once every `period` ticks.
-fn parse_lasting(value: Value) -> crate::Result<Lasting> {
+/// skill's `cost` takes, paid once every `period` ticks — or
+/// `{ as_long_as = <requirement> }`, held for as long as the carrier meets it —
+/// a bare list of requirements reading as all of them.
+fn parse_lasting(value: Value, registry: &ContentRegistry) -> crate::Result<Lasting> {
     match &value {
         Value::String(name) if name == "forever" => Ok(Lasting::Forever),
         Value::Table(table) => match (
             optional::<u32>(table, "ticks")?,
             optional::<Table>(table, "upkeep")?,
+            optional::<Value>(table, "as_long_as")?,
         ) {
-            (Some(ticks), None) => Ok(Lasting::For(ticks)),
-            (None, Some(upkeep)) => Ok(Lasting::Upkeep {
+            (Some(ticks), None, None) => Ok(Lasting::For(ticks)),
+            (None, Some(upkeep), None) => Ok(Lasting::Upkeep {
                 costs: parse_costs(&required::<Table>(&upkeep, "cost")?)?,
                 period: required::<u32>(&upkeep, "period")?,
             }),
-            (Some(_), Some(_)) | (None, None) => Err(ScriptError::ContentError(
-                "a lasting table names exactly one of ticks or upkeep".to_string(),
+            (None, None, Some(requirement)) => Ok(Lasting::While(match &requirement {
+                Value::Table(table) => {
+                    match parse_requirement_group("as_long_as", table, registry)? {
+                        Group::One(requirement) => requirement,
+                        Group::List(list) => Requirement::All(list),
+                    }
+                }
+                _ => parse_requirement(&requirement, registry)?,
+            })),
+            (Some(_), Some(_), _)
+            | (Some(_), _, Some(_))
+            | (_, Some(_), Some(_))
+            | (None, None, None) => Err(ScriptError::ContentError(
+                "a lasting table names exactly one of ticks, upkeep, or as_long_as".to_string(),
             )),
         },
         other => Err(content::unexpected(
@@ -1478,6 +1528,7 @@ fn parse_lasting(value: Value) -> crate::Result<Lasting> {
                 "'forever'",
                 "a { ticks = ... } table",
                 "a { upkeep = ... } table",
+                "a { as_long_as = ... } table",
             ],
             &found(other),
         )),
@@ -1618,52 +1669,211 @@ fn parse_annex_life(value: Value) -> crate::Result<AnnexLife> {
     }
 }
 
-/// Reads a `requires` list: each entry a table naming exactly one kind —
-/// `{ entity_type = "armory" }`, `{ tag = "workshop" }`,
-/// `{ research = "smithing" }` or `{ annexed = "tech_lab" }`.
+/// Reads the `requires` field: absent means nothing required, otherwise
+/// [`parse_requirement_group`].
 fn parse_requires(table: &Table, registry: &ContentRegistry) -> crate::Result<Vec<Requirement>> {
-    let Some(entries) = optional::<Vec<Value>>(table, "requires")? else {
+    let Some(entries) = optional::<Table>(table, "requires")? else {
         return Ok(Vec::new());
     };
-    entries
-        .into_iter()
-        .map(|entry| match &entry {
-            Value::Table(entry) => parse_requirement(entry, registry),
-            other => Err(content::unexpected(
+    match parse_requirement_group("requires", &entries, registry)? {
+        Group::One(requirement) => Ok(vec![requirement]),
+        Group::List(list) => Ok(list),
+    }
+}
+
+/// Reads a `what` table that is either a bare list of requirements or a
+/// single requirement naming one of its keys — never both.
+fn parse_requirement_group(
+    what: &str,
+    table: &Table,
+    registry: &ContentRegistry,
+) -> crate::Result<Group> {
+    if names_requirement_key(table)? {
+        Ok(Group::One(parse_requirement(
+            &Value::Table(table.clone()),
+            registry,
+        )?))
+    } else {
+        Ok(Group::List(parse_requirement_list(what, table, registry)?))
+    }
+}
+
+/// Whether `table` names any requirement key.
+fn names_requirement_key(table: &Table) -> crate::Result<bool> {
+    for key in REQUIREMENT_KEYS {
+        if optional::<Value>(table, key)?.is_some() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Reads one requirement: `"idle"`, an `{ all = { ... } }` or `{ any = { ... } }`
+/// node, or a table naming exactly one leaf — `{ entity_type = }`, `{ tag = }`,
+/// `{ research = }`, `{ annexed = }`, `{ health = <bound> }`,
+/// `{ energy = <bound> }`, `{ stat = "name", <bound keys> }`,
+/// `{ idle_for = ticks }`, or `{ unhurt_for = ticks }` — a bound naming
+/// exactly one of `under`, `at_least`, `under_share` or `at_least_share`.
+fn parse_requirement(value: &Value, registry: &ContentRegistry) -> crate::Result<Requirement> {
+    let entry = match value {
+        Value::String(name) if name == "idle" => return Ok(Requirement::Idle),
+        Value::Table(entry) => entry,
+        other => {
+            return Err(content::unexpected(
                 "a requirement",
                 &[
-                    "an { entity_type = ... } table",
-                    "a { tag = ... } table",
-                    "a { research = ... } table",
-                    "an { annexed = ... } table",
+                    "'idle'",
+                    "an { all = ... } or { any = ... } table",
+                    "a table naming one of entity_type, tag, research, annexed, health, energy, stat, idle_for, or unhurt_for",
                 ],
                 &found(other),
-            )),
+            ));
+        }
+    };
+    if entry.raw_len() > 0 {
+        return Err(ScriptError::ContentError(
+            if names_requirement_key(entry)? {
+                "a requirement table names a requirement or lists requirements, not both"
+            } else {
+                "a list of requirements inside a list is written as { all = { ... } } or { any = { ... } }"
+            }
+            .to_string(),
+        ));
+    }
+    // The shape is judged before any name is resolved, so an entry naming two
+    // kinds reads as the shape error it is rather than as a failed lookup.
+    let mut named: Vec<&str> = Vec::new();
+    for key in REQUIREMENT_KEYS {
+        if optional::<Value>(entry, key)?.is_some() {
+            named.push(key);
+        }
+    }
+    let [key] = named[..] else {
+        return Err(ScriptError::ContentError(
+            "a requirement names exactly one of all, any, entity_type, tag, research, annexed, health, energy, stat, idle_for, or unhurt_for".to_string(),
+        ));
+    };
+    match key {
+        "all" => Ok(Requirement::All(parse_requirement_list(
+            "all",
+            &required::<Table>(entry, "all")?,
+            registry,
+        )?)),
+        "any" => Ok(Requirement::Any(parse_requirement_list(
+            "any",
+            &required::<Table>(entry, "any")?,
+            registry,
+        )?)),
+        "entity_type" => Ok(Requirement::EntityType(required::<String>(
+            entry,
+            "entity_type",
+        )?)),
+        "tag" => Ok(Requirement::Tag(required::<String>(entry, "tag")?)),
+        "research" => Ok(Requirement::Research(research_by_name(
+            &required::<String>(entry, "research")?,
+            registry,
+        )?)),
+        "annexed" => Ok(Requirement::Annexed(required::<String>(entry, "annexed")?)),
+        "health" => Ok(Requirement::Health(parse_bound(
+            "health",
+            &required::<Table>(entry, "health")?,
+        )?)),
+        "energy" => Ok(Requirement::Energy(parse_bound(
+            "energy",
+            &required::<Table>(entry, "energy")?,
+        )?)),
+        "stat" => {
+            let name = required::<String>(entry, "stat")?;
+            let stat = registry.entity_stat(&name).ok_or_else(|| {
+                ScriptError::ContentError(format!(
+                    "a requirement names the stat '{name}', which is not registered"
+                ))
+            })?;
+            Ok(Requirement::Stat {
+                stat,
+                bound: parse_bound("stat", entry)?,
+            })
+        }
+        "idle_for" => Ok(Requirement::IdleFor(required::<u32>(entry, "idle_for")?)),
+        "unhurt_for" => Ok(Requirement::UnhurtFor(required::<u32>(
+            entry,
+            "unhurt_for",
+        )?)),
+        _ => unreachable!("the key was drawn from the list above"),
+    }
+}
+
+/// Reads the entries of a requirement list — the `requires` field or an
+/// `as_long_as` list itself, or the list under an `all` or `any` node — each
+/// index from 1 to its length holding one.
+fn parse_requirement_list(
+    field: &str,
+    list: &Table,
+    registry: &ContentRegistry,
+) -> crate::Result<Vec<Requirement>> {
+    if names_requirement_key(list)? {
+        return Err(ScriptError::ContentError(
+            "a requirement table names a requirement or lists requirements, not both".to_string(),
+        ));
+    }
+    let length = list.raw_len();
+    let mut stray: Vec<String> = Vec::new();
+    for pair in list.clone().pairs::<Value, Value>() {
+        let (key, _) = pair.map_err(|error| field_error(field, error))?;
+        match key {
+            Value::Integer(index) if (1..=length as i64).contains(&index) => {}
+            Value::Integer(index) => stray.push(format!("[{index}]")),
+            other => stray.push(found(&other)),
+        }
+    }
+    // Lua walks a table's keys in no fixed order, so the one named is the
+    // first in sorted order.
+    stray.sort();
+    if let Some(key) = stray.first() {
+        return Err(ScriptError::ContentError(format!(
+            "{field} lists requirements and also names {key}, which is none of them"
+        )));
+    }
+    (1..=length)
+        .map(|index| {
+            match list
+                .raw_get::<Value>(index)
+                .map_err(|error| field_error(field, error))?
+            {
+                Value::Nil => Err(ScriptError::ContentError(format!(
+                    "{field} has no requirement at {index}"
+                ))),
+                entry => parse_requirement(&entry, registry),
+            }
         })
         .collect()
 }
 
-/// Reads one requirement entry, which names exactly one kind.
-fn parse_requirement(entry: &Table, registry: &ContentRegistry) -> crate::Result<Requirement> {
-    // The shape is judged before any name is resolved, so an entry naming two
-    // kinds reads as the shape error it is rather than as a failed lookup.
+/// Reads the limit a `what` requirement compares against: exactly one of
+/// `under`, `at_least` (an amount) or `under_share`, `at_least_share` (a
+/// fraction of the reference), each a whole number or a decimal string.
+fn parse_bound(what: &str, table: &Table) -> crate::Result<Bound> {
     match (
-        optional::<String>(entry, "entity_type")?,
-        optional::<String>(entry, "tag")?,
-        optional::<String>(entry, "research")?,
-        optional::<String>(entry, "annexed")?,
+        optional::<Value>(table, "under")?,
+        optional::<Value>(table, "at_least")?,
+        optional::<Value>(table, "under_share")?,
+        optional::<Value>(table, "at_least_share")?,
     ) {
-        (Some(name), None, None, None) => Ok(Requirement::EntityType(name)),
-        (None, Some(name), None, None) => Ok(Requirement::Tag(name)),
-        (None, None, Some(name), None) => {
-            Ok(Requirement::Research(research_by_name(&name, registry)?))
+        (Some(value), None, None, None) => {
+            Ok(Bound::Amount(Threshold::Under(fixed_value(what, &value)?)))
         }
-        (None, None, None, Some(name)) => Ok(Requirement::Annexed(name)),
-        // Every other shape names none of the four kinds, or more than one.
-        _ => Err(ScriptError::ContentError(
-            "a requirement must name exactly one of entity_type, tag, research, or annexed"
-                .to_string(),
-        )),
+        (None, Some(value), None, None) => Ok(Bound::Amount(Threshold::AtLeast(fixed_value(
+            what, &value,
+        )?))),
+        (None, None, Some(value), None) => {
+            Ok(Bound::Share(Threshold::Under(fixed_value(what, &value)?)))
+        }
+        (None, None, None, Some(value)) => {
+            Ok(Bound::Share(Threshold::AtLeast(fixed_value(what, &value)?)))
+        }
+        _ => Err(ScriptError::ContentError(format!(
+            "a {what} requirement names exactly one of under, at_least, under_share, or at_least_share"
+        ))),
     }
 }
 
@@ -1780,7 +1990,7 @@ fn parse_entity_buff(table: &Table, registry: &ContentRegistry) -> crate::Result
     };
     Ok(EntityBuffDef {
         effects,
-        lasting: parse_lasting(required::<Value>(table, "lasting")?)?,
+        lasting: parse_lasting(required::<Value>(table, "lasting")?, registry)?,
         stack_rule: content::stack_rule(&required::<String>(table, "stack")?)?,
         interrupted_by,
     })

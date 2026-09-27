@@ -49,11 +49,11 @@ use ferrets_simulation::{
     movement_model::MovementModel,
     order::AttackTarget,
     session::{
-        GameSession, ai_detection::AiDetection, ai_vision::AiVision, player_id::PlayerId,
-        player_slot::PlayerSlot, player_type::PlayerType,
+        GameSession, ai_detection::AiDetection, ai_vision::AiVision, player_slot::PlayerSlot,
+        player_type::PlayerType,
     },
     spawn,
-    visibility::{self, Senses, Sighting},
+    visibility::Sighting,
 };
 
 //
@@ -69,7 +69,7 @@ fn concealed_enemy_on_lit_cell_is_glimpsed_and_not_named() {
 
     // The sniper sees eight cells; the shade stands three away, on a lit
     // cell, and is a presence and no more.
-    assert_eq!(sighting_of(&app, 0, shade), Sighting::Glimpsed);
+    assert_eq!(utils::sighting_of(&app, 0, shade), Sighting::Glimpsed);
 
     // Neither the acquire scan nor a named attack reaches it.
     utils::select(&mut app, sniper_id);
@@ -93,7 +93,7 @@ fn detector_in_range_lets_side_engage_concealed_enemy() {
     let (shade, _) = utils::create_owned(&mut app, "shade", 5, 8, 1);
     utils::run_ticks(&mut app, utils::APPLY);
 
-    assert_eq!(sighting_of(&app, 0, shade), Sighting::Seen);
+    assert_eq!(utils::sighting_of(&app, 0, shade), Sighting::Seen);
     // Auto-engaged: 10 damage every 2 ticks empties 20 health.
     utils::run_ticks(&mut app, 30);
     utils::assert_despawned(app.world_mut(), shade);
@@ -112,7 +112,7 @@ fn allied_detector_counts() {
     let (shade, _) = utils::create_owned(&mut app, "shade", 5, 8, 1);
     utils::run_ticks(&mut app, utils::APPLY);
 
-    assert_eq!(sighting_of(&app, 0, shade), Sighting::Seen);
+    assert_eq!(utils::sighting_of(&app, 0, shade), Sighting::Seen);
     utils::run_ticks(&mut app, 30);
     utils::assert_despawned(app.world_mut(), shade);
 }
@@ -125,12 +125,12 @@ fn detection_without_sight_reveals_nothing() {
     utils::create_owned(&mut app, "tower", 5, 5, 0);
     let (shade, _) = utils::create_owned(&mut app, "shade", 5, 10, 1);
     utils::run_ticks(&mut app, utils::APPLY);
-    assert_eq!(sighting_of(&app, 0, shade), Sighting::Unseen);
+    assert_eq!(utils::sighting_of(&app, 0, shade), Sighting::Unseen);
 
     // A scout lends the sight; detection was there all along.
     utils::create_owned(&mut app, "scout", 5, 12, 0);
     utils::run_ticks(&mut app, utils::APPLY);
-    assert_eq!(sighting_of(&app, 0, shade), Sighting::Seen);
+    assert_eq!(utils::sighting_of(&app, 0, shade), Sighting::Seen);
 }
 
 #[test]
@@ -143,8 +143,8 @@ fn owner_and_ally_always_see_own_concealed_unit() {
     utils::create_owned(&mut app, "scout", 5, 7, 1);
     utils::run_ticks(&mut app, utils::APPLY);
 
-    assert_eq!(sighting_of(&app, 0, shade), Sighting::Seen);
-    assert_eq!(sighting_of(&app, 1, shade), Sighting::Seen);
+    assert_eq!(utils::sighting_of(&app, 0, shade), Sighting::Seen);
+    assert_eq!(utils::sighting_of(&app, 1, shade), Sighting::Seen);
     let view = game_view(
         app.world(),
         0,
@@ -238,7 +238,7 @@ fn omniscient_seat_glimpses_undetected_cloak_anywhere_and_names_it_not() {
     // Far beyond the sniper's sight: only omniscience reaches the cell at all.
     let (shade, shade_id) = utils::create_owned(&mut app, "shade", 25, 25, 0);
     utils::run_ticks(&mut app, utils::APPLY);
-    assert_eq!(sighting_of(&app, 1, shade), Sighting::Glimpsed);
+    assert_eq!(utils::sighting_of(&app, 1, shade), Sighting::Glimpsed);
 
     // The seat may name what fog hides, but not what a cloak hides.
     utils::run_ticks_commanding(
@@ -278,7 +278,7 @@ fn everywhere_detecting_seat_names_undetected_cloak_and_its_order_proceeds() {
     let (_, sniper_id) = utils::create_owned(&mut app, "sniper", 5, 5, 1);
     let (shade, shade_id) = utils::create_owned(&mut app, "shade", 5, 8, 0);
     utils::run_ticks(&mut app, utils::APPLY);
-    assert_eq!(sighting_of(&app, 1, shade), Sighting::Seen);
+    assert_eq!(utils::sighting_of(&app, 1, shade), Sighting::Seen);
 
     // Named, and the attack runs to the kill: 10 damage every 2 ticks over
     // 20 health.
@@ -332,12 +332,12 @@ fn detection_naming_ground_leaves_cloaked_flier_glimpsed() {
     utils::run_ticks(&mut app, utils::APPLY);
 
     assert_eq!(
-        sighting_of(&app, 0, shade),
+        utils::sighting_of(&app, 0, shade),
         Sighting::Seen,
         "on the ground the eye names"
     );
     assert_eq!(
-        sighting_of(&app, 0, phantom),
+        utils::sighting_of(&app, 0, phantom),
         Sighting::Glimpsed,
         "in the air it does not"
     );
@@ -351,7 +351,7 @@ fn disabled_detector_detects_nothing() {
     let (tower, _) = utils::create_owned(&mut app, "tower", 10, 10, 1);
     let (shade, _) = utils::create_owned(&mut app, "shade", 12, 10, 0);
     utils::run_ticks(&mut app, utils::APPLY);
-    assert_eq!(sighting_of(&app, 1, shade), Sighting::Seen);
+    assert_eq!(utils::sighting_of(&app, 1, shade), Sighting::Seen);
 
     utils::create_owned(&mut app, "arbiter", 10, 10, 0);
     utils::run_ticks(&mut app, 3);
@@ -359,7 +359,7 @@ fn disabled_detector_detects_nothing() {
         entity_def::operation(app.world(), tower),
         Operation::Disabled(Outage::Field)
     );
-    assert_eq!(sighting_of(&app, 1, shade), Sighting::Glimpsed);
+    assert_eq!(utils::sighting_of(&app, 1, shade), Sighting::Glimpsed);
 }
 
 #[test]
@@ -368,7 +368,7 @@ fn watch_detects_concealed_enemy_for_its_duration() {
     let (_, mage_id) = utils::create_owned(&mut app, "mage", 5, 5, 0);
     let (shade, _) = utils::create_owned(&mut app, "shade", 8, 5, 1);
     utils::run_ticks(&mut app, utils::APPLY);
-    assert_eq!(sighting_of(&app, 0, shade), Sighting::Glimpsed);
+    assert_eq!(utils::sighting_of(&app, 0, shade), Sighting::Glimpsed);
 
     // A sweep over the shade's cell names it from the tick the cast lands
     // through the six ticks after, then the patch lapses and it is a shimmer
@@ -380,15 +380,15 @@ fn watch_detects_concealed_enemy_for_its_duration() {
         Some(SkillTarget::Position(utils::pos(8, 5))),
     );
     utils::run_ticks(&mut app, utils::APPLY);
-    assert_eq!(sighting_of(&app, 0, shade), Sighting::Seen);
+    assert_eq!(utils::sighting_of(&app, 0, shade), Sighting::Seen);
     utils::run_ticks(&mut app, 5);
     assert_eq!(
-        sighting_of(&app, 0, shade),
+        utils::sighting_of(&app, 0, shade),
         Sighting::Seen,
         "the sixth tick"
     );
     utils::run_ticks(&mut app, 1);
-    assert_eq!(sighting_of(&app, 0, shade), Sighting::Glimpsed);
+    assert_eq!(utils::sighting_of(&app, 0, shade), Sighting::Glimpsed);
 }
 
 #[test]
@@ -406,8 +406,8 @@ fn watch_naming_ground_leaves_cloaked_flier_glimpsed() {
         Some(SkillTarget::Position(utils::pos(8, 5))),
     );
     utils::run_ticks(&mut app, utils::APPLY + 1);
-    assert_eq!(sighting_of(&app, 0, shade), Sighting::Seen);
-    assert_eq!(sighting_of(&app, 0, phantom), Sighting::Glimpsed);
+    assert_eq!(utils::sighting_of(&app, 0, shade), Sighting::Seen);
+    assert_eq!(utils::sighting_of(&app, 0, phantom), Sighting::Glimpsed);
 }
 
 #[test]
@@ -419,15 +419,15 @@ fn free_seat_and_unknown_player_see_nothing() {
     // An exposed unit in the open: any seated side would see it.
     let (scout, _) = utils::create_owned(&mut app, "scout", 5, 5, 0);
     utils::run_ticks(&mut app, utils::APPLY);
-    assert_eq!(sighting_of(&app, 0, scout), Sighting::Seen);
+    assert_eq!(utils::sighting_of(&app, 0, scout), Sighting::Seen);
 
     assert_eq!(
-        sighting_of(&app, 1, scout),
+        utils::sighting_of(&app, 1, scout),
         Sighting::Unseen,
         "nobody sits there"
     );
     assert_eq!(
-        sighting_of(&app, 7, scout),
+        utils::sighting_of(&app, 7, scout),
         Sighting::Unseen,
         "no such seat"
     );
@@ -458,7 +458,7 @@ fn position_attack_hits_concealed_unit_on_its_cell() {
     let (_, mortar_id) = utils::create_owned(&mut app, "mortar", 5, 5, 1);
     let (shade, _) = utils::create_owned(&mut app, "shade", 5, 10, 0);
     utils::run_ticks(&mut app, utils::APPLY);
-    assert_eq!(sighting_of(&app, 1, shade), Sighting::Glimpsed);
+    assert_eq!(utils::sighting_of(&app, 1, shade), Sighting::Glimpsed);
 
     // The rival cannot name the shade, but a shell sent to the cell it
     // shimmers on hits whatever stands there: 20 − 10 = 10.
@@ -496,7 +496,7 @@ fn splash_hits_concealed_unit_beside_what_it_was_aimed_at() {
     let (dummy, dummy_id) = utils::create_owned(&mut app, "dummy", 5, 10, 0);
     let (shade, _) = utils::create_owned(&mut app, "shade", 5, 11, 0);
     utils::run_ticks(&mut app, utils::APPLY);
-    assert_eq!(sighting_of(&app, 1, shade), Sighting::Glimpsed);
+    assert_eq!(utils::sighting_of(&app, 1, shade), Sighting::Glimpsed);
 
     // The shell is aimed at the dummy the rival can see; the blast band one
     // cell out catches the shade it cannot: 20 − 5 = 15.
@@ -536,7 +536,7 @@ fn sight_reaching_one_corner_of_body_makes_out_whole_of_it() {
     utils::run_ticks(&mut app, utils::APPLY);
 
     assert_eq!(
-        sighting_of(&app, 0, hall),
+        utils::sighting_of(&app, 0, hall),
         Sighting::Seen,
         "any one lit cell of a footprint settles it"
     );
@@ -551,7 +551,7 @@ fn sight_reaching_no_cell_of_body_makes_out_none_of_it() {
     let (hall, _) = utils::create_owned(&mut app, "hall", 5, 5, 1);
     utils::run_ticks(&mut app, utils::APPLY);
 
-    assert_eq!(sighting_of(&app, 0, hall), Sighting::Unseen);
+    assert_eq!(utils::sighting_of(&app, 0, hall), Sighting::Unseen);
 }
 
 #[test]
@@ -565,7 +565,7 @@ fn detector_reaching_one_corner_of_concealed_body_makes_out_whole_of_it() {
     utils::run_ticks(&mut app, utils::APPLY);
 
     assert_eq!(
-        sighting_of(&app, 0, crypt),
+        utils::sighting_of(&app, 0, crypt),
         Sighting::Seen,
         "any one detected cell of a footprint settles it"
     );
@@ -579,7 +579,7 @@ fn concealed_body_lit_but_undetected_anywhere_is_glimpsed() {
     let (crypt, _) = utils::create_owned(&mut app, "crypt", 7, 7, 1);
     utils::run_ticks(&mut app, utils::APPLY);
 
-    assert_eq!(sighting_of(&app, 0, crypt), Sighting::Glimpsed);
+    assert_eq!(utils::sighting_of(&app, 0, crypt), Sighting::Glimpsed);
 }
 
 #[test]
@@ -625,8 +625,8 @@ fn veil_conceals_allied_units_inside_and_not_its_source() {
 
     assert!(app.world().entity(zealot).contains::<ConcealedComponent>());
     assert!(!app.world().entity(arbiter).contains::<ConcealedComponent>());
-    assert_eq!(sighting_of(&app, 1, zealot), Sighting::Glimpsed);
-    assert_eq!(sighting_of(&app, 1, arbiter), Sighting::Seen);
+    assert_eq!(utils::sighting_of(&app, 1, zealot), Sighting::Glimpsed);
+    assert_eq!(utils::sighting_of(&app, 1, arbiter), Sighting::Seen);
 
     // The veil moves with the arbiter, and the zealot is exposed once it is gone.
     utils::select(&mut app, arbiter_id);
@@ -639,7 +639,7 @@ fn veil_conceals_allied_units_inside_and_not_its_source() {
     );
     utils::run_ticks(&mut app, 60);
     assert!(!app.world().entity(zealot).contains::<ConcealedComponent>());
-    assert_eq!(sighting_of(&app, 1, zealot), Sighting::Seen);
+    assert_eq!(utils::sighting_of(&app, 1, zealot), Sighting::Seen);
 }
 
 #[test]
@@ -666,7 +666,7 @@ fn veil_hides_wide_body_only_once_it_covers_every_cell() {
             concealed,
             "{type_name}"
         );
-        assert_eq!(sighting_of(&app, 1, body), sighting, "{type_name}");
+        assert_eq!(utils::sighting_of(&app, 1, body), sighting, "{type_name}");
     }
 }
 
@@ -1242,7 +1242,7 @@ fn leashed_attack_under_seat_detecting_everywhere_lapses_when_detector_dies() {
     utils::run_ticks(&mut app, utils::APPLY + 2);
     assert!(utils::order_queue_is_empty(app.world_mut(), sniper));
     assert_eq!(
-        sighting_of(&app, 1, wight),
+        utils::sighting_of(&app, 1, wight),
         Sighting::Seen,
         "the seat still names it"
     );
@@ -1414,11 +1414,6 @@ fn seat_detecting_everywhere() -> Vec<PlayerSlot> {
             None,
         ),
     ]
-}
-
-/// What `player`'s side makes of `entity` now.
-fn sighting_of(app: &App, player: PlayerId, entity: Entity) -> Sighting {
-    visibility::sighting(app.world(), player, entity, Senses::SeatDeclared)
 }
 
 /// A free, instant skill an entity aims at `target` with the given effect.

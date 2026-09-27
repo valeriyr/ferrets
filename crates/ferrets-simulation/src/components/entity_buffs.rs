@@ -40,4 +40,15 @@ impl BuffsComponent {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+
+    /// `true` when an instance of `id` is active.
+    pub fn contains(&self, id: EntityBuffId) -> bool {
+        self.0.contains(id)
+    }
+
+    /// The term the active instance of `id` runs on, or `None` when none is
+    /// active.
+    pub fn term(&self, id: EntityBuffId) -> Option<Term> {
+        self.0.term(id)
+    }
 }

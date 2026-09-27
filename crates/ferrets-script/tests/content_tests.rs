@@ -3,6 +3,8 @@
 //! surface as errors rather than panics. The contract holds for any engine;
 //! [`engine`] picks the binding the suite runs against.
 
+mod utils;
+
 use ferrets_content::{
     affiliation::Affiliation,
     annex::{AloneConduct, AnnexClaim, AnnexLife, AnnexWork},
@@ -28,7 +30,7 @@ use ferrets_content::{
     price::{self, Price},
     quantity::Quantity,
     repair::{RepairCost, RepairRate},
-    requirement::Requirement,
+    requirement::{Bound, Requirement, Threshold},
     research::ResearchDef,
     resource::Banking,
     skills::{
@@ -648,7 +650,7 @@ fn requirement_naming_no_kind_is_rejected() {
     };
     assert!(
         matches!(&error, ScriptError::ContentError(m) if m.contains(
-            "a requirement must name exactly one of entity_type, tag, research, or annexed"
+            "a requirement names exactly one of all, any, entity_type, tag, research, annexed, health, energy, stat, idle_for, or unhurt_for"
         )),
         "unexpected error: {error:?}"
     );
@@ -670,7 +672,7 @@ fn requirement_naming_two_kinds_is_rejected() {
     };
     assert!(
         matches!(&error, ScriptError::ContentError(m) if m.contains(
-            "a requirement must name exactly one of entity_type, tag, research, or annexed"
+            "a requirement names exactly one of all, any, entity_type, tag, research, annexed, health, energy, stat, idle_for, or unhurt_for"
         )),
         "unexpected error: {error:?}"
     );
@@ -693,7 +695,7 @@ fn requirement_naming_two_kinds_reports_shape_before_lookup() {
     // and not as the failed lookup of a research it should never have asked for.
     assert!(
         matches!(&error, ScriptError::ContentError(m) if m.contains(
-            "a requirement must name exactly one of entity_type, tag, research, or annexed"
+            "a requirement names exactly one of all, any, entity_type, tag, research, annexed, health, energy, stat, idle_for, or unhurt_for"
         )),
         "unexpected error: {error:?}"
     );
@@ -1207,6 +1209,352 @@ fn loads_declared_requirements_onto_entities() {
     assert_eq!(
         registry.entity("mortar").unwrap().requires,
         vec![Requirement::EntityType("blacksmith".to_string())]
+    );
+}
+
+#[test]
+fn loads_requirement_nodes_and_state_leaves() {
+    let source = r#"
+        local ground = define_layer("ground")
+        define_entity("keep", {
+            location = { occupation = ground, size = 1, solidity = "solid" },
+        })
+        define_entity("castle", {
+            location = { occupation = ground, size = 1, solidity = "solid" },
+        })
+        define_research("tactics", { time = 10 })
+        define_entity("knight", {
+            location = { occupation = ground, size = 1, solidity = "solid" },
+            requires = { any = {
+                { entity_type = "keep" },
+                { all = {
+                    { entity_type = "castle" },
+                    { research = "tactics" },
+                    { health = { under_share = "0.34" } },
+                    { energy = { at_least = 20 } },
+                    { stat = "speed", under = "0.2" },
+                    { stat = "speed", at_least_share = "1.5" },
+                    "idle",
+                    { idle_for = 40 },
+                    { unhurt_for = 200 },
+                } },
+            } },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("load content");
+
+    let tactics = registry.research("tactics").expect("tactics registered");
+    assert_eq!(
+        registry.entity("knight").unwrap().requires,
+        vec![Requirement::Any(vec![
+            Requirement::EntityType("keep".to_string()),
+            Requirement::All(vec![
+                Requirement::EntityType("castle".to_string()),
+                Requirement::Research(tactics),
+                Requirement::Health(Bound::Share(Threshold::Under(utils::fixed("0.34")))),
+                Requirement::Energy(Bound::Amount(Threshold::AtLeast(FixedU64::from_num(20)))),
+                Requirement::Stat {
+                    stat: EntityStatId::SPEED,
+                    bound: Bound::Amount(Threshold::Under(utils::fixed("0.2"))),
+                },
+                Requirement::Stat {
+                    stat: EntityStatId::SPEED,
+                    bound: Bound::Share(Threshold::AtLeast(utils::fixed("1.5"))),
+                },
+                Requirement::Idle,
+                Requirement::IdleFor(40),
+                Requirement::UnhurtFor(200),
+            ]),
+        ])]
+    );
+}
+
+#[test]
+fn requirement_table_mixing_list_and_key_errors() {
+    let source = r#"
+        local ground = define_layer("ground")
+        define_tag("hall")
+        define_entity("forge", {
+            location = { occupation = ground, size = 1, solidity = "solid" },
+            tags = { "hall" },
+        })
+        define_entity("knight", {
+            location = { occupation = ground, size = 1, solidity = "solid" },
+            requires = { { entity_type = "forge" }, any = { { tag = "hall" } } },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject a table that lists requirements and names one");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("a requirement table names a requirement or lists requirements, not both")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn requirement_list_with_stray_key_errors() {
+    let source = r#"
+        local ground = define_layer("ground")
+        define_research("masonry", { time = 10 })
+        define_entity("knight", {
+            location = { occupation = ground, size = 1, solidity = "solid" },
+            requires = { reserch = "masonry" },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject a misspelled requirement key");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("requires lists requirements and also names 'reserch', which is none of them")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn requirement_node_list_naming_key_beside_entries_errors() {
+    let source = r#"
+        local ground = define_layer("ground")
+        define_entity("keep", {
+            location = { occupation = ground, size = 1, solidity = "solid" },
+        })
+        define_entity("knight", {
+            location = { occupation = ground, size = 1, solidity = "solid" },
+            requires = { any = { { entity_type = "keep" }, entity_type = "castle" } },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject a requirement key written beside a node's entries");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("a requirement table names a requirement or lists requirements, not both")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn bare_list_inside_requirement_list_errors() {
+    let source = r#"
+        local ground = define_layer("ground")
+        define_tag("hall")
+        define_entity("forge", {
+            location = { occupation = ground, size = 1, solidity = "solid" },
+            tags = { "hall" },
+        })
+        define_entity("knight", {
+            location = { occupation = ground, size = 1, solidity = "solid" },
+            requires = { { entity_type = "forge" }, { { tag = "hall" } } },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject a bare list nested in a requirement list");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("a list of requirements inside a list is written as { all = { ... } } or { any = { ... } }")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn requirement_list_with_several_stray_keys_names_first_in_sorted_order() {
+    let source = r#"
+        local ground = define_layer("ground")
+        define_entity("keep", {
+            location = { occupation = ground, size = 1, solidity = "solid" },
+        })
+        define_entity("knight", {
+            location = { occupation = ground, size = 1, solidity = "solid" },
+            requires = { { entity_type = "keep" }, zeal = 1, banner = 2, moat = 3 },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject stray keys in a requirement list");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("requires lists requirements and also names 'banner', which is none of them")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn requirement_list_with_hole_errors() {
+    let source = r#"
+        local ground = define_layer("ground")
+        define_research("masonry", { time = 10 })
+        define_entity("keep", {
+            location = { occupation = ground, size = 1, solidity = "solid" },
+        })
+        define_entity("knight", {
+            location = { occupation = ground, size = 1, solidity = "solid" },
+            requires = { { entity_type = "keep" }, UNDEFINED, { research = "masonry" } },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject a requirement list with a hole");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("requires has no requirement at 2")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn requirement_list_with_index_past_its_length_errors() {
+    let source = r#"
+        local ground = define_layer("ground")
+        define_entity("keep", {
+            location = { occupation = ground, size = 1, solidity = "solid" },
+        })
+        define_entity("knight", {
+            location = { occupation = ground, size = 1, solidity = "solid" },
+            requires = { [1] = { entity_type = "keep" }, [3] = { entity_type = "keep" } },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject an entry past the list's length");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("requires lists requirements and also names [3], which is none of them")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn as_long_as_list_with_stray_key_errors() {
+    let source = r#"
+        define_entity_buff("hidden", {
+            effects = {},
+            lasting = { as_long_as = { "idle", unhurt_fr = 40 } },
+            stack = "ignore",
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject a stray key in an as_long_as list");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("as_long_as lists requirements and also names 'unhurt_fr', which is none of them")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn requirement_string_other_than_idle_errors() {
+    let source = r#"
+        local ground = define_layer("ground")
+        define_entity("knight", {
+            location = { occupation = ground, size = 1, solidity = "solid" },
+            requires = { "resting" },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject a requirement string that is not 'idle'");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("a requirement must be 'idle', an { all = ... } or { any = ... } table, or a table naming one of entity_type, tag, research, annexed, health, energy, stat, idle_for, or unhurt_for, found 'resting'")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn as_long_as_reads_bare_list_as_all() {
+    let source = r#"
+        define_entity_buff("steady", {
+            lasting = { as_long_as = { "idle", { unhurt_for = 40 } } },
+            stack = "ignore",
+            effects = { "conceal" },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("load content");
+
+    let steady = registry.entity_buff("steady").expect("steady registered");
+    assert_eq!(
+        registry.entity_buff_def(steady).lasting,
+        Lasting::While(Requirement::All(vec![
+            Requirement::Idle,
+            Requirement::UnhurtFor(40),
+        ]))
+    );
+}
+
+#[test]
+fn bound_naming_both_sides_errors() {
+    let source = r#"
+        local ground = define_layer("ground")
+        define_entity("knight", {
+            location = { occupation = ground, size = 1, solidity = "solid" },
+            requires = { { health = { under = 20, under_share = "0.5" } } },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject a bound naming both sides");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("a health requirement names exactly one of under, at_least, under_share, or at_least_share")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn stat_requirement_with_unknown_stat_errors() {
+    let source = r#"
+        local ground = define_layer("ground")
+        define_entity("knight", {
+            location = { occupation = ground, size = 1, solidity = "solid" },
+            requires = { { stat = "girth", under = "1" } },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject an unregistered stat");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("a requirement names the stat 'girth', which is not registered")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn loads_while_buff_and_passives() {
+    let source = r#"
+        local ground = define_layer("ground")
+        define_entity_buff("on_fire", {
+            lasting = { as_long_as = { health = { under_share = "0.34" } } },
+            stack = "ignore",
+            effects = { { modifiers = { { entity_stat = "health_drain", op = "flat", value = "0.15" } } } },
+        })
+        define_entity("depot", {
+            location = { occupation = ground, size = 1, solidity = "solid" },
+            stats = { max_health = 200, health_drain = "0" },
+            passives = { "on_fire" },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("load content");
+
+    let on_fire = registry.entity_buff("on_fire").expect("on_fire registered");
+    let def = registry.entity_buff_def(on_fire);
+    assert_eq!(
+        def.lasting,
+        Lasting::While(Requirement::Health(Bound::Share(Threshold::Under(
+            utils::fixed("0.34")
+        ))))
+    );
+    assert_eq!(registry.entity("depot").unwrap().passives, vec![on_fire]);
+}
+
+#[test]
+fn passive_naming_unknown_buff_errors() {
+    let source = r#"
+        local ground = define_layer("ground")
+        define_entity("depot", {
+            location = { occupation = ground, size = 1, solidity = "solid" },
+            passives = { "on_fire" },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject an unknown passive");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("entity buff 'on_fire' is not defined")),
+        "unexpected error: {error:?}"
     );
 }
 
@@ -2790,6 +3138,7 @@ fn unknown_morph_reason_errors() {
         local GROUND = define_layer("ground")
         define_entity("walker", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
+            tags = { "winged" },
             stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5" },
             morphs = {
                 { into = "flier", time = 20, placement = "reserve", cancel = "committed", reason = "growth" },
@@ -3081,7 +3430,7 @@ fn lasting_names_exactly_one_of_ticks_or_upkeep() {
             .err()
             .expect("bad lasting");
         assert!(
-            matches!(&error, ScriptError::ContentError(m) if m.contains("a lasting table names exactly one of ticks or upkeep")),
+            matches!(&error, ScriptError::ContentError(m) if m.contains("a lasting table names exactly one of ticks, upkeep, or as_long_as")),
             "{lasting}: {error:?}"
         );
     }
@@ -3098,7 +3447,7 @@ fn unknown_lasting_errors() {
     "#;
     let error = content::load(&engine(), source).err().expect("bad lasting");
     assert!(
-        matches!(&error, ScriptError::ContentError(m) if m.contains("lasting must be 'forever', a { ticks = ... } table, or a { upkeep = ... } table, found 'briefly'")),
+        matches!(&error, ScriptError::ContentError(m) if m.contains("lasting must be 'forever', a { ticks = ... } table, a { upkeep = ... } table, or a { as_long_as = ... } table, found 'briefly'")),
         "{error:?}"
     );
 }
@@ -3362,6 +3711,7 @@ fn morph_transitions_round_trip() {
         define_entity("walker", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
             stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5", max_energy = 50, morph_time = 20 },
+            tags = { "winged" },
             morphs = {
                 { into = "flier",
                   time = { stat = "morph_time" },

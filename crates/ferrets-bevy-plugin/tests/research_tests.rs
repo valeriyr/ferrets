@@ -235,6 +235,31 @@ fn research_requirement_gates_training() {
 }
 
 #[test]
+fn any_requirement_admits_either_research() {
+    let mut app = utils::research_app();
+    let (_, lab_id) = utils::create_owned(&mut app, "lab", 10, 10, 0);
+    let (guardhouse, guardhouse_id) = utils::create_owned(&mut app, "guardhouse", 20, 20, 0);
+    utils::grant_gold(&mut app, 100);
+
+    // Neither tactics nor masonry: refused, nothing queued, nothing paid.
+    train(&mut app, guardhouse_id, "crossbowman");
+    utils::run_ticks(&mut app, utils::APPLY + 10);
+    assert_eq!(utils::count_of_type(app.world_mut(), "crossbowman"), 0);
+    assert_eq!(utils::train_queue_len(app.world(), guardhouse), 0);
+    assert_eq!(utils::gold(app.world()), 100);
+
+    // Masonry alone — the second branch, with the first still unmet — admits it.
+    start_research(&mut app, lab_id, "masonry");
+    utils::run_ticks(&mut app, utils::APPLY + 15);
+    assert!(completed(&app, "masonry"));
+    assert!(!completed(&app, "tactics"));
+
+    train(&mut app, guardhouse_id, "crossbowman");
+    utils::run_ticks(&mut app, utils::APPLY + 10);
+    assert_eq!(utils::count_of_type(app.world_mut(), "crossbowman"), 1);
+}
+
+#[test]
 fn tag_requirement_follows_standing_provider() {
     let mut app = utils::research_app();
     let (_, guardhouse_id) = utils::create_owned(&mut app, "guardhouse", 20, 20, 0);

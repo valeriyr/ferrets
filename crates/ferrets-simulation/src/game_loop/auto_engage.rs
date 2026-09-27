@@ -59,13 +59,10 @@ pub fn tick(world: &mut World) {
             Operation::Operating => {}
             Operation::UnderConstruction | Operation::Disabled(_) => continue,
         }
-        let entity_ref = world.entity(entity);
-        if entity_ref
-            .get::<OrderQueueComponent>()
-            .is_none_or(|queue| queue.front().is_some())
-        {
+        if !entity_def::idle(world, entity) {
             continue;
         }
+        let entity_ref = world.entity(entity);
         // What is engaged here is the weapon a body points itself: an unarmed body
         // has nothing to engage with, and one that fights only from turrets has
         // nothing an order would work — an order binds every gun it carries to one

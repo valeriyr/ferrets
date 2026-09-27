@@ -324,6 +324,24 @@ fn walking_gun_draws_hull_and_gun_apart() {
 }
 
 //
+// ─── Fire ─────────────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn flames_count_by_footprint_width_and_hold_within_tick() {
+    // Two plus the width, at most two more: three over a cell, four over a
+    // footprint two or more cells wide.
+    assert_eq!(render::flame_tongues(40, 7, CellSize::ONE).count(), 3);
+    assert_eq!(render::flame_tongues(40, 7, CellSize::new(2, 2)).count(), 4);
+    assert_eq!(render::flame_tongues(40, 7, CellSize::new(3, 3)).count(), 4);
+
+    // The same tick draws the same fire; the next one moves it.
+    let fire = |tick| render::flame_tongues(tick, 7, CellSize::new(3, 3)).collect::<Vec<_>>();
+    assert_eq!(fire(40), fire(40));
+    assert_ne!(fire(40), fire(41));
+}
+
+//
 // ─── Sightings ────────────────────────────────────────────────────────────────
 //
 

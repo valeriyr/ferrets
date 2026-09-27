@@ -6,7 +6,7 @@ use ferrets_math::FixedU64;
 
 use crate::{
     annex,
-    buffs_store::Term,
+    buffs_store::{Held, Term},
     components::{
         build::UnderConstructionComponent, energy::EnergyComponent, entity_buffs::BuffsComponent,
         entity_skills::SkillsComponent, entity_stats::StatsComponent, health::HealthComponent,
@@ -35,6 +35,22 @@ use ferrets_content::{
 /// Applies the buff `id` to `entity`, inserting a [`BuffsComponent`] if it has
 /// none. No-op for an entity with no stat store to modify.
 pub fn apply_entity_buff(world: &mut World, entity: Entity, id: EntityBuffId) {
+    bear(world, entity, id, Held::Applied);
+}
+
+/// Fits the passive `id` onto `entity`, as [`apply_entity_buff`] applies a
+/// buff, marked as borne of its type. Panics when `entity` has no stat store.
+pub fn fit_passive(world: &mut World, entity: Entity, id: EntityBuffId) {
+    assert!(
+        world.entity(entity).contains::<StatsComponent>(),
+        "fit_passive is given an entity with a stat store"
+    );
+    bear(world, entity, id, Held::Passive);
+}
+
+/// Puts the buff `id` on `entity`, a buff held on a requirement marked as
+/// `held`.
+fn bear(world: &mut World, entity: Entity, id: EntityBuffId, held: Held) {
     if !world.entity(entity).contains::<StatsComponent>() {
         return;
     }
@@ -52,6 +68,7 @@ pub fn apply_entity_buff(world: &mut World, entity: Entity, id: EntityBuffId) {
             period: *period,
             due_in: *period + 1,
         },
+        Lasting::While(_) => Term::While(held),
     };
     let stack_rule = def.stack_rule;
     let mut entity_mut = world.entity_mut(entity);
@@ -110,47 +127,35 @@ pub fn recompute_entity_stats(world: &mut World) {
     // Gather first — reads only — so the apply pass below can take the world
     // mutably. The owner-side lists are the same for every unit an owner has,
     // so they are folded once per player, not once per entity.
-    let registry = world.resource::<ContentRegistry>();
-    let player_stats = world.resource::<PlayerStats>();
-    let player_buffs = world.resource::<PlayerBuffs>();
     let owner_modifiers: Vec<Vec<EntityModifier>> =
         (0..world.resource::<GameSession>().slots().len())
-            .map(|player| {
-                let player = player as PlayerId;
-                let mut modifiers = player_buff_entity_modifiers(registry, player_buffs, player);
-                modifiers.extend_from_slice(player_stats.entity_modifiers(player));
-                modifiers
-            })
+            .map(|player| owner_entity_modifiers(world, player as PlayerId))
             .collect();
 
     let mut folds: Vec<(Entity, Vec<EntityModifier>)> = Vec::new();
     for (_, entity) in world.resource::<EntityIndex>().alive_entries() {
-        let entity_ref = world.entity(entity);
-        if !entity_ref.contains::<StatsComponent>() {
+        if !world.entity(entity).contains::<StatsComponent>() {
             continue;
         }
-        let mut modifiers = match entity_ref.get::<BuffsComponent>() {
-            Some(buffs) => entity_buff_modifiers(registry, buffs),
-            None => Vec::new(),
-        };
-        if let Some(owner) = entity_def::owner(world, entity) {
-            modifiers.extend_from_slice(&owner_modifiers[owner as usize]);
-        }
-        modifiers.extend(fields::modifiers(world, entity));
-        modifiers.extend(annex::modifiers(world, entity));
-        folds.push((entity, modifiers));
+        let owned = entity_def::owner(world, entity)
+            .map_or(&[][..], |owner| owner_modifiers[owner as usize].as_slice());
+        folds.push((entity, reaching(world, entity, owned)));
     }
+    fold(world, folds);
+}
 
-    // The fold holds every stat at the floor its registration carries, and the
-    // registry is the only place that knows them — held aside for the pass so
-    // the entities it folds can be reached at the same time.
-    world.resource_scope(|world, registry: Mut<ContentRegistry>| {
-        for (entity, modifiers) in folds {
-            if let Some(mut stats) = world.entity_mut(entity).get_mut::<StatsComponent>() {
-                stats.recompute(&modifiers, registry.entity_stat_defs());
-            }
-        }
-    });
+/// Recomputes `entity`'s effective stats alone, from the same modifiers
+/// [`recompute_entity_stats`] folds for it. Panics when `entity` has no stat
+/// store.
+pub fn recompute_stats_of(world: &mut World, entity: Entity) {
+    assert!(
+        world.entity(entity).contains::<StatsComponent>(),
+        "recompute_stats_of is given an entity with a stat store"
+    );
+    let owned = entity_def::owner(world, entity)
+        .map_or_else(Vec::new, |owner| owner_entity_modifiers(world, owner));
+    let modifiers = reaching(world, entity, &owned);
+    fold(world, vec![(entity, modifiers)]);
 }
 
 /// Recomputes every player's effective stats: the player's own buffs fold
@@ -198,7 +203,7 @@ pub fn process_entity_buffs(world: &mut World) {
                 .lasting
             {
                 Lasting::Upkeep { costs, .. } => cost::times(costs, stacks),
-                Lasting::Forever | Lasting::For(_) => {
+                Lasting::Forever | Lasting::For(_) | Lasting::While(_) => {
                     unreachable!("the store reports a payment due on an upkeep alone")
                 }
             };
@@ -262,11 +267,12 @@ pub fn process_entity_skills(world: &mut World) {
     }
 }
 
-/// Refills each energy pool by one tick's `energy_regen`, up to `max_energy`.
+/// Moves each energy pool by one tick: up by `energy_regen` to `max_energy`,
+/// then down by `energy_drain`, to no lower than empty.
 ///
 /// Runs over the alive index, so the dying are already excluded. A pool also
 /// settles back under a ceiling a debuff has lowered.
-pub fn process_energy_regen(world: &mut World) {
+pub fn process_energy_flow(world: &mut World) {
     for (_, entity) in world.resource::<EntityIndex>().alive_entries() {
         let entity_ref = world.entity(entity);
         if !entity_ref.contains::<EnergyComponent>() {
@@ -284,8 +290,12 @@ pub fn process_energy_regen(world: &mut World) {
         let regen = stats
             .effective(EntityStatId::ENERGY_REGEN)
             .unwrap_or(FixedU64::ZERO);
+        let drain = stats
+            .effective(EntityStatId::ENERGY_DRAIN)
+            .unwrap_or(FixedU64::ZERO);
         if let Some(mut energy) = world.entity_mut(entity).get_mut::<EnergyComponent>() {
             energy.regenerate(regen, max);
+            energy.drain(drain);
         }
     }
 }
@@ -295,7 +305,7 @@ pub fn process_energy_regen(world: &mut World) {
 ///
 /// Runs over the alive index, so the dying are already excluded; entities still
 /// under construction are skipped too. A pool also settles back under a ceiling
-/// a debuff has lowered, and one a drain runs dry dies of it.
+/// a debuff has lowered, and one the drain empties dies of it.
 pub fn process_health_flow(world: &mut World) {
     for (_, entity) in world.resource::<EntityIndex>().alive_entries() {
         let entity_ref = world.entity(entity);
@@ -332,9 +342,10 @@ pub fn process_health_flow(world: &mut World) {
             }
             None => unreachable!("the pool read a moment ago is still the entity's own"),
         };
-        // A pool this pass ran dry dies of it, with nobody to blame: a
-        // structure withering off the field that sustains it. A pool that was
-        // already empty is left where the opening rule left it.
+        // A health pool this pass drains to nothing dies of it, with nobody
+        // to blame: a structure withering off the field that sustains it, a
+        // building burning down under its line. A pool that was already empty
+        // is left where the opening rule left it.
         if emptied {
             spawn::despawn_entity(world, entity, DeathCause::Decayed);
         }
@@ -423,4 +434,42 @@ fn player_buff_player_modifiers(
         }
     }
     modifiers
+}
+
+/// The entity modifiers `player`'s buffs and applied modifiers lay over every
+/// unit it owns.
+fn owner_entity_modifiers(world: &World, player: PlayerId) -> Vec<EntityModifier> {
+    let registry = world.resource::<ContentRegistry>();
+    let mut modifiers =
+        player_buff_entity_modifiers(registry, world.resource::<PlayerBuffs>(), player);
+    modifiers.extend_from_slice(world.resource::<PlayerStats>().entity_modifiers(player));
+    modifiers
+}
+
+/// Every entity modifier that reaches `entity`: its own buffs', `owned` (its
+/// owner's), and the fields' and annex's that hold for where it stands.
+fn reaching(world: &World, entity: Entity, owned: &[EntityModifier]) -> Vec<EntityModifier> {
+    let registry = world.resource::<ContentRegistry>();
+    let mut modifiers = match world.entity(entity).get::<BuffsComponent>() {
+        Some(buffs) => entity_buff_modifiers(registry, buffs),
+        None => Vec::new(),
+    };
+    modifiers.extend_from_slice(owned);
+    modifiers.extend(fields::modifiers(world, entity));
+    modifiers.extend(annex::modifiers(world, entity));
+    modifiers
+}
+
+/// Folds each entity's modifiers into its effective stats, each stat held at
+/// the floor its registration carries.
+fn fold(world: &mut World, folds: Vec<(Entity, Vec<EntityModifier>)>) {
+    // The floors live in the registry alone, held aside for the pass so the
+    // entities it folds can be reached at the same time.
+    world.resource_scope(|world, registry: Mut<ContentRegistry>| {
+        for (entity, modifiers) in folds {
+            if let Some(mut stats) = world.entity_mut(entity).get_mut::<StatsComponent>() {
+                stats.recompute(&modifiers, registry.entity_stat_defs());
+            }
+        }
+    });
 }

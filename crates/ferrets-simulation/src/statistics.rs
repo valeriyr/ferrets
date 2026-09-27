@@ -54,7 +54,7 @@ impl PlayerTally {
         self.produced.get(&entity_type).copied().unwrap_or(0)
     }
 
-    /// How many of `entity_type` this player lost to fire.
+    /// How many of `entity_type` this player lost to fire or to decay.
     pub fn lost(&self, entity_type: EntityTypeId) -> u32 {
         self.lost.get(&entity_type).copied().unwrap_or(0)
     }
@@ -165,7 +165,8 @@ impl Statistics {
         bump(&mut self.0[player as usize].produced, entity_type);
     }
 
-    /// Counts one of `player`'s entities of `entity_type` lost to fire.
+    /// Counts one of `player`'s entities of `entity_type` lost to fire or to
+    /// decay.
     pub(crate) fn record_lost(&mut self, player: PlayerId, entity_type: EntityTypeId) {
         bump(&mut self.0[player as usize].lost, entity_type);
     }

@@ -40,6 +40,7 @@ use ferrets_simulation::{
         concealed::ConcealedComponent,
         dying::{DyingComponent, RemainsComponent},
         energy::EnergyComponent,
+        entity_buffs::BuffsComponent,
         entity_info::EntityInfoComponent,
         entity_stats::StatsComponent,
         field_source::{Emitted, FieldSourcesComponent},
@@ -96,6 +97,17 @@ pub const REMAINS_COLOR: Color = Color::srgba(0.45, 0.44, 0.42, 1.0);
 
 /// Screen pixels per grid cell.
 pub const CELL_PX: f32 = 32.0;
+
+/// The demo's fire, by the buff name its content declares.
+pub(crate) const ON_FIRE: &str = "on_fire";
+
+/// The health bar of a burning entity.
+const FIRE_BAR_COLOR: Color = Color::srgb(1.0, 0.25, 0.1);
+
+/// The outer edge of a tongue of flame.
+const FLAME_OUTER: Color = Color::srgb(1.0, 0.45, 0.05);
+/// Its brighter core.
+const FLAME_INNER: Color = Color::srgb(1.0, 0.9, 0.3);
 
 /// The interpolated render position from the previous tick.
 #[derive(Component)]
@@ -1675,9 +1687,9 @@ pub fn glimpse_center(
     transform.translation.truncate() - lift(registry, def).truncate()
 }
 
-/// What [`refresh_sightings`] judges every drawn entity by.
+/// What the watched perspective judges an entity by — see [`sighting_judge`].
 #[derive(Debug, Clone, Copy)]
-enum SightingJudge {
+pub(crate) enum SightingJudge {
     /// Everything is seen: the fog is lifted, or the perspective is the whole
     /// map.
     Everything,
@@ -1733,7 +1745,35 @@ pub fn refresh_sightings(world: &mut World, mut last: Local<Option<SightingsKey>
     };
     let unchanged = *last == Some(key);
     *last = Some(key);
-    let judge = match (reveal, viewed) {
+    let judge = sighting_judge(world);
+    let drawn: Vec<(Entity, bool)> = world
+        .query_filtered::<(Entity, Has<Sighted>), With<Renderable>>()
+        .iter(world)
+        .collect();
+    for (entity, stamped) in drawn {
+        if unchanged && stamped {
+            continue;
+        }
+        let sighting = judged(world, judge, entity);
+        let mut entity_mut = world.entity_mut(entity);
+        match entity_mut.get::<Sighted>() {
+            Some(before) if before.0 == sighting => {}
+            Some(_) | None => {
+                entity_mut.insert(Sighted(sighting));
+            }
+        }
+    }
+}
+
+/// What the watched perspective judges entities by this tick: everything
+/// under the fog reveal or a whole-map watch, the watched seat's declared
+/// senses, or nothing for a watched player without a seat.
+pub(crate) fn sighting_judge(world: &World) -> SightingJudge {
+    let viewed = viewed_player(
+        world.resource::<GameSession>(),
+        world.resource::<ObserverPerspective>(),
+    );
+    match (world.resource::<FogReveal>().0, viewed) {
         (true, _) | (false, None) => SightingJudge::Everything,
         (false, Some(player)) => {
             let declared = world
@@ -1749,31 +1789,19 @@ pub fn refresh_sightings(world: &mut World, mut last: Local<Option<SightingsKey>
                 None => SightingJudge::NoSeat,
             }
         }
-    };
-    let drawn: Vec<(Entity, bool)> = world
-        .query_filtered::<(Entity, Has<Sighted>), With<Renderable>>()
-        .iter(world)
-        .collect();
-    for (entity, stamped) in drawn {
-        if unchanged && stamped {
-            continue;
-        }
-        let sighting = match judge {
-            SightingJudge::Everything => Sighting::Seen,
-            SightingJudge::NoSeat => Sighting::Unseen,
-            SightingJudge::Seat {
-                player,
-                vision,
-                detection,
-            } => visibility::sighting(world, player, entity, Senses::Given(vision, detection)),
-        };
-        let mut entity_mut = world.entity_mut(entity);
-        match entity_mut.get::<Sighted>() {
-            Some(before) if before.0 == sighting => {}
-            Some(_) | None => {
-                entity_mut.insert(Sighted(sighting));
-            }
-        }
+    }
+}
+
+/// What the perspective `judge` stands for makes of `entity` this tick.
+pub(crate) fn judged(world: &World, judge: SightingJudge, entity: Entity) -> Sighting {
+    match judge {
+        SightingJudge::Everything => Sighting::Seen,
+        SightingJudge::NoSeat => Sighting::Unseen,
+        SightingJudge::Seat {
+            player,
+            vision,
+            detection,
+        } => visibility::sighting(world, player, entity, Senses::Given(vision, detection)),
     }
 }
 
@@ -3272,12 +3300,13 @@ pub fn draw_status_bars(
             Option<&MorphComponent>,
             Option<&TransporterComponent>,
             Option<&BroodComponent>,
-            Option<&Sighted>,
+            (Option<&Sighted>, Option<&BuffsComponent>),
         ),
         Without<HiddenComponent>,
     >,
 ) {
     let camera = cameras.single().ok().cloned().unwrap_or_default();
+    let on_fire = registry.entity_buff(ON_FIRE);
     for (
         info,
         transform,
@@ -3293,7 +3322,7 @@ pub fn draw_status_bars(
         morph,
         transporter,
         brood,
-        sighted,
+        (sighted, buffs),
     ) in &query
     {
         // A glimpse is a presence and no more: nothing about it is read out.
@@ -3348,7 +3377,15 @@ pub fn draw_status_bars(
             && max > FixedU64::ZERO
         {
             let fraction = (health.current().to_num::<f32>() / max.to_num::<f32>()).min(1.0);
-            let color = Color::srgb(1.0 - fraction * 0.75, 0.15 + fraction * 0.75, 0.2);
+            // A burning pool reads red whatever it holds.
+            let burning = buffs
+                .zip(on_fire)
+                .is_some_and(|(buffs, id)| buffs.contains(id));
+            let color = if burning {
+                FIRE_BAR_COLOR
+            } else {
+                Color::srgb(1.0 - fraction * 0.75, 0.15 + fraction * 0.75, 0.2)
+            };
             bar(&mut gizmos, fraction, color, y);
             y += 4.0;
         }
@@ -3581,6 +3618,96 @@ fn shade(material: &mut ColorMaterial, alpha: f32) {
     };
 }
 
+/// Draws flames over every entity bearing the fire that the watched player
+/// makes out (run in `Update`): three or four tongues rooted along the lower
+/// edge of the footprint, their tips flickering from the tick and the entity's
+/// id.
+pub fn draw_flames(
+    mut gizmos: Gizmos,
+    registry: Res<ContentRegistry>,
+    session: Res<GameSession>,
+    cameras: Query<&Transform, With<Camera2d>>,
+    query: Query<
+        (
+            &EntityInfoComponent,
+            &Transform,
+            &Visibility,
+            &BuffsComponent,
+            Option<&Sighted>,
+        ),
+        Without<HiddenComponent>,
+    >,
+) {
+    let Some(on_fire) = registry.entity_buff(ON_FIRE) else {
+        return;
+    };
+    let camera = cameras.single().ok().cloned().unwrap_or_default();
+    let tick = session.tick();
+    for (info, transform, visibility, buffs, sighted) in &query {
+        if !buffs.contains(on_fire) || !made_out(visibility, sighted) {
+            continue;
+        }
+        let size = registry.def(info.type_id()).location.unwrap().size();
+        let center = transform.translation.truncate();
+        let anchored = |offset: Vec2| {
+            center
+                + (camera.rotation
+                    * Vec3::new(offset.x * camera.scale.x, offset.y * camera.scale.y, 0.0))
+                .truncate()
+        };
+        for tongue in flame_tongues(tick, info.id().0, size) {
+            gizmos.line_2d(
+                anchored(tongue.root_left),
+                anchored(tongue.tip),
+                FLAME_OUTER,
+            );
+            gizmos.line_2d(
+                anchored(tongue.root_right),
+                anchored(tongue.tip),
+                FLAME_OUTER,
+            );
+            gizmos.line_2d(anchored(tongue.root), anchored(tongue.core), FLAME_INNER);
+        }
+    }
+}
+
+/// One tongue of flame, in offsets from the burning entity's center.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Tongue {
+    /// Where its left edge meets the ground.
+    pub root_left: Vec2,
+    /// Where its right edge meets the ground.
+    pub root_right: Vec2,
+    /// The middle of its base.
+    pub root: Vec2,
+    /// Its tip.
+    pub tip: Vec2,
+    /// The top of its brighter core.
+    pub core: Vec2,
+}
+
+/// The tongues of flame over a footprint of `size` owned by the entity `id` at
+/// `tick`: three or four rooted evenly along the lower edge, each leaning and
+/// stretching with a hash of the tick, the id and its place in the row.
+pub fn flame_tongues(tick: u32, id: u32, size: CellSize) -> impl Iterator<Item = Tongue> {
+    let width = size.width as f32 * CELL_PX;
+    let bottom = -(size.height as f32) * CELL_PX / 2.0 + 4.0;
+    let count = 2 + (size.width as usize).min(2);
+    (0..count).map(move |index| {
+        let x = -width / 2.0 + width * (index as f32 + 0.5) / count as f32;
+        let phase = flicker(tick, id, index as u32);
+        let lean = (phase % 7) as f32 - 3.0;
+        let height = CELL_PX * (0.45 + (phase % 5) as f32 * 0.08);
+        Tongue {
+            root_left: Vec2::new(x - CELL_PX * 0.18, bottom),
+            root_right: Vec2::new(x + CELL_PX * 0.18, bottom),
+            root: Vec2::new(x, bottom),
+            tip: Vec2::new(x + lean, bottom + height),
+            core: Vec2::new(x + lean * 0.5, bottom + height * 0.5),
+        }
+    })
+}
+
 /// How strongly a concealed unit the perspective makes out is drawn — its
 /// own, an ally's, or a detected enemy's — and everything drawn about it.
 const CONCEALED_ALPHA: f32 = 0.1;
@@ -3597,4 +3724,16 @@ fn presence_alpha(sighted: Option<&Sighted>, concealed: bool) -> f32 {
 /// `color` with its alpha scaled by `alpha`.
 fn faded(color: Color, alpha: f32) -> Color {
     color.with_alpha(color.alpha() * alpha)
+}
+
+/// A small hash of the tick, an id and a tongue index, folded to a byte, that
+/// the flames flicker by.
+fn flicker(tick: u32, id: u32, tongue: u32) -> u32 {
+    let mut value = tick
+        .wrapping_mul(2_654_435_761)
+        .wrapping_add(id.wrapping_mul(40_503))
+        .wrapping_add(tongue.wrapping_mul(97));
+    value ^= value >> 13;
+    value = value.wrapping_mul(0x5bd1_e995);
+    (value >> 24) & 0xff
 }

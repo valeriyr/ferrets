@@ -1,6 +1,8 @@
 //! The demo's embedded content script and map: they load, validate, and agree
 //! with each other.
 
+mod utils;
+
 use ferrets_content::{
     affiliation::Affiliation,
     attack::Slain,
@@ -23,10 +25,11 @@ use ferrets_content::{
     price,
     quantity::Quantity,
     registry::ContentRegistry,
-    requirement::Requirement,
+    requirement::{Bound, Requirement, Threshold},
     resource::Banking,
     skills::{EntityCastEffect, EntityCastTarget, PlayerCastEffect, Reach, SkillCaster},
     stand::StandingAct,
+    stats::{EntityModifier, ModifierOp},
     targeting,
     work::{Attachment, BerthStance, CrewLimit, WorkPresence},
 };
@@ -1386,6 +1389,110 @@ fn planted_tank_is_priced_and_paced_like_one_that_rolls() {
         planted.tags.contains("mechanical"),
         "and mends as a machine, planted or not"
     );
+}
+
+#[test]
+fn every_terran_building_burns_under_its_fire_line() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    let on_fire = registry
+        .entity_buff("on_fire")
+        .expect("the fire is registered");
+    let fire = registry.entity_buff_def(on_fire);
+    assert_eq!(
+        fire.lasting,
+        Lasting::While(Requirement::Health(Bound::Share(Threshold::Under(
+            utils::fixed("0.34")
+        ))))
+    );
+    // Three points a second at 20 Hz: 0.15 a tick onto the drain.
+    assert_eq!(
+        fire.effects,
+        vec![EntityEffect::Modifiers(vec![EntityModifier {
+            stat: EntityStatId::HEALTH_DRAIN,
+            op: ModifierOp::FlatAdd,
+            magnitude: "0.15".parse::<FixedI64>().unwrap(),
+        }])]
+    );
+
+    // Every Terran building, aloft forms included, bears the fire and carries
+    // the drain it moves; no other race's building does.
+    for def in registry.entities() {
+        let building = def.tags.contains("building");
+        let terran = def.race.as_deref() == Some("terran");
+        assert_eq!(
+            def.passives.contains(&on_fire),
+            building && terran,
+            "{} bears the fire iff it is a Terran building",
+            def.name
+        );
+        if building && terran {
+            assert_eq!(
+                def.base_stat(EntityStatId::HEALTH_DRAIN),
+                Some(FixedU64::ZERO),
+                "{} declares the drain the fire moves",
+                def.name
+            );
+        }
+    }
+}
+
+#[test]
+fn tank_is_built_with_tech_lab_docked_or_once_siege_tech_is_known() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    let siege_tech = registry.research("siege_tech").expect("siege tech");
+    let tank = registry.entity("tank").expect("tank is registered");
+    assert_eq!(
+        tank.requires,
+        vec![Requirement::Any(vec![
+            Requirement::Annexed("tech_lab".to_string()),
+            Requirement::Research(siege_tech),
+        ])]
+    );
+}
+
+#[test]
+fn each_demo_unit_passive_holds_on_its_requirement() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    let frenzy_ritual = registry.research("frenzy_ritual").expect("frenzy ritual");
+    let expected: [(&str, &str, Requirement); 6] = [
+        ("marine", "combat_drugs", Requirement::UnhurtFor(200)),
+        ("huntress", "shadowmeld", Requirement::IdleFor(40)),
+        (
+            "grunt",
+            "enraged",
+            Requirement::All(vec![
+                Requirement::Health(Bound::Share(Threshold::Under(utils::fixed("0.3")))),
+                Requirement::Research(frenzy_ritual),
+            ]),
+        ),
+        (
+            "shaman",
+            "spent",
+            Requirement::Energy(Bound::Amount(Threshold::Under(FixedU64::from_num(20)))),
+        ),
+        (
+            "tank",
+            "limping",
+            Requirement::Health(Bound::Share(Threshold::Under(utils::fixed("0.5")))),
+        ),
+        (
+            "necromancer",
+            "composed",
+            Requirement::Health(Bound::Share(Threshold::AtLeast(FixedU64::ONE))),
+        ),
+    ];
+    for (type_name, passive, requirement) in expected {
+        let id = registry
+            .entity_buff(passive)
+            .expect("the passive is registered");
+        let def = registry.entity(type_name).expect("the type is registered");
+        assert_eq!(def.passives, vec![id], "{type_name} bears {passive} alone");
+        assert_eq!(
+            registry.entity_buff_def(id).lasting,
+            Lasting::While(requirement),
+            "{passive} holds on its own requirement"
+        );
+    }
 }
 
 //

@@ -47,6 +47,11 @@
 //! [ApplyDeferred]
 //! process_dying      — exclusive system; advance Die orders, despawn entities that
 //!                      finished dying
+//! refit_held_buffs   — exclusive system; end every buff held `While` a requirement
+//!                      its bearer no longer meets, whoever applied it, and apply
+//!                      each passive of a type to the instances that meet its
+//!                      requirement, ahead of the concealment marker and the
+//!                      stat fold that read them
 //! recompute_visibility — exclusive system; refresh each player's fog of war from
 //!                      owned entities' sight, the fields they cover and the
 //!                      watches they hold, before acquisition/AI read it
@@ -58,6 +63,9 @@
 //! flee               — exclusive system; fleeing-stance entities run from fresh hits
 //! auto_engage        — exclusive system; stance-driven target acquisition for idle
 //!                      entities
+//! note_idleness      — exclusive system; mark busy every entity given an order
+//!                      before the orders run, and note since when the rest
+//!                      have stood idle
 //! tick_orders        — exclusive system; full order lifecycle for alive entities:
 //!                        prepare phase: flush canceled entries, New → InProcessing,
 //!                          Suspended → resumed, insert driver components
@@ -78,6 +86,8 @@
 //!                      stands with, apply what its terms do to one left
 //!                      standing alone, and hand over the annexes a claim
 //!                      gives away
+//! note_idleness      — again, once every order of the tick has run: record how
+//!                      long each order queue has stood empty
 //! process_impacts    — exclusive system; land shots whose flight time has elapsed,
 //!                      where the same-tick delivery path lands its damage
 //! process_pending_reveals — exclusive system; retry reappearing entities that finished
@@ -89,7 +99,8 @@
 //!                      that have run out
 //! process_entity_skills — exclusive system; age entity-skill cooldowns by one tick
 //! process_player_skills — exclusive system; age player-skill cooldowns
-//! process_energy_regen — exclusive system; refill energy pools toward max_energy
+//! process_energy_flow — exclusive system; move energy pools up by energy_regen
+//!                      toward max_energy and down by energy_drain
 //! process_health_flow — exclusive system; move health pools up by health_regen
 //!                      toward max_health and down by health_drain,
 //!                      skipping the dying and the still-under-construction
@@ -457,6 +468,11 @@ impl Plugin for SimulationPlugin {
                     (
                         systems::recompute_fields,
                         systems::perform_standing_acts,
+                        // Buffs held on a requirement are refitted before the
+                        // marker a buff's concealment sets and before the
+                        // fold, so what one grants or takes away is in force
+                        // the tick its requirement is met or lapses.
+                        systems::refit_held_buffs,
                         systems::refit_concealment,
                         systems::recompute_visibility,
                     )
@@ -470,6 +486,11 @@ impl Plugin for SimulationPlugin {
                     // flee response executes on the same tick it was decided.
                     systems::flee,
                     systems::auto_engage,
+                    // Every order given before the orders run is in the
+                    // queues — the commands', flight's and acquisition's — so
+                    // one given now makes its entity busy even if it ends
+                    // this tick.
+                    systems::note_idleness,
                     // The hierarchy's one mutation point: fold in footprint
                     // changes before orders path against it, never lazily at
                     // query time.
@@ -495,6 +516,9 @@ impl Plugin for SimulationPlugin {
                         systems::advance_berths,
                         systems::advance_brood,
                         systems::advance_annexes,
+                        // Every order of the tick has run, rallies included:
+                        // what stands idle now has stood idle since now.
+                        systems::note_idleness,
                     )
                         .chain(),
                     // The two fights that run outside the order lifecycle, right
@@ -527,7 +551,7 @@ impl Plugin for SimulationPlugin {
                     systems::process_entity_skills,
                     systems::process_player_skills,
                     (
-                        systems::process_energy_regen,
+                        systems::process_energy_flow,
                         systems::process_health_flow,
                         systems::process_lifetimes,
                     )

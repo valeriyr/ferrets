@@ -5,9 +5,12 @@ use std::collections::BTreeSet;
 use bevy::prelude::*;
 use ferrets_bevy_plugin::{PendingInput, ReplayPlayback, ScenarioObjectives};
 use ferrets_content::{
+    cost::Cost,
     entity_stats::EntityStatId,
     morph::MorphCancel,
+    price::Price,
     registry::ContentRegistry,
+    requirement::{Bound, Requirement, Threshold},
     research::ResearchId,
     skills::{EntityCastTarget, SkillCaster, SkillId},
 };
@@ -39,7 +42,10 @@ use ferrets_simulation::{
     entity_def::{self, Operation},
     entity_index::EntityIndex,
     fields::{self, FieldGrid},
-    game_loop::{morph, orders},
+    game_loop::{
+        morph,
+        orders::{self, Refusal},
+    },
     order::Order,
     player_research::PlayerResearch,
     player_skills::PlayerSkills,
@@ -59,7 +65,7 @@ use crate::{
     input::{InputMode, Leading, TargetedOrder},
     render::{self, Sighted},
     states::{GameState, InGameUi},
-    time::SpeedStep,
+    time::{self, SpeedStep},
 };
 
 /// A raised card button at rest.
@@ -123,6 +129,11 @@ pub struct LeaveButton;
 /// The command-card container; train buttons for the leading producer are its children.
 #[derive(Component)]
 pub struct CommandCard;
+
+/// The line above the command card that says what the hovered button costs,
+/// or, for a grayed one, why it is grayed and what would light it.
+#[derive(Component)]
+pub struct CardHint;
 
 /// A command-card button that queues an entity type on the leading producer.
 #[derive(Component)]
@@ -447,6 +458,25 @@ pub fn setup_hud(mut commands: Commands, registry: Res<ContentRegistry>) {
             bottom: Val::Px(72.0),
             left: Val::Px(10.0),
             column_gap: Val::Px(6.0),
+            ..default()
+        },
+    ));
+    // What the hovered card button costs, or why a grayed one is grayed: the
+    // top of the bottom-left cluster, above the War Drums button (140 to 174),
+    // so it covers nothing.
+    commands.spawn((
+        InGameUi,
+        CardHint,
+        Text::new(""),
+        TextFont {
+            font_size: 14.0,
+            ..default()
+        },
+        TextColor(Color::srgb(0.95, 0.85, 0.55)),
+        Node {
+            position_type: PositionType::Absolute,
+            bottom: Val::Px(180.0),
+            left: Val::Px(10.0),
             ..default()
         },
     ));
@@ -1541,8 +1571,9 @@ enum CardAction {
 /// Recolors the gated card buttons from what the executor would currently
 /// allow: a train, build, research, skill or change of form the leading
 /// entity may not start now (see [`orders::can_start`]), or whose
-/// requirements are unmet, greys out, as does a research that is done or
-/// already under way.
+/// requirements are unmet, grays out, as does a research that is done or
+/// already under way. The hovered button's price, or a grayed one's reason,
+/// is written to the [`CardHint`] line.
 pub fn update_card_availability(world: &mut World) {
     // A watcher has no card to recolor — update_command_card despawned it.
     let Some(player) = world.resource::<GameSession>().local_player() else {
@@ -1554,6 +1585,13 @@ pub fn update_card_availability(world: &mut World) {
         .and_then(|id| world.resource::<EntityIndex>().interactable(world, id));
     let starts = |world: &World, order: Order| {
         leading.is_some_and(|entity| orders::can_start(world, entity, &order).is_ok())
+    };
+    // What the start check answered, in words, for the hint line.
+    let refused = |world: &World, order: Order| -> Option<String> {
+        let entity = leading?;
+        orders::can_start(world, entity, &order)
+            .err()
+            .map(refusal_words)
     };
     // A change of form is commanded for the whole selection — the player's own
     // entities in it, as the executor reads it — so the button stands as long
@@ -1661,20 +1699,19 @@ pub fn update_card_availability(world: &mut World) {
         buttons.push((entity, *interaction, action));
     }
 
+    let mut hint: Option<String> = None;
     for (entity, interaction, action) in buttons {
-        let type_requirements_met = |world: &mut World, type_name: &str| {
+        let type_requirements_met = |world: &World, type_name: &str| {
             world
                 .resource::<ContentRegistry>()
                 .entity(type_name)
-                .map(|def| def.requires.clone())
-                .is_none_or(|requires| requirements::met(world, player, leading, &requires))
+                .is_none_or(|def| requirements::met(world, player, leading, &def.requires))
         };
-        let skill_requirements_met = |world: &mut World, skill: SkillId| {
+        let skill_requirements_met = |world: &World, skill: SkillId| {
             world
                 .resource::<ContentRegistry>()
                 .skill_def(skill)
-                .map(|def| def.requires.clone())
-                .is_none_or(|requires| requirements::met(world, player, leading, &requires))
+                .is_none_or(|def| requirements::met(world, player, leading, &def.requires))
         };
         let (available, normal, hovered) = match &action {
             CardAction::Train(type_name) => (
@@ -1703,10 +1740,7 @@ pub fn update_card_availability(world: &mut World) {
                     && world
                         .resource::<ContentRegistry>()
                         .research_def(*research)
-                        .map(|def| def.requires.clone())
-                        .is_none_or(|requires| {
-                            requirements::met(world, player, leading, &requires)
-                        })
+                        .is_none_or(|def| requirements::met(world, player, leading, &def.requires))
                     && starts(
                         world,
                         Order::Research {
@@ -1734,7 +1768,7 @@ pub fn update_card_availability(world: &mut World) {
                 SKILL_HOVERED,
             ),
             // A committed change is not the player's to call off while its
-            // window stands open, so the button greys out rather than doing
+            // window stands open, so the button grays out rather than doing
             // nothing when it is clicked.
             CardAction::CancelMorph => (calls_off(world), BUTTON_NORMAL, BUTTON_HOVERED),
             // Nothing queued and nothing under way is nothing to call off.
@@ -1750,7 +1784,339 @@ pub fn update_card_availability(world: &mut World) {
         if let Some(mut background) = world.entity_mut(entity).get_mut::<BackgroundColor>() {
             background.0 = color;
         }
+        if matches!(interaction, Interaction::Hovered | Interaction::Pressed) {
+            hint = Some(if available {
+                price_words(world, &action)
+            } else {
+                card_hint(world, player, leading, &action, &refused)
+            });
+        }
     }
+    let hint = hint.unwrap_or_default();
+    let mut lines = world.query_filtered::<&mut Text, With<CardHint>>();
+    for mut text in lines.iter_mut(world) {
+        if text.0 != hint {
+            text.0 = hint.clone();
+        }
+    }
+}
+
+/// What the hovered live button costs: the price and the time of a train, a
+/// build or a research; the costs and the cooldown of a cast; the costs of a
+/// change of form. A cancel costs nothing and says nothing.
+fn price_words(world: &World, action: &CardAction) -> String {
+    let registry = world.resource::<ContentRegistry>();
+    let priced = |price: &Price, ticks: Option<u32>| {
+        let mut parts: Vec<String> = price_parts(price);
+        if let Some(ticks) = ticks {
+            parts.push(time::seconds_text(time::seconds(ticks)));
+        }
+        parts.join(", ")
+    };
+    match action {
+        CardAction::Train(type_name) => {
+            let def = registry
+                .entity(type_name)
+                .expect("a card button names a registered type");
+            priced(&def.price, def.train_time)
+        }
+        CardAction::Build(type_name) => {
+            let def = registry
+                .entity(type_name)
+                .expect("a card button names a registered type");
+            priced(&def.price, def.build_time)
+        }
+        CardAction::Research(research) => {
+            let def = registry
+                .research_def(*research)
+                .expect("a card button names a registered research");
+            priced(&def.price, Some(def.research_time))
+        }
+        CardAction::Skill(skill) | CardAction::PlayerSkill(skill) => {
+            let def = registry
+                .skill_def(*skill)
+                .expect("a card button names a registered skill");
+            let mut parts = match &def.caster {
+                SkillCaster::Entity { costs, .. } => cost_parts(costs),
+                SkillCaster::Player { price, .. } => price_parts(price),
+            };
+            parts.push(format!(
+                "{} cooldown",
+                time::seconds_text(time::seconds(def.cooldown))
+            ));
+            parts.join(", ")
+        }
+        CardAction::Morph(type_name) => world
+            .resource::<Leading>()
+            .0
+            .and_then(|id| world.resource::<EntityIndex>().interactable(world, id))
+            .and_then(|entity| {
+                entity_def::of(world, entity)
+                    .morphs
+                    .iter()
+                    .find(|transition| transition.into_type() == type_name)
+                    .map(|transition| cost_parts(transition.costs()).join(", "))
+            })
+            .unwrap_or_default(),
+        CardAction::CancelMorph | CardAction::CancelTrain | CardAction::CancelResearch => {
+            String::new()
+        }
+    }
+}
+
+/// Each kind of a price in words: `60 gold`.
+fn price_parts(price: &Price) -> Vec<String> {
+    price
+        .iter()
+        .map(|(kind, amount)| format!("{amount} {kind}"))
+        .collect()
+}
+
+/// Each cost in words: a price's kinds, `25 energy`, `10 health`.
+fn cost_parts(costs: &[Cost]) -> Vec<String> {
+    let mut parts = Vec::new();
+    for cost in costs {
+        match cost {
+            Cost::Resources(price) => parts.extend(price_parts(price)),
+            Cost::Energy(amount) => parts.push(format!("{amount} energy")),
+            Cost::Health(amount) => parts.push(format!("{amount} health")),
+        }
+    }
+    parts
+}
+
+/// Why a grayed card button is grayed, and what would light it: the unmet
+/// part of a requirement in words, or what the start check refused.
+fn card_hint(
+    world: &mut World,
+    player: PlayerId,
+    leading: Option<Entity>,
+    action: &CardAction,
+    refused: &dyn Fn(&World, Order) -> Option<String>,
+) -> String {
+    // The one read that walks the queues, taken before the registry is held.
+    let under_way = match action {
+        CardAction::Research(research) => research_under_way(world, player, *research),
+        CardAction::Train(_)
+        | CardAction::Build(_)
+        | CardAction::Skill(_)
+        | CardAction::PlayerSkill(_)
+        | CardAction::Morph(_)
+        | CardAction::CancelMorph
+        | CardAction::CancelTrain
+        | CardAction::CancelResearch => false,
+    };
+    let world: &World = world;
+    let registry = world.resource::<ContentRegistry>();
+    let needs = |requires: &[Requirement]| -> Option<String> {
+        let unmet: Vec<String> = requires
+            .iter()
+            .filter_map(|entry| unmet_words(world, player, leading, entry))
+            .collect();
+        (!unmet.is_empty()).then(|| format!("Needs {}", unmet.join(" and ")))
+    };
+    let of_type = |type_name: &str| {
+        registry
+            .entity(type_name)
+            .and_then(|def| needs(&def.requires))
+    };
+    match action {
+        CardAction::Train(type_name) => of_type(type_name)
+            .or_else(|| refused(world, Order::Train))
+            .unwrap_or_default(),
+        CardAction::Build(type_name) => of_type(type_name)
+            .or_else(|| {
+                refused(
+                    world,
+                    Order::Build {
+                        type_name: type_name.clone(),
+                        position: FixedUVec2::ZERO,
+                    },
+                )
+            })
+            .unwrap_or_default(),
+        CardAction::Research(research) => {
+            if world
+                .resource::<PlayerResearch>()
+                .is_completed(player, *research)
+            {
+                "Already researched".to_string()
+            } else if under_way {
+                "Already under way".to_string()
+            } else {
+                registry
+                    .research_def(*research)
+                    .and_then(|def| needs(&def.requires))
+                    .or_else(|| {
+                        refused(
+                            world,
+                            Order::Research {
+                                research: *research,
+                            },
+                        )
+                    })
+                    .unwrap_or_default()
+            }
+        }
+        CardAction::Skill(skill) => {
+            let unmet = registry
+                .skill_def(*skill)
+                .and_then(|def| needs(&def.requires));
+            match (unmet, leading) {
+                (Some(words), _) => words,
+                (None, None) => "Nothing selected can cast it".to_string(),
+                (None, Some(entity)) => match entity_def::operation(world, entity) {
+                    Operation::UnderConstruction => "Still under construction".to_string(),
+                    Operation::Disabled(_) => "Switched off".to_string(),
+                    Operation::Operating => match world.entity(entity).get::<SkillsComponent>() {
+                        Some(skills) if skills.skills().any(|known| known == *skill) => {
+                            "Cooling down".to_string()
+                        }
+                        Some(_) | None => "It cannot cast this".to_string(),
+                    },
+                },
+            }
+        }
+        CardAction::PlayerSkill(skill) => registry
+            .skill_def(*skill)
+            .and_then(|def| needs(&def.requires))
+            .unwrap_or_default(),
+        // The change is read off the leading entity's own transition: its
+        // requirements first, then what the start check refused.
+        CardAction::Morph(type_name) => leading
+            .and_then(|entity| {
+                let transition = entity_def::of(world, entity)
+                    .morphs
+                    .iter()
+                    .find(|transition| transition.into_type() == type_name)?;
+                Some(needs(transition.requires()).or_else(|| {
+                    refused(
+                        world,
+                        Order::Morph {
+                            type_name: type_name.clone(),
+                        },
+                    )
+                }))
+            })
+            .flatten()
+            .unwrap_or_else(|| {
+                format!(
+                    "Nothing selected can become a {} now",
+                    pretty_name(type_name)
+                )
+            }),
+        CardAction::CancelMorph => "The change is committed".to_string(),
+        CardAction::CancelTrain => "Nothing is being trained".to_string(),
+        CardAction::CancelResearch => "Nothing is being researched".to_string(),
+    }
+}
+
+/// The unmet part of one requirement in words, or `None` when it is met: an
+/// `all` names each unmet branch, an `any` every branch when none is met. Each
+/// leaf is judged once.
+fn unmet_words(
+    world: &World,
+    player: PlayerId,
+    leading: Option<Entity>,
+    entry: &Requirement,
+) -> Option<String> {
+    match entry {
+        Requirement::All(items) => {
+            let unmet: Vec<String> = items
+                .iter()
+                .filter_map(|item| unmet_words(world, player, leading, item))
+                .collect();
+            (!unmet.is_empty()).then(|| unmet.join(" and "))
+        }
+        Requirement::Any(items) => {
+            let mut unmet: Vec<String> = Vec::new();
+            for item in items {
+                match unmet_words(world, player, leading, item) {
+                    Some(words) => unmet.push(words),
+                    None => return None,
+                }
+            }
+            Some(format!("({})", unmet.join(" or ")))
+        }
+        Requirement::EntityType(_)
+        | Requirement::Tag(_)
+        | Requirement::Research(_)
+        | Requirement::Annexed(_)
+        | Requirement::Health(_)
+        | Requirement::Energy(_)
+        | Requirement::Stat { .. }
+        | Requirement::Idle
+        | Requirement::IdleFor(_)
+        | Requirement::UnhurtFor(_) => {
+            (!requirements::met(world, player, leading, std::slice::from_ref(entry)))
+                .then(|| leaf_words(world, entry))
+        }
+    }
+}
+
+/// One leaf of a requirement in words: `a Spawning Pit`, `health under 34%`.
+fn leaf_words(world: &World, entry: &Requirement) -> String {
+    let registry = world.resource::<ContentRegistry>();
+    match entry {
+        Requirement::All(_) | Requirement::Any(_) => unreachable!("a node is not a leaf"),
+        Requirement::EntityType(name) => format!("a {}", pretty_name(name)),
+        Requirement::Tag(tag) => format!("a {}", pretty_name(tag)),
+        Requirement::Research(research) => pretty_name(
+            registry
+                .research_name(*research)
+                .expect("a requirement names a registered research"),
+        ),
+        Requirement::Annexed(name) => format!("a {} docked", pretty_name(name)),
+        Requirement::Health(bound) => format!("health {}", bound_words(*bound)),
+        Requirement::Energy(bound) => format!("energy {}", bound_words(*bound)),
+        Requirement::Stat { stat, bound } => format!(
+            "{} {}",
+            pretty_name(
+                registry
+                    .entity_stat_name(*stat)
+                    .expect("a requirement names a registered stat")
+            ),
+            bound_words(*bound)
+        ),
+        Requirement::Idle => "standing idle".to_string(),
+        Requirement::IdleFor(ticks) => {
+            format!("{} idle", time::seconds_text(time::seconds(*ticks)))
+        }
+        Requirement::UnhurtFor(ticks) => {
+            format!("{} unhurt", time::seconds_text(time::seconds(*ticks)))
+        }
+    }
+}
+
+/// A bound in words: `under 20`, `at least 34%`.
+fn bound_words(bound: Bound) -> String {
+    let (side, number) = match bound.threshold() {
+        Threshold::Under(number) => ("under", number),
+        Threshold::AtLeast(number) => ("at least", number),
+    };
+    match bound {
+        Bound::Amount(_) => format!("{side} {number}"),
+        Bound::Share(_) => format!(
+            "{side} {}%",
+            (number.to_num::<f64>() * 100.0).round() as u32
+        ),
+    }
+}
+
+/// What the start check refused, in words.
+fn refusal_words(refusal: Refusal) -> String {
+    match refusal {
+        Refusal::Incapable => "It cannot do this",
+        Refusal::UnderConstruction => "Still under construction",
+        Refusal::Disabled => "Switched off",
+        Refusal::NothingToDo => "Nothing to do",
+        Refusal::TargetGone => "The target is gone",
+        Refusal::TargetUnfit => "The target will not do",
+        Refusal::Busy => "Busy",
+        Refusal::NoRoom => "No room for it",
+        Refusal::NoSupply => "Not enough supply",
+    }
+    .to_string()
 }
 
 /// Whether any of the local player's entities is working on or queued for the

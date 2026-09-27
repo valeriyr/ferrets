@@ -32,11 +32,16 @@ use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect};
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_physics::body;
 
-use super::orders::{self, Processing, Refusal};
+use super::{
+    held_buffs,
+    orders::{self, Processing, Refusal},
+    stats,
+};
 use crate::{
     berths, brood,
     components::{
         attached::AttachedComponent,
+        concealed::ConcealedComponent,
         dying::DyingComponent,
         energy::EnergyComponent,
         entity_info::EntityInfoComponent,
@@ -577,6 +582,7 @@ fn land(
     let broodlings = brood::broodlings(world, entity).to_vec();
 
     // Identity stays; the type is rewritten under it, and the anchor follows.
+    let worn = entity_def::type_id(world, entity);
     let base_stats = world
         .resource::<ContentRegistry>()
         .def(type_id)
@@ -623,17 +629,23 @@ fn land(
     );
     spawn::align_broodlings(world, entity, &broodlings, origin);
 
+    // The old form's passives go before the new form's stats are folded, so
+    // the fold holds only what the new form bears.
+    held_buffs::shed_form(world, entity, worn);
+    stats::recompute_stats_of(world, entity);
+
     // The pools are re-fitted to what the destination declares: a form with
-    // the stat keeps the carried proportion — or starts full when the old
-    // form had no such pool — and a form without it loses the pool component
-    // outright, because a zero-maximum pool would read as dead rather than
-    // as poolless.
-    match base_stats.get(&EntityStatId::MAX_HEALTH) {
-        Some(&max) => {
+    // the stat keeps the carried proportion of its effective maximum — or
+    // starts full when the old form had no such pool — and a form without it
+    // loses the pool component outright, because a zero-maximum pool would
+    // read as dead rather than as poolless. The health pool keeps its last
+    // hit across the change.
+    match entity_def::effective_stat(world, entity, EntityStatId::MAX_HEALTH) {
+        Some(max) => {
             let filled = max * health.unwrap_or(FixedU64::ONE);
             let mut entity_mut = world.entity_mut(entity);
             if let Some(mut pool) = entity_mut.get_mut::<HealthComponent>() {
-                *pool = HealthComponent::full(filled);
+                pool.refill(filled);
             } else {
                 entity_mut.insert(HealthComponent::full(filled));
             }
@@ -642,8 +654,8 @@ fn land(
             world.entity_mut(entity).remove::<HealthComponent>();
         }
     }
-    match base_stats.get(&EntityStatId::MAX_ENERGY) {
-        Some(&max) => {
+    match entity_def::effective_stat(world, entity, EntityStatId::MAX_ENERGY) {
+        Some(max) => {
             let filled = max * energy.unwrap_or(FixedU64::ONE);
             let mut entity_mut = world.entity_mut(entity);
             if let Some(mut pool) = entity_mut.get_mut::<EnergyComponent>() {
@@ -656,6 +668,15 @@ fn land(
             world.entity_mut(entity).remove::<EnergyComponent>();
         }
     }
+
+    // What the new form names is fitted by its requirement, and a buff held on
+    // one the new form no longer meets ends — judged on the new form's pools
+    // and folded stats, which are folded again with what the refit changed,
+    // and the concealment marker fitted to the buffs as they now stand.
+    held_buffs::refit_entity(world, entity);
+    stats::recompute_stats_of(world, entity);
+    let concealed = entity_def::concealed(world, entity);
+    spawn::fit_default::<ConcealedComponent>(&mut world.entity_mut(entity), concealed);
 
     // The plan was made against the old form's layers and clearance, so it means
     // nothing now. The order queue stays: a unit told to go somewhere and then
@@ -1014,11 +1035,15 @@ fn settled(
     }
 }
 
-/// How full a pool is, as a fraction of its maximum, or `None` when there is no
-/// pool to carry over.
+/// How full a pool is, as a fraction of its maximum — none of a pool whose
+/// maximum is zero — or `None` when there is no pool to carry over.
 fn filled_fraction(current: Option<FixedU64>, maximum: Option<FixedU64>) -> Option<FixedU64> {
     let (current, maximum) = current.zip(maximum)?;
-    (maximum > FixedU64::ZERO).then(|| current / maximum)
+    if maximum > FixedU64::ZERO {
+        Some(current / maximum)
+    } else {
+        Some(FixedU64::ZERO)
+    }
 }
 
 /// Takes the entity's standing presence off the grid ahead of testing or

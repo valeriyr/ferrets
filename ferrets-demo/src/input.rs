@@ -36,7 +36,7 @@ use ferrets_simulation::{
 use crate::{
     camera,
     render::{self, CELL_PX},
-    time::SpeedStep,
+    time::{self, SpeedStep},
 };
 
 /// Drag below this many pixels is treated as a click, not a box-select.
@@ -132,7 +132,7 @@ pub fn seek_input(
     } else {
         10
     };
-    let ticks = seconds * crate::time::NOMINAL_TICK_HZ as u32;
+    let ticks = time::ticks(seconds);
     commands.insert_resource(tick::Seek(session.tick() + ticks));
 }
 

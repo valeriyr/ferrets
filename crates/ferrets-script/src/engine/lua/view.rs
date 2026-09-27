@@ -3,7 +3,7 @@
 use mlua::{Lua, Table, Value};
 
 use crate::ai::view::{
-    content::{ContentView, EntityContentView, RequirementView},
+    content::{BoundView, ContentView, EntityContentView, RequirementView},
     game::{EntityView, GameView, RemainsView},
 };
 
@@ -90,6 +90,7 @@ fn entity_table(lua: &Lua, entity: &EntityView) -> mlua::Result<Table> {
     table.set("idle", entity.idle)?;
     table.set("hidden", entity.hidden)?;
     table.set("concealed", entity.concealed)?;
+    table.set("buffs", strings_table(lua, &entity.buffs)?)?;
     if let Some((kind, amount)) = &entity.carrying {
         let carrying = lua.create_table()?;
         carrying.set("kind", kind.as_str())?;
@@ -239,20 +240,74 @@ fn strings_table(lua: &Lua, strings: &[String]) -> mlua::Result<Table> {
     Ok(array)
 }
 
-/// The requirement list as a script reads it: an array of
-/// `{ kind = ..., name = ... }` tables, or nil when there are none.
+/// The requirement list as a script reads it: an array of requirement tables,
+/// or nil when there are none.
 fn optional_requirements(lua: &Lua, requires: Option<&[RequirementView]>) -> mlua::Result<Value> {
     let Some(requires) = requires else {
         return Ok(Value::Nil);
     };
+    Ok(Value::Table(requirement_list(lua, requires)?))
+}
+
+/// An array of requirement tables.
+fn requirement_list(lua: &Lua, requires: &[RequirementView]) -> mlua::Result<Table> {
     let table = lua.create_table()?;
     for (index, entry) in requires.iter().enumerate() {
-        let view = lua.create_table()?;
-        view.set("kind", entry.kind.as_str())?;
-        view.set("name", entry.name.as_str())?;
-        table.set(index + 1, view)?;
+        table.set(index + 1, requirement_table(lua, entry)?)?;
     }
-    Ok(Value::Table(table))
+    Ok(table)
+}
+
+/// One requirement as a `{ kind = ..., ... }` table: `all` and `any` carry
+/// `items`; a named kind carries `name`; `health` and `energy` carry one of
+/// `under`, `at_least`, `under_share` or `at_least_share`; `stat` carries
+/// `name` and one of those; `idle_for` and `unhurt_for` carry `ticks`.
+fn requirement_table(lua: &Lua, entry: &RequirementView) -> mlua::Result<Table> {
+    let view = lua.create_table()?;
+    match entry {
+        RequirementView::All(items) => {
+            view.set("kind", "all")?;
+            view.set("items", requirement_list(lua, items)?)?;
+        }
+        RequirementView::Any(items) => {
+            view.set("kind", "any")?;
+            view.set("items", requirement_list(lua, items)?)?;
+        }
+        RequirementView::Named { kind, name } => {
+            view.set("kind", kind.as_str())?;
+            view.set("name", name.as_str())?;
+        }
+        RequirementView::Pool { kind, bound } => {
+            view.set("kind", kind.as_str())?;
+            set_bound(&view, bound)?;
+        }
+        RequirementView::Stat { name, bound } => {
+            view.set("kind", "stat")?;
+            view.set("name", name.as_str())?;
+            set_bound(&view, bound)?;
+        }
+        RequirementView::Idle => view.set("kind", "idle")?,
+        RequirementView::IdleFor(ticks) => {
+            view.set("kind", "idle_for")?;
+            view.set("ticks", *ticks)?;
+        }
+        RequirementView::UnhurtFor(ticks) => {
+            view.set("kind", "unhurt_for")?;
+            view.set("ticks", *ticks)?;
+        }
+    }
+    Ok(view)
+}
+
+/// Sets a bound's one key — `under`, `at_least`, `under_share` or
+/// `at_least_share` — to its decimal string.
+fn set_bound(view: &Table, bound: &BoundView) -> mlua::Result<()> {
+    match bound {
+        BoundView::Under(value) => view.set("under", value.as_str()),
+        BoundView::AtLeast(value) => view.set("at_least", value.as_str()),
+        BoundView::UnderShare(value) => view.set("under_share", value.as_str()),
+        BoundView::AtLeastShare(value) => view.set("at_least_share", value.as_str()),
+    }
 }
 
 /// Like [`strings_table`], mapping `None` to `nil`.

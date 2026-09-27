@@ -70,6 +70,16 @@ impl OrderEntry {
     }
 }
 
+/// Since when an entity has been idle — taking orders and running none — as
+/// last noted.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IdlenessComponent {
+    /// The entity runs an order, or takes none.
+    Busy,
+    /// The entity has been idle since this tick.
+    IdleSince(u32),
+}
+
 /// Ordered list of orders for an entity; the front entry executes each tick.
 #[derive(Component, Debug, Default)]
 pub struct OrderQueueComponent(pub VecDeque<OrderEntry>);

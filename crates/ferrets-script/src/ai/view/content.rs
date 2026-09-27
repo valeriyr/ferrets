@@ -8,48 +8,61 @@ use ferrets_content::{
     entity_type_def::EntityTypeDef,
     quantity::Quantity,
     registry::ContentRegistry,
-    requirement::Requirement,
+    requirement::{Bound, Requirement, Threshold},
     research::ResearchId,
     skills::{EntityCastTarget, SkillCaster, SkillId},
 };
 
-/// One requirement as a script reads it: the kind of thing wanted, and its
-/// name.
-pub struct RequirementView {
-    /// `"entity_type"`, `"tag"`, `"research"`, or `"annexed"`.
-    pub kind: String,
-    /// The registered name it asks for.
-    pub name: String,
+/// The limit a requirement compares against, as a script reads it: an amount,
+/// or a fraction of the reference, as a decimal string.
+pub enum BoundView {
+    /// Strictly under the amount.
+    Under(String),
+    /// At the amount or over it.
+    AtLeast(String),
+    /// Strictly under the share.
+    UnderShare(String),
+    /// At the share or over it.
+    AtLeastShare(String),
 }
 
-/// The entries of `requires` as a script reads them, or `None` when it holds
-/// none.
-fn requirements(
-    requires: &[Requirement],
-    registry: &ContentRegistry,
-) -> Option<Vec<RequirementView>> {
-    let views: Vec<RequirementView> = requires
-        .iter()
-        .map(|entry| {
-            let (kind, name): (&str, String) = match entry {
-                Requirement::EntityType(name) => ("entity_type", name.clone()),
-                Requirement::Tag(name) => ("tag", name.clone()),
-                Requirement::Research(research) => (
-                    "research",
-                    registry
-                        .research_name(*research)
-                        .expect("a requirement's research id was minted by this registry")
-                        .to_string(),
-                ),
-                Requirement::Annexed(name) => ("annexed", name.clone()),
-            };
-            RequirementView {
-                kind: kind.to_string(),
-                name,
-            }
-        })
-        .collect();
-    (!views.is_empty()).then_some(views)
+/// One requirement as a script reads it.
+pub enum RequirementView {
+    /// Every one is met.
+    All(Vec<RequirementView>),
+    /// At least one is met.
+    Any(Vec<RequirementView>),
+    /// A registered thing the player or the actor must have: the kind is
+    /// `"entity_type"`, `"tag"`, `"research"`, or `"annexed"`.
+    Named {
+        /// The kind of thing wanted.
+        kind: String,
+        /// Its registered name.
+        name: String,
+    },
+    /// A pool of the actor's, `"health"` or `"energy"`, against a bound: an
+    /// amount of it, or a share of its maximum.
+    Pool {
+        /// Which pool.
+        kind: String,
+        /// The side asked for.
+        bound: BoundView,
+    },
+    /// One of the actor's effective stats, by registered name, against a
+    /// bound: an amount, or a share of the stat's base.
+    Stat {
+        /// The stat read.
+        name: String,
+        /// The side asked for.
+        bound: BoundView,
+    },
+    /// The actor takes orders and runs none.
+    Idle,
+    /// The actor takes orders, runs none, and has run none for at least this
+    /// many ticks.
+    IdleFor(u32),
+    /// No hit has landed on the actor for this many ticks, or ever.
+    UnhurtFor(u32),
 }
 
 /// The static content catalogue a script can consult.
@@ -302,5 +315,78 @@ impl EntityContentView {
                 },
             }),
         }
+    }
+}
+
+/// The entries of `requires` as a script reads them, or `None` when it holds
+/// none.
+fn requirements(
+    requires: &[Requirement],
+    registry: &ContentRegistry,
+) -> Option<Vec<RequirementView>> {
+    let views: Vec<RequirementView> = requires
+        .iter()
+        .map(|entry| requirement(entry, registry))
+        .collect();
+    (!views.is_empty()).then_some(views)
+}
+
+/// One requirement as a script reads it.
+fn requirement(entry: &Requirement, registry: &ContentRegistry) -> RequirementView {
+    let named = |kind: &str, name: String| RequirementView::Named {
+        kind: kind.to_string(),
+        name,
+    };
+    match entry {
+        Requirement::All(items) => RequirementView::All(
+            items
+                .iter()
+                .map(|item| requirement(item, registry))
+                .collect(),
+        ),
+        Requirement::Any(items) => RequirementView::Any(
+            items
+                .iter()
+                .map(|item| requirement(item, registry))
+                .collect(),
+        ),
+        Requirement::EntityType(name) => named("entity_type", name.clone()),
+        Requirement::Tag(name) => named("tag", name.clone()),
+        Requirement::Research(research) => named(
+            "research",
+            registry
+                .research_name(*research)
+                .expect("a requirement's research id was minted by this registry")
+                .to_string(),
+        ),
+        Requirement::Annexed(name) => named("annexed", name.clone()),
+        Requirement::Health(bound) => RequirementView::Pool {
+            kind: "health".to_string(),
+            bound: bound_view(*bound),
+        },
+        Requirement::Energy(bound) => RequirementView::Pool {
+            kind: "energy".to_string(),
+            bound: bound_view(*bound),
+        },
+        Requirement::Stat { stat, bound } => RequirementView::Stat {
+            name: registry
+                .entity_stat_name(*stat)
+                .expect("a requirement's stat id was registered by this registry")
+                .to_string(),
+            bound: bound_view(*bound),
+        },
+        Requirement::Idle => RequirementView::Idle,
+        Requirement::IdleFor(ticks) => RequirementView::IdleFor(*ticks),
+        Requirement::UnhurtFor(ticks) => RequirementView::UnhurtFor(*ticks),
+    }
+}
+
+/// A bound as a script reads it.
+fn bound_view(bound: Bound) -> BoundView {
+    match bound {
+        Bound::Amount(Threshold::Under(value)) => BoundView::Under(value.to_string()),
+        Bound::Amount(Threshold::AtLeast(value)) => BoundView::AtLeast(value.to_string()),
+        Bound::Share(Threshold::Under(value)) => BoundView::UnderShare(value.to_string()),
+        Bound::Share(Threshold::AtLeast(value)) => BoundView::AtLeastShare(value.to_string()),
     }
 }

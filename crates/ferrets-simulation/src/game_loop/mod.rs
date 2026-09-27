@@ -22,6 +22,7 @@ pub mod game_result;
 pub mod garrison;
 pub mod guard;
 pub mod harvest;
+pub mod held_buffs;
 pub mod impacts;
 pub mod load;
 pub mod morph;

@@ -23,6 +23,19 @@ pub enum Term {
         /// Ticks until the next payment falls due.
         due_in: u32,
     },
+    /// Until its carrier stops meeting the requirement the buff holds on.
+    While(Held),
+}
+
+/// How a buff held on a requirement came to be borne. The origin is part of
+/// the term: a second application that the stack rule ignores leaves it as it
+/// was, and one that refreshes or stacks replaces it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Held {
+    /// Fitted as a passive of the bearer's type.
+    Passive,
+    /// Applied by anything but the bearer's type.
+    Applied,
 }
 
 /// One active buff instance: its registered id (the stacking and removal
@@ -85,7 +98,7 @@ impl<BuffId: Copy + PartialEq> BuffsStore<BuffId> {
         let mut due = Vec::new();
         for active in &mut self.active {
             match &mut active.term {
-                Term::Forever => {}
+                Term::Forever | Term::While(_) => {}
                 Term::For { remaining } => *remaining = remaining.saturating_sub(1),
                 Term::Upkeep { period, due_in } => {
                     *due_in = due_in.saturating_sub(1);
@@ -110,6 +123,20 @@ impl<BuffId: Copy + PartialEq> BuffsStore<BuffId> {
     pub fn is_empty(&self) -> bool {
         self.active.is_empty()
     }
+
+    /// `true` when an instance of `id` is active.
+    pub fn contains(&self, id: BuffId) -> bool {
+        self.active.iter().any(|active| active.id == id)
+    }
+
+    /// The term the active instance of `id` runs on, or `None` when none is
+    /// active.
+    pub fn term(&self, id: BuffId) -> Option<Term> {
+        self.active
+            .iter()
+            .find(|active| active.id == id)
+            .map(|active| active.term)
+    }
 }
 
 /// The term an active instance on `existing` runs on once the buff is applied
@@ -117,7 +144,7 @@ impl<BuffId: Copy + PartialEq> BuffsStore<BuffId> {
 /// keeps its own, the next payment falling due when it was going to.
 fn refreshed(existing: Term, term: Term) -> Term {
     match existing {
-        Term::Forever | Term::For { .. } => term,
+        Term::Forever | Term::For { .. } | Term::While(_) => term,
         Term::Upkeep { .. } => existing,
     }
 }
