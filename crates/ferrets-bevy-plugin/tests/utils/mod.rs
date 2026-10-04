@@ -18,13 +18,21 @@ use ferrets_content::{
     dying::{Bequest, LeftBy},
     entity_buffs::{EntityBuffDef, EntityBuffId, Lasting},
     entity_effect::EntityEffect,
+    entity_modifiers::EntityModifiers,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     field::FieldId,
     kinds::Kinds,
     location::Solidity,
-    morph::{MorphCancel, MorphInterrupted, MorphPlacement, MorphReason, MorphTransition},
+    morph::{
+        MorphCancel, MorphCourse, MorphInterrupted, MorphPlacement, MorphReason, MorphTransition,
+        PoolCarry, RevertCarry, ViaInterrupted,
+    },
     player_buffs::PlayerBuffDef,
+    pool::Pool,
+    pool_def::PoolId,
+    pool_def::PoolRole,
+    pool_shift::PoolShift,
     price,
     projectile::{Aim, ProjectileDef},
     quantity::Quantity,
@@ -66,15 +74,15 @@ use ferrets_replay::{
 use ferrets_simulation::{
     command::{PlayerCommand, SelectMode, SkillCasterRef, SkillTarget},
     components::{
-        energy::EnergyComponent,
+        build::{self, SiteWork},
         entity_info::EntityInfoComponent,
         entity_stats::StatsComponent,
-        health::HealthComponent,
         hidden::HiddenComponent,
         location::LocationComponent,
         order_queue::{CancelPolicy, OrderQueueComponent},
         owner::OwnerComponent,
         pending_reveal::PendingRevealComponent,
+        pools,
         train::TrainQueueComponent,
         transport::TransporterComponent,
         turret::TurretsComponent,
@@ -82,6 +90,7 @@ use ferrets_simulation::{
     entity_def,
     events::{DeathCause, EventRecord, SimulationEvent, SpawnCause},
     fields::FieldGrid,
+    game_loop::buffs::{self, Bearing},
     input::{InputFrames, PlayerFrame},
     map::Map,
     movement_model::MovementModel,
@@ -432,7 +441,7 @@ pub fn selection_app() -> App {
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
                 )
-                .with_health(30)
+                .with_pool(Pool::health(30))
                 .with_dying(1, [])
                 .with_attack(weapon(GROUND), 10, 1, 3, 2, 1)
                 .with_sight_range(5),
@@ -440,13 +449,13 @@ pub fn selection_app() -> App {
         registry.register(
             EntityTypeDef::new("critter")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-                .with_health(1)
+                .with_pool(Pool::health(1))
                 .with_dying(1, []),
         );
         registry.register(
             EntityTypeDef::new("keep")
                 .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
-                .with_health(100)
+                .with_pool(Pool::health(100))
                 .with_tags(["building"]),
         );
     }
@@ -488,7 +497,7 @@ pub fn cell_crowd_app() -> App {
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
                 )
-                .with_health(30)
+                .with_pool(Pool::health(30))
                 .with_dying(2, []),
         );
         registry.register(
@@ -501,7 +510,7 @@ pub fn cell_crowd_app() -> App {
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
                 )
-                .with_health(60)
+                .with_pool(Pool::health(60))
                 .with_dying(2, []),
         );
     }
@@ -532,85 +541,92 @@ pub fn morph_app(model: MovementModel) -> App {
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
                 )
-                .with_health(30)
+                .with_pool(Pool::health(30))
                 .with_dying(2, [])
                 .with_price([("gold", 10)])
                 .with_train_time(20)
                 .with_morphs([
                     MorphTransition::new(
                         "giant",
-                        None,
+                        MorphCourse::direct(MorphInterrupted::Reverts),
                         Quantity::Constant(10),
                         MorphPlacement::Reserve,
                         MorphCancel::Refundable,
-                        MorphInterrupted::Reverts,
                         MorphReason::Change,
                         Vec::new(),
                         Vec::new(),
+                        [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
                     ),
                     MorphTransition::new(
                         "boulder",
-                        None,
+                        MorphCourse::direct(MorphInterrupted::Dies),
                         Quantity::Constant(0),
                         MorphPlacement::Revalidate,
                         MorphCancel::Committed,
-                        MorphInterrupted::Dies,
                         MorphReason::Change,
                         Vec::new(),
                         Vec::new(),
+                        [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
                     ),
                     MorphTransition::new(
                         "ogre",
-                        None,
+                        MorphCourse::direct(MorphInterrupted::Reverts),
                         Quantity::Constant(10),
                         MorphPlacement::Reserve,
                         MorphCancel::Refundable,
-                        MorphInterrupted::Reverts,
                         MorphReason::Change,
                         Vec::new(),
                         Vec::new(),
+                        [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
                     ),
                     MorphTransition::new(
                         "husk",
-                        None,
+                        MorphCourse::direct(MorphInterrupted::Reverts),
                         Quantity::Constant(0),
                         MorphPlacement::Revalidate,
                         MorphCancel::Committed,
-                        MorphInterrupted::Reverts,
                         MorphReason::Change,
                         vec![Cost::Health(FixedU64::from_num(10))],
                         Vec::new(),
+                        [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
                     ),
                     MorphTransition::new(
                         "wisp",
-                        None,
+                        MorphCourse::direct(MorphInterrupted::Reverts),
                         Quantity::Constant(10),
                         MorphPlacement::Revalidate,
                         MorphCancel::Forfeit,
-                        MorphInterrupted::Reverts,
                         MorphReason::Change,
                         Vec::new(),
                         Vec::new(),
+                        [],
                     ),
                     // Worn as a chrysalis on the way, paid, and refunded if
                     // the change ends early.
                     MorphTransition::new(
                         "wyrm",
-                        Some("chrysalis"),
+                        MorphCourse::via(
+                            "chrysalis",
+                            [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
+                            ViaInterrupted::reverts([(
+                                PoolId::HEALTH,
+                                RevertCarry::Carry(PoolCarry::Shift(PoolShift::Share)),
+                            )]),
+                        ),
                         Quantity::Constant(10),
                         MorphPlacement::Revalidate,
                         MorphCancel::Refundable,
-                        MorphInterrupted::Reverts,
                         MorphReason::Change,
                         vec![Cost::Resources(price::from([("gold", 10)]))],
                         Vec::new(),
+                        [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
                     ),
                 ]),
         );
         registry.register(
             EntityTypeDef::new("chrysalis")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-                .with_health(60)
+                .with_pool(Pool::health(60))
                 .with_dying(2, []),
         );
         registry.register(
@@ -623,7 +639,7 @@ pub fn morph_app(model: MovementModel) -> App {
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
                 )
-                .with_health(90)
+                .with_pool(Pool::health(90))
                 .with_dying(2, []),
         );
         registry.register(
@@ -636,13 +652,13 @@ pub fn morph_app(model: MovementModel) -> App {
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
                 )
-                .with_health(60)
+                .with_pool(Pool::health(60))
                 .with_dying(2, []),
         );
         registry.register(
             EntityTypeDef::new("boulder")
                 .with_location(GROUND, CellSize::new(3, 3), Solidity::Solid)
-                .with_health(100)
+                .with_pool(Pool::health(100))
                 .with_dying(2, []),
         );
         registry.register(
@@ -655,7 +671,7 @@ pub fn morph_app(model: MovementModel) -> App {
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
                 )
-                .with_health(60)
+                .with_pool(Pool::health(60))
                 .with_dying(2, []),
         );
         registry.register(
@@ -668,7 +684,7 @@ pub fn morph_app(model: MovementModel) -> App {
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
                 )
-                .with_health(10)
+                .with_pool(Pool::health(10))
                 .with_dying(2, []),
         );
         registry.register(
@@ -683,20 +699,20 @@ pub fn morph_app(model: MovementModel) -> App {
                 )
                 .with_morphs([MorphTransition::new(
                     "whelp",
-                    None,
+                    MorphCourse::direct(MorphInterrupted::Reverts),
                     Quantity::Constant(10),
                     MorphPlacement::Revalidate,
                     MorphCancel::Forfeit,
-                    MorphInterrupted::Reverts,
                     MorphReason::Change,
                     Vec::new(),
                     Vec::new(),
+                    [],
                 )]),
         );
         registry.register(
             EntityTypeDef::new("shrine")
                 .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
-                .with_health(100)
+                .with_pool(Pool::health(100))
                 .with_dying(2, [])
                 .with_tags(["building"])
                 // Trains the whelp, and its unrooted form does not: the one
@@ -705,14 +721,14 @@ pub fn morph_app(model: MovementModel) -> App {
                 .with_trainer(["whelp"])
                 .with_morphs([MorphTransition::new(
                     "golem",
-                    None,
+                    MorphCourse::direct(MorphInterrupted::Reverts),
                     Quantity::Constant(10),
                     MorphPlacement::Reserve,
                     MorphCancel::Refundable,
-                    MorphInterrupted::Reverts,
                     MorphReason::Change,
                     Vec::new(),
                     Vec::new(),
+                    [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
                 )]),
         );
         registry.register(
@@ -725,18 +741,18 @@ pub fn morph_app(model: MovementModel) -> App {
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
                 )
-                .with_health(50)
+                .with_pool(Pool::health(50))
                 .with_dying(2, [])
                 .with_morphs([MorphTransition::new(
                     "shrine",
-                    None,
+                    MorphCourse::direct(MorphInterrupted::Reverts),
                     Quantity::Constant(10),
                     MorphPlacement::Reserve,
                     MorphCancel::Refundable,
-                    MorphInterrupted::Reverts,
                     MorphReason::Change,
                     Vec::new(),
                     Vec::new(),
+                    [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
                 )]),
         );
     }
@@ -767,7 +783,7 @@ fn brood_berths(slots: usize) -> [(&'static str, BerthGroup); 1] {
 fn brood_building(name: &str) -> EntityTypeDef {
     EntityTypeDef::new(name)
         .with_location(GROUND, CellSize::new(3, 3), Solidity::Solid)
-        .with_health(300)
+        .with_pool(Pool::health(300))
         .with_stat(EntityStatId::SUPPLY_PROVIDED, FixedU64::from_num(3))
         .with_dying(2, [])
         .with_tags(["building"])
@@ -784,7 +800,7 @@ fn brood_mover(name: &str, max_health: u32) -> EntityTypeDef {
             FixedU64::from_num(360),
             FixedU64::from_num(360),
         )
-        .with_health(max_health)
+        .with_pool(Pool::health(max_health))
         .with_dying(2, [])
 }
 
@@ -793,14 +809,14 @@ fn brood_mover(name: &str, max_health: u32) -> EntityTypeDef {
 fn brood_change(into: &str) -> MorphTransition {
     MorphTransition::new(
         into,
-        None,
+        MorphCourse::direct(MorphInterrupted::Reverts),
         Quantity::Constant(10),
         MorphPlacement::Revalidate,
         MorphCancel::Refundable,
-        MorphInterrupted::Reverts,
         MorphReason::Change,
         Vec::new(),
         Vec::new(),
+        [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
     )
 }
 
@@ -842,14 +858,21 @@ pub fn brood_app(model: MovementModel) -> App {
                 .with_morphs([
                     MorphTransition::new(
                         "great_hatch",
-                        Some("shell"),
+                        MorphCourse::via(
+                            "shell",
+                            [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
+                            ViaInterrupted::reverts([(
+                                PoolId::HEALTH,
+                                RevertCarry::Carry(PoolCarry::Shift(PoolShift::Share)),
+                            )]),
+                        ),
                         Quantity::Constant(10),
                         MorphPlacement::Revalidate,
                         MorphCancel::Refundable,
-                        MorphInterrupted::Reverts,
                         MorphReason::Change,
                         Vec::new(),
                         Vec::new(),
+                        [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
                     ),
                     brood_change("bare_hatch"),
                     brood_change("tight_hatch"),
@@ -906,14 +929,21 @@ pub fn brood_app(model: MovementModel) -> App {
                 .with_breeder("piglet", Quantity::Constant(10), 2, 0, reseat)
                 .with_morphs([MorphTransition::new(
                     "roomy_pen",
-                    Some("pen_shell"),
+                    MorphCourse::via(
+                        "pen_shell",
+                        [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
+                        ViaInterrupted::reverts([(
+                            PoolId::HEALTH,
+                            RevertCarry::Carry(PoolCarry::Shift(PoolShift::Share)),
+                        )]),
+                    ),
                     Quantity::Constant(10),
                     MorphPlacement::Revalidate,
                     MorphCancel::Refundable,
-                    MorphInterrupted::Reverts,
                     MorphReason::Change,
                     Vec::new(),
                     Vec::new(),
+                    [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
                 )]),
         );
         registry.register(brood_building("pen_shell"));
@@ -926,7 +956,7 @@ pub fn brood_app(model: MovementModel) -> App {
         registry.register(
             EntityTypeDef::new("grub")
                 .with_location(GROUND, CellSize::ONE, Solidity::Passable)
-                .with_health(25)
+                .with_pool(Pool::health(25))
                 .with_dying(1, [])
                 .with_selection(1, None)
                 .with_broodling(Attachment::new(
@@ -939,69 +969,98 @@ pub fn brood_app(model: MovementModel) -> App {
                 .with_morphs([
                     MorphTransition::new(
                         "worker",
-                        Some("egg"),
+                        MorphCourse::via(
+                            "egg",
+                            [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
+                            ViaInterrupted::reverts([(
+                                PoolId::HEALTH,
+                                RevertCarry::Carry(PoolCarry::Shift(PoolShift::Share)),
+                            )]),
+                        ),
                         Quantity::Constant(10),
                         MorphPlacement::Nearby,
                         MorphCancel::Refundable,
-                        MorphInterrupted::Reverts,
                         MorphReason::Production,
                         vec![Cost::Resources(price::from([("gold", 10)]))],
                         Vec::new(),
+                        [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
                     ),
                     MorphTransition::new(
                         "brute",
-                        Some("egg"),
+                        MorphCourse::via(
+                            "egg",
+                            [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
+                            ViaInterrupted::reverts([(
+                                PoolId::HEALTH,
+                                RevertCarry::Carry(PoolCarry::Shift(PoolShift::Share)),
+                            )]),
+                        ),
                         Quantity::Constant(20),
                         MorphPlacement::Nearby,
                         MorphCancel::Refundable,
-                        MorphInterrupted::Reverts,
                         MorphReason::Change,
                         vec![Cost::Resources(price::from([("gold", 10)]))],
                         [Requirement::EntityType("den".to_string())],
+                        [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
                     ),
                     MorphTransition::new(
                         "mound",
-                        None,
+                        MorphCourse::direct(MorphInterrupted::Reverts),
                         Quantity::Constant(10),
                         MorphPlacement::Reserve,
                         MorphCancel::Refundable,
-                        MorphInterrupted::Reverts,
                         MorphReason::Change,
                         vec![Cost::Resources(price::from([("gold", 10)]))],
                         Vec::new(),
+                        [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
                     ),
                     MorphTransition::new(
                         "flit",
-                        Some("egg"),
+                        MorphCourse::via(
+                            "egg",
+                            [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
+                            ViaInterrupted::Dies,
+                        ),
                         Quantity::Constant(10),
                         MorphPlacement::Nearby,
                         MorphCancel::Refundable,
-                        MorphInterrupted::Dies,
                         MorphReason::Change,
                         vec![Cost::Resources(price::from([("gold", 10)]))],
                         Vec::new(),
+                        [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
                     ),
                     MorphTransition::new(
                         "bulk",
-                        Some("egg"),
+                        MorphCourse::via(
+                            "egg",
+                            [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
+                            ViaInterrupted::reverts([(
+                                PoolId::HEALTH,
+                                RevertCarry::Carry(PoolCarry::Shift(PoolShift::Share)),
+                            )]),
+                        ),
                         Quantity::Constant(10),
                         MorphPlacement::Nearby,
                         MorphCancel::Refundable,
-                        MorphInterrupted::Reverts,
                         MorphReason::Change,
                         vec![Cost::Resources(price::from([("gold", 10)]))],
                         Vec::new(),
+                        [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
                     ),
                     MorphTransition::new(
                         "hulk",
-                        Some("egg"),
+                        MorphCourse::via(
+                            "egg",
+                            [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
+                            ViaInterrupted::Dies,
+                        ),
                         Quantity::Constant(10),
                         MorphPlacement::Nearby,
                         MorphCancel::Refundable,
-                        MorphInterrupted::Dies,
                         MorphReason::Change,
                         vec![Cost::Resources(price::from([("gold", 10)]))],
                         Vec::new(),
+                        [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
                     ),
                 ]),
         );
@@ -1016,14 +1075,14 @@ pub fn brood_app(model: MovementModel) -> App {
                         FixedU64::from_num(360),
                         FixedU64::from_num(360),
                     )
-                    .with_health(90)
+                    .with_pool(Pool::health(90))
                     .with_dying(2, []),
             );
         }
         registry.register(
             EntityTypeDef::new("egg")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-                .with_health(100)
+                .with_pool(Pool::health(100))
                 .with_dying(1, []),
         );
         registry.register(
@@ -1036,31 +1095,31 @@ pub fn brood_app(model: MovementModel) -> App {
         registry.register(
             EntityTypeDef::new("mound")
                 .with_location(GROUND, CellSize::new(3, 3), Solidity::Solid)
-                .with_health(100)
+                .with_pool(Pool::health(100))
                 .with_dying(2, []),
         );
         registry.register(
             EntityTypeDef::new("piglet")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-                .with_health(20)
+                .with_pool(Pool::health(20))
                 .with_dying(2, [])
                 .with_broodling(Attachment::new("brood", BerthStance::Still))
                 .with_morphs([MorphTransition::new(
                     "worker",
-                    None,
+                    MorphCourse::direct(MorphInterrupted::Reverts),
                     Quantity::Constant(10),
                     MorphPlacement::Revalidate,
                     MorphCancel::Refundable,
-                    MorphInterrupted::Reverts,
                     MorphReason::Change,
                     vec![Cost::Resources(price::from([("gold", 10)]))],
                     vec![],
+                    [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
                 )]),
         );
         registry.register(
             EntityTypeDef::new("den")
                 .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
-                .with_health(100)
+                .with_pool(Pool::health(100))
                 .with_dying(2, [])
                 .with_tags(["building"]),
         );
@@ -1370,35 +1429,60 @@ pub fn grant_gold(app: &mut App, amount: u32) {
         .add(0, "gold", amount);
 }
 
-/// The entity's displayed health points, `0` once it is dead or gone.
-pub fn health(app: &App, entity: Entity) -> u32 {
-    app.world()
-        .get::<HealthComponent>(entity)
-        .map_or(0, HealthComponent::displayed)
-}
-
 /// The entity's exact remaining health, unrounded.
-pub fn current_health(app: &App, entity: Entity) -> FixedU64 {
-    app.world()
-        .get::<HealthComponent>(entity)
-        .unwrap()
-        .current()
+pub fn health(app: &App, entity: Entity) -> FixedU64 {
+    entity_def::pool_value(app.world(), entity, PoolId::HEALTH)
+        .expect("the entity carries a health pool")
 }
 
-/// The entity's exact remaining energy, unrounded.
-pub fn energy(app: &App, entity: Entity) -> FixedU64 {
-    app.world()
-        .get::<EnergyComponent>(entity)
-        .expect("the entity carries an energy pool")
-        .current()
+/// The entity's remaining health as a whole number. Panics when the entity
+/// has no health pool or its health is not whole.
+pub fn health_as_u32(app: &App, entity: Entity) -> u32 {
+    pool_as_u32(app, entity, PoolId::HEALTH)
+}
+
+/// The entity's remaining energy as a whole number. Panics when the entity
+/// has no energy pool or its energy is not whole.
+pub fn energy_as_u32(app: &App, entity: Entity) -> u32 {
+    pool_as_u32(app, entity, PoolId::ENERGY)
+}
+
+/// What the entity's `pool` holds, as a whole number. Panics when the entity
+/// has no such pool or its value is not whole.
+fn pool_as_u32(app: &App, entity: Entity, pool: PoolId) -> u32 {
+    let value = entity_def::pool_value(app.world(), entity, pool)
+        .unwrap_or_else(|| panic!("the entity carries the {pool:?} pool"));
+    assert!(
+        value.frac() == FixedU64::ZERO,
+        "the entity's {pool:?} {value} is a whole number"
+    );
+    value.to_num::<u32>()
+}
+
+/// Applies the buff `id` to `entity`, as a fixture whose buff fits its
+/// target. Panics when `entity` cannot carry it.
+pub fn apply_buff(world: &mut World, entity: Entity, id: EntityBuffId) {
+    match buffs::apply_entity_buff(world, entity, id) {
+        Bearing::Borne => {}
+        Bearing::Uncarried => panic!("apply_buff is given a buff its target carries"),
+    }
 }
 
 /// Removes `amount` health points directly, standing in for damage taken.
 pub fn wound(app: &mut App, entity: Entity, amount: &str) {
-    app.world_mut()
-        .get_mut::<HealthComponent>(entity)
-        .unwrap()
-        .drain(fixed(amount));
+    pools::drain(app.world_mut(), entity, PoolId::HEALTH, fixed(amount));
+}
+
+/// Marks `entity` as a site under construction with no work put in, worked by
+/// a crew nobody has joined yet.
+pub fn mark_as_site(world: &mut World, entity: Entity) {
+    build::mark_as_site(
+        world,
+        entity,
+        SiteWork::Crew {
+            builders: Default::default(),
+        },
+    );
 }
 
 /// Selects `attacker` for the local player and orders it to attack `target`,
@@ -1416,7 +1500,7 @@ pub fn attack(app: &mut App, attacker: SimulationId, target: SimulationId) {
 
 /// Registers a single-modifier entity buff, refreshing on re-application:
 /// `stat` moved by `magnitude` per `op`, for `duration` ticks (`None` is
-/// permanent).
+/// permanent). On a pool's maximum it clamps the pool.
 pub fn register_entity_buff(
     app: &mut App,
     name: &str,
@@ -1425,16 +1509,24 @@ pub fn register_entity_buff(
     magnitude: &str,
     duration: Option<u32>,
 ) -> EntityBuffId {
+    let modifiers = vec![EntityModifier {
+        stat,
+        op,
+        magnitude: signed_fixed(magnitude),
+    }];
+    let modifiers = match app.world().resource::<ContentRegistry>().pool_role_of(stat) {
+        Some((_, PoolRole::Maximum)) => EntityModifiers::PoolMaximums {
+            modifiers,
+            pool_shift: PoolShift::Clamp,
+        },
+        Some((_, PoolRole::Regen | PoolRole::Drain)) | None => EntityModifiers::Stats(modifiers),
+    };
     app.world_mut()
         .resource_mut::<ContentRegistry>()
         .register_entity_buff(
             name,
             EntityBuffDef {
-                effects: vec![EntityEffect::Modifiers(vec![EntityModifier {
-                    stat,
-                    op,
-                    magnitude: signed_fixed(magnitude),
-                }])],
+                effects: vec![EntityEffect::Modifiers(modifiers)],
                 lasting: match duration {
                     Some(ticks) => Lasting::For(ticks),
                     None => Lasting::Forever,
@@ -1528,7 +1620,7 @@ pub fn combat_app() -> App {
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
                 )
-                .with_health(50)
+                .with_pool(Pool::health(50))
                 .with_dying(3, [])
                 .with_attack(weapon(GROUND), 10, 1, 1, 4, 2),
         );
@@ -1548,7 +1640,7 @@ pub fn combat_app() -> App {
         registry.register(
             EntityTypeDef::new("bastion")
                 .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
-                .with_health(200)
+                .with_pool(Pool::health(200))
                 .with_sight_range(14)
                 .with_stat(EntityStatId::AIM_RATE, FixedU64::from_num(3))
                 .with_stat(EntityStatId::ATTACK_ARC, FixedU64::from_num(60))
@@ -1584,7 +1676,7 @@ pub fn combat_app() -> App {
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
                 )
-                .with_health(40)
+                .with_pool(Pool::health(40))
                 .with_sight_range(10)
                 .with_stat(EntityStatId::AIM_RATE, FixedU64::from_num(30))
                 .with_stat(EntityStatId::DAMAGE, FixedU64::from_num(10))
@@ -1619,7 +1711,7 @@ pub fn combat_app() -> App {
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
                 )
-                .with_health(40)
+                .with_pool(Pool::health(40))
                 // Sight wider than the range it engages at, so what it engages —
                 // and what it is ordered onto across the map — is something it
                 // can see: naming a target reads the fog grid.
@@ -1673,7 +1765,7 @@ pub fn combat_app() -> App {
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
                 )
-                .with_health(40)
+                .with_pool(Pool::health(40))
                 .with_sight_range(10)
                 .with_stat(EntityStatId::AIM_RATE, FixedU64::from_num(360))
                 .with_stat(EntityStatId::DAMAGE, FixedU64::from_num(10))
@@ -1699,7 +1791,7 @@ pub fn combat_app() -> App {
             registry.register(
                 EntityTypeDef::new(name)
                     .with_location(GROUND, CellSize::new(5, 5), Solidity::Solid)
-                    .with_health(300)
+                    .with_pool(Pool::health(300))
                     .with_sight_range(14)
                     .with_stat(EntityStatId::AIM_RATE, FixedU64::from_num(360))
                     .with_stat(EntityStatId::DAMAGE, FixedU64::from_num(10))
@@ -1734,7 +1826,7 @@ pub fn combat_app() -> App {
             registry.register(
                 EntityTypeDef::new(name)
                     .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-                    .with_health(60)
+                    .with_pool(Pool::health(60))
                     .with_sight_range(10)
                     .with_stat(EntityStatId::AIM_RATE, FixedU64::from_num(360))
                     .with_attack(weapon(GROUND), 10, 4, 8, 6, 3)
@@ -1746,7 +1838,7 @@ pub fn combat_app() -> App {
             EntityTypeDef::new("kite")
                 .with_location(GROUND, CellSize::ONE, Solidity::Passable)
                 .with_targetable(AIR)
-                .with_health(30)
+                .with_pool(Pool::health(30))
                 .with_dying(3, []),
         );
         // A keep with one gun on its far corner, throwing something slow enough to
@@ -1762,7 +1854,7 @@ pub fn combat_app() -> App {
         registry.register(
             EntityTypeDef::new("shell_keep")
                 .with_location(GROUND, CellSize::new(5, 5), Solidity::Solid)
-                .with_health(300)
+                .with_pool(Pool::health(300))
                 .with_sight_range(14)
                 .with_stat(EntityStatId::AIM_RATE, FixedU64::from_num(360))
                 .with_stat(EntityStatId::DAMAGE, FixedU64::from_num(10))
@@ -1794,7 +1886,7 @@ pub fn combat_app() -> App {
         registry.register(
             EntityTypeDef::new("longarm")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-                .with_health(60)
+                .with_pool(Pool::health(60))
                 .with_sight_range(12)
                 .with_attack(weapon(GROUND), 10, 2, 8, 6, 3)
                 .with_stat(gun_range, FixedU64::from_num(8))
@@ -1810,7 +1902,7 @@ pub fn combat_app() -> App {
         registry.register(
             EntityTypeDef::new("bombardier")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-                .with_health(60)
+                .with_pool(Pool::health(60))
                 .with_sight_range(12)
                 .with_attack(weapon(GROUND), 10, 4, 8, 6, 3)
                 .with_turrets([TurretMount::new(
@@ -1822,7 +1914,7 @@ pub fn combat_app() -> App {
         registry.register(
             EntityTypeDef::new("battery")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-                .with_health(60)
+                .with_pool(Pool::health(60))
                 .with_sight_range(12)
                 .with_attack(
                     AttackDef::new(Weapon::new(
@@ -1868,7 +1960,7 @@ pub fn combat_app() -> App {
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
                 )
-                .with_health(40)
+                .with_pool(Pool::health(40))
                 .with_sight_range(10)
                 .with_stat(EntityStatId::DAMAGE, FixedU64::from_num(10))
                 .with_stat(EntityStatId::ATTACK_RANGE, FixedU64::from_num(4))
@@ -1906,7 +1998,7 @@ pub fn combat_app() -> App {
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
                 )
-                .with_health(40)
+                .with_pool(Pool::health(40))
                 .with_sight_range(12)
                 .with_attack(weapon(GROUND), 10, 2, 8, 6, 3)
                 .with_stat(anti_air_range, FixedU64::from_num(10))
@@ -1921,7 +2013,7 @@ pub fn combat_app() -> App {
         registry.register(
             EntityTypeDef::new("hulk")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-                .with_health(500)
+                .with_pool(Pool::health(500))
                 .with_dying(3, []),
         );
         // Registered before `dummy`, which leaves it as a body: tagged remains
@@ -1935,7 +2027,7 @@ pub fn combat_app() -> App {
         registry.register(
             EntityTypeDef::new("dummy")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-                .with_health(20)
+                .with_pool(Pool::health(20))
                 .with_dying(3, leaves("bones")),
         );
         // A wide attacker, so a chase threads a 2x2 chaser footprint: reach
@@ -1951,7 +2043,7 @@ pub fn combat_app() -> App {
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
                 )
-                .with_health(80)
+                .with_pool(Pool::health(80))
                 .with_dying(3, [])
                 .with_attack(weapon(GROUND), 10, 2, 2, 4, 2),
         );
@@ -2006,7 +2098,7 @@ pub fn supply_app() -> App {
         registry.register(
             EntityTypeDef::new("camp")
                 .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
-                .with_health(100)
+                .with_pool(Pool::health(100))
                 .with_dying(2, [])
                 .with_price([("gold", 20)])
                 .with_build_time(10)
@@ -2023,7 +2115,7 @@ pub fn supply_app() -> App {
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
                 )
-                .with_health(20)
+                .with_pool(Pool::health(20))
                 .with_dying(2, [])
                 .with_price([("gold", 10)])
                 .with_train_time(10)
@@ -2034,7 +2126,7 @@ pub fn supply_app() -> App {
         registry.register(
             EntityTypeDef::new("lodge")
                 .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
-                .with_health(100)
+                .with_pool(Pool::health(100))
                 .with_dying(2, [])
                 .with_trainer(["settler", "worker"]),
         );
@@ -2049,7 +2141,7 @@ pub fn supply_app() -> App {
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
                 )
-                .with_health(20)
+                .with_pool(Pool::health(20))
                 .with_dying(2, [])
                 .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
                 .with_builder(
@@ -2086,18 +2178,18 @@ pub fn player_effects_app() -> App {
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
                 )
-                .with_health(20)
+                .with_pool(Pool::health(20))
                 .with_dying(2, []),
         );
         let drums_haste = registry.register_player_buff(
             "drums_haste",
             PlayerBuffDef {
                 player_modifiers: Vec::new(),
-                entity_modifiers: vec![EntityModifier {
+                entity_modifiers: vec![EntityModifiers::Stats(vec![EntityModifier {
                     stat: EntityStatId::SPEED,
                     op: ModifierOp::PercentAdd,
                     magnitude: FixedI64::from_num(1),
-                }],
+                }])],
                 duration: Some(10),
                 stack_rule: StackRule::Refresh,
             },
@@ -2139,11 +2231,11 @@ pub fn research_app_seating(slots: Vec<PlayerSlot>) -> App {
             "sharp_blades",
             PlayerBuffDef {
                 player_modifiers: Vec::new(),
-                entity_modifiers: vec![EntityModifier {
+                entity_modifiers: vec![EntityModifiers::Stats(vec![EntityModifier {
                     stat: EntityStatId::DAMAGE,
                     op: ModifierOp::FlatAdd,
                     magnitude: FixedI64::from_num(5),
-                }],
+                }])],
                 duration: None,
                 stack_rule: StackRule::Ignore,
             },
@@ -2182,7 +2274,7 @@ pub fn research_app_seating(slots: Vec<PlayerSlot>) -> App {
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
                 )
-                .with_health(30)
+                .with_pool(Pool::health(30))
                 .with_dying(2, [])
                 .with_attack(weapon(GROUND), 10, 1, 1, 4, 2)
                 .with_price([("gold", 10)])
@@ -2200,7 +2292,7 @@ pub fn research_app_seating(slots: Vec<PlayerSlot>) -> App {
         registry.register(
             EntityTypeDef::new("lab")
                 .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
-                .with_health(100)
+                .with_pool(Pool::health(100))
                 .with_dying(2, [])
                 .with_researcher([smithing, tactics, masonry])
                 .with_tags(["workshop"]),
@@ -2208,7 +2300,7 @@ pub fn research_app_seating(slots: Vec<PlayerSlot>) -> App {
         registry.register(
             EntityTypeDef::new("guardhouse")
                 .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
-                .with_health(100)
+                .with_pool(Pool::health(100))
                 .with_dying(2, [])
                 .with_trainer(["pikeman", "halberdier", "knight", "crossbowman"]),
         );
@@ -2270,7 +2362,7 @@ pub fn annex_app() -> App {
         registry.register(
             EntityTypeDef::new("keep")
                 .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
-                .with_health(200)
+                .with_pool(Pool::health(200))
                 .with_sight_range(8)
                 .with_dying(2, [])
                 .with_tags(["building"])
@@ -2290,14 +2382,14 @@ pub fn annex_app() -> App {
                 .with_trainer(["sentry", "runner"])
                 .with_morphs([MorphTransition::new(
                     "keep_aloft",
-                    None,
+                    MorphCourse::direct(MorphInterrupted::Reverts),
                     Quantity::Constant(4),
                     MorphPlacement::Revalidate,
                     MorphCancel::Committed,
-                    MorphInterrupted::Reverts,
                     MorphReason::Change,
                     Vec::new(),
                     Vec::new(),
+                    [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
                 )]),
         );
         registry.register(
@@ -2310,20 +2402,20 @@ pub fn annex_app() -> App {
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
                 )
-                .with_health(200)
+                .with_pool(Pool::health(200))
                 .with_sight_range(8)
                 .with_dying(2, [])
                 .with_tags(["building"])
                 .with_morphs([MorphTransition::new(
                     "keep",
-                    None,
+                    MorphCourse::direct(MorphInterrupted::Reverts),
                     Quantity::Constant(4),
                     MorphPlacement::Reserve,
                     MorphCancel::Committed,
-                    MorphInterrupted::Reverts,
                     MorphReason::Change,
                     Vec::new(),
                     Vec::new(),
+                    [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
                 )]),
         );
         // Its dock is below it, so a tower two cells up offers the same cell a
@@ -2331,7 +2423,7 @@ pub fn annex_app() -> App {
         registry.register(
             EntityTypeDef::new("tower")
                 .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
-                .with_health(150)
+                .with_pool(Pool::health(150))
                 .with_sight_range(8)
                 .with_dying(2, [])
                 .with_tags(["building"])
@@ -2347,7 +2439,7 @@ pub fn annex_app() -> App {
         registry.register(
             EntityTypeDef::new("lookout")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-                .with_health(40)
+                .with_pool(Pool::health(40))
                 .with_sight_range(6)
                 .with_dying(2, [])
                 .with_tags(["building"])
@@ -2370,7 +2462,7 @@ pub fn annex_app() -> App {
         registry.register(
             EntityTypeDef::new("watchpost")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-                .with_health(40)
+                .with_pool(Pool::health(40))
                 .with_dying(2, [])
                 .with_tags(["building"])
                 .with_price([("gold", 10)])
@@ -2386,7 +2478,7 @@ pub fn annex_app() -> App {
         registry.register(
             EntityTypeDef::new("beacon")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-                .with_health(30)
+                .with_pool(Pool::health(30))
                 .with_dying(2, [])
                 .with_tags(["building"])
                 .with_price([("gold", 10)])
@@ -2398,8 +2490,7 @@ pub fn annex_app() -> App {
         registry.register(
             EntityTypeDef::new("mast")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-                .with_health(10)
-                .with_stat(EntityStatId::HEALTH_DRAIN, FixedU64::ZERO)
+                .with_pool(Pool::health(10))
                 .with_dying(2, [])
                 .with_tags(["building"])
                 .with_price([("gold", 10)])
@@ -2419,7 +2510,7 @@ pub fn annex_app() -> App {
         registry.register(
             EntityTypeDef::new("spire")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-                .with_health(60)
+                .with_pool(Pool::health(60))
                 .with_dying(2, [])
                 .with_tags(["building"])
                 .with_price([("gold", 10)])
@@ -2437,7 +2528,7 @@ pub fn annex_app() -> App {
         registry.register(
             EntityTypeDef::new("mooring")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-                .with_health(60)
+                .with_pool(Pool::health(60))
                 .with_dying(2, [])
                 .with_tags(["building"])
                 .with_price([("gold", 10)])
@@ -2456,7 +2547,7 @@ pub fn annex_app() -> App {
         registry.register(
             EntityTypeDef::new("hub")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-                .with_health(60)
+                .with_pool(Pool::health(60))
                 .with_dying(2, [])
                 .with_tags(["building"])
                 .with_price([("gold", 10)])
@@ -2480,7 +2571,7 @@ pub fn annex_app() -> App {
         registry.register(
             EntityTypeDef::new("relay")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-                .with_health(60)
+                .with_pool(Pool::health(60))
                 .with_dying(2, [])
                 .with_tags(["building"])
                 .with_price([("gold", 10)])
@@ -2504,7 +2595,7 @@ pub fn annex_app() -> App {
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
                 )
-                .with_health(20)
+                .with_pool(Pool::health(20))
                 .with_dying(2, [])
                 .with_price([("gold", 10)])
                 // Shorter than the lookout's build time, so a unit that trained
@@ -2516,7 +2607,7 @@ pub fn annex_app() -> App {
         // queue when a primary lifts off and a rival lands in its place.
         registry.register(
             walker("signaler", GROUND)
-                .with_health(20)
+                .with_pool(Pool::health(20))
                 .with_dying(2, [])
                 .with_price([("gold", 10)])
                 .with_train_time(40),
@@ -2531,7 +2622,7 @@ pub fn annex_app() -> App {
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
                 )
-                .with_health(30)
+                .with_pool(Pool::health(30))
                 .with_dying(2, [])
                 .with_price([("gold", 10)])
                 .with_train_time(4)
@@ -2568,7 +2659,7 @@ pub fn transport_app() -> App {
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
                 )
-                .with_health(30)
+                .with_pool(Pool::health(30))
                 .with_dying(2, [])
                 .with_attack(weapon(GROUND), 10, 3, 5, 4, 2)
                 .with_sight_range(8)
@@ -2585,7 +2676,7 @@ pub fn transport_app() -> App {
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
                 )
-                .with_health(20)
+                .with_pool(Pool::health(20))
                 .with_dying(2, [])
                 .with_tags(["infantry"])
                 .with_stat(EntityStatId::CARGO_SIZE, FixedU64::from_num(2)),
@@ -2600,7 +2691,7 @@ pub fn transport_app() -> App {
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
                 )
-                .with_health(20)
+                .with_pool(Pool::health(20))
                 .with_dying(2, [])
                 .with_tags(["infantry"]),
         );
@@ -2614,7 +2705,7 @@ pub fn transport_app() -> App {
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
                 )
-                .with_health(60)
+                .with_pool(Pool::health(60))
                 .with_dying(2, [])
                 .with_stat(EntityStatId::CARGO_CAPACITY, FixedU64::from_num(4))
                 .with_stat(EntityStatId::LOAD_RANGE, FixedU64::from_num(2))
@@ -2657,7 +2748,7 @@ pub fn transport_app() -> App {
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
                 )
-                .with_health(30)
+                .with_pool(Pool::health(30))
                 .with_dying(2, [])
                 .with_sight_range(8)
                 .with_stat(EntityStatId::AIM_RATE, FixedU64::from_num(360))
@@ -2676,7 +2767,7 @@ pub fn transport_app() -> App {
         registry.register(
             EntityTypeDef::new("bunker")
                 .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
-                .with_health(200)
+                .with_pool(Pool::health(200))
                 .with_dying(2, [])
                 .with_sight_range(8)
                 .with_stat(EntityStatId::CARGO_CAPACITY, FixedU64::from_num(4))
@@ -2694,7 +2785,7 @@ pub fn transport_app() -> App {
         registry.register(
             EntityTypeDef::new("bombard")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-                .with_health(40)
+                .with_pool(Pool::health(40))
                 .with_dying(2, [])
                 .with_sight_range(10)
                 .with_attack(
@@ -2732,7 +2823,7 @@ pub fn corner_app() -> App {
         registry.register(
             EntityTypeDef::new("keep")
                 .with_location(GROUND, CellSize::new(3, 3), Solidity::Solid)
-                .with_health(100),
+                .with_pool(Pool::health(100)),
         );
         registry.register(
             EntityTypeDef::new("runner")
@@ -2744,7 +2835,7 @@ pub fn corner_app() -> App {
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
                 )
-                .with_health(20),
+                .with_pool(Pool::health(20)),
         );
     }
     app.world_mut().resource::<ContentRegistry>().validate();
@@ -2773,7 +2864,7 @@ pub fn turning_app() -> App {
                     FixedU64::from_num(9),
                     FixedU64::from_num(18),
                 )
-                .with_health(20),
+                .with_pool(Pool::health(20)),
         );
         registry.register(
             EntityTypeDef::new("ponderous")
@@ -2786,7 +2877,7 @@ pub fn turning_app() -> App {
                     FixedU64::ONE,
                 )
                 .with_stat(EntityStatId::PIVOT_ANGLE, FixedU64::from_num(90))
-                .with_health(20),
+                .with_pool(Pool::health(20)),
         );
     }
     app.world_mut().resource::<ContentRegistry>().validate();
@@ -2917,7 +3008,7 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
                 )
-                .with_health(30)
+                .with_pool(Pool::health(30))
                 .with_dying(2, [])
                 .with_attack(weapon(GROUND), 10, 1, 1, 4, 2)
                 .with_price([("gold", 30)])
@@ -2937,7 +3028,7 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
                 )
-                .with_health(60)
+                .with_pool(Pool::health(60))
                 .with_dying(2, []),
         );
         // A heavy continuous mover on a soldier's footprint, for contact tests
@@ -2953,14 +3044,37 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
                 )
-                .with_health(60)
+                .with_pool(Pool::health(60))
                 .with_dying(2, []),
+        );
+        // A stall that sees one cell further once it is built.
+        let opened = registry.register_entity_buff(
+            "opened",
+            EntityBuffDef {
+                effects: vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![flat(
+                    EntityStatId::SIGHT_RANGE,
+                    "1",
+                )]))],
+                lasting: Lasting::While(Requirement::Built),
+                stack_rule: StackRule::Ignore,
+                interrupted_by: Vec::new(),
+            },
+        );
+        registry.register(
+            EntityTypeDef::new("kiosk")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_pool(Pool::health(50))
+                .with_sight_range(2)
+                .with_dying(2, [])
+                .with_price([("gold", 10)])
+                .with_build_time(6)
+                .with_passives([opened]),
         );
         // Registered before `worker`, which builds it.
         registry.register(
             EntityTypeDef::new("depot")
                 .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
-                .with_health(100)
+                .with_pool(Pool::health(100))
                 .with_dying(2, [])
                 .with_price([("gold", 50)])
                 .with_build_time(6)
@@ -2989,14 +3103,14 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
                 )
-                .with_health(20)
+                .with_pool(Pool::health(20))
                 .with_dying(2, [])
                 .with_price([("gold", 10)])
                 .with_train_time(2)
                 .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
                 .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
                 .with_builder(
-                    ["depot"],
+                    ["depot", "kiosk"],
                     BuilderAttendance::Crew(WorkPresence::Hidden {
                         crew: CrewLimit::ONE,
                     }),
@@ -3028,7 +3142,7 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
                 )
-                .with_health(20)
+                .with_pool(Pool::health(20))
                 .with_dying(2, [])
                 .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
                 .with_builder(
@@ -3050,7 +3164,7 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
                 )
-                .with_health(20)
+                .with_pool(Pool::health(20))
                 .with_dying(2, [])
                 .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
                 .with_builder(
@@ -3073,7 +3187,7 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
                 )
-                .with_health(20)
+                .with_pool(Pool::health(20))
                 .with_dying(2, [])
                 .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
                 .with_builder(
@@ -3097,7 +3211,7 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
                 )
-                .with_health(20)
+                .with_pool(Pool::health(20))
                 .with_dying(2, [])
                 .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
                 .with_builder(["depot"], BuilderAttendance::Unattended),
@@ -3115,7 +3229,7 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
                 )
-                .with_health(20)
+                .with_pool(Pool::health(20))
                 .with_dying(2, [])
                 .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
                 .with_stat(EntityStatId::SUPPLY_COST, FixedU64::ONE)
@@ -3132,7 +3246,7 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
                 )
-                .with_health(20)
+                .with_pool(Pool::health(20))
                 .with_dying(2, [])
                 .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
                 .with_resource_carrier([(
@@ -3162,7 +3276,7 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
                 )
-                .with_health(20)
+                .with_pool(Pool::health(20))
                 .with_dying(2, [])
                 .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::from_num(3))
                 .with_resource_carrier([(
@@ -3192,7 +3306,7 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
                 )
-                .with_health(20)
+                .with_pool(Pool::health(20))
                 .with_dying(2, [])
                 .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
                 .with_resource_carrier([(
@@ -3213,7 +3327,7 @@ pub fn register_orders_content(app: &mut App) {
             EntityTypeDef::new("barracks")
                 .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
                 .with_sight_range(8)
-                .with_health(100)
+                .with_pool(Pool::health(100))
                 .with_dying(2, [])
                 .with_price([("gold", 40)])
                 .with_build_time(4)
@@ -3224,7 +3338,7 @@ pub fn register_orders_content(app: &mut App) {
         // way, and that the entry behind it can be watched starting over.
         registry.register(
             walker("recruit", GROUND)
-                .with_health(30)
+                .with_pool(Pool::health(30))
                 .with_dying(1, [])
                 .with_price([("gold", 30)])
                 .with_train_time(20),
@@ -3233,7 +3347,7 @@ pub fn register_orders_content(app: &mut App) {
             EntityTypeDef::new("academy")
                 .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
                 .with_sight_range(8)
-                .with_health(100)
+                .with_pool(Pool::health(100))
                 .with_dying(2, [])
                 .with_price([("gold", 40)])
                 .with_build_time(4)
@@ -3243,7 +3357,7 @@ pub fn register_orders_content(app: &mut App) {
         registry.register(
             EntityTypeDef::new("boulder")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-                .with_health(50),
+                .with_pool(Pool::health(50)),
         );
         // Carries either resource, so only an order's kind lock keeps a wood
         // trip off the gold.
@@ -3258,7 +3372,7 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
                 )
-                .with_health(20)
+                .with_pool(Pool::health(20))
                 .with_dying(2, [])
                 .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
                 .with_resource_carrier([
@@ -3303,7 +3417,7 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
                 )
-                .with_health(20)
+                .with_pool(Pool::health(20))
                 .with_dying(2, [])
                 .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
                 .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
@@ -3346,7 +3460,7 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
                 )
-                .with_health(20)
+                .with_pool(Pool::health(20))
                 .with_dying(2, [])
                 .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
                 .with_resource_carrier([(
@@ -3380,7 +3494,7 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
                 )
-                .with_health(20)
+                .with_pool(Pool::health(20))
                 .with_dying(2, [])
                 .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
                 .with_resource_carrier([(
@@ -3414,7 +3528,7 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
                 )
-                .with_health(20)
+                .with_pool(Pool::health(20))
                 .with_dying(2, [])
                 .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
                 .with_resource_carrier([(
@@ -3447,7 +3561,7 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
                 )
-                .with_health(20)
+                .with_pool(Pool::health(20))
                 .with_dying(2, [])
                 .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
                 .with_resource_carrier([(
@@ -3475,7 +3589,7 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
                 )
-                .with_health(20)
+                .with_pool(Pool::health(20))
                 .with_dying(2, [])
                 .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
                 .with_resource_carrier([(
@@ -3506,7 +3620,7 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
                 )
-                .with_health(20)
+                .with_pool(Pool::health(20))
                 .with_dying(2, [])
                 .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
                 .with_resource_carrier([(
@@ -3536,7 +3650,7 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
                 )
-                .with_health(20)
+                .with_pool(Pool::health(20))
                 .with_dying(2, [])
                 .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
                 .with_resource_carrier([(
@@ -3614,7 +3728,7 @@ pub fn register_orders_content(app: &mut App) {
         registry.register(
             EntityTypeDef::new("shaft_house")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-                .with_health(100)
+                .with_pool(Pool::health(100))
                 .with_dying(2, [])
                 .with_price([("gold", 20)])
                 .with_build_time(20)
@@ -3624,14 +3738,14 @@ pub fn register_orders_content(app: &mut App) {
                 .with_berths([("rim", BerthGroup::new([berth("0.5", "0.5")], 1))])
                 .with_morphs([MorphTransition::new(
                     "walking_shaft",
-                    None,
+                    MorphCourse::direct(MorphInterrupted::Reverts),
                     Quantity::Constant(4),
                     MorphPlacement::Reserve,
                     MorphCancel::Committed,
-                    MorphInterrupted::Reverts,
                     MorphReason::Change,
                     Vec::new(),
                     Vec::new(),
+                    [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
                 )]),
         );
         // The form a shaft house takes when it uproots.
@@ -3645,20 +3759,20 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
                 )
-                .with_health(100)
+                .with_pool(Pool::health(100))
                 .with_dying(2, [])
                 // Back to standing, as an uprooted ancient roots again: the
                 // ground it settles on is reserved when the change starts.
                 .with_morphs([MorphTransition::new(
                     "shaft_house",
-                    None,
+                    MorphCourse::direct(MorphInterrupted::Reverts),
                     Quantity::Constant(4),
                     MorphPlacement::Reserve,
                     MorphCancel::Committed,
-                    MorphInterrupted::Reverts,
                     MorphReason::Change,
                     Vec::new(),
                     Vec::new(),
+                    [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
                 )]),
         );
         // Raised over a geyser, which stays on the map when emptied: what the
@@ -3666,7 +3780,7 @@ pub fn register_orders_content(app: &mut App) {
         registry.register(
             EntityTypeDef::new("pump_house")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-                .with_health(100)
+                .with_pool(Pool::health(100))
                 .with_dying(2, [])
                 .with_price([("gold", 20)])
                 .with_build_time(20)
@@ -3676,14 +3790,14 @@ pub fn register_orders_content(app: &mut App) {
                 .with_berths([("rim", BerthGroup::new([berth("0.5", "0.5")], 1))])
                 .with_morphs([MorphTransition::new(
                     "walking_pump",
-                    None,
+                    MorphCourse::direct(MorphInterrupted::Reverts),
                     Quantity::Constant(4),
                     MorphPlacement::Reserve,
                     MorphCancel::Committed,
-                    MorphInterrupted::Reverts,
                     MorphReason::Change,
                     Vec::new(),
                     Vec::new(),
+                    [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
                 )]),
         );
         // The form a pump house takes when it uproots: wider than the house, so
@@ -3699,7 +3813,7 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
                 )
-                .with_health(100)
+                .with_pool(Pool::health(100))
                 .with_dying(2, []),
         );
         registry.register(
@@ -3724,7 +3838,7 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
                 )
-                .with_health(20),
+                .with_pool(Pool::health(20)),
         );
         // A soldier variant that notices enemies well beyond its weapon range,
         // for the stance and auto-engagement suites.
@@ -3738,7 +3852,7 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
                 )
-                .with_health(30)
+                .with_pool(Pool::health(30))
                 .with_dying(2, [])
                 .with_attack(weapon(GROUND), 10, 1, 5, 4, 2)
                 // Sees farther than it auto-engages, so its circular vision
@@ -3756,7 +3870,7 @@ pub fn register_orders_content(app: &mut App) {
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
                 )
-                .with_health(30)
+                .with_pool(Pool::health(30))
                 .with_dying(2, [])
                 .with_attack(weapon(GROUND), 10, 3, 5, 4, 2)
                 .with_sight_range(8),
@@ -3872,7 +3986,7 @@ pub fn harness_soldier() -> EntityTypeDef {
             FixedU64::from_num(360),
             FixedU64::from_num(360),
         )
-        .with_health(30)
+        .with_pool(Pool::health(30))
         .with_dying(2, [])
         .with_attack(weapon(GROUND), 10, 1, 1, 4, 2)
 }
@@ -3882,7 +3996,7 @@ pub fn harness_soldier() -> EntityTypeDef {
 pub fn harness_base() -> EntityTypeDef {
     EntityTypeDef::new("base")
         .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-        .with_health(30)
+        .with_pool(Pool::health(30))
         .with_dying(2, [])
         .with_tags(["building"])
 }

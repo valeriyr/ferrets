@@ -16,7 +16,7 @@ use ferrets_content::{
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     field::FieldId,
-    quantity::Quantity,
+    pool_def::PoolId,
     registry::ContentRegistry,
     resource::ResourceSourceDef,
     skills::{Casting, SkillCaster},
@@ -39,18 +39,17 @@ use ferrets_simulation::{
         cast::{CastComponent, CastStage},
         concealed::ConcealedComponent,
         dying::{DyingComponent, RemainsComponent},
-        energy::EnergyComponent,
         entity_buffs::BuffsComponent,
         entity_info::EntityInfoComponent,
         entity_stats::StatsComponent,
         field_source::{Emitted, FieldSourcesComponent},
-        health::HealthComponent,
         hidden::HiddenComponent,
         lifetime::LifetimeComponent,
         location::LocationComponent,
         morph::MorphComponent,
         order_queue::OrderQueueComponent,
         owner::OwnerComponent,
+        pools::PoolsComponent,
         rally::{RallyPointComponent, RallyTarget},
         repair::{RepairComponent, UnderRepairComponent},
         research::ResearchComponent,
@@ -2260,10 +2259,7 @@ fn cast_point(
     };
     match casting {
         Casting::Instant => None,
-        Casting::Delayed { point, .. } => match point {
-            Quantity::Constant(ticks) => Some(*ticks),
-            Quantity::Stat(stat) => stats?.effective_as_u32(*stat),
-        },
+        Casting::Delayed { point, .. } => stats?.quantity_ticks(*point),
     }
 }
 
@@ -3289,9 +3285,8 @@ pub fn draw_status_bars(
             &EntityInfoComponent,
             &Transform,
             &Visibility,
-            Option<&HealthComponent>,
+            &PoolsComponent,
             Option<&StatsComponent>,
-            Option<&EnergyComponent>,
             Option<&LifetimeComponent>,
             Option<&UnderConstructionComponent>,
             Option<&TrainQueueComponent>,
@@ -3311,9 +3306,8 @@ pub fn draw_status_bars(
         info,
         transform,
         visibility,
-        health,
+        pools,
         stats,
-        energy,
         lifetime,
         construction,
         queue,
@@ -3331,6 +3325,8 @@ pub fn draw_status_bars(
             continue;
         }
         let def = registry.def(info.type_id());
+        let health = pools.current(PoolId::HEALTH);
+        let energy = pools.current(PoolId::ENERGY);
         let size = def.location.unwrap().size();
         let center = transform.translation.truncate();
         let half_width = size.width as f32 * CELL_PX * 0.4;
@@ -3367,7 +3363,7 @@ pub fn draw_status_bars(
             && let Some(max) = stats.effective(EntityStatId::MAX_ENERGY)
             && max > FixedU64::ZERO
         {
-            let fraction = (energy.current().to_num::<f32>() / max.to_num::<f32>()).min(1.0);
+            let fraction = (energy.to_num::<f32>() / max.to_num::<f32>()).min(1.0);
             bar(&mut gizmos, fraction, Color::srgb(0.45, 0.5, 1.0), y);
             y += 4.0;
         }
@@ -3376,7 +3372,7 @@ pub fn draw_status_bars(
             && let Some(max) = stats.effective(EntityStatId::MAX_HEALTH)
             && max > FixedU64::ZERO
         {
-            let fraction = (health.current().to_num::<f32>() / max.to_num::<f32>()).min(1.0);
+            let fraction = (health.to_num::<f32>() / max.to_num::<f32>()).min(1.0);
             // A burning pool reads red whatever it holds.
             let burning = buffs
                 .zip(on_fire)
@@ -3393,7 +3389,7 @@ pub fn draw_status_bars(
         // What a summon has left of its time, under its health: a thin bar
         // draining as it ages.
         if let (Some(lifetime), Some(stats)) = (lifetime, stats)
-            && let Some(limit) = stats.effective_as_u32(EntityStatId::LIFETIME)
+            && let Some(limit) = stats.effective_ticks(EntityStatId::LIFETIME)
             && limit > 0
         {
             let left = limit.saturating_sub(lifetime.age);
@@ -3434,12 +3430,7 @@ pub fn draw_status_bars(
                 .morphs
                 .iter()
                 .find(|transition| transition.into_type() == morph.into)
-                .map(|transition| match transition.time() {
-                    Quantity::Constant(ticks) => ticks,
-                    Quantity::Stat(id) => stats
-                        .and_then(|stats| stats.effective(id))
-                        .map_or(0, |time| time.to_num::<u32>()),
-                })
+                .and_then(|transition| stats?.quantity_ticks(transition.time()))
                 .unwrap_or(1)
                 .max(1);
             let fraction = morph.progress as f32 / time as f32;
@@ -3451,13 +3442,10 @@ pub fn draw_status_bars(
             // The wait for the next birth, under the breeding form's own
             // terms; a brood at its limit holds its progress, and the bar
             // holds with it.
-            let period = match breeder.period() {
-                Quantity::Constant(ticks) => ticks,
-                Quantity::Stat(id) => stats
-                    .and_then(|stats| stats.effective(id))
-                    .map_or(0, |time| time.to_num::<u32>()),
-            }
-            .max(1);
+            let period = stats
+                .and_then(|stats| stats.quantity_ticks(breeder.period()))
+                .unwrap_or(1)
+                .max(1);
             let fraction = brood.progress as f32 / period as f32;
             bar(&mut gizmos, fraction, BROOD_WORK_COLOR, y);
             y += 4.0;
@@ -3582,7 +3570,7 @@ pub fn fade_remains(
         // it from — not the dying time every other death runs down.
         let decay = registry
             .def(info.type_id())
-            .base_stat_as_u32(EntityStatId::LIFETIME)
+            .base_ticks(EntityStatId::LIFETIME)
             .unwrap_or(1)
             .max(1);
         let left = dying.ticks_remaining as f32 / decay as f32;

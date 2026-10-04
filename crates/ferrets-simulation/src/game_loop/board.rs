@@ -164,7 +164,7 @@ pub(super) fn admit(world: &mut World, holder: Entity, passenger: Entity) {
         .insert(BoardedComponent { holder: holder_id });
 
     let tick = world.resource::<GameSession>().tick();
-    let period = entity_def::effective_stat_u32(world, holder, EntityStatId::LOAD_PERIOD);
+    let period = entity_def::effective_ticks(world, holder, EntityStatId::LOAD_PERIOD);
     world
         .entity_mut(holder)
         .get_mut::<TransporterComponent>()

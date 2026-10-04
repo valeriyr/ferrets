@@ -21,7 +21,7 @@ use ferrets_bevy_plugin::PendingInput;
 use ferrets_content::registry::ContentRegistry;
 use ferrets_simulation::{
     components::{
-        entity_info::EntityInfoComponent, health::HealthComponent, hidden::HiddenComponent,
+        entity_info::EntityInfoComponent, hidden::HiddenComponent, last_hit::LastHitComponent,
         location::LocationComponent, owner::OwnerComponent, rally::RallyPointComponent,
     },
     fields::FieldGrid,
@@ -536,7 +536,7 @@ pub fn refresh_minimap(
             &EntityInfoComponent,
             &LocationComponent,
             Option<&OwnerComponent>,
-            Option<&HealthComponent>,
+            Option<&LastHitComponent>,
             Option<&render::Sighted>,
         ),
         Without<HiddenComponent>,
@@ -645,7 +645,7 @@ pub fn refresh_minimap(
     let selected = local.map_or(&[][..], |local| selection.get(local));
     let mut blips: Vec<_> = entities
         .iter()
-        .filter_map(|(info, location, owner, health, sighted)| {
+        .filter_map(|(info, location, owner, last_hit, sighted)| {
             let (x, y) = (
                 location.position.x.to_num::<u32>(),
                 location.position.y.to_num::<u32>(),
@@ -665,7 +665,7 @@ pub fn refresh_minimap(
 
             let color = if selected.contains(&info.id()) {
                 SELECTED
-            } else if own && hurt_recently(health, tick) {
+            } else if own && hurt_recently(last_hit, tick) {
                 HURT
             } else {
                 bytes_of(render::color_for(
@@ -704,8 +704,8 @@ pub fn refresh_minimap(
 
 /// Whether an entity was hurt recently enough to answer for it, blinking once a
 /// second after an opening stretch of solid color.
-fn hurt_recently(health: Option<&HealthComponent>, tick: u32) -> bool {
-    let Some(hit) = health.and_then(|health| health.last_hit()) else {
+fn hurt_recently(last_hit: Option<&LastHitComponent>, tick: u32) -> bool {
+    let Some(hit) = last_hit else {
         return false;
     };
     let since = tick.saturating_sub(hit.tick);

@@ -3,7 +3,7 @@
 
 use bevy::prelude::*;
 use ferrets_content::{
-    entity_type_def::EntityTypeDef, location::Solidity, registry::ContentRegistry,
+    entity_type_def::EntityTypeDef, location::Solidity, pool::Pool, registry::ContentRegistry,
 };
 use ferrets_geometry::cell_size::CellSize;
 use ferrets_simulation::session::{GameSession, player_slot::PlayerSlot, player_type::PlayerType};
@@ -28,7 +28,7 @@ fn bonus_damage_vs_and_armor_shape_damage_per_hit() {
     // 10 base + 10 (vs armored) − 3 armor = 17 per hit, and three hits land in
     // 15 ticks on a 4-tick attack period.
     assert_eq!(
-        200 - utils::health(&app, tank),
+        200 - utils::health_as_u32(&app, tank),
         51,
         "expected three hits of 17 damage each"
     );
@@ -57,8 +57,8 @@ fn armor_mitigates_and_never_makes_target_immune() {
     // leaves exactly 1/hit — mitigated tenfold, yet never immune.
     assert_eq!(
         (
-            200 - utils::health(&app, scout),
-            200 - utils::health(&app, fortress)
+            200 - utils::health_as_u32(&app, scout),
+            200 - utils::health_as_u32(&app, fortress)
         ),
         (30, 3),
         "expected the scout at 10/hit and the fortress at the 1/hit floor"
@@ -82,26 +82,26 @@ fn app() -> App {
         registry.register(
             utils::walker("grunt", utils::GROUND)
                 .with_sight_range(8)
-                .with_health(50)
+                .with_pool(Pool::health(50))
                 .with_attack(utils::weapon(utils::GROUND), 10, 1, 1, 4, 2)
                 .with_bonus_damage_vs([("armored", 10u32)]),
         );
         registry.register(
             EntityTypeDef::new("tank")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_health(200)
+                .with_pool(Pool::health(200))
                 .with_armor(3)
                 .with_tags(["armored"]),
         );
         registry.register(
             EntityTypeDef::new("scout")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_health(200),
+                .with_pool(Pool::health(200)),
         );
         registry.register(
             EntityTypeDef::new("fortress")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_health(200)
+                .with_pool(Pool::health(200))
                 .with_armor(100),
         );
     }

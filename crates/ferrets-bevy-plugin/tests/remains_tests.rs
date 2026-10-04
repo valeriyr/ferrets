@@ -10,6 +10,7 @@ use ferrets_content::{
     entity_type_def::EntityTypeDef,
     kinds::Kinds,
     location::Solidity,
+    pool::Pool,
     registry::ContentRegistry,
     transport::{PassengerConduct, PassengerFate},
 };
@@ -465,7 +466,7 @@ fn app(limit: RemainsLimit) -> App {
         registry.register(
             EntityTypeDef::new("soldier")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_health(30)
+                .with_pool(Pool::health(30))
                 .with_attack(utils::weapon(utils::GROUND), 10, 1, 1, 4, 2)
                 .with_dying(2, utils::leaves("corpse")),
         );
@@ -485,20 +486,20 @@ fn app(limit: RemainsLimit) -> App {
         registry.register(
             EntityTypeDef::new("ghoul")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_health(30)
+                .with_pool(Pool::health(30))
                 .with_dying(2, utils::leaves("ash")),
         );
         registry.register(
             EntityTypeDef::new("broodling")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_health(20),
+                .with_pool(Pool::health(20)),
         );
         // A 3x3 that bursts when something kills it, and leaves nothing when it
         // goes any other way.
         registry.register(
             EntityTypeDef::new("hive")
                 .with_location(utils::GROUND, CellSize::new(3, 3), Solidity::Solid)
-                .with_health(200)
+                .with_pool(Pool::health(200))
                 .with_dying(
                     2,
                     [Bequest::new(
@@ -512,7 +513,7 @@ fn app(limit: RemainsLimit) -> App {
         // the legs that boarding asks for.
         registry.register(
             utils::walker("rider", utils::GROUND)
-                .with_health(30)
+                .with_pool(Pool::health(30))
                 .with_stat(EntityStatId::CARGO_SIZE, FixedU64::ONE)
                 .with_dying(
                     2,
@@ -526,7 +527,7 @@ fn app(limit: RemainsLimit) -> App {
         // A carrier that takes its passengers down with it.
         registry.register(
             utils::walker("wagon", utils::GROUND)
-                .with_health(60)
+                .with_pool(Pool::health(60))
                 .with_dying(2, [])
                 .with_stat(EntityStatId::CARGO_CAPACITY, FixedU64::from_num(4))
                 .with_stat(EntityStatId::LOAD_RANGE, FixedU64::from_num(2))
@@ -551,26 +552,26 @@ fn app(limit: RemainsLimit) -> App {
         registry.register(
             EntityTypeDef::new("imp")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_health(30)
+                .with_pool(Pool::health(30))
                 .with_dying(2, utils::leaves("cinder")),
         );
         // A 3x3 that leaves a body wherever it falls.
         registry.register(
             EntityTypeDef::new("keep")
                 .with_location(utils::GROUND, CellSize::new(3, 3), Solidity::Solid)
-                .with_health(200)
+                .with_pool(Pool::health(200))
                 .with_dying(2, utils::leaves("corpse")),
         );
         registry.register(
             EntityTypeDef::new("wraith")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Passable)
-                .with_health(30)
+                .with_pool(Pool::health(30))
                 .with_dying(2, utils::leaves("corpse")),
         );
         registry.register(
             EntityTypeDef::new("sapper")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_health(30)
+                .with_pool(Pool::health(30))
                 .with_dying(
                     2,
                     [Bequest::new(
@@ -589,13 +590,13 @@ fn app(limit: RemainsLimit) -> App {
         );
         registry.register(
             utils::walker("cart", utils::GROUND)
-                .with_health(30)
+                .with_pool(Pool::health(30))
                 .with_dying(2, utils::leaves("rubble")),
         );
         registry.register(
             EntityTypeDef::new("mole")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Underfoot)
-                .with_health(20),
+                .with_pool(Pool::health(20)),
         );
     }
     app.world_mut().resource::<ContentRegistry>().validate();

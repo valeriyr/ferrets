@@ -3,7 +3,10 @@
 
 use bevy_ecs::{entity::Entity, world::World};
 
-use super::orders::{self, Processing, Refusal};
+use super::{
+    buffs,
+    orders::{self, Processing, Refusal},
+};
 use crate::{
     components::{
         order_queue::{CancelPolicy, OrderState},
@@ -11,7 +14,6 @@ use crate::{
     },
     entity_def,
     events::SpendCause,
-    game_loop::stats,
     order::Order,
     player_research::{self, PlayerResearch},
     resources,
@@ -138,7 +140,7 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
     let researcher = Some(entity_def::simulation_id(world, entity));
     player_research::complete(world, player, research, researcher);
     if let Some(buff) = buff {
-        stats::apply_player_buff(world, player, buff);
+        buffs::apply_player_buff(world, player, buff);
     }
     Processing::state(OrderState::Finished)
 }

@@ -5,10 +5,7 @@
 //! reach the player's own stats and its entity modifiers descend to every unit
 //! the player owns.
 
-use crate::{
-    stack_rule::StackRule,
-    stats::{EntityModifier, PlayerModifier},
-};
+use crate::{entity_modifiers::EntityModifiers, stack_rule::StackRule, stats::PlayerModifier};
 
 /// A handle to a registered player buff, assigned in registration order.
 ///
@@ -38,7 +35,7 @@ pub struct PlayerBuffDef {
     /// The modifiers this buff contributes to the player's own stats.
     pub player_modifiers: Vec<PlayerModifier>,
     /// The modifiers this buff lays over every unit the player owns.
-    pub entity_modifiers: Vec<EntityModifier>,
+    pub entity_modifiers: Vec<EntityModifiers>,
     /// Lifetime in ticks; `None` is permanent (removed only explicitly).
     pub duration: Option<u32>,
     /// How a repeat application of this kind combines.

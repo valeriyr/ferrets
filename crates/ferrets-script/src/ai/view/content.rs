@@ -32,6 +32,8 @@ pub enum RequirementView {
     All(Vec<RequirementView>),
     /// At least one is met.
     Any(Vec<RequirementView>),
+    /// The requirement it holds is not met.
+    Unless(Box<RequirementView>),
     /// A registered thing the player or the actor must have: the kind is
     /// `"entity_type"`, `"tag"`, `"research"`, or `"annexed"`.
     Named {
@@ -56,6 +58,8 @@ pub enum RequirementView {
         /// The side asked for.
         bound: BoundView,
     },
+    /// The actor is not under construction.
+    Built,
     /// The actor takes orders and runs none.
     Idle,
     /// The actor takes orders, runs none, and has run none for at least this
@@ -350,6 +354,7 @@ fn requirement(entry: &Requirement, registry: &ContentRegistry) -> RequirementVi
                 .map(|item| requirement(item, registry))
                 .collect(),
         ),
+        Requirement::Unless(item) => RequirementView::Unless(Box::new(requirement(item, registry))),
         Requirement::EntityType(name) => named("entity_type", name.clone()),
         Requirement::Tag(name) => named("tag", name.clone()),
         Requirement::Research(research) => named(
@@ -375,6 +380,7 @@ fn requirement(entry: &Requirement, registry: &ContentRegistry) -> RequirementVi
                 .to_string(),
             bound: bound_view(*bound),
         },
+        Requirement::Built => RequirementView::Built,
         Requirement::Idle => RequirementView::Idle,
         Requirement::IdleFor(ticks) => RequirementView::IdleFor(*ticks),
         Requirement::UnhurtFor(ticks) => RequirementView::UnhurtFor(*ticks),

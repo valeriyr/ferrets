@@ -21,7 +21,6 @@ use ferrets_simulation::{
         hidden::HiddenComponent, order_queue::OrderQueueComponent,
         resource::ResourceSourceComponent,
     },
-    game_loop,
     input::{InputFrames, PlayerFrame, SYNC_LATENCY},
     resources::PlayerResources,
     session::{
@@ -308,8 +307,8 @@ fn game_view_names_borne_buffs_in_application_order() {
     );
     let (worker, _) = utils::create_owned(&mut app, "worker", 5, 5, 0);
     utils::create_owned(&mut app, "worker", 7, 5, 0);
-    game_loop::stats::apply_entity_buff(app.world_mut(), worker, tough);
-    game_loop::stats::apply_entity_buff(app.world_mut(), worker, swift);
+    utils::apply_buff(app.world_mut(), worker, tough);
+    utils::apply_buff(app.world_mut(), worker, swift);
 
     let view = game_view(
         app.world(),
@@ -323,6 +322,32 @@ fn game_view_names_borne_buffs_in_application_order() {
         vec!["tough".to_string(), "swift".to_string()]
     );
     assert!(view.my_entities[1].buffs.is_empty());
+}
+
+#[test]
+fn game_view_rounds_fractional_supply_use_up() {
+    let mut app = utils::supply_app();
+    let lighter = utils::register_entity_buff(
+        &mut app,
+        "lighter",
+        EntityStatId::SUPPLY_COST,
+        ModifierOp::FlatAdd,
+        "-0.5",
+        None,
+    );
+    let (settler, _) = utils::create_owned(&mut app, "settler", 5, 5, 0);
+    utils::apply_buff(app.world_mut(), settler, lighter);
+    utils::run_ticks(&mut app, 1);
+
+    // 1 − 0.5 = 0.5 supply used, read as 1 rather than 0.
+    let view = game_view(
+        app.world(),
+        0,
+        "human",
+        AiVision::Filtered,
+        AiDetection::Detectors,
+    );
+    assert_eq!(view.supply_used, 1);
 }
 
 //

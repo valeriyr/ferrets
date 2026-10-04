@@ -1,13 +1,13 @@
 //! What applies to an entity while something holds over it — a buff it
 //! carries, a field it stands in.
 
-use crate::stats::EntityModifier;
+use crate::entity_modifiers::EntityModifiers;
 
 /// One consequence for an entity while a buff or a field applies to it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EntityEffect {
     /// Folds the modifiers into the entity's effective stats.
-    Modifiers(Vec<EntityModifier>),
+    Modifiers(EntityModifiers),
     /// The entity stands but does not operate: it starts no order but Train
     /// and Research, which wait, and neither fights, hunts, casts nor moves.
     Disable,

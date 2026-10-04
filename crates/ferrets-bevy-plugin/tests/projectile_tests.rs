@@ -6,6 +6,7 @@ use ferrets_content::{
     attack::{AttackDef, Delivery, Slain, Weapon},
     entity_type_def::EntityTypeDef,
     location::Solidity,
+    pool::Pool,
     projectile::{Aim, ProjectileDef},
     registry::ContentRegistry,
     splash::{SplashDef, SplashShape},
@@ -42,7 +43,7 @@ fn shot_lands_after_its_flight_time() {
     utils::run_ticks(&mut app, 5);
 
     assert_eq!(
-        utils::health(&app, target),
+        utils::health_as_u32(&app, target),
         100,
         "the shell is still in the air, so nothing has been hit yet"
     );
@@ -55,7 +56,7 @@ fn shot_lands_after_its_flight_time() {
     utils::run_ticks(&mut app, 8);
     // One shell has arrived, for the gunner's full 20 damage against an unarmored
     // target; the next is still in its attack cycle.
-    assert_eq!(utils::health(&app, target), 80);
+    assert_eq!(utils::health_as_u32(&app, target), 80);
 }
 
 //
@@ -80,9 +81,9 @@ fn blast_damages_bystanders_by_band() {
     utils::run_ticks(&mut app, 14);
 
     let (direct, near_lost, far_lost) = (
-        100 - utils::health(&app, target),
-        100 - utils::health(&app, near),
-        100 - utils::health(&app, far),
+        100 - utils::health_as_u32(&app, target),
+        100 - utils::health_as_u32(&app, near),
+        100 - utils::health_as_u32(&app, far),
     );
     // 20 damage at the impact, halved one cell out and quartered two cells out.
     assert_eq!((direct, near_lost, far_lost), (20, 10, 5));
@@ -106,7 +107,10 @@ fn blast_spares_own_side_without_friendly_fire() {
     // The enemy takes the direct 20; the gunner's own unit stands one cell from the
     // impact, inside the half-damage band, and is untouched.
     assert_eq!(
-        (utils::health(&app, target), utils::health(&app, ally)),
+        (
+            utils::health_as_u32(&app, target),
+            utils::health_as_u32(&app, ally)
+        ),
         (80, 100)
     );
 }
@@ -129,9 +133,9 @@ fn blast_scales_bonus_and_subtracts_armor_in_full() {
     utils::run_ticks(&mut app, 14);
 
     // Direct hit on the untagged target: 20 base, no bonus, no armor.
-    assert_eq!(100 - utils::health(&app, target), 20);
+    assert_eq!(100 - utils::health_as_u32(&app, target), 20);
     // Bystander one cell out: (20 base + 12 vs armored) x 0.5 = 16, less 6 armor.
-    assert_eq!(100 - utils::health(&app, tank), 10);
+    assert_eq!(100 - utils::health_as_u32(&app, tank), 10);
 }
 
 //
@@ -161,7 +165,7 @@ fn shot_at_footprint_is_aimed_at_its_nearest_cell() {
     // Four cells at half a cell a tick: eight ticks of flight, and 20 off the
     // keep when it lands.
     utils::run_ticks(&mut app, 8);
-    assert_eq!(utils::health(&app, keep), 280);
+    assert_eq!(utils::health_as_u32(&app, keep), 280);
 }
 
 #[test]
@@ -187,7 +191,7 @@ fn cell_aimed_shot_misses_target_that_moves_away() {
     utils::run_ticks(&mut app, 20);
 
     assert_eq!(
-        utils::health(&app, runner),
+        utils::health_as_u32(&app, runner),
         60,
         "the shell landed on the cell the runner left"
     );
@@ -207,7 +211,7 @@ fn cell_aimed_shot_hits_whoever_stands_on_cell() {
     utils::attack(&mut app, sieger, target_id);
     utils::run_ticks(&mut app, 24);
 
-    assert_eq!(100 - utils::health(&app, target), 20);
+    assert_eq!(100 - utils::health_as_u32(&app, target), 20);
 }
 
 #[test]
@@ -304,7 +308,7 @@ fn shot_lands_after_its_attacker_dies() {
     utils::run_ticks(&mut app, 8);
 
     // The gunner is gone, but its shell still deals the 20 damage frozen at release.
-    assert_eq!(utils::health(&app, target), 80);
+    assert_eq!(utils::health_as_u32(&app, target), 80);
 }
 
 //
@@ -329,7 +333,7 @@ fn app() -> App {
             EntityTypeDef::new("gunner")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
                 .with_sight_range(12)
-                .with_health(40)
+                .with_pool(Pool::health(40))
                 .with_bonus_damage_vs([("armored", 12u32)])
                 .with_attack(
                     AttackDef::new(Weapon::new(
@@ -354,7 +358,7 @@ fn app() -> App {
         registry.register(
             EntityTypeDef::new("keep")
                 .with_location(utils::GROUND, CellSize::new(3, 3), Solidity::Solid)
-                .with_health(300),
+                .with_pool(Pool::health(300)),
         );
         let lob = registry.register_projectile(
             "lob",
@@ -364,7 +368,7 @@ fn app() -> App {
             EntityTypeDef::new("sieger")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
                 .with_sight_range(12)
-                .with_health(40)
+                .with_pool(Pool::health(40))
                 .with_attack(
                     AttackDef::new(Weapon::new(
                         utils::GROUND,
@@ -379,19 +383,19 @@ fn app() -> App {
                     2,
                 ),
         );
-        registry.register(utils::walker("runner", utils::GROUND).with_health(60));
+        registry.register(utils::walker("runner", utils::GROUND).with_pool(Pool::health(60)));
         registry.register(
             EntityTypeDef::new("tank")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
                 .with_sight_range(12)
-                .with_health(100)
+                .with_pool(Pool::health(100))
                 .with_armor(6)
                 .with_tags(["armored"]),
         );
         registry.register(
             EntityTypeDef::new("dummy")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_health(100),
+                .with_pool(Pool::health(100)),
         );
     }
     app.world_mut().resource::<ContentRegistry>().validate();

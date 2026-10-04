@@ -15,7 +15,13 @@ use ferrets_content::{
         FieldSourceDef, FieldVision,
     },
     location::Solidity,
-    morph::{MorphCancel, MorphInterrupted, MorphPlacement, MorphReason, MorphTransition},
+    morph::{
+        MorphCancel, MorphCourse, MorphInterrupted, MorphPlacement, MorphReason, MorphTransition,
+        PoolCarry,
+    },
+    pool::Pool,
+    pool_def::PoolId,
+    pool_shift::PoolShift,
     quantity::Quantity,
     registry::ContentRegistry,
     skills::{Casting, EntityCastEffect, EntityCastTarget, Reach, SkillCaster, SkillDef},
@@ -185,7 +191,7 @@ fn blight(app: &App) -> FieldId {
 fn building(name: &str, side: u32, build_time: u32) -> EntityTypeDef {
     EntityTypeDef::new(name)
         .with_location(utils::GROUND, CellSize::new(side, side), Solidity::Solid)
-        .with_health(100)
+        .with_pool(Pool::health(100))
         .with_dying(1, [])
         .with_build_time(build_time)
 }
@@ -227,14 +233,14 @@ fn stand_app() -> App {
         let refit = |into: &str| {
             MorphTransition::new(
                 into,
-                None,
+                MorphCourse::direct(MorphInterrupted::Reverts),
                 Quantity::Constant(1),
                 MorphPlacement::Revalidate,
                 MorphCancel::Forfeit,
-                MorphInterrupted::Reverts,
                 MorphReason::Change,
                 Vec::new(),
                 Vec::new(),
+                [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
             )
         };
         registry.register(

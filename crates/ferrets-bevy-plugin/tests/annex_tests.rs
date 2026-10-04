@@ -598,11 +598,9 @@ fn fading_annex_loses_health_until_it_dies() {
     order_annex(&mut app, keep_id, "mast", 12, 10);
     utils::run_ticks(&mut app, utils::APPLY + 6);
     let mast = utils::single_owned_of_type(app.world_mut(), "mast", 0);
-    // Ten health, less the one tick it fades on the way in: the stats it is
-    // judged by are folded at the head of the tick, and the bond is derived
-    // after the orders, so the tick a fading annex finishes and docks is a
-    // tick it spent standing alone. Two health, once.
-    assert_eq!(utils::health(&app, mast), 8);
+    // Ten health: a site, bonded to nothing until it is built, does not
+    // fade, and the tick it finishes it docks.
+    assert_eq!(utils::health_as_u32(&app, mast), 10);
     let docked = utils::health(&app, mast);
     utils::run_ticks(&mut app, 3);
     assert_eq!(
@@ -620,16 +618,18 @@ fn fading_annex_loses_health_until_it_dies() {
         Operation::Operating,
         "it works without a primary, it only fades"
     );
-    // Two health a tick from the eight it had, one tick behind the loss: the
-    // tick its primary went was folded while it still had one, so 8 - 2 = 6
-    // after two ticks, then 4, 2, and empty.
-    assert_eq!(utils::health(&app, mast), 6);
+    // Two health a tick from the ten it had, one tick behind the loss: the
+    // tick its primary went was folded while it still had one, so 10 - 2 = 8
+    // after two ticks, then 6, 4, 2, and empty.
+    assert_eq!(utils::health_as_u32(&app, mast), 8);
     utils::run_ticks(&mut app, 1);
-    assert_eq!(utils::health(&app, mast), 4);
+    assert_eq!(utils::health_as_u32(&app, mast), 6);
     utils::run_ticks(&mut app, 1);
-    assert_eq!(utils::health(&app, mast), 2);
+    assert_eq!(utils::health_as_u32(&app, mast), 4);
     utils::run_ticks(&mut app, 1);
-    assert_eq!(utils::health(&app, mast), 0);
+    assert_eq!(utils::health_as_u32(&app, mast), 2);
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(utils::health_as_u32(&app, mast), 0);
     utils::run_ticks(&mut app, 5);
     utils::assert_despawned(app.world_mut(), mast);
 }

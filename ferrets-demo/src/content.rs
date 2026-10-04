@@ -110,20 +110,35 @@ pub const CONTENT: &str = r#"
     -- attack, researched at the war camp once a pig farm stands.
     define_player_buff("iron_weapons", {
         stack = "ignore",
-        entity_modifiers = {
-            { entity_stat = "damage", op = "flat", value = "2" },
-        },
+        entity_modifiers = { {
+            stats = { { entity_stat = "damage", op = "flat", value = "2" } },
+        } },
     })
     define_research("iron_weapons", {
         price = { gold = 100, wood = 50 },
         time = 200,
         buff = "iron_weapons",
     })
+    -- Vitality drill toughens everything the human player has by ten health,
+    -- and what is already standing gains the ten with it: a full archer stays
+    -- full, a wounded one is ten the better.
+    define_player_buff("vitality_drill", {
+        stack = "ignore",
+        entity_modifiers = { {
+            pool_maximums = { { entity_stat = "max_health", op = "flat", value = "10" } },
+            pool_shift = "difference",
+        } },
+    })
+    define_research("vitality_drill", {
+        price = { gold = 80, wood = 40 },
+        time = 160,
+        buff = "vitality_drill",
+    })
     define_player_buff("frenzy_ritual", {
         stack = "ignore",
-        entity_modifiers = {
-            { entity_stat = "attack_period", op = "percent", value = "-0.25" },
-        },
+        entity_modifiers = { {
+            stats = { { entity_stat = "attack_period", op = "percent", value = "-0.25" } },
+        } },
     })
     define_research("frenzy_ritual", {
         price = { gold = 150 },
@@ -137,7 +152,7 @@ pub const CONTENT: &str = r#"
     define_entity_buff("frenzy", {
         lasting = { ticks = 100 },
         stack = "refresh",
-        effects = { { modifiers = {
+        effects = { { stats = {
             { entity_stat = "speed", op = "percent", value = "1.0" },
             { entity_stat = "damage", op = "percent", value = "0.5" },
         } } },
@@ -164,6 +179,24 @@ pub const CONTENT: &str = r#"
         target = { kind = "allied", only = { tags = { "biological" } } },
         effect = { heal = "15" },
     })
+    -- The shaman's curse withers an enemy's body for ten seconds: its health
+    -- ceiling falls by nearly a third, and a unit at half health stays at half
+    -- of the lowered ceiling — and back at half of its own when it ends.
+    define_entity_buff("withering", {
+        lasting = { ticks = 200 },
+        stack = "refresh",
+        effects = { {
+            pool_maximums = { { entity_stat = "max_health", op = "percent", value = "-0.3" } },
+            pool_shift = "share",
+        } },
+    })
+    define_skill("withering", {
+        caster = "entity",
+        cooldown = 200,
+        cost = { energy = "25" },
+        target = { kind = "enemy" },
+        effect = { apply_buff = "withering" },
+    })
     -- Blood rite unlocks with the frenzy ritual: the button sits greyed on
     -- every grunt until the war camp finishes the research.
     define_skill("blood_rite", {
@@ -182,9 +215,9 @@ pub const CONTENT: &str = r#"
     define_player_buff("war_drums", {
         duration = 100,
         stack = "refresh",
-        entity_modifiers = {
-            { entity_stat = "speed", op = "percent", value = "0.5" },
-        },
+        entity_modifiers = { {
+            stats = { { entity_stat = "speed", op = "percent", value = "0.5" } },
+        } },
     })
     define_skill("war_drums", {
         caster = "player",
@@ -198,13 +231,14 @@ pub const CONTENT: &str = r#"
     define_entity("ship", {
         location = { occupation = WATER, size = 1, solidity = "solid" },
         stats = {
-            speed = "0.25", turn_rate = 6, pivot_rate = 9, radius = "0.5", weight = 6, max_health = 80,
+            speed = "0.25", turn_rate = 6, pivot_rate = 9, radius = "0.5", weight = 6,
             damage = 12, attack_range = 5, acquire_range = 8, attack_period = 10, damage_point = 4,
             -- Sees past its acquire range so its circular vision covers the square it
             -- can auto-engage.
             sight_range = 12,
             supply_cost = 1,
         },
+        pools = { health = { maximum = 80 } },
         dying = { time = 2 },
         -- Shore bombardment: a slow ball, so shots at a moving target are wasted.
         attack = { targets = GROUND | WATER | AIR, projectile = "cannonball" },
@@ -235,11 +269,11 @@ pub const CONTENT: &str = r#"
     })
     define_entity("sea_fortress", {
         location = { occupation = WATER | AIR, size = { 5, 5 }, solidity = "solid" },
-        stats = {
-            max_health = 1500, sight_range = 16, supply_provided = 5,
+        stats = { sight_range = 16, supply_provided = 5,
             damage = 10, attack_range = 12, acquire_range = 14, attack_period = 30,
             damage_point = 12, aim_rate = 3, attack_arc = 60,
         },
+        pools = { health = { maximum = 1500 } },
         dying = { time = 2 },
         -- One gun at each corner, all reading the same numbers: four times the
         -- fire of the old single mount, so each round is a quarter of what that
@@ -305,7 +339,7 @@ pub const CONTENT: &str = r#"
             stats = {
                 -- The baseline weight everything else is authored against: a
                 -- worker is what a crowd is made of, and what gives way in one.
-                speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1, max_health = 30, sight_range = 4,
+                speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1, sight_range = 4,
                 -- Mends at the rate it builds, and bills a quarter of the price for
                 -- a full restore, so repairing is cheaper than rebuilding. It works
                 -- from the next cell over.
@@ -317,6 +351,7 @@ pub const CONTENT: &str = r#"
                 -- One shelter slot: a worker fits in a bunker or a pig farm.
                 cargo_size = 1,
             },
+            pools = { health = { maximum = 30 } },
             dying = FALLS,
             price = { gold = 50 },
             train_time = 40,
@@ -350,7 +385,8 @@ pub const CONTENT: &str = r#"
             -- Enough starting headroom for the first few units; farms carry the
             -- army beyond it. Sight reaches the mine placed by the base, so
             -- the economy never depends on a lucky scout.
-            stats = { max_health = 800, sight_range = 9, supply_provided = 10 },
+            stats = { sight_range = 9, supply_provided = 10 },
+            pools = { health = { maximum = 800 } },
             dying = { time = 2 },
             price = { gold = 400 },
             build_time = 200,
@@ -367,7 +403,8 @@ pub const CONTENT: &str = r#"
         define_entity(name, {
             race = race,
             location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
-            stats = { max_health = 200, sight_range = 3, supply_provided = 6 },
+            stats = { sight_range = 3, supply_provided = 6 },
+            pools = { health = { maximum = 200 } },
             dying = { time = 2 },
             price = { gold = 40, wood = 20 },
             build_time = 60,
@@ -379,7 +416,8 @@ pub const CONTENT: &str = r#"
         define_entity(name, {
             race = race,
             location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
-            stats = { max_health = 500, sight_range = 6 },
+            stats = { sight_range = 6 },
+            pools = { health = { maximum = 500 } },
             dying = { time = 2 },
             price = { gold = 200, wood = 100 },
             build_time = 120,
@@ -412,13 +450,13 @@ pub const CONTENT: &str = r#"
     define_entity("bunker", {
         race = "human",
         location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
-        stats = {
-            max_health = 400, sight_range = 7,
+        stats = { sight_range = 7,
             cargo_capacity = 4,
             -- Boarding steps over the threshold; unloading spills everyone out
             -- at once, so a garrison empties the moment it is told to.
             load_range = 1, unload_range = 1, load_period = 0, unload_period = 0,
         },
+        pools = { health = { maximum = 400 } },
         dying = { time = 2 },
         -- Stone and earthworks: no call on the wood line, which the demo
         -- economy keeps stretched over the upgrades.
@@ -441,32 +479,36 @@ pub const CONTENT: &str = r#"
     })
 
     -- The human tech building: while one stands, mortars unlock, and it hosts
-    -- the iron weapons upgrade.
+    -- the iron weapons and vitality drill upgrades.
     define_entity("blacksmith", {
         race = "human",
         location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
-        stats = { max_health = 350, sight_range = 5 },
+        stats = { sight_range = 5 },
+        pools = { health = { maximum = 350 } },
         dying = { time = 2 },
         price = { gold = 150, wood = 80 },
         build_time = 100,
-        researcher = { "iron_weapons" },
+        researcher = { "iron_weapons", "vitality_drill" },
         tags = { "building" },
     })
     define_entity("archer", {
         race = "human",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
         stats = {
-            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1, max_health = 40,
+            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1,
             damage = 6, attack_range = 4, acquire_range = 7, attack_period = 7, damage_point = 3,
-            -- 0.1/tick is 2 energy a second, so a 30-cost cast is earned over ~15s
-            -- rather than handed back instantly: energy gates the skills, not the
-            -- cooldowns.
-            max_energy = 60, energy_regen = "0.1",
             -- Sees comfortably past its acquire range, so its circular vision covers
             -- what it can auto-engage.
             sight_range = 10,
             supply_cost = 1,
             cargo_size = 1,
+        },
+        pools = {
+            health = { maximum = 40 },
+            -- 0.1/tick is 2 energy a second, so a 30-cost cast is earned over ~15s
+            -- rather than handed back instantly: energy gates the skills, not the
+            -- cooldowns.
+            energy = { maximum = 60, regen = "0.1" },
         },
         dying = FALLS,
         tags = { "biological" },
@@ -494,15 +536,18 @@ pub const CONTENT: &str = r#"
         race = "human",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
         stats = {
-            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1, max_health = 45, sight_range = 9,
-            -- Half a point of energy per point of health (see the repairer cost
-            -- below) means a full 200-point pool restores 400 health across a squad.
-            max_energy = 200, energy_regen = "0.2",
+            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1, sight_range = 9,
             -- A flat point of health per tick, whatever the patient is — a unit's
             -- price says nothing about how long it takes to patch up.
             repair_speed = "1.0", repair_range = 2,
             supply_cost = 1,
             cargo_size = 1,
+        },
+        pools = {
+            health = { maximum = 45 },
+            -- Half a point of energy per point of health (see the repairer cost
+            -- below) means a full 200-point pool restores 400 health across a squad.
+            energy = { maximum = 200, regen = "0.2" },
         },
         dying = FALLS,
         tags = { "biological" },
@@ -529,13 +574,14 @@ pub const CONTENT: &str = r#"
         stats = {
             -- Tube, carriage and crew: heavier than the infantry it walks with,
             -- though nothing like the grunt that can shoulder it aside.
-            speed = "0.2", turn_rate = 6, pivot_rate = 12, pivot_angle = 90, radius = "0.5", weight = 3, max_health = 35,
+            speed = "0.2", turn_rate = 6, pivot_rate = 12, pivot_angle = 90, radius = "0.5", weight = 3,
             damage = 14, attack_range = 7, acquire_range = 9, attack_period = 20, damage_point = 8,
             sight_range = 11,
             supply_cost = 1,
             -- The tube and its crew take two shelter slots.
             cargo_size = 2,
         },
+        pools = { health = { maximum = 35 } },
         -- A tube on a carriage: it is mended, not healed, and what it leaves
         -- when it falls is wreckage nobody raises anything from.
         dying = { time = 2 },
@@ -590,7 +636,7 @@ pub const CONTENT: &str = r#"
             morphs = morphs,
             stats = {
                 speed = speed, turn_rate = 18, pivot_rate = 24, pivot_angle = 90,
-                radius = "1", weight = 4, max_health = 180, sight_range = 10,
+                radius = "1", weight = 4, sight_range = 10,
                 supply_cost = 2,
                 -- One rider, who fights from the saddle.
                 cargo_capacity = 1,
@@ -603,9 +649,12 @@ pub const CONTENT: &str = r#"
                 -- take-off reads it and a buffed dead stat on the aloft form
                 -- would only mislead.
                 morph_time = trainable and 20 or nil,
+            },
+            pools = {
+                health = { maximum = 180 },
                 -- The pool the take-off draws from; shared by both forms so it
                 -- carries across the change.
-                max_energy = 60, energy_regen = "0.2",
+                energy = { maximum = 60, regen = "0.2" },
             },
             dying = { time = 2 },
             transporter = {
@@ -636,7 +685,7 @@ pub const CONTENT: &str = r#"
     -- takes saddle and rider down together — which is the risk that prices
     -- the ride.
     gryphon("gryphon", GROUND, GROUND | AIR, "0.3", "eject", {
-        { into = "gryphon_aloft",
+        { into = "gryphon_aloft", land_pool_carry = { health = "clamp", energy = "clamp" },
           time = { stat = "morph_time" },
           placement = "revalidate",
           cancel = "committed",
@@ -645,7 +694,7 @@ pub const CONTENT: &str = r#"
     gryphon("gryphon_aloft", AIR, AIR, "0.45", "destroy", {
         -- A plain tick count, where the take-off reads its stat: landing pace
         -- is nothing anyone would research.
-        { into = "gryphon",
+        { into = "gryphon", land_pool_carry = { health = "clamp", energy = "clamp" },
           time = 20,
           placement = "reserve",
           cancel = "committed" },
@@ -661,13 +710,14 @@ pub const CONTENT: &str = r#"
         stats = {
             -- A gas envelope the size of a building: the heaviest thing that
             -- flies, so a gryphon meeting one aloft is the one that gives way.
-            speed = "0.35", turn_rate = 6, pivot_rate = 9, pivot_angle = 90, radius = "1", weight = 8, max_health = 150, sight_range = 10,
+            speed = "0.35", turn_rate = 6, pivot_rate = 9, pivot_angle = 90, radius = "1", weight = 8, sight_range = 10,
             supply_cost = 2,
             cargo_capacity = 4,
             -- A gangplank: one body a second each way, as the pig farm's is.
             load_range = 1, unload_range = 1,
             load_period = 20, unload_period = 20,
         },
+        pools = { health = { maximum = 150 } },
         dying = { time = 2 },
         price = { gold = 160, wood = 60 },
         train_time = 90,
@@ -704,7 +754,8 @@ pub const CONTENT: &str = r#"
     define_entity("big_rock", {
         race = "orc",
         location = { occupation = GROUND, size = { 4, 4 }, solidity = "solid" },
-        stats = { max_health = 2000, sight_range = 2 },
+        stats = { sight_range = 2 },
+        pools = { health = { maximum = 2000 } },
         dying = { time = 2 },
         price = { gold = 50 },
         build_time = 1200,
@@ -720,13 +771,13 @@ pub const CONTENT: &str = r#"
     define_entity("pig_farm", {
         race = "orc",
         location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
-        stats = {
-            max_health = 200, sight_range = 3, supply_provided = 6,
+        stats = { sight_range = 3, supply_provided = 6,
             cargo_capacity = 4,
             -- A crawl space, not a door: one body a second each way.
             load_range = 1, unload_range = 1,
             load_period = 20, unload_period = 20,
         },
+        pools = { health = { maximum = 200 } },
         dying = { time = 2 },
         price = { gold = 40, wood = 20 },
         build_time = 60,
@@ -755,9 +806,9 @@ pub const CONTENT: &str = r#"
         location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
         targetable = GROUND | AIR,
         stats = {
-            max_health = 250,
             sight_range = 12,
         },
+        pools = { health = { maximum = 250 } },
         dying = { time = 2 },
         price = { gold = 120, wood = 40 },
         build_time = 70,
@@ -770,7 +821,7 @@ pub const CONTENT: &str = r#"
         -- money is committed up front and comes back in full if the upgrade is
         -- called off — which is what makes starting one cheap to reconsider.
         morphs = {
-            { into = "guard_tower",
+            { into = "guard_tower", land_pool_carry = { health = "share" },
               time = 60,
               placement = "reserve",
               cancel = "refundable",
@@ -785,10 +836,10 @@ pub const CONTENT: &str = r#"
         location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
         targetable = GROUND | AIR,
         stats = {
-            max_health = 350,
             damage = 14, attack_range = 7, acquire_range = 9, attack_period = 12, damage_point = 5,
             sight_range = 10,
         },
+        pools = { health = { maximum = 350 } },
         dying = { time = 2 },
         attack = { targets = GROUND | WATER | AIR, projectile = "arrow" },
         tags = { "building" },
@@ -806,7 +857,8 @@ pub const CONTENT: &str = r#"
     define_entity("siege_works", {
         race = "orc",
         location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
-        stats = { max_health = 400, sight_range = 5 },
+        stats = { sight_range = 5 },
+        pools = { health = { maximum = 400 } },
         dying = { time = 2 },
         price = { gold = 180, wood = 120 },
         build_time = 130,
@@ -849,7 +901,7 @@ pub const CONTENT: &str = r#"
             -- Slow, and heavy enough that a grunt walking into one gives way.
             -- Its body is the circle inscribed in that footprint, radius one.
             speed = "0.2", turn_rate = 9, pivot_rate = 18, pivot_angle = 90,
-            radius = "1", weight = 6, max_health = 90,
+            radius = "1", weight = 6,
             -- One heavy shot on a long cycle: it out-ranges a grunt several times
             -- over and loses to anything that closes while it is reloading.
             damage = 24, attack_range = 6, acquire_range = 8, attack_period = 24,
@@ -862,6 +914,7 @@ pub const CONTENT: &str = r#"
             sight_range = 9,
             supply_cost = 2,
         },
+        pools = { health = { maximum = 90 } },
         dying = { time = 2 },
         -- The one gun in the demo that does not stop to shoot: it bears on its
         -- own, so the hull can keep to its orders while the cannon works whatever
@@ -882,12 +935,12 @@ pub const CONTENT: &str = r#"
     define_entity_buff("enraged", {
         lasting = { as_long_as = { all = { { health = { under_share = "0.3" } }, { research = "frenzy_ritual" } } } },
         stack = "ignore",
-        effects = { { modifiers = { { entity_stat = "damage", op = "percent", value = "0.5" } } } },
+        effects = { { stats = { { entity_stat = "damage", op = "percent", value = "0.5" } } } },
     })
     define_entity_buff("spent", {
         lasting = { as_long_as = { energy = { under = 20 } } },
         stack = "ignore",
-        effects = { { modifiers = { { entity_stat = "energy_regen", op = "flat", value = "0.2" } } } },
+        effects = { { stats = { { entity_stat = "energy_regen", op = "flat", value = "0.2" } } } },
     })
     define_entity("grunt", {
         race = "orc",
@@ -896,17 +949,17 @@ pub const CONTENT: &str = r#"
             -- Heavy melee in body as well as armor: four times a worker's
             -- weight on the same one-cell footprint, so a peon walking into a
             -- standing grunt is the one that gives way and slides around it.
-            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 4, max_health = 60,
+            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 4,
             damage = 10, attack_range = 1, acquire_range = 5, attack_period = 6, damage_point = 3,
             -- Heavy melee: flat armor blunts each incoming hit.
             armor = 3,
             -- 0.05/tick is a point a second, so a mauled grunt walks off its wounds
             -- over about a minute instead of needing to be replaced.
-            health_regen = "0.05",
             sight_range = 8,
             supply_cost = 1,
             cargo_size = 1,
         },
+        pools = { health = { maximum = 60, regen = "0.05" } },
         dying = FALLS,
         tags = { "biological" },
         -- An axe reaches what stands on the ground or floats on the water and
@@ -927,15 +980,15 @@ pub const CONTENT: &str = r#"
         race = "orc",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
         stats = {
-            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1, max_health = 35,
-            max_energy = 80, energy_regen = "0.2",
+            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1,
             sight_range = 8,
             supply_cost = 1,
             cargo_size = 1,
         },
+        pools = { health = { maximum = 35 }, energy = { maximum = 80, regen = "0.2" } },
         dying = FALLS,
         tags = { "biological" },
-        skills = { "second_wind" },
+        skills = { "second_wind", "withering" },
         passives = { "spent" },
         price = { gold = 120 },
         train_time = 80,
@@ -954,15 +1007,17 @@ pub const CONTENT: &str = r#"
     -- itself spreads it, at full reach when it is placed by the map, and from
     -- three cells a cell every third of a second when it is built, showing a
     -- patch under itself while still going up. Structures left off creep
-    -- waste away; a larva off creep is gone in a second; swarmlings run a
+    -- waste away once built; a larva off creep is gone in a second; swarmlings run a
     -- third faster on anyone's creep.
     local ON_CREEP = { requires = "creep", of = "anyone", coverage = "every" }
-    local WITHERS_OFF_CREEP = { field = "creep", of = "anyone", coverage = "every", outside = {
-        modifiers = { { entity_stat = "health_drain", op = "flat", value = "0.2" } },
-    } }
-    local DIES_OFF_CREEP = { field = "creep", of = "anyone", coverage = "every", outside = {
-        modifiers = { { entity_stat = "health_drain", op = "flat", value = "1.25" } },
-    } }
+    local WITHERS_OFF_CREEP = { field = "creep", of = "anyone", coverage = "any",
+        holds_while = "built",
+        outside = { {
+            stats = { { entity_stat = "health_drain", op = "flat", value = "0.2" } },
+        } } }
+    local DIES_OFF_CREEP = { field = "creep", of = "anyone", coverage = "any", outside = { {
+        stats = { { entity_stat = "health_drain", op = "flat", value = "1.25" } },
+    } } }
 
     -- What every swarm structure is full of: spawn too young to be a
     -- swarmling, which lives twenty seconds and is gone. It costs no supply,
@@ -972,20 +1027,21 @@ pub const CONTENT: &str = r#"
         race = "swarm",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
         stats = {
-            speed = "0.32", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1, max_health = 25,
+            speed = "0.32", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1,
             damage = 4, attack_range = 1, acquire_range = 5, attack_period = 6, damage_point = 2,
             sight_range = 6,
             lifetime = 400,
             cargo_size = 1,
         },
+        pools = { health = { maximum = 25 } },
         dying = { time = 1 },
         tags = { "biological" },
         attack = { targets = GROUND | WATER },
         selection = { priority = 10 },
         field_effects = {
-            { field = "creep", of = "anyone", coverage = "any", inside = {
-                modifiers = { { entity_stat = "speed", op = "percent", value = "0.3" } },
-            } },
+            { field = "creep", of = "anyone", coverage = "any", inside = { {
+                stats = { { entity_stat = "speed", op = "percent", value = "0.3" } },
+            } } },
         },
     })
 
@@ -1022,7 +1078,8 @@ pub const CONTENT: &str = r#"
     define_entity("hatchery", {
         race = "swarm",
         location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
-        stats = { max_health = 800, sight_range = 9, supply_provided = 10 },
+        stats = { sight_range = 9, supply_provided = 10 },
+        pools = { health = { maximum = 800 } },
         dying = { time = 2, leaves = BURSTS },
         price = { gold = 400 },
         build_time = 200,
@@ -1035,8 +1092,9 @@ pub const CONTENT: &str = r#"
             { field = "creep", radius = CREEP_RADIUS, growth = CREEP_GROWTH, while_constructing = { held = 1 }, while_disabled = "full" },
         },
         morphs = {
-            { into = "hive", via = "hive_cocoon", time = 200, placement = "reserve", cancel = "refundable",
-              interrupted = "reverts", reason = "change", cost = { resources = { gold = 150, wood = 100 } },
+            { into = "hive", land_pool_carry = { health = "full" },
+              via = { form = "hive_cocoon", enter_pool_carry = { health = "full" }, interrupted = { reverts = { health = "restore" } } },
+              time = 200, placement = "reserve", cancel = "refundable", reason = "change", cost = { resources = { gold = 150, wood = 100 } },
               requires = { { entity_type = "spawning_pit" } } },
         },
     })
@@ -1046,7 +1104,8 @@ pub const CONTENT: &str = r#"
     define_entity("hive_cocoon", {
         race = "swarm",
         location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
-        stats = { max_health = 800, sight_range = 9, supply_provided = 10 },
+        stats = { sight_range = 9, supply_provided = 10 },
+        pools = { health = { maximum = 800 } },
         dying = { time = 2, leaves = BURSTS },
         resource_storage = { "gold", "wood" },
         tags = { "building" },
@@ -1059,7 +1118,8 @@ pub const CONTENT: &str = r#"
     define_entity("hive", {
         race = "swarm",
         location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
-        stats = { max_health = 1000, sight_range = 10, supply_provided = 10 },
+        stats = { sight_range = 10, supply_provided = 10 },
+        pools = { health = { maximum = 1000 } },
         dying = { time = 2, leaves = BURSTS },
         -- Nothing builds a hive: it carries the hatchery's price and the
         -- growth's on top of it, over the raising and the growing together.
@@ -1081,20 +1141,24 @@ pub const CONTENT: &str = r#"
     define_entity("larva", {
         race = "swarm",
         location = { occupation = GROUND, size = 1, solidity = "passable" },
-        stats = { max_health = 25, armor = 10, sight_range = 1, health_drain = "0" },
+        stats = { armor = 10, sight_range = 1 },
+        pools = { health = { maximum = 25 } },
         dying = { time = 1 },
         tags = { "biological" },
         selection = { priority = 1 },
         broodling = { berths = "brood", stance = { roaming = { speed = "0.05", dwell = 40 } } },
         field_effects = { DIES_OFF_CREEP },
         morphs = {
-            { into = "drone", via = "egg", time = 40, placement = "nearby", cancel = "refundable",
-              interrupted = "reverts", reason = "production", cost = { resources = { gold = 50 } } },
-            { into = "swarmling", via = "egg", time = 40, placement = "nearby", cancel = "refundable",
-              interrupted = "reverts", reason = "production", cost = { resources = { gold = 50 } },
+            { into = "drone", land_pool_carry = { health = "full" },
+              via = { form = "egg", enter_pool_carry = { health = "full" }, interrupted = { reverts = { health = "restore" } } },
+              time = 40, placement = "nearby", cancel = "refundable", reason = "production", cost = { resources = { gold = 50 } } },
+            { into = "swarmling", land_pool_carry = { health = "full" },
+              via = { form = "egg", enter_pool_carry = { health = "full" }, interrupted = { reverts = { health = "restore" } } },
+              time = 40, placement = "nearby", cancel = "refundable", reason = "production", cost = { resources = { gold = 50 } },
               requires = { { entity_type = "spawning_pit" } } },
-            { into = "overlord", via = "egg", time = 60, placement = "nearby", cancel = "refundable",
-              interrupted = "reverts", reason = "production", cost = { resources = { gold = 100 } } },
+            { into = "overlord", land_pool_carry = { health = "full" },
+              via = { form = "egg", enter_pool_carry = { health = "full" }, interrupted = { reverts = { health = "restore" } } },
+              time = 60, placement = "nearby", cancel = "refundable", reason = "production", cost = { resources = { gold = 100 } } },
         },
     })
 
@@ -1106,9 +1170,9 @@ pub const CONTENT: &str = r#"
         race = "swarm",
         location = { occupation = AIR, size = { 2, 2 }, solidity = "solid" },
         stats = {
-            speed = "0.2", turn_rate = 4, pivot_rate = 6, pivot_angle = 90, radius = "1", weight = 6,
-            max_health = 200, armor = 1, sight_range = 8, supply_provided = 6,
+            speed = "0.2", turn_rate = 4, pivot_rate = 6, pivot_angle = 90, radius = "1", weight = 6, armor = 1, sight_range = 8, supply_provided = 6,
         },
+        pools = { health = { maximum = 200 } },
         dying = { time = 2 },
         tags = { "biological" },
         field_sources = {
@@ -1121,7 +1185,8 @@ pub const CONTENT: &str = r#"
     define_entity("egg", {
         race = "swarm",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
-        stats = { max_health = 200, armor = 10, sight_range = 1 },
+        stats = { armor = 10, sight_range = 1 },
+        pools = { health = { maximum = 200 } },
         dying = { time = 1 },
         tags = { "biological" },
         selection = { priority = 1 },
@@ -1140,11 +1205,12 @@ pub const CONTENT: &str = r#"
         race = "swarm",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
         stats = {
-            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1, max_health = 30, sight_range = 4,
+            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1, sight_range = 4,
             build_range = 1, harvest_range = 1,
             supply_cost = 1,
             cargo_size = 1,
         },
+        pools = { health = { maximum = 30 } },
         dying = FALLS,
         builder = { builds = { "hatchery", "tumor", "spawning_pit" }, attendance = "consumed" },
         tags = { "biological" },
@@ -1161,7 +1227,8 @@ pub const CONTENT: &str = r#"
     define_entity("tumor", {
         race = "swarm",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
-        stats = { max_health = 50, sight_range = 1 },
+        stats = { sight_range = 1 },
+        pools = { health = { maximum = 50 } },
         dying = { time = 2 },
         price = { gold = 25 },
         build_time = 40,
@@ -1175,7 +1242,8 @@ pub const CONTENT: &str = r#"
     define_entity("spawning_pit", {
         race = "swarm",
         location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
-        stats = { max_health = 500, sight_range = 6, health_drain = "0" },
+        stats = { sight_range = 6 },
+        pools = { health = { maximum = 500 } },
         dying = { time = 2, leaves = BURSTS },
         price = { gold = 200, wood = 100 },
         build_time = 120,
@@ -1188,29 +1256,29 @@ pub const CONTENT: &str = r#"
         race = "swarm",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
         stats = {
-            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 2, max_health = 35,
+            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 2,
             damage = 5, attack_range = 1, acquire_range = 5, attack_period = 4, damage_point = 2,
-            health_regen = "0.05",
             sight_range = 8,
             supply_cost = 1,
             cargo_size = 1,
         },
+        pools = { health = { maximum = 35, regen = "0.05" } },
         dying = FALLS,
         tags = { "biological" },
         attack = { targets = GROUND | WATER },
         selection = { priority = 10 },
         field_effects = {
-            { field = "creep", of = "anyone", coverage = "any", inside = {
-                modifiers = { { entity_stat = "speed", op = "percent", value = "0.3" } },
-            } },
+            { field = "creep", of = "anyone", coverage = "any", inside = { {
+                stats = { { entity_stat = "speed", op = "percent", value = "0.3" } },
+            } } },
         },
         -- A swarmling grows into a ravager inside a cocoon: three seconds
         -- wrapped up and helpless but thick-skinned, for a price the hive's
         -- presence unlocks, and the price comes back if the growth is called
         -- off; the ravager lands on the nearest ground that takes it.
         morphs = {
-            { into = "ravager",
-              via = "cocoon",
+            { into = "ravager", land_pool_carry = { health = "full" },
+              via = { form = "cocoon", enter_pool_carry = { health = "full" }, interrupted = { reverts = { health = "restore" } } },
               time = 60,
               placement = "nearby",
               cancel = "refundable",
@@ -1218,7 +1286,7 @@ pub const CONTENT: &str = r#"
               requires = { { entity_type = "hive" } } },
             -- Digging in takes a moment and cannot be called off; the ground
             -- it digs into is the ground it stands on.
-            { into = "swarmling_burrowed",
+            { into = "swarmling_burrowed", land_pool_carry = { health = "clamp" },
               time = 12,
               placement = "reserve",
               cancel = "committed",
@@ -1238,17 +1306,17 @@ pub const CONTENT: &str = r#"
         -- raised on top of it.
         location = { occupation = GROUND, size = 1, solidity = "underfoot" },
         stats = {
-            radius = "0.5", weight = 2, max_health = 35,
-            health_regen = "0.15",
+            radius = "0.5", weight = 2,
             sight_range = 6,
             supply_cost = 1,
         },
+        pools = { health = { maximum = 35, regen = "0.15" } },
         concealment = "concealed",
         dying = FALLS,
         tags = { "biological" },
         selection = { priority = 10 },
         morphs = {
-            { into = "swarmling",
+            { into = "swarmling", land_pool_carry = { health = "clamp" },
               time = 12,
               placement = "nearby",
               cancel = "committed",
@@ -1261,7 +1329,8 @@ pub const CONTENT: &str = r#"
     define_entity("cocoon", {
         race = "swarm",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
-        stats = { max_health = 120, armor = 3, sight_range = 2 },
+        stats = { armor = 3, sight_range = 2 },
+        pools = { health = { maximum = 120 } },
         dying = { time = 2 },
         tags = { "biological" },
     })
@@ -1272,22 +1341,22 @@ pub const CONTENT: &str = r#"
         race = "swarm",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
         stats = {
-            speed = "0.25", turn_rate = 24, pivot_rate = 24, radius = "0.5", weight = 3, max_health = 90,
+            speed = "0.25", turn_rate = 24, pivot_rate = 24, radius = "0.5", weight = 3,
             damage = 12, attack_range = 1, acquire_range = 5, attack_period = 6, damage_point = 3,
             armor = 1,
-            health_regen = "0.05",
             sight_range = 8,
             supply_cost = 2,
             cargo_size = 1,
         },
+        pools = { health = { maximum = 90, regen = "0.05" } },
         dying = FALLS,
         tags = { "biological" },
         attack = { targets = GROUND | WATER },
         selection = { priority = 12 },
         field_effects = {
-            { field = "creep", of = "anyone", coverage = "any", inside = {
-                modifiers = { { entity_stat = "speed", op = "percent", value = "0.3" } },
-            } },
+            { field = "creep", of = "anyone", coverage = "any", inside = { {
+                stats = { { entity_stat = "speed", op = "percent", value = "0.3" } },
+            } } },
         },
     })
 
@@ -1300,16 +1369,17 @@ pub const CONTENT: &str = r#"
     -- of the conclave's is built on creep, and a pylon that finishes burns
     -- away creep nothing sustains around it.
     local POWERED = { requires = "power", of = "own", coverage = "every" }
-    local UNPOWERED_IDLES = { field = "power", of = "own", coverage = "every", outside = "disable" }
+    local UNPOWERED_IDLES = { field = "power", of = "own", coverage = "every", outside = { "disable" } }
 
     -- Every conclave unit but the arbiter itself declares that the veil of
     -- its own side, or an ally's, conceals it while it stands inside.
-    local VEILED = { field = "veil", of = "allied", coverage = "every", inside = "conceal" }
+    local VEILED = { field = "veil", of = "allied", coverage = "every", inside = { "conceal" } }
 
     define_entity("nexus", {
         race = "conclave",
         location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
-        stats = { max_health = 800, sight_range = 9, supply_provided = 10 },
+        stats = { sight_range = 9, supply_provided = 10 },
+        pools = { health = { maximum = 800 } },
         dying = { time = 2 },
         price = { gold = 400 },
         build_time = 200,
@@ -1334,11 +1404,12 @@ pub const CONTENT: &str = r#"
         race = "conclave",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
         stats = {
-            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1, max_health = 30, sight_range = 4,
+            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1, sight_range = 4,
             build_range = 1, harvest_range = 1,
             supply_cost = 1,
             cargo_size = 1,
         },
+        pools = { health = { maximum = 30 } },
         dying = FALLS,
         price = { gold = 50 },
         train_time = 40,
@@ -1355,7 +1426,8 @@ pub const CONTENT: &str = r#"
     define_entity("pylon", {
         race = "conclave",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
-        stats = { max_health = 200, sight_range = 6, supply_provided = 6 },
+        stats = { sight_range = 6, supply_provided = 6 },
+        pools = { health = { maximum = 200 } },
         dying = { time = 2 },
         price = { gold = 60 },
         build_time = 50,
@@ -1372,7 +1444,8 @@ pub const CONTENT: &str = r#"
     define_entity("gateway", {
         race = "conclave",
         location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
-        stats = { max_health = 500, sight_range = 6 },
+        stats = { sight_range = 6 },
+        pools = { health = { maximum = 500 } },
         dying = { time = 2 },
         price = { gold = 200, wood = 100 },
         build_time = 120,
@@ -1386,11 +1459,11 @@ pub const CONTENT: &str = r#"
     define_entity("photon_cannon", {
         race = "conclave",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
-        stats = {
-            max_health = 300, armor = 1,
+        stats = { armor = 1,
             damage = 12, attack_range = 6, acquire_range = 7, attack_period = 20, damage_point = 5,
             sight_range = 8,
         },
+        pools = { health = { maximum = 300 } },
         dying = { time = 2 },
         price = { gold = 120 },
         build_time = 80,
@@ -1409,13 +1482,14 @@ pub const CONTENT: &str = r#"
         race = "conclave",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
         stats = {
-            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 3, max_health = 60,
+            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 3,
             damage = 8, attack_range = 1, acquire_range = 5, attack_period = 5, damage_point = 2,
             armor = 1,
             sight_range = 8,
             supply_cost = 1,
             cargo_size = 1,
         },
+        pools = { health = { maximum = 60 } },
         dying = FALLS,
         tags = { "biological" },
         attack = { targets = GROUND | WATER },
@@ -1432,13 +1506,14 @@ pub const CONTENT: &str = r#"
         race = "conclave",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
         stats = {
-            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 3, max_health = 80,
+            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 3,
             damage = 20, attack_range = 1, acquire_range = 5, attack_period = 20, damage_point = 6,
             armor = 1,
             sight_range = 8,
             supply_cost = 2,
             cargo_size = 1,
         },
+        pools = { health = { maximum = 80 } },
         concealment = "concealed",
         dying = FALLS,
         tags = { "biological" },
@@ -1456,10 +1531,11 @@ pub const CONTENT: &str = r#"
         race = "conclave",
         location = { occupation = AIR, size = 1, solidity = "solid" },
         stats = {
-            speed = "0.35", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1, max_health = 40,
+            speed = "0.35", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1,
             sight_range = 9,
             supply_cost = 1,
         },
+        pools = { health = { maximum = 40 } },
         concealment = "concealed",
         dying = { time = 2 },
         tags = { "mechanical" },
@@ -1478,11 +1554,12 @@ pub const CONTENT: &str = r#"
         race = "conclave",
         location = { occupation = AIR, size = 1, solidity = "solid" },
         stats = {
-            speed = "0.3", turn_rate = 20, pivot_rate = 20, radius = "0.5", weight = 4, max_health = 200,
+            speed = "0.3", turn_rate = 20, pivot_rate = 20, radius = "0.5", weight = 4,
             armor = 1,
             sight_range = 9,
             supply_cost = 3,
         },
+        pools = { health = { maximum = 200 } },
         dying = { time = 2 },
         tags = { "mechanical" },
         price = { gold = 200, wood = 150 },
@@ -1508,11 +1585,12 @@ pub const CONTENT: &str = r#"
         race = "elves",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
         stats = {
-            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1, max_health = 30, sight_range = 4,
+            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1, sight_range = 4,
             build_range = 1, harvest_range = 1,
             supply_cost = 1,
             cargo_size = 1,
         },
+        pools = { health = { maximum = 30 } },
         dying = { time = 2 },
         price = { gold = 50 },
         train_time = 40,
@@ -1546,7 +1624,8 @@ pub const CONTENT: &str = r#"
     define_entity("entangled_mine", {
         race = "elves",
         location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
-        stats = { max_health = 600, sight_range = 6 },
+        stats = { sight_range = 6 },
+        pools = { health = { maximum = 600 } },
         dying = { time = 2 },
         price = { gold = 100 },
         build_time = 100,
@@ -1570,6 +1649,7 @@ pub const CONTENT: &str = r#"
             race = "elves",
             location = { occupation = GROUND, size = size, solidity = "solid" },
             stats = rooted.stats,
+            pools = rooted.pools,
             dying = { time = 2 },
             price = rooted.price,
             build_time = rooted.build_time,
@@ -1579,42 +1659,45 @@ pub const CONTENT: &str = r#"
             field_placement = { NOT_ON_CREEP, NOT_ON_BLIGHT },
             field_sources = rooted.field_sources,
             morphs = {
-                { into = uprooted, time = 40, placement = "revalidate", cancel = "refundable" },
+                { into = uprooted, land_pool_carry = { health = "clamp" }, time = 40, placement = "revalidate", cancel = "refundable" },
             },
         })
         define_entity(uprooted, {
             race = "elves",
             location = { occupation = GROUND, size = size, solidity = "solid" },
             stats = walker.stats,
+            pools = walker.pools,
             dying = { time = 2 },
             attack = { targets = GROUND },
             tags = { "building" },
             selection = { priority = 6 },
             morphs = {
-                { into = name, time = 40, placement = "reserve", cancel = "refundable" },
+                { into = name, land_pool_carry = { health = "clamp" }, time = 40, placement = "reserve", cancel = "refundable" },
             },
         })
     end
 
     -- The hall: trains wisps rooted; uprooted it lumbers and swats.
     ancient("tree_of_life", { 3, 3 }, {
-        stats = { max_health = 800, sight_range = 9, supply_provided = 10 },
+        stats = { sight_range = 9, supply_provided = 10 },
+        pools = { health = { maximum = 800 } },
         price = { gold = 400 },
         build_time = 200,
         trainer = { "wisp" },
     }, {
         stats = {
-            speed = "0.1", turn_rate = 6, pivot_rate = 6, pivot_angle = 90, radius = "1.5", weight = 12,
-            max_health = 800, sight_range = 9, supply_provided = 10,
+            speed = "0.1", turn_rate = 6, pivot_rate = 6, pivot_angle = 90, radius = "1.5", weight = 12, sight_range = 9, supply_provided = 10,
             damage = 20, attack_range = 1, acquire_range = 5, attack_period = 30, damage_point = 10,
         },
+        pools = { health = { maximum = 800 } },
     })
     -- The moon well feeds the army the way a farm does. It is the one elf
     -- structure with no legs: a well stays where it was dug.
     define_entity("moon_well", {
         race = "elves",
         location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
-        stats = { max_health = 200, sight_range = 3, supply_provided = 6 },
+        stats = { sight_range = 3, supply_provided = 6 },
+        pools = { health = { maximum = 200 } },
         dying = { time = 2 },
         price = { gold = 40, wood = 20 },
         build_time = 60,
@@ -1623,25 +1706,26 @@ pub const CONTENT: &str = r#"
     })
     -- The war ancient: huntresses rooted, a heavy bite uprooted.
     ancient("ancient_of_war", { 3, 3 }, {
-        stats = { max_health = 500, sight_range = 6 },
+        stats = { sight_range = 6 },
+        pools = { health = { maximum = 500 } },
         price = { gold = 200, wood = 100 },
         build_time = 120,
         trainer = { "huntress" },
     }, {
         stats = {
-            speed = "0.15", turn_rate = 8, pivot_rate = 8, pivot_angle = 90, radius = "1.5", weight = 10,
-            max_health = 500, sight_range = 6,
+            speed = "0.15", turn_rate = 8, pivot_rate = 8, pivot_angle = 90, radius = "1.5", weight = 10, sight_range = 6,
             damage = 25, attack_range = 1, acquire_range = 5, attack_period = 25, damage_point = 8,
         },
+        pools = { health = { maximum = 500 } },
     })
     -- The tower: rooted it throws at range, over ground and water and into the
     -- air; uprooted it can only bite at what walks up to it.
     -- Rooted, the protector also sees through cloaks: the elves' one detector.
     ancient("ancient_protector", { 2, 2 }, {
-        stats = {
-            max_health = 300, armor = 1, sight_range = 8,
+        stats = { armor = 1, sight_range = 8,
             damage = 14, attack_range = 6, acquire_range = 7, attack_period = 20, damage_point = 5,
         },
+        pools = { health = { maximum = 300 } },
         price = { gold = 120, wood = 40 },
         build_time = 80,
         attack = { targets = GROUND | WATER | AIR, projectile = "arrow" },
@@ -1650,10 +1734,10 @@ pub const CONTENT: &str = r#"
         },
     }, {
         stats = {
-            speed = "0.15", turn_rate = 12, pivot_rate = 12, radius = "1", weight = 6,
-            max_health = 300, armor = 1, sight_range = 8,
+            speed = "0.15", turn_rate = 12, pivot_rate = 12, radius = "1", weight = 6, armor = 1, sight_range = 8,
             damage = 14, attack_range = 1, acquire_range = 5, attack_period = 20, damage_point = 5,
         },
+        pools = { health = { maximum = 300 } },
     })
 
     -- The huntress lies in ambush: unseen for fifteen seconds, or until she
@@ -1681,12 +1765,13 @@ pub const CONTENT: &str = r#"
         race = "elves",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
         stats = {
-            speed = "0.35", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 2, max_health = 55,
+            speed = "0.35", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 2,
             damage = 9, attack_range = 1, acquire_range = 6, attack_period = 5, damage_point = 2,
             sight_range = 9,
             supply_cost = 1,
             cargo_size = 1,
         },
+        pools = { health = { maximum = 55 } },
         dying = FALLS,
         tags = { "biological" },
         attack = { targets = GROUND | WATER },
@@ -1698,27 +1783,35 @@ pub const CONTENT: &str = r#"
     })
 
     -- ── The Terrans ─────────────────────────────────────────────────────────
-    -- Every Terran building burns: under 34% of its health it bears the
-    -- fire, which drains three points a second at 20 Hz until an SCV mends it
-    -- back over the line or it burns down. The drain lands on `health_drain`,
-    -- so each building declares the stat at nothing for the fire to move.
+    -- Every finished Terran building burns: under 34% of its health it bears
+    -- the fire, which drains three points a second at 20 Hz until an SCV
+    -- mends it back over the line or it burns down. A site going up does not
+    -- burn. The drain lands on `health_drain`, which a health pool carries
+    -- beside it.
     define_entity_buff("on_fire", {
-        lasting = { as_long_as = { health = { under_share = "0.34" } } },
+        lasting = { as_long_as = { all = { "built", { health = { under_share = "0.34" } } } } },
         stack = "ignore",
-        effects = { { modifiers = { { entity_stat = "health_drain", op = "flat", value = "0.15" } } } },
+        effects = { { stats = { { entity_stat = "health_drain", op = "flat", value = "0.15" } } } },
+    })
+    -- A command center going up stands in scaffolding, which hides half
+    -- of what it would see.
+    define_entity_buff("scaffolding", {
+        lasting = { as_long_as = { unless = "built" } },
+        stack = "ignore",
+        effects = { { stats = { { entity_stat = "sight_range", op = "percent", value = "-0.5" } } } },
     })
     -- The marine's field dressing: two points a second, ten seconds after the
     -- last hit landed. Nothing else mends a marine.
     define_entity_buff("combat_drugs", {
         lasting = { as_long_as = { unhurt_for = 200 } },
         stack = "ignore",
-        effects = { { modifiers = { { entity_stat = "health_regen", op = "flat", value = "0.1" } } } },
+        effects = { { stats = { { entity_stat = "health_regen", op = "flat", value = "0.1" } } } },
     })
     -- A shot-up tank crawls until it is patched.
     define_entity_buff("limping", {
         lasting = { as_long_as = { health = { under_share = "0.5" } } },
         stack = "ignore",
-        effects = { { modifiers = { { entity_stat = "speed", op = "percent", value = "-0.3" } } } },
+        effects = { { stats = { { entity_stat = "speed", op = "percent", value = "-0.3" } } } },
     })
     -- The race that takes its buildings with it. The command center, the
     -- barracks and the factory lift off into the air layer and set down again
@@ -1779,12 +1872,13 @@ pub const CONTENT: &str = r#"
         race = "terran",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
         stats = {
-            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1, max_health = 40, sight_range = 4,
+            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1, sight_range = 4,
             repair_speed = "1.0", repair_cost_factor = "0.25", repair_range = 1,
             build_range = 1, harvest_range = 1,
             supply_cost = 1,
             cargo_size = 1,
         },
+        pools = { health = { maximum = 40 } },
         dying = FALLS,
         price = { gold = 50 },
         train_time = 40,
@@ -1819,7 +1913,8 @@ pub const CONTENT: &str = r#"
     define_entity("command_center", {
         race = "terran",
         location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
-        stats = { max_health = 800, sight_range = 9, supply_provided = 10, build_range = 1, health_drain = "0" },
+        stats = { sight_range = 9, supply_provided = 10, build_range = 1 },
+        pools = { health = { maximum = 800 } },
         dying = { time = 2 },
         price = { gold = 400 },
         build_time = 200,
@@ -1831,9 +1926,9 @@ pub const CONTENT: &str = r#"
         docks = { { at = { 3, 0 }, accepts = { types = { "comsat_station" } } } },
         berths = { rim = { points = rim(3, 3), slots = 1 } },
         tags = { "building" },
-        passives = { "on_fire" },
+        passives = { "on_fire", "scaffolding" },
         morphs = {
-            { into = "command_center_aloft", time = LIFTS.time, placement = LIFTS.placement, cancel = LIFTS.cancel },
+            { into = "command_center_aloft", land_pool_carry = { health = "clamp" }, time = LIFTS.time, placement = LIFTS.placement, cancel = LIFTS.cancel },
         },
     })
     -- Aloft it trains nothing, stores nothing, docks nothing and defends
@@ -1843,15 +1938,15 @@ pub const CONTENT: &str = r#"
         race = "terran",
         location = { occupation = AIR, size = { 3, 3 }, solidity = "solid" },
         stats = {
-            speed = "0.12", turn_rate = 6, pivot_rate = 6, pivot_angle = 90, radius = "1.5", weight = 12,
-            max_health = 800, sight_range = 9, supply_provided = 10, health_drain = "0",
+            speed = "0.12", turn_rate = 6, pivot_rate = 6, pivot_angle = 90, radius = "1.5", weight = 12, sight_range = 9, supply_provided = 10,
         },
+        pools = { health = { maximum = 800 } },
         dying = { time = 2 },
         tags = { "building" },
         passives = { "on_fire" },
         selection = { priority = 6 },
         morphs = {
-            { into = "command_center", time = LANDS.time, placement = LANDS.placement, cancel = LANDS.cancel },
+            { into = "command_center", land_pool_carry = { health = "clamp" }, time = LANDS.time, placement = LANDS.placement, cancel = LANDS.cancel },
         },
     })
 
@@ -1860,7 +1955,8 @@ pub const CONTENT: &str = r#"
     define_entity("barracks", {
         race = "terran",
         location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
-        stats = { max_health = 500, sight_range = 6, health_drain = "0" },
+        stats = { sight_range = 6 },
+        pools = { health = { maximum = 500 } },
         dying = { time = 2 },
         price = { gold = 150 },
         build_time = 100,
@@ -1870,29 +1966,30 @@ pub const CONTENT: &str = r#"
         tags = { "building" },
         passives = { "on_fire" },
         morphs = {
-            { into = "barracks_aloft", time = LIFTS.time, placement = LIFTS.placement, cancel = LIFTS.cancel },
+            { into = "barracks_aloft", land_pool_carry = { health = "clamp" }, time = LIFTS.time, placement = LIFTS.placement, cancel = LIFTS.cancel },
         },
     })
     define_entity("barracks_aloft", {
         race = "terran",
         location = { occupation = AIR, size = { 3, 3 }, solidity = "solid" },
         stats = {
-            speed = "0.15", turn_rate = 6, pivot_rate = 6, pivot_angle = 90, radius = "1.5", weight = 10,
-            max_health = 500, sight_range = 6, health_drain = "0",
+            speed = "0.15", turn_rate = 6, pivot_rate = 6, pivot_angle = 90, radius = "1.5", weight = 10, sight_range = 6,
         },
+        pools = { health = { maximum = 500 } },
         dying = { time = 2 },
         tags = { "building" },
         passives = { "on_fire" },
         selection = { priority = 6 },
         morphs = {
-            { into = "barracks", time = LANDS.time, placement = LANDS.placement, cancel = LANDS.cancel },
+            { into = "barracks", land_pool_carry = { health = "clamp" }, time = LANDS.time, placement = LANDS.placement, cancel = LANDS.cancel },
         },
     })
 
     define_entity("factory", {
         race = "terran",
         location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
-        stats = { max_health = 500, sight_range = 6, build_range = 1, health_drain = "0" },
+        stats = { sight_range = 6, build_range = 1 },
+        pools = { health = { maximum = 500 } },
         dying = { time = 2 },
         price = { gold = 200, wood = 100 },
         build_time = 120,
@@ -1904,22 +2001,22 @@ pub const CONTENT: &str = r#"
         tags = { "building" },
         passives = { "on_fire" },
         morphs = {
-            { into = "factory_aloft", time = LIFTS.time, placement = LIFTS.placement, cancel = LIFTS.cancel },
+            { into = "factory_aloft", land_pool_carry = { health = "clamp" }, time = LIFTS.time, placement = LIFTS.placement, cancel = LIFTS.cancel },
         },
     })
     define_entity("factory_aloft", {
         race = "terran",
         location = { occupation = AIR, size = { 3, 3 }, solidity = "solid" },
         stats = {
-            speed = "0.15", turn_rate = 6, pivot_rate = 6, pivot_angle = 90, radius = "1.5", weight = 10,
-            max_health = 500, sight_range = 6, health_drain = "0",
+            speed = "0.15", turn_rate = 6, pivot_rate = 6, pivot_angle = 90, radius = "1.5", weight = 10, sight_range = 6,
         },
+        pools = { health = { maximum = 500 } },
         dying = { time = 2 },
         tags = { "building" },
         passives = { "on_fire" },
         selection = { priority = 6 },
         morphs = {
-            { into = "factory", time = LANDS.time, placement = LANDS.placement, cancel = LANDS.cancel },
+            { into = "factory", land_pool_carry = { health = "clamp" }, time = LANDS.time, placement = LANDS.placement, cancel = LANDS.cancel },
         },
     })
 
@@ -1930,11 +2027,13 @@ pub const CONTENT: &str = r#"
     define_entity("comsat_station", {
         race = "terran",
         location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
-        stats = {
-            max_health = 250, sight_range = 6, health_drain = "0",
+        stats = { sight_range = 6,
+        },
+        pools = {
+            health = { maximum = 250 },
             -- Two hundred to a pool that refills slowly: four sweeps held in
             -- reserve, and a wait between them.
-            max_energy = 200, energy_regen = "0.2",
+            energy = { maximum = 200, regen = "0.2" },
         },
         dying = { time = 2 },
         price = { gold = 50, wood = 50 },
@@ -1951,12 +2050,12 @@ pub const CONTENT: &str = r#"
         race = "terran",
         location = { occupation = AIR, size = 1, solidity = "solid" },
         stats = {
-            speed = "0.45", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 3, max_health = 120,
+            speed = "0.45", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 3,
             damage = 8, attack_range = 5, acquire_range = 7, attack_period = 12, damage_point = 4,
             sight_range = 9,
-            max_energy = 200, energy_regen = "0.1",
             supply_cost = 2,
         },
+        pools = { health = { maximum = 120 }, energy = { maximum = 200, regen = "0.1" } },
         dying = { time = 2 },
         tags = { "mechanical" },
         attack = { targets = GROUND | WATER | AIR },
@@ -1978,11 +2077,11 @@ pub const CONTENT: &str = r#"
     define_entity("missile_turret", {
         race = "terran",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
-        stats = {
-            max_health = 200, armor = 1, health_drain = "0",
+        stats = { armor = 1,
             damage = 12, attack_range = 7, acquire_range = 8, attack_period = 15, damage_point = 5,
             sight_range = 9,
         },
+        pools = { health = { maximum = 200 } },
         dying = { time = 2 },
         price = { gold = 75, wood = 25 },
         build_time = 60,
@@ -2003,7 +2102,8 @@ pub const CONTENT: &str = r#"
     define_entity("tech_lab", {
         race = "terran",
         location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
-        stats = { max_health = 300, sight_range = 5, health_drain = "0" },
+        stats = { sight_range = 5 },
+        pools = { health = { maximum = 300 } },
         dying = { time = 2 },
         price = { gold = 50, wood = 25 },
         build_time = 80,
@@ -2016,7 +2116,8 @@ pub const CONTENT: &str = r#"
     define_entity("supply_depot", {
         race = "terran",
         location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
-        stats = { max_health = 200, sight_range = 3, supply_provided = 6, health_drain = "0" },
+        stats = { sight_range = 3, supply_provided = 6 },
+        pools = { health = { maximum = 200 } },
         dying = { time = 2 },
         price = { gold = 40, wood = 20 },
         build_time = 60,
@@ -2031,7 +2132,8 @@ pub const CONTENT: &str = r#"
     define_entity("refinery", {
         race = "terran",
         location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
-        stats = { max_health = 500, sight_range = 4, health_drain = "0" },
+        stats = { sight_range = 4 },
+        pools = { health = { maximum = 500 } },
         dying = { time = 2 },
         price = { gold = 75 },
         build_time = 90,
@@ -2049,13 +2151,13 @@ pub const CONTENT: &str = r#"
         race = "terran",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
         stats = {
-            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 2, max_health = 45,
+            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 2,
             damage = 6, attack_range = 4, acquire_range = 7, attack_period = 8, damage_point = 3,
             sight_range = 8,
-            health_regen = "0",
             supply_cost = 1,
             cargo_size = 1,
         },
+        pools = { health = { maximum = 45 } },
         dying = FALLS,
         tags = { "biological" },
         -- A rifle: the shot lands the tick it is fired, with nothing to
@@ -2091,13 +2193,14 @@ pub const CONTENT: &str = r#"
     tank("tank", {
         stats = {
             speed = "0.18", turn_rate = 9, pivot_rate = 12, pivot_angle = 90,
-            radius = "1", weight = 6, max_health = 160, armor = 1, sight_range = 9,
+            radius = "1", weight = 6, armor = 1, sight_range = 9,
             damage = 20, attack_range = 6, acquire_range = 8, attack_period = 26, damage_point = 10,
             -- The gun is the hull: it comes about at the hull's own pace, and
             -- fires only through a narrow arc ahead of it.
             attack_arc = 20,
             supply_cost = 2,
         },
+        pools = { health = { maximum = 160 } },
         -- The gun leaves what it kills: only the planted form shells a body
         -- to nothing, which is what makes planting the answer to raised dead.
         attack = { targets = GROUND | WATER },
@@ -2108,14 +2211,13 @@ pub const CONTENT: &str = r#"
         requires = { any = { { annexed = "tech_lab" }, { research = "siege_tech" } } },
         passives = { "limping" },
         morphs = {
-            { into = "siege_tank", time = 60, placement = "reserve", cancel = "committed",
+            { into = "siege_tank", land_pool_carry = { health = "clamp" }, time = 60, placement = "reserve", cancel = "committed",
               requires = { { research = "siege_tech" } } },
         },
     })
 
     tank("siege_tank", {
-        stats = {
-            max_health = 160, armor = 1, sight_range = 11,
+        stats = { armor = 1, sight_range = 11,
             -- Planted, the gun traverses: no arc, so it answers whatever comes
             -- into its reach from any side.
             -- Its reach outruns its eyes on purpose: planted, it shells
@@ -2124,6 +2226,7 @@ pub const CONTENT: &str = r#"
             damage = 40, attack_range = 12, acquire_range = 13, attack_period = 40, damage_point = 16,
             supply_cost = 2,
         },
+        pools = { health = { maximum = 160 } },
         attack = {
             targets = GROUND | WATER,
             slain = "nothing",
@@ -2143,7 +2246,7 @@ pub const CONTENT: &str = r#"
         price = { gold = 150, wood = 100 },
         train_time = 160,
         morphs = {
-            { into = "tank", time = 60, placement = "revalidate", cancel = "committed" },
+            { into = "tank", land_pool_carry = { health = "clamp" }, time = 60, placement = "revalidate", cancel = "committed" },
         },
     })
     --
@@ -2166,19 +2269,28 @@ pub const CONTENT: &str = r#"
         return { { field = "blight", radius = radius, growth = "instant", while_constructing = "nothing", while_disabled = "full" } }
     end
     -- The dead mend only on their own ground: off blight nothing knits.
-    local HEALS_ON_BLIGHT = { field = "blight", of = "anyone", coverage = "any", inside = {
-        modifiers = { { entity_stat = "health_regen", op = "flat", value = "0.1" } },
-    } }
+    local MENDS = { stats = { { entity_stat = "health_regen", op = "flat", value = "0.1" } } }
+    local HEALS_ON_BLIGHT = { field = "blight", of = "anyone", coverage = "any", inside = { MENDS } }
+    -- A necromancer mends on the blight and, away from it, holds half its
+    -- energy ceiling, and what it holds stays where it was — clamped, never
+    -- given back: stepping back onto the blight lifts the ceiling and nothing
+    -- else. One entry says both sides.
+    local BOUND_TO_BLIGHT = { field = "blight", of = "anyone", coverage = "any",
+        inside = { MENDS },
+        outside = { {
+            pool_maximums = { { entity_stat = "max_energy", op = "percent", value = "-0.5" } },
+            pool_shift = "clamp",
+        } } }
     define_entity("acolyte", {
         race = "undead",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
         stats = {
-            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1, max_health = 40, sight_range = 4,
+            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1, sight_range = 4,
             build_range = 1, harvest_range = 1,
-            health_regen = "0",
             supply_cost = 1,
             cargo_size = 1,
         },
+        pools = { health = { maximum = 40 } },
         dying = FALLS,
         price = { gold = 50 },
         train_time = 40,
@@ -2204,13 +2316,13 @@ pub const CONTENT: &str = r#"
         race = "undead",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
         stats = {
-            speed = "0.35", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 2, max_health = 60,
+            speed = "0.35", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 2,
             damage = 8, attack_range = 1, acquire_range = 6, attack_period = 8, damage_point = 4,
             sight_range = 6, harvest_range = 1,
-            health_regen = "0",
             supply_cost = 1,
             cargo_size = 1,
         },
+        pools = { health = { maximum = 60 } },
         dying = FALLS,
         price = { gold = 80 },
         train_time = 50,
@@ -2231,13 +2343,13 @@ pub const CONTENT: &str = r#"
         race = "undead",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
         stats = {
-            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 2, max_health = 50,
+            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 2,
             damage = 7, attack_range = 1, acquire_range = 6, attack_period = 14, damage_point = 6,
             sight_range = 5,
-            health_regen = "0",
             lifetime = 900,
             cargo_size = 1,
         },
+        pools = { health = { maximum = 50 } },
         dying = { time = 2 },
         attack = { targets = GROUND | WATER },
         field_effects = { HEALS_ON_BLIGHT },
@@ -2261,7 +2373,7 @@ pub const CONTENT: &str = r#"
     })
     define_player_buff("skeletal_longevity", {
         stack = "ignore",
-        entity_modifiers = { { entity_stat = "lifetime", op = "flat", value = "300" } },
+        entity_modifiers = { { stats = { { entity_stat = "lifetime", op = "flat", value = "300" } } } },
     })
     define_research("skeletal_longevity", {
         price = { gold = 100 },
@@ -2274,20 +2386,19 @@ pub const CONTENT: &str = r#"
     define_entity_buff("composed", {
         lasting = { as_long_as = { health = { at_least_share = 1 } } },
         stack = "ignore",
-        effects = { { modifiers = { { entity_stat = "energy_regen", op = "flat", value = "0.2" } } } },
+        effects = { { stats = { { entity_stat = "energy_regen", op = "flat", value = "0.2" } } } },
     })
     define_entity("necromancer", {
         race = "undead",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
         stats = {
-            speed = "0.28", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 2, max_health = 45,
+            speed = "0.28", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 2,
             damage = 5, attack_range = 4, acquire_range = 6, attack_period = 20, damage_point = 8,
             sight_range = 8,
-            max_energy = 100, energy_regen = "0.3",
-            health_regen = "0",
             supply_cost = 2,
             cargo_size = 1,
         },
+        pools = { health = { maximum = 45 }, energy = { maximum = 100, regen = "0.3" } },
         dying = FALLS,
         price = { gold = 100 },
         train_time = 60,
@@ -2295,17 +2406,19 @@ pub const CONTENT: &str = r#"
         attack = { targets = GROUND | WATER, projectile = "arrow" },
         skills = { "raise_dead" },
         passives = { "composed" },
-        field_effects = { HEALS_ON_BLIGHT },
+        field_effects = { BOUND_TO_BLIGHT },
     })
 
     -- The hall, in three forms. Each grows into the next through an interim
     -- form that trains nothing, so the hall is silent while it rises; a change
     -- ordered with acolytes queued is refused until the queue is empty.
-    local function hall(name, into, stats, extra)
+    local function hall(name, into, health, stats, extra)
+        local pools = { health = { maximum = health } }
         local def = {
             race = "undead",
             location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
             stats = stats,
+            pools = pools,
             dying = { time = 2 },
             tags = { "building" },
             trainer = { "acolyte" },
@@ -2315,7 +2428,9 @@ pub const CONTENT: &str = r#"
         for key, value in pairs(extra or {}) do def[key] = value end
         if into then
             local rising = into .. "_rising"
-            def.morphs = { { into = into, via = rising, time = 120, placement = "revalidate", cancel = "refundable",
+            def.morphs = { { into = into, land_pool_carry = { health = "share" },
+                             via = { form = rising, enter_pool_carry = { health = "share" }, interrupted = { reverts = { health = "restore" } } },
+                             time = 120, placement = "revalidate", cancel = "refundable",
                              cost = { resources = { gold = 150 } } } }
             -- The hall rising is still the place wood is carried to, so a
             -- ghoul with a load does not wait out the change. It wears the
@@ -2326,6 +2441,7 @@ pub const CONTENT: &str = r#"
                 race = "undead",
                 location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
                 stats = stats,
+                pools = pools,
                 dying = { time = 2 },
                 tags = def.tags,
                 resource_storage = { "wood" },
@@ -2334,19 +2450,19 @@ pub const CONTENT: &str = r#"
         end
         define_entity(name, def)
     end
-    hall("necropolis", "halls_of_the_dead",
-        { max_health = 700, sight_range = 9, supply_provided = 10 },
+    hall("necropolis", "halls_of_the_dead", 700,
+        { sight_range = 9, supply_provided = 10 },
         { cost = { gold = 350 }, build_time = 180 })
     -- A grown hall is never built, so it carries the necropolis's price and
     -- every growth paid since, over the raising and the growing together.
-    hall("halls_of_the_dead", "black_citadel",
-        { max_health = 900, sight_range = 10, supply_provided = 10 },
+    hall("halls_of_the_dead", "black_citadel", 900,
+        { sight_range = 10, supply_provided = 10 },
         { tags = { "building", "grown_hall" },
           price = { gold = 500 }, build_time = 300 })
     -- The citadel is the one hall that answers for itself: bolts at whatever
     -- comes into its reach, in the air as readily as on the ground.
-    hall("black_citadel", nil,
-        { max_health = 1100, sight_range = 11, supply_provided = 10,
+    hall("black_citadel", nil, 1100,
+        { sight_range = 11, supply_provided = 10,
           damage = 18, attack_range = 8, acquire_range = 9, attack_period = 22, damage_point = 9 },
         { tags = { "building", "grown_hall" },
           price = { gold = 650 }, build_time = 420,
@@ -2359,7 +2475,8 @@ pub const CONTENT: &str = r#"
     define_entity("haunted_mine", {
         race = "undead",
         location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
-        stats = { max_health = 600, sight_range = 6 },
+        stats = { sight_range = 6 },
+        pools = { health = { maximum = 600 } },
         dying = { time = 2 },
         price = { gold = 100 },
         build_time = 100,
@@ -2381,7 +2498,8 @@ pub const CONTENT: &str = r#"
     define_entity("ziggurat", {
         race = "undead",
         location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
-        stats = { max_health = 300, sight_range = 6, supply_provided = 10 },
+        stats = { sight_range = 6, supply_provided = 10 },
+        pools = { health = { maximum = 300 } },
         dying = { time = 2 },
         price = { gold = 80, wood = 30 },
         build_time = 100,
@@ -2389,10 +2507,10 @@ pub const CONTENT: &str = r#"
         field_placement = { ON_BLIGHT },
         field_sources = blights(4),
         morphs = {
-            { into = "spirit_tower", time = 70, placement = "revalidate", cancel = "refundable",
+            { into = "spirit_tower", land_pool_carry = { health = "share" }, time = 70, placement = "revalidate", cancel = "refundable",
               cost = { resources = { gold = 100 } },
               requires = { { entity_type = "graveyard" } } },
-            { into = "nerubian_tower", time = 70, placement = "revalidate", cancel = "refundable",
+            { into = "nerubian_tower", land_pool_carry = { health = "share" }, time = 70, placement = "revalidate", cancel = "refundable",
               cost = { resources = { gold = 120, wood = 40 } },
               requires = { { entity_type = "graveyard" } } },
         },
@@ -2400,11 +2518,12 @@ pub const CONTENT: &str = r#"
     -- A tower is only ever reached by hardening a ziggurat, so it carries the
     -- ziggurat's price and the hardening's on top of it, over the raising and
     -- the hardening together.
-    local function tower(name, stats, attack, price, build_time, field_sources)
+    local function tower(name, health, stats, attack, price, build_time, field_sources)
         define_entity(name, {
             race = "undead",
             location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
             stats = stats,
+            pools = { health = { maximum = health } },
             dying = { time = 2 },
             tags = { "building" },
             attack = attack,
@@ -2416,15 +2535,15 @@ pub const CONTENT: &str = r#"
     end
     -- The spirit tower spreads blight and sees through cloaks: the undead's
     -- one detector, as the ghostly eye it is.
-    tower("spirit_tower",
-        { max_health = 400, sight_range = 8, supply_provided = 10,
+    tower("spirit_tower", 400,
+        { sight_range = 8, supply_provided = 10,
           damage = 14, attack_range = 7, acquire_range = 8, attack_period = 18, damage_point = 7 },
         { targets = GROUND | WATER | AIR, projectile = "arrow" },
         { gold = 180, wood = 30 }, 170,
         { { field = "blight", radius = 4, growth = "instant", while_constructing = "nothing", while_disabled = "full" },
           { field = "true_sight", radius = 7, growth = "instant", while_constructing = "nothing", while_disabled = "nothing" } })
-    tower("nerubian_tower",
-        { max_health = 500, sight_range = 8, supply_provided = 10,
+    tower("nerubian_tower", 500,
+        { sight_range = 8, supply_provided = 10,
           damage = 22, attack_range = 6, acquire_range = 7, attack_period = 24, damage_point = 10 },
         { targets = GROUND | WATER, projectile = "cannonball" },
         { gold = 200, wood = 70 }, 170,
@@ -2433,7 +2552,8 @@ pub const CONTENT: &str = r#"
     define_entity("crypt", {
         race = "undead",
         location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
-        stats = { max_health = 500, sight_range = 6 },
+        stats = { sight_range = 6 },
+        pools = { health = { maximum = 500 } },
         dying = { time = 2 },
         price = { gold = 200, wood = 50 },
         build_time = 120,
@@ -2448,7 +2568,8 @@ pub const CONTENT: &str = r#"
     define_entity("graveyard", {
         race = "undead",
         location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
-        stats = { max_health = 300, sight_range = 5 },
+        stats = { sight_range = 5 },
+        pools = { health = { maximum = 300 } },
         dying = { time = 2 },
         price = { gold = 120, wood = 40 },
         build_time = 90,
@@ -2460,7 +2581,8 @@ pub const CONTENT: &str = r#"
     define_entity("temple_of_the_damned", {
         race = "undead",
         location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
-        stats = { max_health = 450, sight_range = 6 },
+        stats = { sight_range = 6 },
+        pools = { health = { maximum = 450 } },
         dying = { time = 2 },
         price = { gold = 250, wood = 100 },
         build_time = 140,

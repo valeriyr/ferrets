@@ -11,9 +11,9 @@ use ferrets_math::FixedU64;
 use crate::{
     annex,
     components::{
-        build::UnderConstructionComponent, energy::EnergyComponent,
-        entity_info::EntityInfoComponent, entity_stats::StatsComponent, health::HealthComponent,
-        order_queue::IdlenessComponent, tags::TagsComponent,
+        build::UnderConstructionComponent, entity_info::EntityInfoComponent,
+        entity_stats::StatsComponent, last_hit::LastHitComponent, order_queue::IdlenessComponent,
+        tags::TagsComponent,
     },
     entity_def,
     entity_index::EntityIndex,
@@ -22,6 +22,7 @@ use crate::{
 };
 use ferrets_content::{
     entity_stats::EntityStatId,
+    pool_def::PoolId,
     requirement::{Bound, Requirement},
 };
 
@@ -61,6 +62,7 @@ fn holds(
     match entry {
         Requirement::All(items) => items.iter().all(|item| holds(world, player, actor, item)),
         Requirement::Any(items) => items.iter().any(|item| holds(world, player, actor, item)),
+        Requirement::Unless(item) => !holds(world, player, actor, item),
         Requirement::Research(research) => player.is_some_and(|player| {
             world
                 .resource::<PlayerResearch>()
@@ -78,17 +80,11 @@ fn holds(
             })
         }),
         Requirement::Health(bound) => actor.is_some_and(|actor| {
-            let current = world
-                .entity(actor)
-                .get::<HealthComponent>()
-                .map(HealthComponent::current);
+            let current = entity_def::pool_value(world, actor, PoolId::HEALTH);
             pool_on(world, actor, current, EntityStatId::MAX_HEALTH, *bound)
         }),
         Requirement::Energy(bound) => actor.is_some_and(|actor| {
-            let current = world
-                .entity(actor)
-                .get::<EnergyComponent>()
-                .map(EnergyComponent::current);
+            let current = entity_def::pool_value(world, actor, PoolId::ENERGY);
             pool_on(world, actor, current, EntityStatId::MAX_ENERGY, *bound)
         }),
         Requirement::Stat { stat, bound } => actor.is_some_and(|actor| {
@@ -101,6 +97,9 @@ fn holds(
                 (None, _) | (_, None) => false,
             }
         }),
+        Requirement::Built => {
+            actor.is_some_and(|actor| !world.entity(actor).contains::<UnderConstructionComponent>())
+        }
         Requirement::Idle => actor.is_some_and(|actor| entity_def::idle(world, actor)),
         Requirement::IdleFor(ticks) => actor.is_some_and(|actor| {
             entity_def::idle(world, actor)
@@ -115,22 +114,20 @@ fn holds(
                     Some(IdlenessComponent::Busy) | None => false,
                 }
         }),
-        Requirement::UnhurtFor(ticks) => actor.is_some_and(|actor| {
-            match world
-                .entity(actor)
-                .get::<HealthComponent>()
-                .and_then(HealthComponent::last_hit)
-            {
-                None => true,
-                Some(hit) => {
-                    world
-                        .resource::<GameSession>()
-                        .tick()
-                        .saturating_sub(hit.tick)
-                        >= *ticks
-                }
-            }
-        }),
+        Requirement::UnhurtFor(ticks) => {
+            actor.is_some_and(
+                |actor| match world.entity(actor).get::<LastHitComponent>() {
+                    None => true,
+                    Some(hit) => {
+                        world
+                            .resource::<GameSession>()
+                            .tick()
+                            .saturating_sub(hit.tick)
+                            >= *ticks
+                    }
+                },
+            )
+        }
     }
 }
 

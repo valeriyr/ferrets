@@ -9,12 +9,8 @@ mod utils;
 use bevy::prelude::App;
 use ferrets_math::FixedU64;
 use ferrets_simulation::{
-    command::PlayerCommand,
-    components::build::{SiteWork, UnderConstructionComponent},
-    player_research::PlayerResearch,
-    resources::PlayerResources,
-    simulation_id::SimulationId,
-    spawn,
+    command::PlayerCommand, components::build, player_research::PlayerResearch,
+    resources::PlayerResources, simulation_id::SimulationId, spawn,
 };
 
 //
@@ -292,14 +288,7 @@ fn under_construction_provider_satisfies_nothing() {
     let (lab, _) = utils::create_owned(&mut app, "lab", 10, 10, 0);
     let (_, guardhouse_id) = utils::create_owned(&mut app, "guardhouse", 20, 20, 0);
     utils::grant_gold(&mut app, 100);
-    app.world_mut()
-        .entity_mut(lab)
-        .insert(UnderConstructionComponent {
-            progress: 0,
-            work: SiteWork::Crew {
-                builders: Default::default(),
-            },
-        });
+    utils::mark_as_site(app.world_mut(), lab);
 
     // A workshop still going up unlocks nothing.
     train(&mut app, guardhouse_id, "knight");
@@ -307,9 +296,7 @@ fn under_construction_provider_satisfies_nothing() {
     assert_eq!(utils::count_of_type(app.world_mut(), "knight"), 0);
     assert_eq!(utils::gold(app.world()), 100);
 
-    app.world_mut()
-        .entity_mut(lab)
-        .remove::<UnderConstructionComponent>();
+    build::mark_as_built(app.world_mut(), lab);
     train(&mut app, guardhouse_id, "knight");
     utils::run_ticks(&mut app, utils::APPLY + 10);
     assert_eq!(utils::count_of_type(app.world_mut(), "knight"), 1);

@@ -1,23 +1,23 @@
 //! Simulation entity creation, destruction, and map presence.
 
-use std::collections::BTreeMap;
-
 use bevy_ecs::{component::Component, entity::Entity, world::EntityWorldMut, world::World};
 use ferrets_content::{
     attack::Slain,
+    base_stats::BaseStats,
     brood::{BreederDef, OrphanFate},
     dying::{DeathKind, DyingDef},
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeId,
     location::LocationDef,
     morph::MorphReason,
+    pool_def::PoolId,
     registry::ContentRegistry,
     resource::DepletionPolicy,
     transport::PassengerFate,
     work::Attachment,
 };
 use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
-use ferrets_math::{FixedU64, facing::Facing, fixed_uvec2::FixedUVec2};
+use ferrets_math::{facing::Facing, fixed_uvec2::FixedUVec2};
 use ferrets_pathfinder::layer_mask::LayerMask;
 use ferrets_physics::body;
 
@@ -30,12 +30,10 @@ use crate::{
         build::OverbuiltComponent,
         concealed::ConcealedComponent,
         dying::{DiedComponent, DyingComponent, Passing, RemainsComponent},
-        energy::EnergyComponent,
         entity_info::EntityInfoComponent,
         entity_skills::SkillsComponent,
         entity_stats::StatsComponent,
         field_source::FieldSourcesComponent,
-        health::HealthComponent,
         hidden::HiddenComponent,
         lifetime::LifetimeComponent,
         location::LocationComponent,
@@ -44,6 +42,8 @@ use crate::{
         order_queue::{CancelPolicy, OrderQueueComponent},
         owner::OwnerComponent,
         pending_reveal::PendingRevealComponent,
+        pool_shifts::PoolShiftsComponent,
+        pools::{self, PoolsComponent},
         rally::RallyPointComponent,
         resource::{ResourceCarrierComponent, ResourceSourceComponent},
         stance::{Stance, StanceComponent},
@@ -57,7 +57,7 @@ use crate::{
     entity_def,
     entity_index::EntityIndex,
     events::{DeathCause, EventRecord, SimulationEvent, SpawnCause},
-    game_loop::{orders, stats},
+    game_loop::{buffs, orders, stats},
     map::{Map, OccupancyClass},
     movement_model::{self, MovementModel},
     order::Order,
@@ -198,6 +198,8 @@ fn conjure(
         EntityInfoComponent::new(id, type_id, type_name),
         location,
         OrderQueueComponent::default(),
+        PoolsComponent::default(),
+        PoolShiftsComponent::default(),
     ));
     if let Some(player) = owner {
         entity_mut.insert(OwnerComponent::new(player));
@@ -206,19 +208,10 @@ fn conjure(
 
     seed_stats(world, entity, &base_stats);
     stats::recompute_stats_of(world, entity);
-    // Current-value pools, seeded full to their effective max stats. A morph
-    // rescales them instead, which is why filling them is the spawn's own
-    // business.
-    if let Some(max_health) = entity_def::effective_stat(world, entity, EntityStatId::MAX_HEALTH) {
-        world
-            .entity_mut(entity)
-            .insert(HealthComponent::full(max_health));
-    }
-    if let Some(max_energy) = entity_def::effective_stat(world, entity, EntityStatId::MAX_ENERGY) {
-        world
-            .entity_mut(entity)
-            .insert(EnergyComponent::full(max_energy));
-    }
+    // Current-value pools, seeded full to their effective max stats. A change
+    // of form carries them instead, which is why filling them is the spawn's
+    // own business.
+    fill_pools(world, entity, type_id);
     fit_components(
         world,
         entity,
@@ -227,6 +220,12 @@ fn conjure(
         StandingActs::Rearm,
         Wearing::Own,
     );
+    // The type's passives are fitted on the pools just filled, and the pools
+    // filled again under the maxima the passives raise or lower, so a fresh
+    // entity starts full whatever its passives do to a pool.
+    buffs::refit_entity(world, entity);
+    stats::recompute_stats_of(world, entity);
+    fill_pools(world, entity, type_id);
     brood::open(world, entity);
     world.resource_mut::<EntityIndex>().insert_alive(id, entity);
 
@@ -315,7 +314,7 @@ pub(crate) fn spawn_bequest(
         let left = if def.is_remains() {
             Left::Remains {
                 decay: def
-                    .base_stat_as_u32(EntityStatId::LIFETIME)
+                    .base_ticks(EntityStatId::LIFETIME)
                     .expect("a type tagged as remains carries the lifetime it lies for"),
             }
         } else {
@@ -422,6 +421,8 @@ fn spawn_remains(
         EntityInfoComponent::new(id, type_id, type_name),
         location,
         queue,
+        PoolsComponent::default(),
+        PoolShiftsComponent::default(),
         RemainsComponent {
             of: fallen.entity_type,
             owner: fallen.owner,
@@ -1293,18 +1294,14 @@ pub fn remove_dead_entity(world: &mut World, entity: Entity) {
 }
 
 /// Seeds `entity`'s stat store from a type's base stats — built-in and custom
-/// alike. Buffs later fold these into `effective` (see
+/// alike, its pools' included. Buffs later fold these into `effective` (see
 /// [`game_loop::stats::recompute_entity_stats`](crate::game_loop::stats::recompute_entity_stats)).
 ///
 /// Replaces the whole store, because bases belong to the type: a type change
 /// must not leave a stat the old type carried and the new one does not.
-pub(crate) fn seed_stats(
-    world: &mut World,
-    entity: Entity,
-    base_stats: &BTreeMap<EntityStatId, FixedU64>,
-) {
+pub(crate) fn seed_stats(world: &mut World, entity: Entity, base_stats: &BaseStats) {
     let mut stats = StatsComponent::default();
-    for (&stat, &value) in base_stats {
+    for (stat, value) in base_stats.iter() {
         stats.set_base(stat, value);
     }
     world.entity_mut(entity).insert(stats);
@@ -1356,7 +1353,7 @@ pub(crate) fn fit_components(
             def.can_attack(),
             def.turrets.len(),
             def.can_move(),
-            def.has_health(),
+            def.has_pool(PoolId::HEALTH),
             def.trainer.is_some(),
             def.can_transport(),
             def.resource_source.is_some(),
@@ -1611,4 +1608,19 @@ fn nothing_underfoot(
             standing_location.occupation() & location_def.occupation() != LayerMask::EMPTY
                 && entity_def::footprint_rect_of(world, standing_def, entity).intersects(footprint)
         })
+}
+
+/// Fills each pool the type `type_id` declares on `entity` to its effective
+/// maximum.
+fn fill_pools(world: &mut World, entity: Entity, type_id: EntityTypeId) {
+    let declared: Vec<PoolId> = world
+        .resource::<ContentRegistry>()
+        .def(type_id)
+        .base_stats
+        .pools()
+        .map(|pool| pool.id())
+        .collect();
+    for pool in declared {
+        pools::fill(world, entity, pool);
+    }
 }

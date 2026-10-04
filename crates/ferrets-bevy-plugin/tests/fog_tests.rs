@@ -10,6 +10,7 @@ use ferrets_content::{
     detection::Detection,
     entity_type_def::EntityTypeDef,
     location::Solidity,
+    pool::Pool,
     registry::ContentRegistry,
     skills::{Casting, EntityCastEffect, EntityCastTarget, Reach, SkillCaster, SkillDef},
 };
@@ -190,7 +191,7 @@ fn attack_refuses_target_in_weapon_range_but_out_of_sight() {
     utils::run_ticks(&mut app, 10);
     assert!(utils::order_queue_is_empty(app.world_mut(), sniper));
     assert_eq!(
-        utils::health(&app, mark),
+        utils::health_as_u32(&app, mark),
         20,
         "a fogged target cannot be named: the attack order is refused untouched"
     );
@@ -231,7 +232,7 @@ fn fog_limited_player_attack_on_fogged_target_is_refused() {
 
     assert!(utils::order_queue_is_empty(app.world_mut(), sniper));
     assert_eq!(
-        utils::health(&app, mark),
+        utils::health_as_u32(&app, mark),
         20,
         "a fogged target cannot be named: the attack order is refused untouched"
     );
@@ -605,7 +606,7 @@ fn fog_app(slots: Vec<PlayerSlot>) -> App {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
         registry.register(
             utils::walker("scout", utils::GROUND)
-                .with_health(20)
+                .with_pool(Pool::health(20))
                 .with_dying(1, [])
                 .with_sight_range(6)
                 // Trainable only so the post below validates; nothing trains
@@ -614,7 +615,7 @@ fn fog_app(slots: Vec<PlayerSlot>) -> App {
         );
         registry.register(
             utils::walker("sniper", utils::GROUND)
-                .with_health(30)
+                .with_pool(Pool::health(30))
                 .with_dying(1, [])
                 .with_attack(utils::weapon(utils::GROUND), 10, 8, 8, 2, 1)
                 .with_sight_range(3),
@@ -622,14 +623,14 @@ fn fog_app(slots: Vec<PlayerSlot>) -> App {
         registry.register(
             EntityTypeDef::new("keep")
                 .with_location(utils::GROUND, CellSize::new(3, 3), Solidity::Solid)
-                .with_health(200)
+                .with_pool(Pool::health(200))
                 .with_dying(1, [])
                 .with_sight_range(2),
         );
         registry.register(
             EntityTypeDef::new("dummy")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_health(20)
+                .with_pool(Pool::health(20))
                 .with_dying(1, [])
                 .with_sight_range(3),
         );
@@ -638,7 +639,7 @@ fn fog_app(slots: Vec<PlayerSlot>) -> App {
         registry.register(
             EntityTypeDef::new("post")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_health(50)
+                .with_pool(Pool::health(50))
                 .with_dying(1, [])
                 .with_trainer(["scout"]),
         );
@@ -666,7 +667,7 @@ fn fog_app(slots: Vec<PlayerSlot>) -> App {
         registry.register(
             EntityTypeDef::new("station")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_health(50)
+                .with_pool(Pool::health(50))
                 .with_dying(1, [])
                 .with_sight_range(2)
                 .with_skills([sweep]),

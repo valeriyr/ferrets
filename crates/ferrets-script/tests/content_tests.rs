@@ -17,16 +17,23 @@ use ferrets_content::{
     dying::{Bequest, DeathKind, DyingDef, LeftBy},
     entity_buffs::{EntityBuffDef, Interruption, Lasting},
     entity_effect::EntityEffect,
+    entity_modifiers::EntityModifiers,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     field::{
         Emission, FieldAction, FieldCoverage, FieldDecay, FieldEffect, FieldGrowth, FieldLayer,
-        FieldPlacement, FieldSide, FieldSourceDef, FieldVision,
+        FieldPlacement, FieldSourceDef, FieldVision,
     },
     kinds::{Kind, Kinds},
     location::Solidity,
-    morph::{MorphCancel, MorphInterrupted, MorphPlacement, MorphReason},
+    morph::{
+        MorphCancel, MorphCourse, MorphInterrupted, MorphPlacement, MorphReason, PoolCarry,
+        RevertCarry, ViaInterrupted,
+    },
     player_stats::PlayerStatId,
+    pool::Pool,
+    pool_def::PoolId,
+    pool_shift::PoolShift,
     price::{self, Price},
     quantity::Quantity,
     repair::{RepairCost, RepairRate},
@@ -75,7 +82,7 @@ fn loads_races_resources_and_entities() {
             FixedU64::from_num(30),
             FixedU64::from_num(30),
         )
-        .with_health(40)
+        .with_pool(Pool::health(40))
         .with_dying(2, [])
         .with_attack(
             AttackDef::new(Weapon::new(
@@ -104,9 +111,9 @@ fn declared_acquire_range_overrides_weapon_range_default() {
         define_entity("scout", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
             stats = {
-                max_health = 20,
                 damage = 2, attack_range = 3, acquire_range = 7, attack_period = 4, damage_point = 2,
             },
+            pools = { health = { maximum = 20 } },
             attack = { targets = GROUND },
         })
     "#;
@@ -114,7 +121,7 @@ fn declared_acquire_range_overrides_weapon_range_default() {
 
     let expected = EntityTypeDef::new("scout")
         .with_location(LayerId::new(1), CellSize::ONE, Solidity::Solid)
-        .with_health(20)
+        .with_pool(Pool::health(20))
         .with_attack(
             AttackDef::new(Weapon::new(
                 LayerId::new(1),
@@ -139,7 +146,8 @@ fn custom_stat_is_declared_and_seeded() {
         define_entity_stat("morale", 0)
         define_entity("hero", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            stats = { max_health = 10, morale = 7 },
+            stats = { morale = 7 },
+            pools = { health = { maximum = 10 } },
         })
     "#;
     let registry = content::load(&engine(), source).expect("load content");
@@ -183,6 +191,42 @@ fn unknown_stat_name_errors() {
 }
 
 #[test]
+fn pool_written_among_stats_errors() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_entity("gadget", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = { health = { maximum = 20 } },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject a pool written among the stats");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("stat 'health' is not defined")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn unknown_pool_name_errors() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_entity("gadget", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            pools = { mana = { maximum = 20 } },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject an unknown pool");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("pool 'mana' is not defined")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
 fn parses_armor_bonus_damage_vs_and_energy() {
     let source = r#"
         local GROUND = define_layer("ground")
@@ -193,10 +237,10 @@ fn parses_armor_bonus_damage_vs_and_energy() {
         define_entity("knight", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
             stats = {
-                max_health = 100,
                 damage = 12, attack_range = 1, attack_period = 4, damage_point = 2,
-                armor = 4, max_energy = 50, energy_regen = "0.5",
+                armor = 4,
             },
+            pools = { health = { maximum = 100 }, energy = { maximum = 50, regen = "0.5" } },
             bonus_damage_vs = { armored = 8, dragon = 15 },
             attack = { targets = GROUND },
         })
@@ -205,7 +249,7 @@ fn parses_armor_bonus_damage_vs_and_energy() {
 
     let expected = EntityTypeDef::new("knight")
         .with_location(LayerId::new(1), CellSize::ONE, Solidity::Solid)
-        .with_health(100)
+        .with_pool(Pool::health(100))
         .with_armor(4)
         .with_attack(
             AttackDef::new(Weapon::new(
@@ -221,7 +265,12 @@ fn parses_armor_bonus_damage_vs_and_energy() {
             2,
         )
         .with_bonus_damage_vs([("armored", 8u32), ("dragon", 15u32)])
-        .with_energy(50, FixedU64::from_str("0.5").unwrap());
+        .with_pool(Pool::builtin(
+            PoolId::ENERGY,
+            FixedU64::from_num(50),
+            FixedU64::from_str("0.5").unwrap(),
+            FixedU64::ZERO,
+        ));
 
     assert_eq!(registry.entity("knight"), Some(&expected));
 }
@@ -235,7 +284,7 @@ fn parses_repairer_and_repair_ratio() {
 
         define_entity("depot", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            stats = { max_health = 100 },
+            pools = { health = { maximum = 100 } },
             price = { gold = 200 },
             build_time = 20,
             repair_ratio = "0.5",
@@ -244,10 +293,10 @@ fn parses_repairer_and_repair_ratio() {
 
         define_entity("worker", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            stats = {
-                max_health = 20, repair_speed = "1.0", repair_cost_factor = "0.25",
+            stats = { repair_speed = "1.0", repair_cost_factor = "0.25",
                 repair_range = 1,
             },
+            pools = { health = { maximum = 20 } },
             repairer = {
                 repairs = { tags = { "building" } },
                 rate = { mode = "production" },
@@ -287,16 +336,17 @@ fn parses_transporter() {
 
         define_entity("footman", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            stats = { max_health = 60, speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", cargo_size = 1 },
+            stats = { speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", cargo_size = 1 },
+            pools = { health = { maximum = 60 } },
             tags = { "infantry" },
         })
 
         define_entity("wagon", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            stats = {
-                max_health = 150, speed = "0.25", turn_rate = 30, pivot_rate = 30, radius = "0.5", cargo_capacity = 6,
+            stats = { speed = "0.25", turn_rate = 30, pivot_rate = 30, radius = "0.5", cargo_capacity = 6,
                 load_range = 2, unload_range = 3, load_period = 4, unload_period = 8,
             },
+            pools = { health = { maximum = 150 } },
             transporter = {
                 carries = { types = { "footman" }, tags = { "infantry" } },
                 boarding = "allied",
@@ -347,10 +397,10 @@ fn parses_sheltering_transporter() {
 
         define_entity("cart", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            stats = {
-                max_health = 100, cargo_capacity = 2,
+            stats = { cargo_capacity = 2,
                 load_range = 1, unload_range = 1, load_period = 0, unload_period = 0,
             },
+            pools = { health = { maximum = 100 } },
             transporter = { carries = { tags = { "infantry" } }, boarding = "own", fate = "destroy", conduct = "shelter" },
         })
     "#;
@@ -375,10 +425,10 @@ fn unknown_passenger_conduct_errors() {
 
         define_entity("cart", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            stats = {
-                max_health = 100, cargo_capacity = 2,
+            stats = { cargo_capacity = 2,
                 load_range = 1, unload_range = 1, load_period = 0, unload_period = 0,
             },
+            pools = { health = { maximum = 100 } },
             transporter = { carries = { tags = { "infantry" } }, boarding = "own", fate = "destroy", conduct = "mutiny" },
         })
     "#;
@@ -399,10 +449,10 @@ fn unknown_boarding_affiliation_errors() {
 
         define_entity("cart", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            stats = {
-                max_health = 100, cargo_capacity = 2,
+            stats = { cargo_capacity = 2,
                 load_range = 1, unload_range = 1, load_period = 0, unload_period = 0,
             },
+            pools = { health = { maximum = 100 } },
             transporter = { carries = { tags = { "infantry" } }, boarding = "everybody", fate = "destroy", conduct = "shelter" },
         })
     "#;
@@ -423,10 +473,10 @@ fn unknown_passenger_fate_errors() {
 
         define_entity("cart", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            stats = {
-                max_health = 100, cargo_capacity = 2,
+            stats = { cargo_capacity = 2,
                 load_range = 1, unload_range = 1, load_period = 0, unload_period = 0,
             },
+            pools = { health = { maximum = 100 } },
             transporter = { carries = { tags = { "infantry" } }, boarding = "own", fate = "scatter", conduct = "shelter" },
         })
     "#;
@@ -448,7 +498,8 @@ fn parses_flat_per_tick_repair_cost() {
 
         define_entity("hauler", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            stats = { max_health = 20, repair_speed = "1.0", repair_range = 1 },
+            stats = { repair_speed = "1.0", repair_range = 1 },
+            pools = { health = { maximum = 20 } },
             repairer = {
                 repairs = { tags = { "building" } },
                 rate = { mode = "production" },
@@ -487,9 +538,9 @@ fn parses_medic_paying_energy_at_flat_rate() {
         define_entity("medic", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
             stats = {
-                max_health = 45, max_energy = 200, energy_regen = "0.2",
                 repair_speed = "1.0", repair_range = 2,
             },
+            pools = { health = { maximum = 45 }, energy = { maximum = 200, regen = "0.2" } },
             repairer = {
                 repairs = { tags = { "biological" } },
                 rate = { mode = "per_tick", health = "1.0" },
@@ -531,7 +582,7 @@ fn parses_skill_with_buff_effect() {
         define_entity_buff("haste", {
             lasting = { ticks = 20 },
             stack = "refresh",
-            effects = { { modifiers = {
+            effects = { { stats = {
                 { entity_stat = "damage", op = "percent", value = "1.0" },
             } } },
         })
@@ -546,7 +597,7 @@ fn parses_skill_with_buff_effect() {
 
         define_entity("mage", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            stats = { max_health = 40, max_energy = 100, energy_regen = "1" },
+            pools = { health = { maximum = 40 }, energy = { maximum = 100, regen = "1" } },
             skills = { "battle_focus" },
         })
     "#;
@@ -582,7 +633,7 @@ fn parses_skill_requirements() {
         define_entity_buff("haste", {
             lasting = { ticks = 20 },
             stack = "refresh",
-            effects = { { modifiers = {
+            effects = { { stats = {
                 { entity_stat = "damage", op = "percent", value = "1.0" },
             } } },
         })
@@ -596,7 +647,7 @@ fn parses_skill_requirements() {
         })
         define_entity("mage", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            stats = { max_health = 40 },
+            pools = { health = { maximum = 40 } },
             skills = { "war_secret" },
         })
     "#;
@@ -615,9 +666,7 @@ fn requirement_naming_undeclared_research_is_rejected() {
     let source = r#"
         define_player_buff("haste", {
             stack = "refresh",
-            entity_modifiers = {
-                { entity_stat = "speed", op = "percent", value = "0.5" },
-            },
+            entity_modifiers = { { stats = { { entity_stat = "speed", op = "percent", value = "0.5" } } } },
         })
         define_skill("war_secret", {
             caster = "player",
@@ -641,7 +690,7 @@ fn requirement_naming_no_kind_is_rejected() {
         local GROUND = define_layer("ground")
         define_entity("mortar", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            stats = { max_health = 10 },
+            pools = { health = { maximum = 10 } },
             requires = { { forge = "blacksmith" } },
         })
     "#;
@@ -650,7 +699,7 @@ fn requirement_naming_no_kind_is_rejected() {
     };
     assert!(
         matches!(&error, ScriptError::ContentError(m) if m.contains(
-            "a requirement names exactly one of all, any, entity_type, tag, research, annexed, health, energy, stat, idle_for, or unhurt_for"
+            "a requirement names exactly one of all, any, unless, entity_type, tag, research, annexed, health, energy, stat, idle_for, or unhurt_for"
         )),
         "unexpected error: {error:?}"
     );
@@ -663,7 +712,7 @@ fn requirement_naming_two_kinds_is_rejected() {
         define_tag("workshop")
         define_entity("mortar", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            stats = { max_health = 10 },
+            pools = { health = { maximum = 10 } },
             requires = { { entity_type = "blacksmith", tag = "workshop" } },
         })
     "#;
@@ -672,7 +721,7 @@ fn requirement_naming_two_kinds_is_rejected() {
     };
     assert!(
         matches!(&error, ScriptError::ContentError(m) if m.contains(
-            "a requirement names exactly one of all, any, entity_type, tag, research, annexed, health, energy, stat, idle_for, or unhurt_for"
+            "a requirement names exactly one of all, any, unless, entity_type, tag, research, annexed, health, energy, stat, idle_for, or unhurt_for"
         )),
         "unexpected error: {error:?}"
     );
@@ -684,7 +733,7 @@ fn requirement_naming_two_kinds_reports_shape_before_lookup() {
         local GROUND = define_layer("ground")
         define_entity("mortar", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            stats = { max_health = 10 },
+            pools = { health = { maximum = 10 } },
             requires = { { entity_type = "blacksmith", research = "arcana" } },
         })
     "#;
@@ -695,7 +744,7 @@ fn requirement_naming_two_kinds_reports_shape_before_lookup() {
     // and not as the failed lookup of a research it should never have asked for.
     assert!(
         matches!(&error, ScriptError::ContentError(m) if m.contains(
-            "a requirement names exactly one of all, any, entity_type, tag, research, annexed, health, energy, stat, idle_for, or unhurt_for"
+            "a requirement names exactly one of all, any, unless, entity_type, tag, research, annexed, health, energy, stat, idle_for, or unhurt_for"
         )),
         "unexpected error: {error:?}"
     );
@@ -707,7 +756,7 @@ fn requirement_that_is_bare_name_is_rejected() {
         local GROUND = define_layer("ground")
         define_entity("mortar", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            stats = { max_health = 10 },
+            pools = { health = { maximum = 10 } },
             requires = { "blacksmith" },
         })
     "#;
@@ -728,9 +777,7 @@ fn parses_player_cast_skill() {
         define_player_buff("war_cry_haste", {
             duration = 10,
             stack = "refresh",
-            entity_modifiers = {
-                { entity_stat = "speed", op = "percent", value = "0.5" },
-            },
+            entity_modifiers = { { stats = { { entity_stat = "speed", op = "percent", value = "0.5" } } } },
         })
 
         define_skill("war_cry", {
@@ -823,9 +870,7 @@ fn parses_player_buff_with_both_modifier_lists() {
             player_modifiers = {
                 { player_stat = "max_supply", op = "flat", value = "5" },
             },
-            entity_modifiers = {
-                { entity_stat = "speed", op = "percent", value = "0.5" },
-            },
+            entity_modifiers = { { stats = { { entity_stat = "speed", op = "percent", value = "0.5" } } } },
         })
     "#;
     let registry = content::load(&engine(), source).expect("load content");
@@ -842,11 +887,11 @@ fn parses_player_buff_with_both_modifier_lists() {
     );
     assert_eq!(
         def.entity_modifiers,
-        vec![EntityModifier {
+        vec![EntityModifiers::Stats(vec![EntityModifier {
             stat: EntityStatId::SPEED,
             op: ModifierOp::PercentAdd,
             magnitude: FixedI64::from_num(0.5),
-        }]
+        }])]
     );
 }
 
@@ -856,7 +901,7 @@ fn player_stat_in_entity_modifier_list_errors() {
         define_entity_buff("confused", {
             lasting = { ticks = 10 },
             stack = "refresh",
-            effects = { { modifiers = {
+            effects = { { stats = {
                 { player_stat = "max_supply", op = "flat", value = "1" },
             } } },
         })
@@ -934,9 +979,9 @@ fn parses_projectile_and_splash() {
         define_entity("mortar", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
             stats = {
-                max_health = 30,
                 damage = 12, attack_range = 6, attack_period = 10, damage_point = 4,
             },
+            pools = { health = { maximum = 30 } },
             attack = {
                 targets = GROUND,
                 projectile = "shell",
@@ -953,7 +998,7 @@ fn parses_projectile_and_splash() {
 
     let expected = EntityTypeDef::new("mortar")
         .with_location(LayerId::new(1), CellSize::ONE, Solidity::Solid)
-        .with_health(30)
+        .with_pool(Pool::health(30))
         .with_attack(
             AttackDef::new(Weapon::new(
                 LayerId::new(1),
@@ -1081,7 +1126,8 @@ fn parses_selection_priority_and_class() {
 
         define_entity("caster", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            stats = { max_health = 20, sight_range = 12 },
+            stats = { sight_range = 12 },
+            pools = { health = { maximum = 20 } },
             selection = { priority = 42, class = "spellcaster" },
         })
     "#;
@@ -1089,7 +1135,7 @@ fn parses_selection_priority_and_class() {
 
     let expected = EntityTypeDef::new("caster")
         .with_location(LayerId::new(1), CellSize::ONE, Solidity::Solid)
-        .with_health(20)
+        .with_pool(Pool::health(20))
         .with_selection(42, Some("spellcaster"))
         .with_sight_range(12);
 
@@ -1152,9 +1198,7 @@ fn parses_research_with_buff_and_requirements() {
         define_resource("gold")
         define_player_buff("sharp_blades", {
             stack = "ignore",
-            entity_modifiers = {
-                { entity_stat = "damage", op = "flat", value = "5" },
-            },
+            entity_modifiers = { { stats = { { entity_stat = "damage", op = "flat", value = "5" } } } },
         })
         define_research("smithing", {
             price = { gold = 30 },
@@ -1450,8 +1494,49 @@ fn requirement_string_other_than_idle_errors() {
         panic!("must reject a requirement string that is not 'idle'");
     };
     assert!(
-        matches!(&error, ScriptError::ContentError(m) if m.contains("a requirement must be 'idle', an { all = ... } or { any = ... } table, or a table naming one of entity_type, tag, research, annexed, health, energy, stat, idle_for, or unhurt_for, found 'resting'")),
+        matches!(&error, ScriptError::ContentError(m) if m.contains("a requirement must be 'built', 'idle', an { all = ... } or { any = ... } table, or a table naming one of unless, entity_type, tag, research, annexed, health, energy, stat, idle_for, or unhurt_for, found 'resting'")),
         "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn as_long_as_reads_built() {
+    let source = r#"
+        define_entity_buff("finished", {
+            lasting = { as_long_as = { "built", "idle" } },
+            stack = "ignore",
+            effects = { "conceal" },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("load content");
+    let finished = registry
+        .entity_buff("finished")
+        .expect("finished registered");
+    assert_eq!(
+        registry.entity_buff_def(finished).lasting,
+        Lasting::While(Requirement::All(vec![
+            Requirement::Built,
+            Requirement::Idle
+        ]))
+    );
+}
+
+#[test]
+fn as_long_as_reads_unless() {
+    let source = r#"
+        define_entity_buff("scaffolding", {
+            lasting = { as_long_as = { unless = "built" } },
+            stack = "ignore",
+            effects = { "conceal" },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("load content");
+    let scaffolding = registry
+        .entity_buff("scaffolding")
+        .expect("scaffolding registered");
+    assert_eq!(
+        registry.entity_buff_def(scaffolding).lasting,
+        Lasting::While(Requirement::Unless(Box::new(Requirement::Built)))
     );
 }
 
@@ -1519,11 +1604,11 @@ fn loads_while_buff_and_passives() {
         define_entity_buff("on_fire", {
             lasting = { as_long_as = { health = { under_share = "0.34" } } },
             stack = "ignore",
-            effects = { { modifiers = { { entity_stat = "health_drain", op = "flat", value = "0.15" } } } },
+            effects = { { stats = { { entity_stat = "health_drain", op = "flat", value = "0.15" } } } },
         })
         define_entity("depot", {
             location = { occupation = ground, size = 1, solidity = "solid" },
-            stats = { max_health = 200, health_drain = "0" },
+            pools = { health = { maximum = 200 } },
             passives = { "on_fire" },
         })
     "#;
@@ -1799,7 +1884,8 @@ fn repairer_without_rate_errors() {
 
         define_entity("worker", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            stats = { max_health = 20, repair_speed = "1.0", repair_range = 1 },
+            stats = { repair_speed = "1.0", repair_range = 1 },
+            pools = { health = { maximum = 20 } },
             repairer = { repairs = { tags = { "building" } }, presence = { present = { crew = 1 } } },
         })
     "#;
@@ -1822,7 +1908,8 @@ fn repairer_without_cost_errors() {
 
         define_entity("worker", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            stats = { max_health = 20, repair_speed = "1.0", repair_range = 1 },
+            stats = { repair_speed = "1.0", repair_range = 1 },
+            pools = { health = { maximum = 20 } },
             repairer = {
                 repairs = { tags = { "building" } },
                 rate = { mode = "production" },
@@ -1847,7 +1934,8 @@ fn unknown_repair_rate_mode_errors() {
 
         define_entity("medic", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            stats = { max_health = 20, repair_speed = "1.0", repair_range = 1 },
+            stats = { repair_speed = "1.0", repair_range = 1 },
+            pools = { health = { maximum = 20 } },
             repairer = {
                 repairs = { tags = { "biological" } },
                 rate = { mode = "instant" },
@@ -1872,7 +1960,8 @@ fn unknown_work_presence_errors() {
 
         define_entity("worker", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            stats = { max_health = 20, repair_speed = "1.0" },
+            stats = { repair_speed = "1.0" },
+            pools = { health = { maximum = 20 } },
             repairer = {
                 repairs = { tags = { "building" } },
                 rate = { mode = "production" },
@@ -1899,14 +1988,15 @@ fn docks_and_annex_read_their_terms() {
 
         define_entity("barracks", {
             location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
-            stats = { max_health = 100, build_range = 1 },
+            stats = { build_range = 1 },
+            pools = { health = { maximum = 100 } },
             tags = { "building" },
             builder = { builds = { "tech_lab" }, attendance = { present = { crew = 1 } } },
             docks = { { at = { 2, 0 }, accepts = { types = { "tech_lab" } } } },
         })
         define_entity("tech_lab", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            stats = { max_health = 40, health_drain = "2" },
+            pools = { health = { maximum = 40, drain = "2" } },
             tags = { "building" },
             price = { gold = 25 },
             build_time = 10,
@@ -2136,7 +2226,7 @@ fn summon_effect_reads_its_type_and_count() {
 
         define_entity("skeleton", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            stats = { max_health = 20 },
+            pools = { health = { maximum = 20 } },
         })
         define_skill("raise_dead", {
             cooldown = 10,
@@ -2192,7 +2282,7 @@ fn empty_dying_block_panics_on_load() {
         local GROUND = define_layer("ground")
         define_entity("marine", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            stats = { max_health = 40 },
+            pools = { health = { maximum = 40 } },
             dying = {},
         })
     "#;
@@ -2211,7 +2301,7 @@ fn dying_reads_what_it_leaves_and_deaths_that_leave_it() {
         })
         define_entity("broodling", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            stats = { max_health = 20 },
+            pools = { health = { maximum = 20 } },
         })
         -- A body states what it rots into and no time: it has lain its whole
         -- life already, so what it leaves goes down the tick its decay ends.
@@ -2225,12 +2315,12 @@ fn dying_reads_what_it_leaves_and_deaths_that_leave_it() {
         -- names them is left by exactly those. A count of one is the default.
         define_entity("marine", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            stats = { max_health = 40 },
+            pools = { health = { maximum = 40 } },
             dying = { time = 2, leaves = { { entity = "corpse" } } },
         })
         define_entity("hive", {
             location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
-            stats = { max_health = 200 },
+            pools = { health = { maximum = 200 } },
             dying = { time = 2, leaves = {
                 { entity = "corpse", on = { "killed", "expired" } },
                 { entity = "broodling", count = 2, on = { "killed" } },
@@ -2291,18 +2381,18 @@ fn weapon_reads_what_it_leaves_of_what_it_kills() {
 
         define_entity("mortar", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            stats = {
-                max_health = 30, damage = 10, attack_range = 6,
+            stats = { damage = 10, attack_range = 6,
                 acquire_range = 8, attack_period = 20, damage_point = 8,
             },
+            pools = { health = { maximum = 30 } },
             attack = { targets = GROUND, slain = "nothing" },
         })
         define_entity("marine", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            stats = {
-                max_health = 30, damage = 10, attack_range = 6,
+            stats = { damage = 10, attack_range = 6,
                 acquire_range = 8, attack_period = 20, damage_point = 8,
             },
+            pools = { health = { maximum = 30 } },
             attack = { targets = GROUND },
         })
     "#;
@@ -2331,7 +2421,8 @@ fn lifetime_stat_parses() {
 
         define_entity("skeleton", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            stats = { max_health = 50, lifetime = 900 },
+            stats = { lifetime = 900 },
+            pools = { health = { maximum = 50 } },
         })
     "#;
     let registry = content::load(&engine(), source).expect("content loads");
@@ -2356,12 +2447,13 @@ fn presence_table_reads_crew_limit_and_harvest_reads_its_sources() {
         })
         define_entity("refinery", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            stats = { max_health = 100 },
+            pools = { health = { maximum = 100 } },
             resource_source = { kind = "gold", depletion = "persist" },
         })
         define_entity("tapper", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            stats = { max_health = 20, harvest_range = 1 },
+            stats = { harvest_range = 1 },
+            pools = { health = { maximum = 20 } },
             resource_carrier = {
                 gold = {
                     capacity = 5, time = 20,
@@ -2372,7 +2464,8 @@ fn presence_table_reads_crew_limit_and_harvest_reads_its_sources() {
         })
         define_entity("gang", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            stats = { max_health = 20, harvest_range = 1 },
+            stats = { harvest_range = 1 },
+            pools = { health = { maximum = 20 } },
             resource_carrier = {
                 gold = { capacity = 5, time = 20, presence = { present = { crew = "any" } } },
             },
@@ -2438,7 +2531,8 @@ fn crew_limit_of_zero_panics() {
         })
         define_entity("tapper", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            stats = { max_health = 20, harvest_range = 1 },
+            stats = { harvest_range = 1 },
+            pools = { health = { maximum = 20 } },
             resource_carrier = {
                 gold = { capacity = 5, time = 20, presence = { hidden = { crew = 0 } } },
             },
@@ -2464,7 +2558,7 @@ fn attached_presence_reads_berths_and_stance() {
         })
         define_entity("lodge", {
             location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
-            stats = { max_health = 100 },
+            pools = { health = { maximum = 100 } },
             price = { gold = 10 },
             build_time = 4,
             berths = {
@@ -2474,7 +2568,8 @@ fn attached_presence_reads_berths_and_stance() {
         })
         define_entity("sprite", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            stats = { max_health = 20, harvest_range = 1, build_range = 1 },
+            stats = { harvest_range = 1, build_range = 1 },
+            pools = { health = { maximum = 20 } },
             resource_carrier = {
                 wood = {
                     capacity = 5, time = 20, drain = 0, banking = "direct",
@@ -2555,7 +2650,7 @@ fn overbuilding_type_reads_its_source() {
         })
         define_entity("shaft_house", {
             location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
-            stats = { max_health = 100 },
+            pools = { health = { maximum = 100 } },
             price = { gold = 10 },
             build_time = 4,
             resource_source = { kind = "gold", depletion = "destroy" },
@@ -2587,7 +2682,8 @@ fn orbit_stance_reads_radius_and_period() {
         })
         define_entity("sprite", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            stats = { max_health = 20, harvest_range = 1 },
+            stats = { harvest_range = 1 },
+            pools = { health = { maximum = 20 } },
             resource_carrier = {
                 wood = {
                     capacity = 5, time = 20,
@@ -2708,7 +2804,8 @@ fn unknown_berth_stance_errors() {
         })
         define_entity("sprite", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            stats = { max_health = 20, harvest_range = 1 },
+            stats = { harvest_range = 1 },
+            pools = { health = { maximum = 20 } },
             resource_carrier = {
                 wood = {
                     capacity = 5, time = 20,
@@ -2886,9 +2983,10 @@ fn parses_fields_sources_placement_and_effects() {
         vec![FieldEffect::new(
             power,
             Affiliation::Own,
-            FieldSide::Outside,
             FieldCoverage::Every,
-            EntityEffect::Disable,
+            Vec::new(),
+            vec![EntityEffect::Disable],
+            None
         )]
     );
     assert_eq!(
@@ -2896,13 +2994,16 @@ fn parses_fields_sources_placement_and_effects() {
         vec![FieldEffect::new(
             creep,
             Affiliation::Anyone,
-            FieldSide::Inside,
             FieldCoverage::Any,
-            EntityEffect::Modifiers(vec![EntityModifier {
-                stat: EntityStatId::SPEED,
-                op: ModifierOp::PercentAdd,
-                magnitude: FixedI64::from_str("0.3").unwrap(),
-            }]),
+            vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![
+                EntityModifier {
+                    stat: EntityStatId::SPEED,
+                    op: ModifierOp::PercentAdd,
+                    magnitude: FixedI64::from_str("0.3").unwrap(),
+                }
+            ]))],
+            Vec::new(),
+            None
         )]
     );
     let spew = registry.skill("spew").expect("skill defined");
@@ -2968,7 +3069,7 @@ fn unknown_field_coverage_errors() {
         define_field("veil", { layer = "anywhere", decay = "instant" })
         define_entity("zealot", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            field_effects = { { field = "veil", of = "allied", coverage = "half", inside = "conceal" } },
+            field_effects = { { field = "veil", of = "allied", coverage = "half", inside = { "conceal" } } },
         })
     "#;
     let error = content::load(&engine(), source)
@@ -2987,7 +3088,7 @@ fn field_effect_without_coverage_errors() {
         define_field("veil", { layer = "anywhere", decay = "instant" })
         define_entity("zealot", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            field_effects = { { field = "veil", of = "allied", inside = "conceal" } },
+            field_effects = { { field = "veil", of = "allied", inside = { "conceal" } } },
         })
     "#;
     let error = content::load(&engine(), source)
@@ -3040,25 +3141,26 @@ fn breeder_and_broodling_round_trip() {
         define_entity_stat("brood_period", 1)
         define_entity("hatch", {
             location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
-            stats = { max_health = 300, brood_period = 12 },
+            stats = { brood_period = 12 },
+            pools = { health = { maximum = 300 } },
             berths = { brood = { points = { { "0.5", "3.5" }, { "-1", "1.0" } }, slots = 2 } },
             breeder = { breeds = "grub", period = { stat = "brood_period" }, limit = 2, initial = 1,
                         orphans = { linger = { reseat = { distance = 3 } } } },
         })
         define_entity("grub", {
             location = { occupation = GROUND, size = 1, solidity = "passable" },
-            stats = { max_health = 25 },
+            pools = { health = { maximum = 25 } },
             broodling = { berths = "brood", stance = "still" },
         })
         define_entity("pen", {
             location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
-            stats = { max_health = 100 },
+            pools = { health = { maximum = 100 } },
             berths = { sty = { points = { { "0.5", "2.5" }, { "1.5", "2.5" }, { "0.5", "-0.5" }, { "1.5", "-0.5" } }, slots = 4 } },
             breeder = { breeds = "piglet", period = 30, limit = 4, orphans = "perish" },
         })
         define_entity("piglet", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            stats = { max_health = 20 },
+            pools = { health = { maximum = 20 } },
             broodling = { berths = "sty", stance = { roaming = { speed = "0.05", dwell = 40 } } },
         })
     "#;
@@ -3121,7 +3223,7 @@ fn unknown_orphan_fate_errors() {
         local GROUND = define_layer("ground")
         define_entity("hatch", {
             location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
-            stats = { max_health = 300 },
+            pools = { health = { maximum = 300 } },
             breeder = { breeds = "grub", period = 12, limit = 1, orphans = "wander" },
         })
     "#;
@@ -3141,7 +3243,7 @@ fn unknown_morph_reason_errors() {
             tags = { "winged" },
             stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5" },
             morphs = {
-                { into = "flier", time = 20, placement = "reserve", cancel = "committed", reason = "growth" },
+                { into = "flier", land_pool_carry = { health = "share" }, time = 20, placement = "reserve", cancel = "committed", reason = "growth" },
             },
         })
     "#;
@@ -3158,7 +3260,7 @@ fn lingering_without_reseat_distance_errors() {
         local GROUND = define_layer("ground")
         define_entity("hatch", {
             location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
-            stats = { max_health = 300 },
+            pools = { health = { maximum = 300 } },
             breeder = { breeds = "grub", period = 12, limit = 1, orphans = { linger = { reseat = {} } } },
         })
     "#;
@@ -3177,7 +3279,7 @@ fn brood_period_of_wrong_shape_errors() {
         local GROUND = define_layer("ground")
         define_entity("hatch", {
             location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
-            stats = { max_health = 300 },
+            pools = { health = { maximum = 300 } },
             breeder = { breeds = "grub", period = "soon", limit = 1, orphans = "perish" },
         })
     "#;
@@ -3196,19 +3298,21 @@ fn morph_interrupted_and_reason_read_and_default() {
         define_entity("walker", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
             stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5" },
+            pools = { health = { maximum = 40 } },
             morphs = {
-                { into = "flier", time = 20, placement = "nearby", cancel = "refundable",
+                { into = "flier", land_pool_carry = { health = "full" }, time = 20, placement = "nearby", cancel = "refundable",
                   interrupted = "dies", reason = "production" },
-                { into = "statue", time = 20, placement = "revalidate", cancel = "committed" },
+                { into = "statue", land_pool_carry = { health = "share" }, time = 20, placement = "revalidate", cancel = "committed" },
             },
         })
         define_entity("flier", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
             stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5" },
+            pools = { health = { maximum = 40 } },
         })
         define_entity("statue", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            stats = { max_health = 100 },
+            pools = { health = { maximum = 100 } },
         })
     "#;
     let registry = content::load(&engine(), source).expect("content loads");
@@ -3217,10 +3321,431 @@ fn morph_interrupted_and_reason_read_and_default() {
         panic!("walker declares exactly two transitions");
     };
     assert_eq!(first.placement(), MorphPlacement::Nearby);
-    assert_eq!(first.interrupted(), MorphInterrupted::Dies);
+    assert_eq!(first.course(), &MorphCourse::direct(MorphInterrupted::Dies));
     assert_eq!(first.reason(), MorphReason::Production);
-    assert_eq!(second.interrupted(), MorphInterrupted::Reverts);
+    assert_eq!(
+        second.course(),
+        &MorphCourse::direct(MorphInterrupted::Reverts)
+    );
     assert_eq!(second.reason(), MorphReason::Change);
+    assert_eq!(
+        first.land_pool_carry().collect::<Vec<_>>(),
+        [(PoolId::HEALTH, PoolCarry::Full)]
+    );
+    assert_eq!(
+        second.land_pool_carry().collect::<Vec<_>>(),
+        [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))]
+    );
+}
+
+#[test]
+fn morph_without_pool_carry_names_no_pool() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_entity("walker", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5" },
+            morphs = { { into = "flier", time = 20, placement = "reserve", cancel = "committed" } },
+        })
+        define_entity("flier", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5" },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("content loads");
+    let walker = registry.entity("walker").expect("walker is registered");
+    assert_eq!(walker.morphs[0].land_pool_carry().count(), 0);
+}
+
+#[test]
+fn pool_carry_reads_each_keyword() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        local function form(name)
+            define_entity(name, {
+                location = { occupation = GROUND, size = 1, solidity = "solid" },
+                pools = { health = { maximum = 10 } },
+            })
+        end
+        form("shared")
+        form("differed")
+        form("clamped")
+        form("full")
+        define_entity("walker", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            pools = { health = { maximum = 10 } },
+            morphs = {
+                { into = "shared", land_pool_carry = { health = "share" }, time = 20, placement = "reserve", cancel = "committed" },
+                { into = "differed", land_pool_carry = { health = "difference" }, time = 20, placement = "reserve", cancel = "committed" },
+                { into = "clamped", land_pool_carry = { health = "clamp" }, time = 20, placement = "reserve", cancel = "committed" },
+                { into = "full", land_pool_carry = { health = "full" }, time = 20, placement = "reserve", cancel = "committed" },
+            },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("content loads");
+    let carries: Vec<PoolCarry> = registry
+        .entity("walker")
+        .unwrap()
+        .morphs
+        .iter()
+        .flat_map(|morph| morph.land_pool_carry().map(|(_, carry)| carry))
+        .collect();
+    assert_eq!(
+        carries,
+        vec![
+            PoolCarry::Shift(PoolShift::Share),
+            PoolCarry::Shift(PoolShift::Difference),
+            PoolCarry::Shift(PoolShift::Clamp),
+            PoolCarry::Full,
+        ]
+    );
+}
+
+#[test]
+fn unknown_pool_carry_errors() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_entity("walker", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5" },
+            morphs = { { into = "flier", land_pool_carry = { health = "half" }, time = 20, placement = "reserve", cancel = "committed" } },
+        })
+        define_entity("flier", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5" },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject an unknown pool carry");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("pool carry must be 'share', 'difference', 'clamp', or 'full', found 'half'")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn via_reads_form_entering_carries_and_reverts() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        local function form(name)
+            define_entity(name, {
+                location = { occupation = GROUND, size = 1, solidity = "solid" },
+                pools = { health = { maximum = 10 }, energy = { maximum = 10 } },
+            })
+        end
+        form("cocoon")
+        form("moth")
+        define_entity("larva", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            pools = { health = { maximum = 10 }, energy = { maximum = 10 } },
+            morphs = { {
+                into = "moth",
+                via = {
+                    form = "cocoon",
+                    enter_pool_carry = { health = "full", energy = "difference" },
+                    interrupted = { reverts = { health = "restore", energy = "clamp" } },
+                },
+                land_pool_carry = { health = "share" },
+                time = 20, placement = "reserve", cancel = "committed",
+            } },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("content loads");
+    let larva = registry.entity("larva").expect("larva is registered");
+    assert_eq!(
+        larva.morphs[0].course(),
+        &MorphCourse::via(
+            "cocoon",
+            [
+                (PoolId::HEALTH, PoolCarry::Full),
+                (PoolId::ENERGY, PoolCarry::Shift(PoolShift::Difference)),
+            ],
+            ViaInterrupted::reverts([
+                (PoolId::HEALTH, RevertCarry::Restore),
+                (
+                    PoolId::ENERGY,
+                    RevertCarry::Carry(PoolCarry::Shift(PoolShift::Clamp)),
+                ),
+            ]),
+        )
+    );
+}
+
+#[test]
+fn via_without_carries_names_no_pool_and_reads_dies() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        local function form(name)
+            define_entity(name, {
+                location = { occupation = GROUND, size = 1, solidity = "solid" },
+                pools = { health = { maximum = 10 } },
+            })
+        end
+        form("cocoon")
+        form("moth")
+        define_entity("larva", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            pools = { health = { maximum = 10 } },
+            morphs = { {
+                into = "moth",
+                via = { form = "cocoon", interrupted = "dies" },
+                time = 20, placement = "reserve", cancel = "committed",
+            } },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("content loads");
+    let larva = registry.entity("larva").expect("larva is registered");
+    assert_eq!(
+        larva.morphs[0].course(),
+        &MorphCourse::via("cocoon", [], ViaInterrupted::Dies)
+    );
+}
+
+#[test]
+fn interrupted_beside_via_errors() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_entity("larva", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            morphs = { {
+                into = "moth",
+                via = { form = "cocoon", interrupted = "dies" },
+                interrupted = "dies",
+                time = 20, placement = "reserve", cancel = "committed",
+            } },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject an interrupted beside a via");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("morph interrupted must be nothing beside a via, which says its own, found 'dies'")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn unknown_revert_carry_errors() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_entity("larva", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            morphs = { {
+                into = "moth",
+                via = { form = "cocoon", interrupted = { reverts = { health = "half" } } },
+                time = 20, placement = "reserve", cancel = "committed",
+            } },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject an unknown revert carry");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("revert carry must be 'restore', 'share', 'difference', 'clamp', or 'full', found 'half'")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn carry_of_undefined_pool_errors() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_entity("larva", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            morphs = { { into = "moth", land_pool_carry = { mana = "share" }, time = 20, placement = "reserve", cancel = "committed" } },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject a carry of an undefined pool");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("pool 'mana' is not defined")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn effect_pool_shift_reads_each_keyword() {
+    let source = r#"
+        define_entity_buff("hearty", {
+            lasting = "forever",
+            stack = "ignore",
+            effects = {
+                { pool_maximums = { { entity_stat = "max_health", op = "flat", value = "10" } }, pool_shift = "share" },
+                { pool_maximums = { { entity_stat = "max_health", op = "flat", value = "10" } }, pool_shift = "difference" },
+                { pool_maximums = { { entity_stat = "max_energy", op = "flat", value = "10" } }, pool_shift = "clamp" },
+                { stats = { { entity_stat = "armor", op = "flat", value = "1" } } },
+            },
+        })
+        define_player_buff("drilled", {
+            stack = "ignore",
+            entity_modifiers = { {
+                pool_maximums = { { entity_stat = "max_health", op = "flat", value = "10" } },
+                pool_shift = "difference",
+            } },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("content loads");
+    let hearty = registry.entity_buff_def(registry.entity_buff("hearty").unwrap());
+    let pool_shifts: Vec<Option<PoolShift>> = hearty
+        .effects
+        .iter()
+        .map(|effect| match effect {
+            EntityEffect::Modifiers(EntityModifiers::PoolMaximums { pool_shift, .. }) => {
+                Some(*pool_shift)
+            }
+            EntityEffect::Modifiers(EntityModifiers::Stats(_)) => None,
+            EntityEffect::Disable | EntityEffect::Conceal => unreachable!("only modifiers"),
+        })
+        .collect();
+    assert_eq!(
+        pool_shifts,
+        vec![
+            Some(PoolShift::Share),
+            Some(PoolShift::Difference),
+            Some(PoolShift::Clamp),
+            None
+        ]
+    );
+    let drilled = registry.player_buff_def(registry.player_buff("drilled").unwrap());
+    assert_eq!(
+        drilled.entity_modifiers,
+        vec![EntityModifiers::PoolMaximums {
+            modifiers: vec![EntityModifier {
+                stat: EntityStatId::MAX_HEALTH,
+                op: ModifierOp::FlatAdd,
+                magnitude: FixedI64::from_num(10),
+            }],
+            pool_shift: PoolShift::Difference,
+        }]
+    );
+}
+
+#[test]
+fn player_buff_reads_each_set_of_entity_modifiers() {
+    let source = r#"
+        define_player_buff("drilled", {
+            stack = "ignore",
+            entity_modifiers = {
+                { stats = { { entity_stat = "damage", op = "flat", value = "2" } } },
+                {
+                    pool_maximums = { { entity_stat = "max_health", op = "flat", value = "10" } },
+                    pool_shift = "difference",
+                },
+            },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("content loads");
+    let drilled = registry.player_buff_def(registry.player_buff("drilled").unwrap());
+    assert_eq!(
+        drilled.entity_modifiers,
+        vec![
+            EntityModifiers::Stats(vec![EntityModifier {
+                stat: EntityStatId::DAMAGE,
+                op: ModifierOp::FlatAdd,
+                magnitude: FixedI64::from_num(2),
+            }]),
+            EntityModifiers::PoolMaximums {
+                modifiers: vec![EntityModifier {
+                    stat: EntityStatId::MAX_HEALTH,
+                    op: ModifierOp::FlatAdd,
+                    magnitude: FixedI64::from_num(10),
+                }],
+                pool_shift: PoolShift::Difference,
+            },
+        ]
+    );
+}
+
+#[test]
+fn unknown_pool_shift_errors() {
+    let source = r#"
+        define_entity_buff("hearty", {
+            lasting = "forever",
+            stack = "ignore",
+            effects = { { pool_maximums = { { entity_stat = "max_health", op = "flat", value = "10" } }, pool_shift = "some" } },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject an unknown pool shift");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("pool shift must be 'share', 'difference', or 'clamp', found 'some'")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn entity_modifiers_naming_both_kinds_errors() {
+    let source = r#"
+        define_entity_buff("hearty", {
+            lasting = "forever",
+            stack = "ignore",
+            effects = { { stats = { { entity_stat = "armor", op = "flat", value = "1" } }, pool_maximums = { { entity_stat = "max_health", op = "flat", value = "10" } }, pool_shift = "share" } },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject a set naming both kinds");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("entity modifiers name exactly one of stats or pool_maximums")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn entity_modifiers_naming_neither_kind_errors() {
+    let source = r#"
+        define_entity_buff("hearty", {
+            lasting = "forever",
+            stack = "ignore",
+            effects = { { pool_shift = "share" } },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject a set naming no kind");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("entity modifiers name exactly one of stats or pool_maximums")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn pool_maximums_without_pool_shift_errors() {
+    let source = r#"
+        define_entity_buff("hearty", {
+            lasting = "forever",
+            stack = "ignore",
+            effects = { { pool_maximums = { { entity_stat = "max_health", op = "flat", value = "10" } } } },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject pool maximums with no shift");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("field 'pool_shift': error converting Lua nil to String")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn pool_shift_beside_stats_errors() {
+    let source = r#"
+        define_entity_buff("hearty", {
+            lasting = "forever",
+            stack = "ignore",
+            effects = { { stats = { { entity_stat = "armor", op = "flat", value = "1" } }, pool_shift = "share" } },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject a shift beside stats");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("a pool_shift goes beside pool_maximums, not stats")),
+        "unexpected error: {error:?}"
+    );
 }
 
 #[test]
@@ -3231,7 +3756,7 @@ fn unknown_morph_interrupted_errors() {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
             stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5" },
             morphs = {
-                { into = "flier", time = 20, placement = "reserve", cancel = "committed", interrupted = "vanishes" },
+                { into = "flier", land_pool_carry = { health = "share" }, time = 20, placement = "reserve", cancel = "committed", interrupted = "vanishes" },
             },
         })
     "#;
@@ -3334,7 +3859,7 @@ fn parses_buff_effects_lasting_and_interruptions() {
             interrupted_by = { "attack", "cast", "hit" },
             effects = {
                 "conceal",
-                { modifiers = { { entity_stat = "speed", op = "percent", value = "0.5" } } },
+                { stats = { { entity_stat = "speed", op = "percent", value = "0.5" } } },
             },
         })
         define_entity_buff("cloaked", {
@@ -3356,11 +3881,11 @@ fn parses_buff_effects_lasting_and_interruptions() {
         EntityBuffDef {
             effects: vec![
                 EntityEffect::Conceal,
-                EntityEffect::Modifiers(vec![EntityModifier {
+                EntityEffect::Modifiers(EntityModifiers::Stats(vec![EntityModifier {
                     stat: EntityStatId::SPEED,
                     op: ModifierOp::PercentAdd,
                     magnitude: FixedI64::from_str("0.5").unwrap(),
-                }]),
+                }])),
             ],
             lasting: Lasting::For(300),
             stack_rule: StackRule::Refresh,
@@ -3463,7 +3988,7 @@ fn unknown_entity_effect_errors() {
     "#;
     let error = content::load(&engine(), source).err().expect("bad effect");
     assert!(
-        matches!(&error, ScriptError::ContentError(m) if m.contains("entity effect must be 'disable', 'conceal', or a { modifiers = ... } table, found 'hidden'")),
+        matches!(&error, ScriptError::ContentError(m) if m.contains("entity effect must be 'disable', 'conceal', or a { stats = ... } or { pool_maximums = ..., pool_shift = ... } table, found 'hidden'")),
         "{error:?}"
     );
 }
@@ -3475,7 +4000,7 @@ fn field_effect_reads_concealed() {
         define_field("veil", { layer = "anywhere", decay = "instant" })
         define_entity("zealot", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            field_effects = { { field = "veil", of = "allied", coverage = "every", inside = "conceal" } },
+            field_effects = { { field = "veil", of = "allied", coverage = "every", inside = { "conceal" } } },
         })
     "#;
     let registry = content::load(&engine(), source).expect("content loads");
@@ -3485,11 +4010,57 @@ fn field_effect_reads_concealed() {
         vec![FieldEffect::new(
             veil,
             Affiliation::Allied,
-            FieldSide::Inside,
             FieldCoverage::Every,
-            EntityEffect::Conceal,
+            vec![EntityEffect::Conceal],
+            Vec::new(),
+            None
         )]
     );
+}
+
+#[test]
+fn field_effect_reads_both_sides() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_field("power", { layer = "anywhere", decay = "instant" })
+        define_entity("zealot", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            field_effects = { { field = "power", of = "own", coverage = "every",
+                inside = { "conceal" }, outside = { "disable", "conceal" } } },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("content loads");
+    let power = registry.field("power").expect("power defined");
+    assert_eq!(
+        registry.entity("zealot").unwrap().field_effects,
+        vec![FieldEffect::new(
+            power,
+            Affiliation::Own,
+            FieldCoverage::Every,
+            vec![EntityEffect::Conceal],
+            vec![EntityEffect::Disable, EntityEffect::Conceal],
+            None
+        )]
+    );
+}
+
+#[test]
+fn field_effect_reads_holds_while() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_field("creep", { layer = "anywhere", decay = "instant" })
+        define_entity("pit", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            pools = { health = { maximum = 100 } },
+            field_effects = { { field = "creep", of = "anyone", coverage = "every", holds_while = "built",
+                outside = { { stats = { { entity_stat = "health_drain", op = "flat", value = "0.2" } } } } } },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("content loads");
+    let [effect] = registry.entity("pit").unwrap().field_effects.as_slice() else {
+        panic!("the pit declares one field effect");
+    };
+    assert_eq!(effect.holds_while(), Some(&Requirement::Built));
 }
 
 #[test]
@@ -3554,7 +4125,8 @@ fn carrier_content(points: &str, stance: &str) -> String {
         }})
         define_entity("sprite", {{
             location = {{ occupation = GROUND, size = 1, solidity = "solid" }},
-            stats = {{ max_health = 20, harvest_range = 1 }},
+            stats = {{ harvest_range = 1 }},
+            pools = {{ health = {{ maximum = 20 }} }},
             resource_carrier = {{
                 wood = {{
                     capacity = 5, time = 20,
@@ -3578,9 +4150,10 @@ const ARCHER: &str = r#"
         race = "human",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
         stats = {
-            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 2, max_health = 40,
+            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 2,
             damage = 6, attack_range = 4, attack_period = 7, damage_point = 3,
         },
+        pools = { health = { maximum = 40 } },
         dying = { time = 2 },
         attack = { targets = GROUND },
         price = { gold = 80 },
@@ -3600,7 +4173,8 @@ const BASE: &str = r#"
     define_entity("peasant", {
         race = "human",
         location = { occupation = GROUND, size = 1, solidity = "solid" },
-        stats = { speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", max_health = 30, build_range = 1, harvest_range = 1 },
+        stats = { speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", build_range = 1, harvest_range = 1 },
+        pools = { health = { maximum = 30 } },
         dying = { time = 2 },
         price = { gold = 50 },
         train_time = 40,
@@ -3614,7 +4188,7 @@ const BASE: &str = r#"
     define_entity("town_hall", {
         race = "human",
         location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
-        stats = { max_health = 800 },
+        pools = { health = { maximum = 800 } },
         dying = { time = 2 },
         price = { gold = 400 },
         build_time = 200,
@@ -3632,7 +4206,7 @@ const FIELDS: &str = r#"
 
     define_entity("hive", {
         location = { occupation = GROUND, size = 2, solidity = "solid" },
-        stats = { max_health = 100 },
+        pools = { health = { maximum = 100 } },
         build_time = 20,
         field_sources = {
             { field = "creep", radius = 10, growth = { cycle = 9, initial_radius = 1 }, while_constructing = { held = 1 }, while_disabled = "full" },
@@ -3641,7 +4215,7 @@ const FIELDS: &str = r#"
 
     define_entity("pylon", {
         location = { occupation = GROUND, size = 1, solidity = "solid" },
-        stats = { max_health = 100 },
+        pools = { health = { maximum = 100 } },
         field_sources = {
             { field = "power", radius = 6, growth = "instant", while_constructing = "nothing", while_disabled = "nothing" },
         },
@@ -3652,23 +4226,24 @@ const FIELDS: &str = r#"
 
     define_entity("gateway", {
         location = { occupation = GROUND, size = 2, solidity = "solid" },
-        stats = { max_health = 100 },
+        pools = { health = { maximum = 100 } },
         field_placement = {
             { requires = "power", of = "own", coverage = "any" },
             { forbids = "creep" },
         },
         field_effects = {
-            { field = "power", of = "own", coverage = "every", outside = "disable" },
+            { field = "power", of = "own", coverage = "every", outside = { "disable" } },
         },
     })
 
     define_entity("zergling", {
         location = { occupation = GROUND, size = 1, solidity = "solid" },
-        stats = { speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1, max_health = 20 },
+        stats = { speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1 },
+        pools = { health = { maximum = 20 } },
         field_effects = {
-            { field = "creep", of = "anyone", coverage = "any", inside = {
-                modifiers = { { entity_stat = "speed", op = "percent", value = "0.3" } },
-            } },
+            { field = "creep", of = "anyone", coverage = "any", inside = { {
+                stats = { { entity_stat = "speed", op = "percent", value = "0.3" } },
+            } } },
         },
     })
 
@@ -3710,17 +4285,18 @@ fn morph_transitions_round_trip() {
 
         define_entity("walker", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5", max_energy = 50, morph_time = 20 },
+            stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5", morph_time = 20 },
+            pools = { health = { maximum = 40 }, energy = { maximum = 50 } },
             tags = { "winged" },
             morphs = {
-                { into = "flier",
+                { into = "flier", land_pool_carry = { health = "share" },
                   time = { stat = "morph_time" },
                   placement = "revalidate",
                   cancel = "committed",
                   cost = { energy = "20" },
                   requires = { { tag = "winged" } } },
-                { into = "statue",
-                  via = "chrysalis",
+                { into = "statue", land_pool_carry = { health = "share" },
+                  via = { form = "chrysalis", enter_pool_carry = { health = "full" }, interrupted = { reverts = { health = "restore" } } },
                   time = 40,
                   placement = "reserve",
                   cancel = "refundable",
@@ -3730,14 +4306,15 @@ fn morph_transitions_round_trip() {
         define_entity("flier", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
             stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5" },
+            pools = { health = { maximum = 40 } },
         })
         define_entity("chrysalis", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            stats = { max_health = 60 },
+            pools = { health = { maximum = 60 } },
         })
         define_entity("statue", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            stats = { max_health = 100 },
+            pools = { health = { maximum = 100 } },
         })
     "#;
     let registry = content::load(&engine(), source).expect("content loads");
@@ -3769,8 +4346,18 @@ fn morph_transitions_round_trip() {
         second.requires().is_empty(),
         "a transition stating no requirements is gated by none"
     );
-    assert_eq!(first.via_type(), None);
-    assert_eq!(second.via_type(), Some("chrysalis"));
+    assert_eq!(
+        first.course(),
+        &MorphCourse::direct(MorphInterrupted::Reverts)
+    );
+    assert_eq!(
+        second.course(),
+        &MorphCourse::via(
+            "chrysalis",
+            [(PoolId::HEALTH, PoolCarry::Full)],
+            ViaInterrupted::reverts([(PoolId::HEALTH, RevertCarry::Restore)])
+        )
+    );
 }
 
 #[test]
@@ -3781,7 +4368,7 @@ fn unknown_morph_placement_errors() {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
             stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5" },
             morphs = {
-                { into = "flier", time = 20, placement = "hover", cancel = "committed" },
+                { into = "flier", land_pool_carry = { health = "share" }, time = 20, placement = "hover", cancel = "committed" },
             },
         })
     "#;
@@ -3802,7 +4389,7 @@ fn unknown_morph_cancel_errors() {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
             stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5" },
             morphs = {
-                { into = "flier", time = 20, placement = "reserve", cancel = "maybe" },
+                { into = "flier", land_pool_carry = { health = "share" }, time = 20, placement = "reserve", cancel = "maybe" },
             },
         })
     "#;
@@ -3823,7 +4410,7 @@ fn morph_time_of_wrong_shape_errors() {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
             stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5" },
             morphs = {
-                { into = "flier", time = "fast", placement = "reserve", cancel = "committed" },
+                { into = "flier", land_pool_carry = { health = "share" }, time = "fast", placement = "reserve", cancel = "committed" },
             },
         })
     "#;
@@ -3844,7 +4431,7 @@ fn unknown_morph_time_stat_errors() {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
             stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5" },
             morphs = {
-                { into = "flier", time = { stat = "bogus" }, placement = "reserve", cancel = "committed" },
+                { into = "flier", land_pool_carry = { health = "share" }, time = { stat = "bogus" }, placement = "reserve", cancel = "committed" },
             },
         })
     "#;
@@ -3869,11 +4456,11 @@ fn parses_turret_and_its_mount() {
 
         define_entity("wagon", {
             location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
-            stats = {
-                max_health = 40, speed = "0.3", radius = "1", weight = "2",
+            stats = { speed = "0.3", radius = "1", weight = "2",
                 turn_rate = 30, pivot_rate = 30, aim_rate = 30,
                 damage = 6, attack_range = 4, acquire_range = 6, attack_period = 7, damage_point = 3,
             },
+            pools = { health = { maximum = 40 } },
             turrets = { { turret = "cannon", at = { 0, 0 }, size = { 2, 2 } } },
         })
     "#;
@@ -3899,7 +4486,7 @@ fn parses_turret_and_its_mount() {
             FixedU64::from_num(30),
         )
         .with_stat(EntityStatId::AIM_RATE, FixedU64::from_num(30))
-        .with_health(40)
+        .with_pool(Pool::health(40))
         .with_stat(EntityStatId::DAMAGE, FixedU64::from_num(6))
         .with_stat(EntityStatId::ATTACK_RANGE, FixedU64::from_num(4))
         .with_stat(EntityStatId::ACQUIRE_RANGE, FixedU64::from_num(6))
@@ -3927,10 +4514,10 @@ fn parses_turret_reading_its_own_stats() {
 
         define_entity("keep", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            stats = {
-                max_health = 100, flak_damage = 3,
+            stats = { flak_damage = 3,
                 damage = 6, attack_range = 4, acquire_range = 6, attack_period = 7, damage_point = 3,
             },
+            pools = { health = { maximum = 100 } },
             turrets = { { turret = "flak" } },
         })
     "#;
@@ -3974,9 +4561,9 @@ fn rejects_mount_of_undefined_turret() {
         define_entity("wagon", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
             stats = {
-                max_health = 40,
                 damage = 6, attack_range = 4, acquire_range = 6, attack_period = 7, damage_point = 3,
             },
+            pools = { health = { maximum = 40 } },
             turrets = { { turret = "gun" } },
         })
     "#;

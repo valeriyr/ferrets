@@ -17,6 +17,7 @@ use ferrets_content::{
     entity_type_def::EntityTypeDef,
     kinds::Kinds,
     location::Solidity,
+    pool::Pool,
     repair::{RepairCost, RepairRate},
     skills::{Casting, EntityCastEffect, EntityCastTarget, Reach, SkillCaster, SkillDef},
     work::{CrewLimit, WorkPresence},
@@ -1050,7 +1051,7 @@ fn enemy_skill_app() -> (App, ferrets_content::skills::SkillId) {
         registry.register(
             EntityTypeDef::new("mage")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_health(50)
+                .with_pool(Pool::health(50))
                 // A named target must be in sight for the cast to be allowed at
                 // all, so the caster needs eyes.
                 .with_sight_range(8)
@@ -1059,7 +1060,7 @@ fn enemy_skill_app() -> (App, ferrets_content::skills::SkillId) {
         registry.register(
             EntityTypeDef::new("victim")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_health(50),
+                .with_pool(Pool::health(50)),
         );
         smite
     };
@@ -1102,7 +1103,7 @@ fn ground_skill_app() -> (App, ferrets_content::skills::SkillId) {
         registry.register(
             EntityTypeDef::new("sentry")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_health(50)
+                .with_pool(Pool::health(50))
                 // A cell out of sight cannot be named as an aim, so the caster
                 // needs eyes on the patch it watches.
                 .with_sight_range(8)
@@ -1130,14 +1131,14 @@ fn repair_app() -> App {
         registry.register(
             EntityTypeDef::new("hall")
                 .with_location(utils::GROUND, CellSize::new(2, 2), Solidity::Solid)
-                .with_health(100)
+                .with_pool(Pool::health(100))
                 .with_price([("gold", 50)])
                 .with_build_time(10)
                 .with_tags(["building"]),
         );
         registry.register(
             utils::walker("fixer", utils::GROUND)
-                .with_health(30)
+                .with_pool(Pool::health(30))
                 .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
                 .with_stat(EntityStatId::REPAIR_RANGE, FixedU64::ONE)
                 .with_stat(EntityStatId::REPAIR_COST_FACTOR, FixedU64::ONE)

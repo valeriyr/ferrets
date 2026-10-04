@@ -6,7 +6,7 @@ use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 
 use crate::{
     components::{
-        health::HealthComponent,
+        last_hit::LastHitComponent,
         order_queue::{CancelPolicy, OrderQueueComponent},
         stance::StanceComponent,
     },
@@ -55,10 +55,7 @@ pub fn tick(world: &mut World) {
         {
             continue;
         }
-        let Some(hit) = entity_ref
-            .get::<HealthComponent>()
-            .and_then(|health| health.last_hit())
-        else {
+        let Some(hit) = entity_ref.get::<LastHitComponent>() else {
             continue;
         };
         // Hits land during the previous tick's order processing; older stamps

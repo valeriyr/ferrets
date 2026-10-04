@@ -5,7 +5,7 @@ mod utils;
 use bevy::{ecs::system::RunSystemOnce, prelude::*};
 use ferrets_bevy_plugin::{NetworkActive, PauseIntent, ReplayPlayback, ReplayPlugin, Seek, Step};
 use ferrets_content::{
-    entity_type_def::EntityTypeDef, location::Solidity, registry::ContentRegistry,
+    entity_type_def::EntityTypeDef, location::Solidity, pool::Pool, registry::ContentRegistry,
 };
 use ferrets_geometry::cell_size::CellSize;
 use ferrets_replay::{buffer::SharedBuffer, recorder::Recorder, replay::Replay};
@@ -470,7 +470,7 @@ fn lone_base_app() -> App {
         registry.register(
             EntityTypeDef::new("base")
                 .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
-                .with_health(30)
+                .with_pool(Pool::health(30))
                 .with_tags(["building"]),
         );
         registry.validate();
@@ -491,7 +491,7 @@ fn base_app() -> App {
     {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
         assert_eq!(registry.register_layer(GROUND_LAYER), GROUND);
-        registry.register(utils::walker("soldier", GROUND).with_health(30));
+        registry.register(utils::walker("soldier", GROUND).with_pool(Pool::health(30)));
         registry.validate();
     }
     app.world_mut().resource_mut::<GameSession>().start();

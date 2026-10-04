@@ -8,10 +8,7 @@ use ferrets_content::player_stats::PlayerStatId;
 use ferrets_math::FixedU64;
 use ferrets_simulation::{
     command::PlayerCommand,
-    components::{
-        build::{SiteWork, UnderConstructionComponent},
-        train::TrainQueueComponent,
-    },
+    components::{build, train::TrainQueueComponent},
     player_stats::PlayerStats,
     resources::PlayerResources,
     simulation_id::SimulationId,
@@ -80,14 +77,7 @@ fn building_under_construction_refuses_training() {
     let world = app.world_mut();
     let (barracks, barracks_id) =
         utils::create_entity(world, "barracks", utils::pos(10, 10), Some(0)).unwrap();
-    world
-        .entity_mut(barracks)
-        .insert(UnderConstructionComponent {
-            progress: 0,
-            work: SiteWork::Crew {
-                builders: Default::default(),
-            },
-        });
+    utils::mark_as_site(world, barracks);
     world.resource_mut::<PlayerResources>().add(0, "gold", 30);
 
     utils::push_command(
@@ -105,9 +95,7 @@ fn building_under_construction_refuses_training() {
     assert!(utils::order_queue_is_empty(app.world_mut(), barracks));
 
     // Construction finishing lifts the restriction.
-    app.world_mut()
-        .entity_mut(barracks)
-        .remove::<UnderConstructionComponent>();
+    build::mark_as_built(app.world_mut(), barracks);
     utils::push_command(
         &mut app,
         PlayerCommand::TrainEntity {

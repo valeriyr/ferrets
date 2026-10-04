@@ -290,7 +290,7 @@ fn ordered_cell_is_worked_by_cell_aimed_gun_alone() {
     utils::run_ticks(&mut app, 8);
 
     assert_eq!(
-        utils::health(&app, bystander),
+        utils::health_as_u32(&app, bystander),
         490,
         "one landed lob, and no spear thrust at bare ground"
     );
@@ -416,8 +416,12 @@ fn gun_recovers_from_phase_beyond_its_cycle() {
         },
     );
     utils::run_ticks(&mut app, 8);
-    let before = utils::health(&app, target);
-    assert!(before < 500, "the fight is under way");
+    // 500 − 2 × 30: two 30-point shots in the first eight ticks.
+    assert_eq!(
+        utils::health_as_u32(&app, target),
+        440,
+        "the fight is under way"
+    );
 
     // A phase far beyond the four-tick cycle, as a shortened cycle leaves one.
     app.world_mut()
@@ -427,8 +431,10 @@ fn gun_recovers_from_phase_beyond_its_cycle() {
         .phase = 50;
     utils::run_ticks(&mut app, 6);
 
-    assert!(
-        utils::health(&app, target) < before,
+    // 440 − 2 × 30: two more shots in the six ticks after the jump.
+    assert_eq!(
+        utils::health_as_u32(&app, target),
+        380,
         "the cycle wrapped and the gun fought on"
     );
 }
@@ -473,8 +479,7 @@ fn turret_only_body_walks_to_what_it_was_ordered_onto() {
     let world = app.world_mut();
     let (wagon, wagon_id) =
         utils::create_entity(world, "rolling_gun", utils::pos(5, 10), Some(0)).unwrap();
-    let (target, target_id) =
-        utils::create_entity(world, "dummy", utils::pos(17, 10), Some(1)).unwrap();
+    let (_, target_id) = utils::create_entity(world, "dummy", utils::pos(17, 10), Some(1)).unwrap();
 
     utils::select(&mut app, wagon_id);
     utils::push_command(
@@ -487,8 +492,8 @@ fn turret_only_body_walks_to_what_it_was_ordered_onto() {
     utils::run_ticks(&mut app, 30);
 
     assert_eq!(
-        utils::health(&app, target),
-        0,
+        app.world().resource::<EntityIndex>().alive(target_id),
+        None,
         "it killed what it was sent at"
     );
     assert!(
@@ -514,7 +519,11 @@ fn body_weapon_and_turret_both_fight() {
     // twenty health has none left.
     utils::run_ticks(&mut app, 12);
 
-    assert_eq!(utils::health(&app, target), 0, "both guns landed a hit");
+    assert_eq!(
+        utils::health_as_u32(&app, target),
+        0,
+        "both guns landed a hit"
+    );
 }
 
 /// A gun answers what its body's own weapon cannot: they reach different layers,
@@ -529,7 +538,7 @@ fn turret_answers_what_body_weapon_cannot_reach() {
     utils::run_ticks(&mut app, 16);
 
     assert_eq!(
-        utils::health(&app, kite),
+        utils::health_as_u32(&app, kite),
         10,
         "the gun worked what flew over, whatever the body could not touch"
     );
@@ -558,7 +567,7 @@ fn body_weapon_waits_beyond_its_own_reach() {
     utils::run_ticks(&mut app, 8);
 
     assert_eq!(
-        utils::health(&app, target),
+        utils::health_as_u32(&app, target),
         490,
         "one hit from the gun, and none from a spear four times out of its reach"
     );

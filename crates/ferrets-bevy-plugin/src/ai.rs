@@ -12,7 +12,7 @@
 use std::collections::BTreeMap;
 
 use bevy::{ecs::world::EntityRef, prelude::*};
-use ferrets_content::{entity_stats::EntityStatId, registry::ContentRegistry};
+use ferrets_content::{entity_stats::EntityStatId, pool_def::PoolId, registry::ContentRegistry};
 use ferrets_geometry::cell_pos::CellPos;
 use ferrets_script::ai::{
     AiRuntime,
@@ -24,15 +24,14 @@ use ferrets_simulation::{
         build::UnderConstructionComponent,
         concealed::ConcealedComponent,
         dying::RemainsComponent,
-        energy::EnergyComponent,
         entity_buffs::BuffsComponent,
         entity_info::EntityInfoComponent,
         entity_stats::StatsComponent,
-        health::HealthComponent,
         hidden::HiddenComponent,
         lifetime::LifetimeComponent,
         location::LocationComponent,
         order_queue::OrderQueueComponent,
+        pools::{self, PoolsComponent},
         resource::{ResourceCarrierComponent, ResourceSourceComponent},
         stance::StanceComponent,
         train::TrainQueueComponent,
@@ -318,6 +317,7 @@ pub fn game_view(
     }
 
     let (researched, researching) = research_views(world, player);
+    let supply = supply::displayed(world, player);
 
     GameView {
         tick: session.tick(),
@@ -326,8 +326,8 @@ pub fn game_view(
         map_width: map.width(),
         map_height: map.height(),
         resources,
-        supply_provided: supply::provided(world, player).to_num::<u32>(),
-        supply_used: supply::used(world, player).to_num::<u32>(),
+        supply_provided: supply.provided,
+        supply_used: supply.used,
         researched,
         researching,
         my_entities,
@@ -387,6 +387,9 @@ fn entity_view(
         .map_or(CellPos::new(0, 0), |location| {
             CellPos::from(location.position)
         });
+    let entity_pools = entity
+        .get::<PoolsComponent>()
+        .expect("a simulation entity carries a pool store");
     EntityView {
         id: id.0,
         type_name: entity
@@ -394,10 +397,12 @@ fn entity_view(
             .map_or_else(String::new, |info| info.type_name().to_string()),
         x: cell.x,
         y: cell.y,
-        health: entity.get::<HealthComponent>().map(|h| h.displayed()),
-        energy: entity
-            .get::<EnergyComponent>()
-            .map(|energy| energy.current_as_u32()),
+        health: entity_pools
+            .current(PoolId::HEALTH)
+            .map(pools::displayed_health),
+        energy: entity_pools
+            .current(PoolId::ENERGY)
+            .map(pools::displayed_energy),
         damage: entity
             .get::<StatsComponent>()
             .and_then(|stats| stats.effective_as_u32(EntityStatId::DAMAGE)),
@@ -464,7 +469,7 @@ fn lifetime_left(entity: &EntityRef) -> Option<u32> {
     let age = entity.get::<LifetimeComponent>()?.age;
     let limit = entity
         .get::<StatsComponent>()
-        .and_then(|stats| stats.effective_as_u32(EntityStatId::LIFETIME))?;
+        .and_then(|stats| stats.effective_ticks(EntityStatId::LIFETIME))?;
     Some(limit.saturating_sub(age))
 }
 

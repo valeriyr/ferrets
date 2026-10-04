@@ -401,12 +401,12 @@ pub(super) fn weapon_stats(
         .expect("attackers have a stat store");
     let range = stats.effective_as_u32(range).unwrap();
     let damage = stats.effective(damage).unwrap();
-    let attack_period = stats.effective_as_u32(period).unwrap();
+    let attack_period = stats.effective_ticks(period).unwrap();
     // Registration keeps the authored damage point inside the authored cycle, but
     // the two stats take modifiers independently, so a shortened cycle can leave
     // the hit beyond its end — where the phase counter would never reach it.
     let damage_point = stats
-        .effective_as_u32(damage_point)
+        .effective_ticks(damage_point)
         .unwrap()
         .min(attack_period);
 

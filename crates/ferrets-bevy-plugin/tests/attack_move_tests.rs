@@ -3,11 +3,9 @@
 
 mod utils;
 
+use ferrets_content::pool_def::PoolId;
 use ferrets_geometry::cell_pos::CellPos;
-use ferrets_simulation::{
-    command::PlayerCommand,
-    components::{health::HealthComponent, stance::Stance},
-};
+use ferrets_simulation::{command::PlayerCommand, components::stance::Stance, entity_def};
 
 //
 // ─── En-route engagement ────────────────────────────────────────────────────
@@ -136,5 +134,8 @@ fn unarmed_unit_attack_moves_like_plain_move() {
     utils::run_ticks(&mut app, 60);
     let world = app.world_mut();
     assert_eq!(utils::cell_of(world, worker), CellPos::new(20, 10));
-    assert_eq!(world.get::<HealthComponent>(ghost).unwrap().current(), 20);
+    assert_eq!(
+        entity_def::pool_value(world, ghost, PoolId::HEALTH).unwrap(),
+        20
+    );
 }

@@ -121,9 +121,9 @@ impl Map {
                     if !def.can_move() {
                         continue;
                     }
-                    let radius = def.base_stats.get(&EntityStatId::RADIUS);
+                    let radius = def.base_stat(EntityStatId::RADIUS);
                     assert!(
-                        radius.is_some_and(|radius| *radius > FixedU64::ZERO),
+                        radius.is_some_and(|radius| radius > FixedU64::ZERO),
                         "entity type '{}' moves but defines no positive radius, \
                          which the continuous movement model requires",
                         def.name
@@ -138,7 +138,7 @@ impl Map {
                         .size();
                     let bound = FixedU64::from_num(size.width.min(size.height)) / 2;
                     assert!(
-                        radius.is_some_and(|radius| *radius <= bound),
+                        radius.is_some_and(|radius| radius <= bound),
                         "entity type '{}' authors a radius beyond half its \
                          footprint's narrow side ({bound}), which the \
                          continuous movement model cannot route",
@@ -151,7 +151,7 @@ impl Map {
                     // is how content spells a body that yields to everything and
                     // shoves nothing.
                     assert!(
-                        def.base_stats.contains_key(&EntityStatId::WEIGHT),
+                        def.base_stat(EntityStatId::WEIGHT).is_some(),
                         "entity type '{}' moves but defines no weight, \
                          which the continuous movement model requires",
                         def.name

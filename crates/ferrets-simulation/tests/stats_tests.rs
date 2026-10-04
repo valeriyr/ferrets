@@ -3,6 +3,7 @@
 use ferrets_content::{
     entity_stats::{EntityStatDef, EntityStatId},
     player_stats::PlayerStatId,
+    quantity::Quantity,
     registry::ContentRegistry,
     stats::{EntityModifier, ModifierOp},
 };
@@ -250,6 +251,27 @@ fn stat_floored_above_zero_holds_at_its_floor() {
     store.recompute(&[flat(ritual_time, "-10")], registry.entity_stat_defs());
 
     assert_eq!(store.effective(ritual_time), Some(FixedU64::ONE));
+}
+
+//
+// ─── Whole-number readings ────────────────────────────────────────────────────
+//
+
+#[test]
+fn ticks_round_up_and_cells_truncate() {
+    // An attack period of 2 shortened by 0.75 is 1.25: two ticks, one cell.
+    let mut store = store(EntityStatId::ATTACK_PERIOD, "2");
+    store.recompute(&[flat(EntityStatId::ATTACK_PERIOD, "-0.75")], &stat_defs());
+    assert_eq!(store.effective_ticks(EntityStatId::ATTACK_PERIOD), Some(2));
+    assert_eq!(
+        store.quantity_ticks(Quantity::Stat(EntityStatId::ATTACK_PERIOD)),
+        Some(2)
+    );
+    assert_eq!(
+        store.quantity_cells(Quantity::Stat(EntityStatId::ATTACK_PERIOD)),
+        Some(1)
+    );
+    assert_eq!(store.quantity_ticks(Quantity::Constant(7)), Some(7));
 }
 
 //

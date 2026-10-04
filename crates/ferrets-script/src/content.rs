@@ -9,7 +9,8 @@ use ferrets_content::{
     entity_buffs::Interruption,
     field::{FieldAction, FieldCoverage, FieldVision},
     location::Solidity,
-    morph::{MorphCancel, MorphInterrupted, MorphPlacement, MorphReason},
+    morph::{MorphCancel, MorphInterrupted, MorphPlacement, MorphReason, PoolCarry, RevertCarry},
+    pool_shift::PoolShift,
     projectile::Aim,
     registry::ContentRegistry,
     resource::{Banking, DepletionPolicy},
@@ -269,6 +270,57 @@ pub(crate) fn morph_reason(value: &str) -> crate::Result<MorphReason> {
         &[
             ("production", MorphReason::Production),
             ("change", MorphReason::Change),
+        ],
+    )
+}
+
+/// Maps a pool carry name to its enum.
+pub(crate) fn pool_carry(value: &str) -> crate::Result<PoolCarry> {
+    keyword(
+        "pool carry",
+        value,
+        &[
+            ("share", PoolCarry::Shift(PoolShift::Share)),
+            ("difference", PoolCarry::Shift(PoolShift::Difference)),
+            ("clamp", PoolCarry::Shift(PoolShift::Clamp)),
+            ("full", PoolCarry::Full),
+        ],
+    )
+}
+
+/// Maps a revert carry name to its enum.
+pub(crate) fn revert_carry(value: &str) -> crate::Result<RevertCarry> {
+    keyword(
+        "revert carry",
+        value,
+        &[
+            ("restore", RevertCarry::Restore),
+            (
+                "share",
+                RevertCarry::Carry(PoolCarry::Shift(PoolShift::Share)),
+            ),
+            (
+                "difference",
+                RevertCarry::Carry(PoolCarry::Shift(PoolShift::Difference)),
+            ),
+            (
+                "clamp",
+                RevertCarry::Carry(PoolCarry::Shift(PoolShift::Clamp)),
+            ),
+            ("full", RevertCarry::Carry(PoolCarry::Full)),
+        ],
+    )
+}
+
+/// Maps a pool shift name to its enum.
+pub(crate) fn pool_shift(value: &str) -> crate::Result<PoolShift> {
+    keyword(
+        "pool shift",
+        value,
+        &[
+            ("share", PoolShift::Share),
+            ("difference", PoolShift::Difference),
+            ("clamp", PoolShift::Clamp),
         ],
     )
 }

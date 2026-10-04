@@ -4,7 +4,10 @@
 
 use ferrets_pathfinder::layer_mask::LayerMask;
 
-use crate::{affiliation::Affiliation, detection::Detection, entity_effect::EntityEffect};
+use crate::{
+    affiliation::Affiliation, detection::Detection, entity_effect::EntityEffect,
+    requirement::Requirement,
+};
 
 /// A handle to a registered field kind, assigned in registration order.
 ///
@@ -286,29 +289,35 @@ impl FieldPlacement {
     }
 }
 
-/// Which side of a field an effect applies on.
+/// Which side of a field an entity stands on, for an effect.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FieldSide {
-    /// Enough of the entity's footprint is covered, as its coverage asks.
+    /// As much of the entity's footprint is covered as the effect's coverage
+    /// asks for.
     Inside,
-    /// Enough of the entity's footprint is uncovered, as its coverage asks.
+    /// Not inside.
     Outside,
 }
 
-/// One effect a field has on an entity type, while enough of its footprint is
-/// on the given side of the field.
+/// What a field does to an entity type on each side of it: inside when as
+/// much of its footprint is covered as the coverage asks for, outside
+/// otherwise.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FieldEffect {
     /// The field read.
     field: FieldId,
     /// Whose coverage counts.
     of: Affiliation,
-    /// The side of the field the effect applies on.
-    side: FieldSide,
-    /// How much of the bearer's footprint must be on that side.
+    /// How much of the bearer's footprint must be covered for it to stand
+    /// inside.
     coverage: FieldCoverage,
-    /// What the effect does.
-    kind: EntityEffect,
+    /// What the field does to the bearer inside it.
+    inside: Vec<EntityEffect>,
+    /// What the field does to the bearer outside it.
+    outside: Vec<EntityEffect>,
+    /// What the bearer must meet besides the field for the effect to hold;
+    /// `None` when the field alone decides.
+    holds_while: Option<Requirement>,
 }
 
 impl FieldEffect {
@@ -316,16 +325,18 @@ impl FieldEffect {
     pub fn new(
         field: FieldId,
         of: Affiliation,
-        side: FieldSide,
         coverage: FieldCoverage,
-        kind: EntityEffect,
+        inside: Vec<EntityEffect>,
+        outside: Vec<EntityEffect>,
+        holds_while: Option<Requirement>,
     ) -> Self {
         Self {
             field,
             of,
-            side,
             coverage,
-            kind,
+            inside,
+            outside,
+            holds_while,
         }
     }
 
@@ -341,21 +352,32 @@ impl FieldEffect {
         self.of
     }
 
-    /// The side of the field the effect applies on.
-    #[inline]
-    pub fn side(&self) -> FieldSide {
-        self.side
-    }
-
-    /// How much of the bearer's footprint must be on that side.
+    /// How much of the bearer's footprint must be covered for it to stand
+    /// inside.
     #[inline]
     pub fn coverage(&self) -> FieldCoverage {
         self.coverage
     }
 
-    /// What the effect does.
+    /// What the field does to the bearer on `side`.
     #[inline]
-    pub fn kind(&self) -> &EntityEffect {
-        &self.kind
+    pub fn on(&self, side: FieldSide) -> &[EntityEffect] {
+        match side {
+            FieldSide::Inside => &self.inside,
+            FieldSide::Outside => &self.outside,
+        }
+    }
+
+    /// Every effect, inside then outside.
+    #[inline]
+    pub fn effects(&self) -> impl Iterator<Item = &EntityEffect> {
+        self.inside.iter().chain(&self.outside)
+    }
+
+    /// What the bearer must meet besides the field for the effect to hold;
+    /// `None` when the field alone decides.
+    #[inline]
+    pub fn holds_while(&self) -> Option<&Requirement> {
+        self.holds_while.as_ref()
     }
 }

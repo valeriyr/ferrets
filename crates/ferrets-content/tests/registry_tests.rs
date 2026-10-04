@@ -20,17 +20,24 @@ use ferrets_content::{
     dying::{Bequest, DeathKind, DyingDef, LeftBy},
     entity_buffs::{EntityBuffDef, Interruption, Lasting},
     entity_effect::EntityEffect,
+    entity_modifiers::EntityModifiers,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     field::{
         Emission, FieldAction, FieldCoverage, FieldDecay, FieldDef, FieldEffect, FieldGrowth,
-        FieldId, FieldLayer, FieldPlacement, FieldSide, FieldSourceDef, FieldVision,
+        FieldId, FieldLayer, FieldPlacement, FieldSourceDef, FieldVision,
     },
     kinds::Kinds,
     location::Solidity,
-    morph::{MorphCancel, MorphInterrupted, MorphPlacement, MorphReason, MorphTransition},
+    morph::{
+        MorphCancel, MorphCourse, MorphInterrupted, MorphPlacement, MorphReason, MorphTransition,
+        PoolCarry, RevertCarry, ViaInterrupted,
+    },
     player_buffs::{PlayerBuffDef, PlayerBuffId},
     player_stats::PlayerStatId,
+    pool::Pool,
+    pool_def::{PoolId, PoolRole},
+    pool_shift::PoolShift,
     price::{self, Price},
     quantity::Quantity,
     registry::ContentRegistry,
@@ -602,14 +609,11 @@ fn validate_rejects_leaving_unregistered_type() {
 )]
 fn register_rejects_remains_with_live_gameplay_data() {
     let mut registry = utils::ground_registry();
-    registry.register(remains("bones", 200).with_health(10).with_attack(
-        utils::weapon(GROUND),
-        1,
-        1,
-        1,
-        2,
-        1,
-    ));
+    registry.register(
+        remains("bones", 200)
+            .with_pool(Pool::health(10))
+            .with_attack(utils::weapon(GROUND), 1, 1, 1, 2, 1),
+    );
 }
 
 #[test]
@@ -660,10 +664,10 @@ fn validate_rejects_transition_wearing_remains() {
     let mut registry = utils::ground_registry();
 
     registry.register(remains("corpse", 600));
-    registry.register(utils::standing("hatchling", GROUND).with_health(30));
+    registry.register(utils::standing("hatchling", GROUND).with_pool(Pool::health(30)));
     registry.register(
         utils::standing("larva", GROUND)
-            .with_health(20)
+            .with_pool(Pool::health(20))
             .with_morphs([morph_through("corpse", "hatchling")]),
     );
     registry.validate();
@@ -915,13 +919,6 @@ fn validate_ignores_layers_of_things_that_cannot_move() {
 //
 
 #[test]
-#[should_panic(expected = "has a non-positive max_health stat")]
-fn register_rejects_non_positive_max_health() {
-    let mut registry = utils::ground_registry();
-    registry.register(utils::standing("worker", GROUND).with_health(0));
-}
-
-#[test]
 #[should_panic(expected = "has a non-positive speed stat")]
 fn register_rejects_non_positive_speed() {
     let mut registry = utils::ground_registry();
@@ -1027,7 +1024,7 @@ fn register_rejects_zero_damage_point() {
 }
 
 #[test]
-#[should_panic(expected = "with an energy cost but no max_energy stat")]
+#[should_panic(expected = "with an energy cost but no energy pool")]
 fn register_rejects_costed_skill_without_energy_pool() {
     let mut registry = utils::ground_registry();
     let jolt = registry.register_skill(
@@ -1046,7 +1043,7 @@ fn register_rejects_costed_skill_without_energy_pool() {
     );
     registry.register(
         utils::standing("caster", GROUND)
-            .with_health(20)
+            .with_pool(Pool::health(20))
             .with_skills([jolt]),
     );
 }
@@ -1070,7 +1067,7 @@ fn register_accepts_free_skill_without_energy_pool() {
     );
     registry.register(
         utils::standing("caster", GROUND)
-            .with_health(20)
+            .with_pool(Pool::health(20))
             .with_skills([shout]),
     );
     assert!(registry.entity("caster").is_some());
@@ -1118,7 +1115,7 @@ fn register_accepts_resource_costed_skill_without_pools() {
     );
     registry.register(
         utils::standing("caster", GROUND)
-            .with_health(20)
+            .with_pool(Pool::health(20))
             .with_skills([rally]),
     );
     assert!(registry.entity("caster").is_some());
@@ -1193,30 +1190,28 @@ fn register_rejects_weapon_without_its_numbers() {
     let mut registry = utils::ground_registry();
     registry.register(
         utils::standing("scarecrow", GROUND)
-            .with_health(10)
+            .with_pool(Pool::health(10))
             .with_attack_def(GROUND, Delivery::Instant, None, Slain::Remains),
     );
 }
 
 #[test]
-#[should_panic(expected = "declares health_regen without max_health")]
-fn register_rejects_health_regen_without_pool() {
+#[should_panic(
+    expected = "entity type 'wall' declares 'health_regen', which belongs to the health pool; declare the pool"
+)]
+fn validate_rejects_pool_stat_without_its_pool() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("wall", GROUND)
-            .with_stat(EntityStatId::HEALTH_REGEN, FixedU64::from_num(0.5)),
+        utils::standing("wall", GROUND).with_stat(EntityStatId::HEALTH_REGEN, utils::fixed("0.5")),
     );
+    registry.validate();
 }
 
 #[test]
-#[should_panic(expected = "declares energy_regen without max_energy")]
-fn register_rejects_energy_regen_without_pool() {
+#[should_panic(expected = "entity type 'wall' declares the health pool with a maximum of 0")]
+fn register_rejects_pool_with_zero_maximum() {
     let mut registry = utils::ground_registry();
-    registry.register(
-        utils::standing("wall", GROUND)
-            .with_health(20)
-            .with_stat(EntityStatId::ENERGY_REGEN, FixedU64::from_num(0.5)),
-    );
+    registry.register(utils::standing("wall", GROUND).with_pool(Pool::health(0)));
 }
 
 #[test]
@@ -1225,7 +1220,7 @@ fn register_rejects_repair_speed_without_capability() {
     let mut registry = utils::ground_registry();
     registry.register(
         utils::standing("worker", GROUND)
-            .with_health(20)
+            .with_pool(Pool::health(20))
             .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE),
     );
 }
@@ -1481,7 +1476,7 @@ fn register_rejects_content_stat_below_its_floor() {
     // the type never actually has.
     registry.register(
         utils::standing("priest", GROUND)
-            .with_health(20)
+            .with_pool(Pool::health(20))
             .with_stat(ritual_time, FixedU64::ZERO),
     );
 }
@@ -1533,11 +1528,13 @@ fn register_rejects_entity_cast_skill_with_unregistered_buff() {
     let buff = foreign.register_entity_buff(
         "haste",
         EntityBuffDef {
-            effects: vec![EntityEffect::Modifiers(vec![EntityModifier {
-                stat: EntityStatId::SPEED,
-                op: ModifierOp::PercentAdd,
-                magnitude: FixedI64::ONE,
-            }])],
+            effects: vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![
+                EntityModifier {
+                    stat: EntityStatId::SPEED,
+                    op: ModifierOp::PercentAdd,
+                    magnitude: FixedI64::ONE,
+                },
+            ]))],
             lasting: Lasting::For(10),
             stack_rule: StackRule::Refresh,
             interrupted_by: Vec::new(),
@@ -1585,7 +1582,7 @@ fn register_rejects_type_declaring_player_cast_skill() {
     let war_cry = registry.register_skill("war_cry", player_cast(haste));
     registry.register(
         utils::standing("caster", GROUND)
-            .with_health(20)
+            .with_pool(Pool::health(20))
             .with_skills([war_cry]),
     );
 }
@@ -1600,7 +1597,7 @@ fn register_rejects_repairer_without_rate() {
     let mut registry = utils::ground_registry();
     registry.register(
         utils::standing("worker", GROUND)
-            .with_health(20)
+            .with_pool(Pool::health(20))
             .with_repairer(
                 Kinds::tags(["building"]),
                 RepairRate::Production,
@@ -1620,7 +1617,7 @@ fn register_rejects_repairer_without_reach() {
     let mut registry = utils::ground_registry();
     registry.register(
         utils::standing("worker", GROUND)
-            .with_health(20)
+            .with_pool(Pool::health(20))
             .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
             .with_repairer(
                 Kinds::tags(["building"]),
@@ -1643,7 +1640,7 @@ fn validate_accepts_repairer_mending_its_own_kind() {
     // mend mechanics — and anything declared after it.
     registry.register(
         utils::standing("mechanic", GROUND)
-            .with_health(20)
+            .with_pool(Pool::health(20))
             .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
             .with_stat(EntityStatId::REPAIR_RANGE, FixedU64::ONE)
             .with_repairer(
@@ -1657,7 +1654,7 @@ fn validate_accepts_repairer_mending_its_own_kind() {
                 None,
             ),
     );
-    registry.register(utils::standing("tank", GROUND).with_health(40));
+    registry.register(utils::standing("tank", GROUND).with_pool(Pool::health(40)));
 
     registry.validate();
 }
@@ -1670,7 +1667,7 @@ fn validate_rejects_repairer_mending_unknown_tag() {
     let mut registry = utils::ground_registry();
     registry.register(
         utils::standing("worker", GROUND)
-            .with_health(20)
+            .with_pool(Pool::health(20))
             .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
             .with_stat(EntityStatId::REPAIR_RANGE, FixedU64::ONE)
             .with_repairer(
@@ -1693,7 +1690,7 @@ fn register_rejects_pro_rata_repair_without_factor() {
     let mut registry = utils::ground_registry();
     registry.register(
         utils::standing("worker", GROUND)
-            .with_health(20)
+            .with_pool(Pool::health(20))
             .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
             .with_stat(EntityStatId::REPAIR_RANGE, FixedU64::ONE)
             .with_repairer(
@@ -1710,13 +1707,13 @@ fn register_rejects_pro_rata_repair_without_factor() {
 }
 
 #[test]
-#[should_panic(expected = "pays for repair with energy but has no max_energy stat")]
+#[should_panic(expected = "pays for repair with energy but has no energy pool")]
 fn register_rejects_energy_paid_repair_without_pool() {
     let mut registry = utils::ground_registry();
     registry.register_tag("biological");
     registry.register(
         utils::standing("medic", GROUND)
-            .with_health(20)
+            .with_pool(Pool::health(20))
             .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
             .with_stat(EntityStatId::REPAIR_RANGE, FixedU64::from_num(2))
             .with_repairer(
@@ -1753,7 +1750,7 @@ fn register_rejects_repair_ratio_without_production_time() {
     let mut registry = utils::ground_registry();
     registry.register(
         utils::standing("monolith", GROUND)
-            .with_health(100)
+            .with_pool(Pool::health(100))
             .with_repair_ratio(FixedU64::ONE),
     );
 }
@@ -1852,7 +1849,7 @@ fn validate_rejects_primary_that_goes_inside_its_annex_site() {
     registry.register(
         EntityTypeDef::new("keep")
             .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
-            .with_health(100)
+            .with_pool(Pool::health(100))
             .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
             .with_builder(
                 ["lookout"],
@@ -1865,7 +1862,7 @@ fn validate_rejects_primary_that_goes_inside_its_annex_site() {
     registry.register(
         EntityTypeDef::new("lookout")
             .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-            .with_health(10)
+            .with_pool(Pool::health(10))
             .with_build_time(4)
             .with_annex(
                 AloneConduct::Standing {
@@ -1879,14 +1876,14 @@ fn validate_rejects_primary_that_goes_inside_its_annex_site() {
 }
 
 #[test]
-#[should_panic(expected = "annex 'mast' fades but does not carry the health_drain stat")]
-fn validate_rejects_fading_annex_without_drain_stat() {
+#[should_panic(expected = "annex 'mast' fades but has no health pool")]
+fn validate_rejects_fading_annex_without_health_pool() {
     let mut registry = utils::ground_registry();
     registry.register_tag("building");
     registry.register(
         EntityTypeDef::new("keep")
             .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
-            .with_health(100)
+            .with_pool(Pool::health(100))
             .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
             .with_builder(
                 ["mast"],
@@ -1899,7 +1896,6 @@ fn validate_rejects_fading_annex_without_drain_stat() {
     registry.register(
         EntityTypeDef::new("mast")
             .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-            .with_health(10)
             .with_build_time(4)
             .with_annex(
                 AloneConduct::Standing {
@@ -1980,7 +1976,7 @@ fn validate_rejects_dock_taking_unregistered_type() {
     // and the dock's own unregistered name is what is left to catch.
     registry.register(
         utils::sized("keep", GROUND, CellSize::new(2, 2))
-            .with_health(100)
+            .with_pool(Pool::health(100))
             .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
             .with_builder(
                 ["lookout"],
@@ -2074,7 +2070,7 @@ fn validate_accepts_dock_that_takes_any_annex() {
     // and what it sweeps in besides goes on standing where it stands.
     registry.register(
         utils::sized("keep", GROUND, CellSize::new(2, 2))
-            .with_health(100)
+            .with_pool(Pool::health(100))
             .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
             .with_builder(
                 ["lab"],
@@ -2085,7 +2081,7 @@ fn validate_accepts_dock_that_takes_any_annex() {
             .with_docks([(CellPos::new(2, 0), Kinds::Any)]),
     );
     registry.register(annex("lab", CellSize::ONE));
-    registry.register(utils::standing("runner", GROUND).with_health(10));
+    registry.register(utils::standing("runner", GROUND).with_pool(Pool::health(10)));
 
     registry.validate();
 }
@@ -2097,7 +2093,7 @@ fn validate_rejects_dock_that_names_no_annex() {
     registry.register_tag("workshop");
     registry.register(
         utils::sized("keep", GROUND, CellSize::new(2, 2))
-            .with_health(100)
+            .with_pool(Pool::health(100))
             .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
             .with_builder(
                 ["lab"],
@@ -2119,7 +2115,7 @@ fn validate_rejects_dock_that_takes_type_that_is_no_annex() {
     registry.register(primary(["runner"]));
     registry.register(
         utils::standing("runner", GROUND)
-            .with_health(10)
+            .with_pool(Pool::health(10))
             .with_build_time(4),
     );
     registry.validate();
@@ -2131,7 +2127,7 @@ fn validate_rejects_dock_inside_its_primarys_own_footprint() {
     let mut registry = utils::ground_registry();
     registry.register(
         utils::sized("keep", GROUND, CellSize::new(2, 2))
-            .with_health(100)
+            .with_pool(Pool::health(100))
             .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
             .with_builder(
                 ["lookout"],
@@ -2151,7 +2147,7 @@ fn validate_rejects_dock_whose_primary_cannot_raise_what_it_takes() {
     let mut registry = utils::ground_registry();
     registry.register(
         utils::sized("keep", GROUND, CellSize::new(2, 2))
-            .with_health(100)
+            .with_pool(Pool::health(100))
             .with_docks([(CellPos::new(2, 0), Kinds::types(["lookout"]))]),
     );
     registry.register(annex("lookout", CellSize::ONE));
@@ -2164,7 +2160,7 @@ fn validate_rejects_two_docks_on_one_cell() {
     let mut registry = utils::ground_registry();
     registry.register(
         utils::sized("keep", GROUND, CellSize::new(2, 2))
-            .with_health(100)
+            .with_pool(Pool::health(100))
             .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
             .with_builder(
                 ["lookout"],
@@ -2189,7 +2185,7 @@ fn validate_rejects_docks_whose_annexes_would_stand_on_each_other() {
     let mut registry = utils::ground_registry();
     registry.register(
         utils::sized("keep", GROUND, CellSize::new(2, 2))
-            .with_health(100)
+            .with_pool(Pool::health(100))
             .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
             .with_builder(
                 ["lookout", "beacon"],
@@ -2217,7 +2213,7 @@ fn validate_rejects_annex_that_does_not_claim_its_cells() {
     registry.register(
         EntityTypeDef::new("lookout")
             .with_location(GROUND, CellSize::ONE, Solidity::Passable)
-            .with_health(10)
+            .with_pool(Pool::health(10))
             .with_build_time(4)
             .with_annex(standing_annex(), AnnexClaim::Bound),
     );
@@ -2246,7 +2242,7 @@ fn validate_rejects_annex_that_cannot_be_built() {
     // spoke first.
     registry.register(
         utils::standing("lookout", GROUND)
-            .with_health(10)
+            .with_pool(Pool::health(10))
             .with_annex(standing_annex(), AnnexClaim::Bound),
     );
     registry.validate();
@@ -2274,7 +2270,7 @@ fn validate_rejects_docks_on_type_that_moves() {
                 FixedU64::from_num(360),
                 FixedU64::from_num(360),
             )
-            .with_health(100)
+            .with_pool(Pool::health(100))
             .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
             .with_builder(
                 ["lookout"],
@@ -2287,7 +2283,7 @@ fn validate_rejects_docks_on_type_that_moves() {
     registry.register(
         EntityTypeDef::new("lookout")
             .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-            .with_health(10)
+            .with_pool(Pool::health(10))
             .with_build_time(4)
             .with_annex(
                 AloneConduct::Standing {
@@ -2540,11 +2536,14 @@ fn validate_rejects_while_buff_moving_stat_it_is_judged_on() {
     registry.register_entity_buff(
         "swollen",
         EntityBuffDef {
-            effects: vec![EntityEffect::Modifiers(vec![EntityModifier {
-                stat: EntityStatId::MAX_HEALTH,
-                op: ModifierOp::PercentAdd,
-                magnitude: FixedI64::ONE,
-            }])],
+            effects: vec![EntityEffect::Modifiers(EntityModifiers::PoolMaximums {
+                modifiers: vec![EntityModifier {
+                    stat: EntityStatId::MAX_HEALTH,
+                    op: ModifierOp::PercentAdd,
+                    magnitude: FixedI64::ONE,
+                }],
+                pool_shift: PoolShift::Share,
+            })],
             lasting: Lasting::While(Requirement::Health(Bound::Share(Threshold::AtLeast(
                 utils::fixed("0.5"),
             )))),
@@ -2564,11 +2563,14 @@ fn validate_rejects_while_buff_on_energy_share_moving_maximum() {
     registry.register_entity_buff(
         "charged",
         EntityBuffDef {
-            effects: vec![EntityEffect::Modifiers(vec![EntityModifier {
-                stat: EntityStatId::MAX_ENERGY,
-                op: ModifierOp::FlatAdd,
-                magnitude: FixedI64::from_num(10),
-            }])],
+            effects: vec![EntityEffect::Modifiers(EntityModifiers::PoolMaximums {
+                modifiers: vec![EntityModifier {
+                    stat: EntityStatId::MAX_ENERGY,
+                    op: ModifierOp::FlatAdd,
+                    magnitude: FixedI64::from_num(10),
+                }],
+                pool_shift: PoolShift::Share,
+            })],
             lasting: Lasting::While(Requirement::Energy(Bound::Share(Threshold::AtLeast(
                 utils::fixed("0.5"),
             )))),
@@ -2588,11 +2590,13 @@ fn validate_rejects_while_buff_on_stat_amount_moving_that_stat() {
     registry.register_entity_buff(
         "sprint",
         EntityBuffDef {
-            effects: vec![EntityEffect::Modifiers(vec![EntityModifier {
-                stat: EntityStatId::SPEED,
-                op: ModifierOp::FlatAdd,
-                magnitude: FixedI64::ONE,
-            }])],
+            effects: vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![
+                EntityModifier {
+                    stat: EntityStatId::SPEED,
+                    op: ModifierOp::FlatAdd,
+                    magnitude: FixedI64::ONE,
+                },
+            ]))],
             lasting: Lasting::While(Requirement::Stat {
                 stat: EntityStatId::SPEED,
                 bound: Bound::Amount(Threshold::Under(FixedU64::ONE)),
@@ -2605,27 +2609,261 @@ fn validate_rejects_while_buff_on_stat_amount_moving_that_stat() {
 }
 
 #[test]
-#[should_panic(
-    expected = "entity buff 'crippled' holds on an amount of a pool capped by 'max_health', which its own modifiers lower"
-)]
-fn validate_rejects_while_buff_on_amount_lowering_maximum() {
+fn validate_accepts_while_buff_lowering_maximum_under_its_line() {
     let mut registry = utils::ground_registry();
-    // Under 100 health lowers a 200 maximum by 60% to 80, which the pool can
-    // never climb past to end it.
+    // Under 100 health lowers a 200 maximum by 60% to 80 by share: the
+    // amount falls with it and stays under the line, so it lapses only once
+    // healed past 100 of its own.
     registry.register_entity_buff(
         "crippled",
-        EntityBuffDef {
-            effects: vec![EntityEffect::Modifiers(vec![EntityModifier {
-                stat: EntityStatId::MAX_HEALTH,
-                op: ModifierOp::PercentAdd,
-                magnitude: "-0.6".parse().expect("-0.6 is a value"),
-            }])],
-            lasting: Lasting::While(Requirement::Health(Bound::Amount(Threshold::Under(
-                FixedU64::from_num(100),
-            )))),
-            stack_rule: StackRule::Ignore,
-            interrupted_by: Vec::new(),
-        },
+        held_on_health_buff(
+            "-0.6",
+            PoolShift::Share,
+            Threshold::Under(FixedU64::from_num(100)),
+        ),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity buff 'crippled' holds on an amount of a pool capped by 'max_health', which its own modifiers shift past its line"
+)]
+fn validate_rejects_while_buff_lowering_pool_past_at_least_line() {
+    let mut registry = utils::ground_registry();
+    // At least 100 health lowers the maximum by share: the amount falls
+    // under the line, the buff lapses, and the amount comes back.
+    registry.register_entity_buff(
+        "crippled",
+        held_on_health_buff(
+            "-0.6",
+            PoolShift::Share,
+            Threshold::AtLeast(FixedU64::from_num(100)),
+        ),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'channeler' holds passive 'surging' → passive 'steeled' → passive 'surging' on requirements that feed each other"
+)]
+fn validate_rejects_passives_feeding_each_other() {
+    let mut registry = utils::ground_registry();
+    // Under 50 health raises the energy maximum by share; under 60 energy
+    // raises the health maximum by difference: each moves the amount the
+    // other judges, so the pair flips every tick.
+    let surging = registry.register_entity_buff(
+        "surging",
+        held_on_amount_buff(
+            Requirement::Health(Bound::Amount(Threshold::Under(FixedU64::from_num(50)))),
+            EntityStatId::MAX_ENERGY,
+            "0.5",
+            PoolShift::Share,
+        ),
+    );
+    let steeled = registry.register_entity_buff(
+        "steeled",
+        held_on_amount_buff(
+            Requirement::Energy(Bound::Amount(Threshold::Under(FixedU64::from_num(60)))),
+            EntityStatId::MAX_HEALTH,
+            "100",
+            PoolShift::Difference,
+        ),
+    );
+    registry.register(
+        utils::standing("channeler", GROUND)
+            .with_pool(Pool::health(100))
+            .with_pool(Pool::energy(100))
+            .with_passives([surging, steeled]),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'channeler' holds passive 'surging' → field effect 1 → passive 'surging' on requirements that feed each other"
+)]
+fn validate_rejects_passive_and_field_effect_feeding_each_other() {
+    let mut registry = utils::ground_registry();
+    let creep = creep_field(&mut registry);
+    // The passive raises the energy maximum by share while under 50 health;
+    // the field effect raises the health maximum by difference while under
+    // 60 energy.
+    let surging = registry.register_entity_buff(
+        "surging",
+        held_on_amount_buff(
+            Requirement::Health(Bound::Amount(Threshold::Under(FixedU64::from_num(50)))),
+            EntityStatId::MAX_ENERGY,
+            "0.5",
+            PoolShift::Share,
+        ),
+    );
+    registry.register(
+        utils::standing("channeler", GROUND)
+            .with_pool(Pool::health(100))
+            .with_pool(Pool::energy(100))
+            .with_passives([surging])
+            .with_field_effects([FieldEffect::new(
+                creep,
+                Affiliation::Anyone,
+                FieldCoverage::Any,
+                vec![EntityEffect::Modifiers(EntityModifiers::PoolMaximums {
+                    modifiers: vec![EntityModifier {
+                        stat: EntityStatId::MAX_HEALTH,
+                        op: ModifierOp::FlatAdd,
+                        magnitude: FixedI64::from_num(100),
+                    }],
+                    pool_shift: PoolShift::Difference,
+                })],
+                Vec::new(),
+                Some(Requirement::Energy(Bound::Amount(Threshold::Under(
+                    FixedU64::from_num(60),
+                )))),
+            )]),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'runner' holds passive 'hasted' → passive 'steadied' → passive 'hasted' on requirements that feed each other"
+)]
+fn validate_rejects_passives_feeding_each_other_through_stats_they_read() {
+    let mut registry = utils::ground_registry();
+    // Each reads the stat the other moves: armor and sight.
+    let hasted = registry.register_entity_buff(
+        "hasted",
+        held_on_stat_buff(EntityStatId::SIGHT_RANGE, EntityStatId::ARMOR),
+    );
+    let steadied = registry.register_entity_buff(
+        "steadied",
+        held_on_stat_buff(EntityStatId::ARMOR, EntityStatId::SIGHT_RANGE),
+    );
+    registry.register(
+        utils::standing("runner", GROUND)
+            .with_stat(EntityStatId::ARMOR, FixedU64::ONE)
+            .with_stat(EntityStatId::SIGHT_RANGE, FixedU64::from_num(5))
+            .with_passives([hasted, steadied]),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity buff 'crippled' holds on an amount of a pool capped by 'max_health', which its own modifiers shift past its line"
+)]
+fn validate_rejects_while_buff_lowering_by_difference_under_at_least_line() {
+    let mut registry = utils::ground_registry();
+    // At least 100 health lowers the maximum by 60% by difference: the amount
+    // falls by the same and drops under the line.
+    registry.register_entity_buff(
+        "crippled",
+        held_on_health_buff(
+            "-0.6",
+            PoolShift::Difference,
+            Threshold::AtLeast(FixedU64::from_num(100)),
+        ),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity buff 'crippled' holds on an amount of a pool capped by 'max_health', which its own modifiers shift past its line"
+)]
+fn validate_rejects_while_buff_lowering_pool_past_under_line_turned_by_unless() {
+    let mut registry = utils::ground_registry();
+    // Held unless under 100 health — met at 100 and over — the share lowering
+    // takes the amount under the line.
+    let mut buff = held_on_health_buff(
+        "-0.6",
+        PoolShift::Share,
+        Threshold::Under(FixedU64::from_num(100)),
+    );
+    buff.lasting = Lasting::While(Requirement::Unless(Box::new(Requirement::Health(
+        Bound::Amount(Threshold::Under(FixedU64::from_num(100))),
+    ))));
+    registry.register_entity_buff("crippled", buff);
+    registry.validate();
+}
+
+#[test]
+fn validate_accepts_passives_looping_through_clamp_lowerings() {
+    let mut registry = utils::ground_registry();
+    // Each lowers the maximum of the pool the other judges, by clamp: a cut
+    // that lapses gives nothing back, so the pair settles.
+    let sapping = registry.register_entity_buff(
+        "sapping",
+        held_on_amount_buff(
+            Requirement::Health(Bound::Amount(Threshold::Under(FixedU64::from_num(50)))),
+            EntityStatId::MAX_ENERGY,
+            "-20",
+            PoolShift::Clamp,
+        ),
+    );
+    let draining = registry.register_entity_buff(
+        "draining",
+        held_on_amount_buff(
+            Requirement::Energy(Bound::Amount(Threshold::Under(FixedU64::from_num(60)))),
+            EntityStatId::MAX_HEALTH,
+            "-20",
+            PoolShift::Clamp,
+        ),
+    );
+    registry.register(
+        utils::standing("channeler", GROUND)
+            .with_pool(Pool::health(100))
+            .with_pool(Pool::energy(100))
+            .with_passives([sapping, draining]),
+    );
+    registry.validate();
+}
+
+#[test]
+fn validate_accepts_passive_feeding_one_that_feeds_nothing() {
+    let mut registry = utils::ground_registry();
+    // The first moves the energy the second judges; the second moves the
+    // health maximum by clamp upward, which leaves every amount where it is.
+    let surging = registry.register_entity_buff(
+        "surging",
+        held_on_amount_buff(
+            Requirement::Health(Bound::Amount(Threshold::Under(FixedU64::from_num(50)))),
+            EntityStatId::MAX_ENERGY,
+            "0.5",
+            PoolShift::Share,
+        ),
+    );
+    let steeled = registry.register_entity_buff(
+        "steeled",
+        held_on_amount_buff(
+            Requirement::Energy(Bound::Amount(Threshold::Under(FixedU64::from_num(60)))),
+            EntityStatId::MAX_HEALTH,
+            "100",
+            PoolShift::Clamp,
+        ),
+    );
+    registry.register(
+        utils::standing("channeler", GROUND)
+            .with_pool(Pool::health(100))
+            .with_pool(Pool::energy(100))
+            .with_passives([surging, steeled]),
+    );
+    registry.validate();
+}
+
+#[test]
+fn validate_accepts_while_buff_lowering_by_clamp_under_at_least_line() {
+    let mut registry = utils::ground_registry();
+    // A clamp lowering may cut the amount under the line once; the lapse
+    // gives nothing back, so the buff stays off.
+    registry.register_entity_buff(
+        "crippled",
+        held_on_health_buff(
+            "-0.6",
+            PoolShift::Clamp,
+            Threshold::AtLeast(FixedU64::from_num(100)),
+        ),
     );
     registry.validate();
 }
@@ -2633,16 +2871,19 @@ fn validate_rejects_while_buff_on_amount_lowering_maximum() {
 #[test]
 fn validate_accepts_while_buff_on_amount_raising_maximum() {
     let mut registry = utils::ground_registry();
-    // An amount of health is capped by the maximum, so a buff held on one may
-    // raise it.
+    // An amount of health is capped by the maximum, so a buff held at least
+    // on one may raise it: a higher amount keeps the requirement met.
     registry.register_entity_buff(
         "rallied",
         EntityBuffDef {
-            effects: vec![EntityEffect::Modifiers(vec![EntityModifier {
-                stat: EntityStatId::MAX_HEALTH,
-                op: ModifierOp::PercentAdd,
-                magnitude: FixedI64::ONE,
-            }])],
+            effects: vec![EntityEffect::Modifiers(EntityModifiers::PoolMaximums {
+                modifiers: vec![EntityModifier {
+                    stat: EntityStatId::MAX_HEALTH,
+                    op: ModifierOp::PercentAdd,
+                    magnitude: FixedI64::ONE,
+                }],
+                pool_shift: PoolShift::Share,
+            })],
             lasting: Lasting::While(Requirement::Health(Bound::Amount(Threshold::AtLeast(
                 FixedU64::from_num(50),
             )))),
@@ -2659,11 +2900,13 @@ fn validate_accepts_while_buff_moving_pool_under_its_line() {
     let on_fire = registry.register_entity_buff(
         "on_fire",
         EntityBuffDef {
-            effects: vec![EntityEffect::Modifiers(vec![EntityModifier {
-                stat: EntityStatId::HEALTH_DRAIN,
-                op: ModifierOp::FlatAdd,
-                magnitude: FixedI64::from_num(2),
-            }])],
+            effects: vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![
+                EntityModifier {
+                    stat: EntityStatId::HEALTH_DRAIN,
+                    op: ModifierOp::FlatAdd,
+                    magnitude: FixedI64::from_num(2),
+                },
+            ]))],
             lasting: Lasting::While(Requirement::Health(Bound::Share(Threshold::Under(
                 utils::fixed("0.34"),
             )))),
@@ -2673,8 +2916,7 @@ fn validate_accepts_while_buff_moving_pool_under_its_line() {
     );
     registry.register(
         utils::standing("depot", GROUND)
-            .with_health(100)
-            .with_stat(EntityStatId::HEALTH_DRAIN, FixedU64::ZERO)
+            .with_pool(Pool::health(100))
             .with_passives([on_fire]),
     );
     registry.validate();
@@ -2682,18 +2924,20 @@ fn validate_accepts_while_buff_moving_pool_under_its_line() {
 
 #[test]
 #[should_panic(
-    expected = "entity type 'depot' bears passive 'on_fire', which modifies 'health_drain' it does not carry"
+    expected = "entity type 'depot' bears passive 'on_fire', which modifies 'armor' it does not carry"
 )]
 fn validate_rejects_passive_modifying_stat_bearer_lacks() {
     let mut registry = utils::ground_registry();
     let on_fire = registry.register_entity_buff(
         "on_fire",
         EntityBuffDef {
-            effects: vec![EntityEffect::Modifiers(vec![EntityModifier {
-                stat: EntityStatId::HEALTH_DRAIN,
-                op: ModifierOp::FlatAdd,
-                magnitude: FixedI64::from_num(2),
-            }])],
+            effects: vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![
+                EntityModifier {
+                    stat: EntityStatId::ARMOR,
+                    op: ModifierOp::FlatAdd,
+                    magnitude: FixedI64::from_num(2),
+                },
+            ]))],
             lasting: Lasting::While(Requirement::Health(Bound::Share(Threshold::Under(
                 utils::fixed("0.34"),
             )))),
@@ -2703,7 +2947,172 @@ fn validate_rejects_passive_modifying_stat_bearer_lacks() {
     );
     registry.register(
         utils::standing("depot", GROUND)
-            .with_health(100)
+            .with_pool(Pool::health(100))
+            .with_passives([on_fire]),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(expected = "entity buff 'swell' moves 'max_health' but declares no pool shift")]
+fn register_rejects_buff_on_pool_maximum_without_shift() {
+    let mut registry = utils::ground_registry();
+    registry.register_entity_buff(
+        "swell",
+        EntityBuffDef {
+            effects: vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![
+                EntityModifier {
+                    stat: EntityStatId::MAX_HEALTH,
+                    op: ModifierOp::FlatAdd,
+                    magnitude: FixedI64::from_num(10),
+                },
+            ]))],
+            lasting: Lasting::Forever,
+            stack_rule: StackRule::Ignore,
+            interrupted_by: Vec::new(),
+        },
+    );
+}
+
+#[test]
+#[should_panic(
+    expected = "entity buff 'haste' declares a pool shift but moves 'speed', no pool maximum"
+)]
+fn register_rejects_shift_on_buff_moving_no_pool_maximum() {
+    let mut registry = utils::ground_registry();
+    registry.register_entity_buff(
+        "haste",
+        EntityBuffDef {
+            effects: vec![EntityEffect::Modifiers(EntityModifiers::PoolMaximums {
+                modifiers: vec![EntityModifier {
+                    stat: EntityStatId::SPEED,
+                    op: ModifierOp::FlatAdd,
+                    magnitude: FixedI64::from_num(1),
+                }],
+                pool_shift: PoolShift::Share,
+            })],
+            lasting: Lasting::Forever,
+            stack_rule: StackRule::Ignore,
+            interrupted_by: Vec::new(),
+        },
+    );
+}
+
+#[test]
+#[should_panic(expected = "player buff 'empty' lays a set of no modifiers")]
+fn register_rejects_player_buff_laying_empty_set() {
+    let mut registry = utils::ground_registry();
+    registry.register_player_buff(
+        "empty",
+        PlayerBuffDef {
+            player_modifiers: Vec::new(),
+            entity_modifiers: vec![EntityModifiers::Stats(Vec::new())],
+            duration: None,
+            stack_rule: StackRule::Ignore,
+        },
+    );
+}
+
+#[test]
+#[should_panic(expected = "player buff 'drill' moves 'max_energy' but declares no pool shift")]
+fn register_rejects_player_buff_on_pool_maximum_without_shift() {
+    let mut registry = utils::ground_registry();
+    registry.register_player_buff(
+        "drill",
+        PlayerBuffDef {
+            player_modifiers: Vec::new(),
+            entity_modifiers: vec![EntityModifiers::Stats(vec![EntityModifier {
+                stat: EntityStatId::MAX_ENERGY,
+                op: ModifierOp::FlatAdd,
+                magnitude: FixedI64::from_num(10),
+            }])],
+            duration: None,
+            stack_rule: StackRule::Ignore,
+        },
+    );
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'shrub' field effect moves 'max_health' but declares no pool shift"
+)]
+fn register_rejects_field_effect_on_pool_maximum_without_shift() {
+    let mut registry = utils::ground_registry();
+    let creep = creep_field(&mut registry);
+    registry.register(
+        utils::standing("shrub", GROUND)
+            .with_pool(Pool::health(35))
+            .with_field_effects([FieldEffect::new(
+                creep,
+                Affiliation::Anyone,
+                FieldCoverage::Every,
+                Vec::new(),
+                vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![
+                    EntityModifier {
+                        stat: EntityStatId::MAX_HEALTH,
+                        op: ModifierOp::PercentAdd,
+                        magnitude: -FixedI64::ONE,
+                    },
+                ]))],
+                None,
+            )]),
+    );
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'shrub' field effect holds while it judges 'max_health', which its own modifiers move"
+)]
+fn register_rejects_field_effect_moving_stat_it_holds_while_judging() {
+    let mut registry = utils::ground_registry();
+    let creep = creep_field(&mut registry);
+    registry.register(
+        utils::standing("shrub", GROUND)
+            .with_pool(Pool::health(35))
+            .with_field_effects([FieldEffect::new(
+                creep,
+                Affiliation::Anyone,
+                FieldCoverage::Every,
+                Vec::new(),
+                vec![EntityEffect::Modifiers(EntityModifiers::PoolMaximums {
+                    modifiers: vec![EntityModifier {
+                        stat: EntityStatId::MAX_HEALTH,
+                        op: ModifierOp::PercentAdd,
+                        magnitude: -FixedI64::ONE,
+                    }],
+                    pool_shift: PoolShift::Share,
+                })],
+                Some(Requirement::Health(Bound::Share(Threshold::AtLeast(
+                    utils::fixed("0.5"),
+                )))),
+            )]),
+    );
+}
+
+#[test]
+fn validate_accepts_passive_on_rate_its_pool_carries() {
+    let mut registry = utils::ground_registry();
+    // The depot names no drain, but its health pool carries one.
+    let on_fire = registry.register_entity_buff(
+        "on_fire",
+        EntityBuffDef {
+            effects: vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![
+                EntityModifier {
+                    stat: EntityStatId::HEALTH_DRAIN,
+                    op: ModifierOp::FlatAdd,
+                    magnitude: FixedI64::from_num(2),
+                },
+            ]))],
+            lasting: Lasting::While(Requirement::Health(Bound::Share(Threshold::Under(
+                utils::fixed("0.34"),
+            )))),
+            stack_rule: StackRule::Ignore,
+            interrupted_by: Vec::new(),
+        },
+    );
+    registry.register(
+        utils::standing("depot", GROUND)
+            .with_pool(Pool::health(100))
             .with_passives([on_fire]),
     );
     registry.validate();
@@ -2729,6 +3138,156 @@ fn validate_rejects_while_buff_naming_unregistered_type() {
 
 #[test]
 #[should_panic(
+    expected = "entity buff 'lit' requires the entity type 'beacon', which is not registered"
+)]
+fn validate_rejects_unresolved_name_under_unless() {
+    let mut registry = utils::ground_registry();
+    registry.register_entity_buff(
+        "lit",
+        EntityBuffDef {
+            effects: vec![EntityEffect::Conceal],
+            lasting: Lasting::While(Requirement::Unless(Box::new(Requirement::EntityType(
+                "beacon".to_string(),
+            )))),
+            stack_rule: StackRule::Ignore,
+            interrupted_by: Vec::new(),
+        },
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity buff 'swollen' holds while it judges 'max_health', which its own modifiers move"
+)]
+fn validate_rejects_while_buff_moving_stat_it_judges_under_unless() {
+    let mut registry = utils::ground_registry();
+    registry.register_entity_buff(
+        "swollen",
+        EntityBuffDef {
+            effects: vec![EntityEffect::Modifiers(EntityModifiers::PoolMaximums {
+                modifiers: vec![EntityModifier {
+                    stat: EntityStatId::MAX_HEALTH,
+                    op: ModifierOp::PercentAdd,
+                    magnitude: FixedI64::ONE,
+                }],
+                pool_shift: PoolShift::Share,
+            })],
+            lasting: Lasting::While(Requirement::Unless(Box::new(Requirement::Health(
+                Bound::Share(Threshold::AtLeast(utils::fixed("0.5"))),
+            )))),
+            stack_rule: StackRule::Ignore,
+            interrupted_by: Vec::new(),
+        },
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity buff 'swollen' holds on an amount of a pool capped by 'max_health', which its own modifiers shift past its line"
+)]
+fn validate_rejects_while_buff_shifting_pool_whose_amount_it_judges() {
+    let mut registry = utils::ground_registry();
+    registry.register_entity_buff(
+        "swollen",
+        EntityBuffDef {
+            effects: vec![EntityEffect::Modifiers(EntityModifiers::PoolMaximums {
+                modifiers: vec![EntityModifier {
+                    stat: EntityStatId::MAX_HEALTH,
+                    op: ModifierOp::FlatAdd,
+                    magnitude: FixedI64::from_num(50),
+                }],
+                pool_shift: PoolShift::Difference,
+            })],
+            lasting: Lasting::While(Requirement::Health(Bound::Amount(Threshold::Under(
+                FixedU64::from_num(100),
+            )))),
+            stack_rule: StackRule::Ignore,
+            interrupted_by: Vec::new(),
+        },
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity buff 'swollen' holds on an amount of a pool capped by 'max_health', which its own modifiers shift past its line"
+)]
+fn validate_rejects_while_buff_shifting_pool_past_line_turned_by_unless() {
+    let mut registry = utils::ground_registry();
+    registry.register_entity_buff(
+        "swollen",
+        EntityBuffDef {
+            effects: vec![EntityEffect::Modifiers(EntityModifiers::PoolMaximums {
+                modifiers: vec![EntityModifier {
+                    stat: EntityStatId::MAX_HEALTH,
+                    op: ModifierOp::FlatAdd,
+                    magnitude: FixedI64::from_num(50),
+                }],
+                pool_shift: PoolShift::Difference,
+            })],
+            lasting: Lasting::While(Requirement::Unless(Box::new(Requirement::Health(
+                Bound::Amount(Threshold::AtLeast(FixedU64::from_num(100))),
+            )))),
+            stack_rule: StackRule::Ignore,
+            interrupted_by: Vec::new(),
+        },
+    );
+    registry.validate();
+}
+
+#[test]
+fn validate_accepts_while_buff_shifting_pool_away_from_its_line() {
+    let mut registry = utils::ground_registry();
+    // Held while alive: raising the pool keeps it alive.
+    registry.register_entity_buff(
+        "swollen",
+        EntityBuffDef {
+            effects: vec![EntityEffect::Modifiers(EntityModifiers::PoolMaximums {
+                modifiers: vec![EntityModifier {
+                    stat: EntityStatId::MAX_HEALTH,
+                    op: ModifierOp::FlatAdd,
+                    magnitude: FixedI64::from_num(50),
+                }],
+                pool_shift: PoolShift::Difference,
+            })],
+            lasting: Lasting::While(Requirement::Health(Bound::Amount(Threshold::AtLeast(
+                FixedU64::ONE,
+            )))),
+            stack_rule: StackRule::Ignore,
+            interrupted_by: Vec::new(),
+        },
+    );
+    registry.validate();
+}
+
+#[test]
+fn validate_accepts_while_buff_raising_pool_by_clamp_whose_amount_it_judges() {
+    let mut registry = utils::ground_registry();
+    registry.register_entity_buff(
+        "swollen",
+        EntityBuffDef {
+            effects: vec![EntityEffect::Modifiers(EntityModifiers::PoolMaximums {
+                modifiers: vec![EntityModifier {
+                    stat: EntityStatId::MAX_HEALTH,
+                    op: ModifierOp::FlatAdd,
+                    magnitude: FixedI64::from_num(50),
+                }],
+                pool_shift: PoolShift::Clamp,
+            })],
+            lasting: Lasting::While(Requirement::Health(Bound::Amount(Threshold::Under(
+                FixedU64::from_num(100),
+            )))),
+            stack_rule: StackRule::Ignore,
+            interrupted_by: Vec::new(),
+        },
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
     expected = "entity type 'depot' bears passive 'thick_hide', which does not hold on a requirement"
 )]
 fn validate_rejects_passive_not_holding_on_requirement() {
@@ -2736,11 +3295,13 @@ fn validate_rejects_passive_not_holding_on_requirement() {
     let thick_hide = registry.register_entity_buff(
         "thick_hide",
         EntityBuffDef {
-            effects: vec![EntityEffect::Modifiers(vec![EntityModifier {
-                stat: EntityStatId::ARMOR,
-                op: ModifierOp::FlatAdd,
-                magnitude: FixedI64::ONE,
-            }])],
+            effects: vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![
+                EntityModifier {
+                    stat: EntityStatId::ARMOR,
+                    op: ModifierOp::FlatAdd,
+                    magnitude: FixedI64::ONE,
+                },
+            ]))],
             lasting: Lasting::Forever,
             stack_rule: StackRule::Ignore,
             interrupted_by: Vec::new(),
@@ -2748,7 +3309,7 @@ fn validate_rejects_passive_not_holding_on_requirement() {
     );
     registry.register(
         utils::standing("depot", GROUND)
-            .with_health(100)
+            .with_pool(Pool::health(100))
             .with_stat(EntityStatId::ARMOR, FixedU64::ZERO)
             .with_passives([thick_hide]),
     );
@@ -2771,7 +3332,7 @@ fn validate_rejects_passive_registered_elsewhere() {
     let mut registry = utils::ground_registry();
     registry.register(
         utils::standing("depot", GROUND)
-            .with_health(100)
+            .with_pool(Pool::health(100))
             .with_passives([foreign]),
     );
     registry.validate();
@@ -2792,7 +3353,7 @@ fn validate_rejects_passive_named_twice() {
     );
     registry.register(
         utils::standing("depot", GROUND)
-            .with_health(100)
+            .with_pool(Pool::health(100))
             .with_passives([on_fire, on_fire]),
     );
     registry.validate();
@@ -2907,14 +3468,14 @@ fn validate_rejects_change_of_form_requiring_tag_nothing_carries() {
     registry.register(
         utils::standing("hall", GROUND).with_morphs([MorphTransition::new(
             "keep",
-            None,
+            MorphCourse::direct(MorphInterrupted::Reverts),
             Quantity::Constant(20),
             MorphPlacement::Reserve,
             MorphCancel::Committed,
-            MorphInterrupted::Reverts,
             MorphReason::Change,
             Vec::new(),
             [Requirement::Tag("forge".to_string())],
+            [],
         )]),
     );
     registry.validate();
@@ -2968,7 +3529,7 @@ fn validate_rejects_annex_requirement_that_can_never_be_unlocked() {
     registry.register(
         EntityTypeDef::new("keep")
             .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
-            .with_health(100)
+            .with_pool(Pool::health(100))
             .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
             .with_builder(
                 ["lookout"],
@@ -2982,7 +3543,7 @@ fn validate_rejects_annex_requirement_that_can_never_be_unlocked() {
     registry.register(
         EntityTypeDef::new("lookout")
             .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-            .with_health(10)
+            .with_pool(Pool::health(10))
             .with_build_time(4)
             .with_annex(
                 AloneConduct::Standing {
@@ -3127,6 +3688,125 @@ fn validate_accepts_one_way_transition() {
 
 #[test]
 #[should_panic(
+    expected = "entity type 'walker' morphing into 'flier' carries the energy pool on its landing, which 'flier' does not have"
+)]
+fn validate_rejects_landing_carry_of_pool_destination_lacks() {
+    let mut registry = utils::ground_registry();
+    registry.register(
+        utils::standing("walker", GROUND)
+            .with_pool(Pool::health(50))
+            .with_pool(Pool::energy(20))
+            .with_morphs([carrying_into(
+                "flier",
+                MorphCourse::direct(MorphInterrupted::Reverts),
+                [(PoolId::ENERGY, PoolCarry::Full)],
+            )]),
+    );
+    registry.register(utils::standing("flier", GROUND).with_pool(Pool::health(50)));
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'walker' morphing into 'flier' carries the energy pool on its entering, which 'cocoon' does not have"
+)]
+fn validate_rejects_entering_carry_of_pool_interim_lacks() {
+    let mut registry = utils::ground_registry();
+    registry.register(utils::standing("cocoon", GROUND).with_pool(Pool::health(50)));
+    registry.register(
+        utils::standing("walker", GROUND)
+            .with_pool(Pool::health(50))
+            .with_pool(Pool::energy(20))
+            .with_morphs([carrying_into(
+                "flier",
+                MorphCourse::via(
+                    "cocoon",
+                    [(PoolId::ENERGY, PoolCarry::Full)],
+                    ViaInterrupted::Dies,
+                ),
+                [],
+            )]),
+    );
+    registry.register(utils::standing("flier", GROUND).with_pool(Pool::health(50)));
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'walker' morphing into 'flier' carries the energy pool on its revert, which 'walker' does not have"
+)]
+fn validate_rejects_revert_carry_of_pool_origin_lacks() {
+    let mut registry = utils::ground_registry();
+    registry.register(
+        utils::standing("cocoon", GROUND)
+            .with_pool(Pool::health(50))
+            .with_pool(Pool::energy(20)),
+    );
+    registry.register(
+        utils::standing("walker", GROUND)
+            .with_pool(Pool::health(50))
+            .with_morphs([carrying_into(
+                "flier",
+                MorphCourse::via(
+                    "cocoon",
+                    [],
+                    ViaInterrupted::reverts([(PoolId::ENERGY, RevertCarry::Restore)]),
+                ),
+                [],
+            )]),
+    );
+    registry.register(utils::standing("flier", GROUND).with_pool(Pool::health(50)));
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'walker' morphing into 'flier' carries the energy pool on its landing, which none of 'cocoon', 'walker' had"
+)]
+fn validate_rejects_landing_carry_of_pool_no_form_left_had() {
+    let mut registry = utils::ground_registry();
+    registry.register(utils::standing("cocoon", GROUND).with_pool(Pool::health(50)));
+    registry.register(
+        utils::standing("walker", GROUND)
+            .with_pool(Pool::health(50))
+            .with_morphs([carrying_into(
+                "flier",
+                MorphCourse::via("cocoon", [], ViaInterrupted::Dies),
+                [(PoolId::ENERGY, PoolCarry::Full)],
+            )]),
+    );
+    registry.register(
+        utils::standing("flier", GROUND)
+            .with_pool(Pool::health(50))
+            .with_pool(Pool::energy(20)),
+    );
+    registry.validate();
+}
+
+#[test]
+fn validate_accepts_landing_carry_of_pool_interim_lacks() {
+    let mut registry = utils::ground_registry();
+    registry.register(utils::standing("cocoon", GROUND).with_pool(Pool::health(50)));
+    registry.register(
+        utils::standing("walker", GROUND)
+            .with_pool(Pool::health(50))
+            .with_pool(Pool::energy(20))
+            .with_morphs([carrying_into(
+                "flier",
+                MorphCourse::via("cocoon", [], ViaInterrupted::Dies),
+                [(PoolId::ENERGY, PoolCarry::Shift(PoolShift::Share))],
+            )]),
+    );
+    registry.register(
+        utils::standing("flier", GROUND)
+            .with_pool(Pool::health(50))
+            .with_pool(Pool::energy(20)),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
     expected = "entity type 'walker' morphing into 'flier' names a type that is not registered"
 )]
 fn validate_rejects_transition_into_unregistered_type() {
@@ -3164,14 +3844,14 @@ fn validate_rejects_nearby_landing_into_form_that_cannot_move() {
             )
             .with_morphs([MorphTransition::new(
                 "keep",
-                None,
+                MorphCourse::direct(MorphInterrupted::Reverts),
                 Quantity::Constant(20),
                 MorphPlacement::Nearby,
                 MorphCancel::Committed,
-                MorphInterrupted::Reverts,
                 MorphReason::Change,
                 Vec::new(),
                 Vec::new(),
+                [],
             )]),
     );
 
@@ -3253,14 +3933,14 @@ fn validate_rejects_transition_with_unresolved_requirement() {
             )
             .with_morphs([MorphTransition::new(
                 "flier",
-                None,
+                MorphCourse::direct(MorphInterrupted::Reverts),
                 Quantity::Constant(20),
                 MorphPlacement::Revalidate,
                 MorphCancel::Committed,
-                MorphInterrupted::Reverts,
                 MorphReason::Change,
                 Vec::new(),
                 [Requirement::EntityType("jet_pack".to_string())],
+                [],
             )]),
     );
     registry.register(utils::standing("flier", GROUND).with_movement(
@@ -3293,14 +3973,14 @@ fn validate_rejects_transition_timed_by_undeclared_stat() {
             )
             .with_morphs([MorphTransition::new(
                 "flier",
-                None,
+                MorphCourse::direct(MorphInterrupted::Reverts),
                 Quantity::Stat(stat),
                 MorphPlacement::Revalidate,
                 MorphCancel::Committed,
-                MorphInterrupted::Reverts,
                 MorphReason::Change,
                 Vec::new(),
                 Vec::new(),
+                [],
             )]),
     );
     registry.register(utils::standing("flier", GROUND).with_movement(
@@ -3317,7 +3997,7 @@ fn validate_rejects_transition_timed_by_undeclared_stat() {
 #[test]
 #[should_panic(
     expected = "entity type 'walker' morphing into 'flier' has an energy cost but no \
-                max_energy stat"
+                energy pool"
 )]
 fn validate_rejects_transition_with_energy_cost_but_no_energy_pool() {
     let mut registry = utils::ground_registry();
@@ -3332,14 +4012,14 @@ fn validate_rejects_transition_with_energy_cost_but_no_energy_pool() {
             )
             .with_morphs([MorphTransition::new(
                 "flier",
-                None,
+                MorphCourse::direct(MorphInterrupted::Reverts),
                 Quantity::Constant(20),
                 MorphPlacement::Revalidate,
                 MorphCancel::Committed,
-                MorphInterrupted::Reverts,
                 MorphReason::Change,
                 vec![Cost::Energy(FixedU64::from_num(20))],
                 Vec::new(),
+                [],
             )]),
     );
     registry.register(utils::standing("flier", GROUND).with_movement(
@@ -3371,14 +4051,14 @@ fn validate_rejects_transition_with_unregistered_resource_cost() {
             )
             .with_morphs([MorphTransition::new(
                 "flier",
-                None,
+                MorphCourse::direct(MorphInterrupted::Reverts),
                 Quantity::Constant(20),
                 MorphPlacement::Revalidate,
                 MorphCancel::Committed,
-                MorphInterrupted::Reverts,
                 MorphReason::Change,
                 vec![Cost::Resources(price::from([("gold", 50)]))],
                 Vec::new(),
+                [],
             )]),
     );
     registry.register(utils::standing("flier", GROUND).with_movement(
@@ -3398,10 +4078,10 @@ fn validate_rejects_transition_through_unregistered_form() {
     let mut registry = utils::ground_registry();
     registry.register(
         utils::standing("larva", GROUND)
-            .with_health(20)
+            .with_pool(Pool::health(20))
             .with_morphs([morph_through("egg", "hatchling")]),
     );
-    registry.register(utils::standing("hatchling", GROUND).with_health(30));
+    registry.register(utils::standing("hatchling", GROUND).with_pool(Pool::health(30)));
 
     registry.validate();
 }
@@ -3412,11 +4092,11 @@ fn validate_rejects_transition_through_form_of_other_footprint() {
     let mut registry = utils::ground_registry();
     registry.register(
         utils::standing("larva", GROUND)
-            .with_health(20)
+            .with_pool(Pool::health(20))
             .with_morphs([morph_through("egg", "hatchling")]),
     );
-    registry.register(utils::sized("egg", GROUND, CellSize::new(2, 2)).with_health(60));
-    registry.register(utils::standing("hatchling", GROUND).with_health(30));
+    registry.register(utils::sized("egg", GROUND, CellSize::new(2, 2)).with_pool(Pool::health(60)));
+    registry.register(utils::standing("hatchling", GROUND).with_pool(Pool::health(30)));
 
     registry.validate();
 }
@@ -3426,11 +4106,11 @@ fn validate_accepts_transition_through_form_of_same_footprint() {
     let mut registry = utils::ground_registry();
     registry.register(
         utils::standing("larva", GROUND)
-            .with_health(20)
+            .with_pool(Pool::health(20))
             .with_morphs([morph_through("egg", "hatchling")]),
     );
-    registry.register(utils::standing("egg", GROUND).with_health(60));
-    registry.register(utils::standing("hatchling", GROUND).with_health(30));
+    registry.register(utils::standing("egg", GROUND).with_pool(Pool::health(60)));
+    registry.register(utils::standing("hatchling", GROUND).with_pool(Pool::health(30)));
 
     registry.validate();
 }
@@ -3448,20 +4128,25 @@ fn validate_accepts_transition_with_payable_costs() {
                 FixedU64::from_num(360),
                 FixedU64::from_num(360),
             )
-            .with_energy(100, FixedU64::from_num(0.1))
+            .with_pool(Pool::builtin(
+                PoolId::ENERGY,
+                FixedU64::from_num(100),
+                utils::fixed("0.1"),
+                FixedU64::ZERO,
+            ))
             .with_morphs([MorphTransition::new(
                 "flier",
-                None,
+                MorphCourse::direct(MorphInterrupted::Reverts),
                 Quantity::Constant(20),
                 MorphPlacement::Reserve,
                 MorphCancel::Refundable,
-                MorphInterrupted::Reverts,
                 MorphReason::Change,
                 vec![
                     Cost::Resources(price::from([("gold", 50)])),
                     Cost::Energy(FixedU64::from_num(20)),
                 ],
                 Vec::new(),
+                [],
             )]),
     );
     registry.register(utils::standing("flier", GROUND).with_movement(
@@ -3571,7 +4256,7 @@ fn register_accepts_field_sources_placement_and_effects() {
     let creep = creep_field(&mut registry);
     registry.register(
         utils::standing("hive", GROUND)
-            .with_health(300)
+            .with_pool(Pool::health(300))
             .with_field_sources([emitter(creep)])
             .with_field_placement([FieldPlacement::Requires {
                 field: creep,
@@ -3581,13 +4266,17 @@ fn register_accepts_field_sources_placement_and_effects() {
             .with_field_effects([FieldEffect::new(
                 creep,
                 Affiliation::Anyone,
-                FieldSide::Inside,
                 FieldCoverage::Any,
-                EntityEffect::Modifiers(vec![EntityModifier {
-                    stat: EntityStatId::MAX_HEALTH,
-                    op: ModifierOp::PercentAdd,
-                    magnitude: FixedI64::ONE,
-                }]),
+                vec![EntityEffect::Modifiers(EntityModifiers::PoolMaximums {
+                    modifiers: vec![EntityModifier {
+                        stat: EntityStatId::MAX_HEALTH,
+                        op: ModifierOp::PercentAdd,
+                        magnitude: FixedI64::ONE,
+                    }],
+                    pool_shift: PoolShift::Share,
+                })],
+                Vec::new(),
+                None,
             )]),
     );
     registry.validate();
@@ -3618,7 +4307,7 @@ fn validate_rejects_standing_act_on_unregistered_field() {
     );
     registry.register(
         utils::standing("pylon", GROUND)
-            .with_health(100)
+            .with_pool(Pool::health(100))
             .with_standing_acts([StandingAct::Field {
                 field: foreign,
                 radius: 3,
@@ -3634,7 +4323,7 @@ fn register_accepts_standing_act_on_registered_field() {
     let creep = creep_field(&mut registry);
     registry.register(
         utils::standing("pylon", GROUND)
-            .with_health(100)
+            .with_pool(Pool::health(100))
             .with_standing_acts([StandingAct::Field {
                 field: creep,
                 radius: 3,
@@ -3731,9 +4420,10 @@ fn register_rejects_effect_of_foreign_field() {
         FieldEffect::new(
             creep,
             Affiliation::Own,
-            FieldSide::Outside,
             FieldCoverage::Every,
-            EntityEffect::Disable,
+            Vec::new(),
+            vec![EntityEffect::Disable],
+            None,
         ),
     ]));
 }
@@ -3823,6 +4513,25 @@ fn register_rejects_source_holding_beyond_radius_while_disabled() {
 }
 
 #[test]
+#[should_panic(
+    expected = "entity type 'zergling' has a field effect with nothing inside or outside"
+)]
+fn register_rejects_field_effect_with_no_side() {
+    let mut registry = utils::ground_registry();
+    let creep = creep_field(&mut registry);
+    registry.register(
+        utils::standing("zergling", GROUND).with_field_effects([FieldEffect::new(
+            creep,
+            Affiliation::Anyone,
+            FieldCoverage::Any,
+            Vec::new(),
+            Vec::new(),
+            None,
+        )]),
+    );
+}
+
+#[test]
 #[should_panic(expected = "entity type 'zergling' has a field effect with no modifiers")]
 fn register_rejects_field_effect_with_no_modifiers() {
     let mut registry = utils::ground_registry();
@@ -3831,33 +4540,61 @@ fn register_rejects_field_effect_with_no_modifiers() {
         utils::standing("zergling", GROUND).with_field_effects([FieldEffect::new(
             creep,
             Affiliation::Anyone,
-            FieldSide::Inside,
             FieldCoverage::Any,
-            EntityEffect::Modifiers(Vec::new()),
+            vec![EntityEffect::Modifiers(EntityModifiers::Stats(Vec::new()))],
+            Vec::new(),
+            None,
         )]),
     );
 }
 
 #[test]
 #[should_panic(
-    expected = "entity type 'zergling' has a field effect on stat 'health_drain', which the type does not carry"
+    expected = "entity type 'zergling' has a field effect on stat 'armor', which the type does not carry"
 )]
 fn register_rejects_field_effect_on_stat_type_lacks() {
     let mut registry = utils::ground_registry();
     let creep = creep_field(&mut registry);
     registry.register(
         utils::standing("zergling", GROUND)
-            .with_health(35)
+            .with_pool(Pool::health(35))
             .with_field_effects([FieldEffect::new(
                 creep,
                 Affiliation::Anyone,
-                FieldSide::Outside,
                 FieldCoverage::Every,
-                EntityEffect::Modifiers(vec![EntityModifier {
-                    stat: EntityStatId::HEALTH_DRAIN,
-                    op: ModifierOp::FlatAdd,
-                    magnitude: FixedI64::from_num(1),
-                }]),
+                Vec::new(),
+                vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![
+                    EntityModifier {
+                        stat: EntityStatId::ARMOR,
+                        op: ModifierOp::FlatAdd,
+                        magnitude: FixedI64::from_num(1),
+                    },
+                ]))],
+                None,
+            )]),
+    );
+}
+
+#[test]
+fn register_accepts_field_effect_on_rate_its_pool_carries() {
+    let mut registry = utils::ground_registry();
+    let creep = creep_field(&mut registry);
+    registry.register(
+        utils::standing("zergling", GROUND)
+            .with_pool(Pool::health(35))
+            .with_field_effects([FieldEffect::new(
+                creep,
+                Affiliation::Anyone,
+                FieldCoverage::Every,
+                Vec::new(),
+                vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![
+                    EntityModifier {
+                        stat: EntityStatId::HEALTH_DRAIN,
+                        op: ModifierOp::FlatAdd,
+                        magnitude: FixedI64::from_num(1),
+                    },
+                ]))],
+                None,
             )]),
     );
 }
@@ -3935,10 +4672,10 @@ fn register_accepts_player_cast_with_player_leaves_under_node() {
 )]
 fn validate_rejects_annexed_requirement_naming_type_that_is_no_annex() {
     let mut registry = utils::ground_registry();
-    registry.register(utils::standing("runner", GROUND).with_health(10));
+    registry.register(utils::standing("runner", GROUND).with_pool(Pool::health(10)));
     registry.register(
         utils::standing("marine", GROUND)
-            .with_health(10)
+            .with_pool(Pool::health(10))
             .with_requires([Requirement::Annexed("runner".to_string())]),
     );
     registry.validate();
@@ -4071,7 +4808,7 @@ fn validate_accepts_skill_aimed_at_type_that_carries_it() {
     );
     registry.register(
         utils::standing("priest", GROUND)
-            .with_health(20)
+            .with_pool(Pool::health(20))
             .with_skills([heal]),
     );
 
@@ -4334,6 +5071,30 @@ fn register_rejects_cast_period_shorter_than_its_point() {
 fn register_rejects_cast_point_from_floorless_stat() {
     let mut registry = utils::ground_registry();
     let ritual_time = registry.register_entity_stat("ritual_time", FixedU64::ZERO);
+    registry.register_skill(
+        "bolt",
+        SkillDef {
+            cooldown: 1,
+            caster: SkillCaster::Entity {
+                costs: Vec::new(),
+                target: EntityCastTarget::Caster,
+                reach: Reach::Wherever,
+                casting: Casting::Delayed {
+                    point: Quantity::Stat(ritual_time),
+                    period: Quantity::Stat(ritual_time),
+                },
+                effect: EntityCastEffect::Damage(FixedU64::ONE),
+            },
+            requires: Vec::new(),
+        },
+    );
+}
+
+#[test]
+fn register_accepts_cast_point_from_stat_floored_under_one_tick() {
+    let mut registry = utils::ground_registry();
+    // A floor of 0.5 is read as one tick, rounded up: never no time at all.
+    let ritual_time = registry.register_entity_stat("ritual_time", utils::fixed("0.5"));
     registry.register_skill(
         "bolt",
         SkillDef {
@@ -4648,7 +5409,7 @@ fn register_rejects_buff_effect_with_no_modifiers() {
     registry.register_entity_buff(
         "hollow",
         EntityBuffDef {
-            effects: vec![EntityEffect::Modifiers(Vec::new())],
+            effects: vec![EntityEffect::Modifiers(EntityModifiers::Stats(Vec::new()))],
             lasting: Lasting::Forever,
             stack_rule: StackRule::Ignore,
             interrupted_by: Vec::new(),
@@ -4675,7 +5436,7 @@ fn register_rejects_self_cast_health_upkeep_on_type_without_health() {
 
 #[test]
 #[should_panic(
-    expected = "entity type 'ghost' has skill 'cloak' keeping up a buff from energy but no max_energy stat"
+    expected = "entity type 'ghost' has skill 'cloak' keeping up a buff from energy but no energy pool"
 )]
 fn register_rejects_self_cast_upkeep_from_pool_type_lacks() {
     let mut registry = utils::ground_registry();
@@ -4689,7 +5450,7 @@ fn register_rejects_self_cast_upkeep_from_pool_type_lacks() {
     let skill = registry.register_skill("cloak", self_cast(EntityCastEffect::ApplyBuff(cloak)));
     registry.register(
         utils::standing("ghost", GROUND)
-            .with_health(40)
+            .with_pool(Pool::health(40))
             .with_skills([skill]),
     );
 }
@@ -4707,8 +5468,8 @@ fn register_accepts_self_cast_upkeep_from_pool_type_carries() {
     let skill = registry.register_skill("cloak", self_cast(EntityCastEffect::ApplyBuff(cloak)));
     registry.register(
         utils::standing("ghost", GROUND)
-            .with_health(40)
-            .with_stat(EntityStatId::MAX_ENERGY, FixedU64::from_num(50))
+            .with_pool(Pool::health(40))
+            .with_pool(Pool::energy(50))
             .with_skills([skill]),
     );
     registry.validate();
@@ -4741,7 +5502,7 @@ fn validate_rejects_brood_of_unregistered_type() {
 fn validate_rejects_brood_of_type_that_is_no_broodling() {
     let mut registry = utils::ground_registry();
     registry.register(hatch("hatch", 3, 2));
-    registry.register(utils::standing("grub", GROUND).with_health(25));
+    registry.register(utils::standing("grub", GROUND).with_pool(Pool::health(25)));
     registry.validate();
 }
 
@@ -4753,7 +5514,7 @@ fn validate_rejects_berthed_broodling_in_group_breeder_lacks() {
     let mut registry = utils::ground_registry();
     registry.register(
         utils::sized("hatch", GROUND, CellSize::new(3, 3))
-            .with_health(300)
+            .with_pool(Pool::health(300))
             .with_breeder("grub", Quantity::Constant(10), 2, 0, OrphanFate::Perish),
     );
     registry.register(grub("grub"));
@@ -4792,7 +5553,7 @@ fn validate_rejects_berthed_broodling_wider_than_one_cell() {
     registry.register(hatch("hatch", 3, 2));
     registry.register(
         utils::sized("grub", GROUND, CellSize::new(2, 2))
-            .with_health(25)
+            .with_pool(Pool::health(25))
             .with_broodling(Attachment::new("brood", BerthStance::Still)),
     );
     registry.validate();
@@ -4845,12 +5606,111 @@ fn validate_accepts_interim_form_of_other_solidity() {
     registry.register(
         EntityTypeDef::new("grub")
             .with_location(GROUND, CellSize::ONE, Solidity::Passable)
-            .with_health(25)
+            .with_pool(Pool::health(25))
             .with_morphs([morph_through("egg", "worker")]),
     );
-    registry.register(utils::standing("egg", GROUND).with_health(100));
-    registry.register(utils::standing("worker", GROUND).with_health(30));
+    registry.register(utils::standing("egg", GROUND).with_pool(Pool::health(100)));
+    registry.register(utils::standing("worker", GROUND).with_pool(Pool::health(30)));
     registry.validate();
+}
+
+//
+// ─── Pools ────────────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn registered_pool_writes_its_stats_with_unnamed_rates_at_zero() {
+    let mut registry = utils::ground_registry();
+    registry.register(
+        utils::standing("well", GROUND)
+            .with_pool(Pool::health(100))
+            .with_pool(Pool::builtin(
+                PoolId::ENERGY,
+                FixedU64::from_num(40),
+                FixedU64::from_num(2),
+                FixedU64::ZERO,
+            )),
+    );
+    let well = registry.entity("well").unwrap();
+
+    // Health named its maximum alone; energy its maximum and regen.
+    assert_eq!(
+        well.base_stat(EntityStatId::MAX_HEALTH),
+        Some(FixedU64::from_num(100))
+    );
+    assert_eq!(
+        well.base_stat(EntityStatId::HEALTH_REGEN),
+        Some(FixedU64::ZERO)
+    );
+    assert_eq!(
+        well.base_stat(EntityStatId::HEALTH_DRAIN),
+        Some(FixedU64::ZERO)
+    );
+    assert_eq!(
+        well.base_stat(EntityStatId::MAX_ENERGY),
+        Some(FixedU64::from_num(40))
+    );
+    assert_eq!(
+        well.base_stat(EntityStatId::ENERGY_REGEN),
+        Some(FixedU64::from_num(2))
+    );
+    assert_eq!(
+        well.base_stat(EntityStatId::ENERGY_DRAIN),
+        Some(FixedU64::ZERO)
+    );
+}
+
+#[test]
+fn type_without_pool_carries_none_of_its_stats() {
+    let mut registry = utils::ground_registry();
+    registry.register(utils::standing("rock", GROUND));
+    let rock = registry.entity("rock").unwrap();
+
+    for stat in [
+        EntityStatId::MAX_HEALTH,
+        EntityStatId::HEALTH_REGEN,
+        EntityStatId::HEALTH_DRAIN,
+        EntityStatId::MAX_ENERGY,
+        EntityStatId::ENERGY_REGEN,
+        EntityStatId::ENERGY_DRAIN,
+    ] {
+        assert_eq!(rock.base_stat(stat), None, "{stat:?}");
+    }
+}
+
+#[test]
+fn pool_role_names_each_stat_of_built_in_pools() {
+    let registry = utils::ground_registry();
+
+    for (stat, role) in [
+        (
+            EntityStatId::MAX_HEALTH,
+            (PoolId::HEALTH, PoolRole::Maximum),
+        ),
+        (
+            EntityStatId::HEALTH_REGEN,
+            (PoolId::HEALTH, PoolRole::Regen),
+        ),
+        (
+            EntityStatId::HEALTH_DRAIN,
+            (PoolId::HEALTH, PoolRole::Drain),
+        ),
+        (
+            EntityStatId::MAX_ENERGY,
+            (PoolId::ENERGY, PoolRole::Maximum),
+        ),
+        (
+            EntityStatId::ENERGY_REGEN,
+            (PoolId::ENERGY, PoolRole::Regen),
+        ),
+        (
+            EntityStatId::ENERGY_DRAIN,
+            (PoolId::ENERGY, PoolRole::Drain),
+        ),
+    ] {
+        assert_eq!(registry.pool_role_of(stat), Some(role), "{stat:?}");
+    }
+    assert_eq!(registry.pool_role_of(EntityStatId::ARMOR), None);
 }
 
 //
@@ -4868,7 +5728,7 @@ fn remains(name: &str, decay: u32) -> EntityTypeDef {
 /// site to do it.
 fn primary(annexes: [&str; 1]) -> EntityTypeDef {
     utils::sized("keep", GROUND, CellSize::new(2, 2))
-        .with_health(100)
+        .with_pool(Pool::health(100))
         .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
         .with_builder(
             annexes,
@@ -4882,7 +5742,7 @@ fn primary(annexes: [&str; 1]) -> EntityTypeDef {
 /// A constructible annex of `size` that endures alone and is bound to its owner.
 fn annex(name: &str, size: CellSize) -> EntityTypeDef {
     utils::sized(name, GROUND, size)
-        .with_health(10)
+        .with_pool(Pool::health(10))
         .with_build_time(4)
         .with_annex(standing_annex(), AnnexClaim::Bound)
 }
@@ -4928,11 +5788,11 @@ fn haste_buff(registry: &mut ContentRegistry) -> PlayerBuffId {
         "haste",
         PlayerBuffDef {
             player_modifiers: Vec::new(),
-            entity_modifiers: vec![EntityModifier {
+            entity_modifiers: vec![EntityModifiers::Stats(vec![EntityModifier {
                 stat: EntityStatId::SPEED,
                 op: ModifierOp::PercentAdd,
                 magnitude: FixedI64::ONE,
-            }],
+            }])],
             duration: Some(10),
             stack_rule: StackRule::Refresh,
         },
@@ -4943,7 +5803,7 @@ fn haste_buff(registry: &mut ContentRegistry) -> PlayerBuffId {
 /// `limit`.
 fn hatch(name: &str, slots: usize, limit: usize) -> EntityTypeDef {
     utils::sized(name, GROUND, CellSize::new(3, 3))
-        .with_health(300)
+        .with_pool(Pool::health(300))
         .with_berths([(
             "brood",
             BerthGroup::new(
@@ -4962,7 +5822,7 @@ fn hatch(name: &str, slots: usize, limit: usize) -> EntityTypeDef {
 fn grub(name: &str) -> EntityTypeDef {
     EntityTypeDef::new(name)
         .with_location(GROUND, CellSize::ONE, Solidity::Passable)
-        .with_health(25)
+        .with_pool(Pool::health(25))
         .with_broodling(Attachment::new("brood", BerthStance::Still))
 }
 
@@ -4970,14 +5830,14 @@ fn grub(name: &str) -> EntityTypeDef {
 fn morph_through(via: &str, into: &str) -> MorphTransition {
     MorphTransition::new(
         into,
-        Some(via),
+        MorphCourse::via((via).to_string(), [], ViaInterrupted::reverts([])),
         Quantity::Constant(20),
         MorphPlacement::Revalidate,
         MorphCancel::Committed,
-        MorphInterrupted::Reverts,
         MorphReason::Change,
         Vec::new(),
         Vec::new(),
+        [],
     )
 }
 
@@ -4985,14 +5845,34 @@ fn morph_through(via: &str, into: &str) -> MorphTransition {
 fn morph_into(into: &str) -> MorphTransition {
     MorphTransition::new(
         into,
-        None,
+        MorphCourse::direct(MorphInterrupted::Reverts),
         Quantity::Constant(20),
         MorphPlacement::Revalidate,
         MorphCancel::Committed,
-        MorphInterrupted::Reverts,
         MorphReason::Change,
         Vec::new(),
         Vec::new(),
+        [],
+    )
+}
+
+/// A free, timed, committed transition into the named type on `course`,
+/// carrying `land_pool_carry` into it.
+fn carrying_into(
+    into: &str,
+    course: MorphCourse,
+    land_pool_carry: impl IntoIterator<Item = (PoolId, PoolCarry)>,
+) -> MorphTransition {
+    MorphTransition::new(
+        into,
+        course,
+        Quantity::Constant(20),
+        MorphPlacement::Revalidate,
+        MorphCancel::Committed,
+        MorphReason::Change,
+        Vec::new(),
+        Vec::new(),
+        land_pool_carry,
     )
 }
 
@@ -5043,4 +5923,68 @@ fn emitter(field: FieldId) -> FieldSourceDef {
         Emission::Nothing,
         Emission::Full,
     )
+}
+
+/// A buff held on an amount of health, moving `max_health` by `magnitude` as
+/// a percentage under `pool_shift`.
+fn held_on_health_buff(
+    magnitude: &str,
+    pool_shift: PoolShift,
+    threshold: Threshold,
+) -> EntityBuffDef {
+    EntityBuffDef {
+        effects: vec![EntityEffect::Modifiers(EntityModifiers::PoolMaximums {
+            modifiers: vec![EntityModifier {
+                stat: EntityStatId::MAX_HEALTH,
+                op: ModifierOp::PercentAdd,
+                magnitude: magnitude.parse().expect("a percentage is a value"),
+            }],
+            pool_shift,
+        })],
+        lasting: Lasting::While(Requirement::Health(Bound::Amount(threshold))),
+        stack_rule: StackRule::Ignore,
+        interrupted_by: Vec::new(),
+    }
+}
+
+/// A buff held while `requirement` is met, moving `stat` by a flat
+/// `magnitude` under `pool_shift`.
+fn held_on_amount_buff(
+    requirement: Requirement,
+    stat: EntityStatId,
+    magnitude: &str,
+    pool_shift: PoolShift,
+) -> EntityBuffDef {
+    EntityBuffDef {
+        effects: vec![EntityEffect::Modifiers(EntityModifiers::PoolMaximums {
+            modifiers: vec![EntityModifier {
+                stat,
+                op: ModifierOp::FlatAdd,
+                magnitude: magnitude.parse().expect("a magnitude is a value"),
+            }],
+            pool_shift,
+        })],
+        lasting: Lasting::While(requirement),
+        stack_rule: StackRule::Ignore,
+        interrupted_by: Vec::new(),
+    }
+}
+
+/// A buff held while `judged` reads at least 1, raising `moved` by 1.
+fn held_on_stat_buff(judged: EntityStatId, moved: EntityStatId) -> EntityBuffDef {
+    EntityBuffDef {
+        effects: vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![
+            EntityModifier {
+                stat: moved,
+                op: ModifierOp::FlatAdd,
+                magnitude: FixedI64::ONE,
+            },
+        ]))],
+        lasting: Lasting::While(Requirement::Stat {
+            stat: judged,
+            bound: Bound::Amount(Threshold::AtLeast(FixedU64::ONE)),
+        }),
+        stack_rule: StackRule::Ignore,
+        interrupted_by: Vec::new(),
+    }
 }

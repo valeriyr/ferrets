@@ -66,6 +66,8 @@ pub fn run() {
         .init_resource::<view::WorldView>()
         .init_resource::<input::DragStart>()
         .init_resource::<input::InputMode>()
+        .init_resource::<input::AimHover>()
+        .init_resource::<input::AimVerdict>()
         .init_resource::<input::Leading>()
         .init_resource::<input::Inspected>()
         .init_resource::<input::LastClick>()
@@ -191,6 +193,8 @@ pub fn run() {
                 ),
                 minimap::order_input,
                 input::order_mode_input,
+                input::hover_aim.in_set(render::ReadsSightings),
+                input::judge_aim,
                 input::targeting_input.in_set(render::ReadsSightings),
                 input::placement_input.in_set(render::ReadsSightings),
                 // F2 sandbox spawn issues a Spawn command, so it counts as input too.
@@ -232,7 +236,9 @@ pub fn run() {
                 hud::update_command_card,
                 // Runs after the card is (re)built and after the click handlers
                 // have applied their hover tints, so its verdict wins the frame.
-                hud::update_card_availability.after(hud::update_command_card),
+                hud::update_card_availability
+                    .after(hud::update_command_card)
+                    .after(input::judge_aim),
                 hud::update_player_skill_cooldown,
                 hud::update_skill_cooldowns,
                 hud::update_group_roster,

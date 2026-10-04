@@ -16,6 +16,7 @@ use ferrets_content::{
     entity_buffs::Interruption,
     entity_type_def::EntityTypeId,
     kinds::Kinds,
+    pool_def::PoolId,
     price::Price,
     registry::ContentRegistry,
     skills::{
@@ -27,10 +28,10 @@ use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::fixed_uvec2::FixedUVec2;
 
 use super::{
+    buffs::{self, Bearing},
     chase::{self, Destination},
     cost, damage,
     orders::{self, Processing, Refusal},
-    stats,
 };
 use crate::{
     command::SkillTarget,
@@ -38,9 +39,8 @@ use crate::{
         cast::{CastComponent, CastStage},
         dying::DyingComponent,
         entity_skills::{self, SkillsComponent},
-        health,
         order_queue::{CancelPolicy, OrderState},
-        owner,
+        owner, pools,
     },
     entity_def,
     events::{EventRecord, SimulationEvent, SpawnCause, SpendCause},
@@ -155,7 +155,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
     if state.stage == CastStage::Working
         && let Some(range) = reach_of(world, entity, &def)
     {
-        let Some(goal) = goal(world, player, entity, &def, target) else {
+        let Some(goal) = goal(world, player, entity, skill, target) else {
             return Processing::state(OrderState::Finished);
         };
         let projection = world.resource::<Map>().projection();
@@ -243,16 +243,16 @@ pub fn by_player(
     resources::charge(world, player, price.clone(), SpendCause::Skill { skill });
 
     match effect {
-        PlayerCastEffect::ApplyBuff(buff) => stats::apply_player_buff(world, player, buff),
-        PlayerCastEffect::RemoveBuff(buff) => stats::remove_player_buff(world, player, buff),
+        PlayerCastEffect::ApplyBuff(buff) => buffs::apply_player_buff(world, player, buff),
+        PlayerCastEffect::RemoveBuff(buff) => buffs::remove_player_buff(world, player, buff),
     }
 
     player_skills::cast(world, player, skill, cooldown);
 }
 
 /// Where a resolved entity cast lands.
-#[derive(Clone, Copy)]
-enum CastAim {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CastAim {
     /// On an entity.
     Entity(Entity),
     /// On a cell.
@@ -286,8 +286,8 @@ fn casting(world: &World, caster: Entity, def: &SkillDef) -> (u32, u32) {
         SkillCaster::Entity { casting, .. } => match casting {
             Casting::Instant => (1, 1),
             Casting::Delayed { point, period } => (
-                entity_def::quantity(world, caster, *point),
-                entity_def::quantity(world, caster, *period),
+                entity_def::quantity_ticks(world, caster, *point),
+                entity_def::quantity_ticks(world, caster, *period),
             ),
         },
         SkillCaster::Player { .. } => unreachable!("an entity cast carries an entity arm"),
@@ -303,7 +303,7 @@ fn reach_of(world: &World, caster: Entity, def: &SkillDef) -> Option<u32> {
     match &def.caster {
         SkillCaster::Entity { reach, .. } => match reach {
             Reach::Wherever => None,
-            Reach::Within(reach) => Some(entity_def::quantity(world, caster, *reach)),
+            Reach::Within(reach) => Some(entity_def::quantity_cells(world, caster, *reach)),
         },
         SkillCaster::Player { .. } => None,
     }
@@ -325,7 +325,7 @@ fn now(
 ) {
     let SkillCaster::Entity {
         costs,
-        target: cast_target,
+        target: _,
         reach: _,
         casting: _,
         effect,
@@ -336,7 +336,7 @@ fn now(
     if !ready(world, caster, skill) {
         return;
     }
-    let Some(aim) = aim(world, player, caster, cast_target, target) else {
+    let Ok(aim) = aim(world, player, caster, skill, target) else {
         return;
     };
     let Some(plan) = judge(world, player, *effect, aim) else {
@@ -346,7 +346,7 @@ fn now(
         return;
     }
     cost::pay(world, caster, player, costs, SpendCause::Skill { skill });
-    stats::interrupt_entity_buffs(world, caster, Interruption::Cast);
+    buffs::interrupt_entity_buffs(world, caster, Interruption::Cast);
 
     let caster_id = entity_def::simulation_id(world, caster);
     // The cast is announced against what it landed on, and a body it landed on
@@ -377,49 +377,124 @@ pub(super) fn ready(world: &World, caster: Entity, skill: SkillId) -> bool {
     has_skill && orders::requires_operating(world, caster).is_ok()
 }
 
-/// Resolves what the cast acts on, or `None` when the aim names nothing the
-/// cast may take.
+/// Why a cast cannot take what it was aimed at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AimRefusal {
+    /// The cast takes a target of another shape than it was given: a cell
+    /// for an entity, or none at all.
+    Unaimed,
+    /// The cell lies off the map.
+    OffMap,
+    /// The entity is not one the caster's owner makes out, or is gone.
+    Unseen,
+    /// The entity stands on a side the cast does not take.
+    WrongSide,
+    /// The entity is not a kind the cast takes.
+    WrongKind,
+    /// The entity cannot take what the cast does to it: a buff modifying a
+    /// stat it lacks, or a heal without a health pool.
+    Uncarried,
+}
+
+/// Resolves what `caster`'s cast of `skill` acts on when aimed at `target`, or
+/// why it cannot take it — an entity that cannot carry the buff the cast
+/// applies included.
 ///
 /// Fog applies to every named aim: what a player cannot see, it cannot name.
-fn aim(
+/// Panics when `skill` is not cast by an entity.
+pub fn aim(
     world: &World,
     player: PlayerId,
     caster: Entity,
-    cast_target: &EntityCastTarget,
+    skill: SkillId,
     target: Option<SkillTarget>,
-) -> Option<CastAim> {
+) -> Result<CastAim, AimRefusal> {
+    let def = world
+        .resource::<ContentRegistry>()
+        .skill_def(skill)
+        .expect("a skill id comes from the registry");
+    let SkillCaster::Entity {
+        target: cast_target,
+        effect,
+        ..
+    } = &def.caster
+    else {
+        panic!("aim is asked of a skill an entity casts");
+    };
+    let effect = *effect;
     match cast_target {
-        EntityCastTarget::Caster => Some(CastAim::Entity(caster)),
+        EntityCastTarget::Caster => {
+            takes(world, caster, effect)?;
+            Ok(CastAim::Entity(caster))
+        }
         EntityCastTarget::Position => {
-            let SkillTarget::Position(position) = target? else {
-                return None;
+            let Some(SkillTarget::Position(position)) = target else {
+                return Err(AimRefusal::Unaimed);
             };
             let cell = CellPos::from(position);
-            world
-                .resource::<Map>()
-                .contains(cell)
-                .then_some(CastAim::Cell(cell))
+            if world.resource::<Map>().contains(cell) {
+                Ok(CastAim::Cell(cell))
+            } else {
+                Err(AimRefusal::OffMap)
+            }
         }
         EntityCastTarget::Fallen { kinds } => {
-            let SkillTarget::Entity(id) = target? else {
-                return None;
+            let Some(SkillTarget::Entity(id)) = target else {
+                return Err(AimRefusal::Unaimed);
             };
             // Anyone's body serves: what fell there stopped belonging to
             // anybody when it fell.
-            let remains = visibility::remains_interactable_to(world, player, id)?;
-            names(world, remains, kinds).then_some(CastAim::Remains(remains))
+            let remains =
+                visibility::remains_interactable_to(world, player, id).ok_or(AimRefusal::Unseen)?;
+            if !names(world, remains, kinds) {
+                return Err(AimRefusal::WrongKind);
+            }
+            Ok(CastAim::Remains(remains))
         }
         EntityCastTarget::Standing { side, kinds } => {
-            let SkillTarget::Entity(id) = target? else {
-                return None;
+            let Some(SkillTarget::Entity(id)) = target else {
+                return Err(AimRefusal::Unaimed);
             };
-            let target = visibility::interactable_to(world, player, id)?;
+            let target =
+                visibility::interactable_to(world, player, id).ok_or(AimRefusal::Unseen)?;
             let session = world.resource::<GameSession>();
             let caster_owner = entity_def::owner(world, caster);
             let target_owner = entity_def::owner(world, target);
-            let on_side = owner::admits(session, *side, caster_owner, target_owner);
-            (on_side && names(world, target, kinds)).then_some(CastAim::Entity(target))
+            if !owner::admits(session, *side, caster_owner, target_owner) {
+                return Err(AimRefusal::WrongSide);
+            }
+            if !names(world, target, kinds) {
+                return Err(AimRefusal::WrongKind);
+            }
+            takes(world, target, effect)?;
+            Ok(CastAim::Entity(target))
         }
+    }
+}
+
+/// Whether `entity` can take what `effect` does to it: a buff it carries, a
+/// heal when it has health, or any other effect.
+fn takes(world: &World, entity: Entity, effect: EntityCastEffect) -> Result<(), AimRefusal> {
+    match effect {
+        EntityCastEffect::ApplyBuff(buff) => {
+            if entity_def::can_carry(world, entity, buff) {
+                Ok(())
+            } else {
+                Err(AimRefusal::Uncarried)
+            }
+        }
+        EntityCastEffect::Heal(_) => {
+            if entity_def::has_pool(world, entity, PoolId::HEALTH) {
+                Ok(())
+            } else {
+                Err(AimRefusal::Uncarried)
+            }
+        }
+        EntityCastEffect::RemoveBuff(_)
+        | EntityCastEffect::Damage(_)
+        | EntityCastEffect::Field { .. }
+        | EntityCastEffect::Watch { .. }
+        | EntityCastEffect::Summon { .. } => Ok(()),
     }
 }
 
@@ -585,8 +660,18 @@ fn apply_effect(
         }
     };
     match effect {
-        EntityCastEffect::ApplyBuff(id) => stats::apply_entity_buff(world, target, id),
-        EntityCastEffect::RemoveBuff(id) => stats::remove_entity_buff(world, target, id),
+        EntityCastEffect::ApplyBuff(id) => match buffs::apply_entity_buff(world, target, id) {
+            Bearing::Borne => {}
+            Bearing::Uncarried => {
+                unreachable!("the aim admits only a target that can carry the buff")
+            }
+        },
+        EntityCastEffect::RemoveBuff(id) => {
+            // A target that does not bear the buff loses nothing.
+            if entity_def::bears(world, target, id) {
+                buffs::remove_entity_buff(world, target, id);
+            }
+        }
         EntityCastEffect::Damage(amount) => {
             // Skill damage bypasses armor, like an ability rather than a
             // weapon — and denies nothing: what it kills leaves whatever its
@@ -594,7 +679,7 @@ fn apply_effect(
             let caster_id = entity_def::simulation_id(world, caster);
             damage::apply(world, caster_id, target, amount, Slain::Remains);
         }
-        EntityCastEffect::Heal(amount) => health::restore(world, target, amount),
+        EntityCastEffect::Heal(amount) => pools::restore(world, target, PoolId::HEALTH, amount),
         EntityCastEffect::Field { .. }
         | EntityCastEffect::Watch { .. }
         | EntityCastEffect::Summon { .. } => {
@@ -619,17 +704,10 @@ fn goal(
     world: &World,
     player: PlayerId,
     caster: Entity,
-    def: &SkillDef,
+    skill: SkillId,
     target: Option<SkillTarget>,
 ) -> Option<(FixedUVec2, CellSize)> {
-    let SkillCaster::Entity {
-        target: cast_target,
-        ..
-    } = &def.caster
-    else {
-        unreachable!("a type declares entity casts only, so only one becomes an order")
-    };
-    match aim(world, player, caster, cast_target, target)? {
+    match aim(world, player, caster, skill, target).ok()? {
         CastAim::Entity(target) | CastAim::Remains(target) => {
             Some(entity_def::footprint(world, target))
         }

@@ -10,6 +10,7 @@ use crate::{
     affiliation::Affiliation,
     annex::{AloneConduct, AnnexClaim, AnnexDef, DockDef},
     attack::{AttackDef, Delivery, Slain, Weapon},
+    base_stats::BaseStats,
     berths::{BerthGroup, BerthsDef},
     brood::{BreederDef, BroodlingDef, OrphanFate},
     build::{BuilderAttendance, BuilderDef},
@@ -21,6 +22,8 @@ use crate::{
     kinds::Kinds,
     location::{LocationDef, Solidity},
     morph::{MorphReason, MorphTransition},
+    pool::Pool,
+    pool_def::PoolId,
     price::{self, Price},
     quantity::Quantity,
     repair::{RepairCost, RepairRate, RepairerDef},
@@ -79,12 +82,13 @@ pub struct EntityTypeDef {
     /// producing player or of the producer itself, and all must hold.
     pub requires: Vec<Requirement>,
 
-    /// Base value of every stat this type carries, seeded into each instance's
-    /// [`StatsComponent`](crate::components::entity_stats::StatsComponent) at spawn. The
-    /// built-in stats drive engine behaviour and gate capabilities (an attacker
-    /// carries [`EntityStatId::DAMAGE`], a mover [`EntityStatId::SPEED`], …); content may add
-    /// custom stats, which are seeded and buffed but otherwise ignored by the engine.
-    pub base_stats: BTreeMap<EntityStatId, FixedU64>,
+    /// Base value of every stat this type carries, written on its own or
+    /// filled by a declared pool, seeded into each instance's stat store at
+    /// spawn. The built-in stats drive engine behavior and gate capabilities
+    /// (an attacker carries [`EntityStatId::DAMAGE`], a mover
+    /// [`EntityStatId::SPEED`], …); content may add custom stats, which are
+    /// seeded and buffed but otherwise ignored by the engine.
+    pub base_stats: BaseStats,
     /// Navigation and footprint properties shared by all instances of this type.
     /// Mandatory for every spawnable type; enforced by
     /// [`ContentRegistry::validate`](crate::registry::ContentRegistry::validate).
@@ -199,7 +203,7 @@ impl EntityTypeDef {
             race: None,
             tags: BTreeSet::new(),
             requires: Vec::new(),
-            base_stats: BTreeMap::new(),
+            base_stats: BaseStats::new(),
             location: None,
             dying: None,
             bonus_damage_vs: BTreeMap::new(),
@@ -245,7 +249,7 @@ impl EntityTypeDef {
 
     /// The authored base value of `stat`, if this type carries it.
     pub fn base_stat(&self, stat: EntityStatId) -> Option<FixedU64> {
-        self.base_stats.get(&stat).copied()
+        self.base_stats.get(stat)
     }
 
     /// The authored base value of `stat` truncated to a whole number, or `None`
@@ -253,6 +257,14 @@ impl EntityTypeDef {
     #[inline]
     pub fn base_stat_as_u32(&self, stat: EntityStatId) -> Option<u32> {
         self.base_stat(stat).map(|value| value.to_num::<u32>())
+    }
+
+    /// The authored base value of `stat` counted in ticks, rounded up, or
+    /// `None` if this type does not carry it.
+    #[inline]
+    pub fn base_ticks(&self, stat: EntityStatId) -> Option<u32> {
+        self.base_stat(stat)
+            .map(|value| value.saturating_ceil().to_num::<u32>())
     }
 
     /// The total bonus damage one hit deals to a target with the given type name
@@ -277,17 +289,12 @@ impl EntityTypeDef {
 
     /// Whether instances can move: they carry the [`EntityStatId::SPEED`] stat.
     pub fn can_move(&self) -> bool {
-        self.base_stats.contains_key(&EntityStatId::SPEED)
+        self.base_stats.get(EntityStatId::SPEED).is_some()
     }
 
-    /// Whether instances have a health pool: they carry the [`EntityStatId::MAX_HEALTH`] stat.
-    pub fn has_health(&self) -> bool {
-        self.base_stats.contains_key(&EntityStatId::MAX_HEALTH)
-    }
-
-    /// Whether instances have an energy pool: they carry the [`EntityStatId::MAX_ENERGY`] stat.
-    pub fn has_energy(&self) -> bool {
-        self.base_stats.contains_key(&EntityStatId::MAX_ENERGY)
+    /// Whether instances have `pool`.
+    pub fn has_pool(&self, pool: PoolId) -> bool {
+        self.base_stats.pool(pool).is_some()
     }
 
     /// Whether instances can mend other entities.
@@ -320,7 +327,7 @@ impl EntityTypeDef {
     /// nothing produces gives that pacing nothing to work from; a mender working at
     /// a flat rate does not care.
     pub fn is_production_repairable(&self) -> bool {
-        self.has_health() && self.production_time().is_some()
+        self.has_pool(PoolId::HEALTH) && self.production_time().is_some()
     }
 
     /// Assigns this type to a race, by registered race name. Race-neutral types
@@ -355,7 +362,7 @@ impl EntityTypeDef {
     /// built-in one. Every base stat is seeded and buffed; the engine reads only
     /// the built-ins.
     pub fn with_stat(mut self, stat: EntityStatId, value: FixedU64) -> Self {
-        self.base_stats.insert(stat, value);
+        self.base_stats.insert_own(stat, value);
         self
     }
 
@@ -373,20 +380,20 @@ impl EntityTypeDef {
         turn_rate: FixedU64,
         pivot_rate: FixedU64,
     ) -> Self {
-        self.base_stats.insert(EntityStatId::SPEED, speed);
-        self.base_stats.insert(EntityStatId::RADIUS, radius);
-        self.base_stats.insert(EntityStatId::WEIGHT, weight);
-        self.base_stats.insert(EntityStatId::TURN_RATE, turn_rate);
-        self.base_stats.insert(EntityStatId::PIVOT_RATE, pivot_rate);
+        self.base_stats.insert_own(EntityStatId::SPEED, speed);
+        self.base_stats.insert_own(EntityStatId::RADIUS, radius);
+        self.base_stats.insert_own(EntityStatId::WEIGHT, weight);
+        self.base_stats
+            .insert_own(EntityStatId::TURN_RATE, turn_rate);
+        self.base_stats
+            .insert_own(EntityStatId::PIVOT_RATE, pivot_rate);
         self
     }
 
-    /// Enables health for this entity type with the given maximum health points.
-    ///
-    /// Panics if `max_health` is `0`.
-    pub fn with_health(mut self, max_health: u32) -> Self {
-        self.base_stats
-            .insert(EntityStatId::MAX_HEALTH, FixedU64::from_num(max_health));
+    /// Gives instances `pool`, replacing any earlier declaration of the same
+    /// pool.
+    pub fn with_pool(mut self, pool: Pool) -> Self {
+        self.base_stats.insert_pool(pool);
         self
     }
 
@@ -462,23 +469,14 @@ impl EntityTypeDef {
     /// Sets the flat armor subtracted from each incoming hit (see [`armor`](Self::armor)).
     pub fn with_armor(mut self, armor: u32) -> Self {
         self.base_stats
-            .insert(EntityStatId::ARMOR, FixedU64::from_num(armor));
+            .insert_own(EntityStatId::ARMOR, FixedU64::from_num(armor));
         self
     }
 
     /// Sets how far instances reveal the map (see [`sight_range`](Self::sight_range)).
     pub fn with_sight_range(mut self, sight_range: u32) -> Self {
         self.base_stats
-            .insert(EntityStatId::SIGHT_RANGE, FixedU64::from_num(sight_range));
-        self
-    }
-
-    /// Gives instances an energy pool of `max` that regenerates `regen` per tick,
-    /// for spending on skills.
-    pub fn with_energy(mut self, max: u32, regen: FixedU64) -> Self {
-        self.base_stats
-            .insert(EntityStatId::MAX_ENERGY, FixedU64::from_num(max));
-        self.base_stats.insert(EntityStatId::ENERGY_REGEN, regen);
+            .insert_own(EntityStatId::SIGHT_RANGE, FixedU64::from_num(sight_range));
         self
     }
 

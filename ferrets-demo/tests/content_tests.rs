@@ -14,6 +14,7 @@ use ferrets_content::{
     dying::DeathKind,
     entity_buffs::{Interruption, Lasting},
     entity_effect::EntityEffect,
+    entity_modifiers::EntityModifiers,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     field::{
@@ -21,7 +22,12 @@ use ferrets_content::{
     },
     kinds::{Kind, Kinds},
     location::Solidity,
-    morph::{MorphCancel, MorphInterrupted, MorphPlacement, MorphReason},
+    morph::{
+        MorphCancel, MorphCourse, MorphPlacement, MorphReason, PoolCarry, RevertCarry,
+        ViaInterrupted,
+    },
+    pool_def::PoolId,
+    pool_shift::PoolShift,
     price,
     quantity::Quantity,
     registry::ContentRegistry,
@@ -453,7 +459,6 @@ fn hatchery_breeds_larvae_that_grow_into_drones_swarmlings_and_overlords() {
             .iter()
             .all(|point| point.y == FixedI64::lit("3.5"))
     );
-
     let larva = registry.entity("larva").expect("larva is registered");
     assert_eq!(
         larva.location.map(|location| location.solidity()),
@@ -481,7 +486,7 @@ fn hatchery_breeds_larvae_that_grow_into_drones_swarmlings_and_overlords() {
         .expect("the larva sits in its hall's berths");
     assert_eq!(attachment.berths(), "brood");
     // Off creep a larva loses its whole pool within a second (20 ticks): the
-    // drain has a base to fold into, and the fold empties the pool.
+    // drain its health pool carries is what the fold moves.
     assert!(larva.base_stat(EntityStatId::HEALTH_DRAIN).is_some());
     let max_health = larva
         .base_stat(EntityStatId::MAX_HEALTH)
@@ -489,9 +494,10 @@ fn hatchery_breeds_larvae_that_grow_into_drones_swarmlings_and_overlords() {
     let drain = larva
         .field_effects
         .iter()
-        .find(|effect| effect.side() == FieldSide::Outside)
-        .and_then(|effect| match effect.kind() {
+        .flat_map(|effect| effect.on(FieldSide::Outside))
+        .find_map(|effect| match effect {
             EntityEffect::Modifiers(modifiers) => modifiers
+                .modifiers()
                 .iter()
                 .find(|modifier| modifier.stat == EntityStatId::HEALTH_DRAIN)
                 .map(|modifier| modifier.magnitude),
@@ -501,14 +507,19 @@ fn hatchery_breeds_larvae_that_grow_into_drones_swarmlings_and_overlords() {
     // 1.25 a tick over the 20 ticks of a second is the whole pool of 25.
     assert_eq!(drain, FixedI64::lit("1.25"));
     assert_eq!(max_health, FixedU64::from_num(25));
-
     let [drone, swarmling, overlord] = larva.morphs.as_slice() else {
         panic!("the larva grows into exactly three things");
     };
     assert_eq!(drone.into_type(), "drone");
-    assert_eq!(drone.via_type(), Some("egg"));
+    assert_eq!(
+        drone.course(),
+        &MorphCourse::via(
+            "egg",
+            [(PoolId::HEALTH, PoolCarry::Full)],
+            ViaInterrupted::reverts([(PoolId::HEALTH, RevertCarry::Restore)])
+        )
+    );
     assert_eq!(drone.placement(), MorphPlacement::Nearby);
-    assert_eq!(drone.interrupted(), MorphInterrupted::Reverts);
     assert_eq!(drone.reason(), MorphReason::Production);
     assert_eq!(swarmling.into_type(), "swarmling");
     assert!(
@@ -525,7 +536,6 @@ fn hatchery_breeds_larvae_that_grow_into_drones_swarmlings_and_overlords() {
         .entity("spawning_pit")
         .expect("spawning_pit is registered");
     assert!(pit.trainer.is_none(), "the pit only unlocks the swarmling");
-
     // The egg stands solid on the ground it is laid on.
     let egg = registry.entity("egg").expect("egg is registered");
     assert_eq!(
@@ -587,8 +597,8 @@ fn hatchery_grows_into_hive_inside_cocoon_that_carries_its_brood() {
     let builder = drone.builder.as_ref().expect("the drone builds");
     assert!(!builder.can_build("hive"));
 
-    // Every swarm structure but the halls stands on creep; the pit withers
-    // off it, the tumor spreads its own, and a hall spreads the creep and
+    // Every swarm structure but the halls stands on creep; the pit, once
+    // built, withers off it, the tumor spreads its own, and a hall spreads the creep and
     // needs none under it.
     for name in ["tumor", "spawning_pit"] {
         let def = registry
@@ -599,7 +609,14 @@ fn hatchery_grows_into_hive_inside_cocoon_that_carries_its_brood() {
     let pit = registry
         .entity("spawning_pit")
         .expect("spawning_pit is registered");
-    assert!(!pit.field_effects.is_empty(), "the pit withers off creep");
+    let [withers] = pit.field_effects.as_slice() else {
+        panic!("the pit withers off creep, and nothing else");
+    };
+    assert_eq!(
+        withers.holds_while(),
+        Some(&Requirement::Built),
+        "the pit withers only once built"
+    );
     for name in ["hatchery", "hive_cocoon", "hive"] {
         let def = registry.entity(name).expect("swarm hall is registered");
         assert!(def.field_placement.is_empty(), "'{name}' needs no creep");
@@ -788,6 +805,7 @@ fn war_drums_rallies_owned_units_for_stockpile_price() {
     assert!(
         buff.entity_modifiers
             .iter()
+            .flat_map(|modifiers| modifiers.modifiers())
             .any(|modifier| modifier.stat == EntityStatId::SPEED),
         "the rallying call moves the army's speed, or casting it changes nothing visible"
     );
@@ -1392,7 +1410,26 @@ fn planted_tank_is_priced_and_paced_like_one_that_rolls() {
 }
 
 #[test]
-fn every_terran_building_burns_under_its_fire_line() {
+fn command_center_stands_in_scaffolding_while_site() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    let scaffolding = registry
+        .entity_buff("scaffolding")
+        .expect("the scaffolding is registered");
+    assert_eq!(
+        registry.entity_buff_def(scaffolding).lasting,
+        Lasting::While(Requirement::Unless(Box::new(Requirement::Built)))
+    );
+    assert!(
+        registry
+            .entity("command_center")
+            .expect("command_center is registered")
+            .passives
+            .contains(&scaffolding)
+    );
+}
+
+#[test]
+fn every_finished_terran_building_burns_under_its_fire_line() {
     let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
     let on_fire = registry
         .entity_buff("on_fire")
@@ -1400,22 +1437,25 @@ fn every_terran_building_burns_under_its_fire_line() {
     let fire = registry.entity_buff_def(on_fire);
     assert_eq!(
         fire.lasting,
-        Lasting::While(Requirement::Health(Bound::Share(Threshold::Under(
-            utils::fixed("0.34")
-        ))))
+        Lasting::While(Requirement::All(vec![
+            Requirement::Built,
+            Requirement::Health(Bound::Share(Threshold::Under(utils::fixed("0.34")))),
+        ]))
     );
     // Three points a second at 20 Hz: 0.15 a tick onto the drain.
     assert_eq!(
         fire.effects,
-        vec![EntityEffect::Modifiers(vec![EntityModifier {
-            stat: EntityStatId::HEALTH_DRAIN,
-            op: ModifierOp::FlatAdd,
-            magnitude: "0.15".parse::<FixedI64>().unwrap(),
-        }])]
+        vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![
+            EntityModifier {
+                stat: EntityStatId::HEALTH_DRAIN,
+                op: ModifierOp::FlatAdd,
+                magnitude: "0.15".parse::<FixedI64>().unwrap(),
+            }
+        ]))]
     );
 
     // Every Terran building, aloft forms included, bears the fire and carries
-    // the drain it moves; no other race's building does.
+    // the drain it moves beside its health; no other race's building bears it.
     for def in registry.entities() {
         let building = def.tags.contains("building");
         let terran = def.race.as_deref() == Some("terran");
@@ -1426,10 +1466,9 @@ fn every_terran_building_burns_under_its_fire_line() {
             def.name
         );
         if building && terran {
-            assert_eq!(
-                def.base_stat(EntityStatId::HEALTH_DRAIN),
-                Some(FixedU64::ZERO),
-                "{} declares the drain the fire moves",
+            assert!(
+                def.base_stat(EntityStatId::HEALTH_DRAIN).is_some(),
+                "{} carries the drain the fire moves",
                 def.name
             );
         }
@@ -1786,7 +1825,10 @@ fn cloak_is_buff_kept_up_from_energy_that_nothing_but_decloak_ends() {
     assert_eq!(decloak, EntityCastEffect::RemoveBuff(cloaked));
 
     let wraith = registry.entity("wraith").expect("wraith is registered");
-    assert!(wraith.has_energy(), "the cloak is paid from a pool it has");
+    assert!(
+        wraith.has_pool(PoolId::ENERGY),
+        "the cloak is paid from a pool it has"
+    );
     assert_eq!(
         wraith.skills,
         vec![
@@ -1849,12 +1891,17 @@ fn arbiter_veils_its_side_but_not_itself() {
             .find(|effect| effect.field() == veil)
             .unwrap_or_else(|| panic!("'{veiled}' answers to the veil"));
         assert_eq!(
-            (effect.of(), effect.side(), effect.coverage(), effect.kind()),
+            (
+                effect.of(),
+                effect.coverage(),
+                effect.on(FieldSide::Inside),
+                effect.on(FieldSide::Outside)
+            ),
             (
                 Affiliation::Allied,
-                FieldSide::Inside,
                 FieldCoverage::Every,
-                &EntityEffect::Conceal
+                &[EntityEffect::Conceal][..],
+                &[][..]
             ),
             "'{veiled}'"
         );
@@ -1865,13 +1912,17 @@ fn arbiter_veils_its_side_but_not_itself() {
 fn declared_coverage_matches_what_each_effect_means() {
     let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
 
-    // The table decision 18 settled: an effect that takes something away asks
-    // for every cell, so a body part way out keeps it; one that gives
-    // something asks for any, so a toe in is enough.
+    // A coverage says how much of a footprint must be covered to stand
+    // inside; outside is the rest. A conclave structure idles unless wholly
+    // powered, and is veiled only wholly inside the veil; a swarmling is
+    // quick with a toe on creep, and a larva and a finished pit wither only
+    // wholly off it.
     for (type_name, field_name, expected) in [
         ("gateway", "power", FieldCoverage::Every),
         ("photon_cannon", "power", FieldCoverage::Every),
         ("swarmling", "creep", FieldCoverage::Any),
+        ("larva", "creep", FieldCoverage::Any),
+        ("spawning_pit", "creep", FieldCoverage::Any),
         ("zealot", "veil", FieldCoverage::Every),
         ("dark_templar", "veil", FieldCoverage::Every),
     ] {
@@ -1951,6 +2002,158 @@ fn burrow_is_researched_at_hall_and_dug_out_onto_nearest_ground() {
     };
     assert_eq!(surfacing.into_type(), "swarmling");
     assert_eq!(surfacing.placement(), MorphPlacement::Nearby);
+}
+
+//
+// ─── Pools ────────────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn vitality_drill_moves_pools_by_its_difference() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    let drill = registry.player_buff_def(registry.player_buff("vitality_drill").unwrap());
+    assert_eq!(
+        drill.entity_modifiers,
+        vec![EntityModifiers::PoolMaximums {
+            modifiers: vec![EntityModifier {
+                stat: EntityStatId::MAX_HEALTH,
+                op: ModifierOp::FlatAdd,
+                magnitude: FixedI64::from_num(10),
+            }],
+            pool_shift: PoolShift::Difference,
+        }]
+    );
+    let blacksmith = registry.entity("blacksmith").unwrap();
+    let research = registry.research("vitality_drill").unwrap();
+    assert!(
+        blacksmith
+            .researcher
+            .as_ref()
+            .is_some_and(|researcher| researcher.can_research(research))
+    );
+}
+
+#[test]
+fn withering_keeps_its_victim_share() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    let withering = registry.entity_buff_def(registry.entity_buff("withering").unwrap());
+    assert_eq!(
+        withering.effects,
+        vec![EntityEffect::Modifiers(EntityModifiers::PoolMaximums {
+            modifiers: vec![EntityModifier {
+                stat: EntityStatId::MAX_HEALTH,
+                op: ModifierOp::PercentAdd,
+                magnitude: "-0.3".parse::<FixedI64>().unwrap(),
+            }],
+            pool_shift: PoolShift::Share
+        })]
+    );
+    let shaman = registry.entity("shaman").unwrap();
+    assert!(
+        shaman
+            .skills
+            .contains(&registry.skill("withering").unwrap())
+    );
+}
+
+#[test]
+fn necromancer_off_blight_clamps_its_energy() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    let necromancer = registry.entity("necromancer").unwrap();
+    let drained = necromancer
+        .field_effects
+        .iter()
+        .find(|effect| !effect.on(FieldSide::Outside).is_empty())
+        .expect("the necromancer answers to the blight's absence");
+    assert_eq!(
+        drained.on(FieldSide::Outside),
+        &[EntityEffect::Modifiers(EntityModifiers::PoolMaximums {
+            modifiers: vec![EntityModifier {
+                stat: EntityStatId::MAX_ENERGY,
+                op: ModifierOp::PercentAdd,
+                magnitude: "-0.5".parse::<FixedI64>().unwrap(),
+            }],
+            pool_shift: PoolShift::Clamp
+        })]
+    );
+}
+
+#[test]
+fn swarm_growths_come_out_full_two_way_changes_keep_points_and_upgrades_keep_share() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    for def in registry.entities() {
+        for transition in &def.morphs {
+            // What the swarm grows through an interim form, an egg or a
+            // cocoon, comes out whole.
+            let swarm = def.race.as_deref() == Some("swarm");
+            let hatched = swarm && transition.via_type().is_some();
+            match transition.course() {
+                MorphCourse::Direct { .. } => {}
+                MorphCourse::Via {
+                    enter_pool_carry,
+                    interrupted,
+                    ..
+                } => {
+                    let entered = if swarm {
+                        PoolCarry::Full
+                    } else {
+                        PoolCarry::Shift(PoolShift::Share)
+                    };
+                    assert_eq!(
+                        *enter_pool_carry,
+                        [(PoolId::HEALTH, entered)].into(),
+                        "{} enters",
+                        def.name
+                    );
+                    assert_eq!(
+                        *interrupted,
+                        ViaInterrupted::Reverts([(PoolId::HEALTH, RevertCarry::Restore)].into()),
+                        "{} gives back what it held when called off",
+                        def.name
+                    );
+                }
+            }
+            // A change the destination can undo is the same unit in another
+            // posture: lifting off, rooting, burrowing, digging in.
+            let destination = registry
+                .entity(transition.into_type())
+                .expect("a change names a registered form");
+            let two_way = destination
+                .morphs
+                .iter()
+                .any(|back| back.into_type() == def.name);
+            // Its points carry as they are, so both postures stand under the
+            // same maximum.
+            if two_way {
+                assert!(
+                    def.base_stat(EntityStatId::MAX_HEALTH).is_some(),
+                    "{} has a health pool",
+                    def.name
+                );
+                assert_eq!(
+                    destination.base_stat(EntityStatId::MAX_HEALTH),
+                    def.base_stat(EntityStatId::MAX_HEALTH),
+                    "{} and {} share their maximum health",
+                    def.name,
+                    transition.into_type()
+                );
+            }
+            let expected = match (hatched, two_way) {
+                (true, _) => PoolCarry::Full,
+                (false, true) => PoolCarry::Shift(PoolShift::Clamp),
+                (false, false) => PoolCarry::Shift(PoolShift::Share),
+            };
+            // Health is always named, and every pool named lands alike.
+            let landed: Vec<(PoolId, PoolCarry)> = transition.land_pool_carry().collect();
+            assert!(
+                landed.contains(&(PoolId::HEALTH, expected))
+                    && landed.iter().all(|&(_, carry)| carry == expected),
+                "{} into {}: {landed:?}",
+                def.name,
+                transition.into_type()
+            );
+        }
+    }
 }
 
 //

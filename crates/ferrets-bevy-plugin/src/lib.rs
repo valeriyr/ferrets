@@ -99,11 +99,11 @@
 //!                      that have run out
 //! process_entity_skills — exclusive system; age entity-skill cooldowns by one tick
 //! process_player_skills — exclusive system; age player-skill cooldowns
-//! process_energy_flow — exclusive system; move energy pools up by energy_regen
-//!                      toward max_energy and down by energy_drain
-//! process_health_flow — exclusive system; move health pools up by health_regen
-//!                      toward max_health and down by health_drain,
-//!                      skipping the dying and the still-under-construction
+//! process_energy_flow — exclusive system; move energy pools by energy_regen
+//!                      net of energy_drain, held under max_energy
+//! process_health_flow — exclusive system; move health pools by health_regen
+//!                      net of health_drain, held under max_health,
+//!                      skipping the dying
 //! process_lifetimes  — exclusive system; age every timed life by a tick and end
 //!                      the ones whose time is up
 //! process_entity_ai  — per-entity AI think (throttled, every N ticks) [not yet implemented]

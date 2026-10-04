@@ -5,7 +5,10 @@ mod utils;
 use bevy::prelude::{App, Entity};
 use ferrets_geometry::{cell_pos::CellPos, projection::Projection};
 
-use ferrets_content::{entity_stats::EntityStatId, registry::ContentRegistry, stats::ModifierOp};
+use ferrets_content::{
+    entity_stats::EntityStatId, pool::Pool, pool_def::PoolId, registry::ContentRegistry,
+    stats::ModifierOp,
+};
 use ferrets_math::{
     FixedU64,
     facing::{self, Facing},
@@ -15,12 +18,10 @@ use ferrets_physics::body;
 use ferrets_simulation::{
     command::PlayerCommand,
     components::{
-        attack::AttackComponent, dying::DyingComponent, health::HealthComponent,
-        location::LocationComponent, movement::MoveComponent, stance::Stance,
-        turret::TurretsComponent,
+        attack::AttackComponent, dying::DyingComponent, location::LocationComponent,
+        movement::MoveComponent, pools::PoolsComponent, stance::Stance, turret::TurretsComponent,
     },
     entity_index::EntityIndex,
-    game_loop,
     map::Map,
     movement_model::MovementModel,
     order::AttackTarget,
@@ -47,7 +48,7 @@ fn attack_kills_adjacent_target() {
 
     // The first hit lands at the damage point: ten damage into twenty health.
     utils::run_ticks(&mut app, 4);
-    assert_eq!(utils::health(&app, target), 10);
+    assert_eq!(utils::health_as_u32(&app, target), 10);
 
     // The target reaches 0 hp and starts dying: out of the alive set, but it
     // still holds its cell until the dying phase completes.
@@ -185,7 +186,7 @@ fn stop_cancels_attack() {
 
     // Wait for the first hit, then order a stop.
     utils::run_ticks(&mut app, 4);
-    assert_eq!(utils::health(&app, target), 10);
+    assert_eq!(utils::health_as_u32(&app, target), 10);
     utils::push_command(&mut app, PlayerCommand::Stop);
 
     utils::run_ticks(&mut app, 3);
@@ -195,7 +196,7 @@ fn stop_cancels_attack() {
 
     // The target survives on the one hit it took: the stop landed before the
     // second could.
-    assert_eq!(utils::health(&app, target), 10);
+    assert_eq!(utils::health_as_u32(&app, target), 10);
     assert!(app.world_mut().get::<DyingComponent>(target).is_none());
 }
 
@@ -214,7 +215,7 @@ fn send_to_entity_does_not_attack_ally() {
         registry.register(
             utils::walker("soldier", utils::GROUND)
                 .with_sight_range(8)
-                .with_health(30)
+                .with_pool(Pool::health(30))
                 .with_dying(2, [])
                 .with_attack(utils::weapon(utils::GROUND), 10, 1, 1, 4, 2),
         );
@@ -238,13 +239,7 @@ fn send_to_entity_does_not_attack_ally() {
 
     utils::run_ticks(&mut app, 6);
     // The ally kept full health — the right-click never became an attack.
-    assert_eq!(
-        app.world_mut()
-            .get::<HealthComponent>(ally)
-            .unwrap()
-            .current(),
-        30,
-    );
+    assert_eq!(utils::health_as_u32(&app, ally), 30);
 }
 
 #[test]
@@ -290,7 +285,7 @@ fn shortened_attack_cycle_still_lands_hits() {
         "-3",
         None,
     );
-    game_loop::stats::apply_entity_buff(app.world_mut(), attacker, hasty);
+    utils::apply_buff(app.world_mut(), attacker, hasty);
 
     utils::select(&mut app, attacker_id);
     utils::push_command(
@@ -305,12 +300,47 @@ fn shortened_attack_cycle_still_lands_hits() {
     // With the cycle clamped to 1 a hit lands every tick, so two land in the two
     // ticks after the command arrives — exactly lethal for the 20-hp dummy. Under
     // the authored 4-tick cycle only one hit could have landed by now.
-    let health = app.world().get::<HealthComponent>(target).unwrap();
     assert!(
-        health.is_dead(),
+        app.world()
+            .get::<PoolsComponent>(target)
+            .unwrap()
+            .emptied(PoolId::HEALTH),
         "expected the shortened cycle to land two hits, target at {} hp",
-        health.displayed()
+        utils::health_as_u32(&app, target)
     );
+}
+
+#[test]
+fn fractional_attack_cycle_rounds_up() {
+    // The soldier's 4-tick cycle shortened by 2.75 is 1.25 ticks, read as 2,
+    // with the hit on tick 2 of it.
+    let mut app = utils::combat_app();
+    let (attacker, attacker_id) =
+        utils::create_entity(app.world_mut(), "soldier", utils::pos(5, 5), Some(0)).unwrap();
+    let (target, target_id) =
+        utils::create_entity(app.world_mut(), "dummy", utils::pos(6, 5), None).unwrap();
+    let hasty = utils::register_entity_buff(
+        &mut app,
+        "hasty",
+        EntityStatId::ATTACK_PERIOD,
+        ModifierOp::FlatAdd,
+        "-2.75",
+        None,
+    );
+    utils::apply_buff(app.world_mut(), attacker, hasty);
+    utils::select(&mut app, attacker_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Attack {
+            target: AttackTarget::Entity(target_id),
+            flush: true,
+        },
+    );
+
+    // One hit of 10 by the fourth tick; a one-tick cycle would have landed
+    // two and emptied the 20.
+    utils::run_ticks(&mut app, 5);
+    assert_eq!(utils::health_as_u32(&app, target), 10);
 }
 
 #[test]
@@ -353,11 +383,8 @@ fn attack_gives_up_on_walled_in_target() {
         "the chase must give up on an unreachable target"
     );
     assert_eq!(
-        app.world()
-            .get::<HealthComponent>(target)
-            .unwrap()
-            .current(),
-        FixedU64::from_num(20),
+        utils::health_as_u32(&app, target),
+        20,
         "the walled-in target must take no damage"
     );
 }
@@ -396,7 +423,7 @@ fn turret_holds_fire_until_it_bears_on_target() {
     // away.
     utils::run_ticks(&mut app, 30);
     assert_eq!(
-        utils::health(&app, target),
+        utils::health_as_u32(&app, target),
         20,
         "the shot must wait until the gun bears on it"
     );
@@ -437,7 +464,7 @@ fn turret_tracks_target_beyond_reach_without_walking() {
     utils::run_ticks(&mut app, 60);
 
     assert_eq!(
-        utils::health(&app, target),
+        utils::health_as_u32(&app, target),
         20,
         "out of reach, so nothing lands"
     );
@@ -584,7 +611,7 @@ fn body_mounted_weapon_turns_itself_and_fires_at_once() {
         "the body comes round to its target itself"
     );
     assert_eq!(
-        utils::health(&app, target),
+        utils::health_as_u32(&app, target),
         10,
         "and the hit lands on the damage point, with no arc to wait for"
     );
@@ -619,7 +646,7 @@ fn rolling_gun_shoots_what_it_drives_past() {
     utils::run_ticks(&mut app, 14);
 
     assert_eq!(
-        utils::health(&app, target),
+        utils::health_as_u32(&app, target),
         10,
         "the gun worked it while the wheels rolled"
     );
@@ -632,7 +659,7 @@ fn rolling_gun_shoots_what_it_drives_past() {
     utils::run_ticks(&mut app, 6);
 
     assert_eq!(
-        utils::health(&app, target),
+        utils::health_as_u32(&app, target),
         0,
         "the second hit of the cycle"
     );
@@ -674,7 +701,7 @@ fn rolling_gun_tracks_what_it_cannot_yet_reach() {
         "the gun stayed on what it had noticed"
     );
     assert_eq!(
-        utils::health(&app, target),
+        utils::health_as_u32(&app, target),
         20,
         "and held its fire, never being in reach of it",
     );
@@ -705,7 +732,7 @@ fn rolling_gun_holds_fire_until_it_bears_on_target() {
     utils::run_ticks(&mut app, 13);
 
     assert_eq!(
-        utils::health(&app, target),
+        utils::health_as_u32(&app, target),
         20,
         "a gun still coming round has not fired",
     );
@@ -713,7 +740,7 @@ fn rolling_gun_holds_fire_until_it_bears_on_target() {
     utils::run_ticks(&mut app, 1);
 
     assert_eq!(
-        utils::health(&app, target),
+        utils::health_as_u32(&app, target),
         10,
         "and the hit lands on the tick its swing was started for",
     );
@@ -794,7 +821,7 @@ fn ordered_gun_works_target_while_it_closes() {
         "and the swing is under way before the walk has ended"
     );
     assert_eq!(
-        utils::health(&app, target),
+        utils::health_as_u32(&app, target),
         20,
         "the hit has not landed yet"
     );
@@ -826,12 +853,12 @@ fn ordered_gun_keeps_to_target_it_was_given() {
     utils::run_ticks(&mut app, 20);
 
     assert_eq!(
-        utils::health(&app, target),
+        utils::health_as_u32(&app, target),
         0,
         "the target it was given is dead"
     );
     assert_eq!(
-        utils::health(&app, bystander),
+        utils::health_as_u32(&app, bystander),
         20,
         "and what it drove past was never fired at"
     );
@@ -864,7 +891,11 @@ fn held_fire_works_target_it_was_ordered_onto() {
     );
     utils::run_ticks(&mut app, 10);
 
-    assert_eq!(utils::health(&app, target), 10, "the ordered hit landed");
+    assert_eq!(
+        utils::health_as_u32(&app, target),
+        10,
+        "the ordered hit landed"
+    );
 }
 
 /// A shot at bare ground has no body to hand over, so an order aimed at a place
@@ -891,7 +922,7 @@ fn ground_attack_takes_gun_back_from_its_last_target() {
     );
     utils::run_ticks(&mut app, 6);
     assert_eq!(
-        utils::health(&app, held),
+        utils::health_as_u32(&app, held),
         10,
         "the handed-over fight landed a hit"
     );
@@ -908,12 +939,12 @@ fn ground_attack_takes_gun_back_from_its_last_target() {
     utils::run_ticks(&mut app, 12);
 
     assert_eq!(
-        utils::health(&app, held),
+        utils::health_as_u32(&app, held),
         10,
         "the gun let go of what it held when the order named a place instead"
     );
     assert_eq!(
-        utils::health(&app, shelled),
+        utils::health_as_u32(&app, shelled),
         10,
         "and the order works the place itself, as it always did"
     );
@@ -941,7 +972,7 @@ fn halting_gun_drives_past_without_shooting() {
     utils::run_ticks(&mut app, 20);
 
     assert_eq!(
-        utils::health(&app, target),
+        utils::health_as_u32(&app, target),
         20,
         "a weapon that halts to fight does not fight while walking",
     );
@@ -971,7 +1002,7 @@ fn halting_gun_fires_where_it_stands() {
     utils::run_ticks(&mut app, 8);
 
     assert_eq!(
-        utils::health(&app, target),
+        utils::health_as_u32(&app, target),
         10,
         "standing, the same gun lands its hit"
     );
@@ -1000,7 +1031,7 @@ fn ordered_attack_fires_one_cycle_only() {
     );
     utils::run_ticks(&mut app, 12);
 
-    assert_eq!(utils::health(&app, target), 10, "one cycle, one hit");
+    assert_eq!(utils::health_as_u32(&app, target), 10, "one cycle, one hit");
 }
 
 /// A stance that picks no targets picks none while walking either.
@@ -1029,7 +1060,7 @@ fn held_fire_rolls_past_without_shooting() {
     utils::run_ticks(&mut app, 20);
 
     assert_eq!(
-        utils::health(&app, target),
+        utils::health_as_u32(&app, target),
         20,
         "a stance that picks no targets picks none while walking either",
     );
@@ -1054,7 +1085,7 @@ fn idle_gun_hunts_what_it_cannot_reach_without_walking() {
         Facing::NORTH,
         "the gun came round on what it noticed",
     );
-    assert_eq!(utils::health(&app, target), 20, "and held its fire");
+    assert_eq!(utils::health_as_u32(&app, target), 20, "and held its fire");
     assert_eq!(
         utils::position_of(app.world(), wagon),
         utils::pos(5, 10),
@@ -1085,7 +1116,7 @@ fn held_fire_keeps_idle_guns_still() {
         Facing::SOUTH,
         "the gun never came round: it was left as it was mounted",
     );
-    assert_eq!(utils::health(&app, target), 20, "and never fired");
+    assert_eq!(utils::health_as_u32(&app, target), 20, "and never fired");
 }
 
 //

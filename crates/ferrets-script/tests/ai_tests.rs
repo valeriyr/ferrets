@@ -8,11 +8,14 @@ use ferrets_content::{
     affiliation::Affiliation,
     annex::{AloneConduct, AnnexClaim, AnnexLife, AnnexWork},
     build::BuilderAttendance,
+    entity_modifiers::EntityModifiers,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     kinds::Kinds,
     location::Solidity,
     player_buffs::PlayerBuffDef,
+    pool::Pool,
+    pool_def::PoolId,
     price::{self, Price},
     registry::ContentRegistry,
     requirement::{Bound, Requirement, Threshold},
@@ -311,7 +314,7 @@ fn scripts_read_requirement_nodes_and_state_leaves() {
             if either.kind ~= "any" or #either.items ~= 2 then error("wrong any") end
             if either.items[1].kind ~= "entity_type" or either.items[1].name ~= "lab" then error("wrong first branch") end
             local both = either.items[2]
-            if both.kind ~= "all" or #both.items ~= 7 then error("wrong all") end
+            if both.kind ~= "all" or #both.items ~= 9 then error("wrong all") end
             if both.items[1].kind ~= "health" or both.items[1].under_share ~= "0.5" then error("wrong health") end
             if both.items[2].kind ~= "stat" or both.items[2].name ~= "speed" or both.items[2].at_least ~= "1" then error("wrong stat") end
             if both.items[3].kind ~= "idle" then error("wrong idle") end
@@ -319,6 +322,8 @@ fn scripts_read_requirement_nodes_and_state_leaves() {
             if both.items[5].kind ~= "unhurt_for" or both.items[5].ticks ~= 200 then error("wrong unhurt_for") end
             if both.items[6].kind ~= "energy" or both.items[6].under ~= "20" then error("wrong energy") end
             if both.items[7].kind ~= "stat" or both.items[7].at_least_share ~= "1.5" then error("wrong stat share") end
+            if both.items[8].kind ~= "built" then error("wrong built") end
+            if both.items[9].kind ~= "unless" or both.items[9].item.kind ~= "idle" then error("wrong unless") end
             return {}
         end"#,
     );
@@ -990,11 +995,11 @@ fn research_content() -> (ContentView, ResearchId) {
         "drums_haste",
         PlayerBuffDef {
             player_modifiers: Vec::new(),
-            entity_modifiers: vec![EntityModifier {
+            entity_modifiers: vec![EntityModifiers::Stats(vec![EntityModifier {
                 stat: EntityStatId::SPEED,
                 op: ModifierOp::PercentAdd,
                 magnitude: FixedI64::ONE,
-            }],
+            }])],
             duration: Some(10),
             stack_rule: StackRule::Refresh,
         },
@@ -1018,7 +1023,12 @@ fn research_content() -> (ContentView, ResearchId) {
             .with_location(LayerId::new(1), CellSize::ONE, Solidity::Solid)
             .with_tags(["workshop"])
             .with_researcher([smithing])
-            .with_energy(50, FixedU64::ONE)
+            .with_pool(Pool::builtin(
+                PoolId::ENERGY,
+                FixedU64::from_num(50),
+                FixedU64::ONE,
+                FixedU64::ZERO,
+            ))
             .with_skills([battle_focus, second_wind]),
     );
     // A primary offering one dock and the annex that stands in it, so a
@@ -1027,7 +1037,7 @@ fn research_content() -> (ContentView, ResearchId) {
     registry.register(
         EntityTypeDef::new("relay")
             .with_location(LayerId::new(1), CellSize::ONE, Solidity::Solid)
-            .with_health(10)
+            .with_pool(Pool::health(10))
             .with_price([("gold", 10)])
             .with_build_time(4)
             .with_annex(
@@ -1041,7 +1051,7 @@ fn research_content() -> (ContentView, ResearchId) {
     registry.register(
         EntityTypeDef::new("hub")
             .with_location(LayerId::new(1), CellSize::ONE, Solidity::Solid)
-            .with_health(20)
+            .with_pool(Pool::health(20))
             .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
             .with_builder(
                 ["relay"],
@@ -1060,7 +1070,7 @@ fn research_content() -> (ContentView, ResearchId) {
     registry.register(
         EntityTypeDef::new("outpost")
             .with_location(LayerId::new(1), CellSize::ONE, Solidity::Solid)
-            .with_health(20)
+            .with_pool(Pool::health(20))
             .with_requires([Requirement::Any(vec![
                 Requirement::EntityType("lab".to_string()),
                 Requirement::All(vec![
@@ -1077,6 +1087,8 @@ fn research_content() -> (ContentView, ResearchId) {
                         stat: EntityStatId::SPEED,
                         bound: Bound::Share(Threshold::AtLeast(utils::fixed("1.5"))),
                     },
+                    Requirement::Built,
+                    Requirement::Unless(Box::new(Requirement::Idle)),
                 ]),
             ])]),
     );

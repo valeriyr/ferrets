@@ -11,15 +11,16 @@ use bevy_ecs::{
 use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
 
 use super::{
+    buffs,
     chase::{self, Destination},
     crew::{self, Departure},
     orders::{self, Processing, Refusal},
-    work,
+    stats, work,
 };
 use crate::{
     annex, berths,
     components::{
-        build::{BuildComponent, SiteWork, UnderConstructionComponent},
+        build::{self, BuildComponent, SiteWork, UnderConstructionComponent},
         dying::DyingComponent,
         entity_info::EntityInfoComponent,
         location::LocationComponent,
@@ -328,12 +329,10 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
             spawn::cover_source(world, source, building);
         }
 
-        world
-            .entity_mut(building)
-            .insert(UnderConstructionComponent {
-                progress: 0,
-                work: work.clone(),
-            });
+        build::mark_as_site(world, building, work.clone());
+        // The passives its spawn fitted that hold only once built lapse at once.
+        buffs::refit_entity(world, building);
+        stats::recompute_stats_of(world, building);
         enter_site(world, entity, building);
         if let Some(player) = owner {
             resources::charge(
@@ -423,9 +422,7 @@ pub(super) fn tear_down_site(world: &mut World, building: Entity) {
 /// completion, naming `builder` — whoever worked the completing tick, or the
 /// founder of a site that raised itself.
 fn complete_site(world: &mut World, building: Entity, builder: SimulationId) {
-    world
-        .entity_mut(building)
-        .remove::<UnderConstructionComponent>();
+    build::mark_as_built(world, building);
     let announced = SimulationEvent::ConstructionCompleted {
         building: entity_def::simulation_id(world, building),
         builder,

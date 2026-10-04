@@ -7,10 +7,17 @@ use ferrets_content::{
     attack::Slain,
     entity_buffs::{EntityBuffDef, EntityBuffId, Lasting},
     entity_effect::EntityEffect,
+    entity_modifiers::EntityModifiers,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     location::Solidity,
-    morph::{MorphCancel, MorphInterrupted, MorphPlacement, MorphReason, MorphTransition},
+    morph::{
+        MorphCancel, MorphCourse, MorphInterrupted, MorphPlacement, MorphReason, MorphTransition,
+        PoolCarry, RevertCarry, ViaInterrupted,
+    },
+    pool::Pool,
+    pool_def::PoolId,
+    pool_shift::PoolShift,
     quantity::Quantity,
     registry::ContentRegistry,
     requirement::{Bound, Requirement, Threshold},
@@ -22,11 +29,10 @@ use ferrets_math::{FixedI64, FixedU64};
 use ferrets_simulation::{
     command::PlayerCommand,
     components::{
-        build::{SiteWork, UnderConstructionComponent},
+        build,
         concealed::ConcealedComponent,
-        energy::EnergyComponent,
         entity_buffs::BuffsComponent,
-        health,
+        pools::{self, Spending},
     },
     entity_def,
     events::{DeathCause, SimulationEvent},
@@ -56,7 +62,7 @@ fn passive_holds_under_line_and_lapses_over_it() {
     utils::wound(&mut app, shed, "50");
     utils::run_ticks(&mut app, 1);
     assert!(!entity_def::bears(app.world(), shed, on_fire));
-    assert_eq!(utils::health(&app, shed), 50);
+    assert_eq!(utils::health_as_u32(&app, shed), 50);
 
     // 49 of 100: under the line. The refit that opens the next tick fits the
     // buff, that tick's fold carries its drain, and that tick's flow takes
@@ -64,17 +70,17 @@ fn passive_holds_under_line_and_lapses_over_it() {
     utils::wound(&mut app, shed, "1");
     utils::run_ticks(&mut app, 1);
     assert!(entity_def::bears(app.world(), shed, on_fire));
-    assert_eq!(utils::health(&app, shed), 47);
+    assert_eq!(utils::health_as_u32(&app, shed), 47);
 
     // Lifted to 51: the next refit finds the line cleared and ends the buff,
     // and that tick drains nothing more — 51 holds.
-    health::restore(app.world_mut(), shed, utils::fixed("4"));
-    assert_eq!(utils::health(&app, shed), 51);
+    pools::restore(app.world_mut(), shed, PoolId::HEALTH, utils::fixed("4"));
+    assert_eq!(utils::health_as_u32(&app, shed), 51);
     utils::run_ticks(&mut app, 1);
     assert!(!entity_def::bears(app.world(), shed, on_fire));
-    assert_eq!(utils::health(&app, shed), 51);
+    assert_eq!(utils::health_as_u32(&app, shed), 51);
     utils::run_ticks(&mut app, 2);
-    assert_eq!(utils::health(&app, shed), 51);
+    assert_eq!(utils::health_as_u32(&app, shed), 51);
 }
 
 #[test]
@@ -86,11 +92,11 @@ fn burn_takes_from_tick_after_crossing() {
     // Wounded under the line mid-flight of tick t; t's flow has already run,
     // so the pool opens t+1 at 40 and closes it at 38.
     utils::wound(&mut app, shed, "60");
-    assert_eq!(utils::health(&app, shed), 40);
+    assert_eq!(utils::health_as_u32(&app, shed), 40);
     utils::run_ticks(&mut app, 1);
-    assert_eq!(utils::health(&app, shed), 38);
+    assert_eq!(utils::health_as_u32(&app, shed), 38);
     utils::run_ticks(&mut app, 1);
-    assert_eq!(utils::health(&app, shed), 36);
+    assert_eq!(utils::health_as_u32(&app, shed), 36);
 }
 
 #[test]
@@ -111,7 +117,7 @@ fn burn_runs_pool_dry_as_decay_with_no_kill_credited() {
         Slain::Remains,
     );
     utils::run_ticks(&mut app, 1);
-    assert_eq!(utils::health(&app, shed), 1);
+    assert_eq!(utils::health_as_u32(&app, shed), 1);
     assert!(
         !app.world()
             .resource::<utils::Announced>()
@@ -154,7 +160,7 @@ fn burn_is_no_hit() {
     utils::run_ticks(&mut app, 10);
 
     // Ten burning ticks: 40 − 20 = 20, and not one hit announced or tallied.
-    assert_eq!(utils::health(&app, shed), 20);
+    assert_eq!(utils::health_as_u32(&app, shed), 20);
     let announced = app.world().resource::<utils::Announced>();
     assert!(
         !announced
@@ -178,12 +184,12 @@ fn regeneration_nets_against_burn() {
     let (troll, _) = utils::create_owned(&mut app, "troll", 5, 5, 0);
     utils::run_ticks(&mut app, 1);
 
-    // 40 of 100 under the line: each tick heals 0.5 then drains 2, net −1.5.
+    // 40 of 100 under the line: each tick moves by 0.5 − 2 = −1.5.
     // 40 → 38.5 → 37.
     utils::wound(&mut app, troll, "60");
     utils::run_ticks(&mut app, 2);
     assert!(entity_def::bears(app.world(), troll, on_fire));
-    assert_eq!(utils::current_health(&app, troll), utils::fixed("37"));
+    assert_eq!(utils::health_as_u32(&app, troll), 37);
 }
 
 //
@@ -191,22 +197,63 @@ fn regeneration_nets_against_burn() {
 //
 
 #[test]
-fn site_under_construction_bears_no_passive() {
+fn site_burns_like_any_entity() {
     let (mut app, on_fire) = app();
     let (shed, _) = utils::create_owned(&mut app, "shed", 5, 5, 0);
-    app.world_mut()
-        .entity_mut(shed)
-        .insert(UnderConstructionComponent {
-            progress: 0,
-            work: SiteWork::Crew {
-                builders: Default::default(),
-            },
-        });
-    utils::wound(&mut app, shed, "60");
-    utils::run_ticks(&mut app, 3);
+    utils::mark_as_site(app.world_mut(), shed);
+    utils::run_ticks(&mut app, 1);
 
-    assert!(!entity_def::bears(app.world(), shed, on_fire));
-    assert_eq!(utils::health(&app, shed), 40);
+    // A site bears the passive its requirement meets and flows like anything
+    // else: 40 under the line, then 38 and 36.
+    utils::wound(&mut app, shed, "60");
+    assert_eq!(utils::health_as_u32(&app, shed), 40);
+    utils::run_ticks(&mut app, 1);
+    assert!(entity_def::bears(app.world(), shed, on_fire));
+    assert_eq!(utils::health_as_u32(&app, shed), 38);
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(utils::health_as_u32(&app, shed), 36);
+}
+
+#[test]
+fn passive_held_while_built_waits_for_completion() {
+    let (mut app, _) = app();
+    let (beacon, _) = utils::create_owned(&mut app, "beacon", 5, 5, 0);
+    let finished = buff_id(&app, "finished");
+    assert!(entity_def::bears(app.world(), beacon, finished));
+
+    utils::mark_as_site(app.world_mut(), beacon);
+    utils::run_ticks(&mut app, 1);
+    assert!(!entity_def::bears(app.world(), beacon, finished));
+
+    build::mark_as_built(app.world_mut(), beacon);
+    utils::run_ticks(&mut app, 1);
+    assert!(entity_def::bears(app.world(), beacon, finished));
+}
+
+#[test]
+fn passive_held_unless_built_lasts_while_site() {
+    let (mut app, _) = app();
+    let (beacon, _) = utils::create_owned(&mut app, "beacon", 5, 5, 0);
+    let scaffold = buff_id(&app, "scaffold");
+    assert!(!entity_def::bears(app.world(), beacon, scaffold));
+
+    utils::mark_as_site(app.world_mut(), beacon);
+    utils::run_ticks(&mut app, 1);
+    assert!(entity_def::bears(app.world(), beacon, scaffold));
+
+    build::mark_as_built(app.world_mut(), beacon);
+    utils::run_ticks(&mut app, 1);
+    assert!(!entity_def::bears(app.world(), beacon, scaffold));
+}
+
+#[test]
+fn site_keeps_passive_not_held_while_built() {
+    let (mut app, _) = app();
+    let (seedling, _) = utils::create_owned(&mut app, "seedling", 5, 5, 0);
+    let hardy = buff_id(&app, "hardy");
+    utils::mark_as_site(app.world_mut(), seedling);
+    utils::run_ticks(&mut app, 1);
+    assert!(entity_def::bears(app.world(), seedling, hardy));
 }
 
 #[test]
@@ -251,15 +298,15 @@ fn cast_applied_while_buff_ends_when_its_requirement_lapses() {
     let (lantern, _) = utils::create_owned(&mut app, "lantern", 5, 5, 0);
     utils::run_ticks(&mut app, 1);
     utils::wound(&mut app, lantern, "60");
-    game_loop::stats::apply_entity_buff(app.world_mut(), lantern, on_fire);
+    utils::apply_buff(app.world_mut(), lantern, on_fire);
     utils::run_ticks(&mut app, 1);
     assert!(entity_def::bears(app.world(), lantern, on_fire));
-    assert_eq!(utils::health(&app, lantern), 38);
+    assert_eq!(utils::health_as_u32(&app, lantern), 38);
 
-    health::restore(app.world_mut(), lantern, utils::fixed("20"));
+    pools::restore(app.world_mut(), lantern, PoolId::HEALTH, utils::fixed("20"));
     utils::run_ticks(&mut app, 1);
     assert!(!entity_def::bears(app.world(), lantern, on_fire));
-    assert_eq!(utils::health(&app, lantern), 58);
+    assert_eq!(utils::health_as_u32(&app, lantern), 58);
 }
 
 #[test]
@@ -317,7 +364,7 @@ fn borne_passive_is_not_applied_again() {
         .find(|(id, _)| *id == embers)
         .map(|(_, stacks)| stacks);
     assert_eq!(stacks, Some(1));
-    assert_eq!(utils::health(&app, kiln), 37);
+    assert_eq!(utils::health_as_u32(&app, kiln), 37);
 }
 
 #[test]
@@ -325,14 +372,14 @@ fn disabled_building_still_burns() {
     let (mut app, on_fire) = app();
     let (shed, _) = utils::create_owned(&mut app, "shed", 5, 5, 0);
     let stunned = buff_id(&app, "stunned");
-    game_loop::stats::apply_entity_buff(app.world_mut(), shed, stunned);
+    utils::apply_buff(app.world_mut(), shed, stunned);
     utils::run_ticks(&mut app, 1);
     utils::wound(&mut app, shed, "60");
 
     // Switched off, it still bears the fire and drains 2 a tick: 40 → 38.
     utils::run_ticks(&mut app, 1);
     assert!(entity_def::bears(app.world(), shed, on_fire));
-    assert_eq!(utils::health(&app, shed), 38);
+    assert_eq!(utils::health_as_u32(&app, shed), 38);
 }
 
 #[test]
@@ -362,7 +409,7 @@ fn new_form_passives_are_fitted_on_landing_tick_from_its_folded_stats() {
     let (mut app, _) = app();
     let (sapling, _) = utils::create_owned(&mut app, "sapling", 5, 5, 0);
     let bark = buff_id(&app, "bark");
-    game_loop::stats::apply_entity_buff(app.world_mut(), sapling, bark);
+    utils::apply_buff(app.world_mut(), sapling, bark);
     utils::run_ticks(&mut app, 1);
 
     // The oak's sight is 1 plus the bark's 2: 3, at least the 2 `watchful`
@@ -422,19 +469,15 @@ fn dropped_passive_stops_draining_on_landing_tick() {
     utils::run_ticks(&mut app, OAK_LANDS - 1);
     // 40 after the wound, less 2 on the one burning tick.
     assert!(entity_def::bears(app.world(), sapling, on_fire));
-    assert_eq!(utils::current_health(&app, sapling), utils::fixed("38"));
+    assert_eq!(utils::health_as_u32(&app, sapling), 38);
 
     // The oak lands with the fire gone from its folded stats, so the landing
     // tick's flow drains nothing: the pool carries its share, 38 of 100, onto
-    // the oak's 100 and holds there — 100 × (38 / 100), a hair under 38 in
-    // binary fixed point.
+    // the oak's 100 and holds there — 38 × 100 / 100 = 38.
     utils::run_ticks(&mut app, 1);
     assert_eq!(entity_def::type_name(app.world(), sapling), "oak");
     assert!(!entity_def::bears(app.world(), sapling, on_fire));
-    assert_eq!(
-        utils::current_health(&app, sapling),
-        utils::fixed("37.9999999888")
-    );
+    assert_eq!(utils::health_as_u32(&app, sapling), 38);
 }
 
 #[test]
@@ -503,13 +546,7 @@ fn zero_maximum_energy_carries_as_empty() {
     // full.
     utils::run_ticks(&mut app, utils::APPLY - SEEDLING_STANDS);
     assert_eq!(entity_def::type_name(app.world(), sapling), "sapling");
-    assert_eq!(
-        app.world()
-            .get::<EnergyComponent>(sapling)
-            .unwrap()
-            .current(),
-        FixedU64::ZERO
-    );
+    assert_eq!(utils::energy_as_u32(&app, sapling), 0);
 }
 
 #[test]
@@ -519,16 +556,19 @@ fn new_entity_starts_full_of_effective_maximum() {
     // 200 of 200, not 100 of 200 under its fire line.
     app.world_mut()
         .resource_mut::<PlayerStats>()
-        .add_entity_modifier(
+        .add_entity_modifiers(
             0,
-            EntityModifier {
-                stat: EntityStatId::MAX_HEALTH,
-                op: ModifierOp::PercentAdd,
-                magnitude: FixedI64::ONE,
+            EntityModifiers::PoolMaximums {
+                modifiers: vec![EntityModifier {
+                    stat: EntityStatId::MAX_HEALTH,
+                    op: ModifierOp::PercentAdd,
+                    magnitude: FixedI64::ONE,
+                }],
+                pool_shift: PoolShift::Share,
             },
         );
     let (sapling, _) = utils::create_owned(&mut app, "sapling", 5, 5, 0);
-    assert_eq!(utils::health(&app, sapling), 200);
+    assert_eq!(utils::health_as_u32(&app, sapling), 200);
     utils::run_ticks(&mut app, 1);
     assert!(!entity_def::bears(app.world(), sapling, on_fire));
 }
@@ -538,17 +578,17 @@ fn change_of_form_carries_share_of_effective_maximum() {
     let (mut app, on_fire) = app();
     let (sapling, _) = utils::create_owned(&mut app, "sapling", 5, 5, 0);
     let grown = buff_id(&app, "grown");
-    game_loop::stats::apply_entity_buff(app.world_mut(), sapling, grown);
+    utils::apply_buff(app.world_mut(), sapling, grown);
     utils::run_ticks(&mut app, 1);
 
     // 100 of a doubled 200 is a half, on the line and not under it. The oak
     // keeps the growth, so it lands at a half of its own doubled 200 — 100,
     // not a half of its base 100 — and does not catch fire.
-    assert_eq!(utils::health(&app, sapling), 100);
+    assert_eq!(utils::health_as_u32(&app, sapling), 100);
     utils::order_morph(&mut app, sapling, "oak");
     utils::run_ticks(&mut app, OAK_LANDS);
     assert_eq!(entity_def::type_name(app.world(), sapling), "oak");
-    assert_eq!(utils::health(&app, sapling), 100);
+    assert_eq!(utils::health_as_u32(&app, sapling), 100);
     assert!(!entity_def::bears(app.world(), sapling, on_fire));
 }
 
@@ -562,7 +602,7 @@ fn applied_while_buff_outlives_change_of_form() {
     // an applied one, and a new form that names no fire keeps it burning
     // while the pool stays under the line.
     utils::wound(&mut app, sapling, "60");
-    game_loop::stats::apply_entity_buff(app.world_mut(), sapling, on_fire);
+    utils::apply_buff(app.world_mut(), sapling, on_fire);
     utils::run_ticks(&mut app, 1);
     utils::order_morph(&mut app, sapling, "oak");
     utils::run_ticks(&mut app, OAK_LANDS);
@@ -581,7 +621,7 @@ fn ignored_recast_of_passive_is_dropped_at_change_of_form() {
 
     // `on_fire` ignores a second application, so the cast leaves the
     // sapling's own fire as it was, and the oak, naming no fire, drops it.
-    game_loop::stats::apply_entity_buff(app.world_mut(), sapling, on_fire);
+    utils::apply_buff(app.world_mut(), sapling, on_fire);
     utils::order_morph(&mut app, sapling, "oak");
     utils::run_ticks(&mut app, OAK_LANDS);
     assert_eq!(entity_def::type_name(app.world(), sapling), "oak");
@@ -601,7 +641,7 @@ fn refreshed_passive_outlives_change_of_form() {
     // `smolder` refreshes on a second application, so the cast replaces the
     // sapling's own copy with an applied one, which the oak keeps while the
     // pool stays under the line.
-    game_loop::stats::apply_entity_buff(app.world_mut(), sapling, smolder);
+    utils::apply_buff(app.world_mut(), sapling, smolder);
     utils::order_morph(&mut app, sapling, "oak");
     utils::run_ticks(&mut app, OAK_LANDS);
     assert_eq!(entity_def::type_name(app.world(), sapling), "oak");
@@ -662,18 +702,11 @@ fn canceled_change_of_form_refits_origin_passives() {
 fn site_lapses_applied_while_buff() {
     let (mut app, on_fire) = app();
     let (shed, _) = utils::create_owned(&mut app, "shed", 5, 5, 0);
-    app.world_mut()
-        .entity_mut(shed)
-        .insert(UnderConstructionComponent {
-            progress: 0,
-            work: SiteWork::Crew {
-                builders: Default::default(),
-            },
-        });
+    utils::mark_as_site(app.world_mut(), shed);
 
     // Alight at full health: its requirement fails, and a site is refitted
     // for what lapses though it is fitted no passive.
-    game_loop::stats::apply_entity_buff(app.world_mut(), shed, on_fire);
+    utils::apply_buff(app.world_mut(), shed, on_fire);
     utils::run_ticks(&mut app, 1);
     assert!(!entity_def::bears(app.world(), shed, on_fire));
 }
@@ -687,11 +720,9 @@ fn energy_line_passive_reads_energy_pool() {
     // `spent` holds under a quarter of 40 energy: 9 < 10 after spending 31.
     let spent = buff_id(&app, "spent");
     assert!(!entity_def::bears(app.world(), troll, spent));
-    assert!(
-        app.world_mut()
-            .get_mut::<EnergyComponent>(troll)
-            .unwrap()
-            .spend(utils::fixed("31"))
+    assert_eq!(
+        pools::spend(app.world_mut(), troll, PoolId::ENERGY, utils::fixed("31")),
+        Spending::Paid
     );
     utils::run_ticks(&mut app, 1);
     assert!(entity_def::bears(app.world(), troll, spent));
@@ -721,8 +752,9 @@ const GROVE_LANDS: u32 = 1 + 8;
 /// `armor +1`), `watchful` (sight at least 2 → `armor +1`), `camouflage`
 /// (health at least 1 → conceal), `sapped` (health at least 1 →
 /// `max_energy −100%`), `bark` (forever, `sight_range +2`), `grown` (forever,
-/// `max_health +100%`), `stunned` (forever, disables), `shadowmeld` (idle →
-/// conceal). Types: `shed` (100 health, bears `on_fire`), `troll` (100 health
+/// `max_health +100%`, the pool clamped), `stunned` (forever, disables), `shadowmeld` (idle →
+/// conceal), `finished` (built → `sight_range +1`), `scaffold` (unless built
+/// → `sight_range +1`). Types: `shed` (100 health, bears `on_fire`), `troll` (100 health
 /// regenerating 0.5, 40 energy, bears `on_fire` and `spent`), `lantern` (100
 /// health, sight 8, bears `lit`), `kiln` (100 health, bears `embers`),
 /// `sapling` (100 health, 40 energy, sight 1, bears `on_fire`, `smolder` and
@@ -730,7 +762,8 @@ const GROVE_LANDS: u32 = 1 + 8;
 /// `seedling` in eight, which can be called off), `oak` (100 health, sight 1,
 /// bears `hardy`, `watchful` and `camouflage`), `seedling` (100 health, 40
 /// energy, bears `hardy` and `sapped`), `grove` (100 health, sight 2, bears
-/// `watchful`), `huntress` (a mover bearing `shadowmeld`).
+/// `watchful`), `huntress` (a mover bearing `shadowmeld`), `beacon` (100
+/// health, sight 1, bears `finished` and `scaffold`).
 fn app() -> (App, EntityBuffId) {
     let mut app = utils::make_app(vec![
         PlayerSlot::occupied(0, PlayerType::Human, None, None),
@@ -743,39 +776,35 @@ fn app() -> (App, EntityBuffId) {
             "on_fire",
             while_buff(
                 Requirement::Health(Bound::Share(Threshold::Under(utils::fixed("0.5")))),
-                vec![EntityEffect::Modifiers(vec![utils::flat(
-                    EntityStatId::HEALTH_DRAIN,
-                    "2",
-                )])],
+                vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![
+                    utils::flat(EntityStatId::HEALTH_DRAIN, "2"),
+                ]))],
             ),
         );
         let lit = registry.register_entity_buff(
             "lit",
             while_buff(
                 Requirement::EntityType("shed".to_string()),
-                vec![EntityEffect::Modifiers(vec![utils::flat(
-                    EntityStatId::SIGHT_RANGE,
-                    "1",
-                )])],
+                vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![
+                    utils::flat(EntityStatId::SIGHT_RANGE, "1"),
+                ]))],
             ),
         );
         let spent = registry.register_entity_buff(
             "spent",
             while_buff(
                 Requirement::Energy(Bound::Share(Threshold::Under(utils::fixed("0.25")))),
-                vec![EntityEffect::Modifiers(vec![utils::flat(
-                    EntityStatId::ENERGY_REGEN,
-                    "1",
-                )])],
+                vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![
+                    utils::flat(EntityStatId::ENERGY_REGEN, "1"),
+                ]))],
             ),
         );
         let embers = registry.register_entity_buff(
             "embers",
             EntityBuffDef {
-                effects: vec![EntityEffect::Modifiers(vec![utils::flat(
-                    EntityStatId::HEALTH_DRAIN,
-                    "1",
-                )])],
+                effects: vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![
+                    utils::flat(EntityStatId::HEALTH_DRAIN, "1"),
+                ]))],
                 lasting: Lasting::While(Requirement::Health(Bound::Share(Threshold::Under(
                     utils::fixed("0.5"),
                 )))),
@@ -787,19 +816,17 @@ fn app() -> (App, EntityBuffId) {
             "hardy",
             while_buff(
                 Requirement::Health(Bound::Amount(Threshold::AtLeast(FixedU64::ONE))),
-                vec![EntityEffect::Modifiers(vec![utils::flat(
-                    EntityStatId::ARMOR,
-                    "1",
-                )])],
+                vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![
+                    utils::flat(EntityStatId::ARMOR, "1"),
+                ]))],
             ),
         );
         registry.register_entity_buff(
             "bark",
             EntityBuffDef {
-                effects: vec![EntityEffect::Modifiers(vec![utils::flat(
-                    EntityStatId::SIGHT_RANGE,
-                    "2",
-                )])],
+                effects: vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![
+                    utils::flat(EntityStatId::SIGHT_RANGE, "2"),
+                ]))],
                 lasting: Lasting::Forever,
                 stack_rule: StackRule::Ignore,
                 interrupted_by: Vec::new(),
@@ -812,29 +839,26 @@ fn app() -> (App, EntityBuffId) {
                     stat: EntityStatId::SIGHT_RANGE,
                     bound: Bound::Amount(Threshold::AtLeast(FixedU64::from_num(2))),
                 },
-                vec![EntityEffect::Modifiers(vec![utils::flat(
-                    EntityStatId::ARMOR,
-                    "1",
-                )])],
+                vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![
+                    utils::flat(EntityStatId::ARMOR, "1"),
+                ]))],
             ),
         );
         let lookout = registry.register_entity_buff(
             "lookout",
             while_buff(
                 Requirement::Health(Bound::Amount(Threshold::AtLeast(FixedU64::ONE))),
-                vec![EntityEffect::Modifiers(vec![utils::flat(
-                    EntityStatId::SIGHT_RANGE,
-                    "2",
-                )])],
+                vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![
+                    utils::flat(EntityStatId::SIGHT_RANGE, "2"),
+                ]))],
             ),
         );
         let smolder = registry.register_entity_buff(
             "smolder",
             EntityBuffDef {
-                effects: vec![EntityEffect::Modifiers(vec![utils::flat(
-                    EntityStatId::ARMOR,
-                    "1",
-                )])],
+                effects: vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![
+                    utils::flat(EntityStatId::ARMOR, "1"),
+                ]))],
                 lasting: Lasting::While(Requirement::Health(Bound::Share(Threshold::Under(
                     utils::fixed("0.5"),
                 )))),
@@ -853,21 +877,27 @@ fn app() -> (App, EntityBuffId) {
             "sapped",
             while_buff(
                 Requirement::Health(Bound::Amount(Threshold::AtLeast(FixedU64::ONE))),
-                vec![EntityEffect::Modifiers(vec![EntityModifier {
-                    stat: EntityStatId::MAX_ENERGY,
-                    op: ModifierOp::PercentAdd,
-                    magnitude: -FixedI64::ONE,
-                }])],
+                vec![EntityEffect::Modifiers(EntityModifiers::PoolMaximums {
+                    modifiers: vec![EntityModifier {
+                        stat: EntityStatId::MAX_ENERGY,
+                        op: ModifierOp::PercentAdd,
+                        magnitude: -FixedI64::ONE,
+                    }],
+                    pool_shift: PoolShift::Share,
+                })],
             ),
         );
         registry.register_entity_buff(
             "grown",
             EntityBuffDef {
-                effects: vec![EntityEffect::Modifiers(vec![EntityModifier {
-                    stat: EntityStatId::MAX_HEALTH,
-                    op: ModifierOp::PercentAdd,
-                    magnitude: FixedI64::ONE,
-                }])],
+                effects: vec![EntityEffect::Modifiers(EntityModifiers::PoolMaximums {
+                    modifiers: vec![EntityModifier {
+                        stat: EntityStatId::MAX_HEALTH,
+                        op: ModifierOp::PercentAdd,
+                        magnitude: FixedI64::ONE,
+                    }],
+                    pool_shift: PoolShift::Clamp,
+                })],
                 lasting: Lasting::Forever,
                 stack_rule: StackRule::Ignore,
                 interrupted_by: Vec::new(),
@@ -889,26 +919,27 @@ fn app() -> (App, EntityBuffId) {
         registry.register(
             EntityTypeDef::new("shed")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_health(100)
-                .with_stat(EntityStatId::HEALTH_DRAIN, FixedU64::ZERO)
+                .with_pool(Pool::health(100))
                 .with_dying(2, [])
                 .with_passives([on_fire]),
         );
         registry.register(
             EntityTypeDef::new("troll")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_health(100)
-                .with_stat(EntityStatId::HEALTH_REGEN, utils::fixed("0.5"))
-                .with_stat(EntityStatId::HEALTH_DRAIN, FixedU64::ZERO)
-                .with_energy(40, FixedU64::ZERO)
+                .with_pool(Pool::builtin(
+                    PoolId::HEALTH,
+                    FixedU64::from_num(100),
+                    utils::fixed("0.5"),
+                    FixedU64::ZERO,
+                ))
+                .with_pool(Pool::energy(40))
                 .with_dying(2, [])
                 .with_passives([on_fire, spent]),
         );
         registry.register(
             EntityTypeDef::new("lantern")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_health(100)
-                .with_stat(EntityStatId::HEALTH_DRAIN, FixedU64::ZERO)
+                .with_pool(Pool::health(100))
                 .with_stat(EntityStatId::SIGHT_RANGE, FixedU64::from_num(8))
                 .with_dying(2, [])
                 .with_passives([lit]),
@@ -916,61 +947,90 @@ fn app() -> (App, EntityBuffId) {
         registry.register(
             EntityTypeDef::new("kiln")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_health(100)
-                .with_stat(EntityStatId::HEALTH_DRAIN, FixedU64::ZERO)
+                .with_pool(Pool::health(100))
                 .with_dying(2, [])
                 .with_passives([embers]),
         );
         registry.register(
             EntityTypeDef::new("sapling")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_health(100)
-                .with_stat(EntityStatId::HEALTH_DRAIN, FixedU64::ZERO)
+                .with_pool(Pool::health(100))
                 .with_stat(EntityStatId::ARMOR, FixedU64::ZERO)
                 .with_stat(EntityStatId::SIGHT_RANGE, FixedU64::ONE)
-                .with_energy(40, FixedU64::ZERO)
+                .with_pool(Pool::energy(40))
                 .with_dying(2, [])
                 .with_passives([on_fire, smolder, lookout])
                 .with_morphs([
                     MorphTransition::new(
                         "oak",
-                        None,
+                        MorphCourse::direct(MorphInterrupted::Reverts),
                         Quantity::Constant(2),
                         MorphPlacement::Reserve,
                         MorphCancel::Committed,
-                        MorphInterrupted::Reverts,
                         MorphReason::Change,
                         Vec::new(),
                         Vec::new(),
+                        [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
                     ),
                     MorphTransition::new(
                         "grove",
-                        Some("seedling"),
+                        MorphCourse::via(
+                            "seedling",
+                            [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
+                            ViaInterrupted::reverts([(
+                                PoolId::HEALTH,
+                                RevertCarry::Carry(PoolCarry::Shift(PoolShift::Share)),
+                            )]),
+                        ),
                         Quantity::Constant(8),
                         MorphPlacement::Reserve,
                         MorphCancel::Forfeit,
-                        MorphInterrupted::Reverts,
                         MorphReason::Change,
                         Vec::new(),
                         Vec::new(),
+                        [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
                     ),
                 ]),
         );
         registry.register(
             EntityTypeDef::new("seedling")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_health(100)
-                .with_stat(EntityStatId::HEALTH_DRAIN, FixedU64::ZERO)
+                .with_pool(Pool::health(100))
                 .with_stat(EntityStatId::ARMOR, FixedU64::ZERO)
-                .with_energy(40, FixedU64::ZERO)
+                .with_pool(Pool::energy(40))
                 .with_dying(2, [])
                 .with_passives([hardy, sapped]),
+        );
+        let finished = registry.register_entity_buff(
+            "finished",
+            while_buff(
+                Requirement::Built,
+                vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![
+                    utils::flat(EntityStatId::SIGHT_RANGE, "1"),
+                ]))],
+            ),
+        );
+        let scaffold = registry.register_entity_buff(
+            "scaffold",
+            while_buff(
+                Requirement::Unless(Box::new(Requirement::Built)),
+                vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![
+                    utils::flat(EntityStatId::SIGHT_RANGE, "1"),
+                ]))],
+            ),
+        );
+        registry.register(
+            EntityTypeDef::new("beacon")
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_pool(Pool::health(100))
+                .with_stat(EntityStatId::SIGHT_RANGE, FixedU64::ONE)
+                .with_dying(2, [])
+                .with_passives([finished, scaffold]),
         );
         registry.register(
             EntityTypeDef::new("grove")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_health(100)
-                .with_stat(EntityStatId::HEALTH_DRAIN, FixedU64::ZERO)
+                .with_pool(Pool::health(100))
                 .with_stat(EntityStatId::ARMOR, FixedU64::ZERO)
                 .with_stat(EntityStatId::SIGHT_RANGE, FixedU64::from_num(2))
                 .with_dying(2, [])
@@ -979,8 +1039,7 @@ fn app() -> (App, EntityBuffId) {
         registry.register(
             EntityTypeDef::new("oak")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_health(100)
-                .with_stat(EntityStatId::HEALTH_DRAIN, FixedU64::ZERO)
+                .with_pool(Pool::health(100))
                 .with_stat(EntityStatId::ARMOR, FixedU64::ZERO)
                 .with_stat(EntityStatId::SIGHT_RANGE, FixedU64::ONE)
                 .with_dying(2, [])
@@ -996,7 +1055,7 @@ fn app() -> (App, EntityBuffId) {
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
                 )
-                .with_health(40)
+                .with_pool(Pool::health(40))
                 .with_dying(2, [])
                 .with_passives([shadowmeld]),
         );

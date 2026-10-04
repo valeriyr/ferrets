@@ -77,6 +77,8 @@ pub enum Requirement {
     All(Vec<Requirement>),
     /// At least one is met.
     Any(Vec<Requirement>),
+    /// The requirement it holds is not met.
+    Unless(Box<Requirement>),
     /// The player has a standing entity of this type, by registered name.
     EntityType(String),
     /// The player has a standing entity carrying this tag.
@@ -100,6 +102,8 @@ pub enum Requirement {
         /// The side asked for.
         bound: Bound,
     },
+    /// The acting entity is not under construction.
+    Built,
     /// The acting entity takes orders and runs none.
     Idle,
     /// The acting entity takes orders, runs none, and has run none for at
@@ -122,6 +126,7 @@ impl Requirement {
                         (Scope::Player, Scope::Player) => Scope::Player,
                     })
             }
+            Requirement::Unless(item) => item.scope(),
             Requirement::EntityType(_) | Requirement::Tag(_) | Requirement::Research(_) => {
                 Scope::Player
             }
@@ -129,6 +134,7 @@ impl Requirement {
             | Requirement::Health(_)
             | Requirement::Energy(_)
             | Requirement::Stat { .. }
+            | Requirement::Built
             | Requirement::Idle
             | Requirement::IdleFor(_)
             | Requirement::UnhurtFor(_) => Scope::Actor,
@@ -149,6 +155,7 @@ impl Requirement {
                     item.collect_leaves(out);
                 }
             }
+            Requirement::Unless(item) => item.collect_leaves(out),
             Requirement::EntityType(_)
             | Requirement::Tag(_)
             | Requirement::Research(_)
@@ -156,6 +163,7 @@ impl Requirement {
             | Requirement::Health(_)
             | Requirement::Energy(_)
             | Requirement::Stat { .. }
+            | Requirement::Built
             | Requirement::Idle
             | Requirement::IdleFor(_)
             | Requirement::UnhurtFor(_) => out.push(self),

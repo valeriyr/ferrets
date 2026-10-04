@@ -2,7 +2,7 @@
 //! that map an entity table onto the [`EntityTypeDef`] builder.
 
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
 use ferrets_content::{
     annex::{AloneConduct, AnnexClaim, AnnexLife},
@@ -15,15 +15,18 @@ use ferrets_content::{
     dying::{Bequest, LeftBy},
     entity_buffs::{EntityBuffDef, Lasting},
     entity_effect::EntityEffect,
+    entity_modifiers::EntityModifiers,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     field::{
         Emission, FieldDecay, FieldDef, FieldEffect, FieldGrowth, FieldId, FieldLayer,
-        FieldPlacement, FieldSide, FieldSourceDef, FieldVision,
+        FieldPlacement, FieldSourceDef, FieldVision,
     },
     kinds::{Kind, Kinds},
-    morph::{MorphInterrupted, MorphReason, MorphTransition},
+    morph::{MorphCourse, MorphInterrupted, MorphReason, MorphTransition, ViaInterrupted},
     player_buffs::PlayerBuffDef,
+    pool::Pool,
+    pool_def::PoolId,
     price::Price,
     projectile::ProjectileDef,
     quantity::Quantity,
@@ -48,9 +51,10 @@ use mlua::{Lua, Table, Value};
 use crate::{content, error::ScriptError};
 
 /// The keys a requirement table may name, one of them each.
-const REQUIREMENT_KEYS: [&str; 11] = [
+const REQUIREMENT_KEYS: [&str; 12] = [
     "all",
     "any",
+    "unless",
     "entity_type",
     "tag",
     "research",
@@ -263,6 +267,11 @@ fn build_entity(
     if let Some(stats) = optional::<Table>(table, "stats")? {
         for (stat, value) in parse_stats(&stats, registry)? {
             def = def.with_stat(stat, value);
+        }
+    }
+    if let Some(pools) = optional::<Table>(table, "pools")? {
+        for pool in parse_pools(&pools, registry)? {
+            def = def.with_pool(pool);
         }
     }
     if let Some(dying) = optional::<Table>(table, "dying")? {
@@ -744,7 +753,7 @@ fn splash_bands(splash: &Table) -> crate::Result<Vec<(u32, FixedU64)>> {
     Ok(out)
 }
 
-/// Reads the flat `stats = { name = value }` table: each key is a registered stat
+/// Reads the `stats = { name = value }` table: each key is a registered stat
 /// name (built-in, or content-declared with `define_entity_stat`), each value a
 /// non-negative integer or a decimal string. An unknown name is rejected — a
 /// custom stat must be declared before it is set.
@@ -759,6 +768,36 @@ fn parse_stats(
             .entity_stat(&name)
             .ok_or_else(|| ScriptError::ContentError(format!("stat '{name}' is not defined")))?;
         out.push((stat, stat_value(&name, value)?));
+    }
+    Ok(out)
+}
+
+/// Reads the `pools = { name = { maximum = ..., regen? = ..., drain? = ... } }`
+/// table: each key is a registered pool's name, each value its maximum and
+/// rates, an unnamed rate at zero. An unknown name is rejected.
+fn parse_pools(pools: &Table, registry: &ContentRegistry) -> crate::Result<Vec<Pool>> {
+    let mut out = Vec::new();
+    for pair in pools.pairs::<String, Table>() {
+        let (name, declaration) = pair.map_err(|error| field_error("pools", error))?;
+        let pool = registry
+            .pool(&name)
+            .ok_or_else(|| ScriptError::ContentError(format!("pool '{name}' is not defined")))?;
+        let rate = |key: &str| -> crate::Result<FixedU64> {
+            match optional::<Value>(&declaration, key)? {
+                Some(value) => fixed_value(&format!("pool '{name}' {key}"), &value),
+                None => Ok(FixedU64::ZERO),
+            }
+        };
+        out.push(Pool::new(
+            pool,
+            *registry.pool_def(pool),
+            fixed_value(
+                &format!("pool '{name}' maximum"),
+                &required::<Value>(&declaration, "maximum")?,
+            )?,
+            rate("regen")?,
+            rate("drain")?,
+        ));
     }
     Ok(out)
 }
@@ -1244,11 +1283,13 @@ fn parse_quantity(
 }
 
 /// Reads the `morphs` list: each entry names the destination type and the
-/// terms — an optional `via` form worn while the change runs, `time` (a tick
-/// count, or `{ stat = ... }` naming a registered entity stat), `placement`,
-/// `cancel`, an optional `interrupted` defaulting to `reverts`, an optional
-/// `reason` defaulting to `change`, an optional `cost` block shaped like a skill cost,
-/// and an optional `requires` list.
+/// terms — its course (see [`parse_course`]), `time` (a tick count, or
+/// `{ stat = ... }` naming a registered entity stat), `placement`, `cancel`,
+/// an optional `reason` defaulting to `change`, an optional `cost` block
+/// shaped like a skill cost,
+/// an optional `requires` list, and an optional `land_pool_carry` table naming,
+/// for each pool it carries, how the landing fills it — `"share"`,
+/// `"difference"`, `"clamp"` or `"full"`.
 fn parse_morphs(
     morphs: Vec<Table>,
     registry: &ContentRegistry,
@@ -1256,7 +1297,7 @@ fn parse_morphs(
     let mut transitions = Vec::with_capacity(morphs.len());
     for entry in morphs {
         let into = required::<String>(&entry, "into")?;
-        let via = optional::<String>(&entry, "via")?;
+        let course = parse_course(&entry, registry)?;
         let time = parse_quantity(
             "morph time",
             "tick",
@@ -1265,10 +1306,6 @@ fn parse_morphs(
         )?;
         let placement = content::morph_placement(&required::<String>(&entry, "placement")?)?;
         let cancel = content::morph_cancel(&required::<String>(&entry, "cancel")?)?;
-        let interrupted = match optional::<String>(&entry, "interrupted")? {
-            Some(name) => content::morph_interrupted(&name)?,
-            None => MorphInterrupted::Reverts,
-        };
         let reason = match optional::<String>(&entry, "reason")? {
             Some(name) => content::morph_reason(&name)?,
             None => MorphReason::Change,
@@ -1278,19 +1315,95 @@ fn parse_morphs(
             None => Vec::new(),
         };
         let requires = parse_requires(&entry, registry)?;
+        let land_pool_carry =
+            parse_carries(&entry, "land_pool_carry", registry, content::pool_carry)?;
         transitions.push(MorphTransition::new(
             into,
-            via.as_deref(),
+            course,
             time,
             placement,
             cancel,
-            interrupted,
             reason,
             costs,
             requires,
+            land_pool_carry,
         ));
     }
     Ok(transitions)
+}
+
+/// Reads how a transition gets to its destination: directly, with an optional
+/// `interrupted = "reverts" | "dies"` (reverting when unsaid), or through
+/// `via = { form = ..., enter_pool_carry = ..., interrupted = ... }`, whose
+/// `interrupted` is `"dies"` or `{ reverts = <revert carry> }`. An
+/// `interrupted` beside a `via` is refused: the interim form's own says it.
+fn parse_course(entry: &Table, registry: &ContentRegistry) -> crate::Result<MorphCourse> {
+    let Some(via) = optional::<Table>(entry, "via")? else {
+        let interrupted = match optional::<String>(entry, "interrupted")? {
+            Some(name) => content::morph_interrupted(&name)?,
+            None => MorphInterrupted::Reverts,
+        };
+        return Ok(MorphCourse::Direct { interrupted });
+    };
+    if let Some(stray) = optional::<Value>(entry, "interrupted")? {
+        return Err(content::unexpected(
+            "morph interrupted",
+            &["nothing beside a via, which says its own"],
+            &found(&stray),
+        ));
+    }
+    let interrupted = match required::<Value>(&via, "interrupted")? {
+        Value::String(word)
+            if word
+                .to_str()
+                .map_err(|error| field_error("via interrupted", error))?
+                .as_ref()
+                == "dies" =>
+        {
+            ViaInterrupted::Dies
+        }
+        Value::Table(interrupted) => ViaInterrupted::Reverts(parse_carries(
+            &interrupted,
+            "reverts",
+            registry,
+            content::revert_carry,
+        )?),
+        other => {
+            return Err(content::unexpected(
+                "via interrupted",
+                &["\"dies\"", "a { reverts = ... } table"],
+                &found(&other),
+            ));
+        }
+    };
+    Ok(MorphCourse::Via {
+        form: required::<String>(&via, "form")?,
+        enter_pool_carry: parse_carries(&via, "enter_pool_carry", registry, content::pool_carry)?,
+        interrupted,
+    })
+}
+
+/// Reads a `key = { <pool name> = <carry word>, ... }` table: how a landing
+/// fills each pool it names. An absent key names none, leaving every pool as
+/// it is.
+fn parse_carries<T>(
+    table: &Table,
+    key: &str,
+    registry: &ContentRegistry,
+    carry: fn(&str) -> crate::Result<T>,
+) -> crate::Result<BTreeMap<PoolId, T>> {
+    let Some(named) = optional::<Table>(table, key)? else {
+        return Ok(BTreeMap::new());
+    };
+    let mut carries = BTreeMap::new();
+    for pair in named.pairs::<String, String>() {
+        let (name, word) = pair.map_err(|error| field_error(key, error))?;
+        let pool = registry
+            .pool(&name)
+            .ok_or_else(|| ScriptError::ContentError(format!("pool '{name}' is not defined")))?;
+        carries.insert(pool, carry(&word)?);
+    }
+    Ok(carries)
 }
 
 /// Reads how long a cast holds its caster: `cast = { point = ..., period = ... }`
@@ -1468,7 +1581,7 @@ fn parse_emission(what: &str, value: Value) -> crate::Result<Emission> {
 }
 
 /// Reads one effect a buff or a field has on an entity: `"disable"`,
-/// `"conceal"`, or `{ modifiers = { ... } }`.
+/// `"conceal"`, or entity modifiers (see [`parse_entity_modifiers`]).
 fn parse_entity_effect_kind(
     value: Value,
     registry: &ContentRegistry,
@@ -1477,12 +1590,15 @@ fn parse_entity_effect_kind(
         Value::String(name) if name == "disable" => Ok(EntityEffect::Disable),
         Value::String(name) if name == "conceal" => Ok(EntityEffect::Conceal),
         Value::Table(table) => Ok(EntityEffect::Modifiers(parse_entity_modifiers(
-            &required::<Vec<Table>>(table, "modifiers")?,
-            registry,
+            table, registry,
         )?)),
         other => Err(content::unexpected(
             "entity effect",
-            &["'disable'", "'conceal'", "a { modifiers = ... } table"],
+            &[
+                "'disable'",
+                "'conceal'",
+                "a { stats = ... } or { pool_maximums = ..., pool_shift = ... } table",
+            ],
             &found(other),
         )),
     }
@@ -1708,23 +1824,25 @@ fn names_requirement_key(table: &Table) -> crate::Result<bool> {
     Ok(false)
 }
 
-/// Reads one requirement: `"idle"`, an `{ all = { ... } }` or `{ any = { ... } }`
-/// node, or a table naming exactly one leaf — `{ entity_type = }`, `{ tag = }`,
+/// Reads one requirement: `"built"`, `"idle"`, an `{ all = { ... } }` or `{ any = { ... } }`
+/// node, an `{ unless = <requirement> }` negation, or a table naming exactly one leaf — `{ entity_type = }`, `{ tag = }`,
 /// `{ research = }`, `{ annexed = }`, `{ health = <bound> }`,
 /// `{ energy = <bound> }`, `{ stat = "name", <bound keys> }`,
 /// `{ idle_for = ticks }`, or `{ unhurt_for = ticks }` — a bound naming
 /// exactly one of `under`, `at_least`, `under_share` or `at_least_share`.
 fn parse_requirement(value: &Value, registry: &ContentRegistry) -> crate::Result<Requirement> {
     let entry = match value {
+        Value::String(name) if name == "built" => return Ok(Requirement::Built),
         Value::String(name) if name == "idle" => return Ok(Requirement::Idle),
         Value::Table(entry) => entry,
         other => {
             return Err(content::unexpected(
                 "a requirement",
                 &[
+                    "'built'",
                     "'idle'",
                     "an { all = ... } or { any = ... } table",
-                    "a table naming one of entity_type, tag, research, annexed, health, energy, stat, idle_for, or unhurt_for",
+                    "a table naming one of unless, entity_type, tag, research, annexed, health, energy, stat, idle_for, or unhurt_for",
                 ],
                 &found(other),
             ));
@@ -1750,7 +1868,7 @@ fn parse_requirement(value: &Value, registry: &ContentRegistry) -> crate::Result
     }
     let [key] = named[..] else {
         return Err(ScriptError::ContentError(
-            "a requirement names exactly one of all, any, entity_type, tag, research, annexed, health, energy, stat, idle_for, or unhurt_for".to_string(),
+            "a requirement names exactly one of all, any, unless, entity_type, tag, research, annexed, health, energy, stat, idle_for, or unhurt_for".to_string(),
         ));
     };
     match key {
@@ -1764,6 +1882,10 @@ fn parse_requirement(value: &Value, registry: &ContentRegistry) -> crate::Result
             &required::<Table>(entry, "any")?,
             registry,
         )?)),
+        "unless" => Ok(Requirement::Unless(Box::new(parse_requirement(
+            &required::<Value>(entry, "unless")?,
+            registry,
+        )?))),
         "entity_type" => Ok(Requirement::EntityType(required::<String>(
             entry,
             "entity_type",
@@ -1914,35 +2036,39 @@ fn parse_field_placement(
         .collect()
 }
 
-/// Reads the `field_effects` list: each entry names a `field` and `of`, and
-/// exactly one of `inside` or `outside` holding an entity effect —
-/// `{ modifiers = {...} }`, `"disable"`, or `"conceal"`.
+/// Reads the `field_effects` list: each entry names a `field`, `of` and
+/// `coverage`, optional `inside` and `outside` lists of entity effects —
+/// entity modifiers (see [`parse_entity_modifiers`]), `"disable"`, or
+/// `"conceal"` — and an optional `holds_while` requirement the bearer must
+/// also meet.
 fn parse_field_effects(
     effects: &[Table],
     registry: &ContentRegistry,
 ) -> crate::Result<Vec<FieldEffect>> {
+    let side = |entry: &Table, key: &str| -> crate::Result<Vec<EntityEffect>> {
+        match optional::<Vec<Value>>(entry, key)? {
+            Some(values) => values
+                .into_iter()
+                .map(|value| parse_entity_effect_kind(value, registry))
+                .collect(),
+            None => Ok(Vec::new()),
+        }
+    };
     effects
         .iter()
         .map(|entry| {
-            let (side, value) = match (
-                optional::<Value>(entry, "inside")?,
-                optional::<Value>(entry, "outside")?,
-            ) {
-                (Some(value), None) => (FieldSide::Inside, value),
-                (None, Some(value)) => (FieldSide::Outside, value),
-                (Some(_), Some(_)) | (None, None) => {
-                    return Err(ScriptError::ContentError(
-                        "a field effect names exactly one of inside or outside".to_string(),
-                    ));
-                }
-            };
-            let kind = parse_entity_effect_kind(value, registry)?;
+            let inside = side(entry, "inside")?;
+            let outside = side(entry, "outside")?;
+            let holds_while = optional::<Value>(entry, "holds_while")?
+                .map(|requirement| parse_requirement(&requirement, registry))
+                .transpose()?;
             Ok(FieldEffect::new(
                 field_id(entry, registry)?,
                 content::affiliation(&required::<String>(entry, "of")?)?,
-                side,
                 content::field_coverage(&required::<String>(entry, "coverage")?)?,
-                kind,
+                inside,
+                outside,
+                holds_while,
             ))
         })
         .collect()
@@ -1997,14 +2123,18 @@ fn parse_entity_buff(table: &Table, registry: &ContentRegistry) -> crate::Result
 }
 
 /// Reads a player buff definition: `{ duration?, stack, player_modifiers?,
-/// entity_modifiers? }` — at least one modifier list must be present.
+/// entity_modifiers? }`, `entity_modifiers` a list of entity modifiers (see
+/// [`parse_entity_modifiers`]) — at least one modifier list must be present.
 fn parse_player_buff(table: &Table, registry: &ContentRegistry) -> crate::Result<PlayerBuffDef> {
     let player_modifiers = match optional::<Vec<Table>>(table, "player_modifiers")? {
         Some(modifiers) => parse_player_modifiers(&modifiers, registry)?,
         None => Vec::new(),
     };
     let entity_modifiers = match optional::<Vec<Table>>(table, "entity_modifiers")? {
-        Some(modifiers) => parse_entity_modifiers(&modifiers, registry)?,
+        Some(sets) => sets
+            .iter()
+            .map(|set| parse_entity_modifiers(set, registry))
+            .collect::<crate::Result<Vec<_>>>()?,
         None => Vec::new(),
     };
     if player_modifiers.is_empty() && entity_modifiers.is_empty() {
@@ -2020,7 +2150,7 @@ fn parse_player_buff(table: &Table, registry: &ContentRegistry) -> crate::Result
     })
 }
 
-fn parse_entity_modifiers(
+fn parse_entity_modifier_list(
     modifiers: &[Table],
     registry: &ContentRegistry,
 ) -> crate::Result<Vec<EntityModifier>> {
@@ -2092,4 +2222,36 @@ fn parse_modifier_op_value(table: &Table) -> crate::Result<(ModifierOp, FixedI64
     let value = FixedI64::from_str(&required::<String>(table, "value")?)
         .map_err(|error| ScriptError::ContentError(format!("invalid modifier value: {error}")))?;
     Ok((op, value))
+}
+
+/// Reads entity modifiers: `{ stats = { ... } }`, modifiers on stats no
+/// pool takes its maximum from, or `{ pool_maximums = { ... }, pool_shift =
+/// ... }`, modifiers on pool maxima and what moving one does to the pool
+/// under it.
+fn parse_entity_modifiers(
+    table: &Table,
+    registry: &ContentRegistry,
+) -> crate::Result<EntityModifiers> {
+    match (
+        optional::<Vec<Table>>(table, "stats")?,
+        optional::<Vec<Table>>(table, "pool_maximums")?,
+    ) {
+        (Some(stats), None) => {
+            if optional::<Value>(table, "pool_shift")?.is_some() {
+                return Err(ScriptError::ContentError(
+                    "a pool_shift goes beside pool_maximums, not stats".to_string(),
+                ));
+            }
+            Ok(EntityModifiers::Stats(parse_entity_modifier_list(
+                &stats, registry,
+            )?))
+        }
+        (None, Some(maximums)) => Ok(EntityModifiers::PoolMaximums {
+            modifiers: parse_entity_modifier_list(&maximums, registry)?,
+            pool_shift: content::pool_shift(&required::<String>(table, "pool_shift")?)?,
+        }),
+        (Some(_), Some(_)) | (None, None) => Err(ScriptError::ContentError(
+            "entity modifiers name exactly one of stats or pool_maximums".to_string(),
+        )),
+    }
 }

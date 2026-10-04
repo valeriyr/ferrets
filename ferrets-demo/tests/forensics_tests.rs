@@ -18,7 +18,7 @@
 use std::{collections::BTreeMap, fs::File, io::BufReader};
 
 use bevy::prelude::*;
-use ferrets_content::registry::ContentRegistry;
+use ferrets_content::{pool_def::PoolId, registry::ContentRegistry};
 use ferrets_demo::playback;
 use ferrets_geometry::cell_pos::CellPos;
 use ferrets_math::{
@@ -31,10 +31,10 @@ use ferrets_physics::body;
 use ferrets_replay::replay::Replay;
 use ferrets_simulation::{
     components::{
-        concealed::ConcealedComponent, energy::EnergyComponent, entity_buffs::BuffsComponent,
-        entity_info::EntityInfoComponent, health::HealthComponent, hidden::HiddenComponent,
-        location::LocationComponent, movement::MoveComponent, order_queue::OrderQueueComponent,
-        owner::OwnerComponent, resource::ResourceCarrierComponent,
+        concealed::ConcealedComponent, entity_buffs::BuffsComponent,
+        entity_info::EntityInfoComponent, hidden::HiddenComponent, location::LocationComponent,
+        movement::MoveComponent, order_queue::OrderQueueComponent, owner::OwnerComponent,
+        pools::PoolsComponent, resource::ResourceCarrierComponent,
     },
     entity_def,
     entity_index::EntityIndex,
@@ -179,12 +179,11 @@ fn replay_forensics() {
                 if before.as_ref() == Some(&names) {
                     continue;
                 }
-                let health = entity_ref
-                    .get::<HealthComponent>()
-                    .map(|health| health.current());
-                let energy = entity_ref
-                    .get::<EnergyComponent>()
-                    .map(|energy| energy.current());
+                let pools = entity_ref
+                    .get::<PoolsComponent>()
+                    .expect("a simulation entity carries a pool store");
+                let health = pools.current(PoolId::HEALTH);
+                let energy = pools.current(PoolId::ENERGY);
                 println!(
                     "t{tick} {id:?} {} bears {names:?} (was {before:?}) health {health:?} energy {energy:?}",
                     info.type_name(),

@@ -3,19 +3,19 @@
 
 mod utils;
 
-use ferrets_content::{entity_stats::EntityStatId, registry::ContentRegistry};
+use ferrets_content::{entity_stats::EntityStatId, pool_def::PoolId, registry::ContentRegistry};
 use ferrets_demo::map;
 use ferrets_geometry::cell_pos::CellPos;
 use ferrets_math::FixedU64;
 use ferrets_simulation::{
     command::{PlayerCommand, SelectMode},
     components::{
-        energy::EnergyComponent,
         entity_info::EntityInfoComponent,
-        health::HealthComponent,
         order_queue::{CancelPolicy, OrderQueueComponent},
+        pools::{self, Spending},
         transport::TransporterComponent,
     },
+    entity_def,
     map::Map,
     movement_model::MovementModel,
     order::Order,
@@ -188,20 +188,11 @@ fn health_carries_its_proportion_not_its_amount() {
         .and_then(|def| def.base_stat(EntityStatId::MAX_HEALTH))
         .expect("the gryphon has health");
     // Halve it, then change form: the fraction is what must survive.
-    app.world_mut()
-        .entity_mut(gryphon)
-        .get_mut::<HealthComponent>()
-        .unwrap()
-        .drain(max / 2);
+    pools::drain(app.world_mut(), gryphon, PoolId::HEALTH, max / 2);
 
     command_morph(&mut app, gryphon_id, "gryphon_aloft");
 
-    let after = app
-        .world()
-        .entity(gryphon)
-        .get::<HealthComponent>()
-        .unwrap()
-        .current();
+    let after = entity_def::pool_value(app.world(), gryphon, PoolId::HEALTH).unwrap();
     let aloft_max = app
         .world()
         .resource::<ContentRegistry>()
@@ -415,12 +406,7 @@ fn rider_fires_from_moving_holder() {
         .world()
         .resource::<ferrets_simulation::entity_index::EntityIndex>()
         .alive(victim_id)
-        .map(|victim| {
-            app.world()
-                .entity(victim)
-                .get::<HealthComponent>()
-                .map(|health| health.current())
-        });
+        .map(|victim| entity_def::pool_value(app.world(), victim, PoolId::HEALTH));
     match outcome {
         None => {}
         Some(left) => assert!(
@@ -671,15 +657,6 @@ fn order_morph(app: &mut bevy::prelude::App, entity: bevy::prelude::Entity, type
         );
 }
 
-/// The entity's current energy.
-fn energy_of(app: &bevy::prelude::App, entity: bevy::prelude::Entity) -> FixedU64 {
-    app.world()
-        .entity(entity)
-        .get::<EnergyComponent>()
-        .expect("the entity has an energy pool")
-        .current()
-}
-
 #[test]
 fn take_off_draws_its_energy_cost() {
     let mut app = utils::demo_map_app(MovementModel::Continuous);
@@ -690,7 +667,10 @@ fn take_off_draws_its_energy_cost() {
         Some(0),
     )
     .expect("the gryphon spawns");
-    assert_eq!(energy_of(&app, gryphon), FixedU64::from_num(60));
+    assert_eq!(
+        entity_def::pool_value(app.world(), gryphon, PoolId::ENERGY),
+        Some(FixedU64::from_num(60))
+    );
 
     // The cost is drawn when the order starts, not when the change lands: the
     // wing-beat is spent on the spot, well before the window runs out.
@@ -700,8 +680,8 @@ fn take_off_draws_its_energy_cost() {
     // The wing-beat's 20 off the full 60 pool, plus two ticks of the 0.2
     // regen in binary fixed-point.
     assert_eq!(
-        energy_of(&app, gryphon),
-        FixedU64::from_bits(0x28_6666_6666),
+        entity_def::pool_value(app.world(), gryphon, PoolId::ENERGY),
+        Some(FixedU64::from_bits(0x28_6666_6666)),
         "the take-off never drew its energy cost"
     );
 }
@@ -716,11 +696,15 @@ fn unpayable_cost_refuses_change() {
         Some(0),
     )
     .expect("the gryphon spawns");
-    app.world_mut()
-        .entity_mut(gryphon)
-        .get_mut::<EnergyComponent>()
-        .unwrap()
-        .spend(FixedU64::from_num(55));
+    assert_eq!(
+        pools::spend(
+            app.world_mut(),
+            gryphon,
+            PoolId::ENERGY,
+            FixedU64::from_num(55),
+        ),
+        Spending::Paid
+    );
 
     // Five energy against a cost of twenty: the order is refused whole rather
     // than started on credit — and nothing is drawn from the pool.
@@ -880,8 +864,8 @@ fn contested_take_off_fizzles_and_keeps_payment() {
     // The drain minus 35 ticks of the 0.2 regen in binary fixed-point —
     // just short of 47, nowhere near a refunded 60.
     assert_eq!(
-        energy_of(&app, gryphon),
-        FixedU64::from_bits(0x2e_ffff_fff9),
+        entity_def::pool_value(app.world(), gryphon, PoolId::ENERGY),
+        Some(FixedU64::from_bits(0x2e_ffff_fff9)),
         "a committed transition's cost came back"
     );
 }

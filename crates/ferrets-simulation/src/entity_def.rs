@@ -12,6 +12,7 @@ use crate::{
         entity_buffs::BuffsComponent, entity_info::EntityInfoComponent,
         entity_stats::StatsComponent, hidden::HiddenComponent, location::LocationComponent,
         morph::MorphComponent, order_queue::OrderQueueComponent, owner::OwnerComponent,
+        pools::PoolsComponent,
     },
     fields,
     map::OccupancyClass,
@@ -29,6 +30,7 @@ use ferrets_content::{
     entity_stats::EntityStatId,
     entity_type_def::{EntityTypeDef, EntityTypeId},
     morph::MorphTransition,
+    pool_def::PoolId,
     quantity::Quantity,
     registry::ContentRegistry,
     resource::HarvestData,
@@ -173,6 +175,23 @@ pub fn bears(world: &World, entity: Entity, id: EntityBuffId) -> bool {
         .is_some_and(|buffs| buffs.contains(id))
 }
 
+/// Whether `entity` can carry the buff `id`: it carries every stat the buff's
+/// modifiers name. An effect that names no stat asks for none; an entity with
+/// no stat store carries none.
+pub fn can_carry(world: &World, entity: Entity, id: EntityBuffId) -> bool {
+    let Some(stats) = world.entity(entity).get::<StatsComponent>() else {
+        return false;
+    };
+    let def = world.resource::<ContentRegistry>().entity_buff_def(id);
+    def.effects.iter().all(|effect| match effect {
+        EntityEffect::Modifiers(modifiers) => modifiers
+            .modifiers()
+            .iter()
+            .all(|modifier| stats.has(modifier.stat)),
+        EntityEffect::Disable | EntityEffect::Conceal => true,
+    })
+}
+
 /// Whether something conceals `entity` now: its type, an active buff, or a
 /// field it declares a concealing effect for.
 pub fn concealed(world: &World, entity: Entity) -> bool {
@@ -184,10 +203,7 @@ pub fn concealed(world: &World, entity: Entity) -> bool {
         Concealment::Exposed => {
             buff_effect_applies(world, entity, |effect| {
                 matches!(effect, EntityEffect::Conceal)
-            }) || (def.field_effects.iter().any(|effect| match effect.kind() {
-                EntityEffect::Conceal => true,
-                EntityEffect::Modifiers(_) | EntityEffect::Disable => false,
-            }) && fields::concealed_of(world, def, entity))
+            }) || fields::concealed_of(world, def, entity)
         }
     }
 }
@@ -253,17 +269,32 @@ pub fn morph_origin(world: &World, entity: Entity) -> EntityTypeId {
         .map_or_else(|| type_id(world, entity), |morph| morph.from)
 }
 
-/// What a declared quantity comes to for `entity`, in the unit the field that
-/// carries it counts: a constant is what it says, and a stat names the
-/// entity's effective value.
+/// What a declared quantity of ticks comes to for `entity`: a constant is
+/// what it says, and a stat names the entity's effective value, rounded up.
 ///
 /// Panics if `entity` carries no such stat — content registration checks that
 /// whoever reads a quantity carries the stat it names.
-pub fn quantity(world: &World, entity: Entity, quantity: Quantity) -> u32 {
-    match quantity {
-        Quantity::Constant(value) => value,
-        Quantity::Stat(id) => effective_stat_u32(world, entity, id),
-    }
+pub fn quantity_ticks(world: &World, entity: Entity, quantity: Quantity) -> u32 {
+    world
+        .entity(entity)
+        .get::<StatsComponent>()
+        .expect("simulation entity must have a stat store")
+        .quantity_ticks(quantity)
+        .expect("the capability pairs the entity with this stat")
+}
+
+/// What a declared quantity of cells comes to for `entity`: a constant is
+/// what it says, and a stat names the entity's effective value, truncated.
+///
+/// Panics if `entity` carries no such stat — content registration checks that
+/// whoever reads a quantity carries the stat it names.
+pub fn quantity_cells(world: &World, entity: Entity, quantity: Quantity) -> u32 {
+    world
+        .entity(entity)
+        .get::<StatsComponent>()
+        .expect("simulation entity must have a stat store")
+        .quantity_cells(quantity)
+        .expect("the capability pairs the entity with this stat")
 }
 
 /// Returns where `entity` stands.
@@ -313,6 +344,22 @@ pub fn effective_stat(world: &World, entity: Entity, stat: EntityStatId) -> Opti
         .and_then(|stats| stats.effective(stat))
 }
 
+/// The current value of `entity`'s `pool`, if it has that pool.
+///
+/// Panics if `entity` is not a simulation entity.
+pub fn pool_value(world: &World, entity: Entity, pool: PoolId) -> Option<FixedU64> {
+    world
+        .entity(entity)
+        .get::<PoolsComponent>()
+        .expect("a simulation entity carries a pool store")
+        .current(pool)
+}
+
+/// Whether `entity` has `pool`.
+pub fn has_pool(world: &World, entity: Entity, pool: PoolId) -> bool {
+    pool_value(world, entity, pool).is_some()
+}
+
 /// The whole-number value of one of `entity`'s stats.
 ///
 /// Panics if `entity` is not a simulation entity, or carries no such stat —
@@ -323,6 +370,19 @@ pub fn effective_stat_u32(world: &World, entity: Entity, stat: EntityStatId) -> 
         .get::<StatsComponent>()
         .expect("simulation entity must have a stat store")
         .effective_as_u32(stat)
+        .expect("the capability pairs the entity with this stat")
+}
+
+/// One of `entity`'s stats counted in ticks: its value rounded up.
+///
+/// Panics if `entity` is not a simulation entity, or carries no such stat —
+/// for stats whose presence the caller's capability check already vouches for.
+pub fn effective_ticks(world: &World, entity: Entity, stat: EntityStatId) -> u32 {
+    world
+        .entity(entity)
+        .get::<StatsComponent>()
+        .expect("simulation entity must have a stat store")
+        .effective_ticks(stat)
         .expect("the capability pairs the entity with this stat")
 }
 

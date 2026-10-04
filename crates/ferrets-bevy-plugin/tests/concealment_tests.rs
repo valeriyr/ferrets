@@ -18,11 +18,17 @@ use ferrets_content::{
     entity_type_def::EntityTypeDef,
     field::{
         Emission, FieldCoverage, FieldDecay, FieldDef, FieldEffect, FieldGrowth, FieldLayer,
-        FieldSide, FieldSourceDef, FieldVision,
+        FieldSourceDef, FieldVision,
     },
     kinds::Kinds,
     location::Solidity,
-    morph::{MorphCancel, MorphInterrupted, MorphPlacement, MorphReason, MorphTransition},
+    morph::{
+        MorphCancel, MorphCourse, MorphInterrupted, MorphPlacement, MorphReason, MorphTransition,
+        PoolCarry,
+    },
+    pool::Pool,
+    pool_def::PoolId,
+    pool_shift::PoolShift,
     price,
     projectile::{Aim, ProjectileDef},
     quantity::Quantity,
@@ -44,7 +50,6 @@ use ferrets_simulation::{
     },
     entity_def::{self, Operation, Outage},
     events::{SimulationEvent, SpendCause},
-    game_loop::stats,
     map::Map,
     movement_model::MovementModel,
     order::AttackTarget,
@@ -82,7 +87,11 @@ fn concealed_enemy_on_lit_cell_is_glimpsed_and_not_named() {
     );
     utils::run_ticks(&mut app, 20);
     assert!(utils::order_queue_is_empty(app.world_mut(), sniper));
-    assert_eq!(utils::health(&app, shade), 20, "the shade is untouched");
+    assert_eq!(
+        utils::health_as_u32(&app, shade),
+        20,
+        "the shade is untouched"
+    );
 }
 
 #[test]
@@ -258,7 +267,7 @@ fn omniscient_seat_glimpses_undetected_cloak_anywhere_and_names_it_not() {
         ],
     );
     assert!(utils::order_queue_is_empty(app.world_mut(), sniper));
-    assert_eq!(utils::health(&app, shade), 20);
+    assert_eq!(utils::health_as_u32(&app, shade), 20);
 }
 
 #[test]
@@ -320,7 +329,7 @@ fn everywhere_detecting_seat_units_still_need_detector_to_engage_on_their_own() 
     // The seat sees everything; its sniper, left to itself, fights as any
     // unit does and never picks out what no detector shows it.
     utils::run_ticks(&mut app, 30);
-    assert_eq!(utils::health(&app, shade), 20);
+    assert_eq!(utils::health_as_u32(&app, shade), 20);
 }
 
 #[test]
@@ -448,7 +457,7 @@ fn concealed_unit_auto_engages_as_any_other() {
     // 20 − 3 × 5 = 5.
     let (dummy, _) = utils::create_owned(&mut app, "dummy", 6, 5, 1);
     utils::run_ticks(&mut app, 12);
-    assert_eq!(utils::health(&app, dummy), 5);
+    assert_eq!(utils::health_as_u32(&app, dummy), 5);
     assert!(!app.world().entity(mage).contains::<ConcealedComponent>());
 }
 
@@ -483,7 +492,7 @@ fn position_attack_hits_concealed_unit_on_its_cell() {
     // 20 − 10 = 10.
     utils::run_ticks(&mut app, 5);
     assert_eq!(
-        utils::health(&app, shade),
+        utils::health_as_u32(&app, shade),
         10,
         "the shell found what stood there"
     );
@@ -520,8 +529,12 @@ fn splash_hits_concealed_unit_beside_what_it_was_aimed_at() {
     // The shell lands on the fifth tick: 20 − 10 direct on the dummy, and
     // the band one cell out deals half of it to the shade, 20 − 5 = 15.
     utils::run_ticks(&mut app, 5);
-    assert_eq!(utils::health(&app, dummy), 10, "the direct hit");
-    assert_eq!(utils::health(&app, shade), 15, "and the blast one cell out");
+    assert_eq!(utils::health_as_u32(&app, dummy), 10, "the direct hit");
+    assert_eq!(
+        utils::health_as_u32(&app, shade),
+        15,
+        "and the blast one cell out"
+    );
 }
 
 #[test]
@@ -714,13 +727,13 @@ fn upkeep_buff_drains_energy_each_period_and_ends_when_pool_is_dry() {
     // period — two ticks — after the cast: four ticks on, 80 energy and
     // concealed, nothing paid yet.
     utils::run_ticks(&mut app, utils::APPLY + 1);
-    assert_eq!(utils::energy(&app, mage), utils::fixed("80"));
+    assert_eq!(utils::energy_as_u32(&app, mage), 80);
     assert!(app.world().entity(mage).contains::<ConcealedComponent>());
 
     // Fourteen ticks on, seven payments have fallen due (at 2, 4, … 14 ticks
     // after the cast): 80 − 7 × 10 = 10.
     utils::run_ticks(&mut app, 14);
-    assert_eq!(utils::energy(&app, mage), utils::fixed("10"));
+    assert_eq!(utils::energy_as_u32(&app, mage), 10);
     assert!(app.world().entity(mage).contains::<ConcealedComponent>());
 
     // The eighth payment empties the pool; the ninth cannot be made, so the
@@ -728,7 +741,7 @@ fn upkeep_buff_drains_energy_each_period_and_ends_when_pool_is_dry() {
     // refit: 10 − 10 = 0, and unconcealed within four more ticks.
     utils::run_ticks(&mut app, 4);
     assert!(!app.world().entity(mage).contains::<ConcealedComponent>());
-    assert_eq!(utils::energy(&app, mage), FixedU64::ZERO);
+    assert_eq!(utils::energy_as_u32(&app, mage), 0);
 }
 
 #[test]
@@ -786,7 +799,7 @@ fn unowned_bearer_loses_upkeep_buff_at_first_due_tick() {
         .resource::<ContentRegistry>()
         .entity_buff("hired")
         .expect("the fixture registers the hired buff");
-    stats::apply_entity_buff(app.world_mut(), lurker, hired);
+    utils::apply_buff(app.world_mut(), lurker, hired);
     utils::run_ticks(&mut app, 1);
     assert!(app.world().entity(lurker).contains::<ConcealedComponent>());
 
@@ -808,26 +821,30 @@ fn health_upkeep_ends_buff_and_never_kills() {
         .resource::<ContentRegistry>()
         .entity_buff("bleeding")
         .expect("the fixture registers the bleeding buff");
-    stats::apply_entity_buff(app.world_mut(), lurker, bleeding);
+    utils::apply_buff(app.world_mut(), lurker, bleeding);
 
     // Period 1, seated at 2: the first 8 health fall due on the second tick,
     // the second 8 on the third. 20 − 8 = 12, then 12 − 8 = 4.
     utils::run_ticks(&mut app, 2);
-    assert_eq!(utils::health(&app, lurker), 12);
+    assert_eq!(utils::health_as_u32(&app, lurker), 12);
     assert!(app.world().entity(lurker).contains::<ConcealedComponent>());
     utils::run_ticks(&mut app, 1);
-    assert_eq!(utils::health(&app, lurker), 4);
+    assert_eq!(utils::health_as_u32(&app, lurker), 4);
 
     // The third would not leave the lurker alive, so it is refused: the buff
     // ends the tick it falls due, the marker goes at the refit after, and the
     // 4 health stay.
     utils::run_ticks(&mut app, 1);
-    assert_eq!(utils::health(&app, lurker), 4);
+    assert_eq!(utils::health_as_u32(&app, lurker), 4);
     assert!(app.world().entity(lurker).contains::<ConcealedComponent>());
     utils::run_ticks(&mut app, 1);
     assert!(!app.world().entity(lurker).contains::<ConcealedComponent>());
     utils::run_ticks(&mut app, 10);
-    assert_eq!(utils::health(&app, lurker), 4, "an upkeep never kills");
+    assert_eq!(
+        utils::health_as_u32(&app, lurker),
+        4,
+        "an upkeep never kills"
+    );
     assert!(!app.world().entity(lurker).contains::<DyingComponent>());
 }
 
@@ -843,6 +860,22 @@ fn decloak_removes_upkeep_buff() {
     utils::use_skill(&mut app, "decloak", SkillCasterRef::Entity(mage_id), None);
     utils::run_ticks(&mut app, utils::APPLY + 1);
     assert!(!app.world().entity(mage).contains::<ConcealedComponent>());
+}
+
+#[test]
+fn decloak_on_ambushing_mage_takes_nothing_off() {
+    let mut app = concealment_app(rivals());
+    let (mage, mage_id) = utils::create_owned(&mut app, "mage", 5, 5, 0);
+    utils::run_ticks(&mut app, utils::APPLY);
+    utils::use_skill(&mut app, "ambush", SkillCasterRef::Entity(mage_id), None);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    assert!(app.world().entity(mage).contains::<ConcealedComponent>());
+
+    // Decloak removes `cloaked`, which the mage does not bear: the ambush
+    // keeps concealing it.
+    utils::use_skill(&mut app, "decloak", SkillCasterRef::Entity(mage_id), None);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    assert!(app.world().entity(mage).contains::<ConcealedComponent>());
 }
 
 #[test]
@@ -867,7 +900,7 @@ fn ambush_ends_when_bearer_attacks() {
     // short; over ten ticks three swings of 5 land at a period of 4:
     // 20 − 3 × 5 = 5.
     utils::run_ticks(&mut app, 10);
-    assert_eq!(utils::health(&app, dummy), 5, "the swings landed");
+    assert_eq!(utils::health_as_u32(&app, dummy), 5, "the swings landed");
     assert!(!app.world().entity(mage).contains::<ConcealedComponent>());
 }
 
@@ -887,7 +920,11 @@ fn ambush_ends_when_bearer_is_hit() {
     // Detected and shot: the sniper's first hit of 10 lands, and the marker
     // goes at the refit that follows it.
     utils::run_ticks(&mut app, 1);
-    assert_eq!(utils::health(&app, lurker), 10, "one hit of 10 landed");
+    assert_eq!(
+        utils::health_as_u32(&app, lurker),
+        10,
+        "one hit of 10 landed"
+    );
     assert!(!app.world().entity(lurker).contains::<ConcealedComponent>());
 }
 
@@ -918,7 +955,7 @@ fn damaging_cast_ends_ambush_of_its_target() {
             target: Some(SkillTarget::Entity(lurker_id)),
         }],
     );
-    assert_eq!(utils::health(&app, lurker), 10);
+    assert_eq!(utils::health_as_u32(&app, lurker), 10);
     assert!(!app.world().entity(lurker).contains::<ConcealedComponent>());
 }
 
@@ -937,7 +974,7 @@ fn turret_gun_ends_ambush_of_its_bearer() {
     // dummy; its first shot of 5 lands on the twenty-first and ends the
     // ambush, its second not before the twenty-fifth: 20 − 5 = 15.
     utils::run_ticks(&mut app, 24);
-    assert_eq!(utils::health(&app, dummy), 15);
+    assert_eq!(utils::health_as_u32(&app, dummy), 15);
     assert!(!app.world().entity(gunner).contains::<ConcealedComponent>());
 }
 
@@ -959,12 +996,12 @@ fn projectile_turret_ends_ambush_when_its_shot_leaves() {
     utils::run_ticks(&mut app, 2);
     assert!(!app.world().entity(lobber).contains::<ConcealedComponent>());
     assert_eq!(
-        utils::health(&app, dummy),
+        utils::health_as_u32(&app, dummy),
         20,
         "the shell is still in flight"
     );
     utils::run_ticks(&mut app, 3);
-    assert_eq!(utils::health(&app, dummy), 15, "and then it lands");
+    assert_eq!(utils::health_as_u32(&app, dummy), 15, "and then it lands");
 }
 
 #[test]
@@ -999,7 +1036,11 @@ fn swing_canceled_before_its_point_keeps_ambush() {
     );
     // The order lands three ticks on and the swing runs four of its ten.
     utils::run_ticks(&mut app, utils::APPLY + 4);
-    assert_eq!(utils::health(&app, dummy), 20, "the point is not reached");
+    assert_eq!(
+        utils::health_as_u32(&app, dummy),
+        20,
+        "the point is not reached"
+    );
     assert!(!utils::order_queue_is_empty(app.world_mut(), spearman));
 
     // Called off mid-swing, three ticks on again, eight ticks into the ten:
@@ -1009,7 +1050,7 @@ fn swing_canceled_before_its_point_keeps_ambush() {
     utils::push_command(&mut app, PlayerCommand::Stop);
     utils::run_ticks(&mut app, utils::APPLY + 20);
     assert!(utils::order_queue_is_empty(app.world_mut(), spearman));
-    assert_eq!(utils::health(&app, dummy), 20, "no shot left");
+    assert_eq!(utils::health_as_u32(&app, dummy), 20, "no shot left");
     assert!(
         app.world()
             .entity(spearman)
@@ -1103,7 +1144,7 @@ fn stacked_upkeep_pays_for_every_stack() {
         .entity_buff("retained")
         .expect("the fixture registers the retained buff");
     for _ in 0..3 {
-        stats::apply_entity_buff(app.world_mut(), lurker, retained);
+        utils::apply_buff(app.world_mut(), lurker, retained);
     }
 
     // Period 5, seated at 6 because the tick of application ages it once.
@@ -1130,12 +1171,12 @@ fn stack_added_mid_period_keeps_first_payment_due() {
         .resource::<ContentRegistry>()
         .entity_buff("retained")
         .expect("the fixture registers the retained buff");
-    stats::apply_entity_buff(app.world_mut(), lurker, retained);
+    utils::apply_buff(app.world_mut(), lurker, retained);
 
     // Period 5, seated at 6. A second stack four ticks in joins the first at
     // its countdown rather than starting one of its own.
     utils::run_ticks(&mut app, 4);
-    stats::apply_entity_buff(app.world_mut(), lurker, retained);
+    utils::apply_buff(app.world_mut(), lurker, retained);
     utils::run_ticks(&mut app, 1);
     assert_eq!(
         utils::gold(app.world()),
@@ -1162,7 +1203,11 @@ fn attack_order_lapses_when_target_cloaks() {
     // The sniper acquires within its scan period and lands 10 every 2 ticks:
     // three hits in twelve ticks, 100 − 3 × 10 = 70.
     utils::run_ticks(&mut app, 12);
-    assert_eq!(utils::health(&app, mage), 70, "the attack is under way");
+    assert_eq!(
+        utils::health_as_u32(&app, mage),
+        70,
+        "the attack is under way"
+    );
     assert!(!utils::order_queue_is_empty(app.world_mut(), sniper));
 
     utils::use_skill(&mut app, "cloak", SkillCasterRef::Entity(mage_id), None);
@@ -1211,7 +1256,7 @@ fn attack_order_lapses_when_target_walks_out_of_sight() {
     );
     // Two hits of 10 land before the runner leaves the light, then the order
     // lapses: 500 − 2 × 10 = 480.
-    assert_eq!(utils::health(&app, runner), 480);
+    assert_eq!(utils::health_as_u32(&app, runner), 480);
     assert!(utils::order_queue_is_empty(app.world_mut(), marksman));
     let after = utils::health(&app, runner);
     utils::run_ticks(&mut app, 10);
@@ -1233,7 +1278,11 @@ fn leashed_attack_under_seat_detecting_everywhere_lapses_when_detector_dies() {
     // Acquired within the scan period and hit for 10 every 2 ticks: three
     // hits in twelve ticks, 500 − 3 × 10 = 470.
     utils::run_ticks(&mut app, 12);
-    assert_eq!(utils::health(&app, wight), 470, "the fight is under way");
+    assert_eq!(
+        utils::health_as_u32(&app, wight),
+        470,
+        "the fight is under way"
+    );
     assert!(!utils::order_queue_is_empty(app.world_mut(), sniper));
 
     // The detector goes, and with it the ordinary sight of the wight: the
@@ -1248,7 +1297,7 @@ fn leashed_attack_under_seat_detecting_everywhere_lapses_when_detector_dies() {
     );
     utils::run_ticks(&mut app, 10);
     assert_eq!(
-        utils::health(&app, wight),
+        utils::health_as_u32(&app, wight),
         470,
         "nothing lands on what the ordinary senses lost"
     );
@@ -1262,13 +1311,13 @@ fn leashed_attack_under_seat_detecting_everywhere_continues_while_detector_stand
     let (wight, _) = utils::create_owned(&mut app, "wight", 5, 8, 0);
     // Three hits in twelve ticks, as above: 500 − 3 × 10 = 470.
     utils::run_ticks(&mut app, 12);
-    assert_eq!(utils::health(&app, wight), 470);
+    assert_eq!(utils::health_as_u32(&app, wight), 470);
 
     // The tower stands, so the detector the fight was picked under still
     // covers the wight: five more hits in the next ten ticks, 470 − 5 × 10 =
     // 420, and the leashed attack holds.
     utils::run_ticks(&mut app, 10);
-    assert_eq!(utils::health(&app, wight), 420);
+    assert_eq!(utils::health_as_u32(&app, wight), 420);
     assert!(!utils::order_queue_is_empty(app.world_mut(), sniper));
 }
 
@@ -1382,7 +1431,7 @@ fn guard_order_lapses_when_ward_cloaks() {
         .resource::<ContentRegistry>()
         .entity_buff("ambushing")
         .expect("the fixture registers the ambushing buff");
-    stats::apply_entity_buff(app.world_mut(), lurker, ambushing);
+    utils::apply_buff(app.world_mut(), lurker, ambushing);
     utils::run_ticks(&mut app, 12);
     assert!(app.world().entity(lurker).contains::<ConcealedComponent>());
     // The order lapses with the sight, and its driver goes with the order.
@@ -1450,7 +1499,7 @@ fn self_cast(effect: EntityCastEffect, costs: Vec<Cost>) -> SkillDef {
 /// A one-cell walker with `health` and `sight`.
 fn walker(name: &str, occupation: impl Into<LayerMask>, health: u32, sight: u32) -> EntityTypeDef {
     utils::walker(name, occupation)
-        .with_health(health)
+        .with_pool(Pool::health(health))
         .with_dying(1, [])
         .with_sight_range(sight)
 }
@@ -1714,7 +1763,7 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
         registry.register(
             EntityTypeDef::new("wight")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_health(500)
+                .with_pool(Pool::health(500))
                 .with_dying(1, [])
                 .with_sight_range(3)
                 .with_concealment(Concealment::Concealed),
@@ -1723,7 +1772,7 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
         registry.register(
             EntityTypeDef::new("dummy")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_health(20)
+                .with_pool(Pool::health(20))
                 .with_dying(1, [])
                 .with_sight_range(3),
         );
@@ -1732,7 +1781,7 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
         registry.register(
             EntityTypeDef::new("hall")
                 .with_location(utils::GROUND, CellSize::new(3, 3), Solidity::Solid)
-                .with_health(50)
+                .with_pool(Pool::health(50))
                 .with_dying(1, [])
                 .with_sight_range(2),
         );
@@ -1740,7 +1789,7 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
         registry.register(
             EntityTypeDef::new("crypt")
                 .with_location(utils::GROUND, CellSize::new(3, 3), Solidity::Solid)
-                .with_health(50)
+                .with_pool(Pool::health(50))
                 .with_dying(1, [])
                 .with_sight_range(2)
                 .with_concealment(Concealment::Concealed),
@@ -1748,7 +1797,7 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
         registry.register(
             EntityTypeDef::new("tower")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_health(50)
+                .with_pool(Pool::health(50))
                 .with_dying(1, [])
                 .with_sight_range(2)
                 .with_field_sources([FieldSourceDef::new(
@@ -1761,15 +1810,16 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
                 .with_field_effects([FieldEffect::new(
                     veil,
                     Affiliation::Enemy,
-                    FieldSide::Inside,
                     FieldCoverage::Any,
-                    EntityEffect::Disable,
+                    vec![EntityEffect::Disable],
+                    Vec::new(),
+                    None,
                 )]),
         );
         registry.register(
             EntityTypeDef::new("ground_eye")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_health(50)
+                .with_pool(Pool::health(50))
                 .with_dying(1, [])
                 .with_sight_range(8)
                 .with_field_sources([FieldSourceDef::new(
@@ -1793,9 +1843,10 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
             FieldEffect::new(
                 veil,
                 Affiliation::Allied,
-                FieldSide::Inside,
                 FieldCoverage::Any,
-                EntityEffect::Conceal,
+                vec![EntityEffect::Conceal],
+                Vec::new(),
+                None,
             )
         };
         registry.register(
@@ -1803,14 +1854,14 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
                 .with_field_effects([veiled()])
                 .with_morphs([MorphTransition::new(
                     "sentinel",
-                    None,
+                    MorphCourse::direct(MorphInterrupted::Reverts),
                     Quantity::Constant(2),
                     MorphPlacement::Reserve,
                     MorphCancel::Refundable,
-                    MorphInterrupted::Reverts,
                     MorphReason::Change,
                     Vec::new(),
                     Vec::new(),
+                    [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
                 )]),
         );
         registry.register(walker("sentinel", utils::GROUND, 60, 6).with_field_effects([veiled()]));
@@ -1819,21 +1870,22 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
         registry.register(
             EntityTypeDef::new("phalanx")
                 .with_location(utils::GROUND, CellSize::new(2, 2), Solidity::Solid)
-                .with_health(50)
+                .with_pool(Pool::health(50))
                 .with_dying(1, [])
                 .with_sight_range(2)
                 .with_field_effects([FieldEffect::new(
                     veil,
                     Affiliation::Allied,
-                    FieldSide::Inside,
                     FieldCoverage::Every,
-                    EntityEffect::Conceal,
+                    vec![EntityEffect::Conceal],
+                    Vec::new(),
+                    None,
                 )]),
         );
         registry.register(
             EntityTypeDef::new("rabble")
                 .with_location(utils::GROUND, CellSize::new(2, 2), Solidity::Solid)
-                .with_health(50)
+                .with_pool(Pool::health(50))
                 .with_dying(1, [])
                 .with_sight_range(2)
                 .with_field_effects([veiled()]),
@@ -1841,7 +1893,7 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
         registry.register(
             walker("mage", utils::GROUND, 100, 6)
                 .with_attack(utils::weapon(utils::GROUND), 5, 1, 5, 4, 1)
-                .with_energy(100, FixedU64::ZERO)
+                .with_pool(Pool::energy(100))
                 .with_skills([
                     cloak,
                     decloak,
@@ -1855,7 +1907,7 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
         );
         registry.register(
             walker("lurker", utils::GROUND, 20, 6)
-                .with_energy(100, FixedU64::ZERO)
+                .with_pool(Pool::energy(100))
                 .with_skills([cloak, ambush, hire]),
         );
         // A swing that takes ten ticks of its twenty to reach its point, and

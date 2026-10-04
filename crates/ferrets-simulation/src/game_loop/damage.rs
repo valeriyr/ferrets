@@ -8,7 +8,12 @@ use bevy_ecs::{entity::Entity, world::World};
 use ferrets_math::FixedU64;
 
 use crate::{
-    components::{entity_info::EntityInfoComponent, health::HealthComponent, tags::TagsComponent},
+    components::{
+        entity_info::EntityInfoComponent,
+        last_hit,
+        pools::{self, PoolsComponent},
+        tags::TagsComponent,
+    },
     entity_def,
     entity_index::EntityIndex,
     events::{EventRecord, SimulationEvent},
@@ -18,10 +23,10 @@ use crate::{
 };
 use ferrets_content::{
     attack::Slain, entity_buffs::Interruption, entity_stats::EntityStatId,
-    entity_type_def::EntityTypeDef,
+    entity_type_def::EntityTypeDef, pool_def::PoolId,
 };
 
-use super::stats;
+use super::buffs;
 
 /// The damage one full-strength hit from `attacker_def` deals to `target`.
 ///
@@ -82,16 +87,16 @@ pub fn apply(
     slain: Slain,
 ) {
     let tick = world.resource::<GameSession>().tick();
-    let died = {
-        let mut target_mut = world.entity_mut(target);
-        let Some(mut health) = target_mut.get_mut::<HealthComponent>() else {
-            return;
-        };
-        health.drain(amount);
-        health.record_hit(attacker, tick);
-        health.is_dead()
-    };
-    stats::interrupt_entity_buffs(world, target, Interruption::Hit);
+    if !entity_def::has_pool(world, target, PoolId::HEALTH) {
+        return;
+    }
+    pools::drain(world, target, PoolId::HEALTH, amount);
+    let died = world
+        .get::<PoolsComponent>(target)
+        .expect("a simulation entity carries a pool store")
+        .emptied(PoolId::HEALTH);
+    last_hit::record(world, target, attacker, tick);
+    buffs::interrupt_entity_buffs(world, target, Interruption::Hit);
 
     // The attacker may already be gone — a shot outlives the weapon that fired
     // it — so the credit is whatever the index can still resolve, its dying

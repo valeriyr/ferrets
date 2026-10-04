@@ -2,9 +2,10 @@
 //! entity.
 //!
 //! The entity survives, so everything not derived from its type comes along
-//! untouched — its id, its selection, its order queue, its buffs, and whatever
-//! it was carrying. What the type owns is re-fitted: where it stands on the
-//! grid, its stat bases, its pools, and its capability components.
+//! untouched — its id, its selection, its order queue, and whatever it was
+//! carrying. What the type owns is re-fitted: where it stands on the
+//! grid, its stat bases, its pools, its capability components, and the buffs
+//! it bears, of which those the new form cannot carry end.
 //!
 //! Who may become what, how long it takes, what it costs, when the ground is
 //! secured, and whether it can be called off are all terms of the
@@ -20,12 +21,16 @@
 //! cannot happen finishes silently, like any other order that finds its work
 //! impossible.
 
-use bevy_ecs::{entity::Entity, world::World};
+use bevy_ecs::{change_detection::Mut, entity::Entity, world::World};
 use ferrets_content::{
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeId,
     location::LocationDef,
-    morph::{MorphCancel, MorphInterrupted, MorphPlacement, MorphReason, MorphTransition},
+    morph::{
+        MorphCancel, MorphCourse, MorphInterrupted, MorphPlacement, MorphReason, MorphTransition,
+        PoolCarry, RevertCarry, ViaInterrupted,
+    },
+    pool_def::PoolId,
     registry::ContentRegistry,
 };
 use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect};
@@ -33,7 +38,7 @@ use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_physics::body;
 
 use super::{
-    held_buffs,
+    buffs,
     orders::{self, Processing, Refusal},
     stats,
 };
@@ -43,13 +48,14 @@ use crate::{
         attached::AttachedComponent,
         concealed::ConcealedComponent,
         dying::DyingComponent,
-        energy::EnergyComponent,
         entity_info::EntityInfoComponent,
-        health::HealthComponent,
+        last_hit::LastHitComponent,
         location::LocationComponent,
         morph::{MorphComponent, MorphReservation},
         movement::MoveComponent,
         order_queue::{CancelPolicy, OrderState},
+        pool_shifts::{self, PoolShiftTerms, PoolShiftsComponent},
+        pools::{self, PoolsComponent},
         transport::TransporterComponent,
     },
     entity_def,
@@ -114,7 +120,7 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
         .expect("a Morph order under way carries its change");
     let transition = entity_def::morph_terms(world, &morph)
         .expect("a change under way is one the form it came from declares");
-    let time = entity_def::quantity(world, entity, transition.time());
+    let time = entity_def::quantity_ticks(world, entity, transition.time());
 
     morph.progress += 1;
     if morph.progress < time {
@@ -414,28 +420,50 @@ fn begin(
             entity: entity_def::simulation_id(world, entity),
         },
     );
+    // What the interim form cannot carry leaves while the entity is still
+    // the origin, and the origin's pools move by its leaving before they are
+    // recorded.
+    if let Some(interim) = interim_of(world, &transition) {
+        buffs::shed_unfit(world, entity, interim);
+        stats::recompute_stats_of(world, entity);
+    }
+    let before: Vec<(PoolId, FixedU64)> = world
+        .get::<PoolsComponent>(entity)
+        .expect("a simulation entity carries a pool store")
+        .iter()
+        .collect();
     let morph = MorphComponent {
         from: entity_def::type_id(world, entity),
         into: type_name.to_string(),
         progress: 0,
         reservation,
+        before,
     };
     // The change is under way from here, so what the interim form's fitting
     // keeps for the duration — a brood being counted — sees it so.
     world.entity_mut(entity).insert(morph.clone());
-    if let Some(via) = transition.via_type() {
-        let worn = land(
-            world,
-            entity,
-            via,
-            Landing::Reserved,
-            morph.from,
-            interim_of(world, &transition),
-        );
-        debug_assert!(
-            worn,
-            "the interim form was judged to stand where the change begins"
-        );
+    match transition.course() {
+        MorphCourse::Direct { .. } => {}
+        MorphCourse::Via {
+            form,
+            enter_pool_carry,
+            ..
+        } => {
+            let worn = land(
+                world,
+                entity,
+                form,
+                Landing::Reserved,
+                &carried(enter_pool_carry.iter().map(|(&pool, &carry)| (pool, carry))),
+                &morph.before,
+                morph.from,
+                interim_of(world, &transition),
+            );
+            debug_assert!(
+                worn,
+                "the interim form was judged to stand where the change begins"
+            );
+        }
     }
     OrderState::InProcessing
 }
@@ -488,6 +516,8 @@ fn finish(
         entity,
         &morph.into,
         landing,
+        &carried(transition.land_pool_carry()),
+        &morph.before,
         morph.from,
         interim_of(world, transition),
     ) {
@@ -505,6 +535,49 @@ fn finish(
         EarlyEnd::Standing => Finish::Standing,
         EarlyEnd::Dying => Finish::Dying,
     }
+}
+
+/// How a landing fills one pool of the form it lands on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PoolFill {
+    /// As a carry says, from what the pool holds now.
+    Carry(PoolCarry),
+    /// Back to the value it held when the change started.
+    Restore(FixedU64),
+}
+
+/// What a pool held as a landing began.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum HeldPool {
+    /// In the store, under the maximum the leaving form stood under.
+    Standing {
+        /// The value it holds.
+        current: FixedU64,
+        /// The maximum it stands under.
+        maximum: FixedU64,
+    },
+    /// Not in the store, which a form on the way lacked: the value it held
+    /// when the change started, and the parts its maximum was last folded
+    /// from.
+    Recorded {
+        /// The value it held.
+        value: FixedU64,
+        /// The parts its maximum was last folded from.
+        parts: Vec<PoolShiftTerms>,
+    },
+    /// Held by no form of the change: the destination's own.
+    Gained,
+}
+
+/// The parts a replayed pool trades on its maximum: the landed form's out,
+/// the origin's in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Trade {
+    /// What the landed form's passives and field effects lay there.
+    landed: Vec<PoolShiftTerms>,
+    /// What the origin's passives the record held and its field effects
+    /// would lay there.
+    origin: Vec<PoolShiftTerms>,
 }
 
 /// What a landing checks before it takes the ground.
@@ -530,12 +603,17 @@ enum Landing {
 /// everything untouched when the change cannot happen — an unregistered
 /// destination, a cell-model mover caught between cells, cargo the new form
 /// cannot seat, or a destination footprint that no longer fits. Which of those
-/// a landing checks before it takes the ground is its [`Landing`].
+/// a landing checks before it takes the ground is its [`Landing`]; how each
+/// pool comes out of it is `fills`, and `before` is what each pool held when
+/// the change started.
+#[allow(clippy::too_many_arguments)]
 fn land(
     world: &mut World,
     entity: Entity,
     type_name: &str,
     landing: Landing,
+    fills: &[(PoolId, PoolFill)],
+    before: &[(PoolId, FixedU64)],
     origin: EntityTypeId,
     interim: Option<EntityTypeId>,
 ) -> bool {
@@ -595,24 +673,41 @@ fn land(
         location.position = anchor;
     }
 
-    // Pools carry their *proportion* across, read before the bases move under
-    // them: a form with a different maximum keeps a full unit full and a
-    // half-dead one half-dead, rather than keeping an absolute value that means
-    // something else on the other side.
-    let health = filled_fraction(
-        world
-            .entity(entity)
-            .get::<HealthComponent>()
-            .map(|health| health.current()),
-        entity_def::effective_stat(world, entity, EntityStatId::MAX_HEALTH),
-    );
-    let energy = filled_fraction(
-        world
-            .entity(entity)
-            .get::<EnergyComponent>()
-            .map(|energy| energy.current()),
-        entity_def::effective_stat(world, entity, EntityStatId::MAX_ENERGY),
-    );
+    // Each pool the entity holds and the maximum it stands under, read before
+    // the bases move under them, as a carry reads both; then each pool a form
+    // on the way lacked, as it stood when the change started; then each pool
+    // the destination declares that nothing is held in yet.
+    let registry = world.resource::<ContentRegistry>();
+    let mut held: Vec<(PoolId, HeldPool)> = world
+        .get::<PoolsComponent>(entity)
+        .expect("a simulation entity carries a pool store")
+        .iter()
+        .map(|(pool, current)| {
+            let maximum =
+                entity_def::effective_stat(world, entity, registry.pool_def(pool).maximum_stat())
+                    .expect("a pool held stands under its maximum");
+            (pool, HeldPool::Standing { current, maximum })
+        })
+        .collect();
+    let remembered = world
+        .get::<PoolShiftsComponent>(entity)
+        .expect("a simulation entity carries its pool shifts");
+    for &(pool, value) in before {
+        if !held.iter().any(|(kept, _)| *kept == pool) {
+            let parts = remembered.parts(pool).to_vec();
+            held.push((pool, HeldPool::Recorded { value, parts }));
+        }
+    }
+    for pool in registry
+        .def(type_id)
+        .base_stats
+        .pools()
+        .map(|pool| pool.id())
+    {
+        if !held.iter().any(|(kept, _)| *kept == pool) {
+            held.push((pool, HeldPool::Gained));
+        }
+    }
 
     spawn::seed_stats(world, entity, &base_stats);
     spawn::fit_components(
@@ -629,51 +724,124 @@ fn land(
     );
     spawn::align_broodlings(world, entity, &broodlings, origin);
 
-    // The old form's passives go before the new form's stats are folded, so
-    // the fold holds only what the new form bears.
-    held_buffs::shed_form(world, entity, worn);
+    // The old form's passives go, and every buff the new form cannot carry,
+    // and the new form's passives come before the pools are
+    // settled, so each carry lands under the maximum the new form stands
+    // under, and whatever their arrival shifted is written over by the carry.
+    buffs::shed_form(world, entity, worn);
+    buffs::shed_unfit(world, entity, type_id);
+    buffs::refit_entity(world, entity);
+    // The passives and field effects a pool a form on the way lacked trades,
+    // judged on the pools as the landing found them — as the fold below
+    // judges them — before that fold moves any pool.
+    let trades: Vec<(PoolId, Trade)> = held
+        .iter()
+        .filter_map(|(pool, held)| match held {
+            HeldPool::Recorded { parts, .. } => {
+                Some((*pool, trade(world, entity, *pool, origin, type_id, parts)))
+            }
+            HeldPool::Standing { .. } | HeldPool::Gained => None,
+        })
+        .collect();
     stats::recompute_stats_of(world, entity);
 
     // The pools are re-fitted to what the destination declares: a form with
-    // the stat keeps the carried proportion of its effective maximum — or
-    // starts full when the old form had no such pool — and a form without it
-    // loses the pool component outright, because a zero-maximum pool would
-    // read as dead rather than as poolless. The health pool keeps its last
-    // hit across the change.
-    match entity_def::effective_stat(world, entity, EntityStatId::MAX_HEALTH) {
-        Some(max) => {
-            let filled = max * health.unwrap_or(FixedU64::ONE);
-            let mut entity_mut = world.entity_mut(entity);
-            if let Some(mut pool) = entity_mut.get_mut::<HealthComponent>() {
-                pool.refill(filled);
-            } else {
-                entity_mut.insert(HealthComponent::full(filled));
+    // the stat fills it as `fills` names it — moved by a shift from what it held,
+    // full, or put back to what it held before the change — keeps one nothing
+    // names, held under its maximum, takes one a form on the way lacked from
+    // what it held then, and starts full when there is nothing to carry, keep
+    // or restore; a form without it loses the pool outright,
+    // because a zero-maximum pool would read as dead rather than as poolless.
+    // The health pool keeps its last hit across the change.
+    //
+    // A pool a form on the way lacked is replayed first, every one of them
+    // before the settle writes any pool.
+    let replays: Vec<(PoolId, (FixedU64, FixedU64))> = held
+        .iter()
+        .filter_map(|(pool, held)| match held {
+            HeldPool::Recorded { value, parts } => {
+                let trade = trades
+                    .iter()
+                    .find(|(traded, _)| traded == pool)
+                    .map(|(_, trade)| trade)
+                    .expect("every recorded pool has its trade judged");
+                Some((
+                    *pool,
+                    origin_now(world, entity, *pool, origin, *value, parts, trade),
+                ))
             }
-        }
-        None => {
-            world.entity_mut(entity).remove::<HealthComponent>();
+            HeldPool::Standing { .. } | HeldPool::Gained => None,
+        })
+        .collect();
+    for (pool, held) in held {
+        let maximum_stat = world
+            .resource::<ContentRegistry>()
+            .pool_def(pool)
+            .maximum_stat();
+        match (
+            entity_def::effective_stat(world, entity, maximum_stat),
+            held,
+            fills
+                .iter()
+                .find(|&&(named, _)| named == pool)
+                .map(|&(_, fill)| fill),
+        ) {
+            (
+                Some(new),
+                HeldPool::Standing {
+                    current,
+                    maximum: old,
+                },
+                Some(PoolFill::Carry(PoolCarry::Shift(pool_shift))),
+            ) => {
+                let carried = pool_shifts::shifted(pool, pool_shift, current, old, new);
+                follow(world, entity, pool, carried);
+            }
+            (Some(new), HeldPool::Standing { .. }, Some(PoolFill::Restore(value))) => {
+                follow(world, entity, pool, value.min(new));
+            }
+            (Some(new), HeldPool::Standing { current, .. }, None) => {
+                follow(world, entity, pool, current.min(new));
+            }
+            (Some(new), HeldPool::Recorded { .. }, fill) => {
+                // Moved by what changed while it was away, under the
+                // origin's maximum as it stands now, then carried from there.
+                let (carried, origin_maximum) = replays
+                    .iter()
+                    .find(|(replayed, _)| *replayed == pool)
+                    .map(|&(_, replay)| replay)
+                    .expect("every recorded pool is replayed before the settle");
+                let value = match fill {
+                    None => carried.min(new),
+                    Some(PoolFill::Carry(PoolCarry::Shift(pool_shift))) => {
+                        pool_shifts::shifted(pool, pool_shift, carried, origin_maximum, new)
+                    }
+                    Some(PoolFill::Carry(PoolCarry::Full)) => new,
+                    Some(PoolFill::Restore(value)) => value.min(new),
+                };
+                pools::fill(world, entity, pool);
+                follow(world, entity, pool, value);
+            }
+            (Some(_), HeldPool::Standing { .. }, Some(PoolFill::Carry(PoolCarry::Full)))
+            | (Some(_), HeldPool::Gained, _) => {
+                pools::fill(world, entity, pool);
+            }
+            (None, _, _) => {
+                if entity_def::has_pool(world, entity, pool) {
+                    pools::remove(world, entity, pool);
+                }
+            }
         }
     }
-    match entity_def::effective_stat(world, entity, EntityStatId::MAX_ENERGY) {
-        Some(max) => {
-            let filled = max * energy.unwrap_or(FixedU64::ONE);
-            let mut entity_mut = world.entity_mut(entity);
-            if let Some(mut pool) = entity_mut.get_mut::<EnergyComponent>() {
-                *pool = EnergyComponent::full(filled);
-            } else {
-                entity_mut.insert(EnergyComponent::full(filled));
-            }
-        }
-        None => {
-            world.entity_mut(entity).remove::<EnergyComponent>();
-        }
+    if !entity_def::has_pool(world, entity, PoolId::HEALTH) {
+        // The last hit goes with the pool it landed on.
+        world.entity_mut(entity).remove::<LastHitComponent>();
     }
 
-    // What the new form names is fitted by its requirement, and a buff held on
-    // one the new form no longer meets ends — judged on the new form's pools
-    // and folded stats, which are folded again with what the refit changed,
-    // and the concealment marker fitted to the buffs as they now stand.
-    held_buffs::refit_entity(world, entity);
+    // A buff held on a requirement is judged again on the settled pools, the
+    // stats folded with what that changed, and the concealment marker fitted
+    // to the buffs as they now stand.
+    buffs::refit_entity(world, entity);
     stats::recompute_stats_of(world, entity);
     let concealed = entity_def::concealed(world, entity);
     spawn::fit_default::<ConcealedComponent>(&mut world.entity_mut(entity), concealed);
@@ -827,9 +995,21 @@ fn abandon(
     transition: &MorphTransition,
     payment: Payment,
 ) -> EarlyEnd {
-    match transition.interrupted() {
-        MorphInterrupted::Reverts => return_to_origin(world, entity, morph),
-        MorphInterrupted::Dies => {}
+    match transition.course() {
+        MorphCourse::Via {
+            interrupted: ViaInterrupted::Reverts(revert),
+            ..
+        } => return_to_origin(
+            world,
+            entity,
+            morph,
+            revert.iter().map(|(&pool, &carry)| (pool, carry)),
+        ),
+        MorphCourse::Direct { .. }
+        | MorphCourse::Via {
+            interrupted: ViaInterrupted::Dies,
+            ..
+        } => {}
     }
     if let Payment::Returned = payment
         && let Some(player) = entity_def::owner(world, entity)
@@ -844,7 +1024,7 @@ fn abandon(
             },
         );
     }
-    ended_early(world, entity, transition.interrupted(), morph.from)
+    ended_early(world, entity, transition.course(), morph.from)
 }
 
 /// What an entity is left as once its change ended early.
@@ -856,7 +1036,7 @@ enum EarlyEnd {
     Dying,
 }
 
-/// Ends a change early on the transition's `interrupted` terms, once the payment
+/// Ends a change early on its `course`'s interruption terms, once the payment
 /// is settled and any interim form taken off: a returning bred entity takes a
 /// seat again; a perishing one dies in the form it wears, its brood — if it
 /// breeds — settled on the terms of `origin`, the form the change was declared
@@ -864,11 +1044,17 @@ enum EarlyEnd {
 fn ended_early(
     world: &mut World,
     entity: Entity,
-    interrupted: MorphInterrupted,
+    course: &MorphCourse,
     origin: EntityTypeId,
 ) -> EarlyEnd {
-    match interrupted {
-        MorphInterrupted::Reverts => {
+    match course {
+        MorphCourse::Direct {
+            interrupted: MorphInterrupted::Reverts,
+        }
+        | MorphCourse::Via {
+            interrupted: ViaInterrupted::Reverts(_),
+            ..
+        } => {
             spawn::reseat_broodling(world, entity);
             if world.entity(entity).contains::<DyingComponent>() {
                 EarlyEnd::Dying
@@ -876,7 +1062,13 @@ fn ended_early(
                 EarlyEnd::Standing
             }
         }
-        MorphInterrupted::Dies => {
+        MorphCourse::Direct {
+            interrupted: MorphInterrupted::Dies,
+        }
+        | MorphCourse::Via {
+            interrupted: ViaInterrupted::Dies,
+            ..
+        } => {
             spawn::settle_broodlings(world, entity, origin);
             spawn::despawn_entity(world, entity, DeathCause::Canceled);
             EarlyEnd::Dying
@@ -885,11 +1077,16 @@ fn ended_early(
 }
 
 /// Puts an entity that ended its change early back into the form it started
-/// from, when it was wearing an interim form. The return cannot be refused:
-/// the interim form stands on the origin's footprint, and the origin is not
-/// judged again on ground it already stood on, whatever the fields there say
-/// by now.
-fn return_to_origin(world: &mut World, entity: Entity, morph: &MorphComponent) {
+/// from, when it was wearing an interim form, its pools filled as `revert`
+/// says. The return cannot be refused: the interim form stands on the
+/// origin's footprint, and the origin is not judged again on ground it
+/// already stood on, whatever the fields there say by now.
+fn return_to_origin(
+    world: &mut World,
+    entity: Entity,
+    morph: &MorphComponent,
+    revert: impl Iterator<Item = (PoolId, RevertCarry)>,
+) {
     if entity_def::type_id(world, entity) == morph.from {
         return;
     }
@@ -900,7 +1097,32 @@ fn return_to_origin(world: &mut World, entity: Entity, morph: &MorphComponent) {
         .clone();
     let interim =
         entity_def::morph_terms(world, morph).and_then(|transition| interim_of(world, &transition));
-    let returned = land(world, entity, &origin, Landing::Return, morph.from, interim);
+    let fills: Vec<(PoolId, PoolFill)> = revert
+        .map(|(pool, revert)| {
+            let fill = match revert {
+                RevertCarry::Restore => PoolFill::Restore(
+                    morph
+                        .before
+                        .iter()
+                        .find(|&&(kept, _)| kept == pool)
+                        .map(|&(_, value)| value)
+                        .expect("a pool both forms carry was held when the change started"),
+                ),
+                RevertCarry::Carry(carry) => PoolFill::Carry(carry),
+            };
+            (pool, fill)
+        })
+        .collect();
+    let returned = land(
+        world,
+        entity,
+        &origin,
+        Landing::Return,
+        &fills,
+        &morph.before,
+        morph.from,
+        interim,
+    );
     debug_assert!(returned, "a return to the origin form is unconditional");
 }
 
@@ -1035,17 +1257,6 @@ fn settled(
     }
 }
 
-/// How full a pool is, as a fraction of its maximum — none of a pool whose
-/// maximum is zero — or `None` when there is no pool to carry over.
-fn filled_fraction(current: Option<FixedU64>, maximum: Option<FixedU64>) -> Option<FixedU64> {
-    let (current, maximum) = current.zip(maximum)?;
-    if maximum > FixedU64::ZERO {
-        Some(current / maximum)
-    } else {
-        Some(FixedU64::ZERO)
-    }
-}
-
 /// Takes the entity's standing presence off the grid ahead of testing or
 /// taking its destination, returning the claim cells actually lifted so
 /// [`restore_standing_presence`] can put back exactly those.
@@ -1085,4 +1296,91 @@ fn restore_standing_presence(
         OccupancyClass::Static => map.place_entity(standing, from, class),
         OccupancyClass::Claim => map.restore_claim(from.occupation(), own),
     }
+}
+
+/// Writes `value` into `entity`'s `pool` through the checked fold write,
+/// which takes the registry out of the world for the call.
+fn follow(world: &mut World, entity: Entity, pool: PoolId, value: FixedU64) {
+    world.resource_scope(|world, registry: Mut<ContentRegistry>| {
+        pools::follow(world, &registry, entity, pool, value);
+    });
+}
+
+/// The value a pool `entity` held as its origin `origin` — `value`, under the
+/// parts `parts` — would hold now, and the origin's maximum now: the parts
+/// stand as they do on the form just landed on, with `trade`'s parts of that
+/// form traded for the origin's.
+fn origin_now(
+    world: &World,
+    entity: Entity,
+    pool: PoolId,
+    origin: EntityTypeId,
+    value: FixedU64,
+    parts: &[PoolShiftTerms],
+    trade: &Trade,
+) -> (FixedU64, FixedU64) {
+    let registry = world.resource::<ContentRegistry>();
+    let maximum_stat = registry.pool_def(pool).maximum_stat();
+    let base = registry
+        .def(origin)
+        .base_stat(maximum_stat)
+        .expect("the origin declares a pool it held");
+    let floor = registry.entity_stat_def(maximum_stat).floor();
+    let now = world
+        .get::<PoolShiftsComponent>(entity)
+        .expect("a simulation entity carries its pool shifts")
+        .parts(pool);
+    let origin_parts = pool_shifts::swapped(now, &trade.landed, &trade.origin);
+    pool_shifts::replayed(pool, value, base, floor, parts, &origin_parts)
+}
+
+/// What `entity`, landed on the form `form` from its origin `origin`, trades
+/// on `pool`'s maximum: the parts of the passives it bears and of the field
+/// effects of `form` where it stands, for the origin's passives the record
+/// `parts` held and the origin's field effects there.
+fn trade(
+    world: &World,
+    entity: Entity,
+    pool: PoolId,
+    origin: EntityTypeId,
+    form: EntityTypeId,
+    parts: &[PoolShiftTerms],
+) -> Trade {
+    let registry = world.resource::<ContentRegistry>();
+    let maximum_stat = registry.pool_def(pool).maximum_stat();
+    let borne = pool_shifts::passive_terms(
+        registry,
+        registry
+            .def(form)
+            .passives
+            .iter()
+            .copied()
+            .filter(|&id| entity_def::bears(world, entity, id)),
+        maximum_stat,
+    );
+    let recorded = pool_shifts::common(
+        &pool_shifts::passive_terms(
+            registry,
+            registry.def(origin).passives.iter().copied(),
+            maximum_stat,
+        ),
+        parts,
+    );
+    let landed_fields =
+        pool_shifts::parts_of(&fields::entity_modifiers(world, entity), maximum_stat);
+    let origin_fields = pool_shifts::parts_of(
+        &fields::entity_modifiers_of(world, entity, registry.def(origin)),
+        maximum_stat,
+    );
+    Trade {
+        landed: [borne, landed_fields].concat(),
+        origin: [recorded, origin_fields].concat(),
+    }
+}
+
+/// Each pool named in `carries`, filled as its carry says.
+fn carried(carries: impl Iterator<Item = (PoolId, PoolCarry)>) -> Vec<(PoolId, PoolFill)> {
+    carries
+        .map(|(pool, carry)| (pool, PoolFill::Carry(carry)))
+        .collect()
 }

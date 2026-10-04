@@ -3,10 +3,12 @@
 
 use bevy::prelude::*;
 use ferrets_content::{
+    entity_modifiers::EntityModifiers,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     location::Solidity,
     player_buffs::PlayerBuffDef,
+    pool::Pool,
     registry::ContentRegistry,
     stack_rule::StackRule,
     stats::{EntityModifier, ModifierOp},
@@ -49,6 +51,28 @@ fn timed_life_ends_on_tick_its_stat_names() {
             .alive(summon)
             .is_none(),
         "the tenth tick is the one its time runs out on"
+    );
+}
+
+#[test]
+fn fractional_life_rounds_up_to_whole_tick() {
+    let mut app = app();
+    let (_, summon) = utils::create_owned(&mut app, "brief_wisp", 5, 5, 0);
+
+    // 9.25 ticks, rounded up to 10: standing on the ninth, gone on the tenth.
+    utils::run_ticks(&mut app, 9);
+    assert!(
+        app.world()
+            .resource::<EntityIndex>()
+            .alive(summon)
+            .is_some()
+    );
+    utils::run_ticks(&mut app, 1);
+    assert!(
+        app.world()
+            .resource::<EntityIndex>()
+            .alive(summon)
+            .is_none()
     );
 }
 
@@ -213,19 +237,25 @@ fn app() -> App {
         registry.register(
             EntityTypeDef::new("wisp_of_ten")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_health(20)
+                .with_pool(Pool::health(20))
                 .with_stat(EntityStatId::LIFETIME, FixedU64::from_num(10))
                 .with_dying(2, utils::leaves("bones")),
+        );
+        registry.register(
+            EntityTypeDef::new("brief_wisp")
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_pool(Pool::health(20))
+                .with_stat(EntityStatId::LIFETIME, utils::fixed("9.25")),
         );
         registry.register_player_buff(
             "longevity",
             PlayerBuffDef {
                 player_modifiers: Vec::new(),
-                entity_modifiers: vec![EntityModifier {
+                entity_modifiers: vec![EntityModifiers::Stats(vec![EntityModifier {
                     stat: EntityStatId::LIFETIME,
                     op: ModifierOp::FlatAdd,
                     magnitude: FixedI64::from_num(5),
-                }],
+                }])],
                 duration: None,
                 stack_rule: StackRule::Ignore,
             },
@@ -234,11 +264,11 @@ fn app() -> App {
             "withering",
             PlayerBuffDef {
                 player_modifiers: Vec::new(),
-                entity_modifiers: vec![EntityModifier {
+                entity_modifiers: vec![EntityModifiers::Stats(vec![EntityModifier {
                     stat: EntityStatId::LIFETIME,
                     op: ModifierOp::FlatAdd,
                     magnitude: FixedI64::from_num(-20),
-                }],
+                }])],
                 duration: None,
                 stack_rule: StackRule::Ignore,
             },

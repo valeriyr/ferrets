@@ -5,11 +5,13 @@ use bevy::prelude::*;
 use ferrets_content::{
     attack::Slain,
     cost::Cost,
+    entity_modifiers::EntityModifiers,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     kinds::Kinds,
     location::Solidity,
     player_buffs::PlayerBuffDef,
+    pool::Pool,
     quantity::Quantity,
     registry::ContentRegistry,
     skills::{Casting, EntityCastEffect, EntityCastTarget, Reach, SkillCaster, SkillDef},
@@ -142,8 +144,8 @@ fn raise_aimed_at_living_is_refused() {
         "a raise names a body, and what still stands is not one"
     );
     assert_eq!(
-        energy(&app, necromancer),
-        FixedU64::from_num(100),
+        energy_as_u32(&app, necromancer),
+        100,
         "a refused cast pays nothing"
     );
 }
@@ -172,8 +174,8 @@ fn summon_with_nowhere_to_stand_pays_nothing() {
         "the body is still lying there"
     );
     assert_eq!(
-        energy(&app, necromancer),
-        FixedU64::from_num(100),
+        energy_as_u32(&app, necromancer),
+        100,
         "nothing was paid for the cast that did not happen"
     );
 }
@@ -198,8 +200,8 @@ fn summon_over_supply_ceiling_pays_nothing() {
         "the body is still lying there"
     );
     assert_eq!(
-        energy(&app, necromancer),
-        FixedU64::from_num(100),
+        energy_as_u32(&app, necromancer),
+        100,
         "and nothing was paid for it"
     );
 }
@@ -255,8 +257,8 @@ fn body_gone_before_caster_arrives_ends_order() {
         "an aim that is gone finishes the order rather than holding the caster"
     );
     assert_eq!(
-        energy(&app, necromancer),
-        FixedU64::from_num(100),
+        energy_as_u32(&app, necromancer),
+        100,
         "and the caster paid nothing for the body it never reached"
     );
 }
@@ -296,8 +298,8 @@ fn body_in_fog_cannot_be_raised() {
         "a cast named at what the fog hides is a cast the player could not have known to make"
     );
     assert_eq!(
-        energy(&app, acolyte),
-        FixedU64::from_num(100),
+        energy_as_u32(&app, acolyte),
+        100,
         "and it paid nothing for it"
     );
 }
@@ -326,8 +328,8 @@ fn summon_with_room_for_only_one_raises_none() {
         "the body is still lying there"
     );
     assert_eq!(
-        energy(&app, necromancer),
-        FixedU64::from_num(100),
+        energy_as_u32(&app, necromancer),
+        100,
         "and nothing was paid for it"
     );
 }
@@ -350,8 +352,8 @@ fn worked_cast_lands_on_its_point() {
 
     assert_eq!(count_of(&app, "skeleton"), 0, "the work is not done yet");
     assert_eq!(
-        energy(&app, necromancer),
-        FixedU64::from_num(100),
+        energy_as_u32(&app, necromancer),
+        100,
         "and nothing is spent while it is under way"
     );
 
@@ -359,8 +361,8 @@ fn worked_cast_lands_on_its_point() {
 
     assert_eq!(count_of(&app, "skeleton"), 2, "the fifth tick raises them");
     assert_eq!(
-        energy(&app, necromancer),
-        FixedU64::from_num(60),
+        energy_as_u32(&app, necromancer),
+        60,
         "and pays for them then: 100 - 40"
     );
 }
@@ -382,8 +384,8 @@ fn worked_cast_walks_in_before_its_work_starts() {
         "a caster still walking is a caster not yet working"
     );
     assert_eq!(
-        energy(&app, necromancer),
-        FixedU64::from_num(100),
+        energy_as_u32(&app, necromancer),
+        100,
         "and it pays for the cast at its point, not for setting off"
     );
 
@@ -395,8 +397,8 @@ fn worked_cast_walks_in_before_its_work_starts() {
         "having closed, it works and raises"
     );
     assert_eq!(
-        energy(&app, necromancer),
-        FixedU64::from_num(60),
+        energy_as_u32(&app, necromancer),
+        60,
         "paying then: 100 - 40"
     );
 }
@@ -447,6 +449,22 @@ fn point_pulled_under_work_already_done_lands_at_once() {
         2,
         "a point that moved under the phase already worked lands on the next tick"
     );
+}
+
+#[test]
+fn fractional_cast_point_rounds_up() {
+    let mut app = app();
+    let necromancer = caster(&mut app, 5, 5);
+    let body = fallen(&mut app, 6, 5);
+
+    // A point of 10 − 0.75 = 9.25 ticks, read as 10: not landed after the
+    // ninth tick of work, landed on the tenth.
+    apply_buff(&mut app, "trimmed_rites");
+    cast(&mut app, necromancer, body, "raise_by_stat");
+    utils::run_ticks(&mut app, utils::APPLY + 8);
+    assert_eq!(count_of(&app, "skeleton"), 0);
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(count_of(&app, "skeleton"), 2);
 }
 
 #[test]
@@ -572,8 +590,8 @@ fn cast_cut_short_before_its_point_costs_nothing() {
 
     assert_eq!(count_of(&app, "skeleton"), 0, "nothing was raised");
     assert_eq!(
-        energy(&app, necromancer),
-        FixedU64::from_num(100),
+        energy_as_u32(&app, necromancer),
+        100,
         "and the energy was never spent"
     );
     assert_eq!(
@@ -612,23 +630,23 @@ fn app() -> App {
         registry.register(
             EntityTypeDef::new("skeleton")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_health(20),
+                .with_pool(Pool::health(20)),
         );
         registry.register(
             EntityTypeDef::new("soldier")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_health(30)
+                .with_pool(Pool::health(30))
                 .with_dying(2, utils::leaves("corpse")),
         );
         registry.register(
             EntityTypeDef::new("colossus")
                 .with_location(utils::GROUND, CellSize::new(40, 40), Solidity::Solid)
-                .with_health(20),
+                .with_pool(Pool::health(20)),
         );
         registry.register(
             EntityTypeDef::new("warden")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_health(20)
+                .with_pool(Pool::health(20))
                 .with_stat(EntityStatId::SUPPLY_COST, FixedU64::from_num(2)),
         );
         let raises = |registry: &mut ContentRegistry, name: &str, summoned: &str, reach| {
@@ -749,11 +767,24 @@ fn app() -> App {
             "drawn_out_rites",
             PlayerBuffDef {
                 player_modifiers: Vec::new(),
-                entity_modifiers: vec![EntityModifier {
+                entity_modifiers: vec![EntityModifiers::Stats(vec![EntityModifier {
                     stat: ritual_time,
                     op: ModifierOp::FlatAdd,
                     magnitude: FixedI64::from_num(10),
-                }],
+                }])],
+                duration: None,
+                stack_rule: StackRule::Ignore,
+            },
+        );
+        registry.register_player_buff(
+            "trimmed_rites",
+            PlayerBuffDef {
+                player_modifiers: Vec::new(),
+                entity_modifiers: vec![EntityModifiers::Stats(vec![EntityModifier {
+                    stat: ritual_time,
+                    op: ModifierOp::FlatAdd,
+                    magnitude: utils::signed_fixed("-0.75"),
+                }])],
                 duration: None,
                 stack_rule: StackRule::Ignore,
             },
@@ -762,11 +793,11 @@ fn app() -> App {
             "quickened_rites",
             PlayerBuffDef {
                 player_modifiers: Vec::new(),
-                entity_modifiers: vec![EntityModifier {
+                entity_modifiers: vec![EntityModifiers::Stats(vec![EntityModifier {
                     stat: ritual_time,
                     op: ModifierOp::FlatAdd,
                     magnitude: FixedI64::from_num(-8),
-                }],
+                }])],
                 duration: None,
                 stack_rule: StackRule::Ignore,
             },
@@ -780,9 +811,9 @@ fn app() -> App {
         );
         registry.register(
             utils::walker("necromancer", utils::GROUND)
-                .with_health(40)
+                .with_pool(Pool::health(40))
                 .with_sight_range(20)
-                .with_energy(100, FixedU64::ZERO)
+                .with_pool(Pool::energy(100))
                 .with_stat(ritual_time, FixedU64::from_num(10))
                 .with_skills([
                     raise_dead,
@@ -796,9 +827,9 @@ fn app() -> App {
         registry.register(
             EntityTypeDef::new("acolyte")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_health(40)
+                .with_pool(Pool::health(40))
                 .with_sight_range(20)
-                .with_energy(100, FixedU64::ZERO)
+                .with_pool(Pool::energy(100))
                 .with_skills([raise_where_it_stands]),
         );
     }
@@ -908,12 +939,12 @@ fn owners_of(app: &App, type_name: &str) -> impl Iterator<Item = Option<u8>> {
         .map(move |(_, entity)| entity_def::owner(world, entity))
 }
 
-/// The caster's current energy.
-fn energy(app: &App, caster: SimulationId) -> FixedU64 {
+/// The caster's current energy as a whole number.
+fn energy_as_u32(app: &App, caster: SimulationId) -> u32 {
     let entity = app
         .world()
         .resource::<EntityIndex>()
         .alive(caster)
         .expect("the caster is standing");
-    utils::energy(app, entity)
+    utils::energy_as_u32(app, entity)
 }

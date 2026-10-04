@@ -7,7 +7,7 @@ mod utils;
 
 use bevy::prelude::{App, Entity};
 use ferrets_content::{
-    entity_type_def::EntityTypeDef, location::Solidity, registry::ContentRegistry,
+    entity_type_def::EntityTypeDef, location::Solidity, pool::Pool, registry::ContentRegistry,
 };
 use ferrets_geometry::cell_size::CellSize;
 use ferrets_simulation::{
@@ -531,14 +531,14 @@ fn register_bases_content(app: &mut App) {
     registry.register(
         EntityTypeDef::new("base")
             .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-            .with_health(30)
+            .with_pool(Pool::health(30))
             .with_dying(2, [])
             .with_tags(["building"]),
     );
     registry.register(
         EntityTypeDef::new("soldier")
             .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-            .with_health(30)
+            .with_pool(Pool::health(30))
             .with_dying(2, []),
     );
     registry.validate();

@@ -13,7 +13,8 @@ use bevy::{
 };
 use ferrets_bevy_plugin::TickPacing;
 use ferrets_content::{
-    attack::Slain, entity_buffs::EntityBuffId, registry::ContentRegistry, skills::SkillId,
+    attack::Slain, entity_buffs::EntityBuffId, pool_def::PoolId, registry::ContentRegistry,
+    skills::SkillId,
 };
 use ferrets_demo::{
     debug::{self, DebugState, DebugText},
@@ -25,10 +26,10 @@ use ferrets_geometry::cell_pos::CellPos;
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_simulation::{
     command::SkillTarget,
-    components::health::HealthComponent,
+    components::pools,
     entity_def,
     events::{DeathCause, EventRecord, SimulationEvent},
-    game_loop,
+    game_loop::{self, buffs::Bearing},
     movement_model::MovementModel,
     session::{local_role::LocalRole, player_id::PlayerId},
     simulation_id::SimulationId,
@@ -200,9 +201,12 @@ fn fire_that_goes_out_and_catches_again_is_heard_again() {
 
     // Out for a tick, then alight again: one more cue, two in all.
     let on_fire = fire(&app);
-    game_loop::stats::remove_entity_buff(app.world_mut(), depot, on_fire);
+    game_loop::buffs::remove_entity_buff(app.world_mut(), depot, on_fire);
     play_fire(&mut app);
-    game_loop::stats::apply_entity_buff(app.world_mut(), depot, on_fire);
+    assert_eq!(
+        game_loop::buffs::apply_entity_buff(app.world_mut(), depot, on_fire),
+        Bearing::Borne
+    );
     play_fire(&mut app);
     assert_eq!(cue_count(&mut app), 2);
 }
@@ -277,7 +281,10 @@ fn concealed_fire_in_sight_of_watched_side_is_not_heard() {
         .resource::<ContentRegistry>()
         .entity_buff("ambushing")
         .expect("the demo content defines the ambush");
-    game_loop::stats::apply_entity_buff(app.world_mut(), depot, ambushing);
+    assert_eq!(
+        game_loop::buffs::apply_entity_buff(app.world_mut(), depot, ambushing),
+        Bearing::Borne
+    );
     utils::run_ticks(&mut app, 1);
 
     play_fire(&mut app);
@@ -298,7 +305,10 @@ fn fires_catching_at_once_stop_at_ceiling() {
             Some(0),
         )
         .expect("the demo content defines a supply depot");
-        game_loop::stats::apply_entity_buff(world, depot, on_fire);
+        assert_eq!(
+            game_loop::buffs::apply_entity_buff(world, depot, on_fire),
+            Bearing::Borne
+        );
     }
     // 14 fires against a ceiling of 12: 12 sound.
     play_fire(&mut app);
@@ -561,12 +571,14 @@ fn burning_depot(app: &mut App, owner: PlayerId) -> Entity {
     let world = app.world_mut();
     let (depot, _) = utils::create_entity(world, "supply_depot", utils::at_cell(8, 8), Some(owner))
         .expect("the demo content defines a supply depot");
-    let mut health = world
-        .get_mut::<HealthComponent>(depot)
-        .expect("a supply depot has health");
-    let lost = health.current() * utils::fixed("0.75");
-    health.drain(lost);
-    game_loop::stats::apply_entity_buff(world, depot, on_fire);
+    let lost = entity_def::pool_value(world, depot, PoolId::HEALTH)
+        .expect("a supply depot has health")
+        * utils::fixed("0.75");
+    pools::drain(world, depot, PoolId::HEALTH, lost);
+    assert_eq!(
+        game_loop::buffs::apply_entity_buff(world, depot, on_fire),
+        Bearing::Borne
+    );
     depot
 }
 

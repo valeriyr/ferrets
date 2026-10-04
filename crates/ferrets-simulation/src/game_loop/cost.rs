@@ -9,13 +9,13 @@ use bevy_ecs::{entity::Entity, world::World};
 use ferrets_math::FixedU64;
 
 use crate::{
-    components::{energy::EnergyComponent, health::HealthComponent},
+    components::pools::{self, Spending},
     entity_def,
     events::SpendCause,
     resources::{self, PlayerResources},
     session::player_id::PlayerId,
 };
-use ferrets_content::{cost::Cost, entity_stats::EntityStatId, price::Price};
+use ferrets_content::{cost::Cost, pool_def::PoolId, price::Price};
 
 /// Whether every arm of the cost is payable right now. Checked in full before
 /// any is paid, so nothing ever half-charges. A health cost must leave the
@@ -28,18 +28,15 @@ pub(super) fn can_pay(world: &World, entity: Entity, player: PlayerId, costs: &[
     {
         return false;
     }
-    let entity_ref = world.entity(entity);
     if energy_cost > FixedU64::ZERO
-        && entity_ref
-            .get::<EnergyComponent>()
-            .is_none_or(|energy| energy.current() < energy_cost)
+        && entity_def::pool_value(world, entity, PoolId::ENERGY)
+            .is_none_or(|energy| energy < energy_cost)
     {
         return false;
     }
     if health_cost > FixedU64::ZERO
-        && entity_ref
-            .get::<HealthComponent>()
-            .is_none_or(|health| health.current() <= health_cost)
+        && entity_def::pool_value(world, entity, PoolId::HEALTH)
+            .is_none_or(|health| health <= health_cost)
     {
         return false;
     }
@@ -57,16 +54,14 @@ pub(super) fn pay(
 ) {
     let (resources, energy_cost, health_cost) = folded(costs);
     resources::charge(world, player, resources, cause);
-    let mut entity_mut = world.entity_mut(entity);
-    if energy_cost > FixedU64::ZERO
-        && let Some(mut energy) = entity_mut.get_mut::<EnergyComponent>()
-    {
-        energy.spend(energy_cost);
+    if energy_cost > FixedU64::ZERO && entity_def::has_pool(world, entity, PoolId::ENERGY) {
+        match pools::spend(world, entity, PoolId::ENERGY, energy_cost) {
+            Spending::Paid => {}
+            Spending::Short => unreachable!("cost::pay is given a cost can_pay judged covered"),
+        }
     }
-    if health_cost > FixedU64::ZERO
-        && let Some(mut health) = entity_mut.get_mut::<HealthComponent>()
-    {
-        health.drain(health_cost);
+    if health_cost > FixedU64::ZERO && entity_def::has_pool(world, entity, PoolId::HEALTH) {
+        pools::drain(world, entity, PoolId::HEALTH, health_cost);
     }
 }
 
@@ -82,20 +77,11 @@ pub(super) fn refund(
 ) {
     let (resources, energy_cost, health_cost) = folded(costs);
     resources::refund(world, player, resources, cause);
-    let max_energy = entity_def::effective_stat(world, entity, EntityStatId::MAX_ENERGY)
-        .unwrap_or(FixedU64::ZERO);
-    let max_health = entity_def::effective_stat(world, entity, EntityStatId::MAX_HEALTH)
-        .unwrap_or(FixedU64::ZERO);
-    let mut entity_mut = world.entity_mut(entity);
-    if energy_cost > FixedU64::ZERO
-        && let Some(mut energy) = entity_mut.get_mut::<EnergyComponent>()
-    {
-        energy.regenerate(energy_cost, max_energy);
+    if energy_cost > FixedU64::ZERO && entity_def::has_pool(world, entity, PoolId::ENERGY) {
+        pools::restore(world, entity, PoolId::ENERGY, energy_cost);
     }
-    if health_cost > FixedU64::ZERO
-        && let Some(mut health) = entity_mut.get_mut::<HealthComponent>()
-    {
-        health.heal(health_cost, max_health);
+    if health_cost > FixedU64::ZERO && entity_def::has_pool(world, entity, PoolId::HEALTH) {
+        pools::restore(world, entity, PoolId::HEALTH, health_cost);
     }
 }
 

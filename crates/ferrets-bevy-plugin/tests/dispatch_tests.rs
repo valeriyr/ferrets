@@ -8,6 +8,7 @@ use ferrets_content::{
     entity_type_def::EntityTypeDef,
     kinds::Kinds,
     location::Solidity,
+    pool::Pool,
     registry::ContentRegistry,
     repair::{RepairCost, RepairRate},
     resource::{Banking, HarvestData},
@@ -110,8 +111,8 @@ fn send_to_entity_resolves_repair_for_damaged_friendly() {
     // nothing else in the world heals.
     utils::run_ticks(&mut app, utils::APPLY + 6);
     assert_eq!(
-        utils::current_health(&app, warehouse),
-        FixedU64::from_num(100),
+        utils::health_as_u32(&app, warehouse),
+        100,
         "the damage was mended off the same click that would harvest or attack"
     );
 }
@@ -148,8 +149,8 @@ fn loaded_carrier_sent_to_damaged_storage_still_delivers() {
         "the load went into the stockpile"
     );
     assert_eq!(
-        utils::current_health(&app, warehouse),
-        FixedU64::from_num(80),
+        utils::health_as_u32(&app, warehouse),
+        80,
         "delivery outranks mending: the same click started no repair"
     );
 }
@@ -168,13 +169,13 @@ fn repair_dispatch_app() -> App {
         registry.register(
             EntityTypeDef::new("warehouse")
                 .with_location(utils::GROUND, CellSize::new(2, 2), Solidity::Solid)
-                .with_health(100)
+                .with_pool(Pool::health(100))
                 .with_tags(["building"])
                 .with_resource_storage(["gold"]),
         );
         registry.register(
             utils::walker("handyman", utils::GROUND)
-                .with_health(20)
+                .with_pool(Pool::health(20))
                 .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
                 .with_resource_carrier([(
                     "gold",

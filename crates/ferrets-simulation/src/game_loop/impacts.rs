@@ -10,11 +10,11 @@ use ferrets_geometry::{
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_pathfinder::layer_mask::LayerMask;
 
-use super::{damage, stats};
+use super::{buffs, damage};
 use crate::{
     components::{
-        dying::DyingComponent, entity_info::EntityInfoComponent, health::HealthComponent,
-        hidden::HiddenComponent, location::LocationComponent, owner::OwnerComponent,
+        dying::DyingComponent, entity_info::EntityInfoComponent, hidden::HiddenComponent,
+        location::LocationComponent, owner::OwnerComponent,
     },
     entity_def,
     entity_index::EntityIndex,
@@ -27,6 +27,7 @@ use ferrets_content::{
     attack::{Delivery, Slain, Weapon},
     entity_buffs::Interruption,
     entity_type_def::EntityTypeDef,
+    pool_def::PoolId,
     projectile::Aim,
     registry::ContentRegistry,
     splash::{SplashDef, SplashShape},
@@ -78,7 +79,7 @@ pub(super) fn deliver(
         .map(Weapon::delivery)
         .expect("a delivering entity has the weapon it fired");
 
-    stats::interrupt_entity_buffs(world, attacker, Interruption::Attack);
+    buffs::interrupt_entity_buffs(world, attacker, Interruption::Attack);
 
     match delivery {
         Delivery::Instant => {
@@ -261,7 +262,7 @@ fn blast_victims(
         let entity_ref = world.entity(entity);
         // Only damageable entities that are not already dying. Hidden entities
         // hold no cells and their position is stale, so no blast reaches them.
-        if entity_ref.get::<HealthComponent>().is_none()
+        if !entity_def::has_pool(world, entity, PoolId::HEALTH)
             || entity_ref.contains::<DyingComponent>()
             || entity_ref.contains::<HiddenComponent>()
         {
@@ -383,7 +384,7 @@ fn occupants_of(world: &mut World, cell: FixedUVec2) -> Vec<Entity> {
         let entity_ref = world.entity(entity);
         // Hidden entities hold no cells and their position is stale, so a shot
         // arriving at the cell one stood on finds nobody there.
-        if entity_ref.get::<HealthComponent>().is_none()
+        if !entity_def::has_pool(world, entity, PoolId::HEALTH)
             || entity_ref.contains::<DyingComponent>()
             || entity_ref.contains::<HiddenComponent>()
         {

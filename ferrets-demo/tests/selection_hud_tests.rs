@@ -8,37 +8,48 @@ use ferrets_bevy_plugin::PendingInput;
 use ferrets_content::{
     entity_buffs::{EntityBuffDef, Lasting},
     entity_effect::EntityEffect,
+    entity_modifiers::EntityModifiers,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     location::Solidity,
-    morph::{MorphCancel, MorphInterrupted, MorphPlacement, MorphReason, MorphTransition},
+    morph::{
+        MorphCancel, MorphCourse, MorphInterrupted, MorphPlacement, MorphReason, MorphTransition,
+        PoolCarry,
+    },
+    pool::Pool,
+    pool_def::PoolId,
+    pool_shift::PoolShift,
     quantity::Quantity,
     registry::ContentRegistry,
     requirement::{Bound, Requirement, Threshold},
     stack_rule::StackRule,
+    stats::{EntityModifier, ModifierOp},
 };
 use ferrets_demo::{
-    hud::{self, SelectionText},
-    input::{Inspected, Leading},
+    hud::{self, SelectionText, SupplyText},
+    input::{self, AimHover, AimVerdict, InputMode, Inspected, Leading, TargetedOrder},
     render::{ObserverPerspective, Sighted},
 };
 use ferrets_geometry::cell_size::CellSize;
 use ferrets_math::FixedU64;
 use ferrets_simulation::{
-    command::{PlayerCommand, SelectMode},
+    command::{PlayerCommand, SelectMode, SkillTarget},
     components::{
-        build::{SiteWork, UnderConstructionComponent},
+        build::{self, SiteWork},
         entity_skills::SkillsComponent,
-        health::HealthComponent,
+        last_hit,
         order_queue::OrderQueueComponent,
+        pools,
         train::TrainQueueComponent,
     },
-    game_loop,
+    entity_index::EntityIndex,
+    game_loop::{self, buffs::Bearing},
     movement_model::MovementModel,
     order::Order,
     player_research::PlayerResearch,
     resources::PlayerResources,
     session::GameSession,
+    supply,
     visibility::Sighting,
 };
 
@@ -61,6 +72,142 @@ fn panel_reports_live_values_of_pick_in_sight() {
     assert!(
         shown.contains("HP "),
         "a pick in sight reports its health: {shown:?}"
+    );
+}
+
+#[test]
+fn panel_reports_energy_against_its_maximum() {
+    let mut app = utils::demo_map_app(MovementModel::Cell);
+    spawn_panel(&mut app);
+    let (_, archer) =
+        utils::create_entity(app.world_mut(), "archer", utils::at_cell(20, 20), Some(0))
+            .expect("the demo content defines an archer");
+    utils::select(&mut app, archer, SelectMode::Replace);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    let entity = app
+        .world()
+        .resource::<EntityIndex>()
+        .alive(archer)
+        .expect("the archer stands");
+    pools::drain(app.world_mut(), entity, PoolId::ENERGY, utils::fixed("35"));
+
+    // 60 − 35 = 25 of the archer's 60.
+    let shown = panel_text(&mut app);
+    assert!(
+        shown.contains("energy 25/60"),
+        "the energy reads against its maximum: {shown:?}"
+    );
+}
+
+#[test]
+fn panel_names_site_and_buff_outage_as_simulation_judges_them() {
+    let mut app = utils::demo_map_app(MovementModel::Cell);
+    spawn_panel(&mut app);
+    let (grunt, grunt_id) =
+        utils::create_entity(app.world_mut(), "grunt", utils::at_cell(20, 20), Some(0))
+            .expect("the demo content defines a grunt");
+    utils::select(&mut app, grunt_id, SelectMode::Replace);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+
+    build::mark_as_site(
+        app.world_mut(),
+        grunt,
+        SiteWork::Crew {
+            builders: Default::default(),
+        },
+    );
+    let shown = panel_text(&mut app);
+    assert!(
+        shown.contains("under construction"),
+        "a site reads under construction: {shown:?}"
+    );
+
+    build::mark_as_built(app.world_mut(), grunt);
+    let stunned = {
+        let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
+        registry.register_entity_buff(
+            "stunned",
+            EntityBuffDef {
+                effects: vec![EntityEffect::Disable],
+                lasting: Lasting::Forever,
+                stack_rule: StackRule::Ignore,
+                interrupted_by: Vec::new(),
+            },
+        )
+    };
+    assert_eq!(
+        game_loop::buffs::apply_entity_buff(app.world_mut(), grunt, stunned),
+        Bearing::Borne
+    );
+    let shown = panel_text(&mut app);
+    assert!(
+        shown.contains("disabled"),
+        "a buff outage reads disabled: {shown:?}"
+    );
+}
+
+#[test]
+fn supply_readout_rounds_and_turns_red_on_what_it_shows() {
+    let mut app = utils::demo_map_app(MovementModel::Cell);
+    app.world_mut()
+        .spawn((SupplyText, Text::new(""), TextColor::default()));
+    utils::create_entity(app.world_mut(), "farm", utils::at_cell(24, 24), Some(0))
+        .expect("the demo content defines a farm");
+    let (grunt, _) =
+        utils::create_entity(app.world_mut(), "grunt", utils::at_cell(20, 20), Some(0))
+            .expect("the demo content defines a grunt");
+    let laden = {
+        let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
+        registry.register_entity_buff(
+            "laden",
+            EntityBuffDef {
+                effects: vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![
+                    EntityModifier {
+                        stat: EntityStatId::SUPPLY_COST,
+                        op: ModifierOp::FlatAdd,
+                        magnitude: "4.5".parse().expect("4.5 is a value"),
+                    },
+                ]))],
+                lasting: Lasting::Forever,
+                stack_rule: StackRule::Ignore,
+                interrupted_by: Vec::new(),
+            },
+        )
+    };
+    assert_eq!(
+        game_loop::buffs::apply_entity_buff(app.world_mut(), grunt, laden),
+        Bearing::Borne
+    );
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(supply::provided(app.world(), 0), FixedU64::from_num(6));
+    assert_eq!(supply::used(app.world(), 0), utils::fixed("5.5"));
+
+    // A grunt's 1 + 4.5 = 5.5 used, read as 6, against the farm's 6: red on
+    // what is shown, though 5.5 of 6 would still admit a half.
+    app.world_mut()
+        .run_system_once(hud::update_supply)
+        .expect("the supply system runs");
+    let mut query = app.world_mut().query::<(&Text, &TextColor, &SupplyText)>();
+    let (text, color, _) = query.single(app.world()).expect("one readout");
+    assert_eq!(text.0, "Supply: 6/6");
+    assert_eq!(color.0, Color::srgb(1.0, 0.35, 0.3));
+}
+
+#[test]
+fn panel_names_pick_simulation_holds_disabled() {
+    let mut app = utils::demo_map_app(MovementModel::Cell);
+    spawn_panel(&mut app);
+    // A gateway with no power of its own under it stands switched off.
+    let (_, gateway) =
+        utils::create_entity(app.world_mut(), "gateway", utils::at_cell(20, 20), Some(0))
+            .expect("the demo content defines a gateway");
+    utils::select(&mut app, gateway, SelectMode::Replace);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+
+    let shown = panel_text(&mut app);
+    assert!(
+        shown.contains("disabled"),
+        "an unpowered gateway reads disabled: {shown:?}"
     );
 }
 
@@ -455,20 +602,17 @@ fn hovered_skill_names_its_cost_or_why_it_cannot_cast() {
         .get_mut::<SkillsComponent>(archer)
         .unwrap()
         .start_cooldown(battle_focus, 0);
-    app.world_mut()
-        .entity_mut(archer)
-        .insert(UnderConstructionComponent {
-            progress: 0,
-            work: SiteWork::Crew {
-                builders: Default::default(),
-            },
-        });
+    build::mark_as_site(
+        app.world_mut(),
+        archer,
+        SiteWork::Crew {
+            builders: Default::default(),
+        },
+    );
     recolor_card(&mut app);
     assert_eq!(hint_text(&mut app), "Still under construction");
 
-    app.world_mut()
-        .entity_mut(archer)
-        .remove::<UnderConstructionComponent>();
+    build::mark_as_built(app.world_mut(), archer);
     let stunned = {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
         registry.register_entity_buff(
@@ -481,7 +625,10 @@ fn hovered_skill_names_its_cost_or_why_it_cannot_cast() {
             },
         )
     };
-    game_loop::stats::apply_entity_buff(app.world_mut(), archer, stunned);
+    assert_eq!(
+        game_loop::buffs::apply_entity_buff(app.world_mut(), archer, stunned),
+        Bearing::Borne
+    );
     recolor_card(&mut app);
     assert_eq!(hint_text(&mut app), "Switched off");
 
@@ -495,6 +642,47 @@ fn hovered_skill_names_its_cost_or_why_it_cannot_cast() {
     app.world_mut().insert_resource(Leading(None));
     recolor_card(&mut app);
     assert_eq!(hint_text(&mut app), "Nothing selected can cast it");
+}
+
+#[test]
+fn armed_skill_names_why_it_refuses_hovered_target() {
+    let mut app = card_app();
+    app.world_mut().spawn((hud::CommandCard, Node::default()));
+    app.world_mut().spawn((hud::CardHint, Text::new("")));
+    let (_, shaman_id) =
+        utils::create_entity(app.world_mut(), "shaman", utils::at_cell(30, 30), Some(0))
+            .expect("the demo content defines a shaman");
+    let (_, barracks_id) =
+        utils::create_entity(app.world_mut(), "barracks", utils::at_cell(20, 20), Some(0))
+            .expect("the demo content defines a barracks");
+    let second_wind = app
+        .world()
+        .resource::<ContentRegistry>()
+        .skill("second_wind")
+        .expect("the demo content defines second wind");
+    app.world_mut().insert_resource(Leading(Some(shaman_id)));
+    app.world_mut()
+        .run_system_once(hud::update_command_card)
+        .expect("the command card system runs");
+    app.world_mut()
+        .insert_resource(InputMode::Targeting(TargetedOrder::Skill(second_wind)));
+
+    // Second wind mends only the biological: a barracks is not one.
+    app.world_mut()
+        .insert_resource(AimHover(Some(SkillTarget::Entity(barracks_id))));
+    app.world_mut()
+        .run_system_once(input::judge_aim)
+        .expect("the aim judge runs");
+    recolor_card(&mut app);
+    assert_eq!(hint_text(&mut app), "Not something it can be cast on");
+
+    // Over nothing, the line has no refusal to name.
+    app.world_mut().insert_resource(AimHover(None));
+    app.world_mut()
+        .run_system_once(input::judge_aim)
+        .expect("the aim judge runs");
+    recolor_card(&mut app);
+    assert_eq!(hint_text(&mut app), "");
 }
 
 #[test]
@@ -611,10 +799,7 @@ fn grayed_button_names_unmet_part_of_requirement_tree() {
             .expect("the fixture registers a totem");
     // Hit this tick, and given an order it has not started.
     let tick = app.world().resource::<GameSession>().tick();
-    app.world_mut()
-        .get_mut::<HealthComponent>(totem)
-        .unwrap()
-        .record_hit(totem_id, tick);
+    last_hit::record(app.world_mut(), totem, totem_id, tick);
     app.world_mut()
         .get_mut::<OrderQueueComponent>(totem)
         .unwrap()
@@ -650,7 +835,7 @@ fn grayed_button_names_unmet_part_of_requirement_tree() {
 }
 
 #[test]
-fn hovered_research_names_its_price_and_time() {
+fn hovered_researches_name_their_price_and_time() {
     let mut app = card_app();
     app.world_mut().spawn((hud::CommandCard, Node::default()));
     app.world_mut().spawn((hud::CardHint, Text::new("")));
@@ -665,11 +850,16 @@ fn hovered_research_names_its_price_and_time() {
     app.world_mut()
         .run_system_once(hud::update_command_card)
         .expect("the command card system runs");
-    hover_only::<hud::ResearchButton>(&mut app);
 
-    // Iron weapons: 100 gold, 50 wood and 200 ticks, 10.0 s.
-    recolor_card(&mut app);
-    assert_eq!(hint_text(&mut app), "100 gold, 50 wood, 10.0 s");
+    // Iron weapons: 100 gold, 50 wood and 200 ticks, 10.0 s; vitality drill:
+    // 80 gold, 40 wood and 160 ticks, 8.0 s.
+    assert_eq!(
+        hover_each::<hud::ResearchButton>(&mut app),
+        vec![
+            "100 gold, 50 wood, 10.0 s".to_string(),
+            "80 gold, 40 wood, 8.0 s".to_string(),
+        ]
+    );
 }
 
 //
@@ -721,6 +911,9 @@ fn card_app() -> App {
     let mut app = utils::demo_map_app(MovementModel::Cell);
     app.world_mut().init_resource::<Inspected>();
     app.world_mut().init_resource::<ObserverPerspective>();
+    app.world_mut().init_resource::<InputMode>();
+    app.world_mut().init_resource::<AimHover>();
+    app.world_mut().init_resource::<AimVerdict>();
     app
 }
 
@@ -773,16 +966,15 @@ fn register_totem(app: &mut App) {
     registry.register(
         EntityTypeDef::new("totem")
             .with_location(ground, CellSize::ONE, Solidity::Solid)
-            .with_health(100)
-            .with_energy(40, FixedU64::ZERO)
+            .with_pool(Pool::health(100))
+            .with_pool(Pool::energy(40))
             .with_stat(EntityStatId::SIGHT_RANGE, FixedU64::from_num(5))
             .with_morphs([MorphTransition::new(
                 "watch_tower",
-                None,
+                MorphCourse::direct(MorphInterrupted::Reverts),
                 Quantity::Constant(10),
                 MorphPlacement::Reserve,
                 MorphCancel::Refundable,
-                MorphInterrupted::Reverts,
                 MorphReason::Change,
                 Vec::new(),
                 [
@@ -812,6 +1004,7 @@ fn register_totem(app: &mut App) {
                     Requirement::IdleFor(40),
                     Requirement::UnhurtFor(200),
                 ],
+                [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
             )]),
     );
 }

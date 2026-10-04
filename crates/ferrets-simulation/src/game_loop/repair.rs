@@ -17,10 +17,9 @@ use crate::{
     berths,
     components::{
         build::UnderConstructionComponent,
-        energy::EnergyComponent,
         entity_stats::StatsComponent,
-        health::HealthComponent,
         order_queue::{CancelPolicy, OrderState},
+        pools::{self, Spending},
         repair::{RepairComponent, UnderRepairComponent},
     },
     entity_def,
@@ -34,6 +33,7 @@ use crate::{
 };
 use ferrets_content::{
     entity_stats::EntityStatId,
+    pool_def::PoolId,
     price::Price,
     repair::{RepairCost, RepairRate, RepairerDef},
     work::WorkPresence,
@@ -219,11 +219,7 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
 
     repair.stalled = 0;
     repair.owed = carried;
-    world
-        .entity_mut(target)
-        .get_mut::<HealthComponent>()
-        .expect("a mendable target is damageable")
-        .heal(restored, max_health);
+    pools::restore(world, target, PoolId::HEALTH, restored);
     world.entity_mut(entity).insert(repair);
     Processing::state(OrderState::InProcessing)
 }
@@ -245,7 +241,7 @@ fn accepts(world: &World, entity: Entity, target: Entity) -> bool {
         return false;
     }
     let target_def = entity_def::of(world, target);
-    if !target_def.has_health() || !repairer.repairs().admits(target_def) {
+    if !target_def.has_pool(PoolId::HEALTH) || !repairer.repairs().admits(target_def) {
         return false;
     }
     // Only a production-paced mender needs the target to be something
@@ -316,11 +312,8 @@ fn restorable(world: &World, entity: Entity, target: Entity, max_health: FixedU6
 /// The health `target` is missing from its effective pool.
 fn remaining_damage(world: &World, target: Entity) -> FixedU64 {
     let max_health = effective(world, target, EntityStatId::MAX_HEALTH);
-    let current = world
-        .entity(target)
-        .get::<HealthComponent>()
-        .expect("a mendable target is damageable")
-        .current();
+    let current = entity_def::pool_value(world, target, PoolId::HEALTH)
+        .expect("a mendable target is damageable");
     max_health.saturating_sub(current)
 }
 
@@ -345,12 +338,10 @@ fn charge(
         // is already fractional, so there is nothing to carry between ticks.
         RepairCost::Energy(per_health) => {
             let spend = per_health.saturating_mul(restored);
-            let paid = world
-                .entity_mut(entity)
-                .get_mut::<EnergyComponent>()
-                .expect("a mender paying with energy has a pool")
-                .spend(spend);
-            return paid.then(|| owed.clone());
+            return match pools::spend(world, entity, PoolId::ENERGY, spend) {
+                Spending::Paid => Some(owed.clone()),
+                Spending::Short => None,
+            };
         }
         // `max_health` cannot be zero — the stat floors at one — so the division
         // inside is safe.

@@ -7,6 +7,7 @@ use bevy::prelude::*;
 use ferrets_content::{
     entity_buffs::{EntityBuffDef, Lasting},
     entity_effect::EntityEffect,
+    entity_modifiers::EntityModifiers,
     entity_stats::EntityStatId,
     player_buffs::{PlayerBuffDef, PlayerBuffId},
     player_stats::PlayerStatId,
@@ -38,7 +39,7 @@ fn unit_modifier_reaches_every_owned_unit() {
 
     app.world_mut()
         .resource_mut::<PlayerStats>()
-        .add_entity_modifier(0, speed_percent("1"));
+        .add_entity_modifiers(0, EntityModifiers::Stats(vec![speed_percent("1")]));
     utils::run_ticks(&mut app, 1);
 
     assert_eq!(utils::effective_speed(&app, first), base + base);
@@ -59,7 +60,7 @@ fn unit_modifier_reaches_unit_spawned_after_it() {
 
     app.world_mut()
         .resource_mut::<PlayerStats>()
-        .add_entity_modifier(0, speed_percent("1"));
+        .add_entity_modifiers(0, EntityModifiers::Stats(vec![speed_percent("1")]));
     utils::run_ticks(&mut app, 1);
     assert_eq!(utils::effective_speed(&app, veteran), base + base);
 
@@ -80,16 +81,18 @@ fn buff_and_unit_modifier_fold_together() {
         .register_entity_buff(
             "haste",
             EntityBuffDef {
-                effects: vec![EntityEffect::Modifiers(vec![speed_percent("1")])],
+                effects: vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![
+                    speed_percent("1"),
+                ]))],
                 lasting: Lasting::For(5),
                 stack_rule: StackRule::Refresh,
                 interrupted_by: Vec::new(),
             },
         );
-    game_loop::stats::apply_entity_buff(app.world_mut(), runner, haste);
+    utils::apply_buff(app.world_mut(), runner, haste);
     app.world_mut()
         .resource_mut::<PlayerStats>()
-        .add_entity_modifier(0, speed_flat("0.5"));
+        .add_entity_modifiers(0, EntityModifiers::Stats(vec![speed_flat("0.5")]));
     utils::run_ticks(&mut app, 1);
 
     // (0.5 base + 0.5 flat) * (1 + 1.0 percent) = 2.
@@ -98,6 +101,23 @@ fn buff_and_unit_modifier_fold_together() {
         FixedU64::from_num(2),
         "the buff and the owner-wide modifier fold into one snapshot"
     );
+}
+
+#[test]
+#[should_panic(expected = "a set of stats laid over an entity names no pool maximum")]
+fn stats_grant_naming_pool_maximum_panics() {
+    let mut app = utils::player_effects_app();
+    utils::create_owned(&mut app, "runner", 5, 5, 0);
+    utils::run_ticks(&mut app, 1);
+
+    // A pool maximum moves only in a set that names its pool shift.
+    app.world_mut()
+        .resource_mut::<PlayerStats>()
+        .add_entity_modifiers(
+            0,
+            EntityModifiers::Stats(vec![utils::flat(EntityStatId::MAX_HEALTH, "10")]),
+        );
+    utils::run_ticks(&mut app, 1);
 }
 
 //
@@ -127,12 +147,12 @@ fn player_buff_mixes_both_arms() {
                     op: ModifierOp::FlatAdd,
                     magnitude: FixedI64::from_num(5),
                 }],
-                entity_modifiers: vec![speed_percent("1")],
+                entity_modifiers: vec![EntityModifiers::Stats(vec![speed_percent("1")])],
                 duration: Some(5),
                 stack_rule: StackRule::Refresh,
             },
         );
-    game_loop::stats::apply_player_buff(app.world_mut(), 0, rally);
+    game_loop::buffs::apply_player_buff(app.world_mut(), 0, rally);
     utils::run_ticks(&mut app, 1);
 
     assert_eq!(
@@ -213,7 +233,7 @@ fn unknown_player_skill_id_is_ignored() {
         "boost",
         PlayerBuffDef {
             player_modifiers: Vec::new(),
-            entity_modifiers: vec![speed_percent("1")],
+            entity_modifiers: vec![EntityModifiers::Stats(vec![speed_percent("1")])],
             duration: Some(10),
             stack_rule: StackRule::Refresh,
         },

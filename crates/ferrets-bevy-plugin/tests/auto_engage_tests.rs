@@ -5,14 +5,16 @@
 mod utils;
 
 use bevy::prelude::*;
+use ferrets_content::pool_def::PoolId;
 use ferrets_geometry::cell_pos::CellPos;
 use ferrets_simulation::{
     command::PlayerCommand,
     components::{
-        health::HealthComponent,
+        last_hit,
         order_queue::OrderQueueComponent,
         stance::{Stance, StanceComponent},
     },
+    entity_def,
     session::GameSession,
 };
 
@@ -174,7 +176,10 @@ fn stand_ground_unit_fires_in_weapon_range_and_never_moves() {
     {
         let world = app.world_mut();
         assert_eq!(utils::cell_of(world, sentry), CellPos::new(10, 10));
-        assert_eq!(world.get::<HealthComponent>(ghost).unwrap().current(), 20);
+        assert_eq!(
+            entity_def::pool_value(world, ghost, PoolId::HEALTH).unwrap(),
+            20
+        );
     }
 
     // Adjacent, the ghost is fair game — and the hit sends it fleeing, which
@@ -187,7 +192,11 @@ fn stand_ground_unit_fires_in_weapon_range_and_never_moves() {
 
     let world = app.world_mut();
     assert_eq!(utils::cell_of(world, sentry), CellPos::new(10, 10));
-    assert!(world.get::<HealthComponent>(ghost2).unwrap().current() < 20);
+    // One hit of 10 on the ghost's 20, which then flees out of reach.
+    assert_eq!(
+        entity_def::pool_value(world, ghost2, PoolId::HEALTH).unwrap(),
+        10
+    );
     assert_ne!(utils::cell_of(world, ghost2), CellPos::new(11, 10));
 }
 
@@ -209,7 +218,10 @@ fn hold_fire_unit_never_engages() {
 
     utils::run_ticks(&mut app, 30);
     let world = app.world_mut();
-    assert_eq!(world.get::<HealthComponent>(ghost).unwrap().current(), 20);
+    assert_eq!(
+        entity_def::pool_value(world, ghost, PoolId::HEALTH).unwrap(),
+        20
+    );
     assert_eq!(utils::cell_of(world, sentry), CellPos::new(10, 10));
     assert!(utils::order_queue_is_empty(world, sentry));
 }
@@ -235,7 +247,10 @@ fn ordered_unit_is_not_hijacked_by_idle_engagement() {
     utils::run_ticks(&mut app, 50);
     let world = app.world_mut();
     assert_eq!(utils::cell_of(world, sentry), CellPos::new(20, 10));
-    assert_eq!(world.get::<HealthComponent>(ghost).unwrap().current(), 20);
+    assert_eq!(
+        entity_def::pool_value(world, ghost, PoolId::HEALTH).unwrap(),
+        20
+    );
 }
 
 #[test]
@@ -250,8 +265,15 @@ fn leashed_chase_abandons_fled_target_and_returns_home() {
     utils::run_ticks(&mut app, 80);
 
     let world = app.world_mut();
-    assert!(world.get::<HealthComponent>(ghost).is_some(), "ghost lives");
-    assert!(world.get::<HealthComponent>(ghost).unwrap().current() < 20);
+    assert!(
+        entity_def::has_pool(world, ghost, PoolId::HEALTH),
+        "ghost lives"
+    );
+    // One hit of 10 on the ghost's 20 before it fled beyond the leash.
+    assert_eq!(
+        entity_def::pool_value(world, ghost, PoolId::HEALTH).unwrap(),
+        10
+    );
     assert_eq!(utils::cell_of(world, archer), CellPos::new(10, 10));
     assert!(utils::order_queue_is_empty(world, archer));
 }
@@ -273,21 +295,20 @@ fn fresh_attacker_is_preferred_over_nearer_target() {
 
     // A hit landing this tick makes the far attacker the fresh target.
     let tick = current_tick(world);
-    world
-        .get_mut::<HealthComponent>(sentry)
-        .unwrap()
-        .record_hit(attacker_id, tick);
+    last_hit::record(world, sentry, attacker_id, tick);
 
     // The sentry pursues its attacker, leaving the nearer worker untouched —
     // asserted before the memory window lapses.
     utils::run_ticks(&mut app, 20);
     let world = app.world_mut();
-    assert!(
-        world.get::<HealthComponent>(attacker).unwrap().current() < 30,
+    // Two hits of 10 on the attacker's 30 within the 20 ticks.
+    assert_eq!(
+        entity_def::pool_value(world, attacker, PoolId::HEALTH).unwrap(),
+        10,
         "the attacker was engaged"
     );
     assert_eq!(
-        world.get::<HealthComponent>(nearer).unwrap().current(),
+        entity_def::pool_value(world, nearer, PoolId::HEALTH).unwrap(),
         20,
         "the nearer worker was untouched"
     );
@@ -308,20 +329,19 @@ fn stale_attacker_is_not_preferred_over_nearer_target() {
         utils::create_entity(world, "sentry", utils::pos(14, 10), Some(1)).unwrap();
     hold_fire(world, attacker);
     let (nearer, _) = utils::create_entity(world, "worker", utils::pos(11, 12), Some(1)).unwrap();
-    world
-        .get_mut::<HealthComponent>(sentry)
-        .unwrap()
-        .record_hit(attacker_id, 0);
+    last_hit::record(world, sentry, attacker_id, 0);
 
     // The sentry engages the nearer worker, and never chases the stale attacker.
     utils::run_ticks(&mut app, 15);
     let world = app.world_mut();
-    assert!(
-        world.get::<HealthComponent>(nearer).unwrap().current() < 20,
+    // One hit of 10 on the worker's 20 within the 15 ticks.
+    assert_eq!(
+        entity_def::pool_value(world, nearer, PoolId::HEALTH).unwrap(),
+        10,
         "the nearer worker was engaged"
     );
     assert_eq!(
-        world.get::<HealthComponent>(attacker).unwrap().current(),
+        entity_def::pool_value(world, attacker, PoolId::HEALTH).unwrap(),
         30,
         "the stale attacker was untouched"
     );

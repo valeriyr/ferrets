@@ -1,8 +1,9 @@
 //! Progress of an in-flight form change.
 
 use bevy_ecs::prelude::*;
-use ferrets_content::entity_type_def::EntityTypeId;
+use ferrets_content::{entity_type_def::EntityTypeId, pool_def::PoolId};
 use ferrets_geometry::cell_pos::CellPos;
+use ferrets_math::FixedU64;
 use ferrets_pathfinder::layer_mask::LayerMask;
 
 /// Ground held ahead of a form change landing on it.
@@ -32,4 +33,6 @@ pub struct MorphComponent {
     /// The ground claimed ahead for the destination footprint. `None` when
     /// the transition revalidates at completion instead of reserving.
     pub reservation: Option<MorphReservation>,
+    /// What each pool held when the change started.
+    pub before: Vec<(PoolId, FixedU64)>,
 }

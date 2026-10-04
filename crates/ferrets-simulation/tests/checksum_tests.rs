@@ -1,21 +1,23 @@
 //! `state_checksum` must be deterministic (same state → same digest), sensitive
 //! to any state change, and stable across builds (locked to a known xxHash64).
 
-use bevy_ecs::world::World;
-use ferrets_math::{FixedU64, facing::Facing, fixed_uvec2::FixedUVec2};
+use bevy_ecs::{entity::Entity, world::World};
+use ferrets_content::{pool::Pool, pool_def::PoolId};
+use ferrets_math::{FixedU64, facing::Facing};
 use ferrets_simulation::{
-    checksum::state_checksum,
+    checksum,
     components::{
-        health::HealthComponent,
         location::LocationComponent,
         owner::OwnerComponent,
+        pools,
         turret::{TurretState, TurretsComponent},
     },
     entity_index::EntityIndex,
     resources::PlayerResources,
     session::player_id::PlayerId,
-    simulation_id::SimulationId,
 };
+
+mod utils;
 
 #[test]
 fn empty_state_matches_known_xxh64_seed0() {
@@ -27,22 +29,32 @@ fn empty_state_matches_known_xxh64_seed0() {
     world.insert_resource(EntityIndex::default());
     world.insert_resource(PlayerResources::new(0));
 
-    assert_eq!(state_checksum(&world), 0xef46_db37_51d8_e999);
+    assert_eq!(checksum::state_checksum(&world), 0xef46_db37_51d8_e999);
 }
 
 #[test]
 fn identical_state_hashes_identically() {
+    let mut first = utils::world([Pool::health(30)]);
+    utils::spawn_unit(&mut first, 5, 5);
+    let mut second = utils::world([Pool::health(30)]);
+    utils::spawn_unit(&mut second, 5, 5);
+
     assert_eq!(
-        state_checksum(&world(100, 30, 5)),
-        state_checksum(&world(100, 30, 5)),
+        checksum::state_checksum(&first),
+        checksum::state_checksum(&second)
     );
 }
 
 #[test]
 fn moving_entity_changes_checksum() {
+    let mut here = utils::world([Pool::health(30)]);
+    utils::spawn_unit(&mut here, 5, 5);
+    let mut there = utils::world([Pool::health(30)]);
+    utils::spawn_unit(&mut there, 6, 5);
+
     assert_ne!(
-        state_checksum(&world(100, 30, 5)),
-        state_checksum(&world(100, 30, 6)),
+        checksum::state_checksum(&here),
+        checksum::state_checksum(&there)
     );
 }
 
@@ -51,29 +63,46 @@ fn turning_entity_changes_checksum() {
     // The look is part of the state the checksum samples, so a body that has come
     // round is a different state — which is what catches a peer whose unit turned
     // the other way.
-    let mut turned = world(100, 30, 5);
+    let mut facing = utils::world([Pool::health(30)]);
+    utils::spawn_unit(&mut facing, 5, 5);
+    let mut turned = utils::world([Pool::health(30)]);
+    utils::spawn_unit(&mut turned, 5, 5);
     face(&mut turned, Facing::NORTH);
 
-    assert_ne!(state_checksum(&world(100, 30, 5)), state_checksum(&turned));
+    assert_ne!(
+        checksum::state_checksum(&facing),
+        checksum::state_checksum(&turned)
+    );
 }
 
 #[test]
 fn aiming_gun_changes_checksum() {
     // The bearing is state of its own: a body standing exactly where its peer's
     // stands, with a gun round the other way, is about to shoot something else.
-    let mut aimed = world(100, 30, 5);
+    let mut aimed = utils::world([Pool::health(30)]);
+    utils::spawn_unit(&mut aimed, 5, 5);
     mount_gun(&mut aimed, Facing::NORTH);
-    let mut turned = world(100, 30, 5);
+    let mut turned = utils::world([Pool::health(30)]);
+    utils::spawn_unit(&mut turned, 5, 5);
     mount_gun(&mut turned, Facing::EAST);
 
-    assert_ne!(state_checksum(&aimed), state_checksum(&turned));
+    assert_ne!(
+        checksum::state_checksum(&aimed),
+        checksum::state_checksum(&turned)
+    );
 }
 
 #[test]
 fn changing_health_changes_checksum() {
+    let mut whole = utils::world([Pool::health(30)]);
+    utils::spawn_unit(&mut whole, 5, 5);
+    let mut hurt = utils::world([Pool::health(30)]);
+    let unit = utils::spawn_unit(&mut hurt, 5, 5);
+    pools::drain(&mut hurt, unit, PoolId::HEALTH, FixedU64::from_num(10));
+
     assert_ne!(
-        state_checksum(&world(100, 30, 5)),
-        state_checksum(&world(100, 20, 5)),
+        checksum::state_checksum(&whole),
+        checksum::state_checksum(&hurt)
     );
 }
 
@@ -85,19 +114,29 @@ fn changing_owner_changes_checksum() {
     // Both worlds own the entity, so only the player it is owned BY can tell
     // them apart: an entity that merely gained an owner would move the digest
     // by the presence of the component alone.
-    let mut mine = world(100, 30, 5);
+    let mut mine = utils::world([Pool::health(30)]);
+    utils::spawn_unit(&mut mine, 5, 5);
     own(&mut mine, 0);
-    let mut theirs = world(100, 30, 5);
+    let mut theirs = utils::world([Pool::health(30)]);
+    utils::spawn_unit(&mut theirs, 5, 5);
     own(&mut theirs, 1);
 
-    assert_ne!(state_checksum(&mine), state_checksum(&theirs));
+    assert_ne!(
+        checksum::state_checksum(&mine),
+        checksum::state_checksum(&theirs)
+    );
 }
 
 #[test]
 fn changing_resources_changes_checksum() {
+    let mut poor = utils::world([Pool::health(30)]);
+    poor.resource_mut::<PlayerResources>().add(0, "gold", 100);
+    let mut rich = utils::world([Pool::health(30)]);
+    rich.resource_mut::<PlayerResources>().add(0, "gold", 150);
+
     assert_ne!(
-        state_checksum(&world(100, 30, 5)),
-        state_checksum(&world(150, 30, 5)),
+        checksum::state_checksum(&poor),
+        checksum::state_checksum(&rich)
     );
 }
 
@@ -105,40 +144,15 @@ fn changing_resources_changes_checksum() {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 //
 
-/// A world with one alive entity (at `(x, 5)` with `hp` health) and `gold` for
-/// player 0 — enough to exercise both the entity and resource hashing paths.
-fn world(gold: u32, hp: u32, x: u32) -> World {
-    let mut world = World::new();
-    let entity = world
-        .spawn((
-            LocationComponent::new(uvec2(x, 5), Facing::SOUTH),
-            HealthComponent::full(FixedU64::from_num(hp)),
-        ))
-        .id();
-    let mut index = EntityIndex::default();
-    index.insert_alive(SimulationId(1), entity);
-    world.insert_resource(index);
-    let mut resources = PlayerResources::new(1);
-    resources.add(0, "gold", gold);
-    world.insert_resource(resources);
-    world
-}
-
 /// Hands the world's one entity to `player`.
 fn own(world: &mut World, player: PlayerId) {
-    let entity = world
-        .resource::<EntityIndex>()
-        .alive(SimulationId(1))
-        .expect("the world holds one alive entity");
+    let entity = only_entity(world);
     world.entity_mut(entity).insert(OwnerComponent::new(player));
 }
 
 /// Fits the world's one entity with a gun trained on `bearing`.
 fn mount_gun(world: &mut World, bearing: Facing) {
-    let entity = world
-        .resource::<EntityIndex>()
-        .alive(SimulationId(1))
-        .expect("the world's entity");
+    let entity = only_entity(world);
     world
         .entity_mut(entity)
         .insert(TurretsComponent(vec![TurretState::mounted(bearing)]));
@@ -146,12 +160,16 @@ fn mount_gun(world: &mut World, bearing: Facing) {
 
 /// Points the world's one entity a different way.
 fn face(world: &mut World, facing: Facing) {
-    let mut query = world.query::<&mut LocationComponent>();
-    for mut location in query.iter_mut(world) {
-        location.facing = facing;
-    }
+    let entity = only_entity(world);
+    world
+        .get_mut::<LocationComponent>(entity)
+        .expect("a spawned unit stands somewhere")
+        .facing = facing;
 }
 
-fn uvec2(x: u32, y: u32) -> FixedUVec2 {
-    FixedUVec2::new(FixedU64::from_num(x), FixedU64::from_num(y))
+/// The world's one alive entity.
+fn only_entity(world: &World) -> Entity {
+    let alive = world.resource::<EntityIndex>().alive_entries();
+    assert_eq!(alive.len(), 1, "the world holds one alive entity");
+    alive[0].1
 }

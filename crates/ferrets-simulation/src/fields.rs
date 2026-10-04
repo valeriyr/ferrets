@@ -11,17 +11,18 @@ use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect};
 use ferrets_pathfinder::layer_mask::LayerMask;
 
 use crate::{
-    components::owner,
-    entity_def,
+    components::{hidden::HiddenComponent, owner},
+    entity_def, requirements,
     session::{GameSession, player_id::PlayerId, player_mask::PlayerMask},
 };
 use ferrets_content::{
     affiliation::Affiliation,
     entity_effect::EntityEffect,
+    entity_modifiers::EntityModifiers,
     entity_type_def::EntityTypeDef,
     field::{FieldCoverage, FieldEffect, FieldId, FieldPlacement, FieldSide},
     registry::ContentRegistry,
-    stats::EntityModifier,
+    requirement::Requirement,
 };
 
 /// One field's cells.
@@ -237,14 +238,6 @@ impl PlayerMask {
     }
 }
 
-/// Whether enough of `rect` answers `test` for `coverage` to be satisfied.
-fn covers_enough(rect: CellRect, coverage: FieldCoverage, test: impl Fn(CellPos) -> bool) -> bool {
-    match coverage {
-        FieldCoverage::Every => rect.cells().all(test),
-        FieldCoverage::Any => rect.cells().any(test),
-    }
-}
-
 /// Whether the fields admit a placement of `def` anchored at `anchor` for
 /// `player`. A def with no placement rules is always admitted.
 pub fn allows_placement(
@@ -292,75 +285,31 @@ pub fn allows_placement_in(
     })
 }
 
-/// Whether the effect applies to an entity owned by `player` standing on
-/// `footprint`: as much of it as the effect's coverage asks for is on the
-/// side of the field the effect names.
-fn effect_applies(
-    grid: &FieldGrid,
-    session: &GameSession,
-    effect: &FieldEffect,
-    player: Option<PlayerId>,
-    footprint: CellRect,
-) -> bool {
-    covers_enough(footprint, effect.coverage(), |cell| {
-        let covered =
-            grid.contains(cell) && grid.covers(session, effect.field(), cell, effect.of(), player);
-        match effect.side() {
-            FieldSide::Inside => covered,
-            FieldSide::Outside => !covered,
-        }
-    })
-}
-
-/// Whether `entity` stands disabled: some field effect of its type says so
-/// for as much of its footprint as that effect asks for.
+/// Whether `entity` stands disabled: a field effect of its type disables it
+/// on the side of the field it stands on. A hidden entity stands on no field.
 pub fn disabled(world: &World, entity: Entity) -> bool {
-    let def = entity_def::of(world, entity);
-    if def.field_effects.is_empty() {
-        return false;
-    }
-    disabled_in(
-        world.resource::<FieldGrid>(),
-        world.resource::<GameSession>(),
-        def,
-        entity_def::owner(world, entity),
-        entity_def::occupied_rect(world, entity),
+    holds_effect(
+        world,
+        entity_def::of(world, entity),
+        entity,
+        |effect| match effect {
+            EntityEffect::Disable => true,
+            EntityEffect::Modifiers(_) | EntityEffect::Conceal => false,
+        },
     )
 }
 
-/// Whether an entity of `def` owned by `player` standing on `footprint` stands
-/// disabled, against the given grid and session.
-pub fn disabled_in(
-    grid: &FieldGrid,
-    session: &GameSession,
-    def: &EntityTypeDef,
-    player: Option<PlayerId>,
-    footprint: CellRect,
-) -> bool {
-    def.field_effects.iter().any(|effect| match effect.kind() {
-        EntityEffect::Disable => effect_applies(grid, session, effect, player, footprint),
-        EntityEffect::Modifiers(_) | EntityEffect::Conceal => false,
-    })
-}
-
-/// Whether `entity` stands concealed by a field: some field effect of its
-/// type says so for as much of the entity's footprint as that effect asks
-/// for.
+/// Whether `entity` stands concealed by a field: a field effect of its type
+/// conceals it on the side of the field it stands on. A hidden entity stands
+/// on no field.
 pub fn concealed(world: &World, entity: Entity) -> bool {
     concealed_of(world, entity_def::of(world, entity), entity)
 }
 
 /// [`concealed`] for an `entity` whose type `def` the caller already holds.
 pub fn concealed_of(world: &World, def: &EntityTypeDef, entity: Entity) -> bool {
-    if def.field_effects.is_empty() {
-        return false;
-    }
-    let player = entity_def::owner(world, entity);
-    let footprint = entity_def::occupied_rect_of(world, def, entity);
-    let grid = world.resource::<FieldGrid>();
-    let session = world.resource::<GameSession>();
-    def.field_effects.iter().any(|effect| match effect.kind() {
-        EntityEffect::Conceal => effect_applies(grid, session, effect, player, footprint),
+    holds_effect(world, def, entity, |effect| match effect {
+        EntityEffect::Conceal => true,
         EntityEffect::Modifiers(_) | EntityEffect::Disable => false,
     })
 }
@@ -385,23 +334,120 @@ pub fn detects(world: &World, player: PlayerId, cell: CellPos, layers: LayerMask
     })
 }
 
-/// The modifiers the fields currently fold into `entity`'s stats.
-pub fn modifiers(world: &World, entity: Entity) -> Vec<EntityModifier> {
-    let def = entity_def::of(world, entity);
-    if def.field_effects.is_empty() {
+/// The entity modifiers the fields currently fold into `entity`'s stats: the
+/// sets of each field effect's side it stands on, while the effect holds;
+/// none while it is hidden.
+pub fn entity_modifiers(world: &World, entity: Entity) -> Vec<EntityModifiers> {
+    entity_modifiers_of(world, entity, entity_def::of(world, entity))
+}
+
+/// The entity modifiers the field effects of the form `def` would fold into
+/// `entity`'s stats, were it standing where it stands now as `def`: the sets
+/// of each effect's side its footprint is on, while the effect holds; none
+/// while it is hidden.
+pub fn entity_modifiers_of(
+    world: &World,
+    entity: Entity,
+    def: &EntityTypeDef,
+) -> Vec<EntityModifiers> {
+    if def.field_effects.is_empty() || world.entity(entity).contains::<HiddenComponent>() {
         return Vec::new();
     }
     let grid = world.resource::<FieldGrid>();
     let session = world.resource::<GameSession>();
     let player = entity_def::owner(world, entity);
-    let footprint = entity_def::occupied_rect(world, entity);
+    let footprint = entity_def::occupied_rect_of(world, def, entity);
+    let holds =
+        |requirement: &Requirement| requirements::met_by(world, player, entity, requirement);
     def.field_effects
         .iter()
-        .filter(|effect| effect_applies(grid, session, effect, player, footprint))
-        .flat_map(|effect| match effect.kind() {
-            EntityEffect::Modifiers(modifiers) => modifiers.as_slice(),
-            EntityEffect::Disable | EntityEffect::Conceal => &[],
+        .filter(|field_effect| {
+            field_effect.effects().any(|effect| match effect {
+                EntityEffect::Modifiers(_) => true,
+                EntityEffect::Disable | EntityEffect::Conceal => false,
+            })
         })
-        .copied()
+        .flat_map(|field_effect| applying(grid, session, field_effect, player, footprint, &holds))
+        .filter_map(|effect| match effect {
+            EntityEffect::Modifiers(modifiers) => Some(modifiers.clone()),
+            EntityEffect::Disable | EntityEffect::Conceal => None,
+        })
         .collect()
+}
+
+/// Whether enough of `rect` answers `test` for `coverage` to be satisfied.
+fn covers_enough(rect: CellRect, coverage: FieldCoverage, test: impl Fn(CellPos) -> bool) -> bool {
+    match coverage {
+        FieldCoverage::Every => rect.cells().all(test),
+        FieldCoverage::Any => rect.cells().any(test),
+    }
+}
+
+/// Whether a field effect of the form `def` does to `entity`, where it stands,
+/// something `wanted` picks out. Entries carrying nothing wanted are passed
+/// over unjudged.
+fn holds_effect(
+    world: &World,
+    def: &EntityTypeDef,
+    entity: Entity,
+    wanted: impl Fn(&EntityEffect) -> bool,
+) -> bool {
+    if world.entity(entity).contains::<HiddenComponent>() {
+        return false;
+    }
+    let mut candidates = def
+        .field_effects
+        .iter()
+        .filter(|field_effect| field_effect.effects().any(&wanted))
+        .peekable();
+    if candidates.peek().is_none() {
+        return false;
+    }
+    let grid = world.resource::<FieldGrid>();
+    let session = world.resource::<GameSession>();
+    let player = entity_def::owner(world, entity);
+    let footprint = entity_def::occupied_rect_of(world, def, entity);
+    let holds =
+        |requirement: &Requirement| requirements::met_by(world, player, entity, requirement);
+    candidates.any(|field_effect| {
+        applying(grid, session, field_effect, player, footprint, &holds)
+            .iter()
+            .any(&wanted)
+    })
+}
+
+/// What `field_effect` does to an entity owned by `player` standing on
+/// `footprint`: the effects of the side it stands on — inside when the
+/// coverage is met, outside otherwise — or nothing when that side names none
+/// or what the effect holds while is unmet.
+fn applying<'a>(
+    grid: &FieldGrid,
+    session: &GameSession,
+    field_effect: &'a FieldEffect,
+    player: Option<PlayerId>,
+    footprint: CellRect,
+    holds: &impl Fn(&Requirement) -> bool,
+) -> &'a [EntityEffect] {
+    let inside = covers_enough(footprint, field_effect.coverage(), |cell| {
+        grid.contains(cell)
+            && grid.covers(
+                session,
+                field_effect.field(),
+                cell,
+                field_effect.of(),
+                player,
+            )
+    });
+    let side = match inside {
+        true => FieldSide::Inside,
+        false => FieldSide::Outside,
+    };
+    let effects = field_effect.on(side);
+    if effects.is_empty() {
+        return &[];
+    }
+    match field_effect.holds_while() {
+        Some(requirement) if !holds(requirement) => &[],
+        Some(_) | None => effects,
+    }
 }

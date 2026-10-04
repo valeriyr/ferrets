@@ -16,13 +16,16 @@ use crate::{
     detection::Detection,
     entity_buffs::{EntityBuffDef, EntityBuffId, Lasting},
     entity_effect::EntityEffect,
+    entity_modifiers::EntityModifiers,
     entity_stats::{ENTITY_BUILTIN_STATS, EntityStatDef, EntityStatId},
     entity_type_def::{EntityTypeDef, EntityTypeId},
     field::{Emission, FieldDef, FieldGrowth, FieldId, FieldLayer},
     kinds::{Kind, Kinds},
-    morph::MorphPlacement,
+    morph::{MorphCourse, MorphPlacement, ViaInterrupted},
     player_buffs::{PlayerBuffDef, PlayerBuffId},
     player_stats::{PLAYER_BUILTIN_STATS, PlayerStatId},
+    pool_def::{POOL_BUILTINS, PoolDef, PoolId, PoolRole},
+    pool_shift::PoolShift,
     projectile::{Aim, ProjectileDef, ProjectileId},
     quantity::Quantity,
     repair::RepairCost,
@@ -33,6 +36,7 @@ use crate::{
         SkillDef, SkillId,
     },
     stand::StandingAct,
+    stats::EntityModifier,
     tags,
     turret::{TurretDef, TurretId, WeaponConduct},
     work::{Crewing, WorkPresence},
@@ -60,6 +64,11 @@ pub struct ContentRegistry {
     /// What each entity stat is, by registration index — the builtins first,
     /// then what content declares.
     entity_stat_defs: Vec<EntityStatDef>,
+    /// Each registered pool's handle, by name — the builtins first.
+    pools: BTreeMap<String, PoolId>,
+    /// The stats each pool is made of, by registration index — the builtins
+    /// first.
+    pool_defs: Vec<PoolDef>,
     player_stats: BTreeMap<String, PlayerStatId>,
     entity_buffs: BTreeMap<String, EntityBuffId>,
     entity_buff_defs: Vec<EntityBuffDef>,
@@ -96,6 +105,11 @@ impl Default for ContentRegistry {
                 .iter()
                 .map(|builtin| EntityStatDef::new(builtin.floor))
                 .collect(),
+            pools: POOL_BUILTINS
+                .iter()
+                .map(|builtin| (builtin.name.to_string(), builtin.id))
+                .collect(),
+            pool_defs: POOL_BUILTINS.iter().map(|builtin| builtin.def).collect(),
             player_stats: PLAYER_BUILTIN_STATS
                 .iter()
                 .map(|builtin| (builtin.name.to_string(), builtin.id))
@@ -146,6 +160,7 @@ impl ContentRegistry {
             def.name
         );
 
+        self.check_pools(&def);
         self.validate_location(&def);
         self.validate_race(&def);
         self.validate_resource_kinds(&def);
@@ -181,6 +196,7 @@ impl ContentRegistry {
     /// registry, or when a declaration cannot be carried out by the type that
     /// makes it. Each `validate_*` below states the terms it enforces.
     pub fn validate(&self) {
+        self.validate_pools();
         for def in &self.defs {
             self.validate_trains(def);
             self.validate_builds(def);
@@ -188,6 +204,7 @@ impl ContentRegistry {
             self.validate_repairs(def);
             self.validate_requires(&format!("entity type '{}'", def.name), &def.requires);
             self.validate_passives(def);
+            self.validate_pool_stats(def);
             self.validate_bonus_damage_vs(def);
             self.validate_traversable(def);
             self.validate_morphs(def);
@@ -200,6 +217,7 @@ impl ContentRegistry {
             self.validate_breeder(def);
             self.validate_broodling(def);
             self.validate_leaves(def);
+            self.validate_holder_loops(def);
         }
         for (name, &id) in &self.researches {
             self.validate_requires(
@@ -376,10 +394,9 @@ impl ContentRegistry {
     }
 
     /// What `stat` is, as it was registered.
-    pub fn entity_stat_def(&self, stat: EntityStatId) -> EntityStatDef {
+    pub fn entity_stat_def(&self, stat: EntityStatId) -> &EntityStatDef {
         self.entity_stat_defs
             .get(stat.index())
-            .copied()
             .expect("a stat id comes from this registry")
     }
 
@@ -391,6 +408,26 @@ impl ContentRegistry {
     /// Returns the [`EntityStatId`] for the given stat name, or `None` if not registered.
     pub fn entity_stat(&self, name: &str) -> Option<EntityStatId> {
         self.entity_stats.get(name).copied()
+    }
+
+    /// The stats `pool` is made of.
+    pub fn pool_def(&self, pool: PoolId) -> &PoolDef {
+        self.pool_defs
+            .get(pool.index())
+            .expect("a pool id names a registered pool")
+    }
+
+    /// Returns the [`PoolId`] for the given pool name, or `None` if not
+    /// registered.
+    pub fn pool(&self, name: &str) -> Option<PoolId> {
+        self.pools.get(name).copied()
+    }
+
+    /// The pool `stat` belongs to and the role it plays there, if it belongs
+    /// to one.
+    pub fn pool_role_of(&self, stat: EntityStatId) -> Option<(PoolId, PoolRole)> {
+        self.pool_defs()
+            .find_map(|(pool, def)| def.role_of(stat).map(|role| (pool, role)))
     }
 
     /// Registers a player stat (max_supply, …) and returns its assigned
@@ -490,15 +527,16 @@ impl ContentRegistry {
             match effect {
                 EntityEffect::Modifiers(modifiers) => {
                     assert!(
-                        !modifiers.is_empty(),
+                        !modifiers.modifiers().is_empty(),
                         "entity buff '{name}' has an effect with no modifiers"
                     );
-                    for modifier in modifiers {
+                    for modifier in modifiers.modifiers() {
                         assert!(
                             modifier.stat.index() < self.entity_stats.len(),
                             "entity buff '{name}' modifies an unregistered entity stat"
                         );
                     }
+                    self.check_pool_shift(&format!("entity buff '{name}'"), modifiers);
                 }
                 EntityEffect::Disable | EntityEffect::Conceal => {}
             }
@@ -563,6 +601,13 @@ impl ContentRegistry {
             return id;
         }
 
+        for modifiers in &buff.entity_modifiers {
+            assert!(
+                !modifiers.modifiers().is_empty(),
+                "player buff '{name}' lays a set of no modifiers"
+            );
+            self.check_pool_shift(&format!("player buff '{name}'"), modifiers);
+        }
         let id = PlayerBuffId::from_index(self.player_buff_defs.len());
         self.player_buffs.insert(name, id);
         self.player_buff_defs.push(buff);
@@ -737,7 +782,7 @@ impl ContentRegistry {
                         Quantity::Stat(stat) => self.entity_stat_def(*stat).floor(),
                     };
                     assert!(
-                        least(point) >= FixedU64::ONE,
+                        least(point) > FixedU64::ZERO,
                         "skill '{name}' is cast over no time at all: an instant cast declares no `cast`, and a point read from a stat is held to that stat's floor"
                     );
                     assert!(
@@ -1149,7 +1194,7 @@ impl ContentRegistry {
             // cost without its pool.
             if let Quantity::Stat(stat) = morph.time() {
                 assert!(
-                    def.base_stats.contains_key(&stat),
+                    def.base_stat(stat).is_some(),
                     "{owner} reads its time from a stat the type does not carry"
                 );
             }
@@ -1177,9 +1222,53 @@ impl ContentRegistry {
                 // The time is read while the interim form is worn.
                 if let Quantity::Stat(stat) = morph.time() {
                     assert!(
-                        interim.base_stats.contains_key(&stat),
+                        interim.base_stat(stat).is_some(),
                         "{owner} reads its time from a stat the form it wears does not carry"
                     );
+                }
+            }
+            // Each pool a landing names is one the form landed on has and a
+            // form the change leaves had: a carry needs a value to carry and
+            // somewhere to put it. A pool the interim form lacks lands from
+            // what the origin held.
+            let left: Vec<&str> = morph
+                .via_type()
+                .into_iter()
+                .chain([def.name.as_str()])
+                .collect();
+            self.check_carried(
+                &owner,
+                "landing",
+                &left,
+                morph.into_type(),
+                morph.land_pool_carry().map(|(pool, _)| pool),
+            );
+            match morph.course() {
+                MorphCourse::Direct { .. } => {}
+                MorphCourse::Via {
+                    form,
+                    enter_pool_carry,
+                    interrupted,
+                } => {
+                    self.check_carried(
+                        &owner,
+                        "entering",
+                        &[def.name.as_str()],
+                        form,
+                        enter_pool_carry.keys().copied(),
+                    );
+                    match interrupted {
+                        ViaInterrupted::Reverts(revert) => {
+                            self.check_carried(
+                                &owner,
+                                "revert",
+                                &[form, def.name.as_str()],
+                                &def.name,
+                                revert.keys().copied(),
+                            );
+                        }
+                        ViaInterrupted::Dies => {}
+                    }
                 }
             }
             for cost in morph.costs() {
@@ -1193,11 +1282,11 @@ impl ContentRegistry {
                         }
                     }
                     Cost::Energy(_) => assert!(
-                        def.has_energy(),
-                        "{owner} has an energy cost but no max_energy stat"
+                        def.has_pool(PoolId::ENERGY),
+                        "{owner} has an energy cost but no energy pool"
                     ),
                     Cost::Health(_) => assert!(
-                        def.has_health(),
+                        def.has_pool(PoolId::HEALTH),
                         "{owner} has a health cost but no health pool"
                     ),
                 }
@@ -1293,7 +1382,7 @@ impl ContentRegistry {
                 let require = |quantity: Quantity, what: &str| {
                     if let Quantity::Stat(stat) = quantity {
                         assert!(
-                            def.base_stats.contains_key(&stat),
+                            def.base_stat(stat).is_some(),
                             "entity type '{}' has skill '{}' reading its {what} from a stat it does not carry",
                             def.name,
                             self.skill_name(skill).unwrap_or("<unregistered>"),
@@ -1335,13 +1424,13 @@ impl ContentRegistry {
                     // nothing type-level left to require.
                     Cost::Resources(_) => {}
                     Cost::Energy(_) => assert!(
-                        def.has_energy(),
-                        "entity type '{}' has skill '{}' with an energy cost but no max_energy stat",
+                        def.has_pool(PoolId::ENERGY),
+                        "entity type '{}' has skill '{}' with an energy cost but no energy pool",
                         def.name,
                         self.skill_name(skill).unwrap_or("<unregistered>"),
                     ),
                     Cost::Health(_) => assert!(
-                        def.has_health(),
+                        def.has_pool(PoolId::HEALTH),
                         "entity type '{}' has skill '{}' with a health cost but no health pool",
                         def.name,
                         self.skill_name(skill).unwrap_or("<unregistered>"),
@@ -1364,13 +1453,13 @@ impl ContentRegistry {
                     match cost {
                         Cost::Resources(_) => {}
                         Cost::Energy(_) => assert!(
-                            def.has_energy(),
-                            "entity type '{}' has skill '{}' keeping up a buff from energy but no max_energy stat",
+                            def.has_pool(PoolId::ENERGY),
+                            "entity type '{}' has skill '{}' keeping up a buff from energy but no energy pool",
                             def.name,
                             self.skill_name(skill).unwrap_or("<unregistered>"),
                         ),
                         Cost::Health(_) => assert!(
-                            def.has_health(),
+                            def.has_pool(PoolId::HEALTH),
                             "entity type '{}' has skill '{}' keeping up a buff from health but no health pool",
                             def.name,
                             self.skill_name(skill).unwrap_or("<unregistered>"),
@@ -1438,40 +1527,59 @@ impl ContentRegistry {
                 ),
             }
         }
-        for effect in &def.field_effects {
+        for field_effect in &def.field_effects {
             assert!(
-                known(effect.field()),
+                known(field_effect.field()),
                 "entity type '{}' answers to an unregistered field",
                 def.name
             );
-            match effect.kind() {
-                EntityEffect::Modifiers(modifiers) => {
-                    assert!(
-                        !modifiers.is_empty(),
-                        "entity type '{}' has a field effect with no modifiers",
-                        def.name
-                    );
-                    for modifier in modifiers {
+            assert!(
+                field_effect.effects().next().is_some(),
+                "entity type '{}' has a field effect with nothing inside or outside",
+                def.name
+            );
+            for effect in field_effect.effects() {
+                match effect {
+                    EntityEffect::Modifiers(modifiers) => {
                         assert!(
-                            modifier.stat.index() < self.entity_stats.len(),
-                            "entity type '{}' has a field effect on an unregistered entity stat",
+                            !modifiers.modifiers().is_empty(),
+                            "entity type '{}' has a field effect with no modifiers",
                             def.name
                         );
-                        // A modifier folds into a stat the instance carries;
-                        // one on a stat the type never declares would validate
-                        // and do nothing.
-                        assert!(
-                            def.base_stats.contains_key(&modifier.stat),
-                            "entity type '{}' has a field effect on stat '{}', which the type does not carry",
-                            def.name,
-                            self.entity_stats
-                                .iter()
-                                .find(|(_, id)| **id == modifier.stat)
-                                .map_or("?", |(name, _)| name.as_str())
+                        self.check_pool_shift(
+                            &format!("entity type '{}' field effect", def.name),
+                            modifiers,
                         );
+                        for modifier in modifiers.modifiers() {
+                            assert!(
+                                modifier.stat.index() < self.entity_stats.len(),
+                                "entity type '{}' has a field effect on an unregistered entity stat",
+                                def.name
+                            );
+                            // A modifier folds into a stat the instance carries;
+                            // one on a stat the type never declares would validate
+                            // and do nothing.
+                            assert!(
+                                def.base_stat(modifier.stat).is_some(),
+                                "entity type '{}' has a field effect on stat '{}', which the type does not carry",
+                                def.name,
+                                self.entity_stats
+                                    .iter()
+                                    .find(|(_, id)| **id == modifier.stat)
+                                    .map_or("?", |(name, _)| name.as_str())
+                            );
+                        }
                     }
+                    EntityEffect::Disable | EntityEffect::Conceal => {}
                 }
-                EntityEffect::Disable | EntityEffect::Conceal => {}
+            }
+            if let Some(requirement) = field_effect.holds_while() {
+                let effects: Vec<EntityEffect> = field_effect.effects().cloned().collect();
+                self.validate_held(
+                    &format!("entity type '{}' field effect", def.name),
+                    requirement,
+                    &effects,
+                );
             }
         }
     }
@@ -1529,6 +1637,7 @@ impl ContentRegistry {
                     self.validate_requirement(owner, item);
                 }
             }
+            Requirement::Unless(item) => self.validate_requirement(owner, item),
             Requirement::EntityType(name) => {
                 assert!(
                     self.defs_by_name.contains_key(name),
@@ -1574,7 +1683,7 @@ impl ContentRegistry {
                     *bound,
                 );
             }
-            Requirement::Idle => {}
+            Requirement::Built | Requirement::Idle => {}
             Requirement::IdleFor(ticks) => assert!(
                 *ticks > 0,
                 "{owner} requires idling for no ticks at all; idle_for is at least one"
@@ -1727,9 +1836,11 @@ impl ContentRegistry {
                 self.research_name(*research)
                     .expect("a requirement's research was checked minted here")
             ),
+            Requirement::Unless(_) => unreachable!("a negation is taken as attainable"),
             Requirement::Health(_)
             | Requirement::Energy(_)
             | Requirement::Stat { .. }
+            | Requirement::Built
             | Requirement::Idle
             | Requirement::IdleFor(_)
             | Requirement::UnhurtFor(_) => unreachable!("a state leaf is taken as met"),
@@ -1763,6 +1874,8 @@ impl ContentRegistry {
             Requirement::Any(items) => items
                 .iter()
                 .any(|item| self.attainable(item, types, researches)),
+            // Met by the thing being absent, which content can always be.
+            Requirement::Unless(_) => true,
             Requirement::EntityType(name) | Requirement::Annexed(name) => {
                 types.contains(name.as_str())
             }
@@ -1774,83 +1887,102 @@ impl ContentRegistry {
             Requirement::Health(_)
             | Requirement::Energy(_)
             | Requirement::Stat { .. }
+            | Requirement::Built
             | Requirement::Idle
             | Requirement::IdleFor(_)
             | Requirement::UnhurtFor(_) => true,
         }
     }
 
-    /// Checks a buff that holds `While`: its requirement resolves like any
-    /// other, and its own modifiers leave alone every stat the requirement is
-    /// judged on, and never lower the maximum that caps a pool it reads an
-    /// amount of.
+    /// Checks a buff that holds `While` a requirement — see
+    /// [`Self::validate_held`].
     fn validate_while(&self, name: &str, buff: &EntityBuffDef) {
         let requirement = match &buff.lasting {
             Lasting::While(requirement) => requirement,
             Lasting::Forever | Lasting::For(_) | Lasting::Upkeep { .. } => return,
         };
-        /// Which of the buff's own modifiers on a stat its requirement judges
-        /// are refused.
-        enum Refused {
-            /// Every one: the stat is what the requirement reads, or the
-            /// maximum a share of a pool is taken of.
-            Any,
-            /// One that lowers it: the maximum that caps a pool the
-            /// requirement reads an amount of.
-            Lowering,
-        }
-        let owner = format!("entity buff '{name}'");
-        self.validate_requirement(&owner, requirement);
-        let judged: Vec<(EntityStatId, Refused)> = requirement
-            .leaves()
-            .into_iter()
-            .filter_map(|leaf| match leaf {
-                Requirement::Health(Bound::Share(_)) => {
-                    Some((EntityStatId::MAX_HEALTH, Refused::Any))
-                }
-                Requirement::Energy(Bound::Share(_)) => {
-                    Some((EntityStatId::MAX_ENERGY, Refused::Any))
-                }
-                Requirement::Health(Bound::Amount(_)) => {
-                    Some((EntityStatId::MAX_HEALTH, Refused::Lowering))
-                }
-                Requirement::Energy(Bound::Amount(_)) => {
-                    Some((EntityStatId::MAX_ENERGY, Refused::Lowering))
-                }
-                Requirement::Stat { stat, .. } => Some((*stat, Refused::Any)),
-                Requirement::All(_)
-                | Requirement::Any(_)
-                | Requirement::EntityType(_)
-                | Requirement::Tag(_)
-                | Requirement::Research(_)
-                | Requirement::Annexed(_)
-                | Requirement::Idle
-                | Requirement::IdleFor(_)
-                | Requirement::UnhurtFor(_) => None,
-            })
-            .collect();
-        for effect in &buff.effects {
+        self.validate_held(&format!("entity buff '{name}'"), requirement, &buff.effects);
+    }
+
+    /// Checks something that holds while `requirement` is met: the
+    /// requirement resolves like any other, and the modifiers of `effects`
+    /// leave alone every stat it is judged on, and never move the maximum that
+    /// caps a pool it reads an amount of by share or difference the way that
+    /// fails the requirement: up where a higher amount fails it, down where a
+    /// lower one does.
+    fn validate_held(&self, owner: &str, requirement: &Requirement, effects: &[EntityEffect]) {
+        self.validate_requirement(owner, requirement);
+        let mut judged: Vec<(EntityStatId, Judged)> = Vec::new();
+        judged_stats(requirement, Negation::Plain, &mut judged);
+        for effect in effects {
             match effect {
                 EntityEffect::Modifiers(modifiers) => {
-                    for modifier in modifiers {
+                    for modifier in modifiers.modifiers() {
                         let stat = || {
                             self.entity_stat_name(modifier.stat)
-                                .expect("a buff's modifiers name registered stats")
+                                .expect("an effect's modifiers name registered stats")
                         };
-                        for (judged_stat, refused) in &judged {
+                        for (judged_stat, judgment) in &judged {
                             if *judged_stat != modifier.stat {
                                 continue;
                             }
-                            match refused {
-                                Refused::Any => panic!(
+                            match judgment {
+                                Judged::Read => panic!(
                                     "{owner} holds while it judges '{}', which its own modifiers move",
                                     stat()
                                 ),
-                                Refused::Lowering => assert!(
-                                    modifier.magnitude >= FixedI64::ZERO,
-                                    "{owner} holds on an amount of a pool capped by '{}', which its own modifiers lower",
-                                    stat()
-                                ),
+                                Judged::Capping(rising) => {
+                                    let direction = match modifier.magnitude >= FixedI64::ZERO {
+                                        true => Direction::Raising,
+                                        false => Direction::Lowering,
+                                    };
+                                    match (modifiers, direction, rising) {
+                                        (
+                                            EntityModifiers::PoolMaximums {
+                                                pool_shift: PoolShift::Share | PoolShift::Difference,
+                                                ..
+                                            },
+                                            Direction::Raising,
+                                            Rising::Fails,
+                                        )
+                                        | (
+                                            EntityModifiers::PoolMaximums {
+                                                pool_shift: PoolShift::Share | PoolShift::Difference,
+                                                ..
+                                            },
+                                            Direction::Lowering,
+                                            Rising::Holds,
+                                        ) => panic!(
+                                            "{owner} holds on an amount of a pool capped by '{}', which its own modifiers shift past its line",
+                                            stat()
+                                        ),
+                                        (
+                                            EntityModifiers::PoolMaximums {
+                                                pool_shift: PoolShift::Share | PoolShift::Difference,
+                                                ..
+                                            },
+                                            Direction::Raising,
+                                            Rising::Holds,
+                                        )
+                                        | (
+                                            EntityModifiers::PoolMaximums {
+                                                pool_shift: PoolShift::Share | PoolShift::Difference,
+                                                ..
+                                            },
+                                            Direction::Lowering,
+                                            Rising::Fails,
+                                        )
+                                        | (
+                                            EntityModifiers::PoolMaximums {
+                                                pool_shift: PoolShift::Clamp,
+                                                ..
+                                            }
+                                            | EntityModifiers::Stats(_),
+                                            Direction::Raising | Direction::Lowering,
+                                            Rising::Fails | Rising::Holds,
+                                        ) => {}
+                                    }
+                                }
                             }
                         }
                     }
@@ -1890,9 +2022,9 @@ impl ContentRegistry {
             for effect in &buff.effects {
                 match effect {
                     EntityEffect::Modifiers(modifiers) => {
-                        for modifier in modifiers {
+                        for modifier in modifiers.modifiers() {
                             assert!(
-                                def.base_stats.contains_key(&modifier.stat),
+                                def.base_stat(modifier.stat).is_some(),
                                 "entity type '{}' bears passive '{name}', which modifies '{}' it does not carry",
                                 def.name,
                                 self.entity_stat_name(modifier.stat)
@@ -1902,6 +2034,70 @@ impl ContentRegistry {
                     }
                     EntityEffect::Disable | EntityEffect::Conceal => {}
                 }
+            }
+        }
+    }
+
+    /// Checks that the things a type holds on a requirement — its passives and
+    /// its field effects — never feed each other around a loop: one moving
+    /// what the next one's requirement judges, back to the first.
+    fn validate_holder_loops(&self, def: &EntityTypeDef) {
+        let mut holders: Vec<Holder> = Vec::new();
+        for &passive in &def.passives {
+            let buff = &self.entity_buff_defs[passive.index()];
+            match &buff.lasting {
+                Lasting::While(requirement) => {
+                    let mut judged = Vec::new();
+                    judged_stats(requirement, Negation::Plain, &mut judged);
+                    let name = self
+                        .entity_buff_name(passive)
+                        .expect("a passive is a registered buff");
+                    holders.push(Holder {
+                        name: format!("passive '{name}'"),
+                        judged,
+                        effects: buff.effects.clone(),
+                    });
+                }
+                Lasting::Forever | Lasting::For(_) | Lasting::Upkeep { .. } => {
+                    unreachable!("a passive holds on a requirement, as validate_passives checks")
+                }
+            }
+        }
+        for (index, field_effect) in def.field_effects.iter().enumerate() {
+            if let Some(requirement) = field_effect.holds_while() {
+                let mut judged = Vec::new();
+                judged_stats(requirement, Negation::Plain, &mut judged);
+                holders.push(Holder {
+                    name: format!("field effect {}", index + 1),
+                    judged,
+                    effects: field_effect.effects().cloned().collect(),
+                });
+            }
+        }
+        let feeds = |from: usize, to: usize| {
+            from != to
+                && holders[from].effects.iter().any(|effect| match effect {
+                    EntityEffect::Modifiers(modifiers) => {
+                        modifiers.modifiers().iter().any(|modifier| {
+                            holders[to].judged.iter().any(|(stat, judgment)| {
+                                *stat == modifier.stat && moves_judged(modifiers, judgment)
+                            })
+                        })
+                    }
+                    EntityEffect::Disable | EntityEffect::Conceal => false,
+                })
+        };
+        for start in 0..holders.len() {
+            if let Some(path) = loop_through(start, holders.len(), &feeds) {
+                let names: Vec<&str> = path
+                    .iter()
+                    .map(|&index| holders[index].name.as_str())
+                    .collect();
+                panic!(
+                    "entity type '{}' holds {} on requirements that feed each other",
+                    def.name,
+                    names.join(" → ")
+                );
             }
         }
     }
@@ -1927,8 +2123,9 @@ impl ContentRegistry {
         }
     }
 
-    /// Checks the engine's built-in stats: a declared pool or speed is positive (a
-    /// zero would be meaningless); a stat the engine reads as a whole number is at
+    /// Checks the engine's built-in stats: a declared speed, repair speed,
+    /// supply, cargo capacity or lifetime is positive (a zero would be
+    /// meaningless); a stat the engine reads as a whole number is at
     /// least its floor; an attacker — one carrying the [`EntityStatId::DAMAGE`] stat —
     /// also carries the rest of its weapon; and the hit lands within the attack
     /// cycle (`damage_point <= attack_period`).
@@ -1937,9 +2134,7 @@ impl ContentRegistry {
         // Declaring any of these at zero says nothing an omitted stat would not
         // — or, for a capacity, declares a capability that can never act.
         for stat in [
-            EntityStatId::MAX_HEALTH,
             EntityStatId::SPEED,
-            EntityStatId::MAX_ENERGY,
             EntityStatId::REPAIR_SPEED,
             EntityStatId::SUPPLY_PROVIDED,
             EntityStatId::SUPPLY_COST,
@@ -1956,9 +2151,10 @@ impl ContentRegistry {
             }
         }
 
-        // A floored stat is one the engine reads as a whole number, so an authored
-        // value below the floor is a number the type never actually has: the fold
-        // raises it to the floor on the first tick. Driven off the registered
+        // A floored stat is one the engine reads as a whole number — ticks rounded
+        // up, cells and counts truncated — so an authored value below the floor
+        // is a number the type never actually has: the fold raises it to the
+        // floor on the first tick. Driven off the registered
         // floors, content's own stats included, so a declaration and the fold
         // cannot disagree.
         for (name, &stat) in &self.entity_stats {
@@ -2079,23 +2275,6 @@ impl ContentRegistry {
                     "entity type '{}' points a weapon but is missing {}",
                     def.name,
                     ENTITY_BUILTIN_STATS[stat.index()].name,
-                );
-            }
-        }
-
-        // A regeneration rate is read through the pool it refills, so one declared
-        // without that pool is content that can never take effect.
-        for (regen, pool) in [
-            (EntityStatId::HEALTH_REGEN, EntityStatId::MAX_HEALTH),
-            (EntityStatId::ENERGY_REGEN, EntityStatId::MAX_ENERGY),
-        ] {
-            if def.base_stat(regen).is_some() {
-                assert!(
-                    def.base_stat(pool).is_some(),
-                    "entity type '{}' declares {} without {}",
-                    def.name,
-                    ENTITY_BUILTIN_STATS[regen.index()].name,
-                    ENTITY_BUILTIN_STATS[pool.index()].name,
                 );
             }
         }
@@ -2271,9 +2450,8 @@ impl ContentRegistry {
             }
             // Spending from a pool the type does not have would make the work free.
             RepairCost::Energy(_) => assert!(
-                def.has_energy(),
-                "entity type '{}' pays for repair with energy but has no max_energy \
-                 stat",
+                def.has_pool(PoolId::ENERGY),
+                "entity type '{}' pays for repair with energy but has no energy pool",
                 def.name
             ),
         }
@@ -2686,7 +2864,7 @@ impl ContentRegistry {
         );
         if let Quantity::Stat(stat) = brood.period() {
             assert!(
-                def.base_stats.contains_key(&stat),
+                def.base_stat(stat).is_some(),
                 "{owner} reads its period from a stat the type does not carry"
             );
         }
@@ -2888,16 +3066,15 @@ impl ContentRegistry {
             "annex '{}' is not constructible",
             def.name
         );
-        // A modifier moves only a stat its type carries, so a fade the
-        // type never declared would drain nothing at all.
+        // A fade drains the health pool, which carries its drain beside it.
         if let AloneConduct::Standing {
             life: AnnexLife::Fades { .. },
             ..
         } = annex.alone()
         {
             assert!(
-                def.base_stat(EntityStatId::HEALTH_DRAIN).is_some(),
-                "annex '{}' fades but does not carry the health_drain stat",
+                def.has_pool(PoolId::HEALTH),
+                "annex '{}' fades but has no health pool",
                 def.name
             );
         }
@@ -2914,7 +3091,11 @@ impl ContentRegistry {
             "annex '{}' does not claim the cells it stands on",
             def.name
         );
-        assert!(def.has_health(), "annex '{}' has no health pool", def.name);
+        assert!(
+            def.has_pool(PoolId::HEALTH),
+            "annex '{}' has no health pool",
+            def.name
+        );
         let docked = self
             .defs
             .iter()
@@ -2987,4 +3168,320 @@ impl ContentRegistry {
             );
         }
     }
+
+    /// Checks that `modifiers` move pool maxima exactly when they declare a
+    /// pool shift: a set of stats names no pool's maximum, a set of pool
+    /// maxima names nothing else.
+    fn check_pool_shift(&self, owner: &str, modifiers: &EntityModifiers) {
+        let is_maximum = |modifier: &&EntityModifier| {
+            self.pool_role_of(modifier.stat)
+                .is_some_and(|(_, role)| match role {
+                    PoolRole::Maximum => true,
+                    PoolRole::Regen | PoolRole::Drain => false,
+                })
+        };
+        let stat_name = |modifier: &EntityModifier| {
+            self.entity_stat_name(modifier.stat)
+                .expect("a modifier names a registered stat")
+        };
+        match modifiers {
+            EntityModifiers::Stats(modifiers) => {
+                if let Some(modifier) = modifiers.iter().find(is_maximum) {
+                    panic!(
+                        "{owner} moves '{}' but declares no pool shift",
+                        stat_name(modifier)
+                    );
+                }
+            }
+            EntityModifiers::PoolMaximums { modifiers, .. } => {
+                if let Some(modifier) = modifiers.iter().find(|modifier| !is_maximum(modifier)) {
+                    panic!(
+                        "{owner} declares a pool shift but moves '{}', no pool maximum",
+                        stat_name(modifier)
+                    );
+                }
+            }
+        }
+    }
+
+    /// Checks each pool `def` declares: registered, given a maximum above 0,
+    /// and filling the stats its registration names.
+    fn check_pools(&self, def: &EntityTypeDef) {
+        for declaration in def.base_stats.pools() {
+            let pool = declaration.id();
+            assert!(
+                pool.index() < self.pool_defs.len(),
+                "entity type '{}' declares an unregistered pool",
+                def.name
+            );
+            let name = self.pool_name(pool);
+            assert!(
+                declaration.maximum() > FixedU64::ZERO,
+                "entity type '{}' declares the {name} pool with a maximum of 0",
+                def.name
+            );
+            let pool_def = self.pool_def(pool);
+            let registered = [
+                pool_def.maximum_stat(),
+                pool_def.regen_stat(),
+                pool_def.drain_stat(),
+            ];
+            assert!(
+                declaration
+                    .stats()
+                    .iter()
+                    .map(|filled| filled.stat)
+                    .eq(registered),
+                "entity type '{}' declares the {name} pool over stats it does not name",
+                def.name
+            );
+        }
+    }
+
+    /// Checks that no stat `def` writes on its own belongs to a pool, whichever
+    /// was registered first: a pool's stats come only from declaring the pool.
+    fn validate_pool_stats(&self, def: &EntityTypeDef) {
+        for (stat, _) in def.base_stats.own() {
+            if let Some((pool, _)) = self.pool_role_of(stat) {
+                panic!(
+                    "entity type '{}' declares '{}', which belongs to the {} pool; declare the pool",
+                    def.name,
+                    self.entity_stat_name(stat)
+                        .expect("a pool names registered stats"),
+                    self.pool_name(pool)
+                );
+            }
+        }
+    }
+
+    /// Checks that every pool in `named` is one `to` carries and one of
+    /// `left` carried.
+    fn check_carried(
+        &self,
+        owner: &str,
+        landing: &str,
+        left: &[&str],
+        to: &str,
+        named: impl Iterator<Item = PoolId>,
+    ) {
+        let carries = |name: &str, pool: PoolId| {
+            self.entity(name)
+                .unwrap_or_else(|| panic!("{owner} names a type that is not registered"))
+                .has_pool(pool)
+        };
+        for pool in named {
+            assert!(
+                carries(to, pool),
+                "{owner} carries the {} pool on its {landing}, which '{to}' does not have",
+                self.pool_name(pool)
+            );
+            assert!(
+                left.iter().any(|&from| carries(from, pool)),
+                "{owner} carries the {} pool on its {landing}, which none of {} had",
+                self.pool_name(pool),
+                left.iter()
+                    .map(|from| format!("'{from}'"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+    }
+
+    /// The name `pool` is registered under.
+    fn pool_name(&self, pool: PoolId) -> &str {
+        self.pools
+            .iter()
+            .find(|&(_, &id)| id == pool)
+            .map(|(name, _)| name.as_str())
+            .expect("a pool id names a registered pool")
+    }
+
+    /// Checks that every pool is made of three registered stats, and that no
+    /// stat belongs to two pools or plays two roles in one.
+    fn validate_pools(&self) {
+        let mut claimed: Vec<(EntityStatId, PoolId)> = Vec::new();
+        for (pool, def) in self.pool_defs() {
+            for stat in [def.maximum_stat(), def.regen_stat(), def.drain_stat()] {
+                let name = self.pool_name(pool);
+                let stat_name = self
+                    .entity_stat_name(stat)
+                    .unwrap_or_else(|| panic!("the {name} pool names an unregistered stat"));
+                if let Some(&(_, other)) = claimed.iter().find(|&&(claimed, _)| claimed == stat) {
+                    panic!(
+                        "the {name} pool names '{stat_name}', which already belongs to the {} pool",
+                        self.pool_name(other)
+                    );
+                }
+                claimed.push((stat, pool));
+            }
+        }
+    }
+
+    /// Every registered pool, in registration order.
+    fn pool_defs(&self) -> impl Iterator<Item = (PoolId, &PoolDef)> + '_ {
+        self.pool_defs
+            .iter()
+            .enumerate()
+            .map(|(index, def)| (PoolId::from_index(index), def))
+    }
+}
+
+/// How a requirement reads a stat its holder's own modifiers might move.
+enum Judged {
+    /// It reads the stat itself, or the maximum a share of a pool is taken of:
+    /// any modifier on it is refused.
+    Read,
+    /// It reads an amount of the pool the stat caps: a share or difference
+    /// shift moving it the way that fails the requirement is refused — up
+    /// where a higher amount fails, down where a lower one does.
+    Capping(Rising),
+}
+
+/// What a higher amount of a pool does to a requirement reading it.
+#[derive(Clone, Copy)]
+enum Rising {
+    /// It fails the requirement.
+    Fails,
+    /// It keeps the requirement met.
+    Holds,
+}
+
+/// Which way a modifier moves a pool's maximum.
+#[derive(Clone, Copy)]
+enum Direction {
+    /// Up, or not at all.
+    Raising,
+    /// Down.
+    Lowering,
+}
+
+/// Whether a requirement stands as written or turned around by `unless`.
+#[derive(Clone, Copy)]
+enum Negation {
+    /// As written.
+    Plain,
+    /// Under an odd number of `unless`.
+    Negated,
+}
+
+/// The stats `requirement` judges, and how — `negation` saying whether it
+/// stands under an odd number of `unless`.
+fn judged_stats(
+    requirement: &Requirement,
+    negation: Negation,
+    out: &mut Vec<(EntityStatId, Judged)>,
+) {
+    let capping =
+        |threshold: &Threshold| {
+            Judged::Capping(match (threshold, negation) {
+                (Threshold::Under(_), Negation::Plain)
+                | (Threshold::AtLeast(_), Negation::Negated) => Rising::Fails,
+                (Threshold::AtLeast(_), Negation::Plain)
+                | (Threshold::Under(_), Negation::Negated) => Rising::Holds,
+            })
+        };
+    match requirement {
+        Requirement::All(items) | Requirement::Any(items) => {
+            for item in items {
+                judged_stats(item, negation, out);
+            }
+        }
+        Requirement::Unless(item) => {
+            let flipped = match negation {
+                Negation::Plain => Negation::Negated,
+                Negation::Negated => Negation::Plain,
+            };
+            judged_stats(item, flipped, out);
+        }
+        Requirement::Health(Bound::Share(_)) => out.push((EntityStatId::MAX_HEALTH, Judged::Read)),
+        Requirement::Energy(Bound::Share(_)) => out.push((EntityStatId::MAX_ENERGY, Judged::Read)),
+        Requirement::Health(Bound::Amount(threshold)) => {
+            out.push((EntityStatId::MAX_HEALTH, capping(threshold)))
+        }
+        Requirement::Energy(Bound::Amount(threshold)) => {
+            out.push((EntityStatId::MAX_ENERGY, capping(threshold)))
+        }
+        Requirement::Stat { stat, .. } => out.push((*stat, Judged::Read)),
+        Requirement::EntityType(_)
+        | Requirement::Tag(_)
+        | Requirement::Research(_)
+        | Requirement::Annexed(_)
+        | Requirement::Built
+        | Requirement::Idle
+        | Requirement::IdleFor(_)
+        | Requirement::UnhurtFor(_) => {}
+    }
+}
+
+/// Whether a modifier of `modifiers` on the stat `judgment` reads moves what
+/// it reads: the stat itself, or the amount of the pool it caps by share or
+/// difference.
+fn moves_judged(modifiers: &EntityModifiers, judgment: &Judged) -> bool {
+    match judgment {
+        Judged::Read => true,
+        Judged::Capping(_) => match modifiers {
+            EntityModifiers::PoolMaximums {
+                pool_shift: PoolShift::Share | PoolShift::Difference,
+                ..
+            } => true,
+            EntityModifiers::PoolMaximums {
+                pool_shift: PoolShift::Clamp,
+                ..
+            }
+            | EntityModifiers::Stats(_) => false,
+        },
+    }
+}
+
+/// A path from `start` back to it along `feeds` among `count` nodes, through
+/// at least one other node, if there is one.
+fn loop_through(
+    start: usize,
+    count: usize,
+    feeds: &impl Fn(usize, usize) -> bool,
+) -> Option<Vec<usize>> {
+    let mut path = vec![start];
+    let mut visited = vec![false; count];
+    visited[start] = true;
+    walk_back_to(start, start, count, feeds, &mut path, &mut visited).then_some(path)
+}
+
+/// Extends `path` from `at` until it reaches `start` again, depth first.
+fn walk_back_to(
+    start: usize,
+    at: usize,
+    count: usize,
+    feeds: &impl Fn(usize, usize) -> bool,
+    path: &mut Vec<usize>,
+    visited: &mut [bool],
+) -> bool {
+    for next in 0..count {
+        if !feeds(at, next) {
+            continue;
+        }
+        if next == start && path.len() > 1 {
+            path.push(start);
+            return true;
+        }
+        if visited[next] {
+            continue;
+        }
+        visited[next] = true;
+        path.push(next);
+        if walk_back_to(start, next, count, feeds, path, visited) {
+            return true;
+        }
+        path.pop();
+    }
+    false
+}
+
+/// Something a type holds on a requirement, as the loop check reads it.
+struct Holder {
+    /// What it is, in a refusal.
+    name: String,
+    /// The stats its requirement judges, and how.
+    judged: Vec<(EntityStatId, Judged)>,
+    /// What it does while it holds.
+    effects: Vec<EntityEffect>,
 }

@@ -259,7 +259,7 @@ fn requirement_list(lua: &Lua, requires: &[RequirementView]) -> mlua::Result<Tab
 }
 
 /// One requirement as a `{ kind = ..., ... }` table: `all` and `any` carry
-/// `items`; a named kind carries `name`; `health` and `energy` carry one of
+/// `items`; `unless` carries `item`; a named kind carries `name`; `health` and `energy` carry one of
 /// `under`, `at_least`, `under_share` or `at_least_share`; `stat` carries
 /// `name` and one of those; `idle_for` and `unhurt_for` carry `ticks`.
 fn requirement_table(lua: &Lua, entry: &RequirementView) -> mlua::Result<Table> {
@@ -272,6 +272,10 @@ fn requirement_table(lua: &Lua, entry: &RequirementView) -> mlua::Result<Table> 
         RequirementView::Any(items) => {
             view.set("kind", "any")?;
             view.set("items", requirement_list(lua, items)?)?;
+        }
+        RequirementView::Unless(item) => {
+            view.set("kind", "unless")?;
+            view.set("item", requirement_table(lua, item)?)?;
         }
         RequirementView::Named { kind, name } => {
             view.set("kind", kind.as_str())?;
@@ -286,6 +290,7 @@ fn requirement_table(lua: &Lua, entry: &RequirementView) -> mlua::Result<Table> 
             view.set("name", name.as_str())?;
             set_bound(&view, bound)?;
         }
+        RequirementView::Built => view.set("kind", "built")?,
         RequirementView::Idle => view.set("kind", "idle")?,
         RequirementView::IdleFor(ticks) => {
             view.set("kind", "idle_for")?;

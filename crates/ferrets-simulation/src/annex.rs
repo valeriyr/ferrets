@@ -235,10 +235,9 @@ fn tend_sites(world: &mut World, offers: &[Offer]) {
 
         match (holders.is_empty(), terms(world, site).alone()) {
             // Nothing offers the dock it stands on, and its type cannot stand
-            // without a primary: the site answers to the same terms its
-            // finished form would, and goes the same way, with nothing
-            // refunded — the conduct belongs to the type, not to the stage
-            // the building happens to have reached.
+            // without a primary: the site is razed as its finished form would
+            // be, with nothing refunded. A type that stands alone and fades
+            // does not fade while a site — see [`modifiers`].
             (true, AloneConduct::Razed) => {
                 spawn::despawn_entity(world, site, DeathCause::Decayed);
             }
@@ -391,11 +390,18 @@ fn stand_alone(world: &mut World, annex: Entity) {
 
 /// The modifiers `entity` carries for standing with no primary: a fading annex
 /// drains health for as long as it stands alone, the way a structure outside
-/// the field that sustains it does.
+/// the field that sustains it does. A site, bonded to no primary until it is
+/// built, does not fade.
 pub fn modifiers(world: &World, entity: Entity) -> Vec<EntityModifier> {
     let Some(annex) = entity_def::annex_def(world, entity) else {
         return Vec::new();
     };
+    if world
+        .entity(entity)
+        .contains::<UnderConstructionComponent>()
+    {
+        return Vec::new();
+    }
     match (primary_of(world, entity), annex.alone()) {
         (
             Docking::Alone,

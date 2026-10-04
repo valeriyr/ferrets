@@ -10,6 +10,7 @@ use ferrets_math::FixedU64;
 
 use ferrets_content::{
     entity_stats::{EntityStatDef, EntityStatId},
+    quantity::Quantity,
     stats::EntityModifier,
 };
 
@@ -55,6 +56,36 @@ impl StatsComponent {
     #[inline]
     pub fn effective_as_u32(&self, stat: EntityStatId) -> Option<u32> {
         self.effective(stat).map(|value| value.to_num::<u32>())
+    }
+
+    /// The effective value of `stat` counted in ticks, rounded up, or `None`
+    /// if the entity does not have it.
+    #[inline]
+    pub fn effective_ticks(&self, stat: EntityStatId) -> Option<u32> {
+        self.effective(stat)
+            .map(|value| value.saturating_ceil().to_num::<u32>())
+    }
+
+    /// The ticks `quantity` comes to: a constant is what it says, a stat the
+    /// entity's effective value rounded up, or `None` if the entity does not
+    /// have it.
+    #[inline]
+    pub fn quantity_ticks(&self, quantity: Quantity) -> Option<u32> {
+        match quantity {
+            Quantity::Constant(value) => Some(value),
+            Quantity::Stat(id) => self.effective_ticks(id),
+        }
+    }
+
+    /// The cells `quantity` comes to: a constant is what it says, a stat the
+    /// entity's effective value truncated, or `None` if the entity does not
+    /// have it.
+    #[inline]
+    pub fn quantity_cells(&self, quantity: Quantity) -> Option<u32> {
+        match quantity {
+            Quantity::Constant(value) => Some(value),
+            Quantity::Stat(id) => self.effective_as_u32(id),
+        }
     }
 
     /// `true` if the entity has `stat` declared.

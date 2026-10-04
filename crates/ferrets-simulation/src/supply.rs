@@ -44,6 +44,24 @@ pub fn used(world: &World, player: PlayerId) -> FixedU64 {
     totals(world, player).1
 }
 
+/// A player's supply as whole numbers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DisplayedSupply {
+    /// The supply occupied, rounded up.
+    pub used: u32,
+    /// The supply provided, rounded down.
+    pub provided: u32,
+}
+
+/// `player`'s supply as whole numbers.
+pub fn displayed(world: &World, player: PlayerId) -> DisplayedSupply {
+    let (provided, used) = totals(world, player);
+    DisplayedSupply {
+        used: used.saturating_ceil().to_num::<u32>(),
+        provided: provided.to_num::<u32>(),
+    }
+}
+
 /// Whether `player`'s supply admits one more instance of `def`.
 ///
 /// A def without a supply cost is always admitted — even over a cap, which is a

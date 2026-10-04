@@ -48,6 +48,11 @@ pub struct UnderConstructionComponent {
 }
 
 impl UnderConstructionComponent {
+    /// A site with no work put in yet, advanced as `work` says.
+    pub fn new(work: SiteWork) -> Self {
+        Self { progress: 0, work }
+    }
+
     /// Steps the work for the `tender` offering to advance the site: a halted
     /// site is taken up as that tender's own, an unattended one whose tender
     /// has gone is halted again, and a site with a crew on it is being worked
@@ -61,6 +66,23 @@ impl UnderConstructionComponent {
             | (SiteWork::Unattended { .. }, Some(_)) => {}
         }
     }
+}
+
+/// Marks `entity` as a site under construction with no work put in,
+/// advanced as `work` says.
+pub fn mark_as_site(world: &mut World, entity: Entity, work: SiteWork) {
+    world
+        .entity_mut(entity)
+        .insert(UnderConstructionComponent::new(work));
+}
+
+/// Marks the site `entity` as built, taking its construction state off.
+/// Panics when `entity` is not a site.
+pub fn mark_as_built(world: &mut World, entity: Entity) {
+    world
+        .entity_mut(entity)
+        .take::<UnderConstructionComponent>()
+        .expect("mark_as_built is given a site under construction");
 }
 
 /// Per-entity in-flight construction state.

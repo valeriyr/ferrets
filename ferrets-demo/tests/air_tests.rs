@@ -7,15 +7,15 @@
 mod utils;
 
 use bevy::prelude::{App, Entity, World};
-use ferrets_content::{entity_stats::EntityStatId, registry::ContentRegistry};
+use ferrets_content::{entity_stats::EntityStatId, pool_def::PoolId, registry::ContentRegistry};
 use ferrets_demo::map;
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::FixedU64;
 use ferrets_simulation::{
     components::{
-        health::HealthComponent, hidden::HiddenComponent, order_queue::OrderQueueComponent,
-        transport::TransporterComponent,
+        hidden::HiddenComponent, order_queue::OrderQueueComponent, transport::TransporterComponent,
     },
+    entity_def,
     entity_index::EntityIndex,
     map::Map,
     movement_model::MovementModel,
@@ -267,10 +267,7 @@ fn melee_ignores_flier_overhead() {
         "the grunt took an order against a flier it cannot reach"
     );
     assert_eq!(
-        world
-            .entity(flier)
-            .get::<HealthComponent>()
-            .map(|health| health.current()),
+        entity_def::pool_value(world, flier, PoolId::HEALTH),
         registry_max_health(world, "zeppelin"),
         "the flier took damage from a weapon that cannot reach the air"
     );
@@ -301,10 +298,7 @@ fn archer_engages_flier_overhead() {
     utils::run_ticks(&mut app, 100);
 
     let world = app.world();
-    let health = world
-        .entity(flier)
-        .get::<HealthComponent>()
-        .map(|health| health.current());
+    let health = entity_def::pool_value(world, flier, PoolId::HEALTH);
     // Six arrows of 6 landed over the hundred ticks — the pinned toll of an
     // engagement that genuinely happened, the chasing archer seeing from the
     // cell its body rounds to.
@@ -356,10 +350,7 @@ fn garrisoned_melee_ignores_flier_overhead() {
 
     let world = app.world();
     assert_eq!(
-        world
-            .entity(flier)
-            .get::<HealthComponent>()
-            .map(|health| health.current()),
+        entity_def::pool_value(world, flier, PoolId::HEALTH),
         registry_max_health(world, "zeppelin"),
         "an axe swung from a bunker reached the air"
     );
@@ -404,10 +395,7 @@ fn garrisoned_archer_engages_flier_overhead() {
     utils::run_ticks(&mut app, 100);
 
     let world = app.world();
-    let left = world
-        .entity(flier)
-        .get::<HealthComponent>()
-        .map(|health| health.current());
+    let left = entity_def::pool_value(world, flier, PoolId::HEALTH);
     // The bunker garrison opened fire later than a standing archer would —
     // the pinned toll says the arrows flew all the same.
     assert_eq!(

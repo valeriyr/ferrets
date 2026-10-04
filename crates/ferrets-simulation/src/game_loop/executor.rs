@@ -14,7 +14,6 @@ use crate::{
     components::{
         build::UnderConstructionComponent,
         entity_info::EntityInfoComponent,
-        health::HealthComponent,
         location::LocationComponent,
         order_queue::{CancelPolicy, OrderQueueComponent},
         owner,
@@ -39,6 +38,7 @@ use crate::{
     supply, visibility,
 };
 use ferrets_content::{
+    pool_def::PoolId,
     registry::ContentRegistry,
     research::ResearchId,
     skills::{SkillCaster, SkillId},
@@ -431,7 +431,7 @@ pub(super) fn resolve_send_to_entity(
         world.resource::<GameSession>(),
         entity_def::owner(world, entity),
         entity_def::owner(world, target),
-    ) && world.entity(target).contains::<HealthComponent>()
+    ) && entity_def::has_pool(world, target, PoolId::HEALTH)
     {
         candidates.push(Order::Attack {
             target: AttackTarget::Entity(target_id),

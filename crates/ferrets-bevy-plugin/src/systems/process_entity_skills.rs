@@ -3,5 +3,5 @@ use ferrets_simulation::game_loop;
 
 /// Ages every entity-skill cooldown by one tick.
 pub fn process_entity_skills(world: &mut World) {
-    game_loop::stats::process_entity_skills(world);
+    game_loop::skills::process_entity_skills(world);
 }

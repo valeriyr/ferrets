@@ -7,6 +7,8 @@ use ferrets_content::{
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     location::Solidity,
+    pool::Pool,
+    pool_def::PoolId,
     registry::ContentRegistry,
     requirement::{Bound, Requirement, Threshold},
     stats::ModifierOp,
@@ -16,12 +18,11 @@ use ferrets_math::FixedU64;
 use ferrets_simulation::{
     command::PlayerCommand,
     components::{
-        energy::EnergyComponent,
-        health::HealthComponent,
+        last_hit,
         order_queue::OrderQueueComponent,
+        pools::{self, Spending},
         stance::{Stance, StanceComponent},
     },
-    game_loop,
     order::Order,
     requirements,
     session::{GameSession, player_slot::PlayerSlot, player_type::PlayerType},
@@ -160,11 +161,9 @@ fn energy_line_reads_energy_pool() {
     ));
 
     // Spent down to 12 of 50: 12 < 12.5, under a quarter.
-    assert!(
-        app.world_mut()
-            .get_mut::<EnergyComponent>(mover)
-            .unwrap()
-            .spend(utils::fixed("38"))
+    assert_eq!(
+        pools::spend(app.world_mut(), mover, PoolId::ENERGY, utils::fixed("38")),
+        Spending::Paid
     );
     assert!(met_by(
         &app,
@@ -199,7 +198,7 @@ fn pool_share_reads_effective_maximum() {
         "1",
         None,
     );
-    game_loop::stats::apply_entity_buff(app.world_mut(), mover, doubled);
+    utils::apply_buff(app.world_mut(), mover, doubled);
     utils::run_ticks(&mut app, 1);
     utils::wound(&mut app, mover, "10");
 
@@ -285,7 +284,7 @@ fn stat_share_reads_effective_stat_against_base() {
         "-0.4",
         None,
     );
-    game_loop::stats::apply_entity_buff(app.world_mut(), mover, slow);
+    utils::apply_buff(app.world_mut(), mover, slow);
     utils::run_ticks(&mut app, 1);
     assert!(met_by(&app, mover, slowed()));
 }
@@ -388,10 +387,7 @@ fn flight_ending_in_its_own_tick_resets_idle_for() {
     assert!(met_by(&app, mover, Requirement::IdleFor(5)));
 
     let tick = app.world().resource::<GameSession>().tick();
-    app.world_mut()
-        .get_mut::<HealthComponent>(mover)
-        .unwrap()
-        .record_hit(hut_id, tick);
+    last_hit::record(app.world_mut(), mover, hut_id, tick);
     // The count restarted: two ticks idle by the end of the run, where an
     // unbroken count would stand at 6 + 3 = 9.
     utils::run_ticks(&mut app, 3);
@@ -445,10 +441,7 @@ fn unhurt_for_counts_ticks_since_last_hit() {
     assert!(met_by(&app, mover, Requirement::UnhurtFor(5)));
 
     let hit_tick = utils::tick(&app);
-    app.world_mut()
-        .get_mut::<HealthComponent>(mover)
-        .unwrap()
-        .record_hit(SimulationId(999), hit_tick);
+    last_hit::record(app.world_mut(), mover, SimulationId(999), hit_tick);
     assert!(!met_by(&app, mover, Requirement::UnhurtFor(5)));
 
     // Four ticks on: 4 < 5, still hurt. Five on: unhurt for five.
@@ -501,15 +494,15 @@ fn app() -> App {
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
                 )
-                .with_health(40)
-                .with_energy(50, FixedU64::ZERO)
+                .with_pool(Pool::health(40))
+                .with_pool(Pool::energy(50))
                 .with_dying(2, []),
         );
         for name in ["hut", "tower"] {
             registry.register(
                 EntityTypeDef::new(name)
                     .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                    .with_health(100)
+                    .with_pool(Pool::health(100))
                     .with_dying(2, []),
             );
         }

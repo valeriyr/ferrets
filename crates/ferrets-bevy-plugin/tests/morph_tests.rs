@@ -9,7 +9,13 @@ use ferrets_content::{
     cost::Cost,
     entity_type_def::EntityTypeDef,
     location::Solidity,
-    morph::{MorphCancel, MorphInterrupted, MorphPlacement, MorphReason, MorphTransition},
+    morph::{
+        MorphCancel, MorphCourse, MorphInterrupted, MorphPlacement, MorphReason, MorphTransition,
+        PoolCarry,
+    },
+    pool::Pool,
+    pool_def::PoolId,
+    pool_shift::PoolShift,
     price,
     quantity::Quantity,
     registry::ContentRegistry,
@@ -20,11 +26,11 @@ use ferrets_simulation::{
     command::PlayerCommand,
     components::{
         attached::AttachedComponent,
-        energy::EnergyComponent,
         entity_info::EntityInfoComponent,
-        health::HealthComponent,
+        last_hit::{self, LastHitComponent},
         location::LocationComponent,
         order_queue::{CancelPolicy, OrderQueueComponent},
+        pools::PoolsComponent,
         rally::RallyTarget,
         resource::ResourceSourceComponent,
         train::TrainQueueComponent,
@@ -158,14 +164,11 @@ fn instant_change_pays_from_old_pools() {
     utils::run_ticks(&mut app, 3);
 
     assert_eq!(type_name_of(&app, whelp), "husk");
-    // (30 - 10) / 30 of the husk's 10 maximum, in binary fixed-point.
+    // 30 − 10 = 20 of the whelp's 30, carried onto the husk's 10 as
+    // 20 × 10 / 30, in binary fixed point.
     assert_eq!(
-        app.world()
-            .entity(whelp)
-            .get::<HealthComponent>()
-            .expect("the husk keeps a health pool")
-            .current(),
-        FixedU64::from_num(10) * (FixedU64::from_num(20) / FixedU64::from_num(30)),
+        utils::health(&app, whelp),
+        FixedU64::from_num(20) * FixedU64::from_num(10) / FixedU64::from_num(30),
         "the blood price was drawn from the wrong form's pool"
     );
 }
@@ -210,19 +213,31 @@ fn changed_trainer_is_not_sent_to_its_own_rally_point() {
 }
 
 #[test]
-fn form_without_pool_sheds_pool_component() {
-    // The wisp declares no health: the pool component goes with the stat,
-    // because a zero-maximum pool would read as dead rather than poolless.
+fn form_without_pool_keeps_empty_pool_store() {
+    // The whelp's one pool is its 30 health; the wisp declares none. The pool
+    // goes with the stat, because a zero-maximum pool would read as dead
+    // rather than poolless, and the store stays on, empty.
     let mut app = utils::morph_app(MovementModel::Continuous);
     let (whelp, whelp_id) = utils::create_owned(&mut app, "whelp", 10, 10, 0);
+    assert_eq!(utils::health_as_u32(&app, whelp), 30);
+    // A hit remembered on the health pool goes with it.
+    last_hit::record(app.world_mut(), whelp, whelp_id, 0);
 
     utils::order_morph(&mut app, whelp, "wisp");
     utils::run_ticks(&mut app, 15);
+    assert!(
+        app.world().get::<LastHitComponent>(whelp).is_none(),
+        "the last hit outlived the health pool it landed on"
+    );
 
     assert_eq!(type_name_of(&app, whelp), "wisp");
     assert!(
-        app.world().entity(whelp).get::<HealthComponent>().is_none(),
-        "a poolless form kept a health pool"
+        app.world()
+            .entity(whelp)
+            .get::<PoolsComponent>()
+            .expect("a simulation entity carries a pool store")
+            .is_empty(),
+        "a poolless form kept a pool"
     );
     assert!(
         app.world()
@@ -230,10 +245,6 @@ fn form_without_pool_sheds_pool_component() {
             .alive(whelp_id)
             .is_some(),
         "shedding the pool must not read as dying"
-    );
-    assert!(
-        app.world().entity(whelp).get::<EnergyComponent>().is_none(),
-        "no form here carries energy"
     );
 }
 
@@ -251,14 +262,7 @@ fn form_gaining_pool_starts_it_full() {
     utils::run_ticks(&mut app, 15);
 
     assert_eq!(type_name_of(&app, whelp), "whelp");
-    assert_eq!(
-        app.world()
-            .entity(whelp)
-            .get::<HealthComponent>()
-            .expect("the regained form has its pool back")
-            .current(),
-        FixedU64::from_num(30)
-    );
+    assert_eq!(utils::health_as_u32(&app, whelp), 30);
 }
 
 //
@@ -319,7 +323,7 @@ fn interim_form_is_worn_until_change_lands() {
     utils::run_ticks(&mut app, 1);
     assert_eq!(type_name_of(&app, whelp), "chrysalis");
     assert_eq!(utils::gold(app.world()), 0);
-    assert_eq!(utils::health(&app, whelp), 60);
+    assert_eq!(utils::health_as_u32(&app, whelp), 60);
 
     utils::run_ticks(&mut app, 12);
     assert_eq!(type_name_of(&app, whelp), "wyrm");
@@ -741,17 +745,17 @@ fn underfoot_app() -> App {
         registry.register(
             EntityTypeDef::new("mole")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Underfoot)
-                .with_health(20)
+                .with_pool(Pool::health(20))
                 .with_morphs([change("vole", MorphPlacement::Reserve, Vec::new())]),
         );
         registry.register(
             EntityTypeDef::new("vole")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Underfoot)
-                .with_health(20),
+                .with_pool(Pool::health(20)),
         );
         registry.register(
             utils::walker("digger", utils::GROUND)
-                .with_health(30)
+                .with_pool(Pool::health(30))
                 .with_dying(2, [])
                 .with_morphs([change(
                     "den",
@@ -762,7 +766,7 @@ fn underfoot_app() -> App {
         registry.register(
             EntityTypeDef::new("den")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_health(50)
+                .with_pool(Pool::health(50))
                 .with_dying(2, []),
         );
         registry.validate();
@@ -776,14 +780,14 @@ fn underfoot_app() -> App {
 fn change(into: &str, placement: MorphPlacement, costs: Vec<Cost>) -> MorphTransition {
     MorphTransition::new(
         into,
-        None,
+        MorphCourse::direct(MorphInterrupted::Reverts),
         Quantity::Constant(2),
         placement,
         MorphCancel::Refundable,
-        MorphInterrupted::Reverts,
         MorphReason::Change,
         costs,
         Vec::new(),
+        [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
     )
 }
 

@@ -25,7 +25,9 @@ use ferrets_simulation::{
         stance::{Stance, StanceComponent},
     },
     control_groups::ControlGroups,
+    entity_index::EntityIndex,
     fields::{self, FieldGrid},
+    game_loop::cast::{self, AimRefusal},
     map::Map,
     order::AttackTarget,
     selection::Selection,
@@ -797,6 +799,104 @@ pub fn order_mode_input(
     *mode = InputMode::Targeting(armed);
 }
 
+/// What an armed skill would be cast on, were the player to click now.
+#[derive(Resource, Default)]
+pub struct AimHover(pub Option<SkillTarget>);
+
+/// What the cast the player is aiming would make of what the cursor is over.
+#[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AimVerdict {
+    /// No skill armed, nothing under the cursor, or no caster to judge for.
+    #[default]
+    Idle,
+    /// The cast would take what the cursor is over.
+    Takes,
+    /// The cast would refuse what the cursor is over, for this reason.
+    Refuses(AimRefusal),
+}
+
+/// While a skill is armed, notes what the cursor would cast it on.
+pub fn hover_aim(
+    mode: Res<InputMode>,
+    registry: Res<ContentRegistry>,
+    mut hover: ResMut<AimHover>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    cameras: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
+    entities: Query<
+        (
+            &EntityInfoComponent,
+            &LocationComponent,
+            Option<&Visibility>,
+            Option<&render::Sighted>,
+            Has<RemainsComponent>,
+        ),
+        Without<HiddenComponent>,
+    >,
+) {
+    let target = match &*mode {
+        &InputMode::Targeting(TargetedOrder::Skill(skill)) => {
+            let cursor = windows.single().ok().zip(cameras.single().ok()).and_then(
+                |(window, (camera, camera_transform))| {
+                    cursor_world(window, camera, camera_transform)
+                },
+            );
+            cursor.and_then(|cursor| skill_target_at(cursor, skill, &registry, &entities))
+        }
+        InputMode::Normal
+        | InputMode::PlacingBuild(_)
+        | InputMode::Targeting(
+            TargetedOrder::Attack
+            | TargetedOrder::Patrol
+            | TargetedOrder::Guard
+            | TargetedOrder::Follow
+            | TargetedOrder::Board
+            | TargetedOrder::Load
+            | TargetedOrder::Unload
+            | TargetedOrder::AttackGround,
+        ) => None,
+    };
+    if hover.0 != target {
+        hover.0 = target;
+    }
+}
+
+/// Judges the hovered aim of an armed skill by the simulation's own rule, for
+/// the leading caster.
+pub fn judge_aim(world: &mut World) {
+    let verdict = match world.resource::<InputMode>() {
+        &InputMode::Targeting(TargetedOrder::Skill(skill)) => {
+            let hovered = world.resource::<AimHover>().0;
+            let player = world.resource::<GameSession>().local_player();
+            let caster = world
+                .resource::<Leading>()
+                .0
+                .and_then(|id| world.resource::<EntityIndex>().interactable(world, id));
+            match (hovered, player, caster) {
+                (Some(target), Some(player), Some(caster)) => {
+                    match cast::aim(world, player, caster, skill, Some(target)) {
+                        Ok(_) => AimVerdict::Takes,
+                        Err(refusal) => AimVerdict::Refuses(refusal),
+                    }
+                }
+                (None, _, _) | (_, None, _) | (_, _, None) => AimVerdict::Idle,
+            }
+        }
+        InputMode::Normal
+        | InputMode::PlacingBuild(_)
+        | InputMode::Targeting(
+            TargetedOrder::Attack
+            | TargetedOrder::Patrol
+            | TargetedOrder::Guard
+            | TargetedOrder::Follow
+            | TargetedOrder::Board
+            | TargetedOrder::Load
+            | TargetedOrder::Unload
+            | TargetedOrder::AttackGround,
+        ) => AimVerdict::Idle,
+    };
+    *world.resource_mut::<AimVerdict>() = verdict;
+}
+
 /// While a combat order is armed, left-click issues it (Esc/RMB cancel).
 pub fn targeting_input(
     mouse: Res<ButtonInput<MouseButton>>,
@@ -805,6 +905,7 @@ pub fn targeting_input(
     session: Res<GameSession>,
     selection: Res<Selection>,
     leading: Res<Leading>,
+    aim_verdict: Res<AimVerdict>,
     mut mode: ResMut<InputMode>,
     mut pending: ResMut<PendingInput>,
     interactions: Query<&Interaction>,
@@ -920,30 +1021,15 @@ pub fn targeting_input(
             let Some(local) = session.local_player() else {
                 return;
             };
-            // What the click has to find depends on what the skill takes: a
-            // cell, a body on the ground, or something standing.
-            let aim = match registry.skill_def(skill).map(|def| &def.caster) {
-                Some(SkillCaster::Entity { target, .. }) => target,
-                Some(SkillCaster::Player { .. }) | None => return,
+            // A miss, or a target the cast would refuse, keeps the mode armed
+            // so the player can click again; the hint line says why.
+            let Some(target) = skill_target_at(cursor, skill, &registry, &entities) else {
+                return;
             };
-            let target = match aim {
-                EntityCastTarget::Position => SkillTarget::Position(world_to_pos(cursor)),
-                EntityCastTarget::Fallen { .. } => {
-                    // A miss keeps the mode armed, so the player can click again.
-                    let Some(target) = entity_at(cursor, Clicked::Remains, &registry, &entities)
-                    else {
-                        return;
-                    };
-                    SkillTarget::Entity(target)
-                }
-                EntityCastTarget::Caster | EntityCastTarget::Standing { .. } => {
-                    let Some(target) = entity_at(cursor, Clicked::Standing, &registry, &entities)
-                    else {
-                        return;
-                    };
-                    SkillTarget::Entity(target)
-                }
-            };
+            match *aim_verdict {
+                AimVerdict::Refuses(_) => return,
+                AimVerdict::Takes | AimVerdict::Idle => {}
+            }
             for &caster in selection.get(local) {
                 pending.push(PlayerCommand::UseSkill {
                     skill,
@@ -1300,4 +1386,36 @@ fn draw_reach(gizmos: &mut Gizmos, anchor: CellPos, size: CellSize, radius: u32,
     let half = (size.width.max(size.height) as f32 / 2.0) * CELL_PX;
     let reach = radius as f32 * CELL_PX;
     gizmos.circle_2d(Isometry2d::from_translation(center), half + reach, color);
+}
+
+/// What a click at `cursor` would cast `skill` on: a cell, a body on the
+/// ground, or something standing, as the skill takes — or `None` on a miss.
+fn skill_target_at(
+    cursor: Vec2,
+    skill: SkillId,
+    registry: &ContentRegistry,
+    entities: &Query<
+        (
+            &EntityInfoComponent,
+            &LocationComponent,
+            Option<&Visibility>,
+            Option<&render::Sighted>,
+            Has<RemainsComponent>,
+        ),
+        Without<HiddenComponent>,
+    >,
+) -> Option<SkillTarget> {
+    let aim = match registry.skill_def(skill).map(|def| &def.caster) {
+        Some(SkillCaster::Entity { target, .. }) => target,
+        Some(SkillCaster::Player { .. }) | None => return None,
+    };
+    match aim {
+        EntityCastTarget::Position => Some(SkillTarget::Position(world_to_pos(cursor))),
+        EntityCastTarget::Fallen { .. } => {
+            entity_at(cursor, Clicked::Remains, registry, entities).map(SkillTarget::Entity)
+        }
+        EntityCastTarget::Caster | EntityCastTarget::Standing { .. } => {
+            entity_at(cursor, Clicked::Standing, registry, entities).map(SkillTarget::Entity)
+        }
+    }
 }

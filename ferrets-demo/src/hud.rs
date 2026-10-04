@@ -8,32 +8,30 @@ use ferrets_content::{
     cost::Cost,
     entity_stats::EntityStatId,
     morph::MorphCancel,
+    pool_def::PoolId,
     price::Price,
     registry::ContentRegistry,
     requirement::{Bound, Requirement, Threshold},
     research::ResearchId,
     skills::{EntityCastTarget, SkillCaster, SkillId},
 };
-use ferrets_geometry::cell_rect::CellRect;
 use ferrets_math::fixed_uvec2::FixedUVec2;
-use ferrets_physics::body;
 use ferrets_simulation::{
     annex,
     command::{PlayerCommand, SelectMode, SkillCasterRef},
     components::{
         build::UnderConstructionComponent,
         concealed::ConcealedComponent,
-        energy::EnergyComponent,
         entity_buffs::BuffsComponent,
         entity_info::EntityInfoComponent,
         entity_skills::SkillsComponent,
         entity_stats::StatsComponent,
-        health::HealthComponent,
         hidden::HiddenComponent,
         location::LocationComponent,
         morph::MorphComponent,
         order_queue::{OrderEntry, OrderQueueComponent},
         owner::OwnerComponent,
+        pools::{self, PoolsComponent},
         resource::{ResourceCarrierComponent, ResourceSourceComponent},
         stance::StanceComponent,
         train::TrainQueueComponent,
@@ -41,8 +39,8 @@ use ferrets_simulation::{
     control_groups::{CONTROL_GROUP_COUNT, ControlGroups},
     entity_def::{self, Operation},
     entity_index::EntityIndex,
-    fields::{self, FieldGrid},
     game_loop::{
+        cast::AimRefusal,
         morph,
         orders::{self, Refusal},
     },
@@ -62,7 +60,7 @@ use ferrets_simulation::{
 };
 
 use crate::{
-    input::{InputMode, Leading, TargetedOrder},
+    input::{AimVerdict, InputMode, Inspected, Leading, TargetedOrder},
     render::{self, Sighted},
     states::{GameState, InGameUi},
     time::{self, SpeedStep},
@@ -586,9 +584,11 @@ pub fn update_supply(world: &mut World) {
         .resource::<GameSession>()
         .local_player()
         .map(|player| {
-            let provided = supply::provided(world, player).to_num::<u32>();
-            let used = supply::used(world, player).to_num::<u32>();
-            (format!("Supply: {used}/{provided}"), used >= provided)
+            let displayed = supply::displayed(world, player);
+            (
+                format!("Supply: {}/{}", displayed.used, displayed.provided),
+                displayed.used >= displayed.provided,
+            )
         });
 
     let mut query = world.query_filtered::<(&mut Text, &mut TextColor), With<SupplyText>>();
@@ -658,30 +658,26 @@ pub fn update_help(
 
 /// Shows details about the current selection: name, health, and resource amounts
 /// for the single selected entity, or a count when several are selected.
-pub fn update_selection(
-    session: Res<GameSession>,
-    watch: Res<render::ObserverPerspective>,
-    selection: Res<Selection>,
-    registry: Res<ContentRegistry>,
-    fields: Res<FieldGrid>,
-    entities: Query<(
+pub fn update_selection(world: &mut World) {
+    let mut entities = world.query_filtered::<(
+        Entity,
         &EntityInfoComponent,
-        &LocationComponent,
         Option<&OwnerComponent>,
-        Option<&HealthComponent>,
+        &PoolsComponent,
         Option<&StatsComponent>,
         Option<&ResourceCarrierComponent>,
         Option<&ResourceSourceComponent>,
         Option<&StanceComponent>,
-        Option<&EnergyComponent>,
         Option<&BuffsComponent>,
-        Option<&UnderConstructionComponent>,
         Has<ConcealedComponent>,
         Option<&Sighted>,
-    )>,
-    inspected: Res<crate::input::Inspected>,
-    mut text: Query<&mut Text, With<SelectionText>>,
-) {
+    ), With<LocationComponent>>();
+    let world_ref: &World = world;
+    let session = world_ref.resource::<GameSession>();
+    let watch = world_ref.resource::<render::ObserverPerspective>();
+    let selection = world_ref.resource::<Selection>();
+    let registry = world_ref.resource::<ContentRegistry>();
+    let inspected = world_ref.resource::<Inspected>();
     // A playing node's panel shows its live selection; a watching one's —
     // by role, or a player whose defeat took effect — shows what it picked
     // to look at. One slice either way, so the readout below serves both.
@@ -692,25 +688,25 @@ pub fn update_selection(
     let message = match selected {
         [] => String::new(),
         [id] => entities
-            .iter()
-            .find(|(info, ..)| info.id() == *id)
+            .iter(world_ref)
+            .find(|(_, info, ..)| info.id() == *id)
             .map(
                 |(
+                    entity,
                     info,
-                    location,
                     owner,
-                    health,
+                    pools,
                     stats,
                     carrier,
                     source,
                     stance,
-                    energy,
                     buffs,
-                    under_construction,
                     concealed,
                     sighted,
                 )| {
                     let def = registry.def(info.type_id());
+                    let health = pools.current(PoolId::HEALTH);
+                    let energy = pools.current(PoolId::ENERGY);
                     // The simulation id rides along with the name: it is the
                     // handle a replay, a log line, or a forensics run names the
                     // same entity by, so a report can point at one unit rather
@@ -726,7 +722,7 @@ pub fn update_selection(
                     // What the side does not own keeps its name and nothing
                     // live once the perspective stops making it out — a pick
                     // that cloaked, or walked into fog.
-                    let own = match (render::viewed_player(&session, &watch), owner) {
+                    let own = match (render::viewed_player(session, watch), owner) {
                         (Some(watched), Some(owner)) => owner.player() == watched,
                         (Some(_), None) | (None, _) => false,
                     };
@@ -742,7 +738,7 @@ pub fn update_selection(
                     if let (Some(health), Some(max_health)) = (health, max_health) {
                         parts.push(format!(
                             "HP {}/{}",
-                            health.displayed(),
+                            pools::displayed_health(health),
                             max_health.to_num::<u32>()
                         ));
                     }
@@ -772,8 +768,15 @@ pub fn update_selection(
                     if let Some(StanceComponent(stance)) = stance {
                         parts.push(format!("stance: {}", stance.name().replace('_', " ")));
                     }
-                    if let Some(energy) = energy {
-                        parts.push(format!("energy {}", energy.current_as_u32()));
+                    let max_energy = stats
+                        .and_then(|stats| stats.effective(EntityStatId::MAX_ENERGY))
+                        .or_else(|| def.base_stat(EntityStatId::MAX_ENERGY));
+                    if let (Some(energy), Some(max_energy)) = (energy, max_energy) {
+                        parts.push(format!(
+                            "energy {}/{}",
+                            pools::displayed_energy(energy),
+                            max_energy.to_num::<u32>()
+                        ));
                     }
                     if let Some(buffs) = buffs
                         && !buffs.is_empty()
@@ -792,25 +795,13 @@ pub fn update_selection(
                             .collect();
                         parts.push(names.join(", "));
                     }
-                    // Not operating: still going up, or standing outside the
-                    // field it needs. Construction wins, as it does for the
-                    // engine's own reading.
-                    let disabled = fields::disabled_in(
-                        &fields,
-                        &session,
-                        def,
-                        owner.map(|owner| owner.player()),
-                        CellRect::new(
-                            body::anchor(location.position),
-                            def.location
-                                .expect("a drawn entity stands somewhere")
-                                .size(),
-                        ),
-                    );
-                    match (under_construction, disabled) {
-                        (Some(_), _) => parts.push("under construction".to_string()),
-                        (None, true) => parts.push("disabled".to_string()),
-                        (None, false) => {}
+                    // Not operating, as the simulation judges it.
+                    match entity_def::operation(world_ref, entity) {
+                        Operation::UnderConstruction => {
+                            parts.push("under construction".to_string());
+                        }
+                        Operation::Disabled(_) => parts.push("disabled".to_string()),
+                        Operation::Operating => {}
                     }
                     if concealed {
                         parts.push("concealed".to_string());
@@ -822,7 +813,8 @@ pub fn update_selection(
         many => format!("{} units selected", many.len()),
     };
 
-    if let Ok(mut text) = text.single_mut() {
+    let mut text = world.query_filtered::<&mut Text, With<SelectionText>>();
+    if let Ok(mut text) = text.single_mut(world) {
         **text = message;
     }
 }
@@ -1792,12 +1784,35 @@ pub fn update_card_availability(world: &mut World) {
             });
         }
     }
-    let hint = hint.unwrap_or_default();
+    // While a skill is armed, the line answers for what the cursor is over: why
+    // the cast would refuse it.
+    let aiming = match world.resource::<InputMode>() {
+        InputMode::Targeting(TargetedOrder::Skill(_)) => *world.resource::<AimVerdict>(),
+        InputMode::Normal | InputMode::PlacingBuild(_) | InputMode::Targeting(_) => {
+            AimVerdict::Idle
+        }
+    };
+    let hint = match aiming {
+        AimVerdict::Refuses(refusal) => aim_refusal_words(refusal).to_string(),
+        AimVerdict::Takes | AimVerdict::Idle => hint.unwrap_or_default(),
+    };
     let mut lines = world.query_filtered::<&mut Text, With<CardHint>>();
     for mut text in lines.iter_mut(world) {
         if text.0 != hint {
             text.0 = hint.clone();
         }
+    }
+}
+
+/// Why an armed cast would refuse what the cursor is over, in words.
+fn aim_refusal_words(refusal: AimRefusal) -> &'static str {
+    match refusal {
+        AimRefusal::Unaimed => "Pick a target the skill takes",
+        AimRefusal::OffMap => "Off the map",
+        AimRefusal::Unseen => "Not in sight",
+        AimRefusal::WrongSide => "Not a side it can be cast on",
+        AimRefusal::WrongKind => "Not something it can be cast on",
+        AimRefusal::Uncarried => "It would do nothing to that",
     }
 }
 
@@ -2038,6 +2053,10 @@ fn unmet_words(
             }
             Some(format!("({})", unmet.join(" or ")))
         }
+        Requirement::Unless(item) => {
+            requirements::met(world, player, leading, std::slice::from_ref(item))
+                .then(|| format!("not {}", requirement_words(world, item)))
+        }
         Requirement::EntityType(_)
         | Requirement::Tag(_)
         | Requirement::Research(_)
@@ -2045,6 +2064,7 @@ fn unmet_words(
         | Requirement::Health(_)
         | Requirement::Energy(_)
         | Requirement::Stat { .. }
+        | Requirement::Built
         | Requirement::Idle
         | Requirement::IdleFor(_)
         | Requirement::UnhurtFor(_) => {
@@ -2054,11 +2074,45 @@ fn unmet_words(
     }
 }
 
+/// A whole requirement in words, met or not: an `all` joined by "and", an
+/// `any` by "or", a negation as "not".
+fn requirement_words(world: &World, entry: &Requirement) -> String {
+    match entry {
+        Requirement::All(items) => items
+            .iter()
+            .map(|item| requirement_words(world, item))
+            .collect::<Vec<_>>()
+            .join(" and "),
+        Requirement::Any(items) => format!(
+            "({})",
+            items
+                .iter()
+                .map(|item| requirement_words(world, item))
+                .collect::<Vec<_>>()
+                .join(" or ")
+        ),
+        Requirement::Unless(item) => format!("not {}", requirement_words(world, item)),
+        Requirement::EntityType(_)
+        | Requirement::Tag(_)
+        | Requirement::Research(_)
+        | Requirement::Annexed(_)
+        | Requirement::Health(_)
+        | Requirement::Energy(_)
+        | Requirement::Stat { .. }
+        | Requirement::Built
+        | Requirement::Idle
+        | Requirement::IdleFor(_)
+        | Requirement::UnhurtFor(_) => leaf_words(world, entry),
+    }
+}
+
 /// One leaf of a requirement in words: `a Spawning Pit`, `health under 34%`.
 fn leaf_words(world: &World, entry: &Requirement) -> String {
     let registry = world.resource::<ContentRegistry>();
     match entry {
-        Requirement::All(_) | Requirement::Any(_) => unreachable!("a node is not a leaf"),
+        Requirement::All(_) | Requirement::Any(_) | Requirement::Unless(_) => {
+            unreachable!("a node is not a leaf")
+        }
         Requirement::EntityType(name) => format!("a {}", pretty_name(name)),
         Requirement::Tag(tag) => format!("a {}", pretty_name(tag)),
         Requirement::Research(research) => pretty_name(
@@ -2078,6 +2132,7 @@ fn leaf_words(world: &World, entry: &Requirement) -> String {
             ),
             bound_words(*bound)
         ),
+        Requirement::Built => "finished building".to_string(),
         Requirement::Idle => "standing idle".to_string(),
         Requirement::IdleFor(ticks) => {
             format!("{} idle", time::seconds_text(time::seconds(*ticks)))

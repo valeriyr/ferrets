@@ -132,7 +132,7 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
         return Processing::state(OrderState::InProcessing);
     }
 
-    let period = entity_def::effective_stat_u32(world, entity, EntityStatId::UNLOAD_PERIOD);
+    let period = entity_def::effective_ticks(world, entity, EntityStatId::UNLOAD_PERIOD);
     loop {
         let Some(passenger_id) = world
             .entity(entity)

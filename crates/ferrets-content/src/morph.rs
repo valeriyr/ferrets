@@ -1,7 +1,12 @@
 //! Content-defined in-place transitions: what an entity can become, and on
 //! what terms.
 
-use crate::{cost::Cost, quantity::Quantity, requirement::Requirement};
+use std::collections::BTreeMap;
+
+use crate::{
+    cost::Cost, pool_def::PoolId, pool_shift::PoolShift, quantity::Quantity,
+    requirement::Requirement,
+};
 
 /// When a transition secures the ground its destination form stands on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,14 +39,98 @@ pub enum MorphCancel {
     Refundable,
 }
 
-/// What becomes of the entity when a transition is interrupted — called off,
-/// flushed, or landing on ground that no longer takes it.
+/// How a landing fills the pools the form it lands on carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PoolCarry {
+    /// Each pool moves to the new maximum as the shift says, from the maximum
+    /// it stood under before the landing.
+    Shift(PoolShift),
+    /// Each pool comes out full.
+    Full,
+}
+
+/// How a change that reverts out of its interim form fills the origin's
+/// pools.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RevertCarry {
+    /// Each pool comes back to what it held when the change started.
+    Restore,
+    /// Each pool carries from the interim form's values, as on any landing.
+    Carry(PoolCarry),
+}
+
+/// What becomes of the entity when a direct change is interrupted — called
+/// off, flushed, or landing on ground that no longer takes it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MorphInterrupted {
-    /// It reverts to the origin form, standing where the change was under way.
+    /// It stays in the origin form, its pools as they are.
     Reverts,
     /// It dies.
     Dies,
+}
+
+/// What becomes of the entity when a change through an interim form is
+/// interrupted — called off, flushed, or landing on ground that no longer
+/// takes it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ViaInterrupted {
+    /// It goes back to the origin form, standing where the change was under
+    /// way, each pool named filled as its carry says and every other one
+    /// keeping its value, held under the origin's maximum.
+    Reverts(BTreeMap<PoolId, RevertCarry>),
+    /// It dies.
+    Dies,
+}
+
+impl ViaInterrupted {
+    /// A change that reverts on interruption, each pool in `carries` filled as
+    /// its carry says.
+    pub fn reverts(carries: impl IntoIterator<Item = (PoolId, RevertCarry)>) -> Self {
+        Self::Reverts(carries.into_iter().collect())
+    }
+}
+
+/// How a change gets from its origin form to its destination.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MorphCourse {
+    /// The form changes at the landing; until then the origin stands as it
+    /// is.
+    Direct {
+        /// What becomes of the entity when the change is interrupted.
+        interrupted: MorphInterrupted,
+    },
+    /// An interim form is worn while the change runs: entered when it starts
+    /// and left when it lands.
+    Via {
+        /// The interim form, by registered name.
+        form: String,
+        /// How the landing on the interim form fills each pool it names; a
+        /// pool it does not name keeps its value, held under the new maximum.
+        enter_pool_carry: BTreeMap<PoolId, PoolCarry>,
+        /// What becomes of the entity when the change is interrupted.
+        interrupted: ViaInterrupted,
+    },
+}
+
+impl MorphCourse {
+    /// A change whose form changes at the landing.
+    pub fn direct(interrupted: MorphInterrupted) -> Self {
+        Self::Direct { interrupted }
+    }
+
+    /// A change that wears `form` while it runs, entering it with each pool in
+    /// `enter_pool_carry` filled as its carry says.
+    pub fn via(
+        form: impl Into<String>,
+        enter_pool_carry: impl IntoIterator<Item = (PoolId, PoolCarry)>,
+        interrupted: ViaInterrupted,
+    ) -> Self {
+        Self::Via {
+            form: form.into(),
+            enter_pool_carry: enter_pool_carry.into_iter().collect(),
+            interrupted,
+        }
+    }
 }
 
 /// What a transition is for, as the statistics count it.
@@ -60,18 +149,14 @@ pub struct MorphTransition {
     /// because transitions may be circular: two forms can each name the
     /// other, so no registration order resolves both to a handle.
     into: String,
-    /// The form worn while the transition runs, by registered name: entered
-    /// when the transition starts and left when it lands. `None` keeps the
-    /// origin form for the duration.
-    via: Option<String>,
+    /// How the transition gets from the origin form to the destination.
+    course: MorphCourse,
     /// How long the transition takes.
     time: Quantity,
     /// When the destination footprint is secured.
     placement: MorphPlacement,
     /// Whether the transition can be called off once under way.
     cancel: MorphCancel,
-    /// What becomes of the entity when the transition is interrupted.
-    interrupted: MorphInterrupted,
     /// What the transition is for, as the statistics count it.
     reason: MorphReason,
     /// What starting the transition costs, drawn when it starts. Every arm is
@@ -81,43 +166,47 @@ pub struct MorphTransition {
     /// [`requires`](crate::entity_type_def::EntityTypeDef::requires) list.
     /// Empty means always available.
     requires: Vec<Requirement>,
+    /// How the landing on the destination fills each pool it names; a pool it
+    /// does not name keeps its value, held under the new maximum.
+    land_pool_carry: BTreeMap<PoolId, PoolCarry>,
 }
 
 impl MorphTransition {
     /// Creates a new `MorphTransition` with the given data.
     ///
-    /// Panics if `into` or `via` is empty.
+    /// Panics if `into` or the interim form's name is empty.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         into: impl Into<String>,
-        via: Option<&str>,
+        course: MorphCourse,
         time: Quantity,
         placement: MorphPlacement,
         cancel: MorphCancel,
-        interrupted: MorphInterrupted,
         reason: MorphReason,
         costs: Vec<Cost>,
         requires: impl IntoIterator<Item = Requirement>,
+        land_pool_carry: impl IntoIterator<Item = (PoolId, PoolCarry)>,
     ) -> Self {
         let into = into.into();
         assert!(!into.is_empty(), "into must not be empty");
-        let via = via.map(str::to_string);
-        assert!(
-            via.as_ref().is_none_or(|via| !via.is_empty()),
-            "via must not be empty"
-        );
+        match &course {
+            MorphCourse::Direct { .. } => {}
+            MorphCourse::Via { form, .. } => {
+                assert!(!form.is_empty(), "via must not be empty");
+            }
+        }
         let requires: Vec<Requirement> = requires.into_iter().collect();
 
         Self {
             into,
-            via,
+            course,
             time,
             placement,
             cancel,
-            interrupted,
             reason,
             costs,
             requires,
+            land_pool_carry: land_pool_carry.into_iter().collect(),
         }
     }
 
@@ -127,16 +216,33 @@ impl MorphTransition {
         &self.into
     }
 
+    /// How the transition gets from the origin form to the destination.
+    #[inline]
+    pub fn course(&self) -> &MorphCourse {
+        &self.course
+    }
+
     /// The form worn while the transition runs, if any.
     #[inline]
     pub fn via_type(&self) -> Option<&str> {
-        self.via.as_deref()
+        match &self.course {
+            MorphCourse::Direct { .. } => None,
+            MorphCourse::Via { form, .. } => Some(form),
+        }
     }
 
     /// How long the transition takes.
     #[inline]
     pub fn time(&self) -> Quantity {
         self.time
+    }
+
+    /// How the landing on the destination fills each pool it names.
+    #[inline]
+    pub fn land_pool_carry(&self) -> impl Iterator<Item = (PoolId, PoolCarry)> + '_ {
+        self.land_pool_carry
+            .iter()
+            .map(|(&pool, &carry)| (pool, carry))
     }
 
     /// When the destination footprint is secured.
@@ -149,12 +255,6 @@ impl MorphTransition {
     #[inline]
     pub fn cancel(&self) -> MorphCancel {
         self.cancel
-    }
-
-    /// What becomes of the entity when the transition is interrupted.
-    #[inline]
-    pub fn interrupted(&self) -> MorphInterrupted {
-        self.interrupted
     }
 
     /// What the transition is for, as the statistics count it.

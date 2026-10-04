@@ -13,6 +13,7 @@ use ferrets_content::{
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     location::Solidity,
+    pool::Pool,
     registry::ContentRegistry,
     turret::{TurretDef, TurretMount, TurretStats, WeaponConduct},
 };
@@ -664,7 +665,7 @@ fn register_gun_wagon(app: &mut App) {
                 FixedU64::from_num(30),
                 FixedU64::from_num(30),
             )
-            .with_health(40)
+            .with_pool(Pool::health(40))
             .with_stat(EntityStatId::AIM_RATE, FixedU64::from_num(12))
             .with_stat(EntityStatId::DAMAGE, FixedU64::from_num(10))
             .with_stat(EntityStatId::ATTACK_RANGE, FixedU64::from_num(4))

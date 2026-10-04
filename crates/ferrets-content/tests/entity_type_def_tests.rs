@@ -12,6 +12,8 @@ use ferrets_content::{
     entity_type_def::EntityTypeDef,
     kinds::Kinds,
     location::Solidity,
+    pool::Pool,
+    pool_def::PoolId,
     quantity::Quantity,
     resource::{Banking, DepletionPolicy, HarvestData},
     work::{Attachment, BerthStance, CrewLimit, WorkPresence},
@@ -35,7 +37,7 @@ fn fully_loaded_definition_is_valid() {
             FixedU64::from_num(360),
             FixedU64::from_num(360),
         )
-        .with_health(50)
+        .with_pool(Pool::health(50))
         .with_dying(3, [])
         .with_attack(utils::weapon(GROUND), 10, 1, 1, 4, 2)
         .with_price([("gold", 30), ("wood", 10)])
@@ -66,6 +68,51 @@ fn fully_loaded_definition_is_valid() {
         .with_resource_storage(["gold"]);
 
     assert_eq!(def.name, "factotum");
+}
+
+//
+// ─── Pools ────────────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn pools_are_kept_in_pool_order_whatever_order_they_are_given() {
+    let def = utils::standing("well", GROUND)
+        .with_pool(Pool::energy(40))
+        .with_pool(Pool::health(100));
+
+    let ids: Vec<PoolId> = def.base_stats.pools().map(|pool| pool.id()).collect();
+    assert_eq!(ids, vec![PoolId::HEALTH, PoolId::ENERGY]);
+}
+
+#[test]
+fn pool_given_twice_keeps_later_declaration() {
+    let def = utils::standing("well", GROUND)
+        .with_pool(Pool::health(20))
+        .with_pool(Pool::health(30));
+
+    assert_eq!(def.base_stats.pools().count(), 1);
+    assert_eq!(
+        def.base_stats
+            .pool(PoolId::HEALTH)
+            .map(|pool| pool.maximum()),
+        Some(FixedU64::from_num(30))
+    );
+}
+
+#[test]
+#[should_panic(expected = "is filled by a declared pool")]
+fn stat_set_beside_its_pool_panics() {
+    let _ = utils::standing("well", GROUND)
+        .with_pool(Pool::energy(20))
+        .with_stat(EntityStatId::ENERGY_REGEN, FixedU64::from_num(1));
+}
+
+#[test]
+#[should_panic(expected = "is set on its own and filled by")]
+fn pool_declared_over_own_stat_panics() {
+    let _ = utils::standing("well", GROUND)
+        .with_stat(EntityStatId::ENERGY_REGEN, FixedU64::from_num(1))
+        .with_pool(Pool::energy(20));
 }
 
 //
@@ -425,6 +472,18 @@ fn bonus_against_ignores_tags_absent_from_bonus_keys() {
 #[should_panic(expected = "bonus_damage_vs keys must not be empty")]
 fn empty_bonus_key_panics() {
     footman().with_bonus_damage_vs([("", 5u32)]);
+}
+
+//
+// ─── Whole-number readings ────────────────────────────────────────────────────
+//
+
+#[test]
+fn base_ticks_round_up() {
+    // A lifetime of 2.25 ticks reads as 3; one the type lacks, as none.
+    let def = footman().with_stat(EntityStatId::LIFETIME, utils::fixed("2.25"));
+    assert_eq!(def.base_ticks(EntityStatId::LIFETIME), Some(3));
+    assert_eq!(def.base_ticks(EntityStatId::LOAD_PERIOD), None);
 }
 
 //

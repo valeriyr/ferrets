@@ -16,20 +16,27 @@ use ferrets_content::{
     detection::Detection,
     entity_buffs::{EntityBuffDef, Lasting},
     entity_effect::EntityEffect,
+    entity_modifiers::EntityModifiers,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     field::{
         Emission, FieldAction, FieldCoverage, FieldDecay, FieldDef, FieldEffect, FieldGrowth,
-        FieldId, FieldLayer, FieldPlacement, FieldSide, FieldSourceDef, FieldVision,
+        FieldId, FieldLayer, FieldPlacement, FieldSourceDef, FieldVision,
     },
     kinds::Kinds,
     location::Solidity,
-    morph::{MorphCancel, MorphInterrupted, MorphPlacement, MorphReason, MorphTransition},
+    morph::{
+        MorphCancel, MorphCourse, MorphInterrupted, MorphPlacement, MorphReason, MorphTransition,
+        PoolCarry, RevertCarry, ViaInterrupted,
+    },
+    pool::Pool,
+    pool_def::PoolId,
+    pool_shift::PoolShift,
     price,
     quantity::Quantity,
     registry::ContentRegistry,
     repair::{RepairCost, RepairRate},
-    requirement::Requirement,
+    requirement::{Bound, Requirement, Threshold},
     research::ResearchDef,
     resource::{Banking, DepletionPolicy, HarvestData},
     skills::{Casting, EntityCastEffect, EntityCastTarget, Reach, SkillCaster, SkillDef},
@@ -46,13 +53,14 @@ use ferrets_simulation::{
     checksum,
     command::{PlayerCommand, SkillCasterRef, SkillTarget},
     components::{
-        research::ResearchComponent, resource::ResourceSourceComponent, train::TrainComponent,
+        hidden::HiddenComponent, pools, research::ResearchComponent,
+        resource::ResourceSourceComponent, train::TrainComponent,
     },
     entity_def::{self, Operation, Outage},
+    entity_index::EntityIndex,
     events::{DeathCause, SimulationEvent},
     fields::{self, FieldGrid},
-    game_loop::stats,
-    map_data::MapData,
+    map_data::{MapData, Placement},
     order::Order,
     player_research::PlayerResearch,
     requirements,
@@ -186,6 +194,62 @@ fn source_under_construction_projects_only_what_it_declares() {
         !utils::covered_by(&app, power, 21, 10, 0),
         "the pylon projects nothing"
     );
+}
+
+#[test]
+fn placement_under_lifted_field_effect_keeps_its_share() {
+    let mut app = field_app();
+    let Fields { creep, .. } = fields(&app);
+    {
+        let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
+        registry.register_terrain("grass", utils::GROUND);
+        // Half its health off creep, whole on it, the pool keeping its share.
+        registry.register(
+            building("shrub", 1, 6).with_field_effects([FieldEffect::new(
+                creep,
+                Affiliation::Anyone,
+                FieldCoverage::Any,
+                Vec::new(),
+                vec![EntityEffect::Modifiers(EntityModifiers::PoolMaximums {
+                    modifiers: vec![modifier(
+                        EntityStatId::MAX_HEALTH,
+                        ModifierOp::PercentAdd,
+                        "-0.5",
+                    )],
+                    pool_shift: PoolShift::Share,
+                })],
+                None,
+            )]),
+        );
+    }
+    let mut data = MapData::new("garden", Projection::Isometric, 16, 16);
+    data.fill_terrain("grass");
+    data.add_player_slot((5, 5));
+    for (type_name, cell) in [("nest", (5, 5)), ("shrub", (7, 5))] {
+        data.add_placement(Placement {
+            type_name: type_name.to_string(),
+            cell,
+            owner: Some(0),
+            amount: None,
+        });
+    }
+    instantiate_map(app.world_mut(), &data);
+
+    // Placed before any field is computed, the shrub starts full at 50 of 50;
+    // the creep covers it on the first tick and lifts the half, and the pool
+    // keeps its share: 100 of 100.
+    let shrub = app
+        .world()
+        .resource::<EntityIndex>()
+        .alive_entries()
+        .into_iter()
+        .map(|(_, entity)| entity)
+        .find(|&entity| entity_def::type_name(app.world(), entity) == "shrub")
+        .expect("the shrub is placed");
+    assert_eq!(utils::health_as_u32(&app, shrub), 50);
+    utils::run_ticks(&mut app, 1);
+    assert!(utils::covered_by(&app, creep, 7, 5, 0));
+    assert_eq!(utils::health_as_u32(&app, shrub), 100);
 }
 
 #[test]
@@ -398,6 +462,56 @@ fn inside_effect_folds_into_stats_where_entity_stands() {
 }
 
 #[test]
+fn one_entry_applies_each_side_where_entity_stands() {
+    let mut app = field_app();
+    utils::place(&mut app, "hive", 10, 10, 0);
+    let on_creep = utils::create_owned(&mut app, "skimmer", 13, 10, 1).0;
+    let off_creep = utils::create_owned(&mut app, "skimmer", 20, 20, 1).0;
+
+    utils::run_ticks(&mut app, 1);
+
+    // 0.5 × (1 + 1) = 1 inside; 0.5 × (1 − 0.5) = 0.25 outside.
+    assert_eq!(utils::effective_speed(&app, on_creep), FixedU64::ONE);
+    assert_eq!(
+        utils::effective_speed(&app, off_creep),
+        utils::fixed("0.25")
+    );
+}
+
+#[test]
+fn hidden_body_takes_no_field_effects() {
+    let mut app = field_app();
+    utils::place(&mut app, "hive", 10, 10, 0);
+    let zergling = utils::create_owned(&mut app, "zergling", 13, 10, 1).0;
+    app.world_mut().entity_mut(zergling).insert(HiddenComponent);
+
+    // On creep, but hidden: the base 0.5, not 0.5 × 2.
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(utils::effective_speed(&app, zergling), utils::fixed("0.5"));
+}
+
+#[test]
+fn hidden_body_takes_no_outside_effect_either() {
+    let mut app = field_app();
+    let probe = utils::create_owned(&mut app, "probe", 20, 20, 0).0;
+    utils::run_ticks(&mut app, 1);
+    // Off its owner's power, the probe stands frozen.
+    assert_eq!(
+        entity_def::operation(app.world(), probe),
+        Operation::Disabled(Outage::Field)
+    );
+
+    // Hidden, it stands on no side of any field: the outside effect that froze
+    // it no longer applies either.
+    app.world_mut().entity_mut(probe).insert(HiddenComponent);
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(
+        entity_def::operation(app.world(), probe),
+        Operation::Operating
+    );
+}
+
+#[test]
 fn own_field_modifier_ignores_rival_power() {
     let mut app = field_app();
     let acolyte = utils::create_owned(&mut app, "acolyte", 12, 10, 0).0;
@@ -447,11 +561,103 @@ fn outside_effect_drains_health_each_tick() {
 
     utils::run_ticks(&mut app, 3);
 
-    assert_eq!(
-        utils::current_health(&app, sheltered),
-        FixedU64::from_num(20)
+    assert_eq!(utils::health_as_u32(&app, sheltered), 20);
+    assert_eq!(utils::health_as_u32(&app, exposed), 17);
+}
+
+#[test]
+fn effect_held_while_built_spares_site() {
+    let mut app = field_app();
+    let site = utils::create_owned(&mut app, "burrow", 20, 20, 0).0;
+    let built = utils::create_owned(&mut app, "burrow", 22, 22, 0).0;
+    utils::mark_as_site(app.world_mut(), site);
+
+    // Off the creep, one a tick for three ticks on the built burrow alone.
+    utils::run_ticks(&mut app, 3);
+    assert_eq!(utils::health_as_u32(&app, site), 20);
+    assert_eq!(utils::health_as_u32(&app, built), 17);
+}
+
+#[test]
+fn landing_carries_pool_interim_lacked_under_origin_field_effects() {
+    let mut app = field_app();
+    utils::place(&mut app, "hive", 10, 10, 0);
+    let grub = utils::create_owned(&mut app, "glowgrub", 13, 10, 0).0;
+    utils::run_ticks(&mut app, 1);
+    // On creep: 40 + 40 = 80, then drained to 60.
+    pools::drain(
+        app.world_mut(),
+        grub,
+        PoolId::ENERGY,
+        FixedU64::from_num(20),
     );
-    assert_eq!(utils::current_health(&app, exposed), FixedU64::from_num(17));
+
+    // The creep's +40 is the grub's form's own: it does not leave while the
+    // pupa is worn, so the 60 stands under 80 and lands by share on the
+    // moth's 100: 60 × 100 / 80 = 75.
+    utils::order_morph(&mut app, grub, "glowmoth");
+    utils::run_ticks(&mut app, 11);
+    assert_eq!(entity_def::type_name(app.world(), grub), "glowmoth");
+    assert_eq!(utils::energy_as_u32(&app, grub), 75);
+}
+
+#[test]
+fn landing_replays_pool_interim_lacked_before_any_pool_settles() {
+    let mut app = field_app();
+    utils::place(&mut app, "hive", 10, 10, 0);
+    let sporeling = utils::create_owned(&mut app, "sporeling", 13, 10, 0).0;
+    utils::run_ticks(&mut app, 1);
+    pools::drain(
+        app.world_mut(),
+        sporeling,
+        PoolId::ENERGY,
+        utils::fixed("10"),
+    );
+    // 30 of 40 energy recorded; the pod enters full at 200 and is wounded
+    // to 110.
+    utils::order_morph(&mut app, sporeling, "sporemoth");
+    utils::run_ticks(&mut app, 1);
+    utils::wound(&mut app, sporeling, "90");
+
+    // Landing on creep, the 110 health holds the moth's +40 as the landing
+    // finds it, so that part is the moth's own and is traded out of the
+    // replay: 30 stands under the sporeling's 40, and lands by share on
+    // 100 + 40 = 140: 30 × 140 / 40 = 105. The health lands at 110 × 100 /
+    // 200 = 55, under the line, and the +40 leaves by difference:
+    // 105 − 40 = 65 of 100.
+    utils::run_ticks(&mut app, 10);
+    assert_eq!(entity_def::type_name(app.world(), sporeling), "sporemoth");
+    assert_eq!(utils::health_as_u32(&app, sporeling), 55);
+    assert_eq!(utils::energy_as_u32(&app, sporeling), 65);
+}
+
+#[test]
+fn landing_judges_trades_before_its_first_fold_moves_pools() {
+    let mut app = field_app();
+    utils::place(&mut app, "hive", 10, 10, 0);
+    let sporeling = utils::create_owned(&mut app, "sporeling", 13, 10, 0).0;
+    utils::run_ticks(&mut app, 1);
+    pools::drain(
+        app.world_mut(),
+        sporeling,
+        PoolId::ENERGY,
+        utils::fixed("10"),
+    );
+    // 30 of 40 energy recorded; the pod enters full at 200 and is wounded
+    // to 50.
+    utils::order_morph(&mut app, sporeling, "sporewing");
+    utils::run_ticks(&mut app, 1);
+    utils::wound(&mut app, sporeling, "150");
+
+    // The landing finds 50 health, so the +40 energy does not hold, as its
+    // first fold judges; that fold then doubles the health maximum by share
+    // (50 × 200 / 100 = 100). The trade is judged on the 50 too: no +40 to
+    // trade out, and the 30 under 40 lands by share on 100: 75. The health
+    // lands by share from 50 of 200: 50 of 200.
+    utils::run_ticks(&mut app, 10);
+    assert_eq!(entity_def::type_name(app.world(), sporeling), "sporewing");
+    assert_eq!(utils::health_as_u32(&app, sporeling), 50);
+    assert_eq!(utils::energy_as_u32(&app, sporeling), 75);
 }
 
 #[test]
@@ -464,7 +670,7 @@ fn withering_off_field_kills_what_runs_dry() {
     // Twenty health, one a tick off the creep: the nineteenth tick leaves one
     // and the twentieth empties the pool.
     utils::run_ticks(&mut app, 19);
-    assert_eq!(utils::current_health(&app, exposed), FixedU64::ONE);
+    assert_eq!(utils::health_as_u32(&app, exposed), 1);
     utils::run_ticks(&mut app, 1);
     assert!(
         app.world()
@@ -552,7 +758,7 @@ fn buff_disabled_trainer_queues_command_and_holds_it() {
                 interrupted_by: Vec::new(),
             },
         );
-    stats::apply_entity_buff(app.world_mut(), gateway, dazed);
+    utils::apply_buff(app.world_mut(), gateway, dazed);
     utils::run_ticks(&mut app, 1);
     assert_eq!(
         entity_def::operation(app.world(), gateway),
@@ -617,26 +823,91 @@ fn disabled_source_halts_its_field_when_declared() {
 }
 
 #[test]
-fn coverage_decides_what_partly_powered_footprint_answers() {
+fn partly_covered_footprint_stands_on_one_side_of_entry() {
     let mut app = field_app();
-    // A pylon at (10, 10) powers three cells around itself, so the column
-    // x = 13 is powered and x = 14 is not. Both buildings span those two
-    // columns: two of their four cells are powered and two are not.
+    // The kiln spans the powered column x = 13 and the unpowered x = 14;
+    // the pyre, the unpowered x = 6 and the powered x = 7.
     utils::place(&mut app, "pylon", 10, 10, 0);
-    let forge = utils::place(&mut app, "forge", 13, 10, 0);
-    let chapel = utils::place(&mut app, "chapel", 13, 13, 0);
+    let kiln = utils::place(&mut app, "kiln", 13, 10, 0);
+    let pyre = utils::place(&mut app, "pyre", 6, 10, 0);
     utils::run_ticks(&mut app, 3);
     let Fields { power, .. } = fields(&app);
     assert!(utils::covered_by(&app, power, 13, 10, 0));
     assert!(!utils::covered_by(&app, power, 14, 10, 0));
+    assert!(!utils::covered_by(&app, power, 6, 10, 0));
+    assert!(utils::covered_by(&app, power, 7, 10, 0));
 
-    // The forge idles outside power only where EVERY cell is outside it, and
-    // two of its cells are inside, so it runs.
+    // The kiln is inside where any cell is powered: it mends and does not
+    // waste.
+    assert_eq!(
+        entity_def::effective_stat(app.world(), kiln, EntityStatId::HEALTH_REGEN),
+        Some(FixedU64::ONE)
+    );
+    assert_eq!(
+        entity_def::effective_stat(app.world(), kiln, EntityStatId::HEALTH_DRAIN),
+        Some(FixedU64::ZERO)
+    );
+    // The pyre is inside only where every cell is, so it stands outside:
+    // it wastes and does not mend.
+    assert_eq!(
+        entity_def::effective_stat(app.world(), pyre, EntityStatId::HEALTH_REGEN),
+        Some(FixedU64::ZERO)
+    );
+    assert_eq!(
+        entity_def::effective_stat(app.world(), pyre, EntityStatId::HEALTH_DRAIN),
+        Some(FixedU64::ONE)
+    );
+}
+
+#[test]
+fn form_field_effects_are_judged_on_that_form_footprint() {
+    let mut app = field_app();
+    utils::place(&mut app, "pylon", 10, 10, 0);
+    // The kiln's 2×2 spans the powered column x = 13 and the unpowered
+    // x = 14; an ember standing on its anchor would cover only (13, 10).
+    let kiln = utils::place(&mut app, "kiln", 13, 10, 0);
+    utils::run_ticks(&mut app, 3);
+
+    let world = app.world();
+    let ember = world
+        .resource::<ContentRegistry>()
+        .entity("ember")
+        .expect("the ember is registered");
+    assert_eq!(
+        fields::entity_modifiers_of(world, kiln, ember),
+        vec![EntityModifiers::Stats(vec![modifier(
+            EntityStatId::HEALTH_REGEN,
+            ModifierOp::FlatAdd,
+            "1"
+        )])]
+    );
+}
+
+#[test]
+fn coverage_decides_what_partly_powered_footprint_answers() {
+    let mut app = field_app();
+    // A pylon at (10, 10) powers three cells around itself, so the columns
+    // x = 7 and x = 13 are powered and x = 6 and x = 14 are not. Each
+    // building spans a powered and an unpowered column: two of its four
+    // cells are powered and two are not.
+    utils::place(&mut app, "pylon", 10, 10, 0);
+    let forge = utils::place(&mut app, "forge", 13, 10, 0);
+    let chapel = utils::place(&mut app, "chapel", 6, 10, 0);
+    utils::run_ticks(&mut app, 3);
+    let Fields { power, .. } = fields(&app);
+    assert!(utils::covered_by(&app, power, 13, 10, 0));
+    assert!(!utils::covered_by(&app, power, 14, 10, 0));
+    assert!(!utils::covered_by(&app, power, 6, 10, 0));
+    assert!(utils::covered_by(&app, power, 7, 10, 0));
+
+    // The forge stands inside power where ANY cell is powered, and two of
+    // its cells are, so it runs.
     assert_eq!(
         entity_def::operation(app.world(), forge),
         Operation::Operating
     );
-    // The chapel idles where ANY cell is outside, and two of its cells are.
+    // The chapel stands inside only where EVERY cell is powered, and two of
+    // its cells are not, so it idles.
     assert_eq!(
         entity_def::operation(app.world(), chapel),
         Operation::Disabled(Outage::Field)
@@ -689,13 +960,17 @@ fn disabled_cannon_does_not_fire() {
     let dummy = utils::create_owned(&mut app, "dummy", 14, 10, 1).0;
 
     utils::run_ticks(&mut app, 20);
-    assert_eq!(utils::health(&app, dummy), 100, "unpowered, it holds fire");
+    assert_eq!(
+        utils::health_as_u32(&app, dummy),
+        100,
+        "unpowered, it holds fire"
+    );
 
     utils::create_owned(&mut app, "pylon", 10, 10, 0);
     utils::run_ticks(&mut app, 20);
     // Two-tick volleys of 10, the first landing a tick after acquisition:
     // nine hits in twenty ticks.
-    assert_eq!(utils::health(&app, dummy), 10, "powered, it fights");
+    assert_eq!(utils::health_as_u32(&app, dummy), 10, "powered, it fights");
 }
 
 #[test]
@@ -736,7 +1011,7 @@ fn disabled_cannon_refuses_attack_command() {
     // Five two-tick volleys of 10 land in the eight ticks after the command
     // takes effect.
     assert_eq!(
-        utils::health(&app, dummy),
+        utils::health_as_u32(&app, dummy),
         50,
         "powered, it takes the order"
     );
@@ -1102,7 +1377,7 @@ fn disabled_battery_gun_stays_idle() {
 
     utils::run_ticks(&mut app, 20);
     assert_eq!(
-        utils::health(&app, dummy),
+        utils::health_as_u32(&app, dummy),
         100,
         "unpowered, the gun is idle"
     );
@@ -1111,7 +1386,11 @@ fn disabled_battery_gun_stays_idle() {
     utils::run_ticks(&mut app, 20);
     // Two-tick volleys of 10, the first landing a tick after acquisition:
     // nine hits in twenty ticks.
-    assert_eq!(utils::health(&app, dummy), 10, "powered, the gun works");
+    assert_eq!(
+        utils::health_as_u32(&app, dummy),
+        10,
+        "powered, the gun works"
+    );
 }
 
 #[test]
@@ -1183,13 +1462,13 @@ fn cannon_site_neither_fires_nor_takes_attack_orders() {
         utils::order_queue_is_empty(app.world_mut(), site),
         "a site takes no orders"
     );
-    assert_eq!(utils::health(&app, dummy), 100, "and fires nothing");
+    assert_eq!(utils::health_as_u32(&app, dummy), 100, "and fires nothing");
 
     utils::run_ticks(&mut app, 20);
     // Of the 2·APPLY + 28 ticks since the build command, the site took its
     // twenty and acquisition its one; four two-tick volleys of 10 land in
     // the rest.
-    assert_eq!(utils::health(&app, dummy), 60, "finished, it fights");
+    assert_eq!(utils::health_as_u32(&app, dummy), 60, "finished, it fights");
 }
 
 #[test]
@@ -1217,7 +1496,7 @@ fn probe_mends_disabled_gateway() {
     utils::run_ticks(&mut app, utils::APPLY + 12);
 
     assert_eq!(
-        utils::health(&app, gateway),
+        utils::health_as_u32(&app, gateway),
         100,
         "dark, it is mended all the same"
     );
@@ -1471,7 +1750,7 @@ fn fields(app: &App) -> Fields {
 fn building(name: &str, side: u32, build_time: u32) -> EntityTypeDef {
     EntityTypeDef::new(name)
         .with_location(utils::GROUND, CellSize::new(side, side), Solidity::Solid)
-        .with_health(100)
+        .with_pool(Pool::health(100))
         .with_dying(1, [])
         .with_build_time(build_time)
 }
@@ -1555,17 +1834,202 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 }])
                 .with_morphs([MorphTransition::new(
                     "tower",
-                    Some("pupa"),
+                    MorphCourse::via(
+                        "pupa",
+                        [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
+                        ViaInterrupted::reverts([(
+                            PoolId::HEALTH,
+                            RevertCarry::Carry(PoolCarry::Shift(PoolShift::Share)),
+                        )]),
+                    ),
                     Quantity::Constant(10),
                     MorphPlacement::Revalidate,
                     MorphCancel::Refundable,
-                    MorphInterrupted::Reverts,
                     MorphReason::Change,
                     Vec::new(),
                     Vec::new(),
+                    [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
                 )]),
         );
         registry.register(building("pupa", 1, 2));
+        // A sporeling growing into a sporemoth through a pod holding no
+        // energy; the sporemoth holds 40 more energy on creep while it has at
+        // least 60 health.
+        registry.register(
+            EntityTypeDef::new("sporeling")
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_pool(Pool::health(40))
+                .with_pool(Pool::energy(40))
+                .with_morphs([
+                    MorphTransition::new(
+                        "sporemoth",
+                        MorphCourse::via(
+                            "sporepod",
+                            [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
+                            ViaInterrupted::reverts([(
+                                PoolId::HEALTH,
+                                RevertCarry::Carry(PoolCarry::Shift(PoolShift::Share)),
+                            )]),
+                        ),
+                        Quantity::Constant(10),
+                        MorphPlacement::Reserve,
+                        MorphCancel::Forfeit,
+                        MorphReason::Change,
+                        Vec::new(),
+                        Vec::new(),
+                        [
+                            (PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share)),
+                            (PoolId::ENERGY, PoolCarry::Shift(PoolShift::Share)),
+                        ],
+                    ),
+                    MorphTransition::new(
+                        "sporewing",
+                        MorphCourse::via(
+                            "sporepod",
+                            [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
+                            ViaInterrupted::reverts([(
+                                PoolId::HEALTH,
+                                RevertCarry::Carry(PoolCarry::Shift(PoolShift::Share)),
+                            )]),
+                        ),
+                        Quantity::Constant(10),
+                        MorphPlacement::Reserve,
+                        MorphCancel::Forfeit,
+                        MorphReason::Change,
+                        Vec::new(),
+                        Vec::new(),
+                        [
+                            (PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share)),
+                            (PoolId::ENERGY, PoolCarry::Shift(PoolShift::Share)),
+                        ],
+                    ),
+                ]),
+        );
+        registry.register(
+            EntityTypeDef::new("sporepod")
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_pool(Pool::health(200)),
+        );
+        // A sporewing holding its health maximum doubled by share on creep,
+        // and 40 more energy there while it has at least 60 health.
+        registry.register(
+            EntityTypeDef::new("sporewing")
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_pool(Pool::health(100))
+                .with_pool(Pool::energy(100))
+                .with_field_effects([
+                    FieldEffect::new(
+                        creep,
+                        Affiliation::Anyone,
+                        FieldCoverage::Every,
+                        vec![EntityEffect::Modifiers(EntityModifiers::PoolMaximums {
+                            modifiers: vec![modifier(
+                                EntityStatId::MAX_HEALTH,
+                                ModifierOp::PercentAdd,
+                                "1",
+                            )],
+                            pool_shift: PoolShift::Share,
+                        })],
+                        Vec::new(),
+                        None,
+                    ),
+                    FieldEffect::new(
+                        creep,
+                        Affiliation::Anyone,
+                        FieldCoverage::Every,
+                        vec![EntityEffect::Modifiers(EntityModifiers::PoolMaximums {
+                            modifiers: vec![modifier(
+                                EntityStatId::MAX_ENERGY,
+                                ModifierOp::FlatAdd,
+                                "40",
+                            )],
+                            pool_shift: PoolShift::Difference,
+                        })],
+                        Vec::new(),
+                        Some(Requirement::Health(Bound::Amount(Threshold::AtLeast(
+                            FixedU64::from_num(60),
+                        )))),
+                    ),
+                ]),
+        );
+        registry.register(
+            EntityTypeDef::new("sporemoth")
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_pool(Pool::health(100))
+                .with_pool(Pool::energy(100))
+                .with_field_effects([FieldEffect::new(
+                    creep,
+                    Affiliation::Anyone,
+                    FieldCoverage::Every,
+                    vec![EntityEffect::Modifiers(EntityModifiers::PoolMaximums {
+                        modifiers: vec![modifier(
+                            EntityStatId::MAX_ENERGY,
+                            ModifierOp::FlatAdd,
+                            "40",
+                        )],
+                        pool_shift: PoolShift::Difference,
+                    })],
+                    Vec::new(),
+                    Some(Requirement::Health(Bound::Amount(Threshold::AtLeast(
+                        FixedU64::from_num(60),
+                    )))),
+                )]),
+        );
+        // A grub holding twice the energy on creep, growing into a moth
+        // through a pupa that holds none.
+        registry.register(
+            EntityTypeDef::new("glowgrub")
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_pool(Pool::health(20))
+                .with_pool(Pool::energy(40))
+                .with_field_effects([FieldEffect::new(
+                    creep,
+                    Affiliation::Anyone,
+                    FieldCoverage::Every,
+                    vec![EntityEffect::Modifiers(EntityModifiers::PoolMaximums {
+                        modifiers: vec![modifier(
+                            EntityStatId::MAX_ENERGY,
+                            ModifierOp::FlatAdd,
+                            "40",
+                        )],
+                        pool_shift: PoolShift::Difference,
+                    })],
+                    Vec::new(),
+                    None,
+                )])
+                .with_morphs([MorphTransition::new(
+                    "glowmoth",
+                    MorphCourse::via(
+                        "glowpupa",
+                        [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
+                        ViaInterrupted::reverts([(
+                            PoolId::HEALTH,
+                            RevertCarry::Carry(PoolCarry::Shift(PoolShift::Share)),
+                        )]),
+                    ),
+                    Quantity::Constant(10),
+                    MorphPlacement::Reserve,
+                    MorphCancel::Forfeit,
+                    MorphReason::Change,
+                    Vec::new(),
+                    Vec::new(),
+                    [
+                        (PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share)),
+                        (PoolId::ENERGY, PoolCarry::Shift(PoolShift::Share)),
+                    ],
+                )]),
+        );
+        registry.register(
+            EntityTypeDef::new("glowpupa")
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_pool(Pool::health(20)),
+        );
+        registry.register(
+            EntityTypeDef::new("glowmoth")
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_pool(Pool::health(20))
+                .with_pool(Pool::energy(100)),
+        );
         registry.register(building("tower", 3, 2));
         registry.register(building("spire", 2, 2).with_field_placement([
             FieldPlacement::Requires {
@@ -1580,48 +2044,76 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
         );
         registry.register(building("lander", 1, 2).with_morphs([MorphTransition::new(
             "bunker",
-            None,
+            MorphCourse::direct(MorphInterrupted::Reverts),
             Quantity::Constant(1),
             MorphPlacement::Revalidate,
             MorphCancel::Forfeit,
-            MorphInterrupted::Reverts,
             MorphReason::Change,
             Vec::new(),
             Vec::new(),
+            [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
         )]));
         // Creep effects: a zergling twice as fast on anyone's creep, a larva
-        // that withers off it.
+        // that withers off it, and a burrow that withers off it once built.
         registry.register(
             utils::walker("zergling", utils::GROUND).with_field_effects([FieldEffect::new(
                 creep,
                 Affiliation::Anyone,
-                FieldSide::Inside,
                 FieldCoverage::Any,
-                EntityEffect::Modifiers(vec![modifier(
-                    EntityStatId::SPEED,
-                    ModifierOp::PercentAdd,
-                    "1.0",
-                )]),
+                vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![
+                    modifier(EntityStatId::SPEED, ModifierOp::PercentAdd, "1.0"),
+                ]))],
+                Vec::new(),
+                None,
             )]),
         );
+        // A skimmer, twice as fast on creep and half as fast off it, from one
+        // entry stating both sides.
+        registry.register(utils::walker("skimmer", utils::GROUND).with_field_effects([
+            FieldEffect::new(
+                creep,
+                Affiliation::Anyone,
+                FieldCoverage::Any,
+                vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![
+                    modifier(EntityStatId::SPEED, ModifierOp::PercentAdd, "1.0"),
+                ]))],
+                vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![
+                    modifier(EntityStatId::SPEED, ModifierOp::PercentAdd, "-0.5"),
+                ]))],
+                None,
+            ),
+        ]));
         registry.register(
             EntityTypeDef::new("larva")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_health(20)
+                .with_pool(Pool::health(20))
                 .with_dying(1, [])
-                // Modifiers move only the stats a type carries, so the drain
-                // is declared at zero for the field to raise.
-                .with_stat(EntityStatId::HEALTH_DRAIN, FixedU64::ZERO)
                 .with_field_effects([FieldEffect::new(
                     creep,
                     Affiliation::Anyone,
-                    FieldSide::Outside,
-                    FieldCoverage::Every,
-                    EntityEffect::Modifiers(vec![modifier(
-                        EntityStatId::HEALTH_DRAIN,
-                        ModifierOp::FlatAdd,
-                        "1",
-                    )]),
+                    FieldCoverage::Any,
+                    Vec::new(),
+                    vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![
+                        modifier(EntityStatId::HEALTH_DRAIN, ModifierOp::FlatAdd, "1"),
+                    ]))],
+                    None,
+                )]),
+        );
+
+        registry.register(
+            EntityTypeDef::new("burrow")
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_pool(Pool::health(20))
+                .with_dying(1, [])
+                .with_field_effects([FieldEffect::new(
+                    creep,
+                    Affiliation::Anyone,
+                    FieldCoverage::Any,
+                    Vec::new(),
+                    vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![
+                        modifier(EntityStatId::HEALTH_DRAIN, ModifierOp::FlatAdd, "1"),
+                    ]))],
+                    Some(Requirement::Built),
                 )]),
         );
 
@@ -1638,9 +2130,10 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
             FieldEffect::new(
                 power,
                 Affiliation::Own,
-                FieldSide::Outside,
-                FieldCoverage::Every,
-                EntityEffect::Disable,
+                FieldCoverage::Any,
+                Vec::new(),
+                vec![EntityEffect::Disable],
+                None,
             )
         };
         registry.register(
@@ -1664,9 +2157,10 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 .with_field_effects([FieldEffect::new(
                     creep,
                     Affiliation::Enemy,
-                    FieldSide::Inside,
                     FieldCoverage::Any,
-                    EntityEffect::Disable,
+                    vec![EntityEffect::Disable],
+                    Vec::new(),
+                    None,
                 )]),
         );
         registry.register(
@@ -1681,9 +2175,10 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 .with_field_effects([FieldEffect::new(
                     creep,
                     Affiliation::Enemy,
-                    FieldSide::Inside,
                     FieldCoverage::Any,
-                    EntityEffect::Disable,
+                    vec![EntityEffect::Disable],
+                    Vec::new(),
+                    None,
                 )]),
         );
         registry.register(
@@ -1698,9 +2193,10 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 .with_field_effects([FieldEffect::new(
                     creep,
                     Affiliation::Enemy,
-                    FieldSide::Inside,
                     FieldCoverage::Any,
-                    EntityEffect::Disable,
+                    vec![EntityEffect::Disable],
+                    Vec::new(),
+                    None,
                 )]),
         );
         registry.register(
@@ -1708,13 +2204,48 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 .with_train_time(4)
                 .with_stat(EntityStatId::CARGO_SIZE, FixedU64::ONE),
         );
-        // Two by two, one switched off unless EVERY cell is powered and one
-        // unless ANY is: the same ground answers differently, which is the
+        // Two by two, one switched off unless ANY cell is powered and one
+        // unless EVERY is: the same ground answers differently, which is the
         // whole of what the coverage knob buys.
         registry.register(
             building("forge", 2, 4)
                 .with_tags(["structure"])
                 .with_field_effects([unpowered_idles()]),
+        );
+        // Two by two, each mending inside power and wasting outside it from
+        // one entry: inside where ANY cell is powered, and where EVERY is.
+        let mends_or_wastes = |coverage| {
+            FieldEffect::new(
+                power,
+                Affiliation::Own,
+                coverage,
+                vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![
+                    modifier(EntityStatId::HEALTH_REGEN, ModifierOp::FlatAdd, "1"),
+                ]))],
+                vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![
+                    modifier(EntityStatId::HEALTH_DRAIN, ModifierOp::FlatAdd, "1"),
+                ]))],
+                None,
+            )
+        };
+        registry.register(
+            building("kiln", 2, 4).with_field_effects([mends_or_wastes(FieldCoverage::Any)]),
+        );
+        // One by one, mending only with every cell powered.
+        registry.register(
+            building("ember", 1, 4).with_field_effects([FieldEffect::new(
+                power,
+                Affiliation::Own,
+                FieldCoverage::Every,
+                vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![
+                    modifier(EntityStatId::HEALTH_REGEN, ModifierOp::FlatAdd, "1"),
+                ]))],
+                Vec::new(),
+                None,
+            )]),
+        );
+        registry.register(
+            building("pyre", 2, 4).with_field_effects([mends_or_wastes(FieldCoverage::Every)]),
         );
         registry.register(
             building("chapel", 2, 4)
@@ -1722,9 +2253,10 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 .with_field_effects([FieldEffect::new(
                     power,
                     Affiliation::Own,
-                    FieldSide::Outside,
-                    FieldCoverage::Any,
-                    EntityEffect::Disable,
+                    FieldCoverage::Every,
+                    Vec::new(),
+                    vec![EntityEffect::Disable],
+                    None,
                 )]),
         );
         registry.register(
@@ -1738,14 +2270,14 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 }])
                 .with_morphs([MorphTransition::new(
                     "warpgate",
-                    None,
+                    MorphCourse::direct(MorphInterrupted::Reverts),
                     Quantity::Constant(10),
                     MorphPlacement::Revalidate,
                     MorphCancel::Forfeit,
-                    MorphInterrupted::Reverts,
                     MorphReason::Change,
                     Vec::new(),
                     Vec::new(),
+                    [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
                 )])
                 .with_field_effects([unpowered_idles()]),
         );
@@ -1795,13 +2327,12 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
             FieldEffect::new(
                 power,
                 Affiliation::Own,
-                FieldSide::Inside,
                 FieldCoverage::Any,
-                EntityEffect::Modifiers(vec![modifier(
-                    EntityStatId::SPEED,
-                    ModifierOp::PercentAdd,
-                    "1.0",
-                )]),
+                vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![
+                    modifier(EntityStatId::SPEED, ModifierOp::PercentAdd, "1.0"),
+                ]))],
+                Vec::new(),
+                None,
             ),
         ]));
         registry.register(
@@ -1833,9 +2364,10 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 .with_field_effects([FieldEffect::new(
                     power,
                     Affiliation::Anyone,
-                    FieldSide::Outside,
-                    FieldCoverage::Every,
-                    EntityEffect::Disable,
+                    FieldCoverage::Any,
+                    Vec::new(),
+                    vec![EntityEffect::Disable],
+                    None,
                 )]),
         );
         registry.register(
@@ -1878,7 +2410,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
         registry.register(
             EntityTypeDef::new("dummy")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_health(100)
+                .with_pool(Pool::health(100))
                 .with_dying(1, []),
         );
 

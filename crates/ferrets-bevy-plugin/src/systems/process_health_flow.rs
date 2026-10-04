@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use ferrets_simulation::game_loop;
 
-/// Refills each health pool by one tick's regeneration.
+/// Moves each health pool by one tick's regeneration and drain.
 pub fn process_health_flow(world: &mut World) {
-    game_loop::stats::process_health_flow(world);
+    game_loop::flows::process_health_flow(world);
 }

@@ -3,13 +3,15 @@
 
 mod utils;
 
+use ferrets_content::pool_def::PoolId;
 use ferrets_geometry::cell_pos::CellPos;
 use ferrets_math::FixedU64;
 use ferrets_simulation::{
     command::PlayerCommand,
     components::{
-        health::HealthComponent,
+        last_hit,
         order_queue::OrderQueueComponent,
+        pools,
         resource::ResourceSourceComponent,
         stance::{Stance, StanceComponent},
     },
@@ -49,9 +51,8 @@ fn commanded_worker_keeps_harvesting_under_fire() {
     let world = app.world_mut();
     let tick = world.resource::<GameSession>().tick();
     assert_eq!(world.resource::<PlayerResources>().amount(0, "gold"), 5);
-    let mut health = world.get_mut::<HealthComponent>(worker).unwrap();
-    health.drain(FixedU64::from_num(5));
-    health.record_hit(sentry_id, tick);
+    pools::drain(world, worker, PoolId::HEALTH, FixedU64::from_num(5));
+    last_hit::record(world, worker, sentry_id, tick);
     utils::run_ticks(&mut app, 60);
 
     // Commanded outranks scared: the order stays queued and the harvest keeps

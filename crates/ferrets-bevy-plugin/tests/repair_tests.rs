@@ -12,7 +12,13 @@ use ferrets_content::{
     entity_type_def::EntityTypeDef,
     kinds::Kinds,
     location::Solidity,
-    morph::{MorphCancel, MorphInterrupted, MorphPlacement, MorphReason, MorphTransition},
+    morph::{
+        MorphCancel, MorphCourse, MorphInterrupted, MorphPlacement, MorphReason, MorphTransition,
+        PoolCarry,
+    },
+    pool::Pool,
+    pool_def::PoolId,
+    pool_shift::PoolShift,
     price,
     quantity::Quantity,
     registry::ContentRegistry,
@@ -24,12 +30,10 @@ use ferrets_simulation::{
     command::PlayerCommand,
     components::{
         attached::AttachedComponent,
-        build::{SiteWork, UnderConstructionComponent},
-        energy::EnergyComponent,
-        entity_stats::StatsComponent,
         hidden::HiddenComponent,
         location::LocationComponent,
         order_queue::{CancelPolicy, OrderQueueComponent},
+        pools::{self, Spending},
         repair::UnderRepairComponent,
     },
     entity_def,
@@ -56,15 +60,15 @@ fn repair_restores_health_at_target_production_rate() {
     // the 40 points lost need eight ticks of work once the two-tick walk is done.
     utils::run_ticks(&mut app, utils::APPLY + 2 + 4);
     assert_eq!(
-        utils::current_health(&app, depot),
-        FixedU64::from_num(80),
+        utils::health_as_u32(&app, depot),
+        80,
         "four ticks of work land exactly four times the per-tick amount"
     );
 
     utils::run_ticks(&mut app, 4);
     assert_eq!(
-        utils::current_health(&app, depot),
-        FixedU64::from_num(100),
+        utils::health_as_u32(&app, depot),
+        100,
         "the depot is mended back to its full pool on the eighth tick of work"
     );
     utils::run_ticks(&mut app, 1);
@@ -88,8 +92,8 @@ fn repair_ratio_scales_work_against_production_time() {
     utils::run_ticks(&mut app, utils::APPLY + 3 + 5);
 
     assert_eq!(
-        utils::current_health(&app, hall),
-        FixedU64::from_num(100),
+        utils::health_as_u32(&app, hall),
+        100,
         "halving the ratio doubles the rate"
     );
 }
@@ -109,8 +113,8 @@ fn several_workers_mend_faster_than_one() {
     utils::run_ticks(&mut app, utils::APPLY + 3 + 4);
 
     assert_eq!(
-        utils::current_health(&app, depot),
-        FixedU64::from_num(100),
+        utils::health_as_u32(&app, depot),
+        100,
         "two workers on a stacking job each contribute their own rate"
     );
 }
@@ -137,26 +141,28 @@ fn flat_rate_ignores_what_target_cost_to_produce() {
     repair(&mut app, second, hall_id);
     utils::run_ticks(&mut app, utils::APPLY + 4);
 
-    let partway = utils::current_health(&app, depot);
-    assert!(
-        partway > FixedU64::from_num(60) && partway < FixedU64::from_num(100),
-        "the depot's job is under way but not done, at {partway}"
+    // 60 + 5 × 5: the command lands on tick APPLY, so APPLY + 4 holds five
+    // ticks of work at five points each.
+    assert_eq!(
+        utils::health_as_u32(&app, depot),
+        85,
+        "the depot's job is under way but not done"
     );
     assert_eq!(
-        utils::current_health(&app, hall),
-        partway,
+        utils::health_as_u32(&app, hall),
+        85,
         "the hall keeps exact pace, its faster repair_ratio notwithstanding"
     );
 
     utils::run_ticks(&mut app, 4);
     assert_eq!(
-        utils::current_health(&app, depot),
-        FixedU64::from_num(100),
+        utils::health_as_u32(&app, depot),
+        100,
         "a flat five points a tick fills the depot in eight ticks"
     );
     assert_eq!(
-        utils::current_health(&app, hall),
-        FixedU64::from_num(100),
+        utils::health_as_u32(&app, hall),
+        100,
         "and fills the hall on the same tick"
     );
 }
@@ -173,8 +179,8 @@ fn flat_rate_mends_target_nothing_produces() {
     utils::run_ticks(&mut app, utils::APPLY + 20);
 
     assert_eq!(
-        utils::current_health(&app, monolith),
-        FixedU64::from_num(100),
+        utils::health_as_u32(&app, monolith),
+        100,
         "a flat rate needs no production time to pace itself against"
     );
 }
@@ -193,8 +199,8 @@ fn repair_range_lets_mender_work_without_closing_in() {
     utils::run_ticks(&mut app, utils::APPLY + 10);
 
     assert_eq!(
-        utils::current_health(&app, depot),
-        FixedU64::from_num(100),
+        utils::health_as_u32(&app, depot),
+        100,
         "the work lands from where it stood"
     );
     assert_eq!(
@@ -216,8 +222,8 @@ fn energy_paid_repair_spends_worker_pool_not_treasury() {
     utils::run_ticks(&mut app, utils::APPLY + 20);
 
     assert_eq!(
-        utils::current_health(&app, depot),
-        FixedU64::from_num(100),
+        utils::health_as_u32(&app, depot),
+        100,
         "the depot is mended"
     );
     assert_eq!(
@@ -227,8 +233,8 @@ fn energy_paid_repair_spends_worker_pool_not_treasury() {
     );
     // Half a point of energy per point of health, over 40 points restored.
     assert_eq!(
-        utils::energy(&app, medic),
-        FixedU64::from_num(30),
+        utils::energy_as_u32(&app, medic),
+        30,
         "the work came out of the worker's own pool"
     );
 }
@@ -246,13 +252,13 @@ fn spent_medic_waits_at_patient_and_resumes_once_it_can_pay() {
     utils::run_ticks(&mut app, utils::APPLY + 20);
 
     assert_eq!(
-        utils::current_health(&app, depot),
-        FixedU64::from_num(30),
+        utils::health_as_u32(&app, depot),
+        30,
         "the medic spends its last energy and stops there"
     );
     assert_eq!(
-        utils::energy(&app, medic),
-        FixedU64::ZERO,
+        utils::energy_as_u32(&app, medic),
+        0,
         "the pool is empty rather than overdrawn"
     );
     assert!(
@@ -263,8 +269,8 @@ fn spent_medic_waits_at_patient_and_resumes_once_it_can_pay() {
     grant_energy(&mut app, medic, "50");
     utils::run_ticks(&mut app, 20);
     assert_eq!(
-        utils::current_health(&app, depot),
-        FixedU64::from_num(100),
+        utils::health_as_u32(&app, depot),
+        100,
         "the held job resumes the moment the work can be paid for"
     );
 }
@@ -294,7 +300,11 @@ fn pro_rata_mender_turns_down_target_with_no_price() {
     // A share of no price is no price, so the work would be free: the mender
     // turns the job down instead of doing it for nothing.
     assert!(app.world().get::<UnderRepairComponent>(shed).is_none());
-    assert_eq!(utils::health(&app, shed), 60, "100 less the 40-point hole");
+    assert_eq!(
+        utils::health_as_u32(&app, shed),
+        60,
+        "100 less the 40-point hole"
+    );
     assert_eq!(utils::gold(app.world()), 500);
 }
 
@@ -311,8 +321,8 @@ fn full_repair_bills_cost_factor_share_of_price() {
     utils::run_ticks(&mut app, utils::APPLY + 30);
 
     assert_eq!(
-        utils::current_health(&app, depot),
-        FixedU64::from_num(100),
+        utils::health_as_u32(&app, depot),
+        100,
         "the depot is fully mended"
     );
     assert_eq!(
@@ -370,10 +380,12 @@ fn unaffordable_repair_holds_job_then_abandons_it() {
     repair(&mut app, worker_id, depot_id);
     utils::run_ticks(&mut app, utils::APPLY + 3 + 6);
 
-    let stalled_at = utils::current_health(&app, depot);
-    assert!(
-        stalled_at > FixedU64::from_num(0) && stalled_at < FixedU64::from_num(100),
-        "work stops partway once the gold runs out, at {stalled_at}"
+    // 0 + 10: a pro-rata point costs 200 × 0.5 / 100 = 1 gold, so the 10 gold
+    // buys ten points.
+    assert_eq!(
+        utils::health_as_u32(&app, depot),
+        10,
+        "work stops partway once the gold runs out"
     );
     assert_eq!(utils::gold(app.world()), 0, "every coin went into the work");
     assert!(
@@ -384,8 +396,8 @@ fn unaffordable_repair_holds_job_then_abandons_it() {
     // Patience is 5 ticks, and it has already stalled for several.
     utils::run_ticks(&mut app, 10);
     assert_eq!(
-        utils::current_health(&app, depot),
-        stalled_at,
+        utils::health_as_u32(&app, depot),
+        10,
         "no work lands while the owner is broke"
     );
     assert!(
@@ -404,8 +416,8 @@ fn patient_repairer_waits_indefinitely_and_resumes_when_paid() {
     repair(&mut app, worker_id, depot_id);
     utils::run_ticks(&mut app, utils::APPLY + 30);
     assert_eq!(
-        utils::current_health(&app, depot),
-        FixedU64::from_num(0),
+        utils::health_as_u32(&app, depot),
+        0,
         "nothing is mended without the gold to pay for it"
     );
     assert!(
@@ -416,8 +428,8 @@ fn patient_repairer_waits_indefinitely_and_resumes_when_paid() {
     utils::grant_gold(&mut app, 500);
     utils::run_ticks(&mut app, 30);
     assert_eq!(
-        utils::current_health(&app, depot),
-        FixedU64::from_num(100),
+        utils::health_as_u32(&app, depot),
+        100,
         "the held job resumes as soon as the work can be paid for"
     );
 }
@@ -439,8 +451,8 @@ fn repairer_refuses_target_without_tag_it_mends() {
     utils::run_ticks(&mut app, utils::APPLY + 20);
 
     assert_eq!(
-        utils::current_health(&app, soldier),
-        FixedU64::from_num(10),
+        utils::health_as_u32(&app, soldier),
+        10,
         "a worker that only mends buildings leaves a wounded soldier alone"
     );
 }
@@ -458,8 +470,8 @@ fn repairer_refuses_target_nothing_produces() {
     utils::run_ticks(&mut app, utils::APPLY + 20);
 
     assert_eq!(
-        utils::current_health(&app, monolith),
-        FixedU64::from_num(60),
+        utils::health_as_u32(&app, monolith),
+        60,
         "repair paces itself against production, so an unproduced type has no rate"
     );
 }
@@ -476,8 +488,8 @@ fn repairer_refuses_enemy_target() {
     utils::run_ticks(&mut app, utils::APPLY + 20);
 
     assert_eq!(
-        utils::current_health(&app, depot),
-        FixedU64::from_num(60),
+        utils::health_as_u32(&app, depot),
+        60,
         "an enemy structure is never mended"
     );
 }
@@ -488,22 +500,15 @@ fn repairer_refuses_target_still_under_construction() {
     let (depot, depot_id) = utils::create_owned(&mut app, "depot", 10, 10, 0);
     let (_, worker_id) = utils::create_owned(&mut app, "worker", 8, 10, 0);
     utils::wound(&mut app, depot, "40");
-    app.world_mut()
-        .entity_mut(depot)
-        .insert(UnderConstructionComponent {
-            progress: 0,
-            work: SiteWork::Crew {
-                builders: Default::default(),
-            },
-        });
+    utils::mark_as_site(app.world_mut(), depot);
     utils::grant_gold(&mut app, 500);
 
     repair(&mut app, worker_id, depot_id);
     utils::run_ticks(&mut app, utils::APPLY + 20);
 
     assert_eq!(
-        utils::current_health(&app, depot),
-        FixedU64::from_num(60),
+        utils::health_as_u32(&app, depot),
+        60,
         "an unfinished site is the build order's business, not repair's"
     );
 }
@@ -519,8 +524,8 @@ fn self_repair_is_refused_unless_declared() {
     utils::run_ticks(&mut app, utils::APPLY + 20);
 
     assert_eq!(
-        utils::current_health(&app, worker),
-        FixedU64::from_num(10),
+        utils::health_as_u32(&app, worker),
+        10,
         "a worker that has not opted into self-repair cannot mend itself"
     );
 }
@@ -604,8 +609,8 @@ fn hidden_worker_leaves_map_and_comes_back() {
 
     utils::run_ticks(&mut app, 20);
     assert_eq!(
-        utils::current_health(&app, depot),
-        FixedU64::from_num(100),
+        utils::health_as_u32(&app, depot),
+        100,
         "the work still lands while the worker is out of sight"
     );
     assert!(
@@ -634,8 +639,8 @@ fn boxed_in_hidden_worker_finishes_job_and_waits_to_reappear() {
     // finishes and the worker waits off the map with a queued reveal, coming back
     // onto the one cell that frees.
     assert_eq!(
-        utils::current_health(&app, depot),
-        FixedU64::from_num(100),
+        utils::health_as_u32(&app, depot),
+        100,
         "the job finished regardless"
     );
     utils::assert_reveal_deferred_then_lands_on(&mut app, worker, CellPos::new(9, 9));
@@ -700,9 +705,11 @@ fn mender_in_open_follows_patient_that_walks_away() {
 
     repair(&mut app, orderly_id, patient_id);
     utils::run_ticks(&mut app, utils::APPLY + 1);
-    let mended = utils::current_health(&app, patient);
-    assert!(
-        mended > FixedU64::from_num(40),
+    // 40 + 2 × 5: the command lands on tick APPLY, so APPLY + 1 holds two
+    // ticks of work at five points each.
+    assert_eq!(
+        utils::health_as_u32(&app, patient),
+        50,
         "the orderly reached its patient and started work"
     );
 
@@ -721,8 +728,8 @@ fn mender_in_open_follows_patient_that_walks_away() {
     utils::run_ticks(&mut app, utils::APPLY + 60);
 
     assert_eq!(
-        utils::current_health(&app, patient),
-        FixedU64::from_num(100),
+        utils::health_as_u32(&app, patient),
+        100,
         "the work carried on once the orderly caught up"
     );
     assert!(
@@ -751,8 +758,8 @@ fn mender_stops_at_near_side_of_target() {
         "it stopped against the east face it walked up to, at {stopped:?}"
     );
     assert_eq!(
-        utils::current_health(&app, depot),
-        FixedU64::from_num(100),
+        utils::health_as_u32(&app, depot),
+        100,
         "and mended from there"
     );
 }
@@ -804,14 +811,14 @@ fn attached_menders_wait_for_free_berth() {
         app.world().get::<AttachedComponent>(second).is_none(),
         "the other waits in the open"
     );
-    assert_eq!(utils::current_health(&app, forge), FixedU64::from_num(65));
+    assert_eq!(utils::health_as_u32(&app, forge), 65);
 
     // Thirty-five points to go, and only the seated mender working: at five a
     // tick, six ticks leave it five short.
     utils::run_ticks(&mut app, 6);
-    assert_eq!(utils::current_health(&app, forge), FixedU64::from_num(95));
+    assert_eq!(utils::health_as_u32(&app, forge), 95);
     utils::run_ticks(&mut app, 1);
-    assert_eq!(utils::current_health(&app, forge), FixedU64::from_num(100));
+    assert_eq!(utils::health_as_u32(&app, forge), 100);
 
     // The tick after, with nothing left to mend, both let go — the one that sat
     // down and the one that never got a berth.
@@ -886,12 +893,12 @@ fn app() -> App {
         registry.register(
             EntityTypeDef::new("monolith")
                 .with_location(utils::GROUND, CellSize::new(2, 2), Solidity::Solid)
-                .with_health(100)
+                .with_pool(Pool::health(100))
                 .with_tags(["building"]),
         );
         registry.register(
             utils::walker("soldier", utils::GROUND)
-                .with_health(20)
+                .with_pool(Pool::health(20))
                 .with_train_time(20),
         );
         // A patient that can walk away mid-treatment, and the field medic that mends
@@ -899,13 +906,13 @@ fn app() -> App {
         registry.register_tag("flesh");
         registry.register(
             utils::walker("casualty", utils::GROUND)
-                .with_health(100)
+                .with_pool(Pool::health(100))
                 .with_train_time(20)
                 .with_tags(["flesh"]),
         );
         registry.register(
             utils::walker("orderly", utils::GROUND)
-                .with_health(30)
+                .with_pool(Pool::health(30))
                 .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
                 .with_stat(EntityStatId::REPAIR_RANGE, FixedU64::ONE)
                 .with_repairer(
@@ -927,14 +934,14 @@ fn app() -> App {
                 .with_berths([("rim", BerthGroup::new([utils::berth("1.0", "1.0")], 1))])
                 .with_morphs([MorphTransition::new(
                     "shuttered_forge",
-                    None,
+                    MorphCourse::direct(MorphInterrupted::Reverts),
                     Quantity::Constant(1),
                     MorphPlacement::Reserve,
                     MorphCancel::Committed,
-                    MorphInterrupted::Reverts,
                     MorphReason::Change,
                     Vec::new(),
                     Vec::new(),
+                    [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
                 )]),
         );
         registry.register(building("shuttered_forge", None));
@@ -942,7 +949,7 @@ fn app() -> App {
         registry.register(
             EntityTypeDef::new("free_shed")
                 .with_location(utils::GROUND, CellSize::new(2, 2), Solidity::Solid)
-                .with_health(100)
+                .with_pool(Pool::health(100))
                 .with_build_time(20)
                 .with_tags(["building"]),
         );
@@ -989,8 +996,8 @@ fn app() -> App {
         // cells — the field-medic shape rather than the workshop one.
         registry.register(
             utils::walker("medic", utils::GROUND)
-                .with_health(30)
-                .with_energy(50, FixedU64::ZERO)
+                .with_pool(Pool::health(30))
+                .with_pool(Pool::energy(50))
                 .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
                 .with_stat(EntityStatId::REPAIR_RANGE, FixedU64::from_num(2))
                 .with_repairer(
@@ -1025,7 +1032,7 @@ fn app() -> App {
 fn building(name: &str, repair_ratio: Option<FixedU64>) -> EntityTypeDef {
     let def = EntityTypeDef::new(name)
         .with_location(utils::GROUND, CellSize::new(2, 2), Solidity::Solid)
-        .with_health(100)
+        .with_pool(Pool::health(100))
         .with_price([("gold", 200)])
         .with_build_time(20)
         .with_tags(["building"]);
@@ -1050,8 +1057,8 @@ fn per_tick_spend(crew: &[&str]) -> u32 {
     utils::run_ticks(&mut app, utils::APPLY + 30);
 
     assert_eq!(
-        utils::current_health(&app, depot),
-        FixedU64::from_num(100),
+        utils::health_as_u32(&app, depot),
+        100,
         "the crew finishes the job"
     );
     500 - utils::gold(app.world())
@@ -1065,7 +1072,7 @@ fn repairer(
     cost: RepairCost,
 ) -> EntityTypeDef {
     let def = utils::walker(name, utils::GROUND)
-        .with_health(20)
+        .with_pool(Pool::health(20))
         .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
         .with_stat(EntityStatId::REPAIR_RANGE, FixedU64::ONE);
     // The factor only means something to a pro-rata bill, and declaring it without
@@ -1107,25 +1114,24 @@ fn crew_of(app: &App, target: Entity) -> Option<BTreeSet<SimulationId>> {
 
 /// Refills `amount` energy directly, standing in for a pool that regenerated.
 fn grant_energy(app: &mut App, entity: Entity, amount: &str) {
-    let max = app
-        .world()
-        .get::<StatsComponent>(entity)
-        .unwrap()
-        .effective(EntityStatId::MAX_ENERGY)
-        .unwrap();
-    app.world_mut()
-        .get_mut::<EnergyComponent>(entity)
-        .unwrap()
-        .regenerate(utils::fixed(amount), max);
+    pools::restore(
+        app.world_mut(),
+        entity,
+        PoolId::ENERGY,
+        utils::fixed(amount),
+    );
 }
 
 /// Spends `amount` energy directly, to set up a worker that is nearly spent.
 fn drain_energy(app: &mut App, entity: Entity, amount: &str) {
-    assert!(
-        app.world_mut()
-            .get_mut::<EnergyComponent>(entity)
-            .unwrap()
-            .spend(utils::fixed(amount)),
+    assert_eq!(
+        pools::spend(
+            app.world_mut(),
+            entity,
+            PoolId::ENERGY,
+            utils::fixed(amount)
+        ),
+        Spending::Paid,
         "the worker had that much energy to spend"
     );
 }

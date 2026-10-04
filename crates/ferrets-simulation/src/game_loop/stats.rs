@@ -1,120 +1,31 @@
-//! Per-tick stat pipeline: fold active buffs into effective stats, age timed
-//! buffs, and advance the per-tick counters and pools that read those stats.
+//! Per-tick stat pipeline: fold active buffs into effective stats, and move
+//! each pool as the modifiers on its maximum come and go.
 
 use bevy_ecs::{change_detection::Mut, entity::Entity, world::World};
 use ferrets_math::FixedU64;
 
 use crate::{
     annex,
-    buffs_store::{Held, Term},
     components::{
-        build::UnderConstructionComponent, energy::EnergyComponent, entity_buffs::BuffsComponent,
-        entity_skills::SkillsComponent, entity_stats::StatsComponent, health::HealthComponent,
-        lifetime::LifetimeComponent,
+        entity_buffs::BuffsComponent,
+        entity_stats::StatsComponent,
+        pool_shifts::{self, PoolShiftTerms, PoolShiftsComponent},
+        pools,
     },
     entity_def,
     entity_index::EntityIndex,
-    events::{DeathCause, SpendCause},
     fields,
-    game_loop::cost,
     player_buffs::PlayerBuffs,
-    player_skills::PlayerSkills,
     player_stats::PlayerStats,
     session::{GameSession, player_id::PlayerId},
-    spawn,
 };
 use ferrets_content::{
-    entity_buffs::{EntityBuffId, Interruption, Lasting},
     entity_effect::EntityEffect,
-    entity_stats::EntityStatId,
-    player_buffs::PlayerBuffId,
+    entity_modifiers::EntityModifiers,
+    pool_def::PoolId,
     registry::ContentRegistry,
     stats::{EntityModifier, PlayerModifier},
 };
-
-/// Applies the buff `id` to `entity`, inserting a [`BuffsComponent`] if it has
-/// none. No-op for an entity with no stat store to modify.
-pub fn apply_entity_buff(world: &mut World, entity: Entity, id: EntityBuffId) {
-    bear(world, entity, id, Held::Applied);
-}
-
-/// Fits the passive `id` onto `entity`, as [`apply_entity_buff`] applies a
-/// buff, marked as borne of its type. Panics when `entity` has no stat store.
-pub fn fit_passive(world: &mut World, entity: Entity, id: EntityBuffId) {
-    assert!(
-        world.entity(entity).contains::<StatsComponent>(),
-        "fit_passive is given an entity with a stat store"
-    );
-    bear(world, entity, id, Held::Passive);
-}
-
-/// Puts the buff `id` on `entity`, a buff held on a requirement marked as
-/// `held`.
-fn bear(world: &mut World, entity: Entity, id: EntityBuffId, held: Held) {
-    if !world.entity(entity).contains::<StatsComponent>() {
-        return;
-    }
-    let def = world.resource::<ContentRegistry>().entity_buff_def(id);
-    // The tick of application ages the term once before anything reads it,
-    // so the seat is one above the term: a buff for `n` ticks stands through
-    // the `n` ticks after the one it landed in, and an upkeep's first payment
-    // falls a full period after it.
-    let term = match &def.lasting {
-        Lasting::Forever => Term::Forever,
-        Lasting::For(ticks) => Term::For {
-            remaining: *ticks + 1,
-        },
-        Lasting::Upkeep { period, .. } => Term::Upkeep {
-            period: *period,
-            due_in: *period + 1,
-        },
-        Lasting::While(_) => Term::While(held),
-    };
-    let stack_rule = def.stack_rule;
-    let mut entity_mut = world.entity_mut(entity);
-    if let Some(mut buffs) = entity_mut.get_mut::<BuffsComponent>() {
-        buffs.apply(id, stack_rule, term);
-    } else {
-        let mut buffs = BuffsComponent::default();
-        buffs.apply(id, stack_rule, term);
-        entity_mut.insert(buffs);
-    }
-}
-
-/// Takes off `entity` every buff whose definition names `interruption` as
-/// what cuts it short. An entity carrying no buffs at all carries none to cut.
-pub fn interrupt_entity_buffs(world: &mut World, entity: Entity, interruption: Interruption) {
-    let Some(buffs) = world.entity(entity).get::<BuffsComponent>() else {
-        return;
-    };
-    let registry = world.resource::<ContentRegistry>();
-    let interrupted: Vec<EntityBuffId> = buffs
-        .active()
-        .map(|(id, _)| id)
-        .filter(|&id| {
-            registry
-                .entity_buff_def(id)
-                .interrupted_by
-                .contains(&interruption)
-        })
-        .collect();
-    if interrupted.is_empty() {
-        return;
-    }
-    if let Some(mut buffs) = world.entity_mut(entity).get_mut::<BuffsComponent>() {
-        for id in interrupted {
-            buffs.remove(id);
-        }
-    }
-}
-
-/// Takes every stack of `id` off `entity`. An entity that carries no buffs at
-/// all carries none of this one.
-pub fn remove_entity_buff(world: &mut World, entity: Entity, id: EntityBuffId) {
-    if let Some(mut buffs) = world.entity_mut(entity).get_mut::<BuffsComponent>() {
-        buffs.remove(id);
-    }
-}
 
 /// Recomputes every entity's effective stats — the once-per-tick snapshot the
 /// rest of the tick reads — from its base stats and the entity modifiers that
@@ -126,27 +37,27 @@ pub fn remove_entity_buff(world: &mut World, entity: Entity, id: EntityBuffId) {
 pub fn recompute_entity_stats(world: &mut World) {
     // Gather first — reads only — so the apply pass below can take the world
     // mutably. The owner-side lists are the same for every unit an owner has,
-    // so they are folded once per player, not once per entity.
-    let owner_modifiers: Vec<Vec<EntityModifier>> =
+    // so they are gathered once per player, not once per entity.
+    let owner_modifiers: Vec<Vec<EntityModifiers>> =
         (0..world.resource::<GameSession>().slots().len())
             .map(|player| owner_entity_modifiers(world, player as PlayerId))
             .collect();
 
-    let mut folds: Vec<(Entity, Vec<EntityModifier>)> = Vec::new();
+    let mut folds: Vec<(Entity, Vec<EntityModifiers>, &[EntityModifiers])> = Vec::new();
     for (_, entity) in world.resource::<EntityIndex>().alive_entries() {
         if !world.entity(entity).contains::<StatsComponent>() {
             continue;
         }
         let owned = entity_def::owner(world, entity)
             .map_or(&[][..], |owner| owner_modifiers[owner as usize].as_slice());
-        folds.push((entity, reaching(world, entity, owned)));
+        folds.push((entity, own_and_standing(world, entity), owned));
     }
     fold(world, folds);
 }
 
 /// Recomputes `entity`'s effective stats alone, from the same modifiers
-/// [`recompute_entity_stats`] folds for it. Panics when `entity` has no stat
-/// store.
+/// [`recompute_entity_stats`] folds for it, moving its pools as that pass
+/// does. Panics when `entity` has no stat store.
 pub fn recompute_stats_of(world: &mut World, entity: Entity) {
     assert!(
         world.entity(entity).contains::<StatsComponent>(),
@@ -154,8 +65,8 @@ pub fn recompute_stats_of(world: &mut World, entity: Entity) {
     );
     let owned = entity_def::owner(world, entity)
         .map_or_else(Vec::new, |owner| owner_entity_modifiers(world, owner));
-    let modifiers = reaching(world, entity, &owned);
-    fold(world, vec![(entity, modifiers)]);
+    let own = own_and_standing(world, entity);
+    fold(world, vec![(entity, own, &owned)]);
 }
 
 /// Recomputes every player's effective stats: the player's own buffs fold
@@ -180,243 +91,45 @@ pub fn recompute_player_stats(world: &mut World) {
     }
 }
 
-/// Ages every entity's buffs by one tick: timed ones that ran out are dropped,
-/// and an upkeep whose payment falls due is paid from the bearer's pools and
-/// its owner's stockpile — or dropped, the tick it cannot be. Expiries take
-/// effect at the next tick's recompute snapshots.
-///
-/// Nobody pays for the unowned: an upkeep on an ownerless bearer ends at its
-/// first due tick.
-pub fn process_entity_buffs(world: &mut World) {
-    for (_, entity) in world.resource::<EntityIndex>().alive_entries() {
-        let due = match world.entity_mut(entity).get_mut::<BuffsComponent>() {
-            Some(mut buffs) => buffs.tick_down(),
-            None => continue,
-        };
-        for (id, stacks) in due {
-            // Cloned off the registry borrow, which the payment needs released,
-            // and taken once per stack: the modifiers are applied per stack, so
-            // the upkeep is owed per stack too.
-            let costs = match &world
-                .resource::<ContentRegistry>()
-                .entity_buff_def(id)
-                .lasting
-            {
-                Lasting::Upkeep { costs, .. } => cost::times(costs, stacks),
-                Lasting::Forever | Lasting::For(_) | Lasting::While(_) => {
-                    unreachable!("the store reports a payment due on an upkeep alone")
-                }
-            };
-            match entity_def::owner(world, entity) {
-                Some(player) if cost::can_pay(world, entity, player, &costs) => {
-                    let bearer = entity_def::simulation_id(world, entity);
-                    cost::pay(
-                        world,
-                        entity,
-                        player,
-                        &costs,
-                        SpendCause::Upkeep { bearer, buff: id },
-                    );
-                }
-                // Unaffordable, or nobody's to pay for: the buff ends.
-                Some(_) | None => remove_entity_buff(world, entity, id),
-            }
-        }
-    }
-}
-
-/// Ages every player's timed buffs by one tick, dropping any that expire.
-/// Expiries take effect at the next tick's recompute snapshots.
-pub fn process_player_buffs(world: &mut World) {
-    world.resource_mut::<PlayerBuffs>().tick_down();
-}
-
-/// Applies the player-level buff `id` to `player`. The buff's own stacking rule
-/// resolves a re-application, exactly as on an entity.
-pub fn apply_player_buff(world: &mut World, player: PlayerId, id: PlayerBuffId) {
-    let def = world.resource::<ContentRegistry>().player_buff_def(id);
-    // The content still states a lifetime as an optional tick count, where
-    // absence means forever; the store takes the term outright.
-    let term = match def.duration {
-        Some(ticks) => Term::For { remaining: ticks },
-        None => Term::Forever,
-    };
-    let stack_rule = def.stack_rule;
-    world
-        .resource_mut::<PlayerBuffs>()
-        .apply(player, id, stack_rule, term);
-}
-
-/// Takes the player-level buff `id` off `player`, however much of it was left.
-pub fn remove_player_buff(world: &mut World, player: PlayerId, id: PlayerBuffId) {
-    world.resource_mut::<PlayerBuffs>().remove(player, id);
-}
-
-/// Ages player-skill cooldowns by one tick. The buffs a cast applied age with
-/// every other player buff in [`process_player_buffs`].
-pub fn process_player_skills(world: &mut World) {
-    world.resource_mut::<PlayerSkills>().tick_cooldowns();
-}
-
-/// Ages every entity-skill cooldown by one tick.
-pub fn process_entity_skills(world: &mut World) {
-    for (_, entity) in world.resource::<EntityIndex>().alive_entries() {
-        if let Some(mut skills) = world.entity_mut(entity).get_mut::<SkillsComponent>() {
-            skills.tick_cooldowns();
-        }
-    }
-}
-
-/// Moves each energy pool by one tick: up by `energy_regen` to `max_energy`,
-/// then down by `energy_drain`, to no lower than empty.
-///
-/// Runs over the alive index, so the dying are already excluded. A pool also
-/// settles back under a ceiling a debuff has lowered.
-pub fn process_energy_flow(world: &mut World) {
-    for (_, entity) in world.resource::<EntityIndex>().alive_entries() {
-        let entity_ref = world.entity(entity);
-        if !entity_ref.contains::<EnergyComponent>() {
-            continue;
-        }
-        // An energy pool is only ever seeded from `max_energy`, so anything with one
-        // carries the stat. The regeneration rate is genuinely optional: a pool that
-        // never refills on its own is ordinary content.
-        let stats = entity_ref
-            .get::<StatsComponent>()
-            .expect("an energy pool implies the store it was seeded into");
-        let max = stats
-            .effective(EntityStatId::MAX_ENERGY)
-            .expect("an energy pool implies the stat it was seeded from");
-        let regen = stats
-            .effective(EntityStatId::ENERGY_REGEN)
-            .unwrap_or(FixedU64::ZERO);
-        let drain = stats
-            .effective(EntityStatId::ENERGY_DRAIN)
-            .unwrap_or(FixedU64::ZERO);
-        if let Some(mut energy) = world.entity_mut(entity).get_mut::<EnergyComponent>() {
-            energy.regenerate(regen, max);
-            energy.drain(drain);
-        }
-    }
-}
-
-/// Moves each health pool by one tick: up by `health_regen` to `max_health`,
-/// then down by `health_drain`.
-///
-/// Runs over the alive index, so the dying are already excluded; entities still
-/// under construction are skipped too. A pool also settles back under a ceiling
-/// a debuff has lowered, and one the drain empties dies of it.
-pub fn process_health_flow(world: &mut World) {
-    for (_, entity) in world.resource::<EntityIndex>().alive_entries() {
-        let entity_ref = world.entity(entity);
-        if entity_ref.contains::<UnderConstructionComponent>() {
-            continue;
-        }
-        let Some(health) = entity_ref.get::<HealthComponent>() else {
-            continue;
-        };
-        // Nothing brings an entity back, whatever its regeneration says.
-        if health.is_dead() {
-            continue;
-        }
-        // A health pool is only ever seeded from `max_health`, so anything with one
-        // carries the stat — and standing a missing ceiling in as zero would settle
-        // the pool to zero and read as a kill.
-        let stats = entity_ref
-            .get::<StatsComponent>()
-            .expect("a health pool implies the store it was seeded into");
-        let max = stats
-            .effective(EntityStatId::MAX_HEALTH)
-            .expect("a health pool implies the stat it was seeded from");
-        let regen = stats
-            .effective(EntityStatId::HEALTH_REGEN)
-            .unwrap_or(FixedU64::ZERO);
-        let drain = stats
-            .effective(EntityStatId::HEALTH_DRAIN)
-            .unwrap_or(FixedU64::ZERO);
-        let emptied = match world.entity_mut(entity).get_mut::<HealthComponent>() {
-            Some(mut health) => {
-                health.heal(regen, max);
-                health.drain(drain);
-                health.is_dead()
-            }
-            None => unreachable!("the pool read a moment ago is still the entity's own"),
-        };
-        // A health pool this pass drains to nothing dies of it, with nobody
-        // to blame: a structure withering off the field that sustains it, a
-        // building burning down under its line. A pool that was already empty
-        // is left where the opening rule left it.
-        if emptied {
-            spawn::despawn_entity(world, entity, DeathCause::Decayed);
-        }
-    }
-}
-
-/// Ages every timed life by one tick, ending the ones whose time is up.
-///
-/// Runs over the alive index, so the dying are already excluded. The age is
-/// compared against the *effective* stat, so a buff that lengthens a life keeps
-/// standing instances on their feet and one that shortens it takes them at
-/// once.
-pub fn process_lifetimes(world: &mut World) {
-    for (_, entity) in world.resource::<EntityIndex>().alive_entries() {
-        let Some(lifetime) = world.entity(entity).get::<LifetimeComponent>() else {
-            continue;
-        };
-        // A timed life is only ever fitted from the stat, so anything carrying
-        // one carries the stat.
-        let limit = entity_def::effective_stat_u32(world, entity, EntityStatId::LIFETIME);
-        let age = lifetime.age + 1;
-        if age >= limit {
-            spawn::despawn_entity(world, entity, DeathCause::Expired);
-            continue;
-        }
-        world
-            .entity_mut(entity)
-            .get_mut::<LifetimeComponent>()
-            .expect("the timed life read a moment ago is still the entity's own")
-            .age = age;
-    }
-}
-
-/// The modifiers an entity's active buffs contribute, resolved through the
-/// registry. A buff with `n` stacks contributes its modifiers `n` times.
+/// What an entity's active buffs lay over it, resolved through the registry:
+/// the entity modifiers of each modifier effect of each buff, its modifiers
+/// once for each stack.
 fn entity_buff_modifiers(
     registry: &ContentRegistry,
     buffs: &BuffsComponent,
-) -> Vec<EntityModifier> {
-    let mut modifiers = Vec::new();
+) -> Vec<EntityModifiers> {
+    let mut entity_modifiers = Vec::new();
     for (id, stacks) in buffs.active() {
         let buff = registry.entity_buff_def(id);
         for effect in &buff.effects {
             match effect {
-                EntityEffect::Modifiers(granted) => {
-                    for _ in 0..stacks {
-                        modifiers.extend_from_slice(granted);
-                    }
+                EntityEffect::Modifiers(modifiers) => {
+                    entity_modifiers.push(repeated(modifiers, stacks));
                 }
                 EntityEffect::Disable | EntityEffect::Conceal => {}
             }
         }
     }
-    modifiers
+    entity_modifiers
 }
 
-/// The entity modifiers a player's active buffs lay over every owned unit. A
-/// buff with `n` stacks contributes its modifiers `n` times.
+/// What a player's active buffs lay over every owned unit: each set of
+/// entity modifiers of each buff, its modifiers once for each stack.
 fn player_buff_entity_modifiers(
     registry: &ContentRegistry,
     buffs: &PlayerBuffs,
     player: PlayerId,
-) -> Vec<EntityModifier> {
-    let mut modifiers = Vec::new();
-    for (id, stacks) in buffs.active(player) {
-        let buff = registry.player_buff_def(id);
-        for _ in 0..stacks {
-            modifiers.extend_from_slice(&buff.entity_modifiers);
-        }
-    }
-    modifiers
+) -> Vec<EntityModifiers> {
+    buffs
+        .active(player)
+        .flat_map(|(id, stacks)| {
+            registry
+                .player_buff_def(id)
+                .entity_modifiers
+                .iter()
+                .map(move |modifiers| repeated(modifiers, stacks))
+        })
+        .collect()
 }
 
 /// The player modifiers a player's active buffs contribute to its own stats. A
@@ -436,40 +149,126 @@ fn player_buff_player_modifiers(
     modifiers
 }
 
-/// The entity modifiers `player`'s buffs and applied modifiers lay over every
-/// unit it owns.
-fn owner_entity_modifiers(world: &World, player: PlayerId) -> Vec<EntityModifier> {
+/// What `player`'s buffs and applied modifiers lay over every unit it owns.
+fn owner_entity_modifiers(world: &World, player: PlayerId) -> Vec<EntityModifiers> {
     let registry = world.resource::<ContentRegistry>();
-    let mut modifiers =
+    let mut entity_modifiers =
         player_buff_entity_modifiers(registry, world.resource::<PlayerBuffs>(), player);
-    modifiers.extend_from_slice(world.resource::<PlayerStats>().entity_modifiers(player));
-    modifiers
+    entity_modifiers.extend(
+        world
+            .resource::<PlayerStats>()
+            .entity_modifiers(player)
+            .iter()
+            .cloned(),
+    );
+    entity_modifiers
 }
 
-/// Every entity modifier that reaches `entity`: its own buffs', `owned` (its
-/// owner's), and the fields' and annex's that hold for where it stands.
-fn reaching(world: &World, entity: Entity, owned: &[EntityModifier]) -> Vec<EntityModifier> {
+/// What reaches `entity` of its own: its buffs', then the fields' and the
+/// annex's that hold for where it stands.
+fn own_and_standing(world: &World, entity: Entity) -> Vec<EntityModifiers> {
     let registry = world.resource::<ContentRegistry>();
-    let mut modifiers = match world.entity(entity).get::<BuffsComponent>() {
+    let mut entity_modifiers = match world.entity(entity).get::<BuffsComponent>() {
         Some(buffs) => entity_buff_modifiers(registry, buffs),
         None => Vec::new(),
     };
-    modifiers.extend_from_slice(owned);
-    modifiers.extend(fields::modifiers(world, entity));
-    modifiers.extend(annex::modifiers(world, entity));
-    modifiers
+    entity_modifiers.extend(fields::entity_modifiers(world, entity));
+    let alone = annex::modifiers(world, entity);
+    entity_modifiers.extend((!alone.is_empty()).then_some(EntityModifiers::Stats(alone)));
+    entity_modifiers
 }
 
-/// Folds each entity's modifiers into its effective stats, each stat held at
-/// the floor its registration carries.
-fn fold(world: &mut World, folds: Vec<(Entity, Vec<EntityModifier>)>) {
+/// Folds each entity's own entity modifiers and its owner's (`owned`, shared
+/// by every unit the owner has) into its effective stats, each stat held at
+/// the floor its registration carries, and moves its pools as the parts of
+/// their maxima came and went.
+fn fold(world: &mut World, folds: Vec<(Entity, Vec<EntityModifiers>, &[EntityModifiers])>) {
     // The floors live in the registry alone, held aside for the pass so the
     // entities it folds can be reached at the same time.
     world.resource_scope(|world, registry: Mut<ContentRegistry>| {
-        for (entity, modifiers) in folds {
-            if let Some(mut stats) = world.entity_mut(entity).get_mut::<StatsComponent>() {
-                stats.recompute(&modifiers, registry.entity_stat_defs());
-            }
+        for (entity, own, owned) in folds {
+            let modifiers: Vec<EntityModifier> = own
+                .iter()
+                .chain(owned)
+                .flat_map(|modifiers| modifiers.modifiers().iter().copied())
+                .collect();
+            world
+                .entity_mut(entity)
+                .get_mut::<StatsComponent>()
+                .expect("a folded entity carries a stat store")
+                .recompute(&modifiers, registry.entity_stat_defs());
+            follow_pools(world, &registry, entity, &own, owned);
         }
     });
+}
+
+/// Moves each of `entity`'s pools as the parts of its maximum came and went
+/// since the last fold, and remembers the parts folded now. A pool the
+/// entity does not have yet is left to whoever fills it.
+fn follow_pools(
+    world: &mut World,
+    registry: &ContentRegistry,
+    entity: Entity,
+    own: &[EntityModifiers],
+    owned: &[EntityModifiers],
+) {
+    let entity_ref = world.entity(entity);
+    let stats = entity_ref
+        .get::<StatsComponent>()
+        .expect("a folded entity carries a stat store");
+    let remembered = entity_ref
+        .get::<PoolShiftsComponent>()
+        .expect("a simulation entity carries its pool shifts");
+    // Judged first, against the store as it stands; nothing is written for an
+    // entity whose maxima the same parts reach as last time.
+    let mut changes: Vec<(PoolId, Vec<PoolShiftTerms>, Option<FixedU64>)> = Vec::new();
+    for pool in registry
+        .def(entity_def::type_id(world, entity))
+        .base_stats
+        .pools()
+        .map(|pool| pool.id())
+    {
+        let maximum_stat = registry.pool_def(pool).maximum_stat();
+        let base = stats
+            .base(maximum_stat)
+            .expect("a pool the type declares seeds its maximum");
+        let now = pool_shifts::parts_of(own.iter().chain(owned), maximum_stat);
+        let before = remembered.parts(pool);
+        if before == now.as_slice() {
+            continue;
+        }
+        let floor = registry.entity_stat_def(maximum_stat).floor();
+        let current = entity_def::pool_value(world, entity, pool)
+            .map(|current| pool_shifts::stepped(pool, current, base, floor, before, &now));
+        changes.push((pool, now, current));
+    }
+    for (pool, parts, current) in changes {
+        if let Some(current) = current {
+            pools::follow(world, registry, entity, pool, current);
+        }
+        world
+            .entity_mut(entity)
+            .get_mut::<PoolShiftsComponent>()
+            .expect("a simulation entity carries its pool shifts")
+            .remember(pool, parts);
+    }
+}
+
+/// `modifiers` once for each of `stacks`.
+fn repeated(modifiers: &EntityModifiers, stacks: u32) -> EntityModifiers {
+    let repeated = |modifiers: &[EntityModifier]| {
+        (0..stacks)
+            .flat_map(|_| modifiers.iter().copied())
+            .collect()
+    };
+    match modifiers {
+        EntityModifiers::Stats(modifiers) => EntityModifiers::Stats(repeated(modifiers)),
+        EntityModifiers::PoolMaximums {
+            modifiers,
+            pool_shift,
+        } => EntityModifiers::PoolMaximums {
+            modifiers: repeated(modifiers),
+            pool_shift: *pool_shift,
+        },
+    }
 }

@@ -15,15 +15,9 @@ use ferrets_simulation::{
         transport::{BoardedComponent, GarrisonFireComponent},
     },
     entity_index::EntityIndex,
-    game_loop,
     map::Map,
     spawn,
     visibility::{self, Senses, Sighting},
-};
-use utils::{
-    APPLY, GROUND, cell_of, create_owned, health, passengers_of, pos, push_command, run_ticks,
-    run_until_aboard, select, selection, send_to, set_all_cells_statically_occupied,
-    single_owned_of_type, transport_app, unload, within,
 };
 
 //
@@ -32,14 +26,14 @@ use utils::{
 
 #[test]
 fn unit_boards_transport_and_leaves_map_and_selection() {
-    let mut app = transport_app();
-    let (wagon, wagon_id) = create_owned(&mut app, "wagon", 10, 10, 0);
-    let (rifleman, rifleman_id) = create_owned(&mut app, "rifleman", 14, 10, 0);
+    let mut app = utils::transport_app();
+    let (wagon, wagon_id) = utils::create_owned(&mut app, "wagon", 10, 10, 0);
+    let (rifleman, rifleman_id) = utils::create_owned(&mut app, "rifleman", 14, 10, 0);
 
-    send_to(&mut app, rifleman_id, wagon_id);
-    run_until_aboard(&mut app, wagon, 1, 40);
+    utils::send_to(&mut app, rifleman_id, wagon_id);
+    utils::run_until_aboard(&mut app, wagon, 1, 40);
 
-    assert_eq!(passengers_of(app.world(), wagon), [rifleman_id]);
+    assert_eq!(utils::passengers_of(app.world(), wagon), [rifleman_id]);
     assert!(app.world().get::<HiddenComponent>(rifleman).is_some());
     assert_eq!(
         app.world()
@@ -48,21 +42,21 @@ fn unit_boards_transport_and_leaves_map_and_selection() {
         Some(wagon_id)
     );
     assert!(
-        !selection(&app).contains(&rifleman_id),
+        !utils::selection(&app).contains(&rifleman_id),
         "a unit off the map leaves the selection"
     );
 }
 
 #[test]
 fn passenger_aboard_is_seen_by_nobody() {
-    let mut app = transport_app();
-    let (wagon, wagon_id) = create_owned(&mut app, "wagon", 10, 10, 0);
-    let (rifleman, rifleman_id) = create_owned(&mut app, "rifleman", 14, 10, 0);
+    let mut app = utils::transport_app();
+    let (wagon, wagon_id) = utils::create_owned(&mut app, "wagon", 10, 10, 0);
+    let (rifleman, rifleman_id) = utils::create_owned(&mut app, "rifleman", 14, 10, 0);
     // The rival stands beside the wagon, so its cell is in the rival's sight.
-    create_owned(&mut app, "rifleman", 11, 11, 2);
-    send_to(&mut app, rifleman_id, wagon_id);
-    run_until_aboard(&mut app, wagon, 1, 40);
-    run_ticks(&mut app, 1);
+    utils::create_owned(&mut app, "rifleman", 11, 11, 2);
+    utils::send_to(&mut app, rifleman_id, wagon_id);
+    utils::run_until_aboard(&mut app, wagon, 1, 40);
+    utils::run_ticks(&mut app, 1);
 
     // The wagon is in plain sight; what rides inside it is off the map, and
     // sight reaches nothing there — not the rival's, not the owner's, not an
@@ -83,14 +77,14 @@ fn passenger_aboard_is_seen_by_nobody() {
 
 #[test]
 fn untransportable_unit_does_not_board() {
-    let mut app = transport_app();
-    let (wagon, wagon_id) = create_owned(&mut app, "wagon", 10, 10, 0);
-    let (civilian, civilian_id) = create_owned(&mut app, "civilian", 13, 10, 0);
+    let mut app = utils::transport_app();
+    let (wagon, wagon_id) = utils::create_owned(&mut app, "wagon", 10, 10, 0);
+    let (civilian, civilian_id) = utils::create_owned(&mut app, "civilian", 13, 10, 0);
 
-    send_to(&mut app, civilian_id, wagon_id);
-    run_ticks(&mut app, 30);
+    utils::send_to(&mut app, civilian_id, wagon_id);
+    utils::run_ticks(&mut app, 30);
 
-    assert!(passengers_of(app.world(), wagon).is_empty());
+    assert!(utils::passengers_of(app.world(), wagon).is_empty());
     assert!(
         app.world().get::<HiddenComponent>(civilian).is_none(),
         "a unit without cargo_size stays in the open"
@@ -99,26 +93,26 @@ fn untransportable_unit_does_not_board() {
 
 #[test]
 fn admission_list_matches_type_name() {
-    let mut app = transport_app();
+    let mut app = utils::transport_app();
     // The bunker carries "rifleman" by type name; a grunt's "infantry" tag is
     // not on its list.
-    let (bunker, bunker_id) = create_owned(&mut app, "bunker", 10, 10, 0);
-    let (_, rifleman_id) = create_owned(&mut app, "rifleman", 13, 10, 0);
-    let (grunt, grunt_id) = create_owned(&mut app, "grunt", 13, 12, 0);
+    let (bunker, bunker_id) = utils::create_owned(&mut app, "bunker", 10, 10, 0);
+    let (_, rifleman_id) = utils::create_owned(&mut app, "rifleman", 13, 10, 0);
+    let (grunt, grunt_id) = utils::create_owned(&mut app, "grunt", 13, 12, 0);
 
-    send_to(&mut app, rifleman_id, bunker_id);
-    send_to(&mut app, grunt_id, bunker_id);
-    run_ticks(&mut app, 30);
+    utils::send_to(&mut app, rifleman_id, bunker_id);
+    utils::send_to(&mut app, grunt_id, bunker_id);
+    utils::run_ticks(&mut app, 30);
 
-    assert_eq!(passengers_of(app.world(), bunker), [rifleman_id]);
+    assert_eq!(utils::passengers_of(app.world(), bunker), [rifleman_id]);
     assert!(app.world().get::<HiddenComponent>(grunt).is_none());
 }
 
 #[test]
 fn debuff_sealing_hold_turns_boarder_away() {
-    let mut app = transport_app();
-    let (wagon, wagon_id) = create_owned(&mut app, "wagon", 10, 10, 0);
-    let (rifleman, rifleman_id) = create_owned(&mut app, "rifleman", 11, 10, 0);
+    let mut app = utils::transport_app();
+    let (wagon, wagon_id) = utils::create_owned(&mut app, "wagon", 10, 10, 0);
+    let (rifleman, rifleman_id) = utils::create_owned(&mut app, "rifleman", 11, 10, 0);
 
     // Capacity has no fold floor, so a debuff can seal the hold entirely.
     let sealed = utils::register_entity_buff(
@@ -129,12 +123,12 @@ fn debuff_sealing_hold_turns_boarder_away() {
         "-10",
         None,
     );
-    game_loop::stats::apply_entity_buff(app.world_mut(), wagon, sealed);
+    utils::apply_buff(app.world_mut(), wagon, sealed);
 
-    send_to(&mut app, rifleman_id, wagon_id);
-    run_ticks(&mut app, 20);
+    utils::send_to(&mut app, rifleman_id, wagon_id);
+    utils::run_ticks(&mut app, 20);
 
-    assert!(passengers_of(app.world(), wagon).is_empty());
+    assert!(utils::passengers_of(app.world(), wagon).is_empty());
     assert!(
         app.world().get::<HiddenComponent>(rifleman).is_none(),
         "a sealed hold admits nobody"
@@ -143,22 +137,22 @@ fn debuff_sealing_hold_turns_boarder_away() {
 
 #[test]
 fn full_transport_turns_boarder_away() {
-    let mut app = transport_app();
-    let (wagon, wagon_id) = create_owned(&mut app, "wagon", 10, 10, 0);
+    let mut app = utils::transport_app();
+    let (wagon, wagon_id) = utils::create_owned(&mut app, "wagon", 10, 10, 0);
     // Two grunts at cargo size 2 each fill the four slots.
-    let (_, first_id) = create_owned(&mut app, "grunt", 12, 10, 0);
-    let (_, second_id) = create_owned(&mut app, "grunt", 12, 11, 0);
-    let (rifleman, rifleman_id) = create_owned(&mut app, "rifleman", 12, 12, 0);
+    let (_, first_id) = utils::create_owned(&mut app, "grunt", 12, 10, 0);
+    let (_, second_id) = utils::create_owned(&mut app, "grunt", 12, 11, 0);
+    let (rifleman, rifleman_id) = utils::create_owned(&mut app, "rifleman", 12, 12, 0);
 
-    send_to(&mut app, first_id, wagon_id);
-    run_until_aboard(&mut app, wagon, 1, 40);
-    send_to(&mut app, second_id, wagon_id);
-    run_until_aboard(&mut app, wagon, 2, 40);
+    utils::send_to(&mut app, first_id, wagon_id);
+    utils::run_until_aboard(&mut app, wagon, 1, 40);
+    utils::send_to(&mut app, second_id, wagon_id);
+    utils::run_until_aboard(&mut app, wagon, 2, 40);
 
-    send_to(&mut app, rifleman_id, wagon_id);
-    run_ticks(&mut app, 30);
+    utils::send_to(&mut app, rifleman_id, wagon_id);
+    utils::run_ticks(&mut app, 30);
 
-    assert_eq!(passengers_of(app.world(), wagon).len(), 2);
+    assert_eq!(utils::passengers_of(app.world(), wagon).len(), 2);
     assert!(
         app.world().get::<HiddenComponent>(rifleman).is_none(),
         "no slot left for even a one-slot passenger"
@@ -167,47 +161,47 @@ fn full_transport_turns_boarder_away() {
 
 #[test]
 fn own_boarding_policy_rejects_allied_holder() {
-    let mut app = transport_app();
+    let mut app = utils::transport_app();
     // Player 1 is allied with the local player 0; the wagon admits own only.
-    let (wagon, wagon_id) = create_owned(&mut app, "wagon", 10, 10, 1);
-    let (rifleman, rifleman_id) = create_owned(&mut app, "rifleman", 13, 10, 0);
+    let (wagon, wagon_id) = utils::create_owned(&mut app, "wagon", 10, 10, 1);
+    let (rifleman, rifleman_id) = utils::create_owned(&mut app, "rifleman", 13, 10, 0);
 
-    send_to(&mut app, rifleman_id, wagon_id);
-    run_ticks(&mut app, 30);
+    utils::send_to(&mut app, rifleman_id, wagon_id);
+    utils::run_ticks(&mut app, 30);
 
-    assert!(passengers_of(app.world(), wagon).is_empty());
+    assert!(utils::passengers_of(app.world(), wagon).is_empty());
     assert!(app.world().get::<HiddenComponent>(rifleman).is_none());
 }
 
 #[test]
 fn allies_boarding_policy_admits_allied_unit() {
-    let mut app = transport_app();
-    let (ferry, ferry_id) = create_owned(&mut app, "ferry", 10, 10, 1);
-    let (_, rifleman_id) = create_owned(&mut app, "rifleman", 13, 10, 0);
+    let mut app = utils::transport_app();
+    let (ferry, ferry_id) = utils::create_owned(&mut app, "ferry", 10, 10, 1);
+    let (_, rifleman_id) = utils::create_owned(&mut app, "rifleman", 13, 10, 0);
 
-    send_to(&mut app, rifleman_id, ferry_id);
-    run_until_aboard(&mut app, ferry, 1, 40);
+    utils::send_to(&mut app, rifleman_id, ferry_id);
+    utils::run_until_aboard(&mut app, ferry, 1, 40);
 
-    assert_eq!(passengers_of(app.world(), ferry), [rifleman_id]);
+    assert_eq!(utils::passengers_of(app.world(), ferry), [rifleman_id]);
 }
 
 #[test]
 fn load_period_meters_boardings() {
-    let mut app = transport_app();
-    let (wagon, wagon_id) = create_owned(&mut app, "wagon", 10, 10, 0);
+    let mut app = utils::transport_app();
+    let (wagon, wagon_id) = utils::create_owned(&mut app, "wagon", 10, 10, 0);
     // Both stand inside the load range already, so they arrive together.
-    let (_, first_id) = create_owned(&mut app, "rifleman", 11, 10, 0);
-    let (_, second_id) = create_owned(&mut app, "rifleman", 11, 11, 0);
+    let (_, first_id) = utils::create_owned(&mut app, "rifleman", 11, 10, 0);
+    let (_, second_id) = utils::create_owned(&mut app, "rifleman", 11, 11, 0);
 
-    select(&mut app, first_id);
-    push_command(
+    utils::select(&mut app, first_id);
+    utils::push_command(
         &mut app,
         PlayerCommand::SelectById {
             id: second_id,
-            mode: ferrets_simulation::command::SelectMode::Add,
+            mode: SelectMode::Add,
         },
     );
-    push_command(
+    utils::push_command(
         &mut app,
         PlayerCommand::SendToEntity {
             target: wagon_id,
@@ -215,43 +209,43 @@ fn load_period_meters_boardings() {
         },
     );
 
-    run_until_aboard(&mut app, wagon, 1, 10);
+    utils::run_until_aboard(&mut app, wagon, 1, 10);
     assert_eq!(
-        passengers_of(app.world(), wagon).len(),
+        utils::passengers_of(app.world(), wagon).len(),
         1,
         "the boarding cooldown holds the second arrival outside"
     );
     // The second boards once the three-tick loading period has passed.
-    run_ticks(&mut app, 3);
-    assert_eq!(passengers_of(app.world(), wagon).len(), 2);
+    utils::run_ticks(&mut app, 3);
+    assert_eq!(utils::passengers_of(app.world(), wagon).len(), 2);
 }
 
 #[test]
 fn explicit_board_command_boards_mixed_selection() {
-    let mut app = transport_app();
-    let (wagon, wagon_id) = create_owned(&mut app, "wagon", 10, 10, 0);
-    let (rifleman, rifleman_id) = create_owned(&mut app, "rifleman", 12, 10, 0);
-    let (civilian, civilian_id) = create_owned(&mut app, "civilian", 12, 11, 0);
+    let mut app = utils::transport_app();
+    let (wagon, wagon_id) = utils::create_owned(&mut app, "wagon", 10, 10, 0);
+    let (rifleman, rifleman_id) = utils::create_owned(&mut app, "rifleman", 12, 10, 0);
+    let (civilian, civilian_id) = utils::create_owned(&mut app, "civilian", 12, 11, 0);
 
-    select(&mut app, rifleman_id);
-    push_command(
+    utils::select(&mut app, rifleman_id);
+    utils::push_command(
         &mut app,
         PlayerCommand::SelectById {
             id: civilian_id,
             mode: SelectMode::Add,
         },
     );
-    push_command(
+    utils::push_command(
         &mut app,
         PlayerCommand::Board {
             target: wagon_id,
             flush: true,
         },
     );
-    run_until_aboard(&mut app, wagon, 1, 30);
+    utils::run_until_aboard(&mut app, wagon, 1, 30);
 
     assert_eq!(
-        passengers_of(app.world(), wagon),
+        utils::passengers_of(app.world(), wagon),
         [rifleman_id],
         "the eligible unit boards"
     );
@@ -264,46 +258,46 @@ fn explicit_board_command_boards_mixed_selection() {
 
 #[test]
 fn explicit_follow_command_tails_own_transporter() {
-    let mut app = transport_app();
-    let (wagon, wagon_id) = create_owned(&mut app, "wagon", 10, 10, 0);
-    let (rifleman, rifleman_id) = create_owned(&mut app, "rifleman", 12, 10, 0);
+    let mut app = utils::transport_app();
+    let (wagon, wagon_id) = utils::create_owned(&mut app, "wagon", 10, 10, 0);
+    let (rifleman, rifleman_id) = utils::create_owned(&mut app, "rifleman", 12, 10, 0);
 
     // The smart click would read this pairing as boarding; the explicit
     // command keeps the rifleman outside, tailing the wagon.
-    select(&mut app, rifleman_id);
-    push_command(
+    utils::select(&mut app, rifleman_id);
+    utils::push_command(
         &mut app,
         PlayerCommand::Follow {
             target: wagon_id,
             flush: true,
         },
     );
-    run_ticks(&mut app, 20);
+    utils::run_ticks(&mut app, 20);
 
-    assert!(passengers_of(app.world(), wagon).is_empty());
+    assert!(utils::passengers_of(app.world(), wagon).is_empty());
     assert!(app.world().get::<HiddenComponent>(rifleman).is_none());
     assert!(
-        within(app.world_mut(), rifleman, wagon, 2),
+        utils::within(app.world_mut(), rifleman, wagon, 2),
         "the follower stays close without climbing in"
     );
 }
 
 #[test]
 fn transport_fetches_targeted_unit_aboard() {
-    let mut app = transport_app();
-    let (wagon, wagon_id) = create_owned(&mut app, "wagon", 5, 5, 0);
-    let (grunt, grunt_id) = create_owned(&mut app, "grunt", 14, 5, 0);
+    let mut app = utils::transport_app();
+    let (wagon, wagon_id) = utils::create_owned(&mut app, "wagon", 5, 5, 0);
+    let (grunt, grunt_id) = utils::create_owned(&mut app, "grunt", 14, 5, 0);
 
     // The grunt is walking its own way; the wagon is sent to fetch it.
-    select(&mut app, grunt_id);
-    push_command(
+    utils::select(&mut app, grunt_id);
+    utils::push_command(
         &mut app,
         PlayerCommand::Move {
-            target: pos(14, 12),
+            target: utils::pos(14, 12),
             flush: true,
         },
     );
-    push_command(
+    utils::push_command(
         &mut app,
         PlayerCommand::Load {
             transport: wagon_id,
@@ -311,9 +305,9 @@ fn transport_fetches_targeted_unit_aboard() {
             flush: true,
         },
     );
-    run_until_aboard(&mut app, wagon, 1, 80);
+    utils::run_until_aboard(&mut app, wagon, 1, 80);
 
-    assert_eq!(passengers_of(app.world(), wagon), [grunt_id]);
+    assert_eq!(utils::passengers_of(app.world(), wagon), [grunt_id]);
     assert!(app.world().get::<HiddenComponent>(grunt).is_some());
     assert!(
         app.world()
@@ -325,11 +319,11 @@ fn transport_fetches_targeted_unit_aboard() {
 
 #[test]
 fn load_refuses_ineligible_unit() {
-    let mut app = transport_app();
-    let (wagon, wagon_id) = create_owned(&mut app, "wagon", 5, 5, 0);
-    let (civilian, civilian_id) = create_owned(&mut app, "civilian", 8, 5, 0);
+    let mut app = utils::transport_app();
+    let (wagon, wagon_id) = utils::create_owned(&mut app, "wagon", 5, 5, 0);
+    let (civilian, civilian_id) = utils::create_owned(&mut app, "civilian", 8, 5, 0);
 
-    push_command(
+    utils::push_command(
         &mut app,
         PlayerCommand::Load {
             transport: wagon_id,
@@ -337,9 +331,9 @@ fn load_refuses_ineligible_unit() {
             flush: true,
         },
     );
-    run_ticks(&mut app, 20);
+    utils::run_ticks(&mut app, 20);
 
-    assert!(passengers_of(app.world(), wagon).is_empty());
+    assert!(utils::passengers_of(app.world(), wagon).is_empty());
     assert!(
         app.world().get::<HiddenComponent>(civilian).is_none(),
         "a unit without cargo_size is not fetched"
@@ -352,17 +346,17 @@ fn load_refuses_ineligible_unit() {
 
 #[test]
 fn unload_period_meters_exits_in_id_order() {
-    let mut app = transport_app();
-    let (wagon, wagon_id) = create_owned(&mut app, "wagon", 10, 10, 0);
-    let (first, first_id) = create_owned(&mut app, "rifleman", 11, 10, 0);
-    let (second, second_id) = create_owned(&mut app, "rifleman", 11, 11, 0);
-    send_to(&mut app, first_id, wagon_id);
-    run_until_aboard(&mut app, wagon, 1, 10);
-    send_to(&mut app, second_id, wagon_id);
-    run_until_aboard(&mut app, wagon, 2, 10);
+    let mut app = utils::transport_app();
+    let (wagon, wagon_id) = utils::create_owned(&mut app, "wagon", 10, 10, 0);
+    let (first, first_id) = utils::create_owned(&mut app, "rifleman", 11, 10, 0);
+    let (second, second_id) = utils::create_owned(&mut app, "rifleman", 11, 11, 0);
+    utils::send_to(&mut app, first_id, wagon_id);
+    utils::run_until_aboard(&mut app, wagon, 1, 10);
+    utils::send_to(&mut app, second_id, wagon_id);
+    utils::run_until_aboard(&mut app, wagon, 2, 10);
 
-    unload(&mut app, wagon_id, None);
-    run_ticks(&mut app, APPLY + 1);
+    utils::unload(&mut app, wagon_id, None);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
 
     assert!(
         app.world().get::<HiddenComponent>(first).is_none(),
@@ -371,43 +365,116 @@ fn unload_period_meters_exits_in_id_order() {
     assert!(app.world().get::<HiddenComponent>(second).is_some());
 
     // The second follows after the two-tick unloading period.
-    run_ticks(&mut app, 2);
+    utils::run_ticks(&mut app, 2);
     assert!(app.world().get::<HiddenComponent>(second).is_none());
-    assert!(passengers_of(app.world(), wagon).is_empty());
+    assert!(utils::passengers_of(app.world(), wagon).is_empty());
     assert!(app.world().get::<BoardedComponent>(first).is_none());
 }
 
 #[test]
-fn unmetered_holder_empties_in_one_tick() {
-    let mut app = transport_app();
-    let (bunker, bunker_id) = create_owned(&mut app, "bunker", 10, 10, 0);
-    let (first, first_id) = create_owned(&mut app, "rifleman", 12, 10, 0);
-    let (second, second_id) = create_owned(&mut app, "rifleman", 12, 11, 0);
-    send_to(&mut app, first_id, bunker_id);
-    send_to(&mut app, second_id, bunker_id);
-    run_until_aboard(&mut app, bunker, 2, 40);
+fn fractional_unload_period_rounds_up() {
+    let mut app = utils::transport_app();
+    let (wagon, wagon_id) = utils::create_owned(&mut app, "wagon", 10, 10, 0);
+    let (first, first_id) = utils::create_owned(&mut app, "rifleman", 11, 10, 0);
+    let (second, second_id) = utils::create_owned(&mut app, "rifleman", 11, 11, 0);
+    utils::send_to(&mut app, first_id, wagon_id);
+    utils::run_until_aboard(&mut app, wagon, 1, 10);
+    utils::send_to(&mut app, second_id, wagon_id);
+    utils::run_until_aboard(&mut app, wagon, 2, 10);
+    // 2 − 0.75 = 1.25 ticks between exits, rounded up to 2.
+    let hastened = utils::register_entity_buff(
+        &mut app,
+        "hastened_exit",
+        EntityStatId::UNLOAD_PERIOD,
+        ModifierOp::FlatAdd,
+        "-0.75",
+        None,
+    );
+    utils::apply_buff(app.world_mut(), wagon, hastened);
 
-    unload(&mut app, bunker_id, None);
-    run_ticks(&mut app, APPLY + 1);
+    // The first steps out the tick the unload applies; the second, two
+    // ticks later.
+    utils::unload(&mut app, wagon_id, None);
+    utils::run_ticks(&mut app, utils::APPLY);
+    assert!(app.world().get::<HiddenComponent>(first).is_none());
+    assert!(app.world().get::<HiddenComponent>(second).is_some());
+
+    utils::run_ticks(&mut app, 1);
+    assert!(app.world().get::<HiddenComponent>(second).is_some());
+    utils::run_ticks(&mut app, 1);
+    assert!(app.world().get::<HiddenComponent>(second).is_none());
+}
+
+#[test]
+fn fractional_load_period_rounds_up() {
+    let mut app = utils::transport_app();
+    let (wagon, wagon_id) = utils::create_owned(&mut app, "wagon", 10, 10, 0);
+    let (_, first_id) = utils::create_owned(&mut app, "rifleman", 11, 10, 0);
+    let (_, second_id) = utils::create_owned(&mut app, "rifleman", 11, 11, 0);
+    // 3 − 1.75 = 1.25 ticks between boardings, rounded up to 2.
+    let hastened = utils::register_entity_buff(
+        &mut app,
+        "hastened_boarding",
+        EntityStatId::LOAD_PERIOD,
+        ModifierOp::FlatAdd,
+        "-1.75",
+        None,
+    );
+    utils::apply_buff(app.world_mut(), wagon, hastened);
+    utils::select(&mut app, first_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SelectById {
+            id: second_id,
+            mode: SelectMode::Add,
+        },
+    );
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SendToEntity {
+            target: wagon_id,
+            flush: true,
+        },
+    );
+
+    utils::run_until_aboard(&mut app, wagon, 1, 10);
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(utils::passengers_of(app.world(), wagon).len(), 1);
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(utils::passengers_of(app.world(), wagon).len(), 2);
+}
+
+#[test]
+fn unmetered_holder_empties_in_one_tick() {
+    let mut app = utils::transport_app();
+    let (bunker, bunker_id) = utils::create_owned(&mut app, "bunker", 10, 10, 0);
+    let (first, first_id) = utils::create_owned(&mut app, "rifleman", 12, 10, 0);
+    let (second, second_id) = utils::create_owned(&mut app, "rifleman", 12, 11, 0);
+    utils::send_to(&mut app, first_id, bunker_id);
+    utils::send_to(&mut app, second_id, bunker_id);
+    utils::run_until_aboard(&mut app, bunker, 2, 40);
+
+    utils::unload(&mut app, bunker_id, None);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
 
     assert!(app.world().get::<HiddenComponent>(first).is_none());
     assert!(app.world().get::<HiddenComponent>(second).is_none());
-    assert!(passengers_of(app.world(), bunker).is_empty());
+    assert!(utils::passengers_of(app.world(), bunker).is_empty());
 }
 
 #[test]
 fn unload_at_point_walks_there_and_sends_passengers_on() {
-    let mut app = transport_app();
-    let (wagon, wagon_id) = create_owned(&mut app, "wagon", 5, 5, 0);
-    let (rifleman, rifleman_id) = create_owned(&mut app, "rifleman", 6, 5, 0);
-    send_to(&mut app, rifleman_id, wagon_id);
-    run_until_aboard(&mut app, wagon, 1, 10);
+    let mut app = utils::transport_app();
+    let (wagon, wagon_id) = utils::create_owned(&mut app, "wagon", 5, 5, 0);
+    let (rifleman, rifleman_id) = utils::create_owned(&mut app, "rifleman", 6, 5, 0);
+    utils::send_to(&mut app, rifleman_id, wagon_id);
+    utils::run_until_aboard(&mut app, wagon, 1, 10);
 
-    unload(&mut app, wagon_id, Some(pos(20, 5)));
-    run_ticks(&mut app, 80);
+    utils::unload(&mut app, wagon_id, Some(utils::pos(20, 5)));
+    utils::run_ticks(&mut app, 80);
 
     assert!(app.world().get::<HiddenComponent>(rifleman).is_none());
-    let wagon_cell = cell_of(app.world_mut(), wagon);
+    let wagon_cell = utils::cell_of(app.world_mut(), wagon);
     assert!(
         app.world()
             .resource::<Map>()
@@ -416,7 +483,7 @@ fn unload_at_point_walks_there_and_sends_passengers_on() {
         "the wagon walked into unload range of the point, stands at {wagon_cell:?}"
     );
     // The freed passenger marches on toward the point itself.
-    let rifleman_cell = cell_of(app.world_mut(), rifleman);
+    let rifleman_cell = utils::cell_of(app.world_mut(), rifleman);
     assert!(
         app.world()
             .resource::<Map>()
@@ -428,21 +495,21 @@ fn unload_at_point_walks_there_and_sends_passengers_on() {
 
 #[test]
 fn immobile_holder_unloads_in_place_toward_point() {
-    let mut app = transport_app();
-    let (bunker, bunker_id) = create_owned(&mut app, "bunker", 10, 10, 0);
-    let (rifleman, rifleman_id) = create_owned(&mut app, "rifleman", 12, 10, 0);
-    send_to(&mut app, rifleman_id, bunker_id);
-    run_until_aboard(&mut app, bunker, 1, 30);
+    let mut app = utils::transport_app();
+    let (bunker, bunker_id) = utils::create_owned(&mut app, "bunker", 10, 10, 0);
+    let (rifleman, rifleman_id) = utils::create_owned(&mut app, "rifleman", 12, 10, 0);
+    utils::send_to(&mut app, rifleman_id, bunker_id);
+    utils::run_until_aboard(&mut app, bunker, 1, 30);
 
-    unload(&mut app, bunker_id, Some(pos(20, 10)));
-    run_ticks(&mut app, APPLY + 1);
+    utils::unload(&mut app, bunker_id, Some(utils::pos(20, 10)));
+    utils::run_ticks(&mut app, utils::APPLY + 1);
 
     assert!(
         app.world().get::<HiddenComponent>(rifleman).is_none(),
         "a holder that cannot walk lets everyone out where it stands"
     );
-    run_ticks(&mut app, 60);
-    let rifleman_cell = cell_of(app.world_mut(), rifleman);
+    utils::run_ticks(&mut app, 60);
+    let rifleman_cell = utils::cell_of(app.world_mut(), rifleman);
     assert!(
         app.world()
             .resource::<Map>()
@@ -454,23 +521,23 @@ fn immobile_holder_unloads_in_place_toward_point() {
 
 #[test]
 fn rally_point_sends_unloaded_passenger_on() {
-    let mut app = transport_app();
-    let (wagon, wagon_id) = create_owned(&mut app, "wagon", 10, 10, 0);
-    let (rifleman, rifleman_id) = create_owned(&mut app, "rifleman", 11, 10, 0);
-    send_to(&mut app, rifleman_id, wagon_id);
-    run_until_aboard(&mut app, wagon, 1, 10);
+    let mut app = utils::transport_app();
+    let (wagon, wagon_id) = utils::create_owned(&mut app, "wagon", 10, 10, 0);
+    let (rifleman, rifleman_id) = utils::create_owned(&mut app, "rifleman", 11, 10, 0);
+    utils::send_to(&mut app, rifleman_id, wagon_id);
+    utils::run_until_aboard(&mut app, wagon, 1, 10);
 
-    push_command(
+    utils::push_command(
         &mut app,
         PlayerCommand::SetRallyPoint {
             entity: wagon_id,
-            target: Some(RallyTarget::Position(pos(18, 10))),
+            target: Some(RallyTarget::Position(utils::pos(18, 10))),
         },
     );
-    unload(&mut app, wagon_id, None);
-    run_ticks(&mut app, 60);
+    utils::unload(&mut app, wagon_id, None);
+    utils::run_ticks(&mut app, 60);
 
-    let rifleman_cell = cell_of(app.world_mut(), rifleman);
+    let rifleman_cell = utils::cell_of(app.world_mut(), rifleman);
     assert!(
         app.world()
             .resource::<Map>()
@@ -482,29 +549,31 @@ fn rally_point_sends_unloaded_passenger_on() {
 
 #[test]
 fn blocked_exit_holds_passenger_and_retries() {
-    let mut app = transport_app();
-    let (wagon, wagon_id) = create_owned(&mut app, "wagon", 10, 10, 0);
-    let (rifleman, rifleman_id) = create_owned(&mut app, "rifleman", 11, 10, 0);
-    send_to(&mut app, rifleman_id, wagon_id);
-    run_until_aboard(&mut app, wagon, 1, 10);
+    let mut app = utils::transport_app();
+    let (wagon, wagon_id) = utils::create_owned(&mut app, "wagon", 10, 10, 0);
+    let (rifleman, rifleman_id) = utils::create_owned(&mut app, "rifleman", 11, 10, 0);
+    utils::send_to(&mut app, rifleman_id, wagon_id);
+    utils::run_until_aboard(&mut app, wagon, 1, 10);
 
-    set_all_cells_statically_occupied(app.world_mut(), true);
-    unload(&mut app, wagon_id, None);
-    run_ticks(&mut app, APPLY + 4);
+    utils::set_all_cells_statically_occupied(app.world_mut(), true);
+    utils::unload(&mut app, wagon_id, None);
+    utils::run_ticks(&mut app, utils::APPLY + 4);
 
     assert!(
         app.world().get::<HiddenComponent>(rifleman).is_some(),
         "a boxed-in exit keeps the passenger aboard"
     );
-    assert_eq!(passengers_of(app.world(), wagon), [rifleman_id]);
+    assert_eq!(utils::passengers_of(app.world(), wagon), [rifleman_id]);
 
     // Free one cell beside the wagon; the held exit lands on it.
-    app.world_mut()
-        .resource_mut::<Map>()
-        .set_static_occupied(GROUND, CellPos::new(11, 10), false);
-    run_ticks(&mut app, 2);
+    app.world_mut().resource_mut::<Map>().set_static_occupied(
+        utils::GROUND,
+        CellPos::new(11, 10),
+        false,
+    );
+    utils::run_ticks(&mut app, 2);
     assert!(app.world().get::<HiddenComponent>(rifleman).is_none());
-    assert!(passengers_of(app.world(), wagon).is_empty());
+    assert!(utils::passengers_of(app.world(), wagon).is_empty());
 }
 
 //
@@ -513,14 +582,14 @@ fn blocked_exit_holds_passenger_and_retries() {
 
 #[test]
 fn destroyed_wagon_takes_passengers_with_it() {
-    let mut app = transport_app();
-    let (wagon, wagon_id) = create_owned(&mut app, "wagon", 10, 10, 0);
-    let (rifleman, rifleman_id) = create_owned(&mut app, "rifleman", 11, 10, 0);
-    send_to(&mut app, rifleman_id, wagon_id);
-    run_until_aboard(&mut app, wagon, 1, 10);
+    let mut app = utils::transport_app();
+    let (wagon, wagon_id) = utils::create_owned(&mut app, "wagon", 10, 10, 0);
+    let (rifleman, rifleman_id) = utils::create_owned(&mut app, "rifleman", 11, 10, 0);
+    utils::send_to(&mut app, rifleman_id, wagon_id);
+    utils::run_until_aboard(&mut app, wagon, 1, 10);
 
     spawn::destroy_entity(app.world_mut(), wagon);
-    run_ticks(&mut app, 5);
+    utils::run_ticks(&mut app, 5);
 
     assert!(
         app.world()
@@ -534,14 +603,14 @@ fn destroyed_wagon_takes_passengers_with_it() {
 
 #[test]
 fn destroyed_bunker_ejects_passengers() {
-    let mut app = transport_app();
-    let (bunker, bunker_id) = create_owned(&mut app, "bunker", 10, 10, 0);
-    let (rifleman, rifleman_id) = create_owned(&mut app, "rifleman", 12, 10, 0);
-    send_to(&mut app, rifleman_id, bunker_id);
-    run_until_aboard(&mut app, bunker, 1, 30);
+    let mut app = utils::transport_app();
+    let (bunker, bunker_id) = utils::create_owned(&mut app, "bunker", 10, 10, 0);
+    let (rifleman, rifleman_id) = utils::create_owned(&mut app, "rifleman", 12, 10, 0);
+    utils::send_to(&mut app, rifleman_id, bunker_id);
+    utils::run_until_aboard(&mut app, bunker, 1, 30);
 
     spawn::destroy_entity(app.world_mut(), bunker);
-    run_ticks(&mut app, 1);
+    utils::run_ticks(&mut app, 1);
 
     assert!(
         app.world().get::<HiddenComponent>(rifleman).is_none(),
@@ -549,20 +618,20 @@ fn destroyed_bunker_ejects_passengers() {
     );
     assert!(app.world().get::<BoardedComponent>(rifleman).is_none());
     assert!(
-        within(app.world_mut(), rifleman, bunker, 2),
+        utils::within(app.world_mut(), rifleman, bunker, 2),
         "ejected beside the holder's footprint"
     );
 }
 
 #[test]
 fn ejected_passenger_without_room_dies() {
-    let mut app = transport_app();
-    let (bunker, bunker_id) = create_owned(&mut app, "bunker", 10, 10, 0);
-    let (rifleman, rifleman_id) = create_owned(&mut app, "rifleman", 12, 10, 0);
-    send_to(&mut app, rifleman_id, bunker_id);
-    run_until_aboard(&mut app, bunker, 1, 30);
+    let mut app = utils::transport_app();
+    let (bunker, bunker_id) = utils::create_owned(&mut app, "bunker", 10, 10, 0);
+    let (rifleman, rifleman_id) = utils::create_owned(&mut app, "rifleman", 12, 10, 0);
+    utils::send_to(&mut app, rifleman_id, bunker_id);
+    utils::run_until_aboard(&mut app, bunker, 1, 30);
 
-    set_all_cells_statically_occupied(app.world_mut(), true);
+    utils::set_all_cells_statically_occupied(app.world_mut(), true);
     spawn::destroy_entity(app.world_mut(), bunker);
 
     assert!(
@@ -586,24 +655,26 @@ fn ejected_passenger_without_room_dies() {
 
 #[test]
 fn garrisoned_rifleman_fires_from_bunker() {
-    let mut app = transport_app();
-    let (bunker, bunker_id) = create_owned(&mut app, "bunker", 10, 10, 0);
-    let (_, rifleman_id) = create_owned(&mut app, "rifleman", 12, 10, 0);
-    send_to(&mut app, rifleman_id, bunker_id);
-    run_until_aboard(&mut app, bunker, 1, 30);
+    let mut app = utils::transport_app();
+    let (bunker, bunker_id) = utils::create_owned(&mut app, "bunker", 10, 10, 0);
+    let (_, rifleman_id) = utils::create_owned(&mut app, "rifleman", 12, 10, 0);
+    utils::send_to(&mut app, rifleman_id, bunker_id);
+    utils::run_until_aboard(&mut app, bunker, 1, 30);
 
     // A hostile in weapon range of the bunker, and one beyond it.
-    let (near, _) = create_owned(&mut app, "grunt", 13, 10, 2);
-    let (far, _) = create_owned(&mut app, "grunt", 20, 10, 2);
-    let near_health = health(&app, near);
-    run_ticks(&mut app, 40);
+    let (near, _) = utils::create_owned(&mut app, "grunt", 13, 10, 2);
+    let (far, _) = utils::create_owned(&mut app, "grunt", 20, 10, 2);
+    utils::run_ticks(&mut app, 40);
 
-    assert!(
-        health(&app, near) < near_health,
+    // 20 − 10: one shot lands, then the unarmed grunt flees past the
+    // rifleman's range of 3.
+    assert_eq!(
+        utils::health_as_u32(&app, near),
+        10,
         "the passenger's own weapon works the target from the holder"
     );
     assert_eq!(
-        health(&app, far),
+        utils::health_as_u32(&app, far),
         20,
         "a target beyond the passenger's range is untouched"
     );
@@ -611,14 +682,14 @@ fn garrisoned_rifleman_fires_from_bunker() {
 
 #[test]
 fn garrison_fire_stops_once_unloaded() {
-    let mut app = transport_app();
-    let (bunker, bunker_id) = create_owned(&mut app, "bunker", 10, 10, 0);
-    let (rifleman, rifleman_id) = create_owned(&mut app, "rifleman", 12, 10, 0);
-    send_to(&mut app, rifleman_id, bunker_id);
-    run_until_aboard(&mut app, bunker, 1, 30);
+    let mut app = utils::transport_app();
+    let (bunker, bunker_id) = utils::create_owned(&mut app, "bunker", 10, 10, 0);
+    let (rifleman, rifleman_id) = utils::create_owned(&mut app, "rifleman", 12, 10, 0);
+    utils::send_to(&mut app, rifleman_id, bunker_id);
+    utils::run_until_aboard(&mut app, bunker, 1, 30);
 
-    unload(&mut app, bunker_id, None);
-    run_ticks(&mut app, APPLY + 1);
+    utils::unload(&mut app, bunker_id, None);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
     assert!(app.world().get::<HiddenComponent>(rifleman).is_none());
     assert!(
         app.world().get::<GarrisonFireComponent>(rifleman).is_none(),
@@ -628,17 +699,17 @@ fn garrison_fire_stops_once_unloaded() {
 
 #[test]
 fn wagon_passengers_do_not_fire() {
-    let mut app = transport_app();
-    let (wagon, wagon_id) = create_owned(&mut app, "wagon", 10, 10, 0);
-    let (_, rifleman_id) = create_owned(&mut app, "rifleman", 11, 10, 0);
-    send_to(&mut app, rifleman_id, wagon_id);
-    run_until_aboard(&mut app, wagon, 1, 10);
+    let mut app = utils::transport_app();
+    let (wagon, wagon_id) = utils::create_owned(&mut app, "wagon", 10, 10, 0);
+    let (_, rifleman_id) = utils::create_owned(&mut app, "rifleman", 11, 10, 0);
+    utils::send_to(&mut app, rifleman_id, wagon_id);
+    utils::run_until_aboard(&mut app, wagon, 1, 10);
 
-    let (near, _) = create_owned(&mut app, "grunt", 13, 10, 2);
-    run_ticks(&mut app, 40);
+    let (near, _) = utils::create_owned(&mut app, "grunt", 13, 10, 2);
+    utils::run_ticks(&mut app, 40);
 
     assert_eq!(
-        health(&app, near),
+        utils::health_as_u32(&app, near),
         20,
         "a sheltering holder keeps its cargo quiet"
     );
@@ -650,25 +721,27 @@ fn wagon_passengers_do_not_fire() {
 
 #[test]
 fn blast_spares_hidden_passenger_at_stale_position() {
-    let mut app = transport_app();
-    let (bunker, bunker_id) = create_owned(&mut app, "bunker", 10, 10, 0);
-    let (rifleman, rifleman_id) = create_owned(&mut app, "rifleman", 12, 10, 0);
-    send_to(&mut app, rifleman_id, bunker_id);
-    run_until_aboard(&mut app, bunker, 1, 30);
-    let full = health(&app, rifleman);
+    let mut app = utils::transport_app();
+    let (bunker, bunker_id) = utils::create_owned(&mut app, "bunker", 10, 10, 0);
+    let (rifleman, rifleman_id) = utils::create_owned(&mut app, "rifleman", 12, 10, 0);
+    utils::send_to(&mut app, rifleman_id, bunker_id);
+    utils::run_until_aboard(&mut app, bunker, 1, 30);
+    let full = utils::health(&app, rifleman);
 
     // A hostile bombard auto-engages the bunker; its blast covers the cell the
     // rifleman stood on when it boarded.
-    create_owned(&mut app, "bombard", 16, 10, 2);
-    run_ticks(&mut app, 30);
+    utils::create_owned(&mut app, "bombard", 16, 10, 2);
+    utils::run_ticks(&mut app, 30);
 
-    let bunker = single_owned_of_type(app.world_mut(), "bunker", 0);
-    assert!(
-        health(&app, bunker) < 200,
+    let bunker = utils::single_owned_of_type(app.world_mut(), "bunker", 0);
+    // 200 − 7 × 20: seven 20-point shells in the 30 ticks.
+    assert_eq!(
+        utils::health_as_u32(&app, bunker),
+        60,
         "the shells land on the bunker itself"
     );
     assert_eq!(
-        health(&app, rifleman),
+        utils::health(&app, rifleman),
         full,
         "a passenger is beyond any blast's reach"
     );
@@ -710,7 +783,7 @@ fn turret_only_passenger_sits_ride_out() {
         "and stowed"
     );
     assert_eq!(
-        utils::health(&app, foe),
+        utils::health_as_u32(&app, foe),
         20,
         "its gun stayed silent: a turret has no place to stand from inside"
     );

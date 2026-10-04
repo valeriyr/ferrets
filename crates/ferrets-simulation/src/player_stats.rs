@@ -16,8 +16,9 @@ use bevy_ecs::prelude::*;
 use ferrets_math::FixedU64;
 
 use ferrets_content::{
+    entity_modifiers::EntityModifiers,
     player_stats::{self, PlayerStatId},
-    stats::{EntityModifier, PlayerModifier},
+    stats::PlayerModifier,
 };
 
 use crate::{session::player_id::PlayerId, stat_store::StatStore};
@@ -31,9 +32,9 @@ struct Store {
     /// The fold is order-independent, so the order carries no meaning beyond
     /// removal bookkeeping.
     player_modifiers: Vec<PlayerModifier>,
-    /// Applied modifiers laid over every unit the player owns — read by the
-    /// entity recompute, never folded here.
-    entity_modifiers: Vec<EntityModifier>,
+    /// Applied modifier sets laid over every unit the player owns — read by
+    /// the entity recompute, never folded here.
+    entity_modifiers: Vec<EntityModifiers>,
     /// Modifiers the player's active buffs grant to its own stats, recomputed
     /// each tick, never mutated directly.
     derived: Vec<PlayerModifier>,
@@ -102,28 +103,35 @@ impl PlayerStats {
         store.refold();
     }
 
-    /// Removes one instance of an identical player modifier, if applied, and
-    /// refolds.
+    /// Removes one instance of an identical player modifier and refolds.
+    /// Panics when the player has no such modifier applied.
     pub fn remove_player_modifier(&mut self, player: PlayerId, modifier: PlayerModifier) {
         let store = &mut self.0[player as usize];
-        if let Some(position) = store.player_modifiers.iter().position(|m| *m == modifier) {
-            store.player_modifiers.remove(position);
-            store.refold();
-        }
+        let position = store
+            .player_modifiers
+            .iter()
+            .position(|applied| *applied == modifier)
+            .expect("remove_player_modifier is given a modifier the player has applied");
+        store.player_modifiers.remove(position);
+        store.refold();
     }
 
-    /// Applies a modifier over every unit the player owns. It takes effect at
-    /// the next entity recompute.
-    pub fn add_entity_modifier(&mut self, player: PlayerId, modifier: EntityModifier) {
-        self.0[player as usize].entity_modifiers.push(modifier);
+    /// Applies a set of modifiers over every unit the player owns. It takes
+    /// effect at the next entity recompute.
+    pub fn add_entity_modifiers(&mut self, player: PlayerId, modifiers: EntityModifiers) {
+        self.0[player as usize].entity_modifiers.push(modifiers);
     }
 
-    /// Removes one instance of an identical entity modifier, if applied.
-    pub fn remove_entity_modifier(&mut self, player: PlayerId, modifier: EntityModifier) {
+    /// Removes one instance of an identical set of entity modifiers. Panics
+    /// when the player has no such set applied.
+    pub fn remove_entity_modifiers(&mut self, player: PlayerId, modifiers: &EntityModifiers) {
         let store = &mut self.0[player as usize];
-        if let Some(position) = store.entity_modifiers.iter().position(|m| *m == modifier) {
-            store.entity_modifiers.remove(position);
-        }
+        let position = store
+            .entity_modifiers
+            .iter()
+            .position(|applied| applied == modifiers)
+            .expect("remove_entity_modifiers is given a set the player has applied");
+        store.entity_modifiers.remove(position);
     }
 
     /// Replaces the presence-derived contributions and refolds when they
@@ -139,8 +147,9 @@ impl PlayerStats {
         }
     }
 
-    /// The applied modifiers currently laid over every unit the player owns.
-    pub fn entity_modifiers(&self, player: PlayerId) -> &[EntityModifier] {
+    /// The applied modifier sets currently laid over every unit the player
+    /// owns.
+    pub fn entity_modifiers(&self, player: PlayerId) -> &[EntityModifiers] {
         &self.0[player as usize].entity_modifiers
     }
 }

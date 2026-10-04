@@ -1,7 +1,7 @@
 //! Buff pipeline: a buff modifies effective stats for its term, then reverts.
 
 use ferrets_content::{entity_stats::EntityStatId, stats::ModifierOp};
-use ferrets_simulation::game_loop;
+use ferrets_simulation::game_loop::buffs;
 
 mod utils;
 
@@ -26,7 +26,7 @@ fn buff_modifies_effective_stat_then_reverts_on_expiry() {
     );
 
     // +100% damage for three ticks.
-    game_loop::stats::apply_entity_buff(app.world_mut(), soldier, frenzy);
+    utils::apply_buff(app.world_mut(), soldier, frenzy);
 
     utils::run_ticks(&mut app, 1);
     assert_eq!(
@@ -51,4 +51,22 @@ fn buff_modifies_effective_stat_then_reverts_on_expiry() {
         base,
         "the effective stat reverts the tick after the buff expires"
     );
+}
+
+#[test]
+#[should_panic(expected = "remove_entity_buff is given a buff its entity bears")]
+fn removing_buff_entity_does_not_bear_panics() {
+    let mut app = utils::combat_app();
+    let (soldier, _) =
+        utils::create_entity(app.world_mut(), "soldier", utils::pos(5, 5), Some(0)).unwrap();
+    let frenzy = utils::register_entity_buff(
+        &mut app,
+        "frenzy",
+        EntityStatId::DAMAGE,
+        ModifierOp::PercentAdd,
+        "1",
+        Some(3),
+    );
+
+    buffs::remove_entity_buff(app.world_mut(), soldier, frenzy);
 }

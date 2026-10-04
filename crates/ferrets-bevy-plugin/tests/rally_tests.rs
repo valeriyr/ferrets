@@ -8,7 +8,7 @@ use bevy::prelude::*;
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 
 use ferrets_content::{
-    entity_type_def::EntityTypeDef, location::Solidity, registry::ContentRegistry,
+    entity_type_def::EntityTypeDef, location::Solidity, pool::Pool, registry::ContentRegistry,
 };
 use ferrets_simulation::{
     command::PlayerCommand,
@@ -287,7 +287,7 @@ fn rally_app() -> App {
             EntityTypeDef::new("hall")
                 .with_location(utils::GROUND, CellSize::new(2, 2), Solidity::Solid)
                 .with_sight_range(8)
-                .with_health(100)
+                .with_pool(Pool::health(100))
                 .with_dying(2, [])
                 .with_trainer(["worker"]),
         );

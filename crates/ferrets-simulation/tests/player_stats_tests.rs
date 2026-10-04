@@ -1,6 +1,7 @@
 //! Tests for the per-player stat store's modifier fold.
 
 use ferrets_content::{
+    entity_modifiers::EntityModifiers,
     entity_stats::EntityStatId,
     player_stats::PlayerStatId,
     registry::ContentRegistry,
@@ -104,6 +105,15 @@ fn remove_modifier_refolds_to_base() {
 }
 
 #[test]
+#[should_panic(expected = "remove_player_modifier is given a modifier the player has applied")]
+fn removing_player_modifier_not_applied_panics() {
+    let mut stats = PlayerStats::new(1);
+    // Another modifier stands applied; the one removed does not.
+    stats.add_player_modifier(0, flat(PlayerStatId::MAX_SUPPLY, "3"));
+    stats.remove_player_modifier(0, flat(PlayerStatId::MAX_SUPPLY, "5"));
+}
+
+#[test]
 fn modifier_over_absent_stat_is_inert_until_base_arrives() {
     let morale = ContentRegistry::default().register_player_stat("morale");
     let mut stats = PlayerStats::new(1);
@@ -152,9 +162,12 @@ fn entity_modifier_reads_back_without_touching_player_stats() {
     assert!(stats.entity_modifiers(0).is_empty());
 
     let boost = entity_percent(EntityStatId::SPEED, "1");
-    stats.add_entity_modifier(0, boost);
+    stats.add_entity_modifiers(0, EntityModifiers::Stats(vec![boost]));
 
-    assert_eq!(stats.entity_modifiers(0), &[boost]);
+    assert_eq!(
+        stats.entity_modifiers(0),
+        &[EntityModifiers::Stats(vec![boost])]
+    );
     // The player store never folds entity modifiers; they reach the player's
     // units at the entity recompute instead.
     assert_eq!(
@@ -167,28 +180,43 @@ fn entity_modifier_reads_back_without_touching_player_stats() {
 fn remove_entity_modifier_removes_one_instance_at_time() {
     let mut stats = PlayerStats::new(1);
     let boost = entity_flat(EntityStatId::SPEED, "0.5");
-    stats.add_entity_modifier(0, boost);
-    stats.add_entity_modifier(0, boost);
+    stats.add_entity_modifiers(0, EntityModifiers::Stats(vec![boost]));
+    stats.add_entity_modifiers(0, EntityModifiers::Stats(vec![boost]));
 
     // Two identical instances come off one per removal.
-    stats.remove_entity_modifier(0, boost);
-    assert_eq!(stats.entity_modifiers(0), &[boost]);
+    stats.remove_entity_modifiers(0, &EntityModifiers::Stats(vec![boost]));
+    assert_eq!(
+        stats.entity_modifiers(0),
+        &[EntityModifiers::Stats(vec![boost])]
+    );
 
-    stats.remove_entity_modifier(0, boost);
+    stats.remove_entity_modifiers(0, &EntityModifiers::Stats(vec![boost]));
     assert!(stats.entity_modifiers(0).is_empty());
+}
 
-    // Removing what is not applied changes nothing.
-    stats.remove_entity_modifier(0, boost);
-    assert!(stats.entity_modifiers(0).is_empty());
+#[test]
+#[should_panic(expected = "remove_entity_modifiers is given a set the player has applied")]
+fn removing_entity_modifiers_not_applied_panics() {
+    let mut stats = PlayerStats::new(1);
+    // Another set stands applied; the one removed does not.
+    stats.add_entity_modifiers(
+        0,
+        EntityModifiers::Stats(vec![entity_flat(EntityStatId::SPEED, "1")]),
+    );
+    let boost = entity_flat(EntityStatId::SPEED, "0.5");
+    stats.remove_entity_modifiers(0, &EntityModifiers::Stats(vec![boost]));
 }
 
 #[test]
 fn entity_modifiers_do_not_leak_between_players() {
     let mut stats = PlayerStats::new(2);
     let boost = entity_percent(EntityStatId::SPEED, "1");
-    stats.add_entity_modifier(0, boost);
+    stats.add_entity_modifiers(0, EntityModifiers::Stats(vec![boost]));
 
-    assert_eq!(stats.entity_modifiers(0), &[boost]);
+    assert_eq!(
+        stats.entity_modifiers(0),
+        &[EntityModifiers::Stats(vec![boost])]
+    );
     assert!(stats.entity_modifiers(1).is_empty());
 }
 

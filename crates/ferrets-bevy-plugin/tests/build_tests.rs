@@ -9,6 +9,7 @@ use ferrets_content::{
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     location::Solidity,
+    pool::Pool,
     registry::ContentRegistry,
     work::{CrewLimit, WorkPresence},
 };
@@ -37,6 +38,38 @@ use ferrets_simulation::{
     simulation_id::SimulationId,
     spawn, supply,
 };
+
+#[test]
+fn site_sheds_built_passive_tick_it_is_founded() {
+    let mut app = utils::orders_app();
+    let (_, worker_id) = utils::create_owned(&mut app, "worker", 5, 5, 0);
+    utils::grant_gold(&mut app, 10);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::BuildEntity {
+            builder: worker_id,
+            type_name: "kiosk".into(),
+            position: utils::pos(8, 8),
+            flush: true,
+        },
+    );
+
+    // Tick by tick until the site stands: the spawn fits `opened`, and the
+    // founding drops it again the same tick, before any later refit.
+    let site = (0..30)
+        .find_map(|_| {
+            utils::run_ticks(&mut app, 1);
+            (utils::count_of_type(app.world_mut(), "kiosk") == 1)
+                .then(|| utils::single_owned_of_type(app.world_mut(), "kiosk", 0))
+        })
+        .expect("the worker founds the kiosk");
+    let opened = app
+        .world()
+        .resource::<ContentRegistry>()
+        .entity_buff("opened")
+        .expect("the fixture registers opened");
+    assert!(!entity_def::bears(app.world(), site, opened));
+}
 
 #[test]
 fn build_constructs_building() {
@@ -1225,19 +1258,19 @@ fn solidity_app() -> App {
         registry.register(
             EntityTypeDef::new("mole")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Underfoot)
-                .with_health(20),
+                .with_pool(Pool::health(20)),
         );
         registry.register(
             EntityTypeDef::new("pebble")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Passable)
-                .with_health(20),
+                .with_pool(Pool::health(20)),
         );
         // The same underfoot body a layer up, to show that holding ground on
         // one layer says nothing about another.
         registry.register(
             EntityTypeDef::new("kite")
                 .with_location(utils::AIR, CellSize::ONE, Solidity::Underfoot)
-                .with_health(20),
+                .with_pool(Pool::health(20)),
         );
     }
     utils::register_orders_content(&mut app);
@@ -1256,7 +1289,7 @@ fn surveyor_app() -> App {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
         registry.register(
             utils::walker("surveyor", utils::GROUND)
-                .with_health(20)
+                .with_pool(Pool::health(20))
                 .with_stat(EntityStatId::BUILD_RANGE, FixedU64::from_num(3))
                 .with_builder(
                     ["depot"],

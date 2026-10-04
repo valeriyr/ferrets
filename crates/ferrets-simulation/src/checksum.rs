@@ -15,13 +15,14 @@
 //! version or platform endianness.
 
 use bevy_ecs::world::World;
+use ferrets_content::pool_def::PoolId;
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use xxhash_rust::xxh64::Xxh64;
 
 use crate::{
     components::{
-        entity_info::EntityInfoComponent, health::HealthComponent, location::LocationComponent,
-        owner::OwnerComponent, turret::TurretsComponent,
+        entity_info::EntityInfoComponent, location::LocationComponent, owner::OwnerComponent,
+        pools::PoolsComponent, turret::TurretsComponent,
     },
     entity_index::EntityIndex,
     resources::PlayerResources,
@@ -116,8 +117,11 @@ pub fn state_checksum(world: &World) -> u64 {
             hasher.write_fixed_uvec2(location.position);
             hasher.write_u16(location.facing.to_bits());
         }
-        if let Some(health) = entity.get::<HealthComponent>() {
-            hasher.write_fixed_u64(health.current());
+        if let Some(health) = entity
+            .get::<PoolsComponent>()
+            .and_then(|pools| pools.current(PoolId::HEALTH))
+        {
+            hasher.write_fixed_u64(health);
         }
         // Whose an entity is can change while it stands: an annex follows the
         // primary that docks with it. A peer that handed a building over while

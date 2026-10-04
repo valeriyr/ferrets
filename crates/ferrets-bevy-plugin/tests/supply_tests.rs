@@ -3,11 +3,14 @@
 
 mod utils;
 
-use ferrets_content::player_stats::PlayerStatId;
+use ferrets_content::{entity_stats::EntityStatId, player_stats::PlayerStatId, stats::ModifierOp};
 use ferrets_math::FixedU64;
 use ferrets_simulation::{
-    command::PlayerCommand, components::build::UnderConstructionComponent,
-    player_stats::PlayerStats, spawn, supply,
+    command::PlayerCommand,
+    components::build::UnderConstructionComponent,
+    player_stats::PlayerStats,
+    spawn,
+    supply::{self, DisplayedSupply},
 };
 
 //
@@ -187,6 +190,37 @@ fn max_supply_caps_provided() {
     );
 
     assert_eq!(supply::provided(app.world(), 0), FixedU64::from_num(3));
+}
+
+#[test]
+fn displayed_supply_rounds_used_up_and_provided_down() {
+    let mut app = utils::supply_app();
+    let lighter = utils::register_entity_buff(
+        &mut app,
+        "lighter",
+        EntityStatId::SUPPLY_COST,
+        ModifierOp::FlatAdd,
+        "-0.5",
+        None,
+    );
+    utils::create_owned(&mut app, "camp", 10, 10, 0);
+    let (settler, _) = utils::create_owned(&mut app, "settler", 5, 5, 0);
+    utils::apply_buff(app.world_mut(), settler, lighter);
+    app.world_mut().resource_mut::<PlayerStats>().set_base(
+        0,
+        PlayerStatId::MAX_SUPPLY,
+        utils::fixed("7.5"),
+    );
+    utils::run_ticks(&mut app, 1);
+
+    // Used 1 − 0.5 = 0.5, read as 1; provided min(8, 7.5) = 7.5, read as 7.
+    assert_eq!(
+        supply::displayed(app.world(), 0),
+        DisplayedSupply {
+            used: 1,
+            provided: 7,
+        }
+    );
 }
 
 #[test]

@@ -4,7 +4,7 @@ use bevy_ecs::{entity::Entity, world::World};
 use ferrets_geometry::cell_rect::CellRect;
 
 use crate::{
-    components::{health::HealthComponent, owner},
+    components::{last_hit::LastHitComponent, owner},
     entity_def,
     entity_index::EntityIndex,
     map::Map,
@@ -12,7 +12,7 @@ use crate::{
     simulation_id::SimulationId,
     visibility::{self, Senses},
 };
-use ferrets_content::targeting;
+use ferrets_content::{pool_def::PoolId, targeting};
 use ferrets_pathfinder::layer_mask::LayerMask;
 
 /// Ticks between acquisition scans for one entity. Scans are staggered by
@@ -128,8 +128,7 @@ pub(super) fn qualifies(
         return false;
     }
 
-    let target_ref = world.entity(target);
-    if !target_ref.contains::<HealthComponent>() {
+    if !entity_def::has_pool(world, target, PoolId::HEALTH) {
         return false;
     }
     if !owner::are_hostile(
@@ -180,8 +179,7 @@ pub(super) fn fresh_attacker(world: &World, entity: Entity) -> Option<Simulation
     let tick = world.resource::<GameSession>().tick();
     world
         .entity(entity)
-        .get::<HealthComponent>()
-        .and_then(|health| health.last_hit())
+        .get::<LastHitComponent>()
         .filter(|hit| hit.tick + HIT_MEMORY >= tick)
         .map(|hit| hit.attacker)
 }

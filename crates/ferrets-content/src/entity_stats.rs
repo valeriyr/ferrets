@@ -18,8 +18,8 @@ use crate::stats::{self, BuiltinStat};
 pub struct EntityStatId(u16);
 
 impl EntityStatId {
-    /// Maximum health points. Current health is runtime state on the health
-    /// component, not a stat.
+    /// Maximum health points. Current health is runtime state in the entity's
+    /// pool store, not a stat.
     pub const MAX_HEALTH: EntityStatId = EntityStatId(0);
     /// Health points removed from a target by one hit, before armor.
     pub const DAMAGE: EntityStatId = EntityStatId(1);
@@ -116,14 +116,14 @@ impl EntityStatId {
     /// centred on where it points — ninety shoots forty-five either side. Zero
     /// fires only along the bearing itself; omitted, the span is the whole circle.
     pub const ATTACK_ARC: EntityStatId = EntityStatId(31);
-    /// Health points removed each tick, after regeneration, while the entity
+    /// Health points removed each tick, net of regeneration, while the entity
     /// stands. Fractional and zero by default.
     pub const HEALTH_DRAIN: EntityStatId = EntityStatId(32);
     /// Ticks an instance stands before its time runs out. Declaring it is what
     /// gives a type a timed life; without it an instance stands until something
     /// ends it.
     pub const LIFETIME: EntityStatId = EntityStatId(33);
-    /// Energy points removed each tick, after regeneration, while the entity
+    /// Energy points removed each tick, net of regeneration, while the entity
     /// stands. Fractional and zero by default.
     pub const ENERGY_DRAIN: EntityStatId = EntityStatId(34);
 
@@ -217,8 +217,8 @@ pub(crate) const ENTITY_BUILTIN_STATS: [BuiltinStat<EntityStatId>; 35] = [
     stats::builtin(EntityStatId::ATTACK_ARC, "attack_arc", FixedU64::ZERO),
     // No floor: a fractional per-tick amount where zero means no drain.
     stats::builtin(EntityStatId::HEALTH_DRAIN, "health_drain", FixedU64::ZERO),
-    // Counted in whole ticks, so a life shorter than one tick is a life that
-    // ends the moment it begins: the floor holds it to the tick it is read in.
+    // Counted in whole ticks, rounded up; the floor holds a life to at least
+    // the tick it is read in.
     stats::builtin(EntityStatId::LIFETIME, "lifetime", FixedU64::ONE),
     // No floor: a fractional per-tick amount where zero means no drain.
     stats::builtin(EntityStatId::ENERGY_DRAIN, "energy_drain", FixedU64::ZERO),
