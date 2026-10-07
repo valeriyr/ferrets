@@ -13,7 +13,7 @@ use crate::{
     base_stats::BaseStats,
     berths::{BerthGroup, BerthsDef},
     brood::{BreederDef, BroodlingDef, OrphanFate},
-    build::{BuilderAttendance, BuilderDef},
+    build::{BuildDef, BuilderAttendance, BuilderDef, SitePool},
     concealment::Concealment,
     dying::{Bequest, DyingDef},
     entity_buffs::EntityBuffId,
@@ -145,8 +145,8 @@ pub struct EntityTypeDef {
     pub price: Price,
     /// Ticks to train one instance. `None` means the type cannot be trained.
     pub train_time: Option<u32>,
-    /// Ticks to construct one instance. `None` means the type cannot be built.
-    pub build_time: Option<u32>,
+    /// How an instance is built. `None` means the type cannot be built.
+    pub build: Option<BuildDef>,
     /// The entity types instances can train. `None` means instances cannot train.
     pub trainer: Option<TrainerDef>,
     /// The passengers instances admit aboard, and on what terms. `None` means
@@ -222,7 +222,7 @@ impl EntityTypeDef {
             selection: SelectionDef::default(),
             price: Price::new(),
             train_time: None,
-            build_time: None,
+            build: None,
             trainer: None,
             transporter: None,
             researcher: None,
@@ -320,7 +320,12 @@ impl EntityTypeDef {
     /// Ticks to produce one instance, however it is produced. `None` means nothing
     /// produces the type, which also leaves repair no rate to work from.
     pub fn production_time(&self) -> Option<u32> {
-        self.build_time.or(self.train_time)
+        self.build_time().or(self.train_time)
+    }
+
+    /// Ticks to construct one instance. `None` means the type cannot be built.
+    pub fn build_time(&self) -> Option<u32> {
+        self.build.as_ref().map(BuildDef::time)
     }
 
     /// Whether instances can be mended at a rate paced against production. A type
@@ -648,12 +653,16 @@ impl EntityTypeDef {
         self
     }
 
-    /// Makes this type constructible, taking `build_time` ticks.
+    /// Makes this type constructible, a site taking `time` ticks of work
+    /// and holding each of `pools` as it says.
     ///
-    /// Panics if `build_time` is `0`.
-    pub fn with_build_time(mut self, build_time: u32) -> Self {
-        assert!(build_time > 0, "build_time must be greater than 0");
-        self.build_time = Some(build_time);
+    /// Panics if `time` is `0` or `pools` names a pool twice.
+    pub fn with_build(
+        mut self,
+        time: u32,
+        pools: impl IntoIterator<Item = (PoolId, SitePool)>,
+    ) -> Self {
+        self.build = Some(BuildDef::new(time, pools));
         self
     }
 

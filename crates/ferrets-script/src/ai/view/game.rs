@@ -68,8 +68,8 @@ pub struct EntityView {
     pub y: u32,
     /// `None` when the type has no health.
     pub health: Option<u32>,
-    /// The current energy pool, floored to whole points. `None` when the type
-    /// has none.
+    /// The current energy pool, floored to whole points. `None` when the
+    /// entity has none: its type declares none, or a site withholds it.
     pub energy: Option<u32>,
     /// Effective attack damage, `None` when the entity cannot attack.
     pub damage: Option<u32>,

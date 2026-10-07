@@ -7,7 +7,7 @@ use ferrets_content::{
     affiliation::Affiliation,
     attack::Slain,
     brood::{BroodlingDef, Lingering, OrphanFate},
-    build::BuilderAttendance,
+    build::{BuilderAttendance, RiseStart, SitePool},
     concealment::Concealment,
     cost::Cost,
     detection::Detection,
@@ -26,6 +26,7 @@ use ferrets_content::{
         MorphCancel, MorphCourse, MorphPlacement, MorphReason, PoolCarry, RevertCarry,
         ViaInterrupted,
     },
+    pool::PoolInitial,
     pool_def::PoolId,
     pool_shift::PoolShift,
     price,
@@ -417,7 +418,7 @@ fn swarm_structures_are_built_by_drone_they_consume() {
             .entity(name)
             .expect("swarm structure is registered");
         assert!(
-            structure.build_time.is_some() && !structure.price.is_empty(),
+            structure.build.is_some() && !structure.price.is_empty(),
             "'{name}' is built and priced like any other structure"
         );
     }
@@ -592,7 +593,7 @@ fn hatchery_grows_into_hive_inside_cocoon_that_carries_its_brood() {
     // growth's own price, over both spans: 400 gold and 200 ticks raising the
     // hatchery, 150 gold, 100 wood and 200 ticks growing out of it.
     assert_eq!(hive.price, price::from([("gold", 550), ("wood", 100)]));
-    assert_eq!(hive.build_time, Some(400));
+    assert_eq!(hive.build_time(), Some(400));
     let drone = registry.entity("drone").expect("drone is registered");
     let builder = drone.builder.as_ref().expect("the drone builds");
     assert!(!builder.can_build("hive"));
@@ -1237,6 +1238,26 @@ fn boss_placements_sit_on_water() {
 }
 
 #[test]
+fn boss_ships_come_at_half_health_and_fortress_full() {
+    let data = map::data();
+    for placement in data
+        .placements()
+        .iter()
+        .filter(|placement| placement.owner == Some(map::BOSS))
+    {
+        let expected = match placement.type_name.as_str() {
+            "ship" => vec![(
+                "health".to_string(),
+                PoolInitial::Share(utils::fixed("0.5")),
+            )],
+            "sea_fortress" => Vec::new(),
+            other => unreachable!("the boss places only ships and its fortress, not {other}"),
+        };
+        assert_eq!(placement.pools, expected, "{}", placement.type_name);
+    }
+}
+
+#[test]
 fn gryphon_edges_wear_different_terms() {
     let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
 
@@ -1309,7 +1330,7 @@ fn tower_upgrade_is_paid_and_refundable() {
         price::from([("gold", 200), ("wood", 60)]),
         "a peon mends the upgraded tower against what it cost to have"
     );
-    assert_eq!(upgraded.build_time, Some(130));
+    assert_eq!(upgraded.build_time(), Some(130));
     assert!(
         upgraded.tags.contains("building"),
         "an upgraded tower must still count as a standing base"
@@ -1473,6 +1494,54 @@ fn every_finished_terran_building_burns_under_its_fire_line() {
             );
         }
     }
+}
+
+#[test]
+fn every_terran_building_rises_from_tenth_of_its_health() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    let tenth = SitePool::Rising(RiseStart::Share(utils::fixed("0.1")));
+    for def in registry.entities() {
+        let Some(build) = &def.build else {
+            continue;
+        };
+        let terran = def.race.as_deref() == Some("terran");
+        assert_eq!(
+            build.site(PoolId::HEALTH) == Some(tenth),
+            terran,
+            "{} rises from a tenth of its health iff it is a Terran building",
+            def.name
+        );
+    }
+    // The comsat station's site has no energy.
+    let comsat = registry
+        .entity("comsat_station")
+        .and_then(|def| def.build.as_ref())
+        .expect("the comsat station is built");
+    assert_eq!(comsat.site(PoolId::ENERGY), Some(SitePool::Withheld));
+}
+
+#[test]
+fn casters_start_at_quarter_of_their_energy() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    let quarter = PoolInitial::Share(utils::fixed("0.25"));
+    let energy_initial = |name: &str| {
+        registry
+            .entity(name)
+            .and_then(|def| def.base_stats.pool(PoolId::ENERGY))
+            .map(|pool| pool.initial())
+    };
+    for caster in [
+        "archer",
+        "medic",
+        "shaman",
+        "comsat_station",
+        "wraith",
+        "necromancer",
+    ] {
+        assert_eq!(energy_initial(caster), Some(quarter), "{caster}");
+    }
+    // The gryphon's energy pays for taking off, not for casting: full.
+    assert_eq!(energy_initial("gryphon"), Some(PoolInitial::Full));
 }
 
 #[test]
@@ -1666,7 +1735,7 @@ fn hardened_towers_and_grown_halls_carry_what_they_cost() {
             "'{tower}' is only hardened into"
         );
         assert_eq!(def.price, price::from([("gold", gold), ("wood", wood)]));
-        assert_eq!(def.build_time, Some(170));
+        assert_eq!(def.build_time(), Some(170));
     }
 
     // A necropolis is 350 gold over 180 ticks, and each growth adds 150 gold
@@ -1675,7 +1744,7 @@ fn hardened_towers_and_grown_halls_carry_what_they_cost() {
         let def = registry.entity(hall).expect("hall is registered");
         assert!(!produced(&registry, hall), "'{hall}' is only grown into");
         assert_eq!(def.price, price::from([("gold", gold)]));
-        assert_eq!(def.build_time, Some(time));
+        assert_eq!(def.build_time(), Some(time));
     }
 }
 

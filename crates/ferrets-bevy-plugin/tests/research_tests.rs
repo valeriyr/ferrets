@@ -285,10 +285,9 @@ fn tag_requirement_follows_standing_provider() {
 #[test]
 fn under_construction_provider_satisfies_nothing() {
     let mut app = utils::research_app();
-    let (lab, _) = utils::create_owned(&mut app, "lab", 10, 10, 0);
+    let (lab, _) = utils::create_crewed_site(&mut app, "lab", 10, 10, 0);
     let (_, guardhouse_id) = utils::create_owned(&mut app, "guardhouse", 20, 20, 0);
     utils::grant_gold(&mut app, 100);
-    utils::mark_as_site(app.world_mut(), lab);
 
     // A workshop still going up unlocks nothing.
     train(&mut app, guardhouse_id, "knight");

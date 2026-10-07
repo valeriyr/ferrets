@@ -17,7 +17,7 @@ use ferrets_physics::body;
 
 use crate::{
     components::location::LocationComponent,
-    map_data::{MapData, MapSlot},
+    map_data::{MapData, MapSlot, Placement},
     movement_model::MovementModel,
     session::player_id::PlayerId,
 };
@@ -79,7 +79,8 @@ impl Map {
     /// open; entity occupancy composes on top either way.
     ///
     /// Panics if the terrain palette references an unregistered terrain, a cell
-    /// indexes past the palette, or the cell count does not match the grid.
+    /// indexes past the palette, the cell count does not match the grid, or a
+    /// placement starts a pool its type cannot start there.
     pub fn from_data(data: &MapData, registry: &ContentRegistry) -> Self {
         let mut nav_grid = NavGrid::new(data.width(), data.height());
         for (_, layer) in registry.layers() {
@@ -101,6 +102,7 @@ impl Map {
                 "placement '{}' names remains, which only a death may leave",
                 placement.type_name
             );
+            check_placement_pools(placement, registry);
         }
 
         // Start positions indexed by slot id; environment seats have none.
@@ -724,5 +726,41 @@ fn footing(location_def: &LocationDef) -> Footing {
     match location_def.solidity() {
         Solidity::Solid => Footing::Free,
         Solidity::Underfoot | Solidity::Passable => Footing::Shared,
+    }
+}
+
+/// Checks each pool `placement` starts: a registered pool, named once, and
+/// for a registered type one it declares, at an initial the pool can start
+/// at.
+fn check_placement_pools(placement: &Placement, registry: &ContentRegistry) {
+    for (index, (name, initial)) in placement.pools.iter().enumerate() {
+        let pool = registry.pool(name).unwrap_or_else(|| {
+            panic!(
+                "placement '{}' names the unregistered pool '{name}'",
+                placement.type_name
+            )
+        });
+        assert!(
+            placement.pools[..index]
+                .iter()
+                .all(|(earlier, _)| earlier != name),
+            "placement '{}' names the {name} pool twice",
+            placement.type_name
+        );
+        // A placement of an unregistered type is skipped when the map is
+        // built, so only its names are checked.
+        let Some(def) = registry.entity(&placement.type_name) else {
+            continue;
+        };
+        let declaration = def.base_stats.pool(pool).unwrap_or_else(|| {
+            panic!(
+                "placement '{}' names the {name} pool, which its type does not declare",
+                placement.type_name
+            )
+        });
+        declaration.validate_initial(
+            *initial,
+            &format!("placement '{}' starts the {name} pool", placement.type_name),
+        );
     }
 }

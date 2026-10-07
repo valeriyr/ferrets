@@ -245,7 +245,7 @@ impl EntityContentView {
                 .map(|(kind, amount)| (kind.clone(), *amount))
                 .collect(),
             train_time: def.train_time,
-            build_time: def.build_time,
+            build_time: def.build_time(),
             trains: def
                 .trainer
                 .as_ref()

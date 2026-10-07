@@ -389,7 +389,7 @@ pub const CONTENT: &str = r#"
             pools = { health = { maximum = 800 } },
             dying = { time = 2 },
             price = { gold = 400 },
-            build_time = 200,
+            build = { time = 200, pools = { health = "initial" } },
             trainer = { trains },
             resource_storage = { "gold", "wood" },
             tags = { "building" },
@@ -407,7 +407,7 @@ pub const CONTENT: &str = r#"
             pools = { health = { maximum = 200 } },
             dying = { time = 2 },
             price = { gold = 40, wood = 20 },
-            build_time = 60,
+            build = { time = 60, pools = { health = "initial" } },
             tags = { "building" },
         })
     end
@@ -420,7 +420,7 @@ pub const CONTENT: &str = r#"
             pools = { health = { maximum = 500 } },
             dying = { time = 2 },
             price = { gold = 200, wood = 100 },
-            build_time = 120,
+            build = { time = 120, pools = { health = "initial" } },
             -- Mends in half the time it took to raise: a camp is quicker to
             -- patch up than to put up.
             repair_ratio = "0.5",
@@ -461,7 +461,7 @@ pub const CONTENT: &str = r#"
         -- Stone and earthworks: no call on the wood line, which the demo
         -- economy keeps stretched over the upgrades.
         price = { gold = 100 },
-        build_time = 80,
+        build = { time = 80, pools = { health = "initial" } },
         transporter = {
             -- Soldiers and the siege tube alike: what shelters here is
             -- whatever can be carried through a door.
@@ -487,7 +487,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 350 } },
         dying = { time = 2 },
         price = { gold = 150, wood = 80 },
-        build_time = 100,
+        build = { time = 100, pools = { health = "initial" } },
         researcher = { "iron_weapons", "vitality_drill" },
         tags = { "building" },
     })
@@ -508,7 +508,7 @@ pub const CONTENT: &str = r#"
             -- 0.1/tick is 2 energy a second, so a 30-cost cast is earned over ~15s
             -- rather than handed back instantly: energy gates the skills, not the
             -- cooldowns.
-            energy = { maximum = 60, regen = "0.1" },
+            energy = { maximum = 60, regen = "0.1", initial = { share = "0.25" } },
         },
         dying = FALLS,
         tags = { "biological" },
@@ -547,7 +547,7 @@ pub const CONTENT: &str = r#"
             health = { maximum = 45 },
             -- Half a point of energy per point of health (see the repairer cost
             -- below) means a full 200-point pool restores 400 health across a squad.
-            energy = { maximum = 200, regen = "0.2" },
+            energy = { maximum = 200, regen = "0.2", initial = { share = "0.25" } },
         },
         dying = FALLS,
         tags = { "biological" },
@@ -758,7 +758,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 2000 } },
         dying = { time = 2 },
         price = { gold = 50 },
-        build_time = 1200,
+        build = { time = 1200, pools = { health = "initial" } },
         tags = { "building" },
         berths = { rim = { points = rim(4, 4) } },
     })
@@ -780,7 +780,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 200 } },
         dying = { time = 2 },
         price = { gold = 40, wood = 20 },
-        build_time = 60,
+        build = { time = 60, pools = { health = "initial" } },
         transporter = {
             carries = { types = { "peon" } },
             boarding = "own",
@@ -811,7 +811,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 250 } },
         dying = { time = 2 },
         price = { gold = 120, wood = 40 },
-        build_time = 70,
+        build = { time = 70, pools = { health = "initial" } },
         tags = { "building" },
         berths = { rim = { points = rim(2, 2) } },
         field_sources = {
@@ -846,7 +846,7 @@ pub const CONTENT: &str = r#"
         -- The watch tower's price and the upgrade's on top of it, over the
         -- raising and the upgrading together: what the tower cost to have.
         price = { gold = 200, wood = 60 },
-        build_time = 130,
+        build = { time = 130, pools = { health = "initial" } },
     })
     camp("war_camp", "orc", { "grunt", "shaman", "zeppelin" }, { "frenzy_ritual" }, { rim = { points = rim(3, 3) } })
 
@@ -861,7 +861,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 400 } },
         dying = { time = 2 },
         price = { gold = 180, wood = 120 },
-        build_time = 130,
+        build = { time = 130, pools = { health = "initial" } },
         repair_ratio = "0.5",
         trainer = { "war_wagon" },
         tags = { "building" },
@@ -985,7 +985,7 @@ pub const CONTENT: &str = r#"
             supply_cost = 1,
             cargo_size = 1,
         },
-        pools = { health = { maximum = 35 }, energy = { maximum = 80, regen = "0.2" } },
+        pools = { health = { maximum = 35 }, energy = { maximum = 80, regen = "0.2", initial = { share = "0.25" } } },
         dying = FALLS,
         tags = { "biological" },
         skills = { "second_wind", "withering" },
@@ -1082,7 +1082,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 800 } },
         dying = { time = 2, leaves = BURSTS },
         price = { gold = 400 },
-        build_time = 200,
+        build = { time = 200, pools = { health = "initial" } },
         resource_storage = { "gold", "wood" },
         tags = { "building" },
         berths = BROOD_BERTHS,
@@ -1124,7 +1124,7 @@ pub const CONTENT: &str = r#"
         -- Nothing builds a hive: it carries the hatchery's price and the
         -- growth's on top of it, over the raising and the growing together.
         price = { gold = 550, wood = 100 },
-        build_time = 400,
+        build = { time = 400, pools = { health = "initial" } },
         resource_storage = { "gold", "wood" },
         tags = { "building" },
         berths = BROOD_BERTHS,
@@ -1231,7 +1231,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 50 } },
         dying = { time = 2 },
         price = { gold = 25 },
-        build_time = 40,
+        build = { time = 40, pools = { health = "initial" } },
         tags = { "building" },
         field_placement = { ON_CREEP },
         field_sources = {
@@ -1246,7 +1246,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 500 } },
         dying = { time = 2, leaves = BURSTS },
         price = { gold = 200, wood = 100 },
-        build_time = 120,
+        build = { time = 120, pools = { health = "initial" } },
         tags = { "building" },
         field_placement = { ON_CREEP },
         field_effects = { WITHERS_OFF_CREEP },
@@ -1382,7 +1382,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 800 } },
         dying = { time = 2 },
         price = { gold = 400 },
-        build_time = 200,
+        build = { time = 200, pools = { health = "initial" } },
         trainer = { "probe" },
         resource_storage = { "gold", "wood" },
         tags = { "building" },
@@ -1430,7 +1430,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 200 } },
         dying = { time = 2 },
         price = { gold = 60 },
-        build_time = 50,
+        build = { time = 50, pools = { health = "initial" } },
         tags = { "building" },
         field_placement = { NOT_ON_CREEP },
         field_sources = {
@@ -1448,7 +1448,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 500 } },
         dying = { time = 2 },
         price = { gold = 200, wood = 100 },
-        build_time = 120,
+        build = { time = 120, pools = { health = "initial" } },
         repair_ratio = "0.5",
         trainer = { "zealot", "dark_templar", "observer", "arbiter" },
         tags = { "building" },
@@ -1466,7 +1466,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 300 } },
         dying = { time = 2 },
         price = { gold = 120 },
-        build_time = 80,
+        build = { time = 80, pools = { health = "initial" } },
         tags = { "building" },
         attack = { targets = GROUND | WATER | AIR, projectile = "arrow" },
         field_placement = { POWERED, NOT_ON_CREEP },
@@ -1628,7 +1628,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 600 } },
         dying = { time = 2 },
         price = { gold = 100 },
-        build_time = 100,
+        build = { time = 100, pools = { health = "initial" } },
         tags = { "building" },
         resource_source = { kind = "gold", depletion = "destroy" },
         overbuilds = "gold_mine",
@@ -1652,7 +1652,7 @@ pub const CONTENT: &str = r#"
             pools = rooted.pools,
             dying = { time = 2 },
             price = rooted.price,
-            build_time = rooted.build_time,
+            build = rooted.build,
             trainer = rooted.trainer,
             attack = rooted.attack,
             tags = { "building" },
@@ -1682,7 +1682,7 @@ pub const CONTENT: &str = r#"
         stats = { sight_range = 9, supply_provided = 10 },
         pools = { health = { maximum = 800 } },
         price = { gold = 400 },
-        build_time = 200,
+        build = { time = 200, pools = { health = "initial" } },
         trainer = { "wisp" },
     }, {
         stats = {
@@ -1700,7 +1700,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 200 } },
         dying = { time = 2 },
         price = { gold = 40, wood = 20 },
-        build_time = 60,
+        build = { time = 60, pools = { health = "initial" } },
         tags = { "building" },
         field_placement = { NOT_ON_CREEP, NOT_ON_BLIGHT },
     })
@@ -1709,7 +1709,7 @@ pub const CONTENT: &str = r#"
         stats = { sight_range = 6 },
         pools = { health = { maximum = 500 } },
         price = { gold = 200, wood = 100 },
-        build_time = 120,
+        build = { time = 120, pools = { health = "initial" } },
         trainer = { "huntress" },
     }, {
         stats = {
@@ -1727,7 +1727,7 @@ pub const CONTENT: &str = r#"
         },
         pools = { health = { maximum = 300 } },
         price = { gold = 120, wood = 40 },
-        build_time = 80,
+        build = { time = 80, pools = { health = "initial" } },
         attack = { targets = GROUND | WATER | AIR, projectile = "arrow" },
         field_sources = {
             { field = "true_sight", radius = 7, growth = "instant", while_constructing = "nothing", while_disabled = "nothing" },
@@ -1783,6 +1783,8 @@ pub const CONTENT: &str = r#"
     })
 
     -- ── The Terrans ─────────────────────────────────────────────────────────
+    -- Every Terran building goes up from a tenth of its health and gains the
+    -- rest with the work; what it takes while going up stays taken.
     -- Every finished Terran building burns: under 34% of its health it bears
     -- the fire, which drains three points a second at 20 Hz until an SCV
     -- mends it back over the line or it burns down. A site going up does not
@@ -1917,7 +1919,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 800 } },
         dying = { time = 2 },
         price = { gold = 400 },
-        build_time = 200,
+        build = { time = 200, pools = { health = { rises_from = { share = "0.1" } } } },
         trainer = { "scv" },
         resource_storage = { "gold", "wood" },
         -- It raises its own annex, standing where it stands while the work is
@@ -1959,7 +1961,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 500 } },
         dying = { time = 2 },
         price = { gold = 150 },
-        build_time = 100,
+        build = { time = 100, pools = { health = { rises_from = { share = "0.1" } } } },
         repair_ratio = "0.5",
         trainer = { "marine" },
         berths = { rim = { points = rim(3, 3), slots = 1 } },
@@ -1992,7 +1994,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 500 } },
         dying = { time = 2 },
         price = { gold = 200, wood = 100 },
-        build_time = 120,
+        build = { time = 120, pools = { health = { rises_from = { share = "0.1" } } } },
         repair_ratio = "0.5",
         trainer = { "tank", "wraith" },
         builder = { builds = { "tech_lab" }, attendance = { present = { crew = 1 } } },
@@ -2032,12 +2034,13 @@ pub const CONTENT: &str = r#"
         pools = {
             health = { maximum = 250 },
             -- Two hundred to a pool that refills slowly: four sweeps held in
-            -- reserve, and a wait between them.
-            energy = { maximum = 200, regen = "0.2" },
+            -- reserve, and a wait between them. The site has none; the
+            -- finished station starts at a quarter.
+            energy = { maximum = 200, regen = "0.2", initial = { share = "0.25" } },
         },
         dying = { time = 2 },
         price = { gold = 50, wood = 50 },
-        build_time = 80,
+        build = { time = 80, pools = { health = { rises_from = { share = "0.1" } }, energy = "withheld" } },
         skills = { "scanner_sweep" },
         tags = { "building" },
         passives = { "on_fire" },
@@ -2055,7 +2058,7 @@ pub const CONTENT: &str = r#"
             sight_range = 9,
             supply_cost = 2,
         },
-        pools = { health = { maximum = 120 }, energy = { maximum = 200, regen = "0.1" } },
+        pools = { health = { maximum = 120 }, energy = { maximum = 200, regen = "0.1", initial = { share = "0.25" } } },
         dying = { time = 2 },
         tags = { "mechanical" },
         attack = { targets = GROUND | WATER | AIR },
@@ -2084,7 +2087,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 200 } },
         dying = { time = 2 },
         price = { gold = 75, wood = 25 },
-        build_time = 60,
+        build = { time = 60, pools = { health = { rises_from = { share = "0.1" } } } },
         berths = { rim = { points = rim(1, 1), slots = 1 } },
         tags = { "building" },
         passives = { "on_fire" },
@@ -2106,7 +2109,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 300 } },
         dying = { time = 2 },
         price = { gold = 50, wood = 25 },
-        build_time = 80,
+        build = { time = 80, pools = { health = { rises_from = { share = "0.1" } } } },
         researcher = { "siege_tech" },
         tags = { "building" },
         passives = { "on_fire" },
@@ -2120,7 +2123,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 200 } },
         dying = { time = 2 },
         price = { gold = 40, wood = 20 },
-        build_time = 60,
+        build = { time = 60, pools = { health = { rises_from = { share = "0.1" } } } },
         tags = { "building" },
         passives = { "on_fire" },
         berths = { rim = { points = rim(2, 2), slots = 1 } },
@@ -2136,7 +2139,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 500 } },
         dying = { time = 2 },
         price = { gold = 75 },
-        build_time = 90,
+        build = { time = 90, pools = { health = { rises_from = { share = "0.1" } } } },
         tags = { "building" },
         passives = { "on_fire" },
         resource_source = { kind = "gold", depletion = "persist" },
@@ -2398,7 +2401,7 @@ pub const CONTENT: &str = r#"
             supply_cost = 2,
             cargo_size = 1,
         },
-        pools = { health = { maximum = 45 }, energy = { maximum = 100, regen = "0.3" } },
+        pools = { health = { maximum = 45 }, energy = { maximum = 100, regen = "0.3", initial = { share = "0.25" } } },
         dying = FALLS,
         price = { gold = 100 },
         train_time = 60,
@@ -2452,20 +2455,20 @@ pub const CONTENT: &str = r#"
     end
     hall("necropolis", "halls_of_the_dead", 700,
         { sight_range = 9, supply_provided = 10 },
-        { cost = { gold = 350 }, build_time = 180 })
+        { cost = { gold = 350 }, build = { time = 180, pools = { health = "initial" } } })
     -- A grown hall is never built, so it carries the necropolis's price and
     -- every growth paid since, over the raising and the growing together.
     hall("halls_of_the_dead", "black_citadel", 900,
         { sight_range = 10, supply_provided = 10 },
         { tags = { "building", "grown_hall" },
-          price = { gold = 500 }, build_time = 300 })
+          price = { gold = 500 }, build = { time = 300, pools = { health = "initial" } } })
     -- The citadel is the one hall that answers for itself: bolts at whatever
     -- comes into its reach, in the air as readily as on the ground.
     hall("black_citadel", nil, 1100,
         { sight_range = 11, supply_provided = 10,
           damage = 18, attack_range = 8, acquire_range = 9, attack_period = 22, damage_point = 9 },
         { tags = { "building", "grown_hall" },
-          price = { gold = 650 }, build_time = 420,
+          price = { gold = 650 }, build = { time = 420, pools = { health = "initial" } },
           attack = { targets = GROUND | WATER | AIR, projectile = "arrow" } })
 
     -- Raised over a gold seam, the haunted mine is the mine from then on: it
@@ -2479,7 +2482,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 600 } },
         dying = { time = 2 },
         price = { gold = 100 },
-        build_time = 100,
+        build = { time = 100, pools = { health = "initial" } },
         tags = { "building" },
         resource_source = { kind = "gold", depletion = "destroy" },
         overbuilds = "gold_mine",
@@ -2502,7 +2505,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 300 } },
         dying = { time = 2 },
         price = { gold = 80, wood = 30 },
-        build_time = 100,
+        build = { time = 100, pools = { health = "initial" } },
         tags = { "building" },
         field_placement = { ON_BLIGHT },
         field_sources = blights(4),
@@ -2528,7 +2531,7 @@ pub const CONTENT: &str = r#"
             tags = { "building" },
             attack = attack,
             price = price,
-            build_time = build_time,
+            build = { time = build_time, pools = { health = "initial" } },
             field_placement = { ON_BLIGHT },
             field_sources = field_sources,
         })
@@ -2556,7 +2559,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 500 } },
         dying = { time = 2 },
         price = { gold = 200, wood = 50 },
-        build_time = 120,
+        build = { time = 120, pools = { health = "initial" } },
         tags = { "building" },
         trainer = { "ghoul" },
         field_placement = { ON_BLIGHT },
@@ -2572,7 +2575,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 300 } },
         dying = { time = 2 },
         price = { gold = 120, wood = 40 },
-        build_time = 90,
+        build = { time = 90, pools = { health = "initial" } },
         tags = { "building" },
         field_placement = { ON_BLIGHT },
         field_sources = blights(4),
@@ -2585,7 +2588,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 450 } },
         dying = { time = 2 },
         price = { gold = 250, wood = 100 },
-        build_time = 140,
+        build = { time = 140, pools = { health = "initial" } },
         tags = { "building" },
         trainer = { "necromancer" },
         researcher = { "skeletal_longevity" },

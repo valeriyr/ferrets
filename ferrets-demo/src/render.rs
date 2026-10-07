@@ -3403,7 +3403,7 @@ pub fn draw_status_bars(
         }
 
         if let Some(construction) = construction {
-            let time = def.build_time.unwrap_or(1).max(1);
+            let time = def.build_time().unwrap_or(1).max(1);
             let fraction = construction.progress as f32 / time as f32;
             bar(&mut gizmos, fraction, BUILD_WORK_COLOR, y);
             y += 4.0;

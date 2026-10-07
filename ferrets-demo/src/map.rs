@@ -24,7 +24,9 @@
 //! boss slot; each lobby slot's base is spawned by the game for its occupant.
 //! The camera opens framed on the local player's start point.
 
+use ferrets_content::pool::PoolInitial;
 use ferrets_geometry::projection::Projection;
+use ferrets_math::FixedU64;
 use ferrets_script::engine::lua::LuaEngine;
 use ferrets_simulation::{
     map::Map,
@@ -162,6 +164,7 @@ pub fn data() -> MapData {
             cell,
             owner: None,
             amount: Some(5000),
+            pools: Vec::new(),
         });
     }
     for &cell in TREES {
@@ -170,6 +173,7 @@ pub fn data() -> MapData {
             cell,
             owner: None,
             amount: Some(400),
+            pools: Vec::new(),
         });
     }
     data.add_placement(Placement {
@@ -177,13 +181,19 @@ pub fn data() -> MapData {
         cell: FORTRESS,
         owner: Some(BOSS),
         amount: None,
+        pools: Vec::new(),
     });
+    // The boss's ships come limping into the bay at half their health.
     for &cell in &SHIPS {
         data.add_placement(Placement {
             type_name: "ship".to_string(),
             cell,
             owner: Some(BOSS),
             amount: None,
+            pools: vec![(
+                "health".to_string(),
+                PoolInitial::Share(FixedU64::lit("0.5")),
+            )],
         });
     }
 

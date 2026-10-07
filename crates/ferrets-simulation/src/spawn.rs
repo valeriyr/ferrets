@@ -5,11 +5,13 @@ use ferrets_content::{
     attack::Slain,
     base_stats::BaseStats,
     brood::{BreederDef, OrphanFate},
+    build::{RiseStart, SitePool},
     dying::{DeathKind, DyingDef},
     entity_stats::EntityStatId,
-    entity_type_def::EntityTypeId,
+    entity_type_def::{EntityTypeDef, EntityTypeId},
     location::LocationDef,
     morph::MorphReason,
+    pool::PoolInitial,
     pool_def::PoolId,
     registry::ContentRegistry,
     resource::DepletionPolicy,
@@ -27,7 +29,7 @@ use crate::{
         annex::{AnnexComponent, DocksComponent},
         attached::AttachedComponent,
         brood::{BredComponent, BroodComponent},
-        build::OverbuiltComponent,
+        build::{OverbuiltComponent, SiteWork, UnderConstructionComponent},
         concealed::ConcealedComponent,
         dying::{DiedComponent, DyingComponent, Passing, RemainsComponent},
         entity_info::EntityInfoComponent,
@@ -100,23 +102,40 @@ pub enum FieldReach {
     Full,
 }
 
+/// How an entity enters the world.
+#[derive(Debug, Clone)]
+pub enum Arrival<'a> {
+    /// Standing, finished: each pool at its initial, or where `starts`
+    /// names it.
+    Standing {
+        /// The pools started in place of their type's initial.
+        starts: &'a [(PoolId, PoolInitial)],
+    },
+    /// As a construction site, advanced as the work says.
+    Site(SiteWork),
+}
+
 /// Creates an entity of the given type at `position`, owned by `owner`
 /// (`None` creates a neutral entity), its field sources reaching as `reach`
-/// says, announcing nothing.
+/// says and arriving as `arrival` says, announcing nothing.
 ///
 /// `position` must lie exactly on a cell's origin corner — a fresh entity is
 /// at rest, and rest positions are lattice points.
 ///
-/// [`spawn_entity`] is the announcing counterpart.
+/// The `spawn_*` functions are the announcing counterparts, one per cause.
 ///
 /// Returns `(entity, simulation_id)`, or `None` if `type_name` is not registered
-/// or the position is blocked on the nav grid.
+/// or the position is blocked on the nav grid. Panics when a standing
+/// arrival's starts name a pool the type does not declare, name one twice,
+/// or start one where it cannot start, or when a site arrives of a type that
+/// cannot be built.
 pub fn create_entity(
     world: &mut World,
     type_name: &str,
     position: FixedUVec2,
     owner: Option<PlayerId>,
     reach: FieldReach,
+    arrival: Arrival,
 ) -> Option<(Entity, SimulationId)> {
     debug_assert!(
         !movement_model::is_mid_crossing(position),
@@ -125,7 +144,12 @@ pub fn create_entity(
     // Both come off one borrow: the whole definition is never cloned for a
     // placement test that reads two of its fields.
     let (location_def, occupancy) = {
-        let def = world.resource::<ContentRegistry>().entity(type_name)?;
+        let registry = world.resource::<ContentRegistry>();
+        let def = registry.entity(type_name)?;
+        match &arrival {
+            Arrival::Standing { starts } => check_starts(registry, def, starts),
+            Arrival::Site(_) => {}
+        }
         (def.location?, OccupancyClass::of(def))
     };
     let location = LocationComponent::new(position, DEFAULT_FACING);
@@ -133,7 +157,7 @@ pub fn create_entity(
         return None;
     }
 
-    let (entity, id) = conjure(world, type_name, location, owner, reach)?;
+    let (entity, id) = conjure(world, type_name, location, owner, reach, arrival)?;
     // Stamped from the location the entity now carries, not the one tested
     // above.
     restore_footprint(world, entity);
@@ -171,111 +195,229 @@ pub fn ground_takes(
     ) && nothing_underfoot(world, placed, to, occupancy, own.map(|own| own.entity))
 }
 
-/// Brings an entity of the given type into the world at `location`, owned by
-/// `owner`, with everything its type gives an instance — and no footprint on
-/// the grid: the caller stands it on the grid or seats it. Returns `None` if
-/// `type_name` is not registered or has no location.
-fn conjure(
+/// Creates one of the map's placements, each pool `starts` names started
+/// there in place of its type's initial, and announces it as placed.
+///
+/// Returns `None` if `type_name` is not registered or the position is
+/// blocked on the nav grid. Panics as [`create_entity`] does.
+pub fn spawn_placed(
     world: &mut World,
     type_name: &str,
-    location: LocationComponent,
+    position: FixedUVec2,
     owner: Option<PlayerId>,
     reach: FieldReach,
+    starts: &[(PoolId, PoolInitial)],
 ) -> Option<(Entity, SimulationId)> {
-    // Only what standing the entity needs; every capability component is fitted
-    // from the type by `fit_components` below.
-    let (type_id, base_stats) = {
-        let registry = world.resource::<ContentRegistry>();
-        let type_id = registry.type_id(type_name)?;
-        let type_def = registry.entity(type_name)?;
-        type_def.location?;
-        (type_id, type_def.base_stats.clone())
-    };
-
-    let id = world.resource_mut::<SimulationIdGenerator>().generate();
-
-    let mut entity_mut = world.spawn((
-        EntityInfoComponent::new(id, type_id, type_name),
-        location,
-        OrderQueueComponent::default(),
-        PoolsComponent::default(),
-        PoolShiftsComponent::default(),
-    ));
-    if let Some(player) = owner {
-        entity_mut.insert(OwnerComponent::new(player));
-    }
-    let entity = entity_mut.id();
-
-    seed_stats(world, entity, &base_stats);
-    stats::recompute_stats_of(world, entity);
-    // Current-value pools, seeded full to their effective max stats. A change
-    // of form carries them instead, which is why filling them is the spawn's
-    // own business.
-    fill_pools(world, entity, type_id);
-    fit_components(
+    spawn(
         world,
-        entity,
-        type_id,
+        type_name,
+        position,
+        owner,
         reach,
-        StandingActs::Rearm,
-        Wearing::Own,
-    );
-    // The type's passives are fitted on the pools just filled, and the pools
-    // filled again under the maxima the passives raise or lower, so a fresh
-    // entity starts full whatever its passives do to a pool.
-    buffs::refit_entity(world, entity);
-    stats::recompute_stats_of(world, entity);
-    fill_pools(world, entity, type_id);
-    brood::open(world, entity);
-    world.resource_mut::<EntityIndex>().insert_alive(id, entity);
-
-    Some((entity, id))
+        Arrival::Standing { starts },
+        SpawnCause::Placed,
+    )
 }
 
-/// Creates an entity of the given type seated in a berth of `job`'s group
-/// named by `attachment`, owned by `owner`, and announces the spawn. The
-/// entity never stands on the grid on its way to the seat.
+/// Creates a unit finished in `trainer`'s queue and announces it as trained.
+///
+/// Returns `None` if `type_name` is not registered or the position is
+/// blocked on the nav grid.
+pub fn spawn_trained(
+    world: &mut World,
+    type_name: &str,
+    position: FixedUVec2,
+    owner: Option<PlayerId>,
+    reach: FieldReach,
+    trainer: SimulationId,
+) -> Option<(Entity, SimulationId)> {
+    spawn(
+        world,
+        type_name,
+        position,
+        owner,
+        reach,
+        Arrival::Standing { starts: &[] },
+        SpawnCause::Trained { trainer },
+    )
+}
+
+/// Creates a construction site `builder` placed, advanced as `work` says,
+/// and announces it as founded.
+///
+/// Returns `None` if `type_name` is not registered or the position is
+/// blocked on the nav grid. Panics when the type cannot be built.
+pub fn spawn_founded(
+    world: &mut World,
+    type_name: &str,
+    position: FixedUVec2,
+    owner: Option<PlayerId>,
+    reach: FieldReach,
+    builder: SimulationId,
+    work: SiteWork,
+) -> Option<(Entity, SimulationId)> {
+    spawn(
+        world,
+        type_name,
+        position,
+        owner,
+        reach,
+        Arrival::Site(work),
+        SpawnCause::Founded { builder },
+    )
+}
+
+/// Creates a broodling `by` bore, seated in a berth of the breeder `job`'s
+/// group named by `attachment`, and announces it as bred. The entity never
+/// stands on the grid on its way to the seat.
 ///
 /// Returns `None` if `type_name` is not registered or has no location, or the
 /// group has no free berth.
-pub(crate) fn spawn_seated(
+pub(crate) fn spawn_bred(
     world: &mut World,
     type_name: &str,
     job: Entity,
     attachment: &Attachment,
     owner: Option<PlayerId>,
-    cause: SpawnCause,
+    reach: FieldReach,
+    by: SimulationId,
 ) -> Option<(Entity, SimulationId)> {
     let from = entity_def::footprint_rect(world, job);
     let (seat, point) = berths::nearest_free_seat(world, job, attachment.berths(), from)?;
     // Facing the way every fresh entity does; the seat sets the position.
     let location = LocationComponent::new(point, DEFAULT_FACING);
-    let (entity, id) = conjure(world, type_name, location, owner, FieldReach::Initial)
-        .expect("validated content breeds a registered type with a location");
+    let (entity, id) = conjure(
+        world,
+        type_name,
+        location,
+        owner,
+        reach,
+        Arrival::Standing { starts: &[] },
+    )
+    .expect("validated content breeds a registered type with a location");
     seat_at(world, entity, job, attachment, seat, point);
-    world
-        .resource_mut::<EventRecord>()
-        .emit(SimulationEvent::EntitySpawned { entity: id, cause });
+    announce(world, id, SpawnCause::Bred { by });
     Some((entity, id))
 }
 
-/// Creates an entity of the given type and announces the spawn.
+/// Creates an entity handed on by the death of `of` and announces it as
+/// bequeathed.
 ///
-/// The announcing counterpart to [`create_entity`]. `cause` travels on the
-/// announcement, where a tally can tell a trained unit from a placed one.
-pub fn spawn_entity(
+/// Returns `None` if `type_name` is not registered or the position is
+/// blocked on the nav grid.
+pub fn spawn_bequeathed(
     world: &mut World,
     type_name: &str,
     position: FixedUVec2,
     owner: Option<PlayerId>,
-    cause: SpawnCause,
+    reach: FieldReach,
+    of: SimulationId,
+) -> Option<(Entity, SimulationId)> {
+    spawn(
+        world,
+        type_name,
+        position,
+        owner,
+        reach,
+        Arrival::Standing { starts: &[] },
+        SpawnCause::Bequeathed { of },
+    )
+}
+
+/// Creates an entity the caster `by` raised from the remains `from`, and
+/// announces it as raised.
+///
+/// Returns `None` if `type_name` is not registered or the position is
+/// blocked on the nav grid.
+pub fn spawn_raised(
+    world: &mut World,
+    type_name: &str,
+    position: FixedUVec2,
+    owner: Option<PlayerId>,
+    reach: FieldReach,
+    by: SimulationId,
+    from: SimulationId,
+) -> Option<(Entity, SimulationId)> {
+    spawn(
+        world,
+        type_name,
+        position,
+        owner,
+        reach,
+        Arrival::Standing { starts: &[] },
+        SpawnCause::Raised { by, from },
+    )
+}
+
+/// Creates an entity the caster `by` called up from nothing, and announces
+/// it as summoned.
+///
+/// Returns `None` if `type_name` is not registered or the position is
+/// blocked on the nav grid.
+pub fn spawn_summoned(
+    world: &mut World,
+    type_name: &str,
+    position: FixedUVec2,
+    owner: Option<PlayerId>,
+    reach: FieldReach,
+    by: SimulationId,
+) -> Option<(Entity, SimulationId)> {
+    spawn(
+        world,
+        type_name,
+        position,
+        owner,
+        reach,
+        Arrival::Standing { starts: &[] },
+        SpawnCause::Summoned { by },
+    )
+}
+
+/// Creates the resource source put back where `by`, raised over it, died,
+/// and announces it as uncovered.
+///
+/// Returns `None` if `type_name` is not registered or the position is
+/// blocked on the nav grid.
+pub fn spawn_uncovered(
+    world: &mut World,
+    type_name: &str,
+    position: FixedUVec2,
+    owner: Option<PlayerId>,
+    reach: FieldReach,
+    by: SimulationId,
+) -> Option<(Entity, SimulationId)> {
+    spawn(
+        world,
+        type_name,
+        position,
+        owner,
+        reach,
+        Arrival::Standing { starts: &[] },
+        SpawnCause::Uncovered { by },
+    )
+}
+
+/// Creates an entity the sandbox spawn command conjured, and announces it as
+/// such.
+///
+/// Returns `None` if `type_name` is not registered or the position is
+/// blocked on the nav grid.
+pub fn spawn_sandbox(
+    world: &mut World,
+    type_name: &str,
+    position: FixedUVec2,
+    owner: Option<PlayerId>,
     reach: FieldReach,
 ) -> Option<(Entity, SimulationId)> {
-    let (entity, id) = create_entity(world, type_name, position, owner, reach)?;
-    world
-        .resource_mut::<EventRecord>()
-        .emit(SimulationEvent::EntitySpawned { entity: id, cause });
-    Some((entity, id))
+    spawn(
+        world,
+        type_name,
+        position,
+        owner,
+        reach,
+        Arrival::Standing { starts: &[] },
+        SpawnCause::Sandbox,
+    )
 }
 
 /// Sets down `count` of `type_name` around the footprint at `around`, as what
@@ -348,13 +490,13 @@ pub(crate) fn spawn_bequest(
                 spawn_remains(world, type_name, position, location_def, decay, fallen);
             }
             Left::Entity => {
-                spawn_entity(
+                spawn_bequeathed(
                     world,
                     type_name,
                     position,
                     fallen.owner,
-                    SpawnCause::Bequeathed { of: fallen.id },
                     FieldReach::Initial,
+                    fallen.id,
                 );
             }
         }
@@ -442,12 +584,7 @@ fn spawn_remains(
     world
         .resource_mut::<EntityIndex>()
         .insert_remains(id, entity);
-    world
-        .resource_mut::<EventRecord>()
-        .emit(SimulationEvent::EntitySpawned {
-            entity: id,
-            cause: SpawnCause::Bequeathed { of: fallen.id },
-        });
+    announce(world, id, SpawnCause::Bequeathed { of: fallen.id });
 }
 
 /// What a death hands on, once its type is resolved.
@@ -939,13 +1076,13 @@ pub(crate) fn uncover_source(world: &mut World, entity: Entity) {
         }
     }
     let by = entity_def::simulation_id(world, entity);
-    if let Some((source, _)) = spawn_entity(
+    if let Some((source, _)) = spawn_uncovered(
         world,
         &type_name,
         FixedUVec2::from(overbuilt.anchor),
         None,
-        SpawnCause::Uncovered { by },
         FieldReach::Full,
+        by,
     ) {
         world
             .entity_mut(source)
@@ -965,7 +1102,7 @@ pub(crate) fn uncover_source(world: &mut World, entity: Entity) {
 /// frees it.
 ///
 /// Takes `entity` off the map, announcing nothing — the counterpart of
-/// [`create_entity`], as [`despawn_entity`] is of [`spawn_entity`].
+/// [`create_entity`], as [`despawn_entity`] is of the `spawn_*` functions.
 ///
 /// Nothing authored it, so it leaves nothing: no body, no brood bursting out.
 /// A death the game has something to say about — what took it, and so what it
@@ -1610,17 +1747,198 @@ fn nothing_underfoot(
         })
 }
 
-/// Fills each pool the type `type_id` declares on `entity` to its effective
-/// maximum.
-fn fill_pools(world: &mut World, entity: Entity, type_id: EntityTypeId) {
-    let declared: Vec<PoolId> = world
-        .resource::<ContentRegistry>()
-        .def(type_id)
+/// Brings an entity of the given type into the world at `location`, owned by
+/// `owner` and arriving as `arrival` says, with everything its type gives an
+/// instance — and no footprint on the grid: the caller stands it on the grid
+/// or seats it. Returns `None` if `type_name` is not registered or has no
+/// location. Panics when it arrives as a site of a type that cannot be built.
+fn conjure(
+    world: &mut World,
+    type_name: &str,
+    location: LocationComponent,
+    owner: Option<PlayerId>,
+    reach: FieldReach,
+    arrival: Arrival,
+) -> Option<(Entity, SimulationId)> {
+    // Only what standing the entity needs; every capability component is fitted
+    // from the type by `fit_components` below.
+    let (type_id, base_stats) = {
+        let registry = world.resource::<ContentRegistry>();
+        let type_id = registry.type_id(type_name)?;
+        let type_def = registry.entity(type_name)?;
+        type_def.location?;
+        match (&arrival, &type_def.build) {
+            (Arrival::Site(_), None) => {
+                panic!("a site is of a type that can be built: '{type_name}'")
+            }
+            (Arrival::Site(_), Some(_)) | (Arrival::Standing { .. }, _) => {}
+        }
+        (type_id, type_def.base_stats.clone())
+    };
+
+    let id = world.resource_mut::<SimulationIdGenerator>().generate();
+
+    let mut entity_mut = world.spawn((
+        EntityInfoComponent::new(id, type_id, type_name),
+        location,
+        OrderQueueComponent::default(),
+        PoolsComponent::default(),
+        PoolShiftsComponent::default(),
+    ));
+    if let Some(player) = owner {
+        entity_mut.insert(OwnerComponent::new(player));
+    }
+    // A site is one before anything is fitted on it.
+    match &arrival {
+        Arrival::Site(work) => {
+            entity_mut.insert(UnderConstructionComponent::new(work.clone()));
+        }
+        Arrival::Standing { .. } => {}
+    }
+    let entity = entity_mut.id();
+
+    seed_stats(world, entity, &base_stats);
+    stats::recompute_stats_of(world, entity);
+    // Current-value pools, seeded at their initial against their effective
+    // max stats. A change of form carries them instead, which is why seeding
+    // them is the spawn's own business.
+    seed_pools(world, entity, type_id, &arrival, Seeding::First);
+    fit_components(
+        world,
+        entity,
+        type_id,
+        reach,
+        StandingActs::Rearm,
+        Wearing::Own,
+    );
+    // The type's passives are fitted on the pools just seeded, and the pools
+    // seeded again under the maxima the passives raise or lower, so a fresh
+    // entity starts at its initial whatever its passives do to a pool.
+    buffs::refit_entity(world, entity);
+    stats::recompute_stats_of(world, entity);
+    seed_pools(world, entity, type_id, &arrival, Seeding::AfterPassives);
+    brood::open(world, entity);
+    world.resource_mut::<EntityIndex>().insert_alive(id, entity);
+
+    Some((entity, id))
+}
+
+/// Creates an entity as [`create_entity`] does and announces it with
+/// `cause`.
+fn spawn(
+    world: &mut World,
+    type_name: &str,
+    position: FixedUVec2,
+    owner: Option<PlayerId>,
+    reach: FieldReach,
+    arrival: Arrival,
+    cause: SpawnCause,
+) -> Option<(Entity, SimulationId)> {
+    let (entity, id) = create_entity(world, type_name, position, owner, reach, arrival)?;
+    announce(world, id, cause);
+    Some((entity, id))
+}
+
+/// Announces that the entity `id` entered the world, by `cause`.
+fn announce(world: &mut World, id: SimulationId, cause: SpawnCause) {
+    world
+        .resource_mut::<EventRecord>()
+        .emit(SimulationEvent::EntitySpawned { entity: id, cause });
+}
+
+/// Starts each pool the type `type_id` declares on `entity` as `arrival`
+/// says, against its effective maximum: a standing entity's at its initial,
+/// or where the arrival's starts name it; a site's as its type's build
+/// holds it, a withheld pool left off. The first pass gives the entity its
+/// pools; the pass after the passives starts them again under the maxima
+/// the passives leave.
+fn seed_pools(
+    world: &mut World,
+    entity: Entity,
+    type_id: EntityTypeId,
+    arrival: &Arrival,
+    seeding: Seeding,
+) {
+    let def = world.resource::<ContentRegistry>().def(type_id);
+    let starts: Vec<(PoolId, Start)> = def
         .base_stats
         .pools()
-        .map(|pool| pool.id())
+        .map(|pool| {
+            let start = match arrival {
+                Arrival::Standing { starts } => Start::At(
+                    starts
+                        .iter()
+                        .find_map(|(named, initial)| (*named == pool.id()).then_some(*initial))
+                        .unwrap_or(pool.initial()),
+                ),
+                Arrival::Site(_) => match def
+                    .build
+                    .as_ref()
+                    .and_then(|build| build.site(pool.id()))
+                    .expect("a site's type says how its build holds each pool")
+                {
+                    SitePool::Initial => Start::At(pool.initial()),
+                    SitePool::Rising(start) => Start::Rising(start),
+                    SitePool::Withheld => Start::Withheld,
+                },
+            };
+            (pool.id(), start)
+        })
         .collect();
-    for pool in declared {
-        pools::fill(world, entity, pool);
+    for (pool, start) in starts {
+        match (start, seeding) {
+            (Start::At(initial), Seeding::First) => pools::seed(world, entity, pool, initial),
+            (Start::At(initial), Seeding::AfterPassives) => {
+                pools::reseed(world, entity, pool, initial);
+            }
+            (Start::Rising(start), Seeding::First) => {
+                pools::seed_rising(world, entity, pool, start.into());
+            }
+            (Start::Rising(start), Seeding::AfterPassives) => {
+                pools::reseed_rising(world, entity, pool, start.into());
+            }
+            (Start::Withheld, Seeding::First | Seeding::AfterPassives) => {}
+        }
+    }
+}
+
+/// Which of a spawn's two pool passes runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Seeding {
+    /// The first, giving the fresh entity its pools.
+    First,
+    /// The one after the passives, starting the pools again under the maxima
+    /// they leave.
+    AfterPassives,
+}
+
+/// Where a spawn's pool passes start one pool.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Start {
+    /// At this initial, following the pool's maximum.
+    At(PoolInitial),
+    /// At this start, rising with a site's work.
+    Rising(RiseStart),
+    /// Not at all: a site leaves the pool off.
+    Withheld,
+}
+
+/// Checks each pool `starts` names for an entity of `def`: one its type
+/// declares, named once, at an initial the pool can start at.
+fn check_starts(registry: &ContentRegistry, def: &EntityTypeDef, starts: &[(PoolId, PoolInitial)]) {
+    for (index, (pool, initial)) in starts.iter().enumerate() {
+        let name = registry.pool_name(*pool);
+        let declared = def.base_stats.pool(*pool).unwrap_or_else(|| {
+            panic!(
+                "'{}' starts the {name} pool, which its type does not declare",
+                def.name
+            )
+        });
+        assert!(
+            starts[..index].iter().all(|(earlier, _)| earlier != pool),
+            "'{}' starts the {name} pool twice",
+            def.name
+        );
+        declared.validate_initial(*initial, &format!("'{}' starts the {name} pool", def.name));
     }
 }

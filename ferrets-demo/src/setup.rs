@@ -9,7 +9,6 @@ use ferrets_content::player_stats::PlayerStatId;
 use ferrets_geometry::projection::Projection;
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_simulation::{
-    events::SpawnCause,
     map::Map,
     movement_model::MovementModel,
     player_stats::PlayerStats,
@@ -116,13 +115,13 @@ fn spawn_base(world: &mut World, player: PlayerId, race: &str, (x, y): (u32, u32
         _ => ("great_hall", "peon"),
     };
     let mut place = |type_name: &str, x: u32, y: u32| {
-        if spawn::spawn_entity(
+        if spawn::spawn_placed(
             world,
             type_name,
             cell(x, y),
             Some(player),
-            SpawnCause::Placed,
             FieldReach::Full,
+            &[],
         )
         .is_none()
         {

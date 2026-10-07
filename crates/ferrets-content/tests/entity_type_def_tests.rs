@@ -42,7 +42,7 @@ fn fully_loaded_definition_is_valid() {
         .with_attack(utils::weapon(GROUND), 10, 1, 1, 4, 2)
         .with_price([("gold", 30), ("wood", 10)])
         .with_train_time(4)
-        .with_build_time(6)
+        .with_build(6, utils::site_initial(&[PoolId::HEALTH]))
         .with_trainer(["footman"])
         .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
         .with_builder(
@@ -234,9 +234,15 @@ fn zero_train_time_panics() {
 }
 
 #[test]
-#[should_panic(expected = "build_time must be greater than 0")]
+#[should_panic(expected = "build time must be greater than 0")]
 fn zero_build_time_panics() {
-    footman().with_build_time(0);
+    footman().with_build(0, utils::site_initial(&[PoolId::HEALTH]));
+}
+
+#[test]
+#[should_panic(expected = "a build names each pool once: PoolId(0)")]
+fn build_naming_pool_twice_panics() {
+    footman().with_build(4, utils::site_initial(&[PoolId::HEALTH, PoolId::HEALTH]));
 }
 
 #[test]

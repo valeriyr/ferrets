@@ -4,6 +4,7 @@ use ferrets_geometry::projection::Projection;
 use serde::{Deserialize, Serialize};
 
 use crate::{movement_model::MovementModel, session::player_id::PlayerId};
+use ferrets_content::pool::PoolInitial;
 
 /// One entity a map opens with.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -16,6 +17,8 @@ pub struct Placement {
     pub owner: Option<PlayerId>,
     /// Overrides the spawned resource source's starting amount.
     pub amount: Option<u32>,
+    /// Where the named pools start, by pool name, overriding the type's.
+    pub pools: Vec<(String, PoolInitial)>,
 }
 
 /// One seat the map declares; the seat's slot id is its position in the

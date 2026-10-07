@@ -15,7 +15,7 @@ use ferrets_content::{
         MorphCancel, MorphCourse, MorphInterrupted, MorphPlacement, MorphReason, MorphTransition,
         PoolCarry, RevertCarry, ViaInterrupted,
     },
-    pool::Pool,
+    pool::{Pool, PoolInitial},
     pool_def::PoolId,
     pool_shift::PoolShift,
     quantity::Quantity,
@@ -199,8 +199,7 @@ fn regeneration_nets_against_burn() {
 #[test]
 fn site_burns_like_any_entity() {
     let (mut app, on_fire) = app();
-    let (shed, _) = utils::create_owned(&mut app, "shed", 5, 5, 0);
-    utils::mark_as_site(app.world_mut(), shed);
+    let (shed, _) = utils::create_crewed_site(&mut app, "shed", 5, 5, 0);
     utils::run_ticks(&mut app, 1);
 
     // A site bears the passive its requirement meets and flows like anything
@@ -217,11 +216,9 @@ fn site_burns_like_any_entity() {
 #[test]
 fn passive_held_while_built_waits_for_completion() {
     let (mut app, _) = app();
-    let (beacon, _) = utils::create_owned(&mut app, "beacon", 5, 5, 0);
+    let (beacon, _) = utils::create_crewed_site(&mut app, "beacon", 5, 5, 0);
     let finished = buff_id(&app, "finished");
-    assert!(entity_def::bears(app.world(), beacon, finished));
-
-    utils::mark_as_site(app.world_mut(), beacon);
+    assert!(!entity_def::bears(app.world(), beacon, finished));
     utils::run_ticks(&mut app, 1);
     assert!(!entity_def::bears(app.world(), beacon, finished));
 
@@ -233,11 +230,9 @@ fn passive_held_while_built_waits_for_completion() {
 #[test]
 fn passive_held_unless_built_lasts_while_site() {
     let (mut app, _) = app();
-    let (beacon, _) = utils::create_owned(&mut app, "beacon", 5, 5, 0);
+    let (beacon, _) = utils::create_crewed_site(&mut app, "beacon", 5, 5, 0);
     let scaffold = buff_id(&app, "scaffold");
-    assert!(!entity_def::bears(app.world(), beacon, scaffold));
-
-    utils::mark_as_site(app.world_mut(), beacon);
+    assert!(entity_def::bears(app.world(), beacon, scaffold));
     utils::run_ticks(&mut app, 1);
     assert!(entity_def::bears(app.world(), beacon, scaffold));
 
@@ -249,9 +244,8 @@ fn passive_held_unless_built_lasts_while_site() {
 #[test]
 fn site_keeps_passive_not_held_while_built() {
     let (mut app, _) = app();
-    let (seedling, _) = utils::create_owned(&mut app, "seedling", 5, 5, 0);
+    let (seedling, _) = utils::create_crewed_site(&mut app, "seedling", 5, 5, 0);
     let hardy = buff_id(&app, "hardy");
-    utils::mark_as_site(app.world_mut(), seedling);
     utils::run_ticks(&mut app, 1);
     assert!(entity_def::bears(app.world(), seedling, hardy));
 }
@@ -701,8 +695,7 @@ fn canceled_change_of_form_refits_origin_passives() {
 #[test]
 fn site_lapses_applied_while_buff() {
     let (mut app, on_fire) = app();
-    let (shed, _) = utils::create_owned(&mut app, "shed", 5, 5, 0);
-    utils::mark_as_site(app.world_mut(), shed);
+    let (shed, _) = utils::create_crewed_site(&mut app, "shed", 5, 5, 0);
 
     // Alight at full health: its requirement fails, and a site is refitted
     // for what lapses though it is fitted no passive.
@@ -919,6 +912,7 @@ fn app() -> (App, EntityBuffId) {
         registry.register(
             EntityTypeDef::new("shed")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_build(4, utils::site_initial(&[PoolId::HEALTH]))
                 .with_pool(Pool::health(100))
                 .with_dying(2, [])
                 .with_passives([on_fire]),
@@ -931,6 +925,7 @@ fn app() -> (App, EntityBuffId) {
                     FixedU64::from_num(100),
                     utils::fixed("0.5"),
                     FixedU64::ZERO,
+                    PoolInitial::Full,
                 ))
                 .with_pool(Pool::energy(40))
                 .with_dying(2, [])
@@ -995,6 +990,7 @@ fn app() -> (App, EntityBuffId) {
         registry.register(
             EntityTypeDef::new("seedling")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_build(4, utils::site_initial(&[PoolId::HEALTH, PoolId::ENERGY]))
                 .with_pool(Pool::health(100))
                 .with_stat(EntityStatId::ARMOR, FixedU64::ZERO)
                 .with_pool(Pool::energy(40))
@@ -1022,6 +1018,7 @@ fn app() -> (App, EntityBuffId) {
         registry.register(
             EntityTypeDef::new("beacon")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_build(4, utils::site_initial(&[PoolId::HEALTH]))
                 .with_pool(Pool::health(100))
                 .with_stat(EntityStatId::SIGHT_RANGE, FixedU64::ONE)
                 .with_dying(2, [])

@@ -11,7 +11,7 @@ use crate::{
     annex::{AloneConduct, AnnexLife},
     attack::{AttackDef, Delivery, Weapon},
     brood::BroodlingDef,
-    build::BuilderAttendance,
+    build::{BuilderAttendance, SitePool},
     cost::Cost,
     detection::Detection,
     entity_buffs::{EntityBuffDef, EntityBuffId, Lasting},
@@ -24,6 +24,7 @@ use crate::{
     morph::{MorphCourse, MorphPlacement, ViaInterrupted},
     player_buffs::{PlayerBuffDef, PlayerBuffId},
     player_stats::{PLAYER_BUILTIN_STATS, PlayerStatId},
+    pool::PoolInitial,
     pool_def::{POOL_BUILTINS, PoolDef, PoolId, PoolRole},
     pool_shift::PoolShift,
     projectile::{Aim, ProjectileDef, ProjectileId},
@@ -161,6 +162,7 @@ impl ContentRegistry {
         );
 
         self.check_pools(&def);
+        self.check_build(&def);
         self.validate_location(&def);
         self.validate_race(&def);
         self.validate_resource_kinds(&def);
@@ -421,6 +423,16 @@ impl ContentRegistry {
     /// registered.
     pub fn pool(&self, name: &str) -> Option<PoolId> {
         self.pools.get(name).copied()
+    }
+
+    /// The name `pool` is registered under. Panics when `pool` is not a
+    /// registered pool.
+    pub fn pool_name(&self, pool: PoolId) -> &str {
+        self.pools
+            .iter()
+            .find(|&(_, &id)| id == pool)
+            .map(|(name, _)| name.as_str())
+            .expect("a pool id names a registered pool")
     }
 
     /// The pool `stat` belongs to and the role it plays there, if it belongs
@@ -1491,7 +1503,7 @@ impl ContentRegistry {
             }
             match source.while_constructing() {
                 Emission::Full | Emission::Held(_) => assert!(
-                    def.build_time.is_some(),
+                    def.build.is_some(),
                     "entity type '{}' projects a field while constructing but is never constructed",
                     def.name
                 ),
@@ -2410,7 +2422,7 @@ impl ContentRegistry {
             );
             assert!(
                 def.production_time().is_some(),
-                "entity type '{}' has a repair_ratio but no build_time or train_time \
+                "entity type '{}' has a repair_ratio but no build or train_time \
                  to scale it against",
                 def.name
             );
@@ -3062,7 +3074,7 @@ impl ContentRegistry {
     fn validate_annex(&self, def: &EntityTypeDef) {
         let Some(annex) = def.annex else { return };
         assert!(
-            def.build_time.is_some(),
+            def.build.is_some(),
             "annex '{}' is not constructible",
             def.name
         );
@@ -3146,7 +3158,7 @@ impl ContentRegistry {
             def.name
         );
         assert!(
-            def.build_time.is_some(),
+            def.build.is_some(),
             "entity type '{}' overbuilds '{over}' but is not constructible",
             def.name
         );
@@ -3160,7 +3172,7 @@ impl ContentRegistry {
         for type_name in builder.builds() {
             let constructible = self
                 .entity(type_name)
-                .is_some_and(|built| built.build_time.is_some());
+                .is_some_and(|built| built.build.is_some());
             assert!(
                 constructible,
                 "entity type '{}' builds '{type_name}', which is not a registered constructible type",
@@ -3205,7 +3217,8 @@ impl ContentRegistry {
     }
 
     /// Checks each pool `def` declares: registered, given a maximum above 0,
-    /// and filling the stats its registration names.
+    /// filling the stats its registration names, and starting where its pool
+    /// can start.
     fn check_pools(&self, def: &EntityTypeDef) {
         for declaration in def.base_stats.pools() {
             let pool = declaration.id();
@@ -3235,6 +3248,56 @@ impl ContentRegistry {
                 "entity type '{}' declares the {name} pool over stats it does not name",
                 def.name
             );
+            declaration.validate_initial(
+                declaration.initial(),
+                &format!(
+                    "entity type '{}' starts the {name} pool's initial",
+                    def.name
+                ),
+            );
+        }
+    }
+
+    /// Checks how a site of `def` holds its pools: each pool the type
+    /// declares named and nothing else, a rising pool starting where the pool
+    /// can start and below its whole maximum, and health never withheld.
+    fn check_build(&self, def: &EntityTypeDef) {
+        let Some(build) = &def.build else {
+            return;
+        };
+        for (pool, _) in build.pools() {
+            assert!(
+                def.base_stats.pool(pool).is_some(),
+                "entity type '{}' says how a site holds a pool it does not declare",
+                def.name
+            );
+        }
+        for declaration in def.base_stats.pools() {
+            let name = self.pool_name(declaration.id());
+            match build.site(declaration.id()) {
+                None => panic!(
+                    "entity type '{}' does not say how a site holds the {name} pool",
+                    def.name
+                ),
+                Some(SitePool::Initial) => {}
+                Some(SitePool::Rising(start)) => {
+                    let start = PoolInitial::from(start);
+                    declaration.validate_initial(
+                        start,
+                        &format!("entity type '{}' starts the {name} pool's rise", def.name),
+                    );
+                    assert!(
+                        start.under(declaration.maximum()) < declaration.maximum(),
+                        "entity type '{}' rises the {name} pool from its whole maximum; let it start at its initial",
+                        def.name
+                    );
+                }
+                Some(SitePool::Withheld) if declaration.id() == PoolId::HEALTH => panic!(
+                    "entity type '{}' withholds the health pool on a site",
+                    def.name
+                ),
+                Some(SitePool::Withheld) => {}
+            }
         }
     }
 
@@ -3285,15 +3348,6 @@ impl ContentRegistry {
                     .join(", ")
             );
         }
-    }
-
-    /// The name `pool` is registered under.
-    fn pool_name(&self, pool: PoolId) -> &str {
-        self.pools
-            .iter()
-            .find(|&(_, &id)| id == pool)
-            .map(|(name, _)| name.as_str())
-            .expect("a pool id names a registered pool")
     }
 
     /// Checks that every pool is made of three registered stats, and that no

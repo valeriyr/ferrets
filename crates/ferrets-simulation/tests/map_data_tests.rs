@@ -123,6 +123,7 @@ fn placement_out_of_bounds_panics() {
         cell: (3, 9),
         owner: None,
         amount: None,
+        pools: Vec::new(),
     });
 }
 
@@ -136,5 +137,6 @@ fn placement_with_undeclared_owner_panics() {
         cell: (2, 2),
         owner: Some(1),
         amount: None,
+        pools: Vec::new(),
     });
 }

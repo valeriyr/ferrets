@@ -1,23 +1,77 @@
-//! The current value of each pool an entity has.
+//! The current value of each pool an entity has, and what it follows.
 
 use bevy_ecs::prelude::*;
-use ferrets_content::{pool_def::PoolId, registry::ContentRegistry};
+use ferrets_content::{pool::PoolInitial, pool_def::PoolId, registry::ContentRegistry};
 use ferrets_math::FixedU64;
 
 use crate::entity_def;
 
-/// The current value of each pool an entity has; every simulation entity
-/// carries one, empty when it has no pool.
+/// The current value of each pool an entity has, and what it follows; every
+/// simulation entity carries one, empty when it has no pool.
 #[derive(Component, Debug, Clone, Default)]
-pub struct PoolsComponent(Vec<(PoolId, FixedU64)>);
+pub struct PoolsComponent(Vec<PoolEntry>);
+
+/// One pool an entity has.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PoolEntry {
+    /// The pool.
+    pool: PoolId,
+    /// Its current value.
+    value: FixedU64,
+    /// What its value follows.
+    follows: Follows,
+}
+
+/// What a pool's value follows when its maximum or a site's work moves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Follows {
+    /// Its maximum, by the shift of each part that comes or goes.
+    Maximum,
+    /// A construction site's work, up to the fold after the site is built,
+    /// which settles the pool from the line it last stood at.
+    Work {
+        /// Where the work's line stood when last read.
+        line: FixedU64,
+    },
+}
+
+impl PoolEntry {
+    /// The pool.
+    #[inline]
+    pub fn pool(&self) -> PoolId {
+        self.pool
+    }
+
+    /// Its current value.
+    #[inline]
+    pub fn value(&self) -> FixedU64 {
+        self.value
+    }
+
+    /// What its value follows.
+    #[inline]
+    pub fn follows(&self) -> Follows {
+        self.follows
+    }
+}
 
 impl PoolsComponent {
     /// The current value of `pool`, if the entity has it.
     pub fn current(&self, pool: PoolId) -> Option<FixedU64> {
-        self.0
-            .iter()
-            .find(|(held, _)| *held == pool)
-            .map(|&(_, value)| value)
+        self.entry(pool).map(PoolEntry::value)
+    }
+
+    /// What `pool`'s value follows, if the entity has it.
+    pub fn follows(&self, pool: PoolId) -> Option<Follows> {
+        self.entry(pool).map(PoolEntry::follows)
+    }
+
+    /// Whether some pool of the entity follows a site's work.
+    pub fn follows_work(&self) -> bool {
+        self.0.iter().any(|entry| match entry.follows {
+            Follows::Work { .. } => true,
+            Follows::Maximum => false,
+        })
     }
 
     /// Whether the entity has `pool`.
@@ -31,9 +85,9 @@ impl PoolsComponent {
             .is_some_and(|value| value == FixedU64::ZERO)
     }
 
-    /// Each pool the entity has, with its current value.
-    pub fn iter(&self) -> impl Iterator<Item = (PoolId, FixedU64)> + '_ {
-        self.0.iter().copied()
+    /// Each pool the entity has.
+    pub fn iter(&self) -> impl Iterator<Item = &PoolEntry> + '_ {
+        self.0.iter()
     }
 
     /// Whether the entity has no pool at all.
@@ -41,45 +95,66 @@ impl PoolsComponent {
         self.0.is_empty()
     }
 
-    /// Sets `pool` to `value`, giving the entity the pool if it had none.
+    /// The entry of `pool`, if the entity has it.
+    fn entry(&self, pool: PoolId) -> Option<&PoolEntry> {
+        self.0.iter().find(|entry| entry.pool == pool)
+    }
+
+    /// Gives the entity `pool` at `value`, following `follows`. Panics when
+    /// the entity already has `pool`.
+    fn insert(&mut self, pool: PoolId, value: FixedU64, follows: Follows) {
+        assert!(
+            self.entry(pool).is_none(),
+            "a pool inserted is one the entity lacks: {pool:?}"
+        );
+        self.0.push(PoolEntry {
+            pool,
+            value,
+            follows,
+        });
+    }
+
+    /// Sets `pool` to `value`. Panics when the entity does not have `pool`.
     fn set(&mut self, pool: PoolId, value: FixedU64) {
-        match self.0.iter_mut().find(|(held, _)| *held == pool) {
-            Some((_, held)) => *held = value,
-            None => self.0.push((pool, value)),
-        }
+        self.held(pool).value = value;
+    }
+
+    /// Sets what `pool`'s value follows. Panics when the entity does not have
+    /// `pool`.
+    fn follow(&mut self, pool: PoolId, follows: Follows) {
+        self.held(pool).follows = follows;
     }
 
     /// Takes `pool` off the entity.
     fn remove(&mut self, pool: PoolId) {
-        self.0.retain(|&(held, _)| held != pool);
+        self.0.retain(|entry| entry.pool != pool);
     }
 
     /// Lowers `pool` by `amount`, to no lower than empty. Panics when the
     /// entity does not have `pool`.
     fn drain(&mut self, pool: PoolId, amount: FixedU64) {
-        let value = self.held(pool);
-        *value = value.saturating_sub(amount);
+        let entry = self.held(pool);
+        entry.value = entry.value.saturating_sub(amount);
     }
 
     /// Takes `cost` out of `pool` if it holds that much. Panics when the
     /// entity does not have `pool`.
     fn spend(&mut self, pool: PoolId, cost: FixedU64) -> Spending {
-        let value = self.held(pool);
-        if *value >= cost {
-            *value -= cost;
+        let entry = self.held(pool);
+        if entry.value >= cost {
+            entry.value -= cost;
             Spending::Paid
         } else {
             Spending::Short
         }
     }
 
-    /// The value `pool` holds, to change in place. Panics when the entity does
+    /// The entry of `pool`, to change in place. Panics when the entity does
     /// not have `pool`.
-    fn held(&mut self, pool: PoolId) -> &mut FixedU64 {
+    fn held(&mut self, pool: PoolId) -> &mut PoolEntry {
         self.0
             .iter_mut()
-            .find(|(held, _)| *held == pool)
-            .map(|(_, value)| value)
+            .find(|entry| entry.pool == pool)
             .unwrap_or_else(|| panic!("a pool changed is one the entity has: {pool:?}"))
     }
 }
@@ -99,12 +174,89 @@ pub fn displayed_energy(value: FixedU64) -> u32 {
     value.to_num::<u32>()
 }
 
-/// Fills `entity`'s `pool` to its effective maximum, giving the entity the
-/// pool if it had none. Panics when the entity carries no maximum for the
-/// pool.
-pub fn fill(world: &mut World, entity: Entity, pool: PoolId) {
-    let value = maximum(world, world.resource::<ContentRegistry>(), entity, pool);
+/// Gives `entity` the `pool`, started at `initial` against its effective
+/// maximum and following that maximum. Panics when the entity already has
+/// the pool or carries no maximum for it.
+pub fn seed(world: &mut World, entity: Entity, pool: PoolId, initial: PoolInitial) {
+    let value = start(world, entity, pool, initial);
+    pools_of(world, entity).insert(pool, value, Follows::Maximum);
+}
+
+/// Gives `entity` the `pool`, started at `initial` against its effective
+/// maximum and following a site's work from there, its line standing at that
+/// start. Panics when the entity already has the pool or carries no maximum
+/// for it.
+pub fn seed_rising(world: &mut World, entity: Entity, pool: PoolId, initial: PoolInitial) {
+    let line = start(world, entity, pool, initial);
+    pools_of(world, entity).insert(pool, line, Follows::Work { line });
+}
+
+/// Starts `entity`'s `pool`, which follows its maximum, at `initial` against
+/// that maximum again. Panics when the pool does not follow its maximum.
+pub fn reseed(world: &mut World, entity: Entity, pool: PoolId, initial: PoolInitial) {
+    match follows(world, entity, pool) {
+        Some(Follows::Maximum) => {}
+        Some(Follows::Work { .. }) | None => {
+            panic!("reseed is given a pool following its maximum: {pool:?}")
+        }
+    }
+    let value = start(world, entity, pool, initial);
     pools_of(world, entity).set(pool, value);
+}
+
+/// Starts `entity`'s `pool`, which follows a site's work, at `initial`
+/// against its effective maximum again, its line with it. Panics when the
+/// pool does not follow work.
+pub fn reseed_rising(world: &mut World, entity: Entity, pool: PoolId, initial: PoolInitial) {
+    match follows(world, entity, pool) {
+        Some(Follows::Work { .. }) => {}
+        Some(Follows::Maximum) | None => {
+            panic!("reseed_rising is given a pool following work: {pool:?}")
+        }
+    }
+    let line = start(world, entity, pool, initial);
+    let mut pools = pools_of(world, entity);
+    pools.set(pool, line);
+    pools.follow(pool, Follows::Work { line });
+}
+
+/// Sets `entity`'s `pool`, which follows a site's work, to `value`, its line
+/// now standing at `line`. Panics when the pool does not follow work, or
+/// `value` is above its effective maximum.
+pub fn step_with_work(
+    world: &mut World,
+    registry: &ContentRegistry,
+    entity: Entity,
+    pool: PoolId,
+    value: FixedU64,
+    line: FixedU64,
+) {
+    match follows(world, entity, pool) {
+        Some(Follows::Work { .. }) => {}
+        Some(Follows::Maximum) | None => {
+            panic!("step_with_work is given a pool following work: {pool:?}")
+        }
+    }
+    let maximum = maximum(world, registry, entity, pool);
+    assert!(
+        value <= maximum,
+        "a pool holds no more than its maximum: {pool:?} {value} > {maximum}"
+    );
+    let mut pools = pools_of(world, entity);
+    pools.set(pool, value);
+    pools.follow(pool, Follows::Work { line });
+}
+
+/// Puts `entity`'s `pool`, which follows a site's work, back to following
+/// its maximum. Panics when the pool does not follow work.
+pub fn follow_maximum(world: &mut World, entity: Entity, pool: PoolId) {
+    let mut pools = pools_of(world, entity);
+    match pools.follows(pool) {
+        Some(Follows::Work { .. }) => pools.follow(pool, Follows::Maximum),
+        Some(Follows::Maximum) | None => {
+            panic!("follow_maximum is given a pool following work: {pool:?}")
+        }
+    }
 }
 
 /// Lowers `entity`'s `pool` by `amount`, to no lower than empty. Panics when
@@ -164,10 +316,9 @@ pub fn flow(
     *value
 }
 
-/// Sets `entity`'s `pool` to `value`, the fold's write of a pool following
-/// its maximum. Panics when the entity does not have the pool, or `value`
-/// is above its effective maximum.
-pub fn follow(
+/// Sets `entity`'s `pool` to `value`. Panics when the entity does not have
+/// the pool, or `value` is above its effective maximum.
+pub fn follow_pool(
     world: &mut World,
     registry: &ContentRegistry,
     entity: Entity,
@@ -210,5 +361,24 @@ fn pools_of(world: &mut World, entity: Entity) -> Mut<'_, PoolsComponent> {
 /// The value `entity`'s `pool` holds, to change in place. Panics when the
 /// entity does not have the pool.
 fn held(world: &mut World, entity: Entity, pool: PoolId) -> Mut<'_, FixedU64> {
-    pools_of(world, entity).map_unchanged(|pools| pools.held(pool))
+    pools_of(world, entity).map_unchanged(|pools| &mut pools.held(pool).value)
+}
+
+/// What `initial` comes to under `entity`'s effective maximum of `pool`.
+/// Panics when the entity carries no maximum for the pool.
+fn start(world: &World, entity: Entity, pool: PoolId, initial: PoolInitial) -> FixedU64 {
+    initial.under(maximum(
+        world,
+        world.resource::<ContentRegistry>(),
+        entity,
+        pool,
+    ))
+}
+
+/// What `entity`'s `pool` follows, if the entity has it.
+fn follows(world: &World, entity: Entity, pool: PoolId) -> Option<Follows> {
+    world
+        .get::<PoolsComponent>(entity)
+        .expect("a simulation entity carries a pool store")
+        .follows(pool)
 }

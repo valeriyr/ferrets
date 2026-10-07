@@ -10,9 +10,21 @@ use bevy::prelude::*;
 use ferrets_bevy_plugin::{
     ScenarioObjectives, install_scenario_runtime, instantiate_map, instantiate_scenario,
 };
-use ferrets_geometry::{cell_pos::CellPos, projection::Projection};
+use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize, projection::Projection};
 
-use ferrets_content::registry::ContentRegistry;
+use ferrets_content::{
+    entity_buffs::{EntityBuffDef, Lasting},
+    entity_effect::EntityEffect,
+    entity_modifiers::EntityModifiers,
+    entity_stats::EntityStatId,
+    entity_type_def::EntityTypeDef,
+    location::Solidity,
+    pool::{Pool, PoolInitial},
+    pool_shift::PoolShift,
+    registry::ContentRegistry,
+    requirement::{Bound, Requirement, Threshold},
+    stack_rule::StackRule,
+};
 use ferrets_script::{
     ai::view::content::ContentView,
     engine::{ScriptEngine, lua::LuaEngine},
@@ -186,6 +198,7 @@ fn placement_on_occupied_cell_is_skipped() {
         cell: (2, 2),
         owner: Some(0),
         amount: None,
+        pools: Vec::new(),
     });
 
     instantiate_scenario(app.world_mut(), &scenario);
@@ -216,6 +229,7 @@ fn placements_of_unoccupied_slots_are_skipped() {
         cell: (12, 12),
         owner: Some(1),
         amount: None,
+        pools: Vec::new(),
     });
 
     instantiate_map(app.world_mut(), &data);
@@ -227,6 +241,79 @@ fn placements_of_unoccupied_slots_are_skipped() {
         .filter(|info| info.type_name() == "barracks")
         .count();
     assert_eq!(barracks, 1, "only the occupied slot's barracks spawns");
+}
+
+#[test]
+fn placement_starts_named_pool_where_it_says() {
+    let mut app = utils::make_app(vec![PlayerSlot::occupied(0, PlayerType::Human, None, None)]);
+    utils::register_orders_content(&mut app);
+    let mut data = scene_map();
+    data.add_player_slot((10, 10));
+    data.add_placement(Placement {
+        type_name: "depot".to_string(),
+        cell: (14, 14),
+        owner: Some(0),
+        amount: None,
+        pools: vec![(
+            "health".to_string(),
+            PoolInitial::Share(utils::fixed("0.5")),
+        )],
+    });
+
+    instantiate_map(app.world_mut(), &data);
+
+    // Half of the depot's 100, where its type would start it full.
+    let depot = utils::single_owned_of_type(app.world_mut(), "depot", 0);
+    assert_eq!(utils::health_as_u32(&app, depot), 50);
+}
+
+#[test]
+fn placement_starts_pool_under_passives_it_wakes() {
+    let mut app = utils::make_app(vec![PlayerSlot::occupied(0, PlayerType::Human, None, None)]);
+    utils::register_orders_content(&mut app);
+    {
+        let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
+        // Under 60% of its health, an outpost's maximum is 100 higher.
+        let rallied = registry.register_entity_buff(
+            "rallied",
+            EntityBuffDef {
+                effects: vec![EntityEffect::Modifiers(EntityModifiers::PoolMaximums {
+                    modifiers: vec![utils::flat(EntityStatId::MAX_HEALTH, "100")],
+                    pool_shift: PoolShift::Clamp,
+                })],
+                lasting: Lasting::While(Requirement::Health(Bound::Share(Threshold::Under(
+                    utils::fixed("0.6"),
+                )))),
+                stack_rule: StackRule::Ignore,
+                interrupted_by: Vec::new(),
+            },
+        );
+        registry.register(
+            EntityTypeDef::new("outpost")
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_pool(Pool::health(100))
+                .with_passives([rallied]),
+        );
+    }
+    let mut data = scene_map();
+    data.add_placement(Placement {
+        type_name: "outpost".to_string(),
+        cell: (14, 14),
+        owner: Some(0),
+        amount: None,
+        pools: vec![(
+            "health".to_string(),
+            PoolInitial::Share(utils::fixed("0.5")),
+        )],
+    });
+
+    instantiate_map(app.world_mut(), &data);
+    utils::run_ticks(&mut app, 1);
+
+    // Half wakes `rallied`, and the half is taken again of what it leaves:
+    // (100 + 100) × 0.5 = 100, as the same initial on the type would start.
+    let outpost = utils::single_owned_of_type(app.world_mut(), "outpost", 0);
+    assert_eq!(utils::health_as_u32(&app, outpost), 100);
 }
 
 //
@@ -285,12 +372,14 @@ fn scene_map() -> MapData {
         cell: (2, 2),
         owner: Some(0),
         amount: None,
+        pools: Vec::new(),
     });
     data.add_placement(Placement {
         type_name: "mine".to_string(),
         cell: (8, 8),
         owner: None,
         amount: Some(500),
+        pools: Vec::new(),
     });
     data
 }

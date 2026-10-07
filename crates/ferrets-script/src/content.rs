@@ -284,6 +284,7 @@ pub(crate) fn pool_carry(value: &str) -> crate::Result<PoolCarry> {
             ("difference", PoolCarry::Shift(PoolShift::Difference)),
             ("clamp", PoolCarry::Shift(PoolShift::Clamp)),
             ("full", PoolCarry::Full),
+            ("initial", PoolCarry::Initial),
         ],
     )
 }
@@ -308,6 +309,7 @@ pub(crate) fn revert_carry(value: &str) -> crate::Result<RevertCarry> {
                 RevertCarry::Carry(PoolCarry::Shift(PoolShift::Clamp)),
             ),
             ("full", RevertCarry::Carry(PoolCarry::Full)),
+            ("initial", RevertCarry::Carry(PoolCarry::Initial)),
         ],
     )
 }

@@ -1,11 +1,10 @@
 //! Bevy wiring for building a described map into a world.
 
 use bevy::prelude::*;
-use ferrets_content::registry::ContentRegistry;
+use ferrets_content::{pool::PoolInitial, pool_def::PoolId, registry::ContentRegistry};
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_simulation::{
     components::resource::ResourceSourceComponent,
-    events::SpawnCause,
     fields::FieldGrid,
     map::Map,
     map_data::MapData,
@@ -43,13 +42,24 @@ pub fn instantiate_map(world: &mut World, data: &MapData) {
         }
         let (x, y) = placement.cell;
         let position = FixedUVec2::new(FixedU64::from_num(x), FixedU64::from_num(y));
-        let Some((entity, _)) = spawn::spawn_entity(
+        let starts: Vec<(PoolId, PoolInitial)> = placement
+            .pools
+            .iter()
+            .map(|(name, initial)| {
+                let pool = world
+                    .resource::<ContentRegistry>()
+                    .pool(name)
+                    .expect("the map checked each pool a placement names");
+                (pool, *initial)
+            })
+            .collect();
+        let Some((entity, _)) = spawn::spawn_placed(
             world,
             &placement.type_name,
             position,
             placement.owner,
-            SpawnCause::Placed,
             FieldReach::Full,
+            &starts,
         ) else {
             eprintln!(
                 "map cell ({x},{y}) cannot host '{}'; placement skipped",

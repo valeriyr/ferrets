@@ -360,6 +360,14 @@ pub fn has_pool(world: &World, entity: Entity, pool: PoolId) -> bool {
     pool_value(world, entity, pool).is_some()
 }
 
+/// Whether some pool of `entity` follows a site's work.
+pub fn follows_work(world: &World, entity: Entity) -> bool {
+    world
+        .get::<PoolsComponent>(entity)
+        .expect("a simulation entity carries a pool store")
+        .follows_work()
+}
+
 /// The whole-number value of one of `entity`'s stats.
 ///
 /// Panics if `entity` is not a simulation entity, or carries no such stat —

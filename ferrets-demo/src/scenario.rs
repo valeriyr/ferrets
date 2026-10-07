@@ -207,5 +207,6 @@ fn place(
         cell,
         owner,
         amount,
+        pools: Vec::new(),
     }
 }

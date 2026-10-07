@@ -78,6 +78,28 @@ fn annex_rises_on_its_primarys_dock_and_docks_when_it_stands() {
 }
 
 #[test]
+fn annex_site_rises_with_its_work() {
+    let mut app = utils::annex_app();
+    let (_, keep_id) = utils::create_owned(&mut app, "keep", 10, 10, 0);
+    utils::grant_gold(&mut app, 10);
+    order_annex(&mut app, keep_id, "lookout", 12, 10);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    let lookout = utils::single_owned_of_type(app.world_mut(), "lookout", 0);
+    // Founded at a quarter of 40, with its first tick of work in:
+    // 10 + (40 − 10) / 4 = 17.5.
+    assert_eq!(utils::health(&app, lookout), utils::fixed("17.5"));
+
+    // Four ticks of build time, and the line reaches the whole 40.
+    utils::run_ticks(&mut app, 5);
+    assert!(
+        app.world()
+            .get::<UnderConstructionComponent>(lookout)
+            .is_none()
+    );
+    assert_eq!(utils::health_as_u32(&app, lookout), 40);
+}
+
+#[test]
 fn primary_holds_one_annex_in_each_of_its_docks() {
     let mut app = utils::annex_app();
     let (keep, keep_id) = utils::create_owned(&mut app, "keep", 10, 10, 0);

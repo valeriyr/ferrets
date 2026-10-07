@@ -47,6 +47,8 @@ pub enum PoolCarry {
     Shift(PoolShift),
     /// Each pool comes out full.
     Full,
+    /// Each pool starts at the initial the form it comes into declares.
+    Initial,
 }
 
 /// How a change that reverts out of its interim form fills the origin's

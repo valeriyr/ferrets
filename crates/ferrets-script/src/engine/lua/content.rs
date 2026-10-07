@@ -9,7 +9,7 @@ use ferrets_content::{
     attack::{Delivery, Slain, Weapon},
     berths::BerthGroup,
     brood::{Lingering, OrphanFate},
-    build::BuilderAttendance,
+    build::{BuilderAttendance, RiseStart, SitePool},
     cost::Cost,
     detection::Detection,
     dying::{Bequest, LeftBy},
@@ -25,7 +25,7 @@ use ferrets_content::{
     kinds::{Kind, Kinds},
     morph::{MorphCourse, MorphInterrupted, MorphReason, MorphTransition, ViaInterrupted},
     player_buffs::PlayerBuffDef,
-    pool::Pool,
+    pool::{Pool, PoolInitial},
     pool_def::PoolId,
     price::Price,
     projectile::ProjectileDef,
@@ -287,8 +287,9 @@ fn build_entity(
     if let Some(train_time) = optional::<u32>(table, "train_time")? {
         def = def.with_train_time(train_time);
     }
-    if let Some(build_time) = optional::<u32>(table, "build_time")? {
-        def = def.with_build_time(build_time);
+    if let Some(build) = optional::<Table>(table, "build")? {
+        let (time, pools) = parse_build(&build, registry)?;
+        def = def.with_build(time, pools);
     }
     if let Some(trainer) = optional::<Vec<String>>(table, "trainer")? {
         def = def.with_trainer(trainer);
@@ -772,9 +773,10 @@ fn parse_stats(
     Ok(out)
 }
 
-/// Reads the `pools = { name = { maximum = ..., regen? = ..., drain? = ... } }`
-/// table: each key is a registered pool's name, each value its maximum and
-/// rates, an unnamed rate at zero. An unknown name is rejected.
+/// Reads the `pools = { name = { maximum = ..., regen? = ..., drain? = ...,
+/// initial? = ... } }` table: each key is a registered pool's name, each
+/// value its maximum and rates, an unnamed rate at zero, and where it starts
+/// (see [`parse_initial`]; unsaid, full). An unknown name is rejected.
 fn parse_pools(pools: &Table, registry: &ContentRegistry) -> crate::Result<Vec<Pool>> {
     let mut out = Vec::new();
     for pair in pools.pairs::<String, Table>() {
@@ -788,6 +790,10 @@ fn parse_pools(pools: &Table, registry: &ContentRegistry) -> crate::Result<Vec<P
                 None => Ok(FixedU64::ZERO),
             }
         };
+        let initial = match optional::<Value>(&declaration, "initial")? {
+            Some(value) => parse_initial(&format!("pool '{name}' initial"), &value)?,
+            None => PoolInitial::Full,
+        };
         out.push(Pool::new(
             pool,
             *registry.pool_def(pool),
@@ -797,9 +803,69 @@ fn parse_pools(pools: &Table, registry: &ContentRegistry) -> crate::Result<Vec<P
             )?,
             rate("regen")?,
             rate("drain")?,
+            initial,
         ));
     }
     Ok(out)
+}
+
+/// Reads `build = { time = ..., pools = { name = site } }`: the ticks of
+/// work a site takes, and how it holds each named pool — `"initial"`,
+/// `"withheld"`, or `{ rises_from = ... }` for a pool rising with the work
+/// (see [`parse_rise_start`]). An unknown pool name is rejected.
+fn parse_build(
+    build: &Table,
+    registry: &ContentRegistry,
+) -> crate::Result<(u32, Vec<(PoolId, SitePool)>)> {
+    let mut pools = Vec::new();
+    for pair in required::<Table>(build, "pools")?.pairs::<String, Value>() {
+        let (name, value) = pair.map_err(|error| field_error("build pools", error))?;
+        let pool = registry
+            .pool(&name)
+            .ok_or_else(|| ScriptError::ContentError(format!("pool '{name}' is not defined")))?;
+        let site = keyword_or_table(
+            &format!("build pool '{name}'"),
+            &value,
+            &[
+                ("initial", SitePool::Initial),
+                ("withheld", SitePool::Withheld),
+            ],
+            &["a { rises_from = ... } table"],
+            |site| {
+                Ok(SitePool::Rising(parse_rise_start(
+                    &format!("build pool '{name}' rises_from"),
+                    &required::<Value>(site, "rises_from")?,
+                )?))
+            },
+        )?;
+        pools.push((pool, site));
+    }
+    Ok((required::<u32>(build, "time")?, pools))
+}
+
+/// Reads where a pool a site raises starts: `{ share = "0.1" }`, or an
+/// amount — a non-negative integer or a decimal string.
+fn parse_rise_start(what: &str, value: &Value) -> crate::Result<RiseStart> {
+    match value {
+        Value::Table(table) => Ok(RiseStart::Share(fixed_value(
+            &format!("{what} share"),
+            &required::<Value>(table, "share")?,
+        )?)),
+        other => Ok(RiseStart::Amount(fixed_value(what, other)?)),
+    }
+}
+
+/// Reads where a pool starts: `"full"`, `{ share = "0.25" }`, or an amount —
+/// a non-negative integer or a decimal string.
+fn parse_initial(what: &str, value: &Value) -> crate::Result<PoolInitial> {
+    match value {
+        Value::String(text) if text.to_string_lossy() == "full" => Ok(PoolInitial::Full),
+        Value::Table(table) => Ok(PoolInitial::Share(fixed_value(
+            &format!("{what} share"),
+            &required::<Value>(table, "share")?,
+        )?)),
+        other => Ok(PoolInitial::Amount(fixed_value(what, other)?)),
+    }
 }
 
 /// Reads one stat value: a non-negative integer, or a decimal string for a
@@ -1289,7 +1355,7 @@ fn parse_quantity(
 /// shaped like a skill cost,
 /// an optional `requires` list, and an optional `land_pool_carry` table naming,
 /// for each pool it carries, how the landing fills it — `"share"`,
-/// `"difference"`, `"clamp"` or `"full"`.
+/// `"difference"`, `"clamp"`, `"full"` or `"initial"`.
 fn parse_morphs(
     morphs: Vec<Table>,
     registry: &ContentRegistry,

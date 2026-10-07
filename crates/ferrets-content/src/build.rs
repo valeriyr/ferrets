@@ -1,6 +1,14 @@
-//! Content-defined construction-catalogue property struct.
+//! Content-defined construction.
 
-use crate::work::{CrewLimit, Crewing, WorkPresence};
+use std::collections::BTreeMap;
+
+use ferrets_math::FixedU64;
+
+use crate::{
+    pool::PoolInitial,
+    pool_def::PoolId,
+    work::{CrewLimit, Crewing, WorkPresence},
+};
 
 /// How a builder relates to a site it raises.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -86,5 +94,77 @@ impl BuilderDef {
     #[inline]
     pub fn attendance(&self) -> &BuilderAttendance {
         &self.attendance
+    }
+}
+
+/// Where a pool a construction site raises starts, below its maximum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RiseStart {
+    /// This share of the maximum, from 0 to below 1.
+    Share(FixedU64),
+    /// This amount, below the maximum.
+    Amount(FixedU64),
+}
+
+impl From<RiseStart> for PoolInitial {
+    fn from(start: RiseStart) -> Self {
+        match start {
+            RiseStart::Share(share) => PoolInitial::Share(share),
+            RiseStart::Amount(amount) => PoolInitial::Amount(amount),
+        }
+    }
+}
+
+/// How a construction site holds a pool while it is built.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SitePool {
+    /// From this start up to the maximum, in step with the work.
+    Rising(RiseStart),
+    /// From the pool's own initial, as on any entity.
+    Initial,
+    /// Not at all: the finished building gains it at its initial.
+    Withheld,
+}
+
+/// How an entity type is built.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BuildDef {
+    /// Ticks of work a site takes.
+    time: u32,
+    /// How a site holds each pool the type declares.
+    pools: BTreeMap<PoolId, SitePool>,
+}
+
+impl BuildDef {
+    /// Creates a new `BuildDef` with the given data.
+    ///
+    /// Panics if `time` is `0` or `pools` names a pool twice.
+    pub fn new(time: u32, pools: impl IntoIterator<Item = (PoolId, SitePool)>) -> Self {
+        assert!(time > 0, "build time must be greater than 0");
+        let mut sites = BTreeMap::new();
+        for (pool, site) in pools {
+            assert!(
+                sites.insert(pool, site).is_none(),
+                "a build names each pool once: {pool:?}"
+            );
+        }
+        Self { time, pools: sites }
+    }
+
+    /// Ticks of work a site takes.
+    #[inline]
+    pub fn time(&self) -> u32 {
+        self.time
+    }
+
+    /// How a site holds each pool the type declares.
+    #[inline]
+    pub fn pools(&self) -> impl Iterator<Item = (PoolId, SitePool)> + '_ {
+        self.pools.iter().map(|(pool, site)| (*pool, *site))
+    }
+
+    /// How a site holds `pool`, if this names it.
+    pub fn site(&self, pool: PoolId) -> Option<SitePool> {
+        self.pools.get(&pool).copied()
     }
 }

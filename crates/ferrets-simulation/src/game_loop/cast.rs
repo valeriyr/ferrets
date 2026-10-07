@@ -43,7 +43,7 @@ use crate::{
         owner, pools,
     },
     entity_def,
-    events::{EventRecord, SimulationEvent, SpawnCause, SpendCause},
+    events::{EventRecord, SimulationEvent, SpendCause},
     game_loop::fields,
     map::Map,
     order::Order,
@@ -588,24 +588,30 @@ fn perform(
                 .clone();
             // What comes out of a body remembers the body it came from; what is
             // called up out of nothing names only its caster.
-            let cause = match from_remains {
-                Some(from) => SpawnCause::Raised {
-                    by: caster_id,
-                    from,
-                },
-                None => SpawnCause::Summoned { by: caster_id },
-            };
             for cell in cells {
-                spawn::spawn_entity(
-                    world,
-                    &type_name,
-                    FixedUVec2::from(cell),
-                    Some(player),
-                    cause,
-                    // What a cast calls up is as new as anything trained: its
-                    // field sources start at their initial reach.
-                    FieldReach::Initial,
-                );
+                let position = FixedUVec2::from(cell);
+                // What a cast calls up is as new as anything trained: its
+                // field sources start at their initial reach.
+                let reach = FieldReach::Initial;
+                match from_remains {
+                    Some(from) => spawn::spawn_raised(
+                        world,
+                        &type_name,
+                        position,
+                        Some(player),
+                        reach,
+                        caster_id,
+                        from,
+                    ),
+                    None => spawn::spawn_summoned(
+                        world,
+                        &type_name,
+                        position,
+                        Some(player),
+                        reach,
+                        caster_id,
+                    ),
+                };
             }
         }
         CastPlan::Act => apply_effect(world, player, caster, aim, effect),

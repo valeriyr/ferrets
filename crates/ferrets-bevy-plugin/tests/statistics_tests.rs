@@ -18,6 +18,7 @@ use ferrets_content::{
     kinds::Kinds,
     location::Solidity,
     pool::Pool,
+    pool_def::PoolId,
     repair::{RepairCost, RepairRate},
     skills::{Casting, EntityCastEffect, EntityCastTarget, Reach, SkillCaster, SkillDef},
     work::{CrewLimit, WorkPresence},
@@ -35,7 +36,7 @@ use ferrets_simulation::{
     resources::PlayerResources,
     session::{GameSession, player_slot::PlayerSlot, player_type::PlayerType},
     simulation_id::SimulationId,
-    spawn,
+    spawn::{self, FieldReach},
     statistics::Statistics,
 };
 
@@ -47,12 +48,13 @@ use ferrets_simulation::{
 fn placing_entity_announces_spawn() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
-    let (_, soldier) = utils::spawn_entity(
+    let (_, soldier) = spawn::spawn_placed(
         world,
         "soldier",
         utils::pos(4, 4),
         Some(0),
-        SpawnCause::Placed,
+        FieldReach::Initial,
+        &[],
     )
     .unwrap();
 
@@ -96,12 +98,13 @@ fn destroying_entity_announces_death_with_its_cause() {
 #[test]
 fn record_holds_only_current_tick() {
     let mut app = utils::orders_app();
-    utils::spawn_entity(
+    spawn::spawn_placed(
         app.world_mut(),
         "soldier",
         utils::pos(4, 4),
         Some(0),
-        SpawnCause::Placed,
+        FieldReach::Initial,
+        &[],
     )
     .unwrap();
     assert!(
@@ -153,12 +156,13 @@ fn placed_entity_does_not_count_toward_production() {
     let mut app = utils::orders_app();
     // Announced deliberately: a silent fixture would make this pass without the
     // tally ever having to decide anything.
-    utils::spawn_entity(
+    spawn::spawn_placed(
         app.world_mut(),
         "soldier",
         utils::pos(4, 4),
         Some(0),
-        SpawnCause::Placed,
+        FieldReach::Initial,
+        &[],
     )
     .unwrap();
     utils::run_ticks(&mut app, 1);
@@ -180,12 +184,13 @@ fn entity_killed_same_tick_still_counts_as_produced() {
     let world = app.world_mut();
     let (_, trainer) =
         utils::create_entity(world, "barracks", utils::pos(10, 10), Some(0)).unwrap();
-    let (entity, _) = utils::spawn_entity(
+    let (entity, _) = spawn::spawn_trained(
         world,
         "soldier",
         utils::pos(4, 4),
         Some(0),
-        SpawnCause::Trained { trainer },
+        FieldReach::Initial,
+        trainer,
     )
     .unwrap();
     let (_, killer) = utils::create_entity(world, "soldier", utils::pos(6, 4), Some(1)).unwrap();
@@ -1133,7 +1138,7 @@ fn repair_app() -> App {
                 .with_location(utils::GROUND, CellSize::new(2, 2), Solidity::Solid)
                 .with_pool(Pool::health(100))
                 .with_price([("gold", 50)])
-                .with_build_time(10)
+                .with_build(10, utils::site_initial(&[PoolId::HEALTH]))
                 .with_tags(["building"]),
         );
         registry.register(

@@ -13,7 +13,7 @@ use ferrets_content::{
     attack::{AttackDef, Delivery, Slain, Weapon},
     berths::BerthGroup,
     brood::{Lingering, OrphanFate},
-    build::BuilderAttendance,
+    build::{BuilderAttendance, RiseStart, SitePool},
     cost::Cost,
     dying::{Bequest, LeftBy},
     entity_buffs::{EntityBuffDef, EntityBuffId, Lasting},
@@ -29,9 +29,8 @@ use ferrets_content::{
         PoolCarry, RevertCarry, ViaInterrupted,
     },
     player_buffs::PlayerBuffDef,
-    pool::Pool,
-    pool_def::PoolId,
-    pool_def::PoolRole,
+    pool::{Pool, PoolInitial},
+    pool_def::{PoolId, PoolRole},
     pool_shift::PoolShift,
     price,
     projectile::{Aim, ProjectileDef},
@@ -74,7 +73,7 @@ use ferrets_replay::{
 use ferrets_simulation::{
     command::{PlayerCommand, SelectMode, SkillCasterRef, SkillTarget},
     components::{
-        build::{self, SiteWork},
+        build::{SiteWork, UnderConstructionComponent},
         entity_info::EntityInfoComponent,
         entity_stats::StatsComponent,
         hidden::HiddenComponent,
@@ -88,7 +87,7 @@ use ferrets_simulation::{
         turret::TurretsComponent,
     },
     entity_def,
-    events::{DeathCause, EventRecord, SimulationEvent, SpawnCause},
+    events::{DeathCause, EventRecord, SimulationEvent},
     fields::FieldGrid,
     game_loop::buffs::{self, Bearing},
     input::{InputFrames, PlayerFrame},
@@ -105,7 +104,7 @@ use ferrets_simulation::{
     },
     simulation_id::SimulationId,
     skirmish::Skirmish,
-    spawn::{self, FieldReach},
+    spawn::{self, Arrival, FieldReach},
     visibility::{self, Senses, Sighting},
 };
 
@@ -260,6 +259,14 @@ pub fn fixed(text: &str) -> FixedU64 {
     FixedU64::from_str(text).unwrap_or_else(|_| panic!("'{text}' is a value"))
 }
 
+/// Each of `pools` held on a site from its own initial.
+pub fn site_initial(pools: &[PoolId]) -> Vec<(PoolId, SitePool)> {
+    pools
+        .iter()
+        .map(|pool| (*pool, SitePool::Initial))
+        .collect()
+}
+
 /// A signed fixed-point value parsed from decimal digits.
 pub fn signed_fixed(text: &str) -> FixedI64 {
     FixedI64::from_str(text).unwrap_or_else(|_| panic!("'{text}' is a signed value"))
@@ -309,24 +316,13 @@ pub fn create_entity(
     position: FixedUVec2,
     owner: Option<PlayerId>,
 ) -> Option<(Entity, SimulationId)> {
-    spawn::create_entity(world, type_name, position, owner, FieldReach::Initial)
-}
-
-/// Like [`create_entity`], announcing the spawn with `cause`.
-pub fn spawn_entity(
-    world: &mut World,
-    type_name: &str,
-    position: FixedUVec2,
-    owner: Option<PlayerId>,
-    cause: ferrets_simulation::events::SpawnCause,
-) -> Option<(Entity, SimulationId)> {
-    spawn::spawn_entity(
+    spawn::create_entity(
         world,
         type_name,
         position,
         owner,
-        cause,
         FieldReach::Initial,
+        Arrival::Standing { starts: &[] },
     )
 }
 
@@ -361,8 +357,69 @@ pub fn create_owned(
         pos(x, y),
         Some(player),
         FieldReach::Initial,
+        Arrival::Standing { starts: &[] },
     )
     .unwrap_or_else(|| panic!("{type_name} fits at ({x}, {y})"))
+}
+
+/// A fixture site of `type_name` at `(x, y)` owned by `player`, founded
+/// without announcing it, with no work put in and advanced as `work` says.
+/// Panics when the position cannot host the type.
+pub fn create_site(
+    app: &mut App,
+    type_name: &str,
+    x: u32,
+    y: u32,
+    player: PlayerId,
+    work: SiteWork,
+) -> (Entity, SimulationId) {
+    spawn::create_entity(
+        app.world_mut(),
+        type_name,
+        pos(x, y),
+        Some(player),
+        FieldReach::Initial,
+        Arrival::Site(work),
+    )
+    .unwrap_or_else(|| panic!("{type_name} fits at ({x}, {y})"))
+}
+
+/// A fixture site of `type_name` at `(x, y)` owned by `player`, with no work
+/// put in, advancing itself on its own behalf.
+pub fn create_unattended_site(
+    app: &mut App,
+    type_name: &str,
+    x: u32,
+    y: u32,
+    player: PlayerId,
+) -> (Entity, SimulationId) {
+    let (site, id) = create_site(app, type_name, x, y, player, SiteWork::Halted);
+    app.world_mut()
+        .get_mut::<UnderConstructionComponent>(site)
+        .expect("a site carries its construction state")
+        .work = SiteWork::Unattended { founder: id };
+    (site, id)
+}
+
+/// A fixture site of `type_name` at `(x, y)` owned by `player`, with no work
+/// put in, worked by a crew nobody has joined yet.
+pub fn create_crewed_site(
+    app: &mut App,
+    type_name: &str,
+    x: u32,
+    y: u32,
+    player: PlayerId,
+) -> (Entity, SimulationId) {
+    create_site(
+        app,
+        type_name,
+        x,
+        y,
+        player,
+        SiteWork::Crew {
+            builders: Default::default(),
+        },
+    )
 }
 
 /// One bequest of `entity_type`, handed on by any death that ends a life —
@@ -381,13 +438,13 @@ pub fn covered_by(app: &App, field: FieldId, x: u32, y: u32, player: PlayerId) -
 
 /// Spawns `type_name` as the map would place it, its field at full reach.
 pub fn place(app: &mut App, type_name: &str, x: u32, y: u32, player: PlayerId) -> Entity {
-    spawn::spawn_entity(
+    spawn::spawn_placed(
         app.world_mut(),
         type_name,
         pos(x, y),
         Some(player),
-        SpawnCause::Placed,
         FieldReach::Full,
+        &[],
     )
     .unwrap_or_else(|| panic!("{type_name} fits at ({x}, {y})"))
     .0
@@ -893,7 +950,7 @@ pub fn brood_app(model: MovementModel) -> App {
         );
         registry.register(
             brood_building("ready_hatch")
-                .with_build_time(20)
+                .with_build(20, site_initial(&[PoolId::HEALTH]))
                 .with_berths(brood_berths(4))
                 .with_breeder("grub", Quantity::Constant(10), 3, 2, OrphanFate::Perish),
         );
@@ -1471,18 +1528,6 @@ pub fn apply_buff(world: &mut World, entity: Entity, id: EntityBuffId) {
 /// Removes `amount` health points directly, standing in for damage taken.
 pub fn wound(app: &mut App, entity: Entity, amount: &str) {
     pools::drain(app.world_mut(), entity, PoolId::HEALTH, fixed(amount));
-}
-
-/// Marks `entity` as a site under construction with no work put in, worked by
-/// a crew nobody has joined yet.
-pub fn mark_as_site(world: &mut World, entity: Entity) {
-    build::mark_as_site(
-        world,
-        entity,
-        SiteWork::Crew {
-            builders: Default::default(),
-        },
-    );
 }
 
 /// Selects `attacker` for the local player and orders it to attack `target`,
@@ -2101,7 +2146,7 @@ pub fn supply_app() -> App {
                 .with_pool(Pool::health(100))
                 .with_dying(2, [])
                 .with_price([("gold", 20)])
-                .with_build_time(10)
+                .with_build(10, site_initial(&[PoolId::HEALTH]))
                 .with_stat(EntityStatId::SUPPLY_PROVIDED, FixedU64::from_num(8)),
         );
         // Registered before `lodge`, which trains it.
@@ -2292,6 +2337,7 @@ pub fn research_app_seating(slots: Vec<PlayerSlot>) -> App {
         registry.register(
             EntityTypeDef::new("lab")
                 .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
+                .with_build(4, site_initial(&[PoolId::HEALTH]))
                 .with_pool(Pool::health(100))
                 .with_dying(2, [])
                 .with_researcher([smithing, tactics, masonry])
@@ -2300,6 +2346,7 @@ pub fn research_app_seating(slots: Vec<PlayerSlot>) -> App {
         registry.register(
             EntityTypeDef::new("guardhouse")
                 .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
+                .with_build(4, site_initial(&[PoolId::HEALTH]))
                 .with_pool(Pool::health(100))
                 .with_dying(2, [])
                 .with_trainer(["pikeman", "halberdier", "knight", "crossbowman"]),
@@ -2444,7 +2491,13 @@ pub fn annex_app() -> App {
                 .with_dying(2, [])
                 .with_tags(["building"])
                 .with_price([("gold", 10)])
-                .with_build_time(4)
+                .with_build(
+                    4,
+                    [(
+                        PoolId::HEALTH,
+                        SitePool::Rising(RiseStart::Share(fixed("0.25"))),
+                    )],
+                )
                 .with_researcher([signals])
                 .with_trainer(["signaler"])
                 .with_annex(
@@ -2466,7 +2519,7 @@ pub fn annex_app() -> App {
                 .with_dying(2, [])
                 .with_tags(["building"])
                 .with_price([("gold", 10)])
-                .with_build_time(12)
+                .with_build(12, site_initial(&[PoolId::HEALTH]))
                 .with_annex(
                     AloneConduct::Standing {
                         work: AnnexWork::Idles,
@@ -2482,7 +2535,7 @@ pub fn annex_app() -> App {
                 .with_dying(2, [])
                 .with_tags(["building"])
                 .with_price([("gold", 10)])
-                .with_build_time(4)
+                .with_build(4, site_initial(&[PoolId::HEALTH]))
                 .with_annex(AloneConduct::Razed, AnnexClaim::Bound),
         );
         // Ten health and two a tick: five ticks alone and it is gone. The
@@ -2494,7 +2547,7 @@ pub fn annex_app() -> App {
                 .with_dying(2, [])
                 .with_tags(["building"])
                 .with_price([("gold", 10)])
-                .with_build_time(4)
+                .with_build(4, site_initial(&[PoolId::HEALTH]))
                 .with_annex(
                     AloneConduct::Standing {
                         work: AnnexWork::Works,
@@ -2514,7 +2567,7 @@ pub fn annex_app() -> App {
                 .with_dying(2, [])
                 .with_tags(["building"])
                 .with_price([("gold", 10)])
-                .with_build_time(4)
+                .with_build(4, site_initial(&[PoolId::HEALTH]))
                 .with_annex(
                     AloneConduct::Standing {
                         work: AnnexWork::Works,
@@ -2532,7 +2585,7 @@ pub fn annex_app() -> App {
                 .with_dying(2, [])
                 .with_tags(["building"])
                 .with_price([("gold", 10)])
-                .with_build_time(4)
+                .with_build(4, site_initial(&[PoolId::HEALTH]))
                 .with_annex(
                     AloneConduct::Standing {
                         work: AnnexWork::Works,
@@ -2551,7 +2604,7 @@ pub fn annex_app() -> App {
                 .with_dying(2, [])
                 .with_tags(["building"])
                 .with_price([("gold", 10)])
-                .with_build_time(4)
+                .with_build(4, site_initial(&[PoolId::HEALTH]))
                 .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
                 .with_builder(
                     ["relay"],
@@ -2575,7 +2628,7 @@ pub fn annex_app() -> App {
                 .with_dying(2, [])
                 .with_tags(["building"])
                 .with_price([("gold", 10)])
-                .with_build_time(4)
+                .with_build(4, site_initial(&[PoolId::HEALTH]))
                 .with_annex(
                     AloneConduct::Standing {
                         work: AnnexWork::Works,
@@ -3060,6 +3113,71 @@ pub fn register_orders_content(app: &mut App) {
                 interrupted_by: Vec::new(),
             },
         );
+        // A rampart whose site starts at a quarter of its 400 health and
+        // gains the rest over its ten ticks of work.
+        registry.register(
+            EntityTypeDef::new("rampart")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_pool(Pool::health(400))
+                .with_dying(2, [])
+                .with_price([("gold", 10)])
+                .with_build(
+                    10,
+                    [(
+                        PoolId::HEALTH,
+                        SitePool::Rising(RiseStart::Share(fixed("0.25"))),
+                    )],
+                ),
+        );
+        // A flare tower whose site has no energy; the finished tower gains it at
+        // a quarter of 60.
+        registry.register(
+            EntityTypeDef::new("flare_tower")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_pool(Pool::health(100))
+                .with_pool(Pool::builtin(
+                    PoolId::ENERGY,
+                    FixedU64::from_num(60),
+                    FixedU64::ZERO,
+                    FixedU64::ZERO,
+                    PoolInitial::Share(fixed("0.25")),
+                ))
+                .with_dying(2, [])
+                .with_price([("gold", 10)])
+                .with_build(
+                    4,
+                    [
+                        (PoolId::HEALTH, SitePool::Initial),
+                        (PoolId::ENERGY, SitePool::Withheld),
+                    ],
+                ),
+        );
+        // A cistern whose site raises its energy from half of 80 with the
+        // work, while the energy also regenerates a point a tick.
+        registry.register(
+            EntityTypeDef::new("cistern")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_pool(Pool::health(100))
+                .with_pool(Pool::builtin(
+                    PoolId::ENERGY,
+                    FixedU64::from_num(80),
+                    FixedU64::ONE,
+                    FixedU64::ZERO,
+                    PoolInitial::Full,
+                ))
+                .with_dying(2, [])
+                .with_price([("gold", 10)])
+                .with_build(
+                    4,
+                    [
+                        (PoolId::HEALTH, SitePool::Initial),
+                        (
+                            PoolId::ENERGY,
+                            SitePool::Rising(RiseStart::Share(fixed("0.5"))),
+                        ),
+                    ],
+                ),
+        );
         registry.register(
             EntityTypeDef::new("kiosk")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
@@ -3067,7 +3185,7 @@ pub fn register_orders_content(app: &mut App) {
                 .with_sight_range(2)
                 .with_dying(2, [])
                 .with_price([("gold", 10)])
-                .with_build_time(6)
+                .with_build(6, site_initial(&[PoolId::HEALTH]))
                 .with_passives([opened]),
         );
         // Registered before `worker`, which builds it.
@@ -3077,7 +3195,7 @@ pub fn register_orders_content(app: &mut App) {
                 .with_pool(Pool::health(100))
                 .with_dying(2, [])
                 .with_price([("gold", 50)])
-                .with_build_time(6)
+                .with_build(6, site_initial(&[PoolId::HEALTH]))
                 .with_resource_storage(["gold", "wood"])
                 .with_berths([(
                     "rim",
@@ -3110,7 +3228,7 @@ pub fn register_orders_content(app: &mut App) {
                 .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
                 .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
                 .with_builder(
-                    ["depot", "kiosk"],
+                    ["depot", "kiosk", "rampart"],
                     BuilderAttendance::Crew(WorkPresence::Hidden {
                         crew: CrewLimit::ONE,
                     }),
@@ -3330,7 +3448,7 @@ pub fn register_orders_content(app: &mut App) {
                 .with_pool(Pool::health(100))
                 .with_dying(2, [])
                 .with_price([("gold", 40)])
-                .with_build_time(4)
+                .with_build(4, site_initial(&[PoolId::HEALTH]))
                 .with_trainer(["soldier"]),
         );
         // Twenty ticks to train, where the soldier takes four: long enough that
@@ -3350,7 +3468,7 @@ pub fn register_orders_content(app: &mut App) {
                 .with_pool(Pool::health(100))
                 .with_dying(2, [])
                 .with_price([("gold", 40)])
-                .with_build_time(4)
+                .with_build(4, site_initial(&[PoolId::HEALTH]))
                 .with_trainer(["recruit"]),
         );
         // A plain obstacle, for walling sources off.
@@ -3731,7 +3849,7 @@ pub fn register_orders_content(app: &mut App) {
                 .with_pool(Pool::health(100))
                 .with_dying(2, [])
                 .with_price([("gold", 20)])
-                .with_build_time(20)
+                .with_build(20, site_initial(&[PoolId::HEALTH]))
                 .with_tags(["building"])
                 .with_resource_source("gold", DepletionPolicy::Destroy)
                 .with_overbuilds("mine")
@@ -3783,7 +3901,7 @@ pub fn register_orders_content(app: &mut App) {
                 .with_pool(Pool::health(100))
                 .with_dying(2, [])
                 .with_price([("gold", 20)])
-                .with_build_time(20)
+                .with_build(20, site_initial(&[PoolId::HEALTH]))
                 .with_tags(["building"])
                 .with_resource_source("gold", DepletionPolicy::Destroy)
                 .with_overbuilds("geyser")

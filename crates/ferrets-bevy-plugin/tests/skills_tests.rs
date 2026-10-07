@@ -10,7 +10,7 @@ use ferrets_content::{
     entity_type_def::EntityTypeDef,
     kinds::{Kind, Kinds},
     location::Solidity,
-    pool::Pool,
+    pool::{Pool, PoolInitial},
     pool_def::PoolId,
     price::{self, Price},
     registry::ContentRegistry,
@@ -249,9 +249,7 @@ fn buff_cast_on_site_meeting_its_terms_lands() {
     let mut app = app();
     let (_, mage_id) =
         utils::create_entity(app.world_mut(), "mage", utils::pos(5, 5), Some(0)).unwrap();
-    let (site, site_id) =
-        utils::create_entity(app.world_mut(), "mage", utils::pos(7, 5), Some(0)).unwrap();
-    utils::mark_as_site(app.world_mut(), site);
+    let (site, site_id) = utils::create_crewed_site(&mut app, "mage", 7, 5, 0);
 
     utils::use_skill(
         &mut app,
@@ -596,6 +594,7 @@ fn app() -> App {
         registry.register(
             EntityTypeDef::new("mage")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_build(4, utils::site_initial(&[PoolId::HEALTH, PoolId::ENERGY]))
                 .with_pool(Pool::health(50))
                 .with_attack(utils::weapon(utils::GROUND), 10, 1, 1, 4, 2)
                 .with_stat(EntityStatId::SIGHT_RANGE, FixedU64::from_num(4))
@@ -604,6 +603,7 @@ fn app() -> App {
                     FixedU64::from_num(100),
                     FixedU64::from_num(1),
                     FixedU64::ZERO,
+                    PoolInitial::Full,
                 ))
                 .with_skills([
                     battle_focus,

@@ -10,7 +10,7 @@ use crate::{
         entity_buffs::BuffsComponent,
         entity_stats::StatsComponent,
         pool_shifts::{self, PoolShiftTerms, PoolShiftsComponent},
-        pools,
+        pools::{self, Follows, PoolsComponent},
     },
     entity_def,
     entity_index::EntityIndex,
@@ -202,9 +202,11 @@ fn fold(world: &mut World, folds: Vec<(Entity, Vec<EntityModifiers>, &[EntityMod
     });
 }
 
-/// Moves each of `entity`'s pools as the parts of its maximum came and went
-/// since the last fold, and remembers the parts folded now. A pool the
-/// entity does not have yet is left to whoever fills it.
+/// Moves each of `entity`'s pools that follows its maximum as the parts of
+/// that maximum came and went since the last fold, and remembers the parts
+/// folded now for every pool its type declares. A pool the entity does not
+/// have is left to whoever seeds it, and one following a site's work to the
+/// work's line.
 fn follow_pools(
     world: &mut World,
     registry: &ContentRegistry,
@@ -238,13 +240,22 @@ fn follow_pools(
             continue;
         }
         let floor = registry.entity_stat_def(maximum_stat).floor();
-        let current = entity_def::pool_value(world, entity, pool)
-            .map(|current| pool_shifts::stepped(pool, current, base, floor, before, &now));
+        let held = entity_ref
+            .get::<PoolsComponent>()
+            .expect("a simulation entity carries a pool store");
+        // A pool following a site's work is moved by the work's line, not
+        // stepped.
+        let current = match held.follows(pool) {
+            Some(Follows::Maximum) => held
+                .current(pool)
+                .map(|current| pool_shifts::stepped(pool, current, base, floor, before, &now)),
+            Some(Follows::Work { .. }) | None => None,
+        };
         changes.push((pool, now, current));
     }
     for (pool, parts, current) in changes {
         if let Some(current) = current {
-            pools::follow(world, registry, entity, pool, current);
+            pools::follow_pool(world, registry, entity, pool, current);
         }
         world
             .entity_mut(entity)

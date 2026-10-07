@@ -10,8 +10,7 @@ use ferrets_math::{FixedI64, FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_script::{content, engine::lua::LuaEngine};
 use ferrets_simulation::{
     command::{PlayerCommand, SelectMode},
-    components::location::LocationComponent,
-    events::SpawnCause,
+    components::{build::SiteWork, location::LocationComponent},
     input::{InputFrames, PlayerFrame},
     map::Map,
     movement_model::MovementModel,
@@ -21,7 +20,7 @@ use ferrets_simulation::{
         player_slot::PlayerSlot, player_type::PlayerType,
     },
     simulation_id::SimulationId,
-    spawn::{self, FieldReach},
+    spawn::{self, Arrival, FieldReach},
 };
 
 /// Creates an entity of `type_name` at `position` for `owner`, its field
@@ -32,24 +31,33 @@ pub fn create_entity(
     position: FixedUVec2,
     owner: Option<PlayerId>,
 ) -> Option<(Entity, SimulationId)> {
-    spawn::create_entity(world, type_name, position, owner, FieldReach::Initial)
-}
-
-/// Like [`create_entity`], announcing the spawn with `cause`.
-pub fn spawn_entity(
-    world: &mut World,
-    type_name: &str,
-    position: FixedUVec2,
-    owner: Option<PlayerId>,
-    cause: SpawnCause,
-) -> Option<(Entity, SimulationId)> {
-    spawn::spawn_entity(
+    spawn::create_entity(
         world,
         type_name,
         position,
         owner,
-        cause,
         FieldReach::Initial,
+        Arrival::Standing { starts: &[] },
+    )
+}
+
+/// Founds a construction site of `type_name` at `position` for `owner`,
+/// worked by a crew nobody has joined yet, announcing nothing.
+pub fn create_site(
+    world: &mut World,
+    type_name: &str,
+    position: FixedUVec2,
+    owner: Option<PlayerId>,
+) -> Option<(Entity, SimulationId)> {
+    spawn::create_entity(
+        world,
+        type_name,
+        position,
+        owner,
+        FieldReach::Initial,
+        Arrival::Site(SiteWork::Crew {
+            builders: Default::default(),
+        }),
     )
 }
 

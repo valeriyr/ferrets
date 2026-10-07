@@ -58,7 +58,7 @@ pub fn process_health_flow(world: &mut World) {
 /// Moves `entity`'s `pool` by one tick by its regeneration net of its drain,
 /// held between empty and its maximum, and answers what it holds after.
 fn flow(world: &mut World, entity: Entity, pool: PoolId, def: PoolDef) -> FixedU64 {
-    // A pool is only ever seeded from its maximum, beside which the store
+    // A pool is only ever seeded against its maximum, beside which the store
     // carries the pool's rates.
     let stats = world
         .entity(entity)

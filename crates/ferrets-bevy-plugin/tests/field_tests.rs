@@ -231,6 +231,7 @@ fn placement_under_lifted_field_effect_keeps_its_share() {
             cell,
             owner: Some(0),
             amount: None,
+            pools: Vec::new(),
         });
     }
     instantiate_map(app.world_mut(), &data);
@@ -568,9 +569,8 @@ fn outside_effect_drains_health_each_tick() {
 #[test]
 fn effect_held_while_built_spares_site() {
     let mut app = field_app();
-    let site = utils::create_owned(&mut app, "burrow", 20, 20, 0).0;
+    let site = utils::create_crewed_site(&mut app, "burrow", 20, 20, 0).0;
     let built = utils::create_owned(&mut app, "burrow", 22, 22, 0).0;
-    utils::mark_as_site(app.world_mut(), site);
 
     // Off the creep, one a tick for three ticks on the built burrow alone.
     utils::run_ticks(&mut app, 3);
@@ -1752,7 +1752,7 @@ fn building(name: &str, side: u32, build_time: u32) -> EntityTypeDef {
         .with_location(utils::GROUND, CellSize::new(side, side), Solidity::Solid)
         .with_pool(Pool::health(100))
         .with_dying(1, [])
-        .with_build_time(build_time)
+        .with_build(build_time, utils::site_initial(&[PoolId::HEALTH]))
 }
 
 /// One stat modifier, its magnitude as a decimal string.
@@ -2103,6 +2103,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
         registry.register(
             EntityTypeDef::new("burrow")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_build(4, utils::site_initial(&[PoolId::HEALTH]))
                 .with_pool(Pool::health(20))
                 .with_dying(1, [])
                 .with_field_effects([FieldEffect::new(

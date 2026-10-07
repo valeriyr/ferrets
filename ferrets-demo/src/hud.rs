@@ -1839,7 +1839,7 @@ fn price_words(world: &World, action: &CardAction) -> String {
             let def = registry
                 .entity(type_name)
                 .expect("a card button names a registered type");
-            priced(&def.price, def.build_time)
+            priced(&def.price, def.build_time())
         }
         CardAction::Research(research) => {
             let def = registry

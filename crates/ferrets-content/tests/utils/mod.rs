@@ -2,9 +2,11 @@
 
 use ferrets_content::{
     attack::{AttackDef, Delivery, Slain, Weapon},
+    build::SitePool,
     dying::{Bequest, LeftBy},
     entity_type_def::EntityTypeDef,
     location::Solidity,
+    pool_def::PoolId,
     registry::ContentRegistry,
 };
 use ferrets_geometry::cell_size::CellSize;
@@ -54,4 +56,12 @@ pub fn weapon(targets: impl Into<LayerMask>) -> AttackDef {
 pub fn fixed(text: &str) -> FixedU64 {
     text.parse()
         .unwrap_or_else(|_| panic!("'{text}' is a value"))
+}
+
+/// Each of `pools` held on a site from its own initial.
+pub fn site_initial(pools: &[PoolId]) -> Vec<(PoolId, SitePool)> {
+    pools
+        .iter()
+        .map(|pool| (*pool, SitePool::Initial))
+        .collect()
 }

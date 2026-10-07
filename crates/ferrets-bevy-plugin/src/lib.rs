@@ -58,6 +58,9 @@
 //! recompute_entity_stats — exclusive system; fold each entity's buffs and its owner's
 //!                      player-level buffs and modifiers into effective stats, the
 //!                      once-per-tick snapshot consumers read
+//! rise_sites         — exclusive system; line up each pool a site raises with
+//!                      its work under the maxima just folded, and settle the
+//!                      pools of each building completed since the last fold
 //! recompute_player_stats — exclusive system; refold player stats from applied
 //!                      modifiers and what the player's active buffs grant
 //! flee               — exclusive system; fleeing-stance entities run from fresh hits
@@ -480,7 +483,11 @@ impl Plugin for SimulationPlugin {
                     // Fold active buffs into effective stats before consumers
                     // read them, so a buff applied by a command this tick is in
                     // this tick's snapshot.
-                    systems::recompute_entity_stats,
+                    // A site's pools are lined up with its work, and a building
+                    // completed last tick has its pools settled, under the
+                    // maxima just folded, before any order heals or spends
+                    // from them; a tick of work moves the line as it is put in.
+                    (systems::recompute_entity_stats, systems::rise_sites).chain(),
                     systems::recompute_player_stats,
                     // Stance-driven initiative first, so a fresh engagement or
                     // flee response executes on the same tick it was decided.

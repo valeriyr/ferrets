@@ -26,7 +26,7 @@ use ferrets_simulation::{
         player_type::PlayerType,
     },
     simulation_id::SimulationIdGenerator,
-    spawn::{self, FieldReach},
+    spawn::{self, Arrival, FieldReach},
 };
 
 /// The players a [`world`] seats.
@@ -83,7 +83,20 @@ pub fn world(pools: impl IntoIterator<Item = Pool>) -> World {
 /// Spawns an unowned `unit` at cell `(x, y)` of a [`world`].
 pub fn spawn_unit(world: &mut World, x: u32, y: u32) -> Entity {
     let position = FixedUVec2::new(FixedU64::from_num(x), FixedU64::from_num(y));
-    spawn::create_entity(world, "unit", position, None, FieldReach::Initial)
-        .expect("the world registers a unit")
-        .0
+    spawn::create_entity(
+        world,
+        "unit",
+        position,
+        None,
+        FieldReach::Initial,
+        Arrival::Standing { starts: &[] },
+    )
+    .expect("the world registers a unit")
+    .0
+}
+
+/// A fixed-point value parsed from decimal digits.
+pub fn fixed(text: &str) -> FixedU64 {
+    text.parse()
+        .unwrap_or_else(|_| panic!("'{text}' is a value"))
 }

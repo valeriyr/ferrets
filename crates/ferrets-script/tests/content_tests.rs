@@ -10,7 +10,7 @@ use ferrets_content::{
     annex::{AloneConduct, AnnexClaim, AnnexLife, AnnexWork},
     attack::{AttackDef, Delivery, Slain, Weapon},
     brood::{BroodlingDef, Lingering, OrphanFate},
-    build::BuilderAttendance,
+    build::{BuilderAttendance, RiseStart, SitePool},
     concealment::Concealment,
     cost::Cost,
     detection::Detection,
@@ -31,7 +31,7 @@ use ferrets_content::{
         RevertCarry, ViaInterrupted,
     },
     player_stats::PlayerStatId,
-    pool::Pool,
+    pool::{Pool, PoolInitial},
     pool_def::PoolId,
     pool_shift::PoolShift,
     price::{self, Price},
@@ -270,9 +270,238 @@ fn parses_armor_bonus_damage_vs_and_energy() {
             FixedU64::from_num(50),
             FixedU64::from_str("0.5").unwrap(),
             FixedU64::ZERO,
+            PoolInitial::Full,
         ));
 
     assert_eq!(registry.entity("knight"), Some(&expected));
+}
+
+#[test]
+fn pool_reads_initial() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_entity("lamp", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            pools = {
+                health = { maximum = 20, initial = "full" },
+                energy = { maximum = 10, initial = "2.5" },
+            },
+        })
+        define_entity("wick", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            pools = {
+                health = { maximum = 20 },
+                energy = { maximum = 200, initial = { share = "0.25" } },
+            },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("load content");
+    let initial = |name: &str, pool: PoolId| {
+        registry
+            .entity(name)
+            .and_then(|def| def.base_stats.pool(pool))
+            .map(|pool| pool.initial())
+    };
+    assert_eq!(initial("lamp", PoolId::HEALTH), Some(PoolInitial::Full));
+    assert_eq!(
+        initial("lamp", PoolId::ENERGY),
+        Some(PoolInitial::Amount(FixedU64::from_str("2.5").unwrap()))
+    );
+    assert_eq!(initial("wick", PoolId::HEALTH), Some(PoolInitial::Full));
+    assert_eq!(
+        initial("wick", PoolId::ENERGY),
+        Some(PoolInitial::Share(FixedU64::from_str("0.25").unwrap()))
+    );
+}
+
+#[test]
+fn build_reads_time_and_how_site_holds_each_pool() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_entity("tower", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            pools = {
+                health = { maximum = 400 },
+                energy = { maximum = 200, initial = 50 },
+            },
+            build = { time = 10, pools = { health = { rises_from = { share = "0.1" } }, energy = "withheld" } },
+        })
+        define_entity("hut", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            pools = { health = { maximum = 100 } },
+            build = { time = 4, pools = { health = "initial" } },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("load content");
+    let tower = registry
+        .entity("tower")
+        .and_then(|def| def.build.as_ref())
+        .expect("the tower is built");
+    assert_eq!(tower.time(), 10);
+    assert_eq!(
+        tower.site(PoolId::HEALTH),
+        Some(SitePool::Rising(RiseStart::Share(
+            FixedU64::from_str("0.1").unwrap()
+        )))
+    );
+    assert_eq!(tower.site(PoolId::ENERGY), Some(SitePool::Withheld));
+    let hut = registry
+        .entity("hut")
+        .and_then(|def| def.build.as_ref())
+        .expect("the hut is built");
+    assert_eq!(hut.time(), 4);
+    assert_eq!(hut.site(PoolId::HEALTH), Some(SitePool::Initial));
+}
+
+#[test]
+fn build_pool_of_unknown_word_is_rejected() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_entity("hut", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            pools = { health = { maximum = 100 } },
+            build = { time = 4, pools = { health = "rising" } },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("an unknown site word is refused");
+    };
+    assert_eq!(
+        error.to_string(),
+        "content error: build pool 'health' must be 'initial', 'withheld', or a { rises_from = ... } table, found 'rising'"
+    );
+}
+
+#[test]
+fn build_pool_rising_without_start_is_rejected() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_entity("hut", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            pools = { health = { maximum = 100 } },
+            build = { time = 4, pools = { health = {} } },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("a rising pool names where it rises from");
+    };
+    assert_eq!(
+        error.to_string(),
+        "content error: build pool 'health' rises_from must be a non-negative integer or a decimal string, got nil"
+    );
+}
+
+#[test]
+fn build_pool_rising_from_full_is_rejected() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_entity("hut", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            pools = { health = { maximum = 100 } },
+            build = { time = 4, pools = { health = { rises_from = "full" } } },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("a pool rises from below full");
+    };
+    assert_eq!(
+        error.to_string(),
+        "invalid number: 'full': invalid digit found in string"
+    );
+}
+
+#[test]
+fn build_pool_of_unknown_name_is_rejected() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_entity("hut", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            pools = { health = { maximum = 100 } },
+            build = { time = 4, pools = { health = "initial", mana = "initial" } },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("the build table is refused");
+    };
+    assert_eq!(
+        error.to_string(),
+        "content error: pool 'mana' is not defined"
+    );
+}
+
+#[test]
+fn build_pool_rising_from_table_without_share_is_rejected() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_entity("hut", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            pools = { health = { maximum = 100 } },
+            build = { time = 4, pools = { health = { rises_from = { shar = "0.1" } } } },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("the build table is refused");
+    };
+    assert_eq!(
+        error.to_string(),
+        "content error: build pool 'health' rises_from share must be a non-negative integer or a decimal string, got nil"
+    );
+}
+
+#[test]
+fn build_without_time_is_rejected() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_entity("hut", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            pools = { health = { maximum = 100 } },
+            build = { pools = { health = "initial" } },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("the build table is refused");
+    };
+    assert_eq!(
+        error.to_string(),
+        "content error: field 'time': error converting Lua nil to u32 (expected number or string coercible to number)"
+    );
+}
+
+#[test]
+fn build_without_pools_is_rejected() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_entity("hut", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            pools = { health = { maximum = 100 } },
+            build = { time = 4 },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("the build table is refused");
+    };
+    assert_eq!(
+        error.to_string(),
+        "content error: field 'pools': error converting Lua nil to table"
+    );
+}
+
+#[test]
+fn pool_initial_of_unknown_word_is_rejected() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_entity("lamp", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            pools = { health = { maximum = 20, initial = "half" } },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("an unknown initial word is refused");
+    };
+    assert_eq!(
+        error.to_string(),
+        "invalid number: 'half': invalid digit found in string"
+    );
 }
 
 #[test]
@@ -286,7 +515,7 @@ fn parses_repairer_and_repair_ratio() {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
             pools = { health = { maximum = 100 } },
             price = { gold = 200 },
-            build_time = 20,
+            build = { time = 20, pools = { health = "initial" } },
             repair_ratio = "0.5",
             tags = { "building" },
         })
@@ -1999,7 +2228,7 @@ fn docks_and_annex_read_their_terms() {
             pools = { health = { maximum = 40, drain = "2" } },
             tags = { "building" },
             price = { gold = 25 },
-            build_time = 10,
+            build = { time = 10, pools = { health = "initial" } },
             annex = { alone = { work = "idles", life = { fades = "2" } }, claim = "seized" },
         })
     "#;
@@ -2560,7 +2789,7 @@ fn attached_presence_reads_berths_and_stance() {
             location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
             pools = { health = { maximum = 100 } },
             price = { gold = 10 },
-            build_time = 4,
+            build = { time = 4, pools = { health = "initial" } },
             berths = {
                 rim = { points = { { 1, 0 }, { "1.8", "1.0" }, { 1, "1.8" }, { "0.2", 1 } }, slots = 2 },
                 ledge = { points = { { 0, 0 }, { 1, 1 }, { 0, 1 } } },
@@ -2652,7 +2881,7 @@ fn overbuilding_type_reads_its_source() {
             location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
             pools = { health = { maximum = 100 } },
             price = { gold = 10 },
-            build_time = 4,
+            build = { time = 4, pools = { health = "initial" } },
             resource_source = { kind = "gold", depletion = "destroy" },
             overbuilds = "mine",
             tags = { "building" },
@@ -3371,6 +3600,7 @@ fn pool_carry_reads_each_keyword() {
         form("differed")
         form("clamped")
         form("full")
+        form("started")
         define_entity("walker", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
             pools = { health = { maximum = 10 } },
@@ -3379,6 +3609,7 @@ fn pool_carry_reads_each_keyword() {
                 { into = "differed", land_pool_carry = { health = "difference" }, time = 20, placement = "reserve", cancel = "committed" },
                 { into = "clamped", land_pool_carry = { health = "clamp" }, time = 20, placement = "reserve", cancel = "committed" },
                 { into = "full", land_pool_carry = { health = "full" }, time = 20, placement = "reserve", cancel = "committed" },
+                { into = "started", land_pool_carry = { health = "initial" }, time = 20, placement = "reserve", cancel = "committed" },
             },
         })
     "#;
@@ -3397,6 +3628,7 @@ fn pool_carry_reads_each_keyword() {
             PoolCarry::Shift(PoolShift::Difference),
             PoolCarry::Shift(PoolShift::Clamp),
             PoolCarry::Full,
+            PoolCarry::Initial,
         ]
     );
 }
@@ -3419,7 +3651,7 @@ fn unknown_pool_carry_errors() {
         panic!("must reject an unknown pool carry");
     };
     assert!(
-        matches!(&error, ScriptError::ContentError(m) if m.contains("pool carry must be 'share', 'difference', 'clamp', or 'full', found 'half'")),
+        matches!(&error, ScriptError::ContentError(m) if m.contains("pool carry must be 'share', 'difference', 'clamp', 'full', or 'initial', found 'half'")),
         "unexpected error: {error:?}"
     );
 }
@@ -3468,6 +3700,44 @@ fn via_reads_form_entering_carries_and_reverts() {
                     RevertCarry::Carry(PoolCarry::Shift(PoolShift::Clamp)),
                 ),
             ]),
+        )
+    );
+}
+
+#[test]
+fn via_reads_initial_on_entering_and_reverting() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        local function form(name)
+            define_entity(name, {
+                location = { occupation = GROUND, size = 1, solidity = "solid" },
+                pools = { health = { maximum = 10 }, energy = { maximum = 10 } },
+            })
+        end
+        form("cocoon")
+        form("moth")
+        define_entity("larva", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            pools = { health = { maximum = 10 }, energy = { maximum = 10 } },
+            morphs = { {
+                into = "moth",
+                via = {
+                    form = "cocoon",
+                    enter_pool_carry = { energy = "initial" },
+                    interrupted = { reverts = { energy = "initial" } },
+                },
+                time = 20, placement = "reserve", cancel = "committed",
+            } },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("content loads");
+    let larva = registry.entity("larva").expect("larva is registered");
+    assert_eq!(
+        larva.morphs[0].course(),
+        &MorphCourse::via(
+            "cocoon",
+            [(PoolId::ENERGY, PoolCarry::Initial)],
+            ViaInterrupted::reverts([(PoolId::ENERGY, RevertCarry::Carry(PoolCarry::Initial))]),
         )
     );
 }
@@ -3542,7 +3812,7 @@ fn unknown_revert_carry_errors() {
         panic!("must reject an unknown revert carry");
     };
     assert!(
-        matches!(&error, ScriptError::ContentError(m) if m.contains("revert carry must be 'restore', 'share', 'difference', 'clamp', or 'full', found 'half'")),
+        matches!(&error, ScriptError::ContentError(m) if m.contains("revert carry must be 'restore', 'share', 'difference', 'clamp', 'full', or 'initial', found 'half'")),
         "unexpected error: {error:?}"
     );
 }
@@ -4191,7 +4461,7 @@ const BASE: &str = r#"
         pools = { health = { maximum = 800 } },
         dying = { time = 2 },
         price = { gold = 400 },
-        build_time = 200,
+        build = { time = 200, pools = { health = "initial" } },
         trainer = { "peasant" },
         resource_storage = { "gold", "wood" },
     })
@@ -4207,7 +4477,7 @@ const FIELDS: &str = r#"
     define_entity("hive", {
         location = { occupation = GROUND, size = 2, solidity = "solid" },
         pools = { health = { maximum = 100 } },
-        build_time = 20,
+        build = { time = 20, pools = { health = "initial" } },
         field_sources = {
             { field = "creep", radius = 10, growth = { cycle = 9, initial_radius = 1 }, while_constructing = { held = 1 }, while_disabled = "full" },
         },

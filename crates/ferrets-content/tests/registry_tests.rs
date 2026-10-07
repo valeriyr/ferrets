@@ -13,7 +13,7 @@ use ferrets_content::{
     attack::{Delivery, Slain, Weapon},
     berths::BerthGroup,
     brood::OrphanFate,
-    build::BuilderAttendance,
+    build::{BuilderAttendance, RiseStart, SitePool},
     concealment::Concealment,
     cost::Cost,
     detection::Detection,
@@ -35,7 +35,7 @@ use ferrets_content::{
     },
     player_buffs::{PlayerBuffDef, PlayerBuffId},
     player_stats::PlayerStatId,
-    pool::Pool,
+    pool::{Pool, PoolInitial},
     pool_def::{PoolId, PoolRole},
     pool_shift::PoolShift,
     price::{self, Price},
@@ -212,7 +212,7 @@ fn validate_accepts_registered_production_catalogues() {
     let mut registry = utils::ground_registry();
 
     registry.register(utils::standing("soldier", GROUND).with_train_time(4));
-    registry.register(utils::sized("depot", GROUND, CellSize::new(2, 2)).with_build_time(6));
+    registry.register(utils::sized("depot", GROUND, CellSize::new(2, 2)).with_build(6, []));
     registry
         .register(utils::sized("barracks", GROUND, CellSize::new(2, 2)).with_trainer(["soldier"]));
     registry.register(
@@ -239,7 +239,7 @@ fn validate_accepts_attachments_offered_by_their_jobs() {
     registry.register_resource("gold");
     registry.register(
         utils::sized("depot", GROUND, CellSize::new(2, 2))
-            .with_build_time(6)
+            .with_build(6, [])
             .with_berths([(
                 "rim",
                 BerthGroup::new([point("0.5", "0.5"), point("1.5", "1.5")], 2),
@@ -289,7 +289,7 @@ fn validate_accepts_attachments_offered_by_their_jobs() {
 )]
 fn validate_rejects_builder_attaching_to_group_its_site_lacks() {
     let mut registry = utils::ground_registry();
-    registry.register(utils::sized("depot", GROUND, CellSize::new(2, 2)).with_build_time(6));
+    registry.register(utils::sized("depot", GROUND, CellSize::new(2, 2)).with_build(6, []));
     registry.register(
         utils::standing("sprite", GROUND)
             .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
@@ -342,7 +342,7 @@ fn validate_accepts_overbuilding_of_matching_source() {
     );
     registry.register(
         utils::sized("shaft_house", GROUND, CellSize::new(2, 2))
-            .with_build_time(6)
+            .with_build(6, [])
             .with_resource_source("gold", DepletionPolicy::Destroy)
             .with_overbuilds("mine"),
     );
@@ -361,7 +361,7 @@ fn validate_rejects_overbuilding_source_of_another_size() {
     );
     registry.register(
         utils::sized("shaft_house", GROUND, CellSize::new(2, 2))
-            .with_build_time(6)
+            .with_build(6, [])
             .with_resource_source("gold", DepletionPolicy::Destroy)
             .with_overbuilds("mine"),
     );
@@ -380,7 +380,7 @@ fn validate_rejects_overbuilding_by_type_that_is_not_source_itself() {
     );
     registry.register(
         utils::standing("shaft_house", GROUND)
-            .with_build_time(6)
+            .with_build(6, [])
             .with_overbuilds("mine"),
     );
     registry.validate();
@@ -393,7 +393,7 @@ fn validate_rejects_overbuilding_unregistered_type() {
     registry.register_resource("gold");
     registry.register(
         utils::standing("shaft_house", GROUND)
-            .with_build_time(6)
+            .with_build(6, [])
             .with_resource_source("gold", DepletionPolicy::Destroy)
             .with_overbuilds("seam"),
     );
@@ -410,7 +410,7 @@ fn validate_rejects_overbuilding_type_that_is_no_source() {
     registry.register(utils::standing("boulder", GROUND));
     registry.register(
         utils::standing("shaft_house", GROUND)
-            .with_build_time(6)
+            .with_build(6, [])
             .with_resource_source("gold", DepletionPolicy::Destroy)
             .with_overbuilds("boulder"),
     );
@@ -430,7 +430,7 @@ fn validate_rejects_overbuilding_source_of_another_kind() {
     );
     registry.register(
         utils::standing("shaft_house", GROUND)
-            .with_build_time(6)
+            .with_build(6, [])
             .with_resource_source("wood", DepletionPolicy::Destroy)
             .with_overbuilds("mine"),
     );
@@ -450,7 +450,7 @@ fn validate_rejects_overbuilding_source_on_other_layers() {
     );
     registry.register(
         utils::standing("shaft_house", air)
-            .with_build_time(6)
+            .with_build(6, [])
             .with_resource_source("gold", DepletionPolicy::Destroy)
             .with_overbuilds("mine"),
     );
@@ -481,7 +481,7 @@ fn validate_accepts_production_cycle() {
     let mut registry = utils::ground_registry();
     registry.register(
         utils::sized("town_hall", GROUND, CellSize::new(2, 2))
-            .with_build_time(6)
+            .with_build(6, [])
             .with_trainer(["worker"]),
     );
     registry.register(
@@ -1215,6 +1215,211 @@ fn register_rejects_pool_with_zero_maximum() {
 }
 
 #[test]
+#[should_panic(
+    expected = "entity type 'wall' starts the health pool's initial at a share of 1.5, above 1"
+)]
+fn register_rejects_initial_share_above_whole() {
+    let mut registry = utils::ground_registry();
+    registry.register(
+        utils::standing("wall", GROUND)
+            .with_pool(health_starting(PoolInitial::Share(utils::fixed("1.5")))),
+    );
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'wall' starts the health pool's initial at 150, above its maximum of 100"
+)]
+fn register_rejects_initial_amount_above_maximum() {
+    let mut registry = utils::ground_registry();
+    registry.register(utils::standing("wall", GROUND).with_pool(health_starting(
+        PoolInitial::Amount(FixedU64::from_num(150)),
+    )));
+}
+
+#[test]
+#[should_panic(expected = "entity type 'wall' starts the health pool's initial at 0")]
+fn register_rejects_health_starting_empty() {
+    let mut registry = utils::ground_registry();
+    registry.register(
+        utils::standing("wall", GROUND)
+            .with_pool(health_starting(PoolInitial::Amount(FixedU64::ZERO))),
+    );
+}
+
+#[test]
+#[should_panic(expected = "entity type 'wall' starts the health pool's rise at 0")]
+fn register_rejects_health_site_starting_empty() {
+    let mut registry = utils::ground_registry();
+    registry.register(
+        utils::standing("wall", GROUND)
+            .with_pool(Pool::health(100))
+            .with_build(
+                4,
+                vec![(
+                    PoolId::HEALTH,
+                    SitePool::Rising(RiseStart::Share(FixedU64::ZERO)),
+                )],
+            ),
+    );
+}
+
+#[test]
+#[should_panic(expected = "entity type 'wall' says how a site holds a pool it does not declare")]
+fn register_rejects_build_naming_undeclared_pool() {
+    let mut registry = utils::ground_registry();
+    registry.register(
+        utils::standing("wall", GROUND)
+            .with_pool(Pool::health(100))
+            .with_build(4, utils::site_initial(&[PoolId::HEALTH, PoolId::ENERGY])),
+    );
+}
+
+#[test]
+#[should_panic(expected = "entity type 'wall' does not say how a site holds the energy pool")]
+fn register_rejects_build_leaving_pool_unsaid() {
+    let mut registry = utils::ground_registry();
+    registry.register(
+        utils::standing("wall", GROUND)
+            .with_pool(Pool::health(100))
+            .with_pool(Pool::energy(50))
+            .with_build(4, utils::site_initial(&[PoolId::HEALTH])),
+    );
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'wall' starts the health pool's rise at a share of 1.5, above 1"
+)]
+fn register_rejects_rise_share_above_whole() {
+    let mut registry = utils::ground_registry();
+    registry.register(
+        utils::standing("wall", GROUND)
+            .with_pool(Pool::health(100))
+            .with_build(
+                4,
+                [(
+                    PoolId::HEALTH,
+                    SitePool::Rising(RiseStart::Share(utils::fixed("1.5"))),
+                )],
+            ),
+    );
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'wall' starts the health pool's rise at 150, above its maximum of 100"
+)]
+fn register_rejects_rise_amount_above_maximum() {
+    let mut registry = utils::ground_registry();
+    registry.register(
+        utils::standing("wall", GROUND)
+            .with_pool(Pool::health(100))
+            .with_build(
+                4,
+                [(
+                    PoolId::HEALTH,
+                    SitePool::Rising(RiseStart::Amount(FixedU64::from_num(150))),
+                )],
+            ),
+    );
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'wall' rises the health pool from its whole maximum; let it start at its initial"
+)]
+fn register_rejects_rise_from_whole_share() {
+    let mut registry = utils::ground_registry();
+    registry.register(
+        utils::standing("wall", GROUND)
+            .with_pool(Pool::health(100))
+            .with_build(
+                4,
+                [(
+                    PoolId::HEALTH,
+                    SitePool::Rising(RiseStart::Share(FixedU64::ONE)),
+                )],
+            ),
+    );
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'wall' rises the health pool from its whole maximum; let it start at its initial"
+)]
+fn register_rejects_rise_from_whole_amount() {
+    let mut registry = utils::ground_registry();
+    registry.register(
+        utils::standing("wall", GROUND)
+            .with_pool(Pool::health(100))
+            .with_build(
+                4,
+                [(
+                    PoolId::HEALTH,
+                    SitePool::Rising(RiseStart::Amount(FixedU64::from_num(100))),
+                )],
+            ),
+    );
+}
+
+#[test]
+#[should_panic(expected = "entity type 'wall' withholds the health pool on a site")]
+fn register_rejects_health_withheld_on_site() {
+    let mut registry = utils::ground_registry();
+    registry.register(
+        utils::standing("wall", GROUND)
+            .with_pool(Pool::health(100))
+            .with_build(4, [(PoolId::HEALTH, SitePool::Withheld)]),
+    );
+}
+
+#[test]
+fn register_accepts_energy_withheld_on_site() {
+    let mut registry = utils::ground_registry();
+    registry.register(
+        utils::standing("wall", GROUND)
+            .with_pool(Pool::health(100))
+            .with_pool(Pool::energy(50))
+            .with_build(
+                4,
+                [
+                    (PoolId::HEALTH, SitePool::Initial),
+                    (PoolId::ENERGY, SitePool::Withheld),
+                ],
+            ),
+    );
+    let wall = registry.entity("wall").and_then(|def| def.build.as_ref());
+    assert_eq!(
+        wall.and_then(|build| build.site(PoolId::ENERGY)),
+        Some(SitePool::Withheld)
+    );
+}
+
+#[test]
+fn register_accepts_energy_starting_empty() {
+    let mut registry = utils::ground_registry();
+    registry.register(
+        utils::standing("wall", GROUND)
+            .with_pool(Pool::health(100))
+            .with_pool(Pool::builtin(
+                PoolId::ENERGY,
+                FixedU64::from_num(100),
+                FixedU64::ZERO,
+                FixedU64::ZERO,
+                PoolInitial::Amount(FixedU64::ZERO),
+            )),
+    );
+    let energy = registry
+        .entity("wall")
+        .and_then(|def| def.base_stats.pool(PoolId::ENERGY));
+    assert_eq!(
+        energy.map(|pool| pool.initial()),
+        Some(PoolInitial::Amount(FixedU64::ZERO))
+    );
+}
+
+#[test]
 #[should_panic(expected = "declares repair_speed but cannot repair")]
 fn register_rejects_repair_speed_without_capability() {
     let mut registry = utils::ground_registry();
@@ -1745,7 +1950,7 @@ fn repairer_rejects_non_positive_flat_rate() {
 }
 
 #[test]
-#[should_panic(expected = "has a repair_ratio but no build_time or train_time")]
+#[should_panic(expected = "has a repair_ratio but no build or train_time")]
 fn register_rejects_repair_ratio_without_production_time() {
     let mut registry = utils::ground_registry();
     registry.register(
@@ -1863,7 +2068,7 @@ fn validate_rejects_primary_that_goes_inside_its_annex_site() {
         EntityTypeDef::new("lookout")
             .with_location(GROUND, CellSize::ONE, Solidity::Solid)
             .with_pool(Pool::health(10))
-            .with_build_time(4)
+            .with_build(4, utils::site_initial(&[PoolId::HEALTH]))
             .with_annex(
                 AloneConduct::Standing {
                     work: AnnexWork::Works,
@@ -1896,7 +2101,7 @@ fn validate_rejects_fading_annex_without_health_pool() {
     registry.register(
         EntityTypeDef::new("mast")
             .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-            .with_build_time(4)
+            .with_build(4, [])
             .with_annex(
                 AloneConduct::Standing {
                     work: AnnexWork::Works,
@@ -2116,7 +2321,7 @@ fn validate_rejects_dock_that_takes_type_that_is_no_annex() {
     registry.register(
         utils::standing("runner", GROUND)
             .with_pool(Pool::health(10))
-            .with_build_time(4),
+            .with_build(4, utils::site_initial(&[PoolId::HEALTH])),
     );
     registry.validate();
 }
@@ -2214,7 +2419,7 @@ fn validate_rejects_annex_that_does_not_claim_its_cells() {
         EntityTypeDef::new("lookout")
             .with_location(GROUND, CellSize::ONE, Solidity::Passable)
             .with_pool(Pool::health(10))
-            .with_build_time(4)
+            .with_build(4, utils::site_initial(&[PoolId::HEALTH]))
             .with_annex(standing_annex(), AnnexClaim::Bound),
     );
     registry.validate();
@@ -2227,7 +2432,7 @@ fn validate_rejects_annex_without_health() {
     registry.register(primary(["lookout"]));
     registry.register(
         utils::standing("lookout", GROUND)
-            .with_build_time(4)
+            .with_build(4, [])
             .with_annex(standing_annex(), AnnexClaim::Bound),
     );
     registry.validate();
@@ -2284,7 +2489,7 @@ fn validate_rejects_docks_on_type_that_moves() {
         EntityTypeDef::new("lookout")
             .with_location(GROUND, CellSize::ONE, Solidity::Solid)
             .with_pool(Pool::health(10))
-            .with_build_time(4)
+            .with_build(4, utils::site_initial(&[PoolId::HEALTH]))
             .with_annex(
                 AloneConduct::Standing {
                     work: AnnexWork::Works,
@@ -3544,7 +3749,7 @@ fn validate_rejects_annex_requirement_that_can_never_be_unlocked() {
         EntityTypeDef::new("lookout")
             .with_location(GROUND, CellSize::ONE, Solidity::Solid)
             .with_pool(Pool::health(10))
-            .with_build_time(4)
+            .with_build(4, utils::site_initial(&[PoolId::HEALTH]))
             .with_annex(
                 AloneConduct::Standing {
                     work: AnnexWork::Works,
@@ -4133,6 +4338,7 @@ fn validate_accepts_transition_with_payable_costs() {
                 FixedU64::from_num(100),
                 utils::fixed("0.1"),
                 FixedU64::ZERO,
+                PoolInitial::Full,
             ))
             .with_morphs([MorphTransition::new(
                 "flier",
@@ -4467,7 +4673,7 @@ fn register_rejects_source_constructing_beyond_radius() {
     let creep = creep_field(&mut registry);
     registry.register(
         utils::standing("hive", GROUND)
-            .with_build_time(4)
+            .with_build(4, [])
             .with_field_sources([FieldSourceDef::new(
                 creep,
                 3,
@@ -5629,6 +5835,7 @@ fn registered_pool_writes_its_stats_with_unnamed_rates_at_zero() {
                 FixedU64::from_num(40),
                 FixedU64::from_num(2),
                 FixedU64::ZERO,
+                PoolInitial::Full,
             )),
     );
     let well = registry.entity("well").unwrap();
@@ -5743,7 +5950,7 @@ fn primary(annexes: [&str; 1]) -> EntityTypeDef {
 fn annex(name: &str, size: CellSize) -> EntityTypeDef {
     utils::sized(name, GROUND, size)
         .with_pool(Pool::health(10))
-        .with_build_time(4)
+        .with_build(4, utils::site_initial(&[PoolId::HEALTH]))
         .with_annex(standing_annex(), AnnexClaim::Bound)
 }
 
@@ -5987,4 +6194,15 @@ fn held_on_stat_buff(judged: EntityStatId, moved: EntityStatId) -> EntityBuffDef
         stack_rule: StackRule::Ignore,
         interrupted_by: Vec::new(),
     }
+}
+
+/// A health pool of 100 starting at `initial`.
+fn health_starting(initial: PoolInitial) -> Pool {
+    Pool::builtin(
+        PoolId::HEALTH,
+        FixedU64::from_num(100),
+        FixedU64::ZERO,
+        FixedU64::ZERO,
+        initial,
+    )
 }

@@ -33,6 +33,7 @@ mod refit_held_buffs;
 mod refresh_nav_hierarchy;
 mod resolve_pushing;
 mod retire_events;
+mod rise_sites;
 mod tick_counter;
 mod tick_orders;
 
@@ -71,5 +72,6 @@ pub use refit_held_buffs::refit_held_buffs;
 pub use refresh_nav_hierarchy::refresh_nav_hierarchy;
 pub use resolve_pushing::resolve_pushing;
 pub use retire_events::retire_events;
+pub use rise_sites::rise_sites;
 pub use tick_counter::tick_counter;
 pub use tick_orders::tick_orders;

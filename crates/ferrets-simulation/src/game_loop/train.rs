@@ -12,7 +12,6 @@ use crate::{
         train::{TrainComponent, TrainQueueComponent},
     },
     entity_def,
-    events::SpawnCause,
     map::Map,
     order::Order,
     rally,
@@ -149,13 +148,13 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
         let spawned = placement.and_then(|cell| {
             let owner = entity_def::owner(world, entity);
             let trainer = entity_def::simulation_id(world, entity);
-            spawn::spawn_entity(
+            spawn::spawn_trained(
                 world,
                 &type_name,
                 FixedUVec2::from(cell),
                 owner,
-                SpawnCause::Trained { trainer },
                 FieldReach::Initial,
+                trainer,
             )
         });
         if let Some((unit, _)) = spawned {

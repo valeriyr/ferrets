@@ -15,9 +15,8 @@ use crate::{
     },
     entity_def::{self, Operation},
     entity_index::EntityIndex,
-    events::SpawnCause,
     map::Map,
-    spawn,
+    spawn::{self, FieldReach},
 };
 
 //
@@ -109,13 +108,14 @@ fn bear(world: &mut World, breeder: Entity, terms: &BreederDef) -> Option<Entity
         .map(BroodlingDef::attachment)
         .cloned()
         .expect("validated content breeds broodlings");
-    let (broodling, _) = spawn::spawn_seated(
+    let (broodling, _) = spawn::spawn_bred(
         world,
         terms.breeds(),
         breeder,
         &attachment,
         owner,
-        SpawnCause::Bred { by },
+        FieldReach::Initial,
+        by,
     )?;
     brood::tie(world, breeder, broodling);
     Some(broodling)

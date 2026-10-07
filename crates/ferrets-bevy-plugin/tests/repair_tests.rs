@@ -56,7 +56,7 @@ fn repair_restores_health_at_target_production_rate() {
     utils::grant_gold(&mut app, 500);
 
     repair(&mut app, worker_id, depot_id);
-    // A 100-point pool over a build_time of 20 at speed 1 mends 5 points a tick, so
+    // A 100-point pool over a build time of 20 at speed 1 mends 5 points a tick, so
     // the 40 points lost need eight ticks of work once the two-tick walk is done.
     utils::run_ticks(&mut app, utils::APPLY + 2 + 4);
     assert_eq!(
@@ -81,7 +81,7 @@ fn repair_restores_health_at_target_production_rate() {
 #[test]
 fn repair_ratio_scales_work_against_production_time() {
     let mut app = app();
-    // Same pool and build_time as the depot, but declared to mend in half the time.
+    // Same pool and build time as the depot, but declared to mend in half the time.
     let (hall, hall_id) = utils::create_owned(&mut app, "hall", 10, 10, 0);
     let (_, worker_id) = utils::create_owned(&mut app, "worker", 8, 10, 0);
     utils::wound(&mut app, hall, "50");
@@ -170,7 +170,7 @@ fn flat_rate_ignores_what_target_cost_to_produce() {
 #[test]
 fn flat_rate_mends_target_nothing_produces() {
     let mut app = app();
-    // No build_time and no train_time — unmendable at a production-paced rate.
+    // No build and no train_time — unmendable at a production-paced rate.
     let (monolith, monolith_id) = utils::create_owned(&mut app, "monolith", 10, 10, 0);
     let (_, medic_id) = utils::create_owned(&mut app, "medic", 8, 10, 0);
     utils::wound(&mut app, monolith, "40");
@@ -460,7 +460,7 @@ fn repairer_refuses_target_without_tag_it_mends() {
 #[test]
 fn repairer_refuses_target_nothing_produces() {
     let mut app = app();
-    // Tagged as a building, but with no build_time to pace the work against.
+    // Tagged as a building, but with no build time to pace the work against.
     let (monolith, monolith_id) = utils::create_owned(&mut app, "monolith", 10, 10, 0);
     let (_, worker_id) = utils::create_owned(&mut app, "worker", 8, 10, 0);
     utils::wound(&mut app, monolith, "40");
@@ -497,10 +497,9 @@ fn repairer_refuses_enemy_target() {
 #[test]
 fn repairer_refuses_target_still_under_construction() {
     let mut app = app();
-    let (depot, depot_id) = utils::create_owned(&mut app, "depot", 10, 10, 0);
+    let (depot, depot_id) = utils::create_crewed_site(&mut app, "depot", 10, 10, 0);
     let (_, worker_id) = utils::create_owned(&mut app, "worker", 8, 10, 0);
     utils::wound(&mut app, depot, "40");
-    utils::mark_as_site(app.world_mut(), depot);
     utils::grant_gold(&mut app, 500);
 
     repair(&mut app, worker_id, depot_id);
@@ -950,7 +949,7 @@ fn app() -> App {
             EntityTypeDef::new("free_shed")
                 .with_location(utils::GROUND, CellSize::new(2, 2), Solidity::Solid)
                 .with_pool(Pool::health(100))
-                .with_build_time(20)
+                .with_build(20, utils::site_initial(&[PoolId::HEALTH]))
                 .with_tags(["building"]),
         );
         registry.register(repairer(
@@ -1034,7 +1033,7 @@ fn building(name: &str, repair_ratio: Option<FixedU64>) -> EntityTypeDef {
         .with_location(utils::GROUND, CellSize::new(2, 2), Solidity::Solid)
         .with_pool(Pool::health(100))
         .with_price([("gold", 200)])
-        .with_build_time(20)
+        .with_build(20, utils::site_initial(&[PoolId::HEALTH]))
         .with_tags(["building"]);
     match repair_ratio {
         Some(ratio) => def.with_repair_ratio(ratio),

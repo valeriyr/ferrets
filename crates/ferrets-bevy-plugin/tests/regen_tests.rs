@@ -11,7 +11,7 @@ use ferrets_content::{
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     location::Solidity,
-    pool::Pool,
+    pool::{Pool, PoolInitial},
     pool_def::PoolId,
     registry::ContentRegistry,
     requirement::Requirement,
@@ -68,9 +68,8 @@ fn entity_without_regeneration_stays_wounded() {
 #[test]
 fn site_regenerates_by_its_own_rate() {
     let mut app = app();
-    let (troll, _) = utils::create_owned(&mut app, "troll", 5, 5, 0);
+    let (troll, _) = utils::create_crewed_site(&mut app, "troll", 5, 5, 0);
     utils::wound(&mut app, troll, "10");
-    utils::mark_as_site(app.world_mut(), troll);
 
     // The troll's own rate holds on a site: four ticks at 0.5 restore two
     // points.
@@ -81,11 +80,10 @@ fn site_regenerates_by_its_own_rate() {
 #[test]
 fn site_does_not_regenerate_by_rate_held_while_built() {
     let mut app = app();
-    let (site, _) = utils::create_owned(&mut app, "hut", 5, 5, 0);
+    let (site, _) = utils::create_crewed_site(&mut app, "hut", 5, 5, 0);
     let (built, _) = utils::create_owned(&mut app, "hut", 7, 5, 0);
     utils::wound(&mut app, site, "10");
     utils::wound(&mut app, built, "10");
-    utils::mark_as_site(app.world_mut(), site);
 
     // `knitting` holds once built: the built hut mends 0.5 a tick, 30 → 32
     // in four ticks; the site holds at 30.
@@ -255,11 +253,13 @@ fn app() -> App {
         registry.register(
             EntityTypeDef::new("troll")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_build(4, utils::site_initial(&[PoolId::HEALTH]))
                 .with_pool(Pool::builtin(
                     PoolId::HEALTH,
                     FixedU64::from_num(40),
                     utils::fixed("0.5"),
                     FixedU64::ZERO,
+                    PoolInitial::Full,
                 ))
                 .with_dying(3, []),
         );
@@ -282,6 +282,7 @@ fn app() -> App {
         registry.register(
             EntityTypeDef::new("hut")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_build(4, utils::site_initial(&[PoolId::HEALTH]))
                 .with_pool(Pool::health(40))
                 .with_passives([knitting]),
         );
@@ -294,6 +295,7 @@ fn app() -> App {
                     FixedU64::from_num(20),
                     FixedU64::ZERO,
                     FixedU64::from_num(3),
+                    PoolInitial::Full,
                 )),
         );
     }

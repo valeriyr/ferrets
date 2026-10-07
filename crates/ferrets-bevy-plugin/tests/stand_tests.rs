@@ -193,7 +193,7 @@ fn building(name: &str, side: u32, build_time: u32) -> EntityTypeDef {
         .with_location(utils::GROUND, CellSize::new(side, side), Solidity::Solid)
         .with_pool(Pool::health(100))
         .with_dying(1, [])
-        .with_build_time(build_time)
+        .with_build(build_time, utils::site_initial(&[PoolId::HEALTH]))
 }
 
 /// App with two rival players over a blight field that never recedes on its

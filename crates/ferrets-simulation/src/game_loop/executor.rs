@@ -25,7 +25,7 @@ use crate::{
     control_groups::{CONTROL_GROUP_COUNT, ControlGroups},
     entity_def,
     entity_index::EntityIndex,
-    events::{SpawnCause, SpendCause},
+    events::SpendCause,
     input::InputFrames,
     order::{AttackTarget, Order},
     player_research::PlayerResearch,
@@ -391,14 +391,7 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
             // the cell origin the spawn contract requires rather than
             // trusted to be one.
             let corner = FixedUVec2::from(CellPos::from(*position));
-            spawn::spawn_entity(
-                world,
-                type_name,
-                corner,
-                Some(player),
-                SpawnCause::Sandbox,
-                FieldReach::Initial,
-            );
+            spawn::spawn_sandbox(world, type_name, corner, Some(player), FieldReach::Initial);
         }
     }
 }

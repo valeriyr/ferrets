@@ -14,7 +14,7 @@ use ferrets_content::{
     kinds::Kinds,
     location::Solidity,
     player_buffs::PlayerBuffDef,
-    pool::Pool,
+    pool::{Pool, PoolInitial},
     pool_def::PoolId,
     price::{self, Price},
     registry::ContentRegistry,
@@ -1028,6 +1028,7 @@ fn research_content() -> (ContentView, ResearchId) {
                 FixedU64::from_num(50),
                 FixedU64::ONE,
                 FixedU64::ZERO,
+                PoolInitial::Full,
             ))
             .with_skills([battle_focus, second_wind]),
     );
@@ -1039,7 +1040,7 @@ fn research_content() -> (ContentView, ResearchId) {
             .with_location(LayerId::new(1), CellSize::ONE, Solidity::Solid)
             .with_pool(Pool::health(10))
             .with_price([("gold", 10)])
-            .with_build_time(4)
+            .with_build(4, utils::site_initial(&[PoolId::HEALTH]))
             .with_annex(
                 AloneConduct::Standing {
                     work: AnnexWork::Idles,

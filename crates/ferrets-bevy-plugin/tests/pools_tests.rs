@@ -16,7 +16,7 @@ use ferrets_content::{
         PoolCarry, RevertCarry, ViaInterrupted,
     },
     player_buffs::{PlayerBuffDef, PlayerBuffId},
-    pool::Pool,
+    pool::{Pool, PoolInitial},
     pool_def::PoolId,
     pool_shift::PoolShift,
     quantity::Quantity,
@@ -393,6 +393,164 @@ fn pool_new_form_gains_starts_full_and_pool_it_lacks_goes() {
 }
 
 #[test]
+fn pool_starts_at_its_declared_initial() {
+    let mut app = app();
+    let (wick, _) = utils::create_owned(&mut app, "wick", 5, 5, 0);
+    let (taper, _) = utils::create_owned(&mut app, "taper", 7, 5, 0);
+    utils::run_ticks(&mut app, 1);
+    // A quarter of 40 is 10; the taper's 15 stands as declared.
+    assert_eq!(utils::energy_as_u32(&app, wick), 10);
+    assert_eq!(utils::energy_as_u32(&app, taper), 15);
+    // Health says nothing: full.
+    assert_eq!(utils::health_as_u32(&app, wick), 50);
+}
+
+#[test]
+fn pool_new_form_gains_starts_at_its_initial() {
+    let mut app = app();
+    let (seed, _) = utils::create_owned(&mut app, "seed", 5, 5, 0);
+    utils::run_ticks(&mut app, 1);
+    // The seed holds no energy: the wick's is gained, not carried.
+    assert!(!entity_def::has_pool(app.world(), seed, PoolId::ENERGY));
+    utils::order_morph(&mut app, seed, "wick");
+    utils::run_ticks(&mut app, HATCHES);
+    // Gained, it starts at a quarter of 40: 10.
+    assert_eq!(entity_def::type_name(app.world(), seed), "wick");
+    assert_eq!(utils::energy_as_u32(&app, seed), 10);
+}
+
+#[test]
+fn share_initial_reads_maximum_its_passives_leave() {
+    let mut app = app();
+    let (lantern, _) = utils::create_owned(&mut app, "dim_lantern", 5, 5, 0);
+    utils::run_ticks(&mut app, 1);
+    // Half of 50 + 50 from `glow`: 50 of 100, not half of the bare 50.
+    assert_eq!(utils::health_as_u32(&app, lantern), 50);
+}
+
+#[test]
+fn kept_pool_carried_as_initial_starts_at_new_forms_initial() {
+    let mut app = app();
+    app.world_mut().resource_mut::<ContentRegistry>().register(
+        EntityTypeDef::new("carafe")
+            .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+            .with_pool(Pool::health(50))
+            .with_pool(Pool::energy(40))
+            .with_morphs([MorphTransition::new(
+                "wick",
+                MorphCourse::direct(MorphInterrupted::Reverts),
+                Quantity::Constant(2),
+                MorphPlacement::Reserve,
+                MorphCancel::Committed,
+                MorphReason::Change,
+                Vec::new(),
+                Vec::new(),
+                [(PoolId::ENERGY, PoolCarry::Initial)],
+            )]),
+    );
+    let (carafe, _) = utils::create_owned(&mut app, "carafe", 5, 5, 0);
+    utils::run_ticks(&mut app, 1);
+    pools::drain(app.world_mut(), carafe, PoolId::ENERGY, utils::fixed("35"));
+    utils::order_morph(&mut app, carafe, "wick");
+    utils::run_ticks(&mut app, HATCHES);
+    // 40 − 35 = 5 as a carafe; the wick starts it at its own quarter of 40: 10.
+    assert_eq!(entity_def::type_name(app.world(), carafe), "wick");
+    assert_eq!(utils::energy_as_u32(&app, carafe), 10);
+}
+
+#[test]
+fn initial_carry_enters_interim_and_lands_at_each_forms_initial() {
+    let mut app = carry_initial_app();
+    let (sprout, _) = utils::create_owned(&mut app, "sprout", 5, 5, 0);
+    utils::run_ticks(&mut app, 1);
+    // 10 as a sprout, 5 after a drain; the pod starts it at half of 40, 20.
+    pools::drain(app.world_mut(), sprout, PoolId::ENERGY, utils::fixed("5"));
+    utils::order_morph(&mut app, sprout, "bloom");
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(entity_def::type_name(app.world(), sprout), "pod");
+    assert_eq!(utils::energy_as_u32(&app, sprout), 20);
+    // The bloom starts it at a quarter of 60, 15.
+    utils::run_ticks(&mut app, 11);
+    assert_eq!(entity_def::type_name(app.world(), sprout), "bloom");
+    assert_eq!(utils::energy_as_u32(&app, sprout), 15);
+}
+
+#[test]
+fn initial_carry_reverts_to_origins_initial() {
+    let mut app = carry_initial_app();
+    let (sprout, _) = utils::create_owned(&mut app, "sprout", 5, 5, 0);
+    utils::run_ticks(&mut app, 1);
+    utils::order_morph(&mut app, sprout, "bloom");
+    utils::run_ticks(&mut app, 1);
+    // 20 in the pod, 2 after a drain; called off, the sprout starts it at 10.
+    pools::drain(app.world_mut(), sprout, PoolId::ENERGY, utils::fixed("18"));
+    utils::soft_cancel_orders(app.world_mut(), sprout);
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(entity_def::type_name(app.world(), sprout), "sprout");
+    assert_eq!(utils::energy_as_u32(&app, sprout), 10);
+}
+
+#[test]
+fn initial_carry_starts_pool_interim_lacked_at_initial() {
+    let mut app = carry_initial_app();
+    // Through a husk with no energy, landing on a fruit: a quarter of 60, 15.
+    let (sprout, _) = utils::create_owned(&mut app, "sprout", 5, 5, 0);
+    utils::run_ticks(&mut app, 1);
+    pools::drain(app.world_mut(), sprout, PoolId::ENERGY, utils::fixed("5"));
+    utils::order_morph(&mut app, sprout, "fruit");
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(entity_def::type_name(app.world(), sprout), "husk");
+    utils::run_ticks(&mut app, 11);
+    assert_eq!(entity_def::type_name(app.world(), sprout), "fruit");
+    assert_eq!(utils::energy_as_u32(&app, sprout), 15);
+
+    // Called off in the husk, back to the sprout's own 10.
+    let (other, _) = utils::create_owned(&mut app, "sprout", 8, 5, 0);
+    utils::run_ticks(&mut app, 1);
+    pools::drain(app.world_mut(), other, PoolId::ENERGY, utils::fixed("5"));
+    utils::order_morph(&mut app, other, "fruit");
+    utils::run_ticks(&mut app, 1);
+    utils::soft_cancel_orders(app.world_mut(), other);
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(entity_def::type_name(app.world(), other), "sprout");
+    assert_eq!(utils::energy_as_u32(&app, other), 10);
+}
+
+#[test]
+fn amount_initial_stands_whatever_its_passives_raise() {
+    let mut app = app();
+    let (lamp, _) = utils::create_owned(&mut app, "low_lamp", 5, 5, 0);
+    utils::run_ticks(&mut app, 1);
+    // 30 of 50 + 20 from `wings`: 30 as declared, not 30 + 20.
+    assert_eq!(utils::health_as_u32(&app, lamp), 30);
+}
+
+#[test]
+fn amount_initial_held_under_maximum_its_passives_lower() {
+    let mut app = app();
+    {
+        let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
+        let dimmed = registry.register_entity_buff("dimmed", passive_buff("-20", PoolShift::Clamp));
+        registry.register(
+            EntityTypeDef::new("squat_lamp")
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_pool(Pool::builtin(
+                    PoolId::HEALTH,
+                    FixedU64::from_num(50),
+                    FixedU64::ZERO,
+                    FixedU64::ZERO,
+                    PoolInitial::Amount(utils::fixed("45")),
+                ))
+                .with_passives([dimmed]),
+        );
+    }
+    let (lamp, _) = utils::create_owned(&mut app, "squat_lamp", 5, 5, 0);
+    utils::run_ticks(&mut app, 1);
+    // 45 held under 50 − 20 = 30.
+    assert_eq!(utils::health_as_u32(&app, lamp), 30);
+}
+
+#[test]
 fn interim_declared_full_enters_full() {
     let mut app = app();
     let (larva, _) = utils::create_owned(&mut app, "larva", 5, 5, 0);
@@ -753,7 +911,8 @@ fn entity_spawns_full_under_clamped_passive_raising_maximum() {
     let (lantern, _) = utils::create_owned(&mut app, "lantern", 5, 5, 0);
     utils::run_ticks(&mut app, 1);
 
-    // 50 + 50 from `glow`, filled after the passive is fitted: 100 of 100.
+    // 50 + 50 from `glow`, started again full after the passive is fitted:
+    // 100 of 100.
     assert_eq!(
         entity_def::effective_stat(app.world(), lantern, EntityStatId::MAX_HEALTH),
         Some(FixedU64::from_num(100))
@@ -1470,6 +1629,52 @@ fn app() -> App {
                 )]),
         );
         registry.register(vessel("lantern", 50, None).with_passives([glow]));
+        // A lantern starting at half its health, its maximum raised by `glow`.
+        registry.register(
+            EntityTypeDef::new("dim_lantern")
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_pool(Pool::builtin(
+                    PoolId::HEALTH,
+                    FixedU64::from_num(50),
+                    FixedU64::ZERO,
+                    FixedU64::ZERO,
+                    PoolInitial::Share(utils::fixed("0.5")),
+                ))
+                .with_passives([glow]),
+        );
+        // A lamp starting at 30 of its 50 health, its maximum raised by
+        // `wings` and the raise's difference given to the pool.
+        registry.register(
+            EntityTypeDef::new("low_lamp")
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_pool(Pool::builtin(
+                    PoolId::HEALTH,
+                    FixedU64::from_num(50),
+                    FixedU64::ZERO,
+                    FixedU64::ZERO,
+                    PoolInitial::Amount(utils::fixed("30")),
+                ))
+                .with_passives([wings]),
+        );
+        // A wick starting at a quarter of its 40 energy, and a taper at 15.
+        for (name, initial) in [
+            ("wick", PoolInitial::Share(utils::fixed("0.25"))),
+            ("taper", PoolInitial::Amount(utils::fixed("15"))),
+        ] {
+            registry.register(
+                EntityTypeDef::new(name)
+                    .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                    .with_pool(Pool::health(50))
+                    .with_pool(Pool::builtin(
+                        PoolId::ENERGY,
+                        FixedU64::from_num(40),
+                        FixedU64::ZERO,
+                        FixedU64::ZERO,
+                        initial,
+                    ))
+                    .with_dying(2, []),
+            );
+        }
         for name in ["butterfly", "hawkmoth", "skipper"] {
             registry.register(vessel(name, 80, None));
         }
@@ -1505,10 +1710,16 @@ fn app() -> App {
         registry.register(vessel("cocoon", 100, None));
         registry.register(vessel("moth", 80, None));
         registry.register(vessel("beetle", 80, None));
-        registry.register(vessel("seed", 50, None).with_morphs([pour(
-            "flask",
-            &[(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
-        )]));
+        registry.register(vessel("seed", 50, None).with_morphs([
+            pour(
+                "flask",
+                &[(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
+            ),
+            pour(
+                "wick",
+                &[(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
+            ),
+        ]));
     }
     app.world_mut().resource::<ContentRegistry>().validate();
     app.world_mut().resource_mut::<GameSession>().start();
@@ -1618,4 +1829,68 @@ fn player_buff_id(app: &App, name: &str) -> PlayerBuffId {
         .resource::<ContentRegistry>()
         .player_buff(name)
         .expect("the fixture registers the buff")
+}
+
+/// App whose `sprout` (energy 40 starting at 10) changes into a `bloom`
+/// through a `pod` (energy 40 starting at half) or into a `fruit` through a
+/// `husk` with no energy, both destinations at a quarter of 60; every carry
+/// of energy, the reverts included, starts it at the form's initial.
+fn carry_initial_app() -> App {
+    let mut app = utils::make_app(vec![PlayerSlot::occupied(0, PlayerType::Human, None, None)]);
+    {
+        let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
+        let energy = |maximum: u32, initial: PoolInitial| {
+            Pool::builtin(
+                PoolId::ENERGY,
+                FixedU64::from_num(maximum),
+                FixedU64::ZERO,
+                FixedU64::ZERO,
+                initial,
+            )
+        };
+        let vessel = |name: &str| {
+            EntityTypeDef::new(name)
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_pool(Pool::health(50))
+        };
+        registry
+            .register(vessel("pod").with_pool(energy(40, PoolInitial::Share(utils::fixed("0.5")))));
+        registry.register(vessel("husk"));
+        for name in ["bloom", "fruit"] {
+            registry.register(
+                vessel(name).with_pool(energy(60, PoolInitial::Share(utils::fixed("0.25")))),
+            );
+        }
+        let via = |into: &str, interim: &str, enter: Vec<(PoolId, PoolCarry)>| {
+            MorphTransition::new(
+                into,
+                MorphCourse::via(
+                    interim,
+                    enter,
+                    ViaInterrupted::reverts([(
+                        PoolId::ENERGY,
+                        RevertCarry::Carry(PoolCarry::Initial),
+                    )]),
+                ),
+                Quantity::Constant(10),
+                MorphPlacement::Reserve,
+                MorphCancel::Forfeit,
+                MorphReason::Change,
+                Vec::new(),
+                Vec::new(),
+                [(PoolId::ENERGY, PoolCarry::Initial)],
+            )
+        };
+        registry.register(
+            vessel("sprout")
+                .with_pool(energy(40, PoolInitial::Amount(utils::fixed("10"))))
+                .with_morphs([
+                    via("bloom", "pod", vec![(PoolId::ENERGY, PoolCarry::Initial)]),
+                    via("fruit", "husk", Vec::new()),
+                ]),
+        );
+    }
+    app.world_mut().resource::<ContentRegistry>().validate();
+    app.world_mut().resource_mut::<GameSession>().start();
+    app
 }

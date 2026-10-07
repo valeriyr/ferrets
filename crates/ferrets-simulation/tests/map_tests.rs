@@ -2,10 +2,13 @@
 //! registers the content's layer vocabulary, and per-cell terrain seeds which
 //! layers each cell blocks.
 
+mod utils;
+
 use ferrets_content::{
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     location::{LocationDef, Solidity},
+    pool::{Pool, PoolInitial},
     registry::ContentRegistry,
 };
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize, projection::Projection};
@@ -465,9 +468,80 @@ fn placement_of_remains_panics() {
         cell: (2, 2),
         owner: None,
         amount: None,
+        pools: Vec::new(),
     });
 
     Map::from_data(&data, &registry);
+}
+
+#[test]
+#[should_panic(expected = "placement 'post' names the unregistered pool 'mana'")]
+fn placement_naming_unregistered_pool_panics() {
+    place_post_with(vec![("mana".to_string(), PoolInitial::Full)]);
+}
+
+#[test]
+#[should_panic(expected = "placement 'ghost' names the unregistered pool 'mana'")]
+fn placement_of_unregistered_type_naming_unregistered_pool_panics() {
+    let mut registry = ContentRegistry::default();
+    let ground = registry.register_layer("ground");
+    registry.register_terrain("grass", ground);
+    let mut data = MapData::new("field", Projection::Isometric, 8, 8);
+    data.fill_terrain("grass");
+    data.add_placement(Placement {
+        type_name: "ghost".to_string(),
+        cell: (2, 2),
+        owner: None,
+        amount: None,
+        pools: vec![("mana".to_string(), PoolInitial::Full)],
+    });
+    Map::from_data(&data, &registry);
+}
+
+#[test]
+#[should_panic(
+    expected = "placement 'post' names the energy pool, which its type does not declare"
+)]
+fn placement_naming_undeclared_pool_panics() {
+    place_post_with(vec![("energy".to_string(), PoolInitial::Full)]);
+}
+
+#[test]
+#[should_panic(expected = "placement 'post' names the health pool twice")]
+fn placement_naming_pool_twice_panics() {
+    place_post_with(vec![
+        ("health".to_string(), PoolInitial::Full),
+        ("health".to_string(), PoolInitial::Full),
+    ]);
+}
+
+#[test]
+#[should_panic(expected = "placement 'post' starts the health pool at a share of 1.5, above 1")]
+fn placement_starting_share_above_whole_panics() {
+    place_post_with(vec![(
+        "health".to_string(),
+        PoolInitial::Share(utils::fixed("1.5")),
+    )]);
+}
+
+#[test]
+#[should_panic(
+    expected = "placement 'post' starts the health pool at 150, above its maximum of 100"
+)]
+fn placement_starting_amount_above_maximum_panics() {
+    place_post_with(vec![(
+        "health".to_string(),
+        PoolInitial::Amount(FixedU64::from_num(150)),
+    )]);
+}
+
+#[test]
+#[should_panic(expected = "placement 'post' starts the health pool at 0")]
+fn placement_starting_health_empty_panics() {
+    place_post_with(vec![(
+        "health".to_string(),
+        PoolInitial::Share(FixedU64::ZERO),
+    )]);
 }
 
 #[test]
@@ -708,4 +782,26 @@ fn lake_map() -> MapData {
     data.fill_terrain("grass");
     data.set_terrain((1, 1), "water");
     data
+}
+
+/// Builds a map placing a post of 100 health with `pools` started as named.
+fn place_post_with(pools: Vec<(String, PoolInitial)>) -> Map {
+    let mut registry = ContentRegistry::default();
+    let ground = registry.register_layer("ground");
+    registry.register_terrain("grass", ground);
+    registry.register(
+        EntityTypeDef::new("post")
+            .with_location(ground, CellSize::ONE, Solidity::Solid)
+            .with_pool(Pool::health(100)),
+    );
+    let mut data = MapData::new("field", Projection::Isometric, 8, 8);
+    data.fill_terrain("grass");
+    data.add_placement(Placement {
+        type_name: "post".to_string(),
+        cell: (2, 2),
+        owner: None,
+        amount: None,
+        pools,
+    });
+    Map::from_data(&data, &registry)
 }

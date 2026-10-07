@@ -30,6 +30,7 @@ use ferrets_content::{
         MorphCancel, MorphCourse, MorphInterrupted, MorphPlacement, MorphReason, MorphTransition,
         PoolCarry, RevertCarry, ViaInterrupted,
     },
+    pool::PoolInitial,
     pool_def::PoolId,
     registry::ContentRegistry,
 };
@@ -431,6 +432,7 @@ fn begin(
         .get::<PoolsComponent>(entity)
         .expect("a simulation entity carries a pool store")
         .iter()
+        .map(|entry| (entry.pool(), entry.value()))
         .collect();
     let morph = MorphComponent {
         from: entity_def::type_id(world, entity),
@@ -682,7 +684,8 @@ fn land(
         .get::<PoolsComponent>(entity)
         .expect("a simulation entity carries a pool store")
         .iter()
-        .map(|(pool, current)| {
+        .map(|entry| {
+            let (pool, current) = (entry.pool(), entry.value());
             let maximum =
                 entity_def::effective_stat(world, entity, registry.pool_def(pool).maximum_stat())
                     .expect("a pool held stands under its maximum");
@@ -746,12 +749,13 @@ fn land(
     stats::recompute_stats_of(world, entity);
 
     // The pools are re-fitted to what the destination declares: a form with
-    // the stat fills it as `fills` names it — moved by a shift from what it held,
-    // full, or put back to what it held before the change — keeps one nothing
-    // names, held under its maximum, takes one a form on the way lacked from
-    // what it held then, and starts full when there is nothing to carry, keep
-    // or restore; a form without it loses the pool outright,
-    // because a zero-maximum pool would read as dead rather than as poolless.
+    // the stat fills it as `fills` names it — moved by a shift from what it
+    // held, full, at the destination's initial, or put back to what it held
+    // before the change — keeps one nothing names, held under its maximum,
+    // takes one a form on the way lacked from what it held then, and starts
+    // at its initial when there is nothing to carry, keep or restore; a form
+    // without it loses the pool outright, because a zero-maximum pool would
+    // read as dead rather than as poolless.
     // The health pool keeps its last hit across the change.
     //
     // A pool a form on the way lacked is replayed first, every one of them
@@ -817,14 +821,24 @@ fn land(
                         pool_shifts::shifted(pool, pool_shift, carried, origin_maximum, new)
                     }
                     Some(PoolFill::Carry(PoolCarry::Full)) => new,
+                    Some(PoolFill::Carry(PoolCarry::Initial)) => {
+                        declared_initial(world, type_id, pool).under(new)
+                    }
                     Some(PoolFill::Restore(value)) => value.min(new),
                 };
-                pools::fill(world, entity, pool);
+                pools::seed(world, entity, pool, PoolInitial::Full);
                 follow(world, entity, pool, value);
             }
-            (Some(_), HeldPool::Standing { .. }, Some(PoolFill::Carry(PoolCarry::Full)))
-            | (Some(_), HeldPool::Gained, _) => {
-                pools::fill(world, entity, pool);
+            (Some(_), HeldPool::Standing { .. }, Some(PoolFill::Carry(PoolCarry::Full))) => {
+                pools::reseed(world, entity, pool, PoolInitial::Full);
+            }
+            (Some(_), HeldPool::Standing { .. }, Some(PoolFill::Carry(PoolCarry::Initial))) => {
+                let initial = declared_initial(world, type_id, pool);
+                pools::reseed(world, entity, pool, initial);
+            }
+            (Some(_), HeldPool::Gained, _) => {
+                let initial = declared_initial(world, type_id, pool);
+                pools::seed(world, entity, pool, initial);
             }
             (None, _, _) => {
                 if entity_def::has_pool(world, entity, pool) {
@@ -1302,7 +1316,7 @@ fn restore_standing_presence(
 /// which takes the registry out of the world for the call.
 fn follow(world: &mut World, entity: Entity, pool: PoolId, value: FixedU64) {
     world.resource_scope(|world, registry: Mut<ContentRegistry>| {
-        pools::follow(world, &registry, entity, pool, value);
+        pools::follow_pool(world, &registry, entity, pool, value);
     });
 }
 
@@ -1383,4 +1397,16 @@ fn carried(carries: impl Iterator<Item = (PoolId, PoolCarry)>) -> Vec<(PoolId, P
     carries
         .map(|(pool, carry)| (pool, PoolFill::Carry(carry)))
         .collect()
+}
+
+/// The initial the form `type_id` declares for `pool`. Panics when the form
+/// does not declare the pool.
+fn declared_initial(world: &World, type_id: EntityTypeId, pool: PoolId) -> PoolInitial {
+    world
+        .resource::<ContentRegistry>()
+        .def(type_id)
+        .base_stats
+        .pool(pool)
+        .expect("a pool a form settles is one it declares")
+        .initial()
 }
