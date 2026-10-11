@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use bevy::prelude::*;
 use ferrets_bevy_plugin::ai::{AiPlugin, AiRuntimes, game_view, install_ai_runtimes};
 use ferrets_content::{entity_stats::EntityStatId, stats::ModifierOp};
+use ferrets_geometry::cell_pos::CellPos;
 use ferrets_replay::{buffer::SharedBuffer, recorder::Recorder, replay::Replay};
 use ferrets_script::{
     ai::view::content::ContentView,
@@ -17,16 +18,15 @@ use ferrets_script::{
 use ferrets_simulation::{
     checksum::{self, CHECKSUM_INTERVAL},
     command::PlayerCommand,
-    components::{
-        hidden::HiddenComponent, order_queue::OrderQueueComponent,
-        resource::ResourceSourceComponent,
-    },
+    components::{order_queue::OrderQueueComponent, resource::ResourceSourceComponent},
+    entity_def,
     input::{InputFrames, PlayerFrame, SYNC_LATENCY},
     resources::PlayerResources,
     session::{
         GameSession, ai_detection::AiDetection, ai_vision::AiVision, finish_policy::FinishPolicy,
         player_id::PlayerId, player_slot::PlayerSlot, player_type::PlayerType,
     },
+    spawn::{self, Boarding},
 };
 
 //
@@ -234,9 +234,9 @@ fn game_view_classifies_and_snapshots_entities() {
         .amount = 900;
     // The source takes no orders.
     world.entity_mut(mine).remove::<OrderQueueComponent>();
-    world.entity_mut(hidden_own).insert(HiddenComponent);
-    world.entity_mut(hidden_enemy).insert(HiddenComponent);
-    world.entity_mut(hidden_ally).insert(HiddenComponent);
+    for hidden in [hidden_own, hidden_enemy, hidden_ally] {
+        spawn::hide_entity(world, hidden);
+    }
     world.resource_mut::<PlayerResources>().add(1, "gold", 120);
 
     let view = game_view(
@@ -261,7 +261,9 @@ fn game_view_classifies_and_snapshots_entities() {
     assert_eq!(worker.health, Some(20));
     assert!(worker.idle && !worker.hidden && !worker.under_construction);
     assert!(worker.carrying.is_none() && worker.resource_amount.is_none());
+    // The hidden one is listed where it went in.
     assert!(view.my_entities[1].hidden);
+    assert_eq!((view.my_entities[1].x, view.my_entities[1].y), (7, 5));
 
     // An ally's entities are listed by ownership, the hidden one flagged, as
     // the brain's own are.
@@ -348,6 +350,235 @@ fn game_view_rounds_fractional_supply_use_up() {
         AiDetection::Detectors,
     );
     assert_eq!(view.supply_used, 1);
+}
+
+#[test]
+fn passenger_aboard_another_side_holder_is_listed_where_it_boarded() {
+    let mut app = utils::transport_app();
+    // A raft boards anyone; this one is player 2's, player 1's rival.
+    let (raft, _) = utils::create_owned(&mut app, "raft", 10, 10, 2);
+    let (rifleman, rifleman_id) = utils::create_owned(&mut app, "rifleman", 11, 10, 1);
+    assert_eq!(
+        spawn::board(app.world_mut(), rifleman, raft),
+        Boarding::Boarded
+    );
+
+    let view = game_view(
+        app.world_mut(),
+        1,
+        "human",
+        AiVision::Filtered,
+        AiDetection::Detectors,
+    );
+
+    // The brain keeps its own rifleman in view, where it boarded, not at the
+    // rival raft it cannot sight.
+    let rifleman = view
+        .my_entities
+        .iter()
+        .find(|entity| entity.id == rifleman_id.0)
+        .expect("a side keeps its own in view");
+    assert!(rifleman.hidden);
+    assert_eq!((rifleman.x, rifleman.y), (11, 10));
+    assert!(view.enemy_entities.is_empty(), "the raft itself is unseen");
+}
+
+#[test]
+fn passenger_aboard_sighted_holder_of_another_side_is_listed_where_holder_is() {
+    let mut app = utils::transport_app();
+    let (raft, _) = utils::create_owned(&mut app, "raft", 10, 10, 2);
+    let (rifleman, rifleman_id) = utils::create_owned(&mut app, "rifleman", 11, 10, 1);
+    assert_eq!(
+        spawn::board(app.world_mut(), rifleman, raft),
+        Boarding::Boarded
+    );
+    // A second rifleman of the brain's side stands in sight of the raft.
+    utils::create_owned(&mut app, "rifleman", 14, 10, 1);
+    utils::run_ticks(&mut app, 1);
+
+    let view = game_view(
+        app.world_mut(),
+        1,
+        "human",
+        AiVision::Filtered,
+        AiDetection::Detectors,
+    );
+
+    // The brain sees the raft, so it knows where its rifleman is carried.
+    let rifleman = view
+        .my_entities
+        .iter()
+        .find(|entity| entity.id == rifleman_id.0)
+        .expect("a side keeps its own in view");
+    assert!(rifleman.hidden);
+    assert_eq!((rifleman.x, rifleman.y), (10, 10));
+}
+
+#[test]
+fn sighted_holder_of_another_side_lists_no_passengers() {
+    let mut app = utils::transport_app();
+    let (raft, raft_id) = utils::create_owned(&mut app, "raft", 10, 10, 2);
+    let (rider, _) = utils::create_owned(&mut app, "rifleman", 11, 10, 2);
+    assert_eq!(
+        spawn::board(app.world_mut(), rider, raft),
+        Boarding::Boarded
+    );
+    utils::create_owned(&mut app, "rifleman", 14, 10, 1);
+    utils::run_ticks(&mut app, 1);
+
+    let view = game_view(
+        app.world_mut(),
+        1,
+        "human",
+        AiVision::Filtered,
+        AiDetection::Detectors,
+    );
+
+    // The raft is in sight; what rides inside it is not.
+    let raft = view
+        .enemy_entities
+        .iter()
+        .find(|entity| entity.id == raft_id.0)
+        .expect("the raft stands in the brain's sight");
+    assert!(raft.passengers.is_empty());
+}
+
+#[test]
+fn worker_inside_own_walking_job_is_listed_where_job_is() {
+    let mut app = utils::transport_app();
+    let (rifleman, rifleman_id) = utils::create_owned(&mut app, "rifleman", 11, 10, 0);
+    let (surgeon, surgeon_id) = utils::create_owned(&mut app, "surgeon", 12, 10, 0);
+    utils::wound(&mut app, rifleman, "20");
+    utils::select(&mut app, surgeon_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Repair {
+            target: rifleman_id,
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY + 2);
+    assert!(entity_def::hidden(app.world(), surgeon));
+
+    // The patient walks on with the surgeon inside it.
+    utils::select(&mut app, rifleman_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Move {
+            target: utils::pos(11, 16),
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, 8);
+    let patient_at = CellPos::from(entity_def::position(app.world(), rifleman));
+
+    let view = game_view(
+        app.world_mut(),
+        0,
+        "human",
+        AiVision::Filtered,
+        AiDetection::Detectors,
+    );
+    let listed = view
+        .my_entities
+        .iter()
+        .find(|entity| entity.id == surgeon_id.0)
+        .expect("a side keeps its own in view");
+    assert!(listed.hidden);
+    assert_ne!(patient_at, CellPos::new(12, 10));
+    assert_eq!((listed.x, listed.y), (patient_at.x, patient_at.y));
+}
+
+#[test]
+fn rider_of_holder_inside_unseen_job_is_listed_where_holder_went_in() {
+    let mut app = utils::transport_app();
+    let (seam, seam_id) =
+        utils::create_entity(app.world_mut(), "ore_seam", utils::pos(10, 5), None).unwrap();
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(seam)
+        .unwrap()
+        .amount = 100;
+    let (hauler, hauler_id) = utils::create_owned(&mut app, "hauler", 9, 5, 0);
+    let (rifleman, rifleman_id) = utils::create_owned(&mut app, "rifleman", 8, 5, 0);
+    assert_eq!(
+        spawn::board(app.world_mut(), rifleman, hauler),
+        Boarding::Boarded
+    );
+    utils::select(&mut app, hauler_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SendToEntity {
+            target: seam_id,
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    assert!(entity_def::hidden(app.world(), hauler));
+
+    // The hauler works inside a seam nobody of the brain's sights: both it and
+    // its rider are listed where the hauler went in, (9, 5), not at the seam.
+    let view = game_view(
+        app.world_mut(),
+        0,
+        "human",
+        AiVision::Filtered,
+        AiDetection::Detectors,
+    );
+    let listed = |id: u32| {
+        let entity = view
+            .my_entities
+            .iter()
+            .find(|entity| entity.id == id)
+            .expect("a side keeps its own in view");
+        (entity.x, entity.y)
+    };
+    assert_eq!(listed(hauler_id.0), (9, 5));
+    assert_eq!(listed(rifleman_id.0), (9, 5));
+}
+
+#[test]
+fn carrier_waiting_beside_removed_source_is_listed_where_source_stood() {
+    let mut app = utils::orders_app();
+    let (worker, worker_id) = utils::create_owned(&mut app, "lone_digger", 5, 5, 0);
+    let (seam, seam_id) = utils::create_owned(&mut app, "roaming_seam", 9, 5, 0);
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(seam)
+        .unwrap()
+        .amount = 40;
+    utils::create_owned(&mut app, "depot", 2, 4, 0);
+    utils::select(&mut app, worker_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SendToEntity {
+            target: seam_id,
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, 10);
+    utils::set_all_cells_statically_occupied(app.world_mut(), true);
+    // The twenty-tick trip ends nineteen ticks on, boxed in.
+    utils::run_ticks(&mut app, 19);
+    assert!(entity_def::pending_reveal(app.world(), worker));
+    spawn::destroy_entity(app.world_mut(), seam);
+    utils::run_ticks(&mut app, 1);
+
+    // The seam is gone; the digger waiting beside it is listed where its
+    // return last searched, the seam's own cell (9, 5), not where it went in,
+    // (8, 5).
+    let view = game_view(
+        app.world_mut(),
+        0,
+        "human",
+        AiVision::Filtered,
+        AiDetection::Detectors,
+    );
+    let digger = view
+        .my_entities
+        .iter()
+        .find(|entity| entity.id == worker_id.0)
+        .expect("a side keeps its own in view");
+    assert!(digger.hidden);
+    assert_eq!((digger.x, digger.y), (9, 5));
 }
 
 //

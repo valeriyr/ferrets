@@ -28,15 +28,13 @@ use ferrets_pathfinder::{mover_shape::MoverShape, nav_grid::NavGrid};
 use ferrets_simulation::{
     command::PlayerCommand,
     components::{
-        attached::AttachedComponent,
         build::{self, BuildComponent, SiteWork, UnderConstructionComponent},
         entity_info::EntityInfoComponent,
-        hidden::HiddenComponent,
         location::LocationComponent,
         order_queue::{CancelPolicy, OrderQueueComponent},
         pools,
     },
-    entity_def,
+    entity_def::{self, Operation},
     entity_index::EntityIndex,
     events::{DeathCause, SimulationEvent},
     map::Map,
@@ -554,14 +552,14 @@ fn build_constructs_building() {
     {
         let world = app.world_mut();
         assert_eq!(utils::gold(world), 30);
-        assert!(world.get::<HiddenComponent>(worker).is_some());
+        assert!(entity_def::hidden(world, worker));
         assert_eq!(under_construction(world), 1);
     }
 
     // Construction completes: the marker is gone and the worker reappears next to
     // the building.
     utils::run_ticks(&mut app, 6);
-    assert!(app.world_mut().get::<HiddenComponent>(worker).is_none());
+    assert!(!entity_def::hidden(app.world(), worker));
     let world = app.world_mut();
     assert_eq!(under_construction(world), 0);
 
@@ -650,7 +648,7 @@ fn force_cancel_brings_hidden_builder_back_and_keeps_price_spent() {
     // reappears next to the site. Only CancelBuild pays a site back, so the 50
     // the depot cost stays spent.
     utils::run_ticks(&mut app, 1);
-    assert!(app.world_mut().get::<HiddenComponent>(worker).is_none());
+    assert!(!entity_def::hidden(app.world(), worker));
     assert_eq!(utils::gold(app.world_mut()), 30);
     utils::run_ticks(&mut app, 3);
     assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 0);
@@ -710,7 +708,7 @@ fn site_destroyed_mid_construction_frees_builder() {
         },
     );
     utils::run_ticks(&mut app, utils::APPLY);
-    assert!(app.world_mut().get::<HiddenComponent>(worker).is_some());
+    assert!(entity_def::hidden(app.world(), worker));
 
     // The site is destroyed under the builder working inside it.
     let site = utils::single_owned_of_type(app.world_mut(), "depot", 0);
@@ -718,7 +716,7 @@ fn site_destroyed_mid_construction_frees_builder() {
     utils::run_ticks(&mut app, 2);
 
     assert!(
-        app.world_mut().get::<HiddenComponent>(worker).is_none(),
+        !entity_def::hidden(app.world(), worker),
         "losing the site puts the builder back on the map"
     );
     assert!(
@@ -754,14 +752,14 @@ fn builder_working_in_open_stays_on_map() {
         "the site went up all the same"
     );
     assert!(
-        app.world_mut().get::<HiddenComponent>(mason).is_none(),
+        !entity_def::hidden(app.world(), mason),
         "a builder declared present raises the site from beside it instead of \
          vanishing into it"
     );
 
     // Still exposed for the whole job, then finishes normally.
     utils::run_ticks(&mut app, 6);
-    assert!(app.world_mut().get::<HiddenComponent>(mason).is_none());
+    assert!(!entity_def::hidden(app.world(), mason));
     assert_eq!(
         under_construction(app.world_mut()),
         0,
@@ -869,7 +867,7 @@ fn builder_standing_on_site_blocks_it_and_is_never_moved() {
         stood_at,
         "the builder is left exactly where it stood"
     );
-    assert!(app.world_mut().get::<HiddenComponent>(mason).is_none());
+    assert!(!entity_def::hidden(app.world(), mason));
     assert!(utils::order_queue_is_empty(app.world_mut(), mason));
 }
 
@@ -895,12 +893,12 @@ fn builder_that_works_hidden_raises_site_it_stands_on() {
     // up on the cell it was standing on.
     utils::run_ticks(&mut app, utils::APPLY);
     assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
-    assert!(app.world_mut().get::<HiddenComponent>(worker).is_some());
+    assert!(entity_def::hidden(app.world(), worker));
 
     // Six ticks of work later it is back out beside what it raised.
     utils::run_ticks(&mut app, 6);
     assert_eq!(under_construction(app.world_mut()), 0);
-    assert!(app.world_mut().get::<HiddenComponent>(worker).is_none());
+    assert!(!entity_def::hidden(app.world(), worker));
 }
 
 #[test]
@@ -919,7 +917,7 @@ fn boxed_in_builder_finishes_site_and_waits_to_reappear() {
         },
     );
     utils::run_ticks(&mut app, utils::APPLY);
-    assert!(app.world_mut().get::<HiddenComponent>(worker).is_some());
+    assert!(entity_def::hidden(app.world(), worker));
 
     // Take away every cell it could come back out onto, then let the work finish.
     utils::set_all_cells_statically_occupied(app.world_mut(), true);
@@ -934,6 +932,132 @@ fn boxed_in_builder_finishes_site_and_waits_to_reappear() {
         "the site finished on time"
     );
     utils::assert_reveal_deferred_then_lands_on(&mut app, worker, CellPos::new(9, 9));
+}
+
+#[test]
+fn queued_order_waits_while_boxed_in_builder_has_no_cell_to_return_to() {
+    let mut app = utils::orders_app();
+    let (worker, worker_id) = utils::create_owned(&mut app, "worker", 10, 10, 0);
+    utils::grant_gold(&mut app, 80);
+
+    utils::push_command(
+        &mut app,
+        PlayerCommand::BuildEntity {
+            builder: worker_id,
+            type_name: "depot".into(),
+            position: utils::pos(10, 10),
+            flush: true,
+        },
+    );
+    utils::select(&mut app, worker_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Move {
+            target: utils::pos(14, 10),
+            flush: false,
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY);
+    utils::set_all_cells_statically_occupied(app.world_mut(), true);
+    utils::run_ticks(&mut app, 6 + 3);
+
+    // The site is done and the builder waits off the map; the walk queued
+    // behind the build waits with it rather than starting from no cell.
+    assert!(entity_def::hidden(app.world(), worker));
+    assert!(entity_def::pending_reveal(app.world(), worker));
+    assert!(
+        !utils::order_queue_is_empty(app.world_mut(), worker),
+        "the walk is still queued"
+    );
+
+    utils::set_all_cells_statically_occupied(app.world_mut(), false);
+    utils::run_ticks(&mut app, 30);
+    assert_eq!(utils::cell_of(app.world(), worker), CellPos::new(14, 10));
+}
+
+#[test]
+fn seated_builder_is_left_to_its_order_when_site_is_destroyed() {
+    let mut app = utils::orders_app();
+    let (roofer, roofer_id) = utils::create_owned(&mut app, "roofer", 9, 10, 0);
+    utils::grant_gold(&mut app, 80);
+    order_depot(&mut app, roofer_id);
+    utils::run_ticks(&mut app, utils::APPLY);
+    assert!(entity_def::attached(app.world(), roofer));
+    let site = utils::owned_of_type(app.world_mut(), "depot", 0)[0];
+
+    // The site's death sets down only workers hidden inside it: a seated one
+    // is still in its berth as the site dies, and leaves through its own
+    // order.
+    spawn::destroy_entity(app.world_mut(), site);
+    assert!(entity_def::attached(app.world(), roofer));
+}
+
+#[test]
+fn boxed_in_attached_builder_goes_off_map_and_waits() {
+    let mut app = utils::orders_app();
+    let (roofer, roofer_id) = utils::create_owned(&mut app, "roofer", 9, 10, 0);
+    utils::grant_gold(&mut app, 80);
+    order_depot(&mut app, roofer_id);
+    utils::run_ticks(&mut app, utils::APPLY);
+    assert!(entity_def::attached(app.world(), roofer));
+
+    // No cell to step onto when the work ends: the roofer gives its berth
+    // back and waits off the map with its return deferred, stranded like any
+    // other body owed a cell; the depot is complete meanwhile.
+    utils::set_all_cells_statically_occupied(app.world_mut(), true);
+    utils::run_ticks(&mut app, 6);
+    assert!(!entity_def::attached(app.world(), roofer));
+    assert!(entity_def::hidden(app.world(), roofer));
+    assert!(entity_def::pending_reveal(app.world(), roofer));
+    assert_eq!(
+        entity_def::operation(app.world(), roofer),
+        Operation::Stranded
+    );
+
+    // The cell frees: the roofer comes back onto it.
+    app.world_mut().resource_mut::<Map>().set_static_occupied(
+        utils::GROUND,
+        CellPos::new(9, 9),
+        false,
+    );
+    utils::run_ticks(&mut app, 1);
+    assert!(!entity_def::hidden(app.world(), roofer));
+    assert!(!entity_def::pending_reveal(app.world(), roofer));
+    assert_eq!(utils::cell_of(app.world(), roofer), CellPos::new(9, 9));
+}
+
+#[test]
+fn destroyed_while_waiting_for_cell_dies_off_map() {
+    let mut app = utils::orders_app();
+    let (worker, worker_id) = utils::create_owned(&mut app, "worker", 10, 10, 0);
+    utils::grant_gold(&mut app, 80);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::BuildEntity {
+            builder: worker_id,
+            type_name: "depot".into(),
+            position: utils::pos(10, 10),
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY);
+    utils::set_all_cells_statically_occupied(app.world_mut(), true);
+    utils::run_ticks(&mut app, 6);
+    assert!(entity_def::pending_reveal(app.world(), worker));
+
+    // A dying entity never comes back: the deferred return is dropped at
+    // once, and a cell freeing afterwards sets nothing down.
+    spawn::destroy_entity(app.world_mut(), worker);
+    assert!(!entity_def::pending_reveal(app.world(), worker));
+    app.world_mut().resource_mut::<Map>().set_static_occupied(
+        utils::GROUND,
+        CellPos::new(9, 9),
+        false,
+    );
+    utils::run_ticks(&mut app, 1);
+    assert!(app.world().get::<LocationComponent>(worker).is_none());
+    utils::run_ticks(&mut app, 2);
+    utils::assert_despawned(app.world_mut(), worker);
 }
 
 #[test]
@@ -988,8 +1112,8 @@ fn crew_shares_one_site_and_each_member_adds_own_work() {
         30,
         "only the builder that placed the site paid for it"
     );
-    assert!(app.world_mut().get::<HiddenComponent>(first).is_none());
-    assert!(app.world_mut().get::<HiddenComponent>(second).is_none());
+    assert!(!entity_def::hidden(app.world(), first));
+    assert!(!entity_def::hidden(app.world(), second));
 
     // Two builders on the site, two ticks of work a tick.
     let before = site_progress(app.world_mut());
@@ -1237,8 +1361,8 @@ fn attached_builder_stands_on_site_holding_no_cells() {
     // On the site — its footprint cell nearest to where the roofer stood — and
     // on the map: visible to targeting, never hidden.
     assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
-    assert!(app.world().get::<AttachedComponent>(roofer).is_some());
-    assert!(app.world().get::<HiddenComponent>(roofer).is_none());
+    assert!(entity_def::attached(app.world(), roofer));
+    assert!(!entity_def::hidden(app.world(), roofer));
     assert_eq!(utils::cell_of(app.world(), roofer), CellPos::new(10, 10));
     assert!(
         app.world()
@@ -1254,7 +1378,7 @@ fn attached_builder_stands_on_site_holding_no_cells() {
     // Six ticks of work later it steps back out onto a free cell beside the depot.
     utils::run_ticks(&mut app, 6);
     assert_eq!(under_construction(app.world_mut()), 0);
-    assert!(app.world().get::<AttachedComponent>(roofer).is_none());
+    assert!(!entity_def::attached(app.world(), roofer));
     let depot = depot(app.world_mut());
     utils::assert_adjacent_to_footprint(app.world_mut(), roofer, depot);
     let cell = utils::cell_of(app.world(), roofer);
@@ -1382,14 +1506,14 @@ fn cancel_build_brings_hidden_builder_back_out() {
 
     order_depot(&mut app, worker_id);
     utils::run_ticks(&mut app, utils::APPLY + 2);
-    assert!(app.world().get::<HiddenComponent>(worker).is_some());
+    assert!(entity_def::hidden(app.world(), worker));
     let depot = depot(app.world_mut());
     let site = entity_def::simulation_id(app.world(), depot);
 
     utils::push_command(&mut app, PlayerCommand::CancelBuild { site });
     utils::run_ticks(&mut app, utils::APPLY + 3);
     assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 0);
-    assert!(app.world().get::<HiddenComponent>(worker).is_none());
+    assert!(!entity_def::hidden(app.world(), worker));
     assert!(utils::order_queue_is_empty(app.world_mut(), worker));
 }
 
@@ -1456,7 +1580,7 @@ fn unattended_builder_places_site_and_leaves_it_to_advance_itself() {
         assert_eq!(under_construction(world), 1);
         assert!(crew_of_site(world).is_empty());
         assert_eq!(founder_of_site(world), Some(architect_id));
-        assert!(world.get::<HiddenComponent>(architect).is_none());
+        assert!(!entity_def::hidden(world, architect));
         assert!(utils::order_queue_is_empty(world, architect));
     }
 
@@ -1528,7 +1652,7 @@ fn consumed_builder_works_site_hidden_and_is_consumed_when_it_completes() {
         assert_eq!(utils::count_of_type(world, "depot"), 1);
         assert_eq!(utils::gold(world), 30);
         assert_eq!(under_construction(world), 1);
-        assert!(world.get::<HiddenComponent>(larva).is_some());
+        assert!(entity_def::hidden(world, larva));
         assert!(!utils::order_queue_is_empty(world, larva));
         assert_eq!(crew_of_site(world), vec![larva_id]);
         assert_eq!(supply::used(world, 0), FixedU64::ZERO);
@@ -1568,7 +1692,7 @@ fn force_cancel_brings_consumed_builder_back_and_keeps_price_spent() {
     let world = app.world_mut();
     assert_eq!(utils::count_of_type(world, "depot"), 0);
     assert_eq!(utils::gold(world), 30);
-    assert!(world.get::<HiddenComponent>(larva).is_none());
+    assert!(!entity_def::hidden(world, larva));
     assert_eq!(supply::used(world, 0), FixedU64::ONE);
     assert_eq!(
         deaths(&app),
@@ -1593,7 +1717,7 @@ fn consumed_builder_survives_placement_that_fails() {
     let world = app.world_mut();
     assert_eq!(utils::count_of_type(world, "depot"), 0);
     assert_eq!(utils::gold(world), 80);
-    assert!(world.get::<HiddenComponent>(larva).is_none());
+    assert!(!entity_def::hidden(world, larva));
     assert!(deaths(&app).is_empty());
 }
 
@@ -1651,9 +1775,8 @@ fn static_footprint_is_raised_over_what_stands_underfoot_on_another_layer() {
 fn static_footprint_is_raised_over_underfoot_body_that_is_off_map() {
     let mut app = solidity_app();
     let mole = place(&mut app, "mole", 10, 10).expect("the mole stands");
-    // Off the map — aboard, inside a site or down a mine — it holds no ground,
-    // and the position it still carries is stale.
-    app.world_mut().entity_mut(mole).insert(HiddenComponent);
+    // Off the map — aboard, inside a site or down a mine — it holds no ground.
+    spawn::hide_entity(app.world_mut(), mole);
 
     assert!(
         place(&mut app, "depot", 10, 10).is_some(),

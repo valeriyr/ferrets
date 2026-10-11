@@ -16,6 +16,7 @@ use ferrets_geometry::cell_pos::CellPos;
 use ferrets_math::FixedI64;
 
 use crate::{
+    beside::Lean,
     components::{
         annex::{AnnexComponent, Docking, DocksComponent},
         build::UnderConstructionComponent,
@@ -53,7 +54,7 @@ pub fn has_standing_annex(world: &World, primary: Entity, type_name: &str) -> bo
     docked.annexes.values().any(|&id| {
         index.alive(id).is_some_and(|annex| {
             entity_def::of(world, annex).name == type_name
-                && !world.entity(annex).contains::<UnderConstructionComponent>()
+                && !entity_def::under_construction(world, annex)
         })
     })
 }
@@ -176,7 +177,15 @@ pub fn advance(world: &mut World) {
         let taker = entity_def::owner(world, primary)
             .expect("a seized annex docks only with a primary that has an owner");
         if entity_def::owner(world, handover.annex) != Some(taker) {
-            spawn::change_owner(world, handover.annex, taker, handover.primary);
+            // A passenger an annex's new owner bars comes out leaning nowhere
+            // in particular, as at a ride's end.
+            spawn::change_owner(
+                world,
+                handover.annex,
+                taker,
+                handover.primary,
+                Lean::Nothing,
+            );
         }
     }
     for &(annex, found) in &docked {
@@ -396,10 +405,7 @@ pub fn modifiers(world: &World, entity: Entity) -> Vec<EntityModifier> {
     let Some(annex) = entity_def::annex_def(world, entity) else {
         return Vec::new();
     };
-    if world
-        .entity(entity)
-        .contains::<UnderConstructionComponent>()
-    {
+    if entity_def::under_construction(world, entity) {
         return Vec::new();
     }
     match (primary_of(world, entity), annex.alone()) {

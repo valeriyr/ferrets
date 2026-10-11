@@ -164,13 +164,17 @@ pub(crate) fn hatch(world: &mut World, entity: Entity, own: Option<RallyTarget>)
 //
 
 /// Whether `breeder`, in the form it wears, has a seat for `entity` in the
-/// group `attachment` names.
+/// group `attachment` names. A breeder off the map or seated in another's
+/// berths seats nobody.
 pub(crate) fn holds(
     world: &World,
     breeder: Entity,
     entity: Entity,
     attachment: &Attachment,
 ) -> bool {
+    if entity_def::hidden(world, breeder) || entity_def::attached(world, breeder) {
+        return false;
+    }
     let standing = entity_def::standing_rect(world, entity);
     berths::offers(world, breeder, attachment.berths())
         && berths::nearest_free_seat(world, breeder, attachment.berths(), standing).is_some()

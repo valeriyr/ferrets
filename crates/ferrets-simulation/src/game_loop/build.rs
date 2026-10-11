@@ -8,7 +8,7 @@ use bevy_ecs::{
     query::{With, Without},
     world::World,
 };
-use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
+use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect};
 
 use super::{
     chase::{self, Destination},
@@ -18,6 +18,7 @@ use super::{
 };
 use crate::{
     annex, berths,
+    beside::Beside,
     components::{
         build::{self, BuildComponent, SiteWork, UnderConstructionComponent},
         dying::DyingComponent,
@@ -46,8 +47,9 @@ use ferrets_content::{
 };
 
 /// Whether `entity` may start this Build: its type raises the ordered type,
-/// that type is constructible, and it operates. Whether the ground admits the
-/// site is decided on arrival.
+/// that type is constructible, it operates, and attending the site would not
+/// take it off the map from under others seated on it. Whether the ground
+/// admits the site is decided on arrival.
 pub fn can_start(world: &World, entity: Entity, order: &Order) -> Result<(), Refusal> {
     let (type_name, _) = order.build_params().expect("Build order must have params");
     if !entity_def::of(world, entity)
@@ -64,7 +66,8 @@ pub fn can_start(world: &World, entity: Entity, order: &Order) -> Result<(), Ref
     if !constructible {
         return Err(Refusal::Incapable);
     }
-    orders::requires_operating(world, entity)
+    orders::requires_operating(world, entity)?;
+    requires_free_to_attend(world, entity)
 }
 
 /// Called once when a Build order becomes the front `New` entry.
@@ -94,7 +97,7 @@ pub fn prepare_suspended(_entity: Entity, _order: &Order, _world: &mut World) ->
 /// Nothing is paid back: only a cancel aimed at the site refunds it.
 pub fn cancel_processing(
     entity: Entity,
-    order: &Order,
+    _order: &Order,
     _policy: CancelPolicy,
     entry_state: OrderState,
     world: &mut World,
@@ -111,20 +114,15 @@ pub fn cancel_processing(
     };
 
     if let Some(building_id) = build_component.building {
-        let (type_name, position) = order.build_params().expect("Build order must have params");
-        let size = world
-            .resource::<ContentRegistry>()
-            .entity(type_name)
-            .expect("type checked in prepare")
-            .location
-            .expect("validated content defines a location")
-            .size();
-
+        let departure = leave_crew(world, building_id, entity);
+        // The builder steps out beside the site as it stands, before the last
+        // one out decides its fate.
+        work::leave(world, entity, Beside::Container(building_id));
         // The last builder off a site decides its fate by how it attended
         // it: one that worked inside the site, or was to become it, takes the
         // site down with it; one that stood on or beside it leaves the site
         // standing for whoever takes it up next.
-        match leave_crew(world, building_id, entity) {
+        match departure {
             Departure::LastOut => match attendance(world, entity) {
                 BuilderAttendance::Crew(WorkPresence::Hidden { .. })
                 | BuilderAttendance::Consumed => abandon_site(world, entity, building_id),
@@ -137,7 +135,6 @@ pub fn cancel_processing(
             },
             Departure::OthersRemain | Departure::JobGone => {}
         }
-        work::leave(world, entity, CellPos::from(position), size);
     }
 
     Processing::state(OrderState::Finished)
@@ -156,7 +153,9 @@ pub fn survives_soft_cancel() -> bool {
 /// there, or pay the price and place one. The order finishes early if the site is
 /// blocked — which includes a builder of its own standing in the footprint, since a
 /// builder that works in the open is never moved out of the way — if the site is
-/// already held by a builder that will not share it, or if the price cannot be paid.
+/// already held by a builder that will not share it, if the price cannot be paid,
+/// or if others sat down on the builder since the order started and its
+/// attendance could take it off the map from under them.
 ///
 /// After that: every builder on the site advances the same progress counter by one
 /// tick's work. When the build time is reached the construction marker is removed,
@@ -219,6 +218,12 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
         if let Some(site) = site_under_way_at(world, type_name, site_anchor, owner) {
             if site_excludes(world, site, entity) {
                 return Processing::state(OrderState::Finished);
+            }
+            // A builder others sat down on since the order started gives
+            // the order up.
+            match requires_free_to_attend(world, entity) {
+                Ok(()) => {}
+                Err(_) => return Processing::state(OrderState::Finished),
             }
             // Nothing is placed and nothing is paid for — joining is just taking up
             // a position on somebody else's job.
@@ -288,6 +293,13 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
             None => None,
         };
 
+        // A builder others sat down on since the order started gives the
+        // order up before raising anything.
+        match requires_free_to_attend(world, entity) {
+            Ok(()) => {}
+            Err(_) => return Processing::state(OrderState::Finished),
+        }
+
         // A builder that disappears into its work leaves the grid now, which
         // frees any of the site's cells it was standing on. One that stays in
         // the open blocks the site the way anything else standing there would;
@@ -322,7 +334,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
             if let Some(source) = overbuilt {
                 spawn::restore_footprint(world, source);
             }
-            work::leave(world, entity, site_anchor, size);
+            work::leave(world, entity, Beside::WentIn);
             return Processing::state(OrderState::Finished);
         };
         if let Some(source) = overbuilt {
@@ -358,20 +370,17 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
     // is its death.
     let Some(building) = world.resource::<EntityIndex>().alive(building_id) else {
         // The building was destroyed mid-construction.
-        work::leave(world, entity, site_anchor, size);
+        work::leave(world, entity, Beside::Container(building_id));
         return Processing::state(OrderState::Finished);
     };
 
     // Another builder on the same site may have finished it first.
-    if !world
-        .entity(building)
-        .contains::<UnderConstructionComponent>()
-    {
-        return leave_finished_site(world, entity, site_anchor, size);
+    if !entity_def::under_construction(world, building) {
+        return leave_finished_site(world, entity, building_id);
     }
     let builder = entity_def::simulation_id(world, entity);
     match put_in_work(world, building, build_time, builder) {
-        Worked::Completed => return leave_finished_site(world, entity, site_anchor, size),
+        Worked::Completed => return leave_finished_site(world, entity, building_id),
         Worked::Going => {}
     }
 
@@ -414,10 +423,7 @@ pub fn rise_sites(world: &mut World) {
         if !entity_def::follows_work(world, entity) {
             continue;
         }
-        if world
-            .entity(entity)
-            .contains::<UnderConstructionComponent>()
-        {
+        if entity_def::under_construction(world, entity) {
             build::rise(world, entity);
         } else {
             build::settle_built(world, entity);
@@ -451,9 +457,7 @@ fn abandon_site(world: &mut World, entity: Entity, site: SimulationId) {
         .alive(site)
         .expect("the last builder leaves a site that still stands");
     assert!(
-        world
-            .entity(building)
-            .contains::<UnderConstructionComponent>(),
+        entity_def::under_construction(world, building),
         "the last builder leaves a site still under construction"
     );
     debug_assert_eq!(
@@ -653,20 +657,15 @@ fn source_under(world: &mut World, over: &str, footprint: CellRect) -> Option<En
         .map(|(entity, _)| entity)
 }
 
-/// Ends a crew builder's order on a site that has completed: one that attends
-/// steps back out beside the footprint at `around`, or stays where it stands;
+/// Ends a crew builder's order on `site`, which has completed: one that attends
+/// steps back out beside it, or stays where it stands;
 /// one consumed by its work is despawned as consumed, and its order finishes
 /// dying. Every early end of the work — a cancel, a destroyed site — brings a
 /// builder back instead, through [`work::leave`].
-fn leave_finished_site(
-    world: &mut World,
-    entity: Entity,
-    around: CellPos,
-    around_size: CellSize,
-) -> Processing {
+fn leave_finished_site(world: &mut World, entity: Entity, site: SimulationId) -> Processing {
     match attendance(world, entity) {
         BuilderAttendance::Crew(_) => {
-            work::leave(world, entity, around, around_size);
+            work::leave(world, entity, Beside::Container(site));
             Processing::state(OrderState::Finished)
         }
         BuilderAttendance::Consumed => {
@@ -676,6 +675,15 @@ fn leave_finished_site(
         BuilderAttendance::Unattended => {
             unreachable!("an unattended builder's order ends at placement")
         }
+    }
+}
+
+/// Refuses a builder whose attendance would take it off the map from under
+/// others seated on it; one that leaves the site to itself is never refused.
+fn requires_free_to_attend(world: &World, entity: Entity) -> Result<(), Refusal> {
+    match attendance(world, entity).presence() {
+        Some(presence) => work::requires_free_to_hide(world, entity, &presence),
+        None => Ok(()),
     }
 }
 

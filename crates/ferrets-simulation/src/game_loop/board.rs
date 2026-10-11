@@ -5,22 +5,21 @@ use bevy_ecs::{entity::Entity, world::World};
 
 use super::{
     chase::{self, Destination},
-    crew,
     orders::{self, Processing, Refusal},
 };
 use crate::{
+    berths,
     components::{
         entity_stats::StatsComponent,
         order_queue::{CancelPolicy, OrderQueueComponent, OrderState},
         owner,
-        transport::{BoardComponent, BoardedComponent, TransporterComponent},
+        transport::{BoardComponent, TransporterComponent},
     },
     entity_def,
     entity_index::EntityIndex,
     order::Order,
-    selection::Selection,
     session::GameSession,
-    spawn,
+    spawn::{self, Boarding},
 };
 use ferrets_content::entity_stats::EntityStatId;
 
@@ -95,9 +94,9 @@ pub fn survives_soft_cancel() -> bool {
 ///
 /// Walk to within the transporter's `load_range` (suspending on a chase move),
 /// then step aboard: the passenger disappears from the map and joins the
-/// transporter's crew. Everything is re-checked at arrival — a transporter that
-/// filled up or changed hands on the way turns the boarder away, and one still
-/// on its boarding cooldown keeps it waiting in place.
+/// transporter's passengers. Everything is re-checked every tick — a transporter that
+/// filled up, changed hands or stopped operating on the way turns the boarder away,
+/// and one still on its boarding cooldown keeps it waiting in place.
 pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing {
     let Some(mut board) = world.entity_mut(entity).take::<BoardComponent>() else {
         return Processing::state(OrderState::Finished);
@@ -110,7 +109,9 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
     else {
         return Processing::state(OrderState::Finished);
     };
-    if would_board(world, entity, target).is_err() {
+    if orders::target_operating(world, target).is_err()
+        || would_board(world, entity, target).is_err()
+    {
         return Processing::state(OrderState::Finished);
     }
 
@@ -139,29 +140,39 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
     }
 
     admit(world, target, entity);
-
-    Processing::state(OrderState::Finished)
+    // Aboard, the passenger runs nothing of its own: what it had queued behind
+    // the boarding goes as a Load drops it, production surviving to resume on
+    // the far side of the ride.
+    Processing::finished_canceling(CancelPolicy::Soft)
 }
 
-/// Takes `passenger` aboard `holder`: the passenger turns to the door, leaves
-/// the map, joins the crew, and starts the holder's boarding cooldown.
-///
-/// Whatever else the passenger had queued is force-canceled — an entity off
-/// the map must not keep walking its old orders. (A passenger boarding on its
-/// own initiative has its queue held out of the world during its dispatch, so
-/// for it this is a no-op; its board order is the front entry anyway.)
+/// Takes `passenger` aboard `holder`: whatever it was doing is soft-canceled
+/// first, then it turns to the door, boards, and starts
+/// the holder's boarding cooldown.
 pub(super) fn admit(world: &mut World, holder: Entity, passenger: Entity) {
-    if let Some(mut queue) = world.entity_mut(passenger).get_mut::<OrderQueueComponent>() {
-        queue.cancel_all(CancelPolicy::Force);
+    // A passenger admitted off a job leaves the job before it leaves the map:
+    // the job's cancel path sets it down, and the boarding takes it from
+    // there rather than the cancel setting a boarded body back on the grid.
+    // A passenger boarding on its own initiative has its queue out of the
+    // world here; the loop cancels what it queued behind the boarding.
+    if world.entity(passenger).contains::<OrderQueueComponent>() {
+        orders::drop_all(world, passenger, CancelPolicy::Soft);
+        let passenger_id = entity_def::simulation_id(world, passenger);
+        assert!(
+            world
+                .resource::<EntityIndex>()
+                .alive(passenger_id)
+                .is_some(),
+            "a soft cancel kills nothing on a body judged not to be changing form"
+        );
     }
-
     chase::face_entity(world, passenger, holder);
-    spawn::hide_entity(world, passenger);
-    crew::join_existing::<TransporterComponent>(world, holder, passenger);
-    let holder_id = entity_def::simulation_id(world, holder);
-    world
-        .entity_mut(passenger)
-        .insert(BoardedComponent { holder: holder_id });
+    match spawn::board(world, passenger, holder) {
+        Boarding::Boarded => {}
+        Boarding::Refused(refusal) => {
+            unreachable!("an admission was judged this tick, got {refusal:?}")
+        }
+    }
 
     let tick = world.resource::<GameSession>().tick();
     let period = entity_def::effective_ticks(world, holder, EntityStatId::LOAD_PERIOD);
@@ -170,10 +181,6 @@ pub(super) fn admit(world: &mut World, holder: Entity, passenger: Entity) {
         .get_mut::<TransporterComponent>()
         .expect("a transporter holds a passenger list")
         .boarding_ready_at = tick + period;
-
-    // A unit that just left the map has no business staying in the selection.
-    let id = entity_def::simulation_id(world, passenger);
-    world.resource_mut::<Selection>().remove(id);
 }
 
 /// Whether `entity`'s type rides: it carries the cargo_size stat and moves,
@@ -184,12 +191,22 @@ fn rides(world: &World, entity: Entity) -> bool {
 }
 
 /// Whether `target` takes `entity` aboard: this entity rides (else
-/// [`Refusal::Incapable`]), and the target takes passengers its policy and
-/// admission list accept with room aboard for this one (else
-/// [`Refusal::TargetUnfit`]).
-pub(super) fn would_board(world: &World, entity: Entity, target: Entity) -> Result<(), Refusal> {
+/// [`Refusal::Incapable`]), is not changing form, sitting in a berth or seating
+/// anyone in its own (else [`Refusal::Busy`]), and the target is another
+/// entity that takes passengers its policy and admission list accept with
+/// room aboard for this one (else [`Refusal::TargetUnfit`]).
+pub(crate) fn would_board(world: &World, entity: Entity, target: Entity) -> Result<(), Refusal> {
     if !rides(world, entity) {
         return Err(Refusal::Incapable);
+    }
+    if entity == target {
+        return Err(Refusal::TargetUnfit);
+    }
+    if entity_def::changing(world, entity)
+        || entity_def::attached(world, entity)
+        || berths::seated_by_others(world, entity, &[])
+    {
+        return Err(Refusal::Busy);
     }
     let entity_def = entity_def::of(world, entity);
     let target_def = entity_def::of(world, target);

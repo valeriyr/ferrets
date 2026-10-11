@@ -63,7 +63,11 @@ pub struct RemainsView {
 pub struct EntityView {
     pub id: u32,
     pub type_name: String,
-    /// Cell coordinates of the entity's position.
+    /// Cell coordinates of where the entity is: its position, or, off the
+    /// map, the cell of what it is inside — its holder, its job, or the
+    /// container a waiting return is set down beside — when the brain sides
+    /// with or sights that, else the cell it went in by; waiting beside a
+    /// container gone from the world, the footprint its return last searched.
     pub x: u32,
     pub y: u32,
     /// `None` when the type has no health.
@@ -102,7 +106,7 @@ pub struct EntityView {
     /// The holder this entity rides in. `None` when not aboard anything.
     pub boarded: Option<u32>,
     /// The ids riding inside this entity, in ascending order. Empty when it
-    /// carries nobody.
+    /// carries nobody, or when it is another side's.
     pub passengers: Vec<u32>,
     /// The ids of the broodlings this entity counts, in the order they joined
     /// its brood. Empty when it counts none.

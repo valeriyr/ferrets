@@ -29,7 +29,6 @@ use ferrets_math::{FixedU64, facing::Facing};
 use ferrets_simulation::{
     command::PlayerCommand,
     components::{
-        attached::AttachedComponent,
         hidden::HiddenComponent,
         location::LocationComponent,
         order_queue::{CancelPolicy, OrderQueueComponent},
@@ -602,7 +601,7 @@ fn hidden_worker_leaves_map_and_comes_back() {
     repair(&mut app, worker_id, depot_id);
     utils::run_ticks(&mut app, utils::APPLY + 4);
     assert!(
-        app.world().get::<HiddenComponent>(worker).is_some(),
+        entity_def::hidden(app.world(), worker),
         "a worker that works from inside its job is taken off the map"
     );
 
@@ -613,7 +612,7 @@ fn hidden_worker_leaves_map_and_comes_back() {
         "the work still lands while the worker is out of sight"
     );
     assert!(
-        app.world().get::<HiddenComponent>(worker).is_none(),
+        !entity_def::hidden(app.world(), worker),
         "the worker comes back out once the job is done"
     );
 }
@@ -628,7 +627,7 @@ fn boxed_in_hidden_worker_finishes_job_and_waits_to_reappear() {
 
     repair(&mut app, worker_id, depot_id);
     utils::run_ticks(&mut app, utils::APPLY + 4);
-    assert!(app.world().get::<HiddenComponent>(worker).is_some());
+    assert!(entity_def::hidden(app.world(), worker));
 
     // Take away every cell it could come back out onto, then let the work finish.
     utils::set_all_cells_statically_occupied(app.world_mut(), true);
@@ -656,13 +655,13 @@ fn cancel_brings_hidden_worker_back_onto_map() {
 
     repair(&mut app, worker_id, depot_id);
     utils::run_ticks(&mut app, utils::APPLY + 4);
-    assert!(app.world().get::<HiddenComponent>(worker).is_some());
+    assert!(entity_def::hidden(app.world(), worker));
 
     utils::force_cancel_orders(app.world_mut(), worker);
     utils::run_ticks(&mut app, 1);
 
     assert!(
-        app.world().get::<HiddenComponent>(worker).is_none(),
+        !entity_def::hidden(app.world(), worker),
         "canceling mid-job puts the worker back on the map"
     );
     utils::assert_adjacent_to_footprint(app.world_mut(), worker, depot);
@@ -679,15 +678,24 @@ fn patient_destroyed_mid_repair_finishes_order_and_frees_worker() {
 
     repair(&mut app, worker_id, depot_id);
     utils::run_ticks(&mut app, utils::APPLY + 4);
-    assert!(app.world().get::<HiddenComponent>(worker).is_some());
+    let went_in = app
+        .world()
+        .get::<HiddenComponent>(worker)
+        .expect("the mole works inside its patient")
+        .went_in;
 
     // The patient goes down under the hands mending it.
     spawn::destroy_entity(app.world_mut(), depot);
     utils::run_ticks(&mut app, 2);
 
     assert!(
-        app.world().get::<HiddenComponent>(worker).is_none(),
+        !entity_def::hidden(app.world(), worker),
         "losing the patient puts the worker back on the map"
+    );
+    // Beside where it went in, that cell being the first the search finds free.
+    assert_eq!(
+        utils::cell_of(app.world(), worker),
+        CellPos::from(went_in.position)
     );
     assert!(
         utils::order_queue_is_empty(app.world_mut(), worker),
@@ -803,11 +811,11 @@ fn attached_menders_wait_for_free_berth() {
     utils::run_ticks(&mut app, utils::APPLY + 3);
 
     assert!(
-        app.world().get::<AttachedComponent>(first).is_some(),
+        entity_def::attached(app.world(), first),
         "the lower id takes the one seat"
     );
     assert!(
-        app.world().get::<AttachedComponent>(second).is_none(),
+        !entity_def::attached(app.world(), second),
         "the other waits in the open"
     );
     assert_eq!(utils::health_as_u32(&app, forge), 65);
@@ -862,7 +870,7 @@ fn attached_mender_gives_up_job_that_loses_its_berths() {
         "shuttered_forge",
         "the forge wears the form with no berths"
     );
-    assert!(app.world().get::<AttachedComponent>(fitter).is_none());
+    assert!(!entity_def::attached(app.world(), fitter));
     assert!(
         utils::order_queue_is_empty(app.world_mut(), fitter),
         "a mender with nowhere to sit gives the job up rather than waiting"

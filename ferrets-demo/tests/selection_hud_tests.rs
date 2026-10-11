@@ -44,7 +44,7 @@ use ferrets_simulation::{
     player_research::PlayerResearch,
     resources::PlayerResources,
     session::GameSession,
-    supply,
+    spawn, supply,
     visibility::Sighting,
 };
 
@@ -283,6 +283,27 @@ fn panel_reports_own_pick_that_carries_no_sighting() {
     assert!(
         !shown.contains("out of sight"),
         "and is never told it has lost them: {shown:?}"
+    );
+}
+
+#[test]
+fn panel_keeps_own_pick_that_goes_off_map() {
+    let mut app = utils::demo_map_app(MovementModel::Cell);
+    spawn_panel(&mut app);
+    let (entity, grunt) =
+        utils::create_entity(app.world_mut(), "grunt", utils::at_cell(20, 20), Some(0))
+            .expect("the demo content defines a grunt");
+    utils::select(&mut app, grunt, SelectMode::Replace);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    assert!(panel_text(&mut app).contains("HP "));
+
+    // Into a mine or aboard a wagon, the pick stays a pick: its side reads it
+    // where it is.
+    spawn::hide_entity(app.world_mut(), entity);
+    let shown = panel_text(&mut app);
+    assert!(
+        shown.contains("HP "),
+        "a side reads its own off the map too: {shown:?}"
     );
 }
 

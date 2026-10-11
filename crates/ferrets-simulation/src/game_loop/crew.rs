@@ -20,7 +20,6 @@ use crate::{
         build::{SiteWork, UnderConstructionComponent},
         repair::UnderRepairComponent,
         resource::UnderHarvestComponent,
-        transport::TransporterComponent,
     },
     entity_def,
     entity_index::EntityIndex,
@@ -73,16 +72,6 @@ impl Crew for UnderRepairComponent {
 
     fn members_mut(&mut self) -> Option<&mut BTreeSet<SimulationId>> {
         Some(&mut self.repairers)
-    }
-}
-
-impl Crew for TransporterComponent {
-    fn members(&self) -> Option<&BTreeSet<SimulationId>> {
-        Some(&self.passengers)
-    }
-
-    fn members_mut(&mut self) -> Option<&mut BTreeSet<SimulationId>> {
-        Some(&mut self.passengers)
     }
 }
 

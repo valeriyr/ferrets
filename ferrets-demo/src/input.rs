@@ -18,7 +18,6 @@ use ferrets_simulation::{
         dying::RemainsComponent,
         entity_info::EntityInfoComponent,
         field_source::{Emitted, FieldSourcesComponent},
-        hidden::HiddenComponent,
         location::LocationComponent,
         owner::OwnerComponent,
         rally::{RallyPointComponent, RallyTarget},
@@ -315,16 +314,13 @@ fn entity_at(
     world: Vec2,
     looking_for: Clicked,
     registry: &ContentRegistry,
-    entities: &Query<
-        (
-            &EntityInfoComponent,
-            &LocationComponent,
-            Option<&Visibility>,
-            Option<&render::Sighted>,
-            Has<RemainsComponent>,
-        ),
-        Without<HiddenComponent>,
-    >,
+    entities: &Query<(
+        &EntityInfoComponent,
+        &LocationComponent,
+        Option<&Visibility>,
+        Option<&render::Sighted>,
+        Has<RemainsComponent>,
+    )>,
 ) -> Option<SimulationId> {
     let x = world.x / CELL_PX;
     let y = -world.y / CELL_PX;
@@ -382,16 +378,13 @@ pub fn selection_input(
     interactions: Query<&Interaction>,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
-    entities: Query<
-        (
-            &EntityInfoComponent,
-            &LocationComponent,
-            Option<&Visibility>,
-            Option<&render::Sighted>,
-            Has<RemainsComponent>,
-        ),
-        Without<HiddenComponent>,
-    >,
+    entities: Query<(
+        &EntityInfoComponent,
+        &LocationComponent,
+        Option<&Visibility>,
+        Option<&render::Sighted>,
+        Has<RemainsComponent>,
+    )>,
 ) {
     if !matches!(*mode, InputMode::Normal) {
         // A drag interrupted by entering a mode must not fire when the click
@@ -505,16 +498,13 @@ pub fn order_input(
     interactions: Query<&Interaction>,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
-    entities: Query<
-        (
-            &EntityInfoComponent,
-            &LocationComponent,
-            Option<&Visibility>,
-            Option<&render::Sighted>,
-            Has<RemainsComponent>,
-        ),
-        Without<HiddenComponent>,
-    >,
+    entities: Query<(
+        &EntityInfoComponent,
+        &LocationComponent,
+        Option<&Visibility>,
+        Option<&render::Sighted>,
+        Has<RemainsComponent>,
+    )>,
     holders: Query<(
         &EntityInfoComponent,
         &OwnerComponent,
@@ -650,16 +640,13 @@ pub fn inspect_input(
     interactions: Query<&Interaction>,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
-    entities: Query<
-        (
-            &EntityInfoComponent,
-            &LocationComponent,
-            Option<&Visibility>,
-            Option<&render::Sighted>,
-            Has<RemainsComponent>,
-        ),
-        Without<HiddenComponent>,
-    >,
+    entities: Query<(
+        &EntityInfoComponent,
+        &LocationComponent,
+        Option<&Visibility>,
+        Option<&render::Sighted>,
+        Has<RemainsComponent>,
+    )>,
 ) {
     if pointer_over_ui(&interactions) {
         // A click on a HUD button belongs to the UI, not the map beneath it.
@@ -822,16 +809,13 @@ pub fn hover_aim(
     mut hover: ResMut<AimHover>,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
-    entities: Query<
-        (
-            &EntityInfoComponent,
-            &LocationComponent,
-            Option<&Visibility>,
-            Option<&render::Sighted>,
-            Has<RemainsComponent>,
-        ),
-        Without<HiddenComponent>,
-    >,
+    entities: Query<(
+        &EntityInfoComponent,
+        &LocationComponent,
+        Option<&Visibility>,
+        Option<&render::Sighted>,
+        Has<RemainsComponent>,
+    )>,
 ) {
     let target = match &*mode {
         &InputMode::Targeting(TargetedOrder::Skill(skill)) => {
@@ -911,16 +895,13 @@ pub fn targeting_input(
     interactions: Query<&Interaction>,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
-    entities: Query<
-        (
-            &EntityInfoComponent,
-            &LocationComponent,
-            Option<&Visibility>,
-            Option<&render::Sighted>,
-            Has<RemainsComponent>,
-        ),
-        Without<HiddenComponent>,
-    >,
+    entities: Query<(
+        &EntityInfoComponent,
+        &LocationComponent,
+        Option<&Visibility>,
+        Option<&render::Sighted>,
+        Has<RemainsComponent>,
+    )>,
 ) {
     let InputMode::Targeting(armed) = *mode else {
         return;
@@ -1188,17 +1169,14 @@ pub fn placement_input(
     interactions: Query<&Interaction>,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
-    sources: Query<
-        (
-            &EntityInfoComponent,
-            &LocationComponent,
-            &Visibility,
-            Option<&render::Sighted>,
-            Option<&OwnerComponent>,
-            Option<&FieldSourcesComponent>,
-        ),
-        Without<HiddenComponent>,
-    >,
+    sources: Query<(
+        &EntityInfoComponent,
+        &LocationComponent,
+        &Visibility,
+        Option<&render::Sighted>,
+        Option<&OwnerComponent>,
+        Option<&FieldSourcesComponent>,
+    )>,
 ) {
     let InputMode::PlacingBuild(type_name) = &*mode else {
         return;
@@ -1394,16 +1372,13 @@ fn skill_target_at(
     cursor: Vec2,
     skill: SkillId,
     registry: &ContentRegistry,
-    entities: &Query<
-        (
-            &EntityInfoComponent,
-            &LocationComponent,
-            Option<&Visibility>,
-            Option<&render::Sighted>,
-            Has<RemainsComponent>,
-        ),
-        Without<HiddenComponent>,
-    >,
+    entities: &Query<(
+        &EntityInfoComponent,
+        &LocationComponent,
+        Option<&Visibility>,
+        Option<&render::Sighted>,
+        Has<RemainsComponent>,
+    )>,
 ) -> Option<SkillTarget> {
     let aim = match registry.skill_def(skill).map(|def| &def.caster) {
         Some(SkillCaster::Entity { target, .. }) => target,

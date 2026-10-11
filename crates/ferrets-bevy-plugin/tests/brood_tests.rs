@@ -6,29 +6,39 @@
 mod utils;
 
 use bevy::prelude::*;
+use ferrets_content::{
+    attack::{AttackDef, Delivery, Slain, Weapon},
+    entity_type_def::EntityTypeDef,
+    location::Solidity,
+    pool::Pool,
+    projectile::{Aim, ProjectileDef},
+    registry::ContentRegistry,
+};
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::{FixedU64, fixed_urect::FixedURect};
 use ferrets_pathfinder::layer_mask::LayerMask;
 use ferrets_simulation::{
     brood,
-    command::{PlayerCommand, SelectMode},
+    command::{PlayerCommand, SelectMode, SkillCasterRef},
     components::{
         attached::AttachedComponent,
         brood::{BredComponent, BroodComponent},
-        build::UnderConstructionComponent,
         entity_info::EntityInfoComponent,
         order_queue::OrderQueueComponent,
         rally::{RallyPointComponent, RallyTarget},
+        resource::{ResourceCarrierComponent, ResourceSourceComponent},
     },
     entity_def,
     entity_index::EntityIndex,
     events::{DeathCause, SimulationEvent, SpawnCause},
     game_loop::orders::{self, Refusal},
+    impacts::{FiredFrom, Following, PendingImpact, PendingImpacts},
     map::Map,
     movement_model::MovementModel,
     order::Order,
+    session::GameSession,
     simulation_id::SimulationId,
-    spawn,
+    spawn::{self, Boarding},
     statistics::Statistics,
     supply,
 };
@@ -134,11 +144,7 @@ fn breeder_under_construction_counts_no_time() {
         utils::run_ticks(&mut app, 1);
         let standing = alive_of_type(&mut app, "ready_hatch")
             .into_iter()
-            .any(|hatch| {
-                !app.world()
-                    .entity(hatch)
-                    .contains::<UnderConstructionComponent>()
-            });
+            .any(|hatch| !entity_def::under_construction(app.world(), hatch));
         if standing {
             completed_at = Some(tick);
             break;
@@ -324,6 +330,358 @@ fn broodlings_without_speed_refuse_move() {
     );
 }
 
+#[test]
+fn breeder_with_broodling_seated_boards_nothing() {
+    let mut app = utils::brood_app(MovementModel::Cell);
+    let sow = utils::place(&mut app, "sow", 10, 10, 0);
+    utils::run_ticks(&mut app, 20);
+    let hog = alive_of_type(&mut app, "hog")[0];
+    assert!(entity_def::attached(app.world(), hog));
+    let cart = utils::place(&mut app, "cart", 12, 10, 0);
+
+    assert_eq!(
+        spawn::board(app.world_mut(), sow, cart),
+        Boarding::Refused(Refusal::Busy)
+    );
+    assert!(!entity_def::hidden(app.world(), sow));
+    assert_eq!(utils::passengers_of(app.world(), cart), []);
+}
+
+#[test]
+fn breeder_seating_broodling_is_refused_building_from_inside() {
+    let mut app = utils::brood_app(MovementModel::Cell);
+    let (delver, delver_id) = utils::create_owned(&mut app, "delver", 5, 5, 0);
+    utils::run_ticks(&mut app, 20);
+    let mite = alive_of_type(&mut app, "mite")[0];
+    assert!(entity_def::attached(app.world(), mite));
+
+    // Going inside would take the delver off the map from under its mite.
+    let order = Order::Build {
+        type_name: "ready_hatch".into(),
+        position: utils::pos(10, 10),
+    };
+    assert_eq!(
+        orders::can_start(app.world(), delver, &order),
+        Err(Refusal::Busy)
+    );
+    utils::push_command(
+        &mut app,
+        PlayerCommand::BuildEntity {
+            builder: delver_id,
+            type_name: "ready_hatch".into(),
+            position: utils::pos(10, 10),
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, 40);
+    assert!(!entity_def::hidden(app.world(), delver));
+    assert!(entity_def::attached(app.world(), mite));
+    assert_eq!(alive_of_type(&mut app, "ready_hatch").len(), 0);
+}
+
+#[test]
+fn breeder_given_broodling_on_way_gives_up_building_from_inside() {
+    let mut app = utils::brood_app(MovementModel::Cell);
+    let (delver, delver_id) = utils::create_owned(&mut app, "delver", 5, 5, 0);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::BuildEntity {
+            builder: delver_id,
+            type_name: "ready_hatch".into(),
+            position: utils::pos(20, 20),
+            flush: true,
+        },
+    );
+    // Nothing sits on the delver yet: the order is taken and it walks.
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    assert!(queued(&app, delver, |order| matches!(
+        order,
+        Order::Build { .. }
+    )));
+
+    // The mite is born ten ticks on, while the delver walks; at the ground
+    // the delver gives the order up rather than leave the map from under it.
+    utils::run_ticks(&mut app, 60);
+    let mite = alive_of_type(&mut app, "mite")[0];
+    assert!(entity_def::attached(app.world(), mite));
+    assert!(!entity_def::hidden(app.world(), delver));
+    assert!(!queued(&app, delver, |_| true));
+    assert_eq!(alive_of_type(&mut app, "ready_hatch").len(), 0);
+    // It stands where the walk ended, in build range 1 of the ground at
+    // (20, 20).
+    assert_eq!(utils::cell_of(app.world(), delver), CellPos::new(19, 19));
+}
+
+#[test]
+fn breeder_seating_broodling_is_refused_harvesting_from_inside() {
+    let mut app = utils::brood_app(MovementModel::Cell);
+    let (delver, _) = utils::create_owned(&mut app, "delver", 5, 5, 0);
+    let (_, lode_id) =
+        utils::create_entity(app.world_mut(), "lode", utils::pos(10, 5), None).unwrap();
+    utils::run_ticks(&mut app, 20);
+    let mite = alive_of_type(&mut app, "mite")[0];
+    assert!(entity_def::attached(app.world(), mite));
+
+    assert_eq!(
+        orders::can_start(app.world(), delver, &Order::Harvest { target: lode_id }),
+        Err(Refusal::Busy)
+    );
+}
+
+#[test]
+fn breeder_seating_broodling_is_refused_mending_from_inside() {
+    let mut app = utils::brood_app(MovementModel::Cell);
+    let (delver, _) = utils::create_owned(&mut app, "delver", 5, 5, 0);
+    let (sow, sow_id) = utils::create_owned(&mut app, "sow", 10, 5, 0);
+    utils::wound(&mut app, sow, "10");
+    utils::run_ticks(&mut app, 20);
+    let mite = alive_of_type(&mut app, "mite")[0];
+    assert!(entity_def::attached(app.world(), mite));
+
+    assert_eq!(
+        orders::can_start(app.world(), delver, &Order::Repair { target: sow_id }),
+        Err(Refusal::Busy)
+    );
+}
+
+#[test]
+fn breeder_seating_broodling_is_refused_mending_seated_in_berths() {
+    let mut app = utils::brood_app(MovementModel::Cell);
+    let (nurse, _) = utils::create_owned(&mut app, "nurse", 5, 5, 0);
+    let (sow, sow_id) = utils::create_owned(&mut app, "sow", 10, 5, 0);
+    utils::wound(&mut app, sow, "10");
+    // The mite is born at tick 10; the sow's second hog, which would fill its
+    // brood seats, only at 20.
+    utils::run_ticks(&mut app, 12);
+    let mite = alive_of_type(&mut app, "mite")[0];
+    assert!(entity_def::attached(app.world(), mite));
+
+    // Seated on its patient the nurse keeps a place on the map, but one with
+    // no cell to step onto when the work ends would leave it from under its
+    // mite.
+    assert_eq!(
+        orders::can_start(app.world(), nurse, &Order::Repair { target: sow_id }),
+        Err(Refusal::Busy)
+    );
+}
+
+#[test]
+fn breeder_given_broodling_on_way_gives_up_harvesting_from_inside() {
+    let mut app = utils::brood_app(MovementModel::Cell);
+    let (delver, delver_id) = utils::create_owned(&mut app, "delver", 5, 5, 0);
+    let (lode, lode_id) =
+        utils::create_entity(app.world_mut(), "lode", utils::pos(12, 5), None).unwrap();
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(lode)
+        .unwrap()
+        .amount = 40;
+    utils::select(&mut app, delver_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SendToEntity {
+            target: lode_id,
+            flush: true,
+        },
+    );
+    // Nothing sits on the delver yet: the order is taken and it walks.
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    assert!(queued(&app, delver, |order| matches!(
+        order,
+        Order::Harvest { .. }
+    )));
+
+    // The mite is born at tick 10, while the delver walks the 6 cells to
+    // within reach of the lode at half a cell a tick from tick 4, arriving
+    // near tick 16; at the lode it gives the order up rather than leave the
+    // map from under its mite.
+    utils::run_ticks(&mut app, 60);
+    let mite = alive_of_type(&mut app, "mite")[0];
+    assert!(entity_def::attached(app.world(), mite));
+    assert!(!entity_def::hidden(app.world(), delver));
+    assert!(!queued(&app, delver, |_| true));
+    // It stands where the walk ended, the first cell in harvest range 1 of the
+    // lode at (12, 5) its path reached.
+    assert_eq!(utils::cell_of(app.world(), delver), CellPos::new(11, 6));
+}
+
+#[test]
+fn breeder_given_broodling_on_way_gives_up_mending_from_inside() {
+    let mut app = utils::brood_app(MovementModel::Cell);
+    let (delver, delver_id) = utils::create_owned(&mut app, "delver", 5, 5, 0);
+    let (sow, sow_id) = utils::create_owned(&mut app, "sow", 20, 20, 0);
+    utils::wound(&mut app, sow, "10");
+    utils::select(&mut app, delver_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Repair {
+            target: sow_id,
+            flush: true,
+        },
+    );
+    // Nothing sits on the delver yet: the order is taken and it walks.
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    assert!(queued(&app, delver, |order| matches!(
+        order,
+        Order::Repair { .. }
+    )));
+
+    // The mite is born ten ticks on, while the delver walks; at the sow the
+    // delver gives the order up rather than leave the map from under it.
+    utils::run_ticks(&mut app, 60);
+    let mite = alive_of_type(&mut app, "mite")[0];
+    assert!(entity_def::attached(app.world(), mite));
+    assert!(!entity_def::hidden(app.world(), delver));
+    assert!(!queued(&app, delver, |_| true));
+    // It stands where the walk ended, in repair range 1 of the sow at
+    // (20, 20).
+    assert_eq!(utils::cell_of(app.world(), delver), CellPos::new(19, 19));
+}
+
+#[test]
+fn breeder_seating_broodling_still_delivers_its_load() {
+    let mut app = utils::brood_app(MovementModel::Cell);
+    let (delver, _) = utils::create_owned(&mut app, "delver", 5, 5, 0);
+    let (_, larder_id) = utils::create_owned(&mut app, "larder", 10, 5, 0);
+    utils::run_ticks(&mut app, 20);
+    let mite = alive_of_type(&mut app, "mite")[0];
+    assert!(entity_def::attached(app.world(), mite));
+    {
+        let mut carrier = app
+            .world_mut()
+            .get_mut::<ResourceCarrierComponent>(delver)
+            .unwrap();
+        carrier.kind = Some("gold".into());
+        carrier.amount = 5;
+    }
+
+    // A delivery never takes the delver off the map, so its mite does not
+    // stand in the way.
+    assert_eq!(
+        orders::can_start(app.world(), delver, &Order::Harvest { target: larder_id }),
+        Ok(())
+    );
+}
+
+#[test]
+fn breeder_given_broodling_on_way_gives_up_mending_seated_in_berths() {
+    let mut app = utils::brood_app(MovementModel::Cell);
+    let (nurse, nurse_id) = utils::create_owned(&mut app, "nurse", 5, 5, 0);
+    // A delver bears one mite into two seats, so one stays free for the
+    // nurse.
+    let (patient, patient_id) = utils::create_owned(&mut app, "delver", 20, 20, 0);
+    utils::wound(&mut app, patient, "30");
+    utils::select(&mut app, nurse_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Repair {
+            target: patient_id,
+            flush: true,
+        },
+    );
+    // Nothing sits on the nurse yet: the order is taken and it walks.
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    assert!(queued(&app, nurse, |order| matches!(
+        order,
+        Order::Repair { .. }
+    )));
+
+    // The mite is born at tick 10, while the nurse walks 14 cells at half a
+    // cell a tick, arriving near tick 31; there it gives the order up rather
+    // than sit down where a boxed-in end of the work would take it off the
+    // map. Seated, it would still be mending 30 points at one a tick.
+    utils::run_ticks(&mut app, 40);
+    let mite_id = broodlings_of(&app, nurse)[0];
+    let mite = app
+        .world()
+        .resource::<EntityIndex>()
+        .alive(mite_id)
+        .expect("the nurse bears its mite on the way");
+    assert!(entity_def::attached(app.world(), mite));
+    assert!(!entity_def::attached(app.world(), nurse));
+    assert!(!queued(&app, nurse, |_| true));
+}
+
+#[test]
+fn seated_breeder_breeds_nothing_until_it_stands() {
+    let mut app = utils::brood_app(MovementModel::Cell);
+    let (nurse, nurse_id) = utils::create_owned(&mut app, "nurse", 5, 5, 0);
+    let (sow, sow_id) = utils::create_owned(&mut app, "sow", 6, 5, 0);
+    // 30 of the sow's 40 health at one a tick keeps the nurse seated well
+    // past tick 10, when its mite would be born.
+    utils::wound(&mut app, sow, "30");
+    utils::select(&mut app, nurse_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Repair {
+            target: sow_id,
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, 15);
+
+    assert!(entity_def::attached(app.world(), nurse));
+    assert!(brood::broodlings(app.world(), nurse).is_empty());
+}
+
+#[test]
+fn seated_patient_takes_no_seated_mender() {
+    let mut app = utils::brood_app(MovementModel::Cell);
+    let (nurse, nurse_id) = utils::create_owned(&mut app, "nurse", 5, 5, 0);
+    let (other, _) = utils::create_owned(&mut app, "nurse", 4, 5, 0);
+    let (sow, sow_id) = utils::create_owned(&mut app, "sow", 6, 5, 0);
+    utils::wound(&mut app, sow, "30");
+    utils::select(&mut app, nurse_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Repair {
+            target: sow_id,
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY + 2);
+    assert!(entity_def::attached(app.world(), nurse));
+    utils::wound(&mut app, nurse, "10");
+
+    // The wounded nurse sits in the sow's berths: nobody sits down on it.
+    let nurse_sim_id = entity_def::simulation_id(app.world(), nurse);
+    assert_eq!(
+        orders::can_start(
+            app.world(),
+            other,
+            &Order::Repair {
+                target: nurse_sim_id
+            }
+        ),
+        Err(Refusal::TargetUnfit)
+    );
+}
+
+#[test]
+fn breeder_with_broodling_seated_is_not_loaded() {
+    let mut app = utils::brood_app(MovementModel::Cell);
+    let sow = utils::place(&mut app, "sow", 10, 10, 0);
+    utils::run_ticks(&mut app, 20);
+    let hog = alive_of_type(&mut app, "hog")[0];
+    assert!(entity_def::attached(app.world(), hog));
+    let cart = utils::place(&mut app, "cart", 12, 10, 0);
+    let sow_id = entity_def::simulation_id(app.world(), sow);
+    let cart_id = entity_def::simulation_id(app.world(), cart);
+
+    // The cart's Load turns away a sow that seats its brood.
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Load {
+            transport: cart_id,
+            target: sow_id,
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY + 4);
+    assert!(!entity_def::hidden(app.world(), sow));
+    assert_eq!(utils::passengers_of(app.world(), cart), []);
+    assert!(entity_def::orders(app.world(), cart).is_empty());
+}
+
 //
 // ─── A broodling's change of form ──────────────────────────────────────────────
 //
@@ -343,7 +701,7 @@ fn broodling_steps_out_of_footprint_before_changing() {
     // the grub sat at seat 0, point (10.5, 13.5), and the cell under it,
     // (10, 13), takes the egg.
     assert_eq!(type_name_of(&app, grub), "egg");
-    assert!(app.world().get::<AttachedComponent>(grub).is_none());
+    assert!(!entity_def::attached(app.world(), grub));
     assert_eq!(utils::cell_of(app.world(), grub), CellPos::new(10, 13));
     assert_eq!(broodlings_of(&app, hatch).len(), 0);
     assert_eq!(utils::gold(app.world()), 0);
@@ -583,7 +941,7 @@ fn refused_reserving_change_leaves_broodling_seated() {
     order_morph(&mut app, grub, "mound");
     utils::run_ticks(&mut app, 3);
     assert_eq!(type_name_of(&app, grub), "grub");
-    assert!(app.world().get::<AttachedComponent>(grub).is_some());
+    assert!(entity_def::attached(app.world(), grub));
     assert_eq!(
         broodlings_of(&app, hatch),
         vec![entity_def::simulation_id(app.world(), grub)]
@@ -1215,7 +1573,7 @@ fn linger_breeder_leaves_detached_broodlings_standing() {
     assert_eq!(piglets.len(), 2);
     for piglet in piglets {
         assert!(app.world().get::<BredComponent>(piglet).is_none());
-        assert!(app.world().get::<AttachedComponent>(piglet).is_none());
+        assert!(!entity_def::attached(app.world(), piglet));
         assert!(entity_def::stands_on_grid(app.world(), piglet));
     }
     assert!(brood::of(app.world(), pen).is_none());
@@ -1320,7 +1678,7 @@ fn canceled_change_takes_set_down_broodlings_in_again_on_return() {
     assert_eq!(type_name_of(&app, pen), "reseat_pen");
     for &piglet in &piglets {
         assert!(app.world().get::<BredComponent>(piglet).is_some());
-        assert!(app.world().get::<AttachedComponent>(piglet).is_some());
+        assert!(entity_def::attached(app.world(), piglet));
     }
     assert_eq!(broodlings_of(&app, pen).len(), 2);
 }
@@ -1366,6 +1724,123 @@ fn hemmed_in_lingering_broodling_is_hidden_until_cell_frees() {
     spawn::destroy_entity(app.world_mut(), pen);
     utils::run_ticks(&mut app, 1);
     utils::assert_reveal_deferred_then_lands_on(&mut app, piglets[0], CellPos::new(11, 13));
+}
+
+#[test]
+fn shot_following_broodling_hidden_by_same_batch_is_lost_with_it() {
+    let mut app = utils::brood_app(MovementModel::Cell);
+    let (pelter_type, stone) = {
+        let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
+        let stone =
+            registry.register_projectile("stone", ProjectileDef::new(FixedU64::ONE, Aim::Entity));
+        registry.register(
+            EntityTypeDef::new("pelter")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_pool(Pool::health(20))
+                .with_attack(
+                    AttackDef::new(Weapon::new(
+                        GROUND,
+                        Delivery::Projectile(stone),
+                        None,
+                        Slain::Remains,
+                    )),
+                    10,
+                    8,
+                    8,
+                    5,
+                    2,
+                ),
+        );
+        (registry.type_id("pelter").expect("registered above"), stone)
+    };
+    utils::set_all_cells_statically_occupied(app.world_mut(), true);
+    free_cells(&mut app, CellPos::new(10, 10), CellSize::new(3, 3));
+    free_cells(&mut app, CellPos::new(2, 2), CellSize::ONE);
+    let pen = utils::place(&mut app, "linger_pen", 10, 10, 0);
+    let pelter = utils::place(&mut app, "pelter", 2, 2, 0);
+    utils::run_ticks(&mut app, 20);
+    let piglet = alive_of_type(&mut app, "piglet")[0];
+    let piglet_id = entity_def::simulation_id(app.world(), piglet);
+    let pen_id = entity_def::simulation_id(app.world(), pen);
+    let pelter_id = entity_def::simulation_id(app.world(), pelter);
+
+    // Two stones land in one batch: the first fells the pen, whose lingering
+    // piglet, with no cell to stand on, goes off the map; the second followed
+    // that piglet and finds it gone off the map mid-batch.
+    let tick = app.world().resource::<GameSession>().tick();
+    let shot = |target: SimulationId, damage: u32| PendingImpact {
+        attacker: pelter_id,
+        attacker_type: pelter_type,
+        fired_from: FiredFrom::Body,
+        projectile: stone,
+        target: Following::Target(target),
+        origin: utils::pos(2, 2),
+        impact: utils::pos(11, 11),
+        damage: FixedU64::from_num(damage),
+        emitted_on_tick: tick,
+        lands_on_tick: tick,
+    };
+    let mut impacts = app.world_mut().resource_mut::<PendingImpacts>();
+    impacts.push(shot(pen_id, 300));
+    impacts.push(shot(piglet_id, 10));
+    utils::run_ticks(&mut app, 1);
+
+    // 20: the piglet, off the map, was hit by nothing.
+    assert!(entity_def::hidden(app.world(), piglet));
+    assert_eq!(utils::health_as_u32(&app, piglet), 20);
+}
+
+#[test]
+fn cast_under_way_on_stranded_broodling_holds_and_resumes_when_it_stands() {
+    let mut app = utils::brood_app(MovementModel::Cell);
+    utils::set_all_cells_statically_occupied(app.world_mut(), true);
+    free_cells(&mut app, CellPos::new(10, 10), CellSize::new(3, 3));
+    let pen = utils::place(&mut app, "linger_pen", 10, 10, 0);
+    utils::run_ticks(&mut app, 20);
+    let piglet = alive_of_type(&mut app, "piglet")[0];
+    let piglet_id = entity_def::simulation_id(app.world(), piglet);
+
+    // The pen starts a ten-tick change into a form with no berths; four
+    // ticks in, a seated piglet begins a delayed cast on itself: five damage
+    // at the sixth tick of an eight-tick cast, due after the change lands.
+    order_morph(&mut app, pen, "bare_pen");
+    utils::run_ticks(&mut app, 4);
+    utils::use_skill(&mut app, "squeal", SkillCasterRef::Entity(piglet_id), None);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    let orders = entity_def::orders(app.world(), piglet);
+    assert!(matches!(orders.as_slice(), [Order::Cast { .. }]));
+    assert_eq!(utils::health_as_u32(&app, piglet), 20);
+
+    // The change lands and the piglet, with no cell to step onto, is
+    // stranded: the cast holds, counted no further however long the wait.
+    utils::run_ticks(&mut app, 3);
+    assert_eq!(type_name_of(&app, pen), "bare_pen");
+    assert!(entity_def::hidden(app.world(), piglet));
+    assert!(entity_def::pending_reveal(app.world(), piglet));
+    utils::run_ticks(&mut app, 10);
+    let orders = entity_def::orders(app.world(), piglet);
+    assert!(matches!(orders.as_slice(), [Order::Cast { .. }]));
+    assert_eq!(utils::health_as_u32(&app, piglet), 20);
+
+    // The one cell beside its berth frees: it stands, and the cast resumes
+    // where it left off and lands.
+    app.world_mut().resource_mut::<Map>().set_static_occupied(
+        utils::GROUND,
+        CellPos::new(11, 13),
+        false,
+    );
+    utils::run_ticks(&mut app, 1);
+    assert!(!entity_def::hidden(app.world(), piglet));
+    // Three of the six ticks to the point ran before the change landed, so
+    // the cast lands on the third tick standing, not the sixth.
+    utils::run_ticks(&mut app, 2);
+    assert_eq!(utils::health_as_u32(&app, piglet), 20);
+    utils::run_ticks(&mut app, 1);
+    // 20 - 5 = 15
+    assert_eq!(utils::health_as_u32(&app, piglet), 15);
+    // Two ticks more to the eighth, and the cast is over.
+    utils::run_ticks(&mut app, 2);
+    assert!(entity_def::orders(app.world(), piglet).is_empty());
 }
 
 #[test]
@@ -1530,4 +2005,14 @@ fn free_cells(app: &mut App, origin: CellPos, size: CellSize) {
             }
         }
     }
+}
+
+/// Whether `entity` holds an order `matching` says yes to.
+fn queued(app: &App, entity: Entity, matching: impl Fn(&Order) -> bool) -> bool {
+    app.world()
+        .get::<OrderQueueComponent>(entity)
+        .expect("simulation entities carry an order queue")
+        .0
+        .iter()
+        .any(|entry| matching(&entry.order))
 }

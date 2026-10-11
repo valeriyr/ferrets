@@ -43,10 +43,14 @@ pub fn tick(world: &mut World) {
         if !entity_def::of(world, entity).can_move() {
             continue;
         }
-        // A frozen entity does not run.
+        // One off the map has nowhere to run, and a frozen one does not.
+        if entity_def::hidden(world, entity) {
+            continue;
+        }
         match entity_def::operation(world, entity) {
             Operation::Operating => {}
             Operation::UnderConstruction | Operation::Disabled(_) => continue,
+            Operation::Stranded => unreachable!("a stranded body is hidden"),
         }
         // Commanded entities stay commanded: only an empty queue flees.
         if entity_ref
@@ -69,7 +73,7 @@ pub fn tick(world: &mut World) {
         };
 
         let position = entity_def::position(world, entity);
-        let attacker_position = entity_def::position(world, attacker);
+        let attacker_position = entity_def::whereabouts(world, attacker);
         let target = flee_target(world, position, attacker_position);
 
         if let Some(mut queue) = world.entity_mut(entity).get_mut::<OrderQueueComponent>() {

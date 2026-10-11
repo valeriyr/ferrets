@@ -63,7 +63,7 @@ use ferrets_simulation::{
     entity_index::EntityIndex,
     events::{EventRecord, SimulationEvent, SpawnCause},
     fields::FieldGrid,
-    impacts::PendingImpacts,
+    impacts::{Following, PendingImpacts},
     order::Order,
     selection::Selection,
     session::{
@@ -1553,13 +1553,12 @@ pub fn interpolate_sprites(
     registry: Res<ContentRegistry>,
     mut query: Query<(
         &EntityInfoComponent,
-        &LocationComponent,
+        Option<&LocationComponent>,
         &PrevPos,
         &PrevFacing,
         &mut DrawnFacing,
         &mut Transform,
         &mut Visibility,
-        Has<HiddenComponent>,
         Option<&Sighted>,
         Option<&Directional>,
         Option<(&TurretsComponent, &PrevBearings, &mut DrawnBearings)>,
@@ -1580,12 +1579,17 @@ pub fn interpolate_sprites(
         mut drawn,
         mut transform,
         mut visibility,
-        hidden,
         sighted,
         directional,
         turret,
     ) in &mut query
     {
+        // Off the map — aboard, inside a site or a mine — there is no body to
+        // place and nothing to draw.
+        let Some(location) = location else {
+            visibility.set_if_neq(Visibility::Hidden);
+            continue;
+        };
         let def = registry.def(info.type_id());
         let size = def.location.unwrap().size();
         let curr = world_center(location.position, size) + lift(&registry, def);
@@ -1611,9 +1615,9 @@ pub fn interpolate_sprites(
         }
         // Unseen is fog and a glimpse is a presence without a body: neither
         // body is drawn.
-        visibility.set_if_neq(match (hidden, stamped(sighted)) {
-            (true, _) | (false, Sighting::Unseen | Sighting::Glimpsed) => Visibility::Hidden,
-            (false, Sighting::Seen) => Visibility::Visible,
+        visibility.set_if_neq(match stamped(sighted) {
+            Sighting::Unseen | Sighting::Glimpsed => Visibility::Hidden,
+            Sighting::Seen => Visibility::Visible,
         });
     }
 }
@@ -2068,6 +2072,16 @@ pub struct Puffs {
     active: Vec<(FixedUVec2, CellSize, PuffKind, u32)>,
 }
 
+impl Puffs {
+    /// Where each live marker stands, with the footprint it covers.
+    pub fn marked(&self) -> Vec<(FixedUVec2, CellSize)> {
+        self.active
+            .iter()
+            .map(|&(position, size, _, _)| (position, size))
+            .collect()
+    }
+}
+
 /// Starts a marker for each remains, hiding and reveal the tick announced, and
 /// drops the expired ones (run once per tick, in the game's slot).
 pub fn collect_puffs(world: &mut World) {
@@ -2081,19 +2095,27 @@ pub fn collect_puffs(world: &mut World) {
                 SimulationEvent::EntitySpawned {
                     entity,
                     cause: SpawnCause::Bequeathed { .. },
-                } => Some((*entity, PuffKind::Bequeathed)),
-                SimulationEvent::EntityHidden { entity } => Some((*entity, PuffKind::Hidden)),
-                SimulationEvent::EntityRevealed { entity } => Some((*entity, PuffKind::Revealed)),
+                } => Some((*entity, None, PuffKind::Bequeathed)),
+                SimulationEvent::EntityHidden { entity, position } => {
+                    Some((*entity, Some(*position), PuffKind::Hidden))
+                }
+                SimulationEvent::EntityRevealed { entity, position } => {
+                    Some((*entity, Some(*position), PuffKind::Revealed))
+                }
                 _ => None,
             };
-            // The announcement names its subject; where it stands and how much
-            // ground it covers come from the subject itself. What a death leaves
-            // may be a body, which begins its life dying, so the lookup has to
-            // accept that stage as well as the standing one.
-            if let Some((id, kind)) = marked
+            // A hide or a return announces its place; what a death leaves names
+            // only its subject, which stands where it was set down. How much
+            // ground the marker covers is the subject's footprint, and a body
+            // begins its life dying, so the lookup accepts that stage too.
+            if let Some((id, place, kind)) = marked
                 && let Some(entity) = world.resource::<EntityIndex>().any(id)
             {
-                let (position, size) = entity_def::footprint(world, entity);
+                let (whereabouts, size) = entity_def::whereabouts_footprint(world, entity);
+                let position = match place {
+                    Some(position) => position,
+                    None => whereabouts,
+                };
                 puffs.active.push((position, size, kind, tick));
             }
         }
@@ -2102,7 +2124,8 @@ pub fn collect_puffs(world: &mut World) {
 
 /// Draws each live marker as a ring that grows and fades (run in `Update`).
 ///
-/// A marker over a cell the viewer cannot see is skipped.
+/// A marker over a cell the viewer cannot see is skipped: a mark is gated by
+/// its cell alone, not by what the viewer makes of its subject.
 pub fn draw_puffs(
     mut gizmos: Gizmos,
     session: Res<GameSession>,
@@ -2279,7 +2302,7 @@ pub fn draw_shots(
     grid: Res<VisibilityGrid>,
     watch: Res<ObserverPerspective>,
     reveal: Res<FogReveal>,
-    targets: Query<(&EntityInfoComponent, &Transform, Option<&HiddenComponent>), With<Renderable>>,
+    targets: Query<(&EntityInfoComponent, &Transform), With<Renderable>>,
 ) {
     let tick = session.tick();
     let overstep = fixed.overstep_fraction();
@@ -2296,14 +2319,12 @@ pub fn draw_shots(
         // turret is mounted on for that gun's, and the holder for a garrisoned
         // archer whose own bearer stands nowhere.
         let from = world_point(shot.origin);
-        // Every shot is aimed at an entity, and the damage follows that entity
-        // wherever it moves, so the shot is drawn heading there. The committed point
-        // is the fallback for a target that is gone or out of sight — and, once a
-        // weapon can be aimed at bare ground, for a shot that never had one.
+        // A shot following an entity is drawn heading to it; one sent to a cell,
+        // or whose target went off the map or is gone, heads to its impact point.
         let to = targets
             .iter()
-            .find(|(info, _, hidden)| Some(info.id()) == shot.target && hidden.is_none())
-            .map(|(_, transform, _)| transform.translation)
+            .find(|(info, _)| Following::Target(info.id()) == shot.target)
+            .map(|(_, transform)| transform.translation)
             .unwrap_or_else(|| world_center(shot.impact, CellSize::ONE));
         let at = from.lerp(to, progress);
 
@@ -2384,15 +2405,12 @@ pub fn draw_rally(
         &OwnerComponent,
         &RallyPointComponent,
     )>,
-    targets: Query<
-        (
-            &EntityInfoComponent,
-            &LocationComponent,
-            &Visibility,
-            Option<&Sighted>,
-        ),
-        Without<HiddenComponent>,
-    >,
+    targets: Query<(
+        &EntityInfoComponent,
+        &LocationComponent,
+        &Visibility,
+        Option<&Sighted>,
+    )>,
 ) {
     const COLOR: Color = Color::srgb(1.0, 0.65, 0.2);
 
@@ -2747,16 +2765,13 @@ pub fn draw_ghosts(
     watch: Res<ObserverPerspective>,
     reveal: Res<FogReveal>,
     mut ghosts: ResMut<Ghosts>,
-    buildings: Query<
-        (
-            &EntityInfoComponent,
-            &LocationComponent,
-            &TagsComponent,
-            Option<&OwnerComponent>,
-            Option<&Sighted>,
-        ),
-        Without<HiddenComponent>,
-    >,
+    buildings: Query<(
+        &EntityInfoComponent,
+        &LocationComponent,
+        &TagsComponent,
+        Option<&OwnerComponent>,
+        Option<&Sighted>,
+    )>,
 ) {
     let viewed = viewed_player(&session, &watch);
     let mut alive = HashSet::new();
@@ -2896,8 +2911,14 @@ const TRAIN_WORK_COLOR: Color = Color::srgb(0.3, 0.9, 0.9);
 // Matches the HUD's research-button teal, so the bar and the button that
 // started it read as the same work.
 const RESEARCH_WORK_COLOR: Color = Color::srgb(0.35, 0.75, 0.65);
-/// The dot color for passengers riding inside a transporter.
-const PASSENGER_COLOR: Color = Color::srgb(0.95, 0.85, 0.35);
+/// The dot of a passenger of the viewed side's own.
+const OWN_PASSENGER_COLOR: Color = Color::srgb(0.4, 0.85, 0.4);
+/// The dot of a passenger of an ally of the viewed side.
+const ALLIED_PASSENGER_COLOR: Color = Color::srgb(0.95, 0.85, 0.35);
+/// The dot of a passenger of a side the viewed side fights.
+const ENEMY_PASSENGER_COLOR: Color = Color::srgb(1.0, 0.35, 0.35);
+/// The dot of a passenger nobody owns.
+const UNOWNED_PASSENGER_COLOR: Color = Color::srgb(0.6, 0.6, 0.65);
 /// The bar of a running form change.
 const MORPH_WORK_COLOR: Color = Color::srgb(0.85, 0.55, 0.25);
 /// A repairer that cannot pay for this tick's work.
@@ -3249,6 +3270,22 @@ pub fn draw_work_markers(
     }
 }
 
+/// The color of a passenger's dot: by the passenger's side as the viewed
+/// player sees it, or, with no viewed player, its owner's color.
+pub fn passenger_dot_color(
+    session: &GameSession,
+    viewed: Option<PlayerId>,
+    owner: Option<PlayerId>,
+) -> Color {
+    match (viewed, owner) {
+        (_, None) => UNOWNED_PASSENGER_COLOR,
+        (None, Some(owner)) => player_color(owner),
+        (Some(viewed), Some(owner)) if owner == viewed => OWN_PASSENGER_COLOR,
+        (Some(viewed), Some(owner)) if session.are_allied(viewed, owner) => ALLIED_PASSENGER_COLOR,
+        (Some(_), Some(_)) => ENEMY_PASSENGER_COLOR,
+    }
+}
+
 /// Whether a crew member is counted on the marker of what it works: one of
 /// the viewed side's own, inside the job or on the map, or a rival's the
 /// perspective makes out. With no viewed player, every member counts.
@@ -3274,9 +3311,14 @@ pub fn crew_counts(
 /// a breeder's progress toward its next birth — for whichever of those the
 /// entity has (run in `Update`). Whatever fog or hiding
 /// keeps off screen stays bare.
+#[allow(clippy::too_many_arguments)]
 pub fn draw_status_bars(
     mut gizmos: Gizmos,
     registry: Res<ContentRegistry>,
+    session: Res<GameSession>,
+    watch: Res<ObserverPerspective>,
+    index: Res<EntityIndex>,
+    owners: Query<&OwnerComponent>,
     cameras: Query<&Transform, With<Camera2d>>,
     // Anchored on the interpolated transforms, so the bars glide with the
     // sprites they sit over.
@@ -3302,6 +3344,7 @@ pub fn draw_status_bars(
 ) {
     let camera = cameras.single().ok().cloned().unwrap_or_default();
     let on_fire = registry.entity_buff(ON_FIRE);
+    let viewed = viewed_player(&session, &watch);
     for (
         info,
         transform,
@@ -3481,16 +3524,20 @@ pub fn draw_status_bars(
         }
 
         // A dot per passenger, like the trainer's queue dots, so a manned
-        // bunker or a loaded shelter reads at a glance.
-        let aboard = transporter.map_or(0, |transporter| transporter.passengers.len());
-        if aboard > 0 {
+        // bunker or a loaded shelter reads at a glance, each in the color of
+        // whose it is.
+        if let Some(transporter) = transporter {
             let gap = 7.0;
-            let left = -(aboard.saturating_sub(1) as f32) * gap / 2.0;
-            for i in 0..aboard {
+            let left = -(transporter.passengers.len().saturating_sub(1) as f32) * gap / 2.0;
+            for (i, &passenger) in transporter.passengers.iter().enumerate() {
+                let owner = index
+                    .any(passenger)
+                    .and_then(|entity| owners.get(entity).ok())
+                    .map(OwnerComponent::player);
                 gizmos.circle_2d(
                     anchored(Vec2::new(left + i as f32 * gap, y + 5.0)),
                     2.5,
-                    PASSENGER_COLOR,
+                    passenger_dot_color(&session, viewed, owner),
                 );
             }
         }

@@ -12,16 +12,14 @@ use ferrets_demo::map;
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::FixedU64;
 use ferrets_simulation::{
-    components::{
-        hidden::HiddenComponent, order_queue::OrderQueueComponent, transport::TransporterComponent,
-    },
+    components::order_queue::OrderQueueComponent,
     entity_def,
     entity_index::EntityIndex,
     map::Map,
     movement_model::MovementModel,
     order::Order,
     simulation_id::SimulationId,
-    spawn,
+    spawn::{self, Boarding},
 };
 
 //
@@ -323,20 +321,17 @@ fn garrisoned_melee_ignores_flier_overhead() {
         Some(0),
     )
     .expect("the bunker spawns");
-    let (grunt, grunt_id) = utils::create_entity(
+    let (grunt, _) = utils::create_entity(
         app.world_mut(),
         "grunt",
         utils::at_cell(CLEAR_GROUND.0 + 3, CLEAR_GROUND.1),
         Some(0),
     )
     .expect("the grunt spawns");
-    app.world_mut()
-        .entity_mut(bunker)
-        .get_mut::<TransporterComponent>()
-        .expect("the bunker is a holder")
-        .passengers
-        .insert(grunt_id);
-    app.world_mut().entity_mut(grunt).insert(HiddenComponent);
+    assert_eq!(
+        spawn::board(app.world_mut(), grunt, bunker),
+        Boarding::Boarded
+    );
 
     let (flier, _) = utils::create_entity(
         app.world_mut(),
@@ -369,20 +364,17 @@ fn garrisoned_archer_engages_flier_overhead() {
         Some(0),
     )
     .expect("the bunker spawns");
-    let (archer, archer_id) = utils::create_entity(
+    let (archer, _) = utils::create_entity(
         app.world_mut(),
         "archer",
         utils::at_cell(CLEAR_GROUND.0 + 3, CLEAR_GROUND.1),
         Some(0),
     )
     .expect("the archer spawns");
-    app.world_mut()
-        .entity_mut(bunker)
-        .get_mut::<TransporterComponent>()
-        .expect("the bunker is a holder")
-        .passengers
-        .insert(archer_id);
-    app.world_mut().entity_mut(archer).insert(HiddenComponent);
+    assert_eq!(
+        spawn::board(app.world_mut(), archer, bunker),
+        Boarding::Boarded
+    );
 
     let (flier, _) = utils::create_entity(
         app.world_mut(),
@@ -396,11 +388,13 @@ fn garrisoned_archer_engages_flier_overhead() {
 
     let world = app.world();
     let left = entity_def::pool_value(world, flier, PoolId::HEALTH);
-    // The bunker garrison opened fire later than a standing archer would —
-    // the pinned toll says the arrows flew all the same.
+    // The bunker garrison opened fire later than a standing archer would, and
+    // the unarmed flier, fleeing from where the archer is, drifts away from the
+    // bunker rather than from the cell the archer boarded by — the pinned toll
+    // says the arrows flew all the same.
     assert_eq!(
         left,
-        Some(FixedU64::from_num(132)),
+        Some(FixedU64::from_num(138)),
         "the garrisoned archer never fired at the flier: {left:?}"
     );
 }
@@ -639,13 +633,10 @@ fn holder_with_passenger(
         Some(0),
     )
     .unwrap_or_else(|| panic!("'{passenger}' spawns"));
-    app.world_mut()
-        .entity_mut(held)
-        .get_mut::<TransporterComponent>()
-        .expect("the holder carries passengers")
-        .passengers
-        .insert(aboard_id);
-    app.world_mut().entity_mut(aboard).insert(HiddenComponent);
+    assert_eq!(
+        spawn::board(app.world_mut(), aboard, held),
+        Boarding::Boarded
+    );
     (held, aboard, aboard_id)
 }
 
@@ -665,7 +656,7 @@ fn rider_walks_away_from_gryphon_wrecked_on_ground() {
         "the rider died with a beast cut down on the ground"
     );
     assert!(
-        app.world().get::<HiddenComponent>(archer).is_none(),
+        !entity_def::hidden(app.world(), archer),
         "the rider stayed off the map instead of standing beside the wreck"
     );
 }

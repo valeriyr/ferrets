@@ -104,7 +104,7 @@ pub fn apply(
     let attacker_entity = world.resource::<EntityIndex>().any(attacker);
     let attacker_owner = attacker_entity.and_then(|entity| entity_def::owner(world, entity));
     let target_owner = entity_def::owner(world, target);
-    let position = entity_def::position(world, target);
+    let position = entity_def::whereabouts(world, target);
     let target_id = entity_def::simulation_id(world, target);
     world
         .resource_mut::<EventRecord>()

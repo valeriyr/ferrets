@@ -11,7 +11,7 @@ use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect};
 use ferrets_pathfinder::layer_mask::LayerMask;
 
 use crate::{
-    components::{hidden::HiddenComponent, owner},
+    components::owner,
     entity_def, requirements,
     session::{GameSession, player_id::PlayerId, player_mask::PlayerMask},
 };
@@ -350,7 +350,7 @@ pub fn entity_modifiers_of(
     entity: Entity,
     def: &EntityTypeDef,
 ) -> Vec<EntityModifiers> {
-    if def.field_effects.is_empty() || world.entity(entity).contains::<HiddenComponent>() {
+    if def.field_effects.is_empty() || entity_def::hidden(world, entity) {
         return Vec::new();
     }
     let grid = world.resource::<FieldGrid>();
@@ -392,7 +392,7 @@ fn holds_effect(
     entity: Entity,
     wanted: impl Fn(&EntityEffect) -> bool,
 ) -> bool {
-    if world.entity(entity).contains::<HiddenComponent>() {
+    if entity_def::hidden(world, entity) {
         return false;
     }
     let mut candidates = def

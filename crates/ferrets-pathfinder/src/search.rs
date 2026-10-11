@@ -62,47 +62,50 @@ pub fn find_placements_near(
     max_amount: usize,
     footing: Footing,
 ) -> Vec<CellPos> {
-    let layer_mask = layer_mask.into();
-    let mut found: Vec<CellPos> = Vec::with_capacity(max_amount);
+    placements_near(
+        grid,
+        layer_mask.into(),
+        around,
+        spawn_size,
+        max_radius,
+        max_amount,
+        footing,
+        |cell| (from_middle(around, cell, spawn_size), cell.y, cell.x),
+    )
+}
 
-    for radius in 0..=max_radius {
-        let min_x = around.origin.x.saturating_sub(radius);
-        let min_y = around.origin.y.saturating_sub(radius);
-        let max_x = (around.origin.x + around.size.width - 1 + radius).min(grid.width() - 1);
-        let max_y = (around.origin.y + around.size.height - 1 + radius).min(grid.height() - 1);
-
-        let mut ring: Vec<CellPos> = Vec::new();
-        for y in min_y..=max_y {
-            for x in min_x..=max_x {
-                ring.push(CellPos::new(x, y));
-            }
-        }
-        ring.sort_by_key(|&cell| (from_middle(around, cell, spawn_size), cell.y, cell.x));
-
-        for candidate in ring {
-            if found.len() == max_amount {
-                return found;
-            }
-            let fits = match footing {
-                Footing::Free => grid.is_footprint_passable_by(layer_mask, candidate, spawn_size),
-                Footing::Shared => {
-                    grid.is_footprint_terrain_passable_by(layer_mask, candidate, spawn_size)
-                }
-            };
-            if !fits {
-                continue;
-            }
-            let rect = CellRect::new(candidate, spawn_size);
-            if found
-                .iter()
-                .any(|&taken| CellRect::new(taken, spawn_size).intersects(rect))
-            {
-                continue;
-            }
-            found.push(candidate);
-        }
-    }
-    found
+/// Finds the nearest placement for a `spawn_size` footprint near the rectangle
+/// at `around`, searching outward ring by ring to `max_radius`; within a ring
+/// the ground closest to `toward` comes first, then the order
+/// [`find_placements_near`] keeps.
+pub fn find_placement_near_toward(
+    grid: &NavGrid,
+    layer_mask: impl Into<LayerMask>,
+    around: CellRect,
+    spawn_size: CellSize,
+    max_radius: u32,
+    footing: Footing,
+    toward: CellRect,
+) -> Option<CellPos> {
+    placements_near(
+        grid,
+        layer_mask.into(),
+        around,
+        spawn_size,
+        max_radius,
+        1,
+        footing,
+        |cell| {
+            (
+                from_middle(toward, cell, spawn_size),
+                from_middle(around, cell, spawn_size),
+                cell.y,
+                cell.x,
+            )
+        },
+    )
+    .into_iter()
+    .next()
 }
 
 /// Finds the nearest placement for a `spawn_size` footprint near the rectangle
@@ -171,6 +174,61 @@ pub fn find_nearest_free_pos(
     }
 
     None
+}
+
+/// The ring search behind the placement finders, `order` ranking the cells
+/// within a ring.
+#[allow(clippy::too_many_arguments)]
+fn placements_near<K: Ord>(
+    grid: &NavGrid,
+    layer_mask: LayerMask,
+    around: CellRect,
+    spawn_size: CellSize,
+    max_radius: u32,
+    max_amount: usize,
+    footing: Footing,
+    order: impl Fn(CellPos) -> K,
+) -> Vec<CellPos> {
+    let mut found: Vec<CellPos> = Vec::with_capacity(max_amount);
+
+    for radius in 0..=max_radius {
+        let min_x = around.origin.x.saturating_sub(radius);
+        let min_y = around.origin.y.saturating_sub(radius);
+        let max_x = (around.origin.x + around.size.width - 1 + radius).min(grid.width() - 1);
+        let max_y = (around.origin.y + around.size.height - 1 + radius).min(grid.height() - 1);
+
+        let mut ring: Vec<CellPos> = Vec::new();
+        for y in min_y..=max_y {
+            for x in min_x..=max_x {
+                ring.push(CellPos::new(x, y));
+            }
+        }
+        ring.sort_by_key(|&cell| order(cell));
+
+        for candidate in ring {
+            if found.len() == max_amount {
+                return found;
+            }
+            let fits = match footing {
+                Footing::Free => grid.is_footprint_passable_by(layer_mask, candidate, spawn_size),
+                Footing::Shared => {
+                    grid.is_footprint_terrain_passable_by(layer_mask, candidate, spawn_size)
+                }
+            };
+            if !fits {
+                continue;
+            }
+            let rect = CellRect::new(candidate, spawn_size);
+            if found
+                .iter()
+                .any(|&taken| CellRect::new(taken, spawn_size).intersects(rect))
+            {
+                continue;
+            }
+            found.push(candidate);
+        }
+    }
+    found
 }
 
 /// How far the middle of a `spawn_size` footprint placed at `candidate` sits

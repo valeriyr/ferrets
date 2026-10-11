@@ -2,6 +2,7 @@
 
 pub mod annex;
 pub mod berths;
+pub mod beside;
 pub mod brood;
 pub mod buffs_store;
 pub mod checksum;

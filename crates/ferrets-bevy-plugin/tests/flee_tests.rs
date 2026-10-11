@@ -15,6 +15,7 @@ use ferrets_simulation::{
         resource::ResourceSourceComponent,
         stance::{Stance, StanceComponent},
     },
+    order::Order,
     resources::PlayerResources,
     session::GameSession,
 };
@@ -101,4 +102,35 @@ fn fleeing_soldier_runs_instead_of_fighting_back() {
     );
     // And it ran: the runner is no longer on its starting cell.
     assert_ne!(utils::cell_of(world, runner), CellPos::new(10, 10));
+}
+
+#[test]
+fn runner_shot_from_inside_holder_flees_from_holder() {
+    let mut app = utils::transport_app();
+    let (bunker, bunker_id) = utils::create_owned(&mut app, "bunker", 10, 10, 0);
+    let (_, rifleman_id) = utils::create_owned(&mut app, "rifleman", 10, 7, 0);
+    // In the garrison's reach, idle, on a side the bunker's owner fights, and
+    // unarmed, so it flees by default; one row above the bunker's own, one
+    // below the row the rifleman boards from.
+    let (runner, _) = utils::create_owned(&mut app, "grunt", 13, 9, 2);
+    utils::send_to(&mut app, rifleman_id, bunker_id);
+    utils::run_until_aboard(&mut app, bunker, 1, 30);
+
+    // The shot comes from the rifleman, which is wherever the bunker is, at
+    // (10, 10): six cells away from it on each axis, east and north, is
+    // (19, 3). From the cell the rifleman boarded by, (10, 8), the flight
+    // would go south instead, to (19, 15).
+    let mut target = None;
+    for _ in 0..40 {
+        utils::run_ticks(&mut app, 1);
+        let front = app
+            .world()
+            .get::<OrderQueueComponent>(runner)
+            .and_then(|queue| queue.front().map(|entry| entry.order.clone()));
+        if let Some(Order::Move { target: at, .. }) = front {
+            target = Some(at);
+            break;
+        }
+    }
+    assert_eq!(target, Some(utils::pos(19, 3)));
 }

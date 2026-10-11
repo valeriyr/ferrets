@@ -80,6 +80,8 @@ pub fn recompute_fields(world: &mut World) {
                 Operation::Operating => Emission::Full,
                 Operation::UnderConstruction => source.while_constructing(),
                 Operation::Disabled(_) => source.while_disabled(),
+                // Off the map, a source stands on no cell to emit from.
+                Operation::Stranded => unreachable!("a stranded body is hidden"),
             };
             let reach = match emission {
                 Emission::Nothing => {

@@ -22,7 +22,6 @@ use ferrets_pathfinder::layer_mask::LayerMask;
 use super::{acquire, attack, chase, turn};
 use crate::{
     components::{
-        hidden::HiddenComponent,
         movement::MoveComponent,
         order_queue::{OrderQueueComponent, OrderState},
         stance::{Stance, StanceComponent},
@@ -47,7 +46,7 @@ pub fn process_turrets(world: &mut World) {
         }
         // Riding inside a holder, a weapon fights only if the holder lets it, and
         // then it fights from the holder — which is [`super::garrison`]'s work.
-        if world.entity(entity).contains::<HiddenComponent>() {
+        if entity_def::hidden(world, entity) {
             continue;
         }
         // A body's guns work only while it operates: a site still going up
@@ -55,6 +54,7 @@ pub fn process_turrets(world: &mut World) {
         match entity_def::operation(world, entity) {
             Operation::Operating => {}
             Operation::UnderConstruction | Operation::Disabled(_) => continue,
+            Operation::Stranded => unreachable!("a stranded body is hidden"),
         }
         work_body(world, entity, id);
     }

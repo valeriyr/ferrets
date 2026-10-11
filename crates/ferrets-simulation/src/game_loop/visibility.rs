@@ -7,8 +7,7 @@ use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, projection};
 
 use crate::{
     components::{
-        entity_stats::StatsComponent, hidden::HiddenComponent, location::LocationComponent,
-        owner::OwnerComponent,
+        entity_stats::StatsComponent, location::LocationComponent, owner::OwnerComponent,
     },
     entity_def,
     fields::FieldGrid,
@@ -37,13 +36,15 @@ pub fn recompute_visibility(world: &mut World) {
     // all, carrying neither an owner nor a stat store. The OR-fold below is
     // commutative, so iteration order cannot reach the shared grid.
     let seers: Vec<(Entity, PlayerId, u32)> = world
-        .query_filtered::<(Entity, &OwnerComponent, &StatsComponent), (With<LocationComponent>, Without<HiddenComponent>)>()
+        .query_filtered::<(Entity, &OwnerComponent, &StatsComponent), With<LocationComponent>>()
         .iter(world)
         .map(|(entity, owner, stats)| {
             (
                 entity,
                 owner.player(),
-                stats.effective_as_u32(EntityStatId::SIGHT_RANGE).unwrap_or(0),
+                stats
+                    .effective_as_u32(EntityStatId::SIGHT_RANGE)
+                    .unwrap_or(0),
             )
         })
         .collect();

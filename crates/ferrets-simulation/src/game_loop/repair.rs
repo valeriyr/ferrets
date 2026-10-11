@@ -1,7 +1,6 @@
 //! Repair order implementation.
 //! Called by [`super::orders`] as part of the shared order lifecycle.
 
-use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use std::collections::BTreeMap;
 
 use bevy_ecs::{entity::Entity, world::World};
@@ -15,8 +14,8 @@ use super::{
 };
 use crate::{
     berths,
+    beside::Beside,
     components::{
-        build::UnderConstructionComponent,
         entity_stats::StatsComponent,
         order_queue::{CancelPolicy, OrderState},
         pools::{self, Spending},
@@ -43,8 +42,9 @@ use ferrets_content::{
 type Carried = BTreeMap<String, FixedU64>;
 
 /// Whether `entity` may start this Repair: it operates and will mend the
-/// target (see `accepts`), the target is there with damage on it, and the
-/// crew already mending it does not shut this one out. A disabled target is
+/// target (see `accepts`), the target is there with damage on it, the crew
+/// already mending it does not shut this one out, and mending would not take
+/// it off the map from under others seated on it. A disabled target is
 /// mended like any other.
 pub fn can_start(world: &World, entity: Entity, order: &Order) -> Result<(), Refusal> {
     let target_id = order
@@ -69,7 +69,7 @@ pub fn can_start(world: &World, entity: Entity, order: &Order) -> Result<(), Ref
     if job_excludes(world, target, entity) {
         return Err(Refusal::TargetUnfit);
     }
-    Ok(())
+    work::requires_free_to_hide(world, entity, repairer_of(world, entity).presence())
 }
 
 /// Called once when a Repair order becomes the front `New` entry.
@@ -131,22 +131,25 @@ pub fn survives_soft_cancel() -> bool {
 /// Walk to within the mender's `repair_range` of the target (suspending on a
 /// chase move), then restore one tick's worth of health and pay for it. The order
 /// finishes when the pool is full, the target is gone or no longer eligible, the
-/// target cannot be reached, or the worker waits out its patience unable to pay.
+/// target cannot be reached, the worker waits out its patience unable to pay,
+/// or, on arrival, others sat down on it since the order started and its
+/// presence could take it off the map from under them.
 pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing {
     let Some(mut repair) = world.entity_mut(entity).take::<RepairComponent>() else {
         return Processing::state(OrderState::Finished);
     };
     let target_id = repair.target;
 
-    let Some(target) = world.resource::<EntityIndex>().alive(target_id) else {
+    // A patient that went off the map is as gone to the order as a dead one.
+    let Some(target) = world
+        .resource::<EntityIndex>()
+        .interactable(world, target_id)
+    else {
         return finish(world, entity, target_id);
     };
     // Construction has its own order, so a site that went back to being built is no
     // longer this order's business.
-    if world
-        .entity(target)
-        .contains::<UnderConstructionComponent>()
-    {
+    if entity_def::under_construction(world, target) {
         return finish(world, entity, target_id);
     }
 
@@ -192,6 +195,12 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
                 return Processing::state(OrderState::InProcessing);
             }
         }
+        // A repairer others sat down on since the order started gives the
+        // order up.
+        match work::requires_free_to_hide(world, entity, &presence) {
+            Ok(()) => {}
+            Err(_) => return finish(world, entity, target_id),
+        }
         work::enter(world, entity, &presence, target);
         repair.inside_job = match presence {
             WorkPresence::Hidden { .. } | WorkPresence::Attached(_) => true,
@@ -234,10 +243,7 @@ fn accepts(world: &World, entity: Entity, target: Entity) -> bool {
     if entity == target && !repairer.self_repair() {
         return false;
     }
-    if world
-        .entity(target)
-        .contains::<UnderConstructionComponent>()
-    {
+    if entity_def::under_construction(world, target) {
         return false;
     }
     let target_def = entity_def::of(world, target);
@@ -406,22 +412,11 @@ fn finish(world: &mut World, entity: Entity, target: SimulationId) -> Processing
 }
 
 /// Leaves the job: the worker drops out of the target's crew, and one that stood
-/// inside comes back on the map beside it — or beside itself when the target is
-/// already gone. A worker that mends from the open is left exactly where it stands.
+/// inside comes back on the map beside it. A worker that mends from the open is
+/// left exactly where it stands.
 fn leave_job(world: &mut World, entity: Entity, target: SimulationId) {
     leave_crew(world, target, entity);
-
-    let (around, around_size) = match world.resource::<EntityIndex>().alive(target) {
-        Some(target) => {
-            let (position, size) = entity_def::footprint(world, target);
-            (CellPos::from(position), size)
-        }
-        None => (
-            CellPos::from(entity_def::position(world, entity)),
-            CellSize::ONE,
-        ),
-    };
-    work::leave(world, entity, around, around_size);
+    work::leave(world, entity, Beside::Container(target));
 }
 
 /// The repair capability of an entity partway through a repair order.

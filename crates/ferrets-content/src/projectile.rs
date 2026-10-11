@@ -27,8 +27,9 @@ impl ProjectileId {
 /// What a projectile's hit resolves against.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Aim {
-    /// The entity itself: the hit follows it, and a blast centres wherever it is when
-    /// the hit lands, so it never misses.
+    /// The entity itself: the hit follows it while it stays on the map, and a
+    /// blast centers wherever it is when the hit lands; one that leaves the map
+    /// escapes the hit, and a blast lands where it went in.
     Entity,
     /// A cell, fixed when the shot was released: the hit resolves there whatever has
     /// happened since, so a target that keeps moving escapes it.

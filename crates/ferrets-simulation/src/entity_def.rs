@@ -1,19 +1,32 @@
 //! Resolution from a spawned entity to what the simulation knows about it.
 
 use bevy_ecs::{entity::Entity, world::World};
-use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
+use ferrets_geometry::{cell_rect::CellRect, cell_size::CellSize};
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_physics::body;
 
 use crate::{
     annex,
+    beside::Beside,
     components::{
-        attached::AttachedComponent, build::UnderConstructionComponent,
-        entity_buffs::BuffsComponent, entity_info::EntityInfoComponent,
-        entity_stats::StatsComponent, hidden::HiddenComponent, location::LocationComponent,
-        morph::MorphComponent, order_queue::OrderQueueComponent, owner::OwnerComponent,
+        attached::AttachedComponent,
+        build::{BuildComponent, UnderConstructionComponent},
+        dying::DyingComponent,
+        entity_buffs::BuffsComponent,
+        entity_info::EntityInfoComponent,
+        entity_stats::StatsComponent,
+        hidden::HiddenComponent,
+        location::LocationComponent,
+        morph::MorphComponent,
+        order_queue::OrderQueueComponent,
+        owner::OwnerComponent,
+        pending_reveal::PendingRevealComponent,
         pools::PoolsComponent,
+        repair::RepairComponent,
+        resource::{HarvestComponent, HarvestingComponent, UnderHarvestComponent},
+        transport::BoardedComponent,
     },
+    entity_index::EntityIndex,
     fields,
     map::OccupancyClass,
     order::Order,
@@ -113,6 +126,49 @@ pub fn harvest_data<'w>(world: &'w World, entity: Entity, kind: &str) -> Option<
         .and_then(|carrier| carrier.harvest_data(kind))
 }
 
+/// Whether `entity` is off the map: aboard a holder, inside a job or a mine,
+/// or waiting on a free cell to come back to.
+pub fn hidden(world: &World, entity: Entity) -> bool {
+    world.entity(entity).contains::<HiddenComponent>()
+}
+
+/// Whether `entity` is in its dying phase.
+pub fn dying(world: &World, entity: Entity) -> bool {
+    world.entity(entity).contains::<DyingComponent>()
+}
+
+/// Whether `entity` sits in a berth of a job, on the map and holding no cells.
+pub fn attached(world: &World, entity: Entity) -> bool {
+    world.entity(entity).contains::<AttachedComponent>()
+}
+
+/// Whether `entity` rides aboard a holder.
+pub fn boarded(world: &World, entity: Entity) -> bool {
+    world.entity(entity).contains::<BoardedComponent>()
+}
+
+/// Whether `entity` is on a harvest trip.
+pub fn harvesting(world: &World, entity: Entity) -> bool {
+    world.entity(entity).contains::<HarvestingComponent>()
+}
+
+/// Whether `entity` is a source with a crew on a trip to it.
+pub fn under_harvest(world: &World, entity: Entity) -> bool {
+    world.entity(entity).contains::<UnderHarvestComponent>()
+}
+
+/// Whether `entity` is a site still being raised.
+pub fn under_construction(world: &World, entity: Entity) -> bool {
+    world
+        .entity(entity)
+        .contains::<UnderConstructionComponent>()
+}
+
+/// Whether `entity`'s return to the grid is deferred, waiting on a free cell.
+pub fn pending_reveal(world: &World, entity: Entity) -> bool {
+    world.entity(entity).contains::<PendingRevealComponent>()
+}
+
 /// Whether `entity` holds its footprint's cells on the navigation grid: it is
 /// neither hidden nor attached to a job.
 pub fn stands_on_grid(world: &World, entity: Entity) -> bool {
@@ -140,6 +196,8 @@ pub enum Operation {
     UnderConstruction,
     /// Standing, but switched off.
     Disabled(Outage),
+    /// Off the map, waiting on a free cell to come back to.
+    Stranded,
 }
 
 /// Whether an active buff on `entity` carries an effect `wanted` picks out.
@@ -216,12 +274,14 @@ pub fn changing(world: &World, entity: Entity) -> bool {
     world.entity(entity).contains::<MorphComponent>()
 }
 
-/// Returns the [`Operation`] `entity` is in. A site still being raised is
-/// [`Operation::UnderConstruction`] whatever the fields say about it or the
-/// dock it stands in.
+/// Returns the [`Operation`] `entity` is in. One off the map waiting on a cell
+/// is [`Operation::Stranded`] before anything else is asked; a site still
+/// being raised is [`Operation::UnderConstruction`] whatever the fields say
+/// about it or the dock it stands in.
 pub fn operation(world: &World, entity: Entity) -> Operation {
-    let entity_ref = world.entity(entity);
-    if entity_ref.contains::<UnderConstructionComponent>() {
+    if pending_reveal(world, entity) {
+        Operation::Stranded
+    } else if under_construction(world, entity) {
         Operation::UnderConstruction
     } else if fields::disabled(world, entity) {
         Operation::Disabled(Outage::Field)
@@ -299,13 +359,153 @@ pub fn quantity_cells(world: &World, entity: Entity, quantity: Quantity) -> u32 
 
 /// Returns where `entity` stands.
 ///
-/// Panics if `entity` is not a simulation entity.
+/// Panics if `entity` is not a simulation entity, or is off the map: a hidden
+/// entity stands nowhere, and [`whereabouts`] is the read for one that may be.
 pub fn position(world: &World, entity: Entity) -> FixedUVec2 {
     world
         .entity(entity)
         .get::<LocationComponent>()
-        .expect("simulation entity must have LocationComponent")
+        .expect("an entity on the map has a location; a hidden one is read by whereabouts")
         .position
+}
+
+/// Where `entity` is: its position while it stands on the map; off it, the
+/// whereabouts of what it is [`inside`]; waiting beside a container gone from
+/// the world, the footprint its return last searched; otherwise where it went
+/// in.
+///
+/// An entity carries a location or the hidden marker, never both and never
+/// neither; what it is inside may itself be inside a job.
+///
+/// Panics if `entity` is not a simulation entity, or its boarding names no
+/// living holder.
+pub fn whereabouts(world: &World, entity: Entity) -> FixedUVec2 {
+    if let Some(location) = world.entity(entity).get::<LocationComponent>() {
+        return location.position;
+    }
+    match inside(world, entity) {
+        Some(container) => whereabouts(world, container),
+        None => match world.entity(entity).get::<PendingRevealComponent>() {
+            Some(pending) => match pending.beside {
+                Beside::Container(_) => FixedUVec2::from(pending.last.origin),
+                Beside::WentIn | Beside::Footprint(_) => went_in(world, entity),
+            },
+            None => went_in(world, entity),
+        },
+    }
+}
+
+/// [`footprint`] read at `entity`'s [`whereabouts`], with the size its type
+/// declares.
+///
+/// Panics if `entity` is not a simulation entity, or its type declares no
+/// location.
+pub fn whereabouts_footprint(world: &World, entity: Entity) -> (FixedUVec2, CellSize) {
+    (whereabouts(world, entity), location_size(world, entity))
+}
+
+/// What `entity` is off the map inside: the holder it rides, the job it works
+/// hidden inside, or, waiting off the map for a cell, the container its return
+/// is set down beside — each while it is in the world. `None` for an entity on
+/// the map, or one inside nothing that remains.
+///
+/// Read from the boarding, the pending return and the driver components of
+/// the hiding orders: an order that hides its entity is joined here.
+///
+/// Panics if `entity` is not a simulation entity, or its boarding names no
+/// living holder.
+pub fn inside(world: &World, entity: Entity) -> Option<Entity> {
+    let entity_ref = world.entity(entity);
+    if !entity_ref.contains::<HiddenComponent>() {
+        return None;
+    }
+    if let Some(boarded) = entity_ref.get::<BoardedComponent>() {
+        let holder = world
+            .resource::<EntityIndex>()
+            .alive(boarded.holder)
+            .expect("a boarding names a living holder");
+        return Some(holder);
+    }
+    if let Some(pending) = entity_ref.get::<PendingRevealComponent>() {
+        return match pending.beside {
+            Beside::Container(id) => world.resource::<EntityIndex>().any(id),
+            Beside::WentIn | Beside::Footprint(_) => None,
+        };
+    }
+    let job = entity_ref
+        .get::<HarvestComponent>()
+        .and_then(|harvest| harvest.harvesting)
+        .or_else(|| {
+            entity_ref
+                .get::<BuildComponent>()
+                .and_then(|build| build.building)
+        })
+        .or_else(|| {
+            entity_ref
+                .get::<RepairComponent>()
+                .filter(|repair| repair.inside_job)
+                .map(|repair| repair.target)
+        })?;
+    let job = world.resource::<EntityIndex>().any(job)?;
+    assert_ne!(job, entity, "nothing works hidden inside itself");
+    Some(job)
+}
+
+/// The footprint of `entity` as it stands, or, off the map, that of what it is
+/// [`inside`] out to the first that stands; once nothing it is inside
+/// remains, the footprint a deferred return beside a container last searched,
+/// else where it went in.
+///
+/// Panics if `entity` is not a simulation entity, or its type declares no
+/// location.
+pub fn outer_rect(world: &World, entity: Entity) -> CellRect {
+    if world.entity(entity).contains::<LocationComponent>() {
+        return footprint_rect(world, entity);
+    }
+    match inside(world, entity) {
+        Some(container) => outer_rect(world, container),
+        None => match world.entity(entity).get::<PendingRevealComponent>() {
+            Some(pending) => match pending.beside {
+                Beside::Container(_) => pending.last,
+                Beside::WentIn | Beside::Footprint(_) => went_in_rect(world, entity),
+            },
+            None => went_in_rect(world, entity),
+        },
+    }
+}
+
+/// The footprint a hidden `entity` is set down beside: the one `beside`
+/// names; once that is gone, the one a deferred return last searched beside,
+/// else where it went in.
+///
+/// Panics if `entity` is not a simulation entity, or `beside` falls back on
+/// where it went in and it is not hidden.
+pub fn beside_rect(world: &World, entity: Entity, beside: Beside) -> CellRect {
+    match beside {
+        Beside::Container(id) => match world.resource::<EntityIndex>().any(id) {
+            Some(container) => outer_rect(world, container),
+            None => match world.entity(entity).get::<PendingRevealComponent>() {
+                Some(pending) => match pending.beside {
+                    Beside::Container(pending_id) if pending_id == id => pending.last,
+                    Beside::Container(_) | Beside::WentIn | Beside::Footprint(_) => {
+                        went_in_rect(world, entity)
+                    }
+                },
+                None => went_in_rect(world, entity),
+            },
+        },
+        Beside::WentIn => went_in_rect(world, entity),
+        Beside::Footprint(rect) => rect,
+    }
+}
+
+/// The footprint a hidden `entity` had where it went in.
+///
+/// Panics if `entity` is not a simulation entity, is not hidden, or its type
+/// declares no location.
+pub fn went_in_rect(world: &World, entity: Entity) -> CellRect {
+    OccupancyClass::of(of(world, entity))
+        .footprint_rect(went_in(world, entity), location_size(world, entity))
 }
 
 /// The body radius of a mover, from its radius stat.
@@ -433,11 +633,7 @@ pub fn footprint_rect(world: &World, entity: Entity) -> CellRect {
 /// Panics if `entity` is not a simulation entity, or `def` declares no location.
 pub fn footprint_rect_of(world: &World, def: &EntityTypeDef, entity: Entity) -> CellRect {
     let (position, size) = footprint_of(world, def, entity);
-    let anchor = match OccupancyClass::of(def) {
-        OccupancyClass::Static => body::anchor(position),
-        OccupancyClass::Claim => CellPos::from(position),
-    };
-    CellRect::new(anchor, size)
+    OccupancyClass::of(def).footprint_rect(position, size)
 }
 
 /// The cells `entity`'s footprint occupies: anchored at the cell its position
@@ -593,4 +789,22 @@ fn longest(
         .map(|(_, stat)| effective_stat_u32(world, entity, stat))
         .max()
         .unwrap_or(0)
+}
+
+/// Where a hidden `entity` went in. Panics for one on the map.
+fn went_in(world: &World, entity: Entity) -> FixedUVec2 {
+    world
+        .entity(entity)
+        .get::<HiddenComponent>()
+        .expect("an entity with no location is hidden")
+        .went_in
+        .position
+}
+
+/// The size `entity`'s type declares. Panics for a type with no location.
+fn location_size(world: &World, entity: Entity) -> CellSize {
+    of(world, entity)
+        .location
+        .expect("only entities with LocationDef have a footprint")
+        .size()
 }

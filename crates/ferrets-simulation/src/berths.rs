@@ -38,14 +38,16 @@ pub fn offers(world: &World, job: Entity, group: &str) -> bool {
 }
 
 /// Whether `job` shuts a newcomer of `presence` out: the newcomer attaches,
-/// and the group it sits in is not offered or has no free berth, or the job's
-/// form is changing. A newcomer that does not attach is never shut out here.
+/// and the group it sits in is not offered or has no free berth, the job's
+/// form is changing, or the job itself sits in another's berths. A newcomer
+/// that does not attach is never shut out here.
 pub fn shut(world: &World, job: Entity, presence: &WorkPresence) -> bool {
     match presence.attachment() {
         Some(attachment) => {
             !offers(world, job, attachment.berths())
                 || free_seats(world, job, attachment.berths()).is_empty()
                 || entity_def::changing(world, job)
+                || entity_def::attached(world, job)
         }
         None => false,
     }

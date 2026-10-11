@@ -10,7 +10,6 @@ use super::orders::{Processing, Refusal};
 use crate::{
     components::{
         dying::{DiedComponent, DyingComponent, Passing},
-        hidden::HiddenComponent,
         location::LocationComponent,
         order_queue::{CancelPolicy, OrderState},
     },
@@ -32,7 +31,7 @@ pub fn can_start(_world: &World, _entity: Entity, _order: &Order) -> Result<(), 
 /// the dying phase needs no further setup.
 pub fn prepare(entity: Entity, _order: &Order, world: &mut World) -> OrderState {
     debug_assert!(
-        world.entity(entity).contains::<DyingComponent>(),
+        entity_def::dying(world, entity),
         "a Die order requires DyingComponent on the entity"
     );
     OrderState::InProcessing
@@ -92,8 +91,8 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
     world.resource_mut::<EntityIndex>().remove_remains(id);
 
     free_footprint(world, entity);
-    // The berth the entity held through its dying phase — one it died in with
-    // no free cell to step back onto — goes back to the job.
+    // The berth the entity held through its dying phase — a seated worker
+    // dies in its seat — goes back to the job.
     spawn::unseat(world, entity);
     spawn::uncover_source(world, entity);
     leave_bequests(world, entity, passing);
@@ -145,10 +144,9 @@ fn leave_bequests(world: &mut World, entity: Entity, passing: Passing) {
     if left.is_empty() {
         return;
     }
-    // A death off the map hands nothing on: there is no ground under what went
-    // down inside a carrier or inside the site it was spent on, and the cell it
-    // last stood on is wherever it happened to step aboard.
-    if world.entity(entity).contains::<HiddenComponent>() {
+    // A death off the map hands nothing on: what goes down inside a carrier,
+    // a site or a mine leaves no body and nothing else on the ground.
+    if entity_def::hidden(world, entity) {
         return;
     }
 

@@ -25,7 +25,6 @@ use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_simulation::{
     command::PlayerCommand,
     components::{
-        attached::AttachedComponent,
         entity_info::EntityInfoComponent,
         last_hit::{self, LastHitComponent},
         location::LocationComponent,
@@ -558,7 +557,7 @@ fn change_refused_while_workers_sit_in_berths() {
         },
     );
     utils::run_ticks(&mut app, utils::APPLY + 4);
-    assert!(app.world().get::<AttachedComponent>(sylph).is_some());
+    assert!(entity_def::attached(app.world(), sylph));
 
     command_morph(&mut app, house_id, "walking_shaft");
     utils::run_ticks(&mut app, utils::APPLY + 6);

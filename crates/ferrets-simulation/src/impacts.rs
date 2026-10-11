@@ -56,14 +56,13 @@ pub struct PendingImpact {
     /// Which projectile kind is in the air, so a renderer can tell an arrow from a
     /// cannonball.
     pub projectile: ProjectileId,
-    /// The intended victim, for a shot that follows its target. `None` for one aimed
-    /// at a cell, which has nobody to follow. Already gone when the shot lands means
-    /// the shot was wasted.
-    pub target: Option<SimulationId>,
+    /// Whom the shot follows.
+    pub target: Following,
     /// Where the shot was released, for measuring a line blast and for drawing.
     pub origin: FixedUVec2,
-    /// Where the shot was aimed. A cell-aimed shot resolves here; a target-following
-    /// one recomputes from its target on arrival and uses this only as a fallback.
+    /// Where the shot lands unless it follows a target: the cell it was aimed at,
+    /// or where a target it lost went in; a following shot falls back on it once
+    /// its target is gone.
     pub impact: FixedUVec2,
     /// The attacker's effective damage, frozen when the shot was released.
     pub damage: FixedU64,
@@ -71,6 +70,20 @@ pub struct PendingImpact {
     pub emitted_on_tick: u32,
     /// The tick the shot lands on.
     pub lands_on_tick: u32,
+}
+
+/// Whom a shot in flight follows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Following {
+    /// Nobody: a shot sent to a cell hits whoever stands there.
+    Nothing,
+    /// This entity, the shot's only direct victim, wherever it stands — or, in
+    /// its dying phase, where it lies; gone, it leaves the shot no direct
+    /// victim.
+    Target(SimulationId),
+    /// A target that went off the map while the shot flew: no direct victim,
+    /// and the shot lands where it went in.
+    Lost,
 }
 
 /// Every shot currently in flight, in release order.
@@ -96,6 +109,20 @@ impl PendingImpacts {
             .partition(|impact| impact.lands_on_tick <= tick);
         self.in_flight = pending;
         due
+    }
+
+    /// Turns every shot following `target` into one that lost it, landing at
+    /// `went_in`.
+    pub fn lose(&mut self, target: SimulationId, went_in: FixedUVec2) {
+        for shot in &mut self.in_flight {
+            match shot.target {
+                Following::Target(id) if id == target => {
+                    shot.target = Following::Lost;
+                    shot.impact = went_in;
+                }
+                Following::Target(_) | Following::Lost | Following::Nothing => {}
+            }
+        }
     }
 
     /// Every shot still in flight, in release order — for rendering.

@@ -1120,7 +1120,8 @@ fn resolve_blocked_crossing(
                     size: CellSize::new(1, 1),
                     range: 0,
                 });
-                super::orders::prepare_front(blocker, &mut queue, world);
+                let operation = entity_def::operation(world, blocker);
+                super::orders::prepare_front(blocker, operation, &mut queue, world);
                 world.entity_mut(blocker).insert(queue);
             }
         }

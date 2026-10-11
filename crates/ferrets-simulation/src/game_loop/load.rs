@@ -10,7 +10,7 @@ use super::{
 };
 use crate::{
     components::{
-        order_queue::{CancelPolicy, OrderQueueComponent, OrderState},
+        order_queue::{CancelPolicy, OrderState},
         transport::LoadComponent,
     },
     entity_def,
@@ -40,15 +40,15 @@ pub fn can_start(world: &World, entity: Entity, order: &Order) -> Result<(), Ref
     orders::target_operating(world, target)?;
     match board::would_board(world, target, entity) {
         Ok(()) => Ok(()),
-        // Judged from the holder's side: a passenger that cannot ride is a
-        // target this order does not take.
-        Err(Refusal::Incapable | Refusal::TargetUnfit) => Err(Refusal::TargetUnfit),
+        // Judged from the holder's side: a passenger that cannot ride, or is
+        // busy where it stands, is a target this order does not take.
+        Err(Refusal::Incapable | Refusal::Busy | Refusal::TargetUnfit) => Err(Refusal::TargetUnfit),
         Err(
             refusal @ (Refusal::UnderConstruction
             | Refusal::Disabled
+            | Refusal::Stranded
             | Refusal::NothingToDo
             | Refusal::TargetGone
-            | Refusal::Busy
             | Refusal::NoRoom
             | Refusal::NoSupply),
         ) => unreachable!("would_board judges fit only, got {refusal:?}"),
@@ -103,9 +103,9 @@ pub fn survives_soft_cancel() -> bool {
 ///
 /// Walk to within own `load_range` of the target (suspending on a chase move,
 /// following it as it moves), then take it in: the target's own orders are
-/// force-canceled — a walk cut down mid-crossing settles onto its claimed
-/// cell first — and it disappears aboard through the same transfer boarding
-/// uses, cooldown included. Everything is re-checked at arrival; a target that
+/// soft-canceled, production kept — a walk cut down mid-crossing settles onto
+/// its claimed cell first — and it disappears aboard through the same transfer boarding
+/// uses, cooldown included. Everything is re-checked every tick; a target that
 /// stopped qualifying on the way ends the order.
 pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing {
     let Some(mut load) = world.entity_mut(entity).take::<LoadComponent>() else {
@@ -119,7 +119,9 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
     else {
         return Processing::state(OrderState::Finished);
     };
-    if board::would_board(world, target, entity).is_err() {
+    if orders::target_operating(world, target).is_err()
+        || board::would_board(world, target, entity).is_err()
+    {
         return Processing::state(OrderState::Finished);
     }
 
@@ -156,10 +158,6 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
         world.entity_mut(entity).insert(load);
         return Processing::state(OrderState::InProcessing);
     }
-    if let Some(mut queue) = world.entity_mut(target).get_mut::<OrderQueueComponent>() {
-        queue.cancel_all(CancelPolicy::Force);
-    }
-
     board::admit(world, entity, target);
     Processing::state(OrderState::Finished)
 }

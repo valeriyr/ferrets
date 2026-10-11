@@ -11,7 +11,6 @@ use super::{acquire, attack_move};
 use crate::{
     components::{
         entity_stats::StatsComponent,
-        hidden::HiddenComponent,
         order_queue::OrderQueueComponent,
         stance::{Stance, StanceComponent},
     },
@@ -50,7 +49,7 @@ pub fn tick(world: &mut World) {
         if !stance.auto_engages() {
             continue;
         }
-        if world.entity(entity).contains::<HiddenComponent>() {
+        if entity_def::hidden(world, entity) {
             continue;
         }
         // Only an operating body takes the initiative: a site still going
@@ -58,6 +57,7 @@ pub fn tick(world: &mut World) {
         match entity_def::operation(world, entity) {
             Operation::Operating => {}
             Operation::UnderConstruction | Operation::Disabled(_) => continue,
+            Operation::Stranded => unreachable!("a stranded body is hidden"),
         }
         if !entity_def::idle(world, entity) {
             continue;

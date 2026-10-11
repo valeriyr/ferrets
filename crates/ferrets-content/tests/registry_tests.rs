@@ -145,7 +145,7 @@ fn register_accepts_registered_kinds() {
                     5,
                     5,
                     2,
-                    WorkPresence::Hidden {
+                    WorkPresence::Present {
                         crew: CrewLimit::ONE,
                     },
                     Banking::Carried,
@@ -154,6 +154,34 @@ fn register_accepts_registered_kinds() {
             )])
             .with_resource_storage(["gold"]),
     );
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'worker' harvests 'gold' it is a source of and so works it in the open"
+)]
+fn validate_rejects_source_harvesting_itself_from_inside() {
+    let mut registry = utils::ground_registry();
+    registry.register_resource("gold");
+    registry.register(
+        utils::standing("worker", GROUND)
+            .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
+            .with_resource_source("gold", DepletionPolicy::Destroy)
+            .with_resource_carrier([(
+                "gold",
+                HarvestData::new(
+                    5,
+                    5,
+                    2,
+                    WorkPresence::Hidden {
+                        crew: CrewLimit::ONE,
+                    },
+                    Banking::Carried,
+                    Kinds::Any,
+                ),
+            )]),
+    );
+    registry.validate();
 }
 
 #[test]
@@ -1795,6 +1823,50 @@ fn register_rejects_type_declaring_player_cast_skill() {
 //
 // ─── Repair capability ────────────────────────────────────────────────────────
 //
+
+#[test]
+#[should_panic(expected = "entity type 'medic' repairs itself and so mends in the open")]
+fn validate_rejects_self_repairer_mending_from_inside() {
+    let mut registry = utils::ground_registry();
+    registry.register(
+        utils::standing("medic", GROUND)
+            .with_pool(Pool::health(20))
+            .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
+            .with_stat(EntityStatId::REPAIR_RANGE, FixedU64::ONE)
+            .with_repairer(
+                Kinds::Any,
+                RepairRate::Production,
+                WorkPresence::Hidden {
+                    crew: CrewLimit::ONE,
+                },
+                true,
+                RepairCost::Free,
+                None,
+            ),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(expected = "entity type 'medic' repairs itself and so mends in the open")]
+fn validate_rejects_self_repairer_seated_on_itself() {
+    let mut registry = utils::ground_registry();
+    registry.register(
+        utils::standing("medic", GROUND)
+            .with_pool(Pool::health(20))
+            .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
+            .with_stat(EntityStatId::REPAIR_RANGE, FixedU64::ONE)
+            .with_repairer(
+                Kinds::Any,
+                RepairRate::Production,
+                WorkPresence::Attached(Attachment::new("rim", BerthStance::Still)),
+                true,
+                RepairCost::Free,
+                None,
+            ),
+    );
+    registry.validate();
+}
 
 #[test]
 #[should_panic(expected = "can repair but is missing repair_speed")]

@@ -6,9 +6,7 @@ use bevy_ecs::prelude::*;
 use ferrets_content::{affiliation::Affiliation, entity_type_def::EntityTypeDef};
 
 use crate::{
-    components::{
-        concealed::ConcealedComponent, hidden::HiddenComponent, location::LocationComponent, owner,
-    },
+    components::{concealed::ConcealedComponent, hidden::HiddenComponent, owner},
     entity_def,
     entity_index::EntityIndex,
     fields,
@@ -234,9 +232,6 @@ pub fn sighting_of(
     };
 
     let entity_ref = world.entity(entity);
-    if !entity_ref.contains::<LocationComponent>() {
-        return Sighting::Unseen;
-    }
     // Off the map — aboard, inside a site or a mine — nobody sees it, its own
     // side included: the owner knows it from what holds it, not by sight.
     if entity_ref.contains::<HiddenComponent>() {

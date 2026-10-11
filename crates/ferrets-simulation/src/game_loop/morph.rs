@@ -44,11 +44,11 @@ use super::{
     stats,
 };
 use crate::{
-    berths, brood,
+    berths,
+    beside::{Beside, Lean},
+    brood,
     components::{
-        attached::AttachedComponent,
         concealed::ConcealedComponent,
-        dying::DyingComponent,
         entity_info::EntityInfoComponent,
         last_hit::LastHitComponent,
         location::LocationComponent,
@@ -191,7 +191,7 @@ pub fn cancel_processing(
     release_reservation(world, &morph);
     // A dying entity keeps the form its death was announced in, and so does
     // one about to die on its transition's terms.
-    if world.entity(entity).contains::<DyingComponent>() {
+    if entity_def::dying(world, entity) {
         return Processing::state(OrderState::Finished);
     }
     match abandon(world, entity, &morph, &transition, payment) {
@@ -281,12 +281,18 @@ fn judge(world: &World, entity: Entity, type_name: &str) -> Result<Start, Refusa
 
     // An attached entity holds no cells: before it changes it steps onto
     // ground that takes the form it wears next, the nearest to its berth.
-    let step_out = if world.entity(entity).contains::<AttachedComponent>() {
+    let step_out = if entity_def::attached(world, entity) {
         let Some(worn) = worn_next(world, &transition) else {
             return Err(Refusal::Incapable);
         };
         let berth = body::anchor(entity_def::position(world, entity));
-        match spawn::cell_back_near(world, entity, berth, from.size(), &worn) {
+        match spawn::cell_back_beside(
+            world,
+            entity,
+            Beside::Footprint(CellRect::new(berth, from.size())),
+            Lean::Nothing,
+            &worn,
+        ) {
             Some(cell) => Some(cell),
             None => return Err(Refusal::NoRoom),
         }
@@ -1070,7 +1076,7 @@ fn ended_early(
             ..
         } => {
             spawn::reseat_broodling(world, entity);
-            if world.entity(entity).contains::<DyingComponent>() {
+            if entity_def::dying(world, entity) {
                 EarlyEnd::Dying
             } else {
                 EarlyEnd::Standing

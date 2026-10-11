@@ -139,7 +139,7 @@ fn field_races_ai_build_economy_and_army() {
     assert_eq!(count_owned(world, 1, "hive"), 1);
     assert_eq!(count_owned(world, 1, "overlord"), 3);
     assert_eq!(count_owned(world, 1, "tumor"), 1);
-    assert_eq!(count_owned(world, 1, "swarmling"), 15);
+    assert_eq!(count_owned(world, 1, "swarmling"), 14);
     // Counted together: one part way through its growth is still a ravager
     // the brain paid for.
     assert_eq!(
@@ -421,7 +421,7 @@ fn ai_builds_economy_and_army() {
     assert_eq!(count_owned(world, 1, "blacksmith"), 1);
     // The one bunker the human brain raises: its detector.
     assert_eq!(count_owned(world, 1, "bunker"), 1);
-    assert_eq!(count_owned(world, 1, "archer"), 9);
+    assert_eq!(count_owned(world, 1, "archer"), 8);
     assert_eq!(count_owned(world, 1, "mortar"), 2);
     // Two watch towers and one hardening come out of the same gold as the
     // grunts, so the army is five.

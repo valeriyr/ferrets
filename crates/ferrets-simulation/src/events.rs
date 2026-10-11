@@ -1,8 +1,10 @@
 //! What the simulation announces as it runs.
 //!
 //! Emitting systems say what happened and nothing about who cares; the consumers
-//! reading the record decide that for themselves. The events carry the owners
-//! and the position a consumer needs to make that judgement.
+//! reading the record decide that for themselves. An event carries what its
+//! subject cannot answer at read time: the position of one leaving the map or
+//! already off it, the owner and type of one dying; a living subject answers
+//! the rest.
 //!
 //! Everything here is deterministic simulation state: reproduced exactly on
 //! playback like anything else the tick produces, and not folded into the
@@ -142,6 +144,11 @@ pub enum DeathCause {
         /// The carrier it was inside.
         holder: SimulationId,
     },
+    /// Destroyed by the fate of a carrier whose new owner no longer admits it.
+    PassengerBarred {
+        /// The carrier it was inside.
+        holder: SimulationId,
+    },
     /// Nothing sustained it any longer: a pool that ran out with no one to
     /// blame, or a bond it cannot stand without.
     Decayed,
@@ -170,7 +177,9 @@ impl From<DeathCause> for DeathKind {
             DeathCause::Canceled => DeathKind::Canceled,
             DeathCause::Consumed => DeathKind::Consumed,
             DeathCause::Overbuilt => DeathKind::Overbuilt,
-            DeathCause::PassengerLost { .. } => DeathKind::CarriedDown,
+            DeathCause::PassengerLost { .. } | DeathCause::PassengerBarred { .. } => {
+                DeathKind::CarriedDown
+            }
             DeathCause::Decayed => DeathKind::Decayed,
             DeathCause::Orphaned { .. } => DeathKind::Orphaned,
             DeathCause::Unseated { .. } => DeathKind::Unseated,
@@ -294,11 +303,15 @@ pub enum SimulationEvent {
     EntityHidden {
         /// The entity that went away.
         entity: SimulationId,
+        /// Where it stood as it went.
+        position: FixedUVec2,
     },
     /// An entity that was off the map came back to it.
     EntityRevealed {
         /// The entity that returned.
         entity: SimulationId,
+        /// Where it was set down.
+        position: FixedUVec2,
     },
     /// An entity's skill went off, having passed its costs and its cooldown.
     SkillCast {

@@ -211,6 +211,7 @@ impl ContentRegistry {
             self.validate_traversable(def);
             self.validate_morphs(def);
             self.validate_crews(def);
+            self.validate_self_work(def);
             self.validate_berths(def);
             self.validate_harvest_sources(def);
             self.validate_overbuilds(def);
@@ -2721,6 +2722,37 @@ impl ContentRegistry {
                 known,
                 "{owner} {what} {}, which is not registered",
                 kind.describe()
+            );
+        }
+    }
+
+    /// Checks that a type working on itself — mending itself, or harvesting a
+    /// kind it is a source of — does so in the open: nothing goes inside or
+    /// sits on itself.
+    fn validate_self_work(&self, def: &EntityTypeDef) {
+        if let Some(repairer) = &def.repairer {
+            let in_the_open = match repairer.presence() {
+                WorkPresence::Present { .. } => true,
+                WorkPresence::Hidden { .. } | WorkPresence::Attached(_) => false,
+            };
+            assert!(
+                !repairer.self_repair() || in_the_open,
+                "entity type '{}' repairs itself and so mends in the open",
+                def.name
+            );
+        }
+        if let (Some(carrier), Some(source)) = (&def.resource_carrier, &def.resource_source)
+            && let Some(data) = carrier.harvest_data(source.kind())
+        {
+            let in_the_open = match data.presence() {
+                WorkPresence::Present { .. } => true,
+                WorkPresence::Hidden { .. } | WorkPresence::Attached(_) => false,
+            };
+            assert!(
+                in_the_open,
+                "entity type '{}' harvests '{}' it is a source of and so works it in the open",
+                def.name,
+                source.kind()
             );
         }
     }

@@ -1,8 +1,6 @@
 use bevy::prelude::*;
 use ferrets_simulation::{
-    components::{dying::DyingComponent, order_queue::OrderQueueComponent},
-    entity_index::EntityIndex,
-    game_loop,
+    components::order_queue::OrderQueueComponent, entity_def, entity_index::EntityIndex, game_loop,
 };
 
 /// Advances every alive entity's order queue by one tick: first prepares each
@@ -17,7 +15,7 @@ pub fn tick_orders(world: &mut World) {
 /// Flush canceled entries and prepare the front order for every alive entity.
 fn prepare(world: &mut World) {
     for entity in alive_entities(world) {
-        if world.entity(entity).contains::<DyingComponent>() {
+        if entity_def::dying(world, entity) {
             continue;
         }
         let Some(mut queue) = world.entity_mut(entity).take::<OrderQueueComponent>() else {
@@ -32,7 +30,7 @@ fn prepare(world: &mut World) {
 /// the running sub-order.
 fn watch(world: &mut World) {
     for entity in alive_entities(world) {
-        if world.entity(entity).contains::<DyingComponent>() {
+        if entity_def::dying(world, entity) {
             continue;
         }
         let Some(mut queue) = world.entity_mut(entity).take::<OrderQueueComponent>() else {
@@ -46,7 +44,7 @@ fn watch(world: &mut World) {
 /// Advance the front `InProcessing` order by one tick for every alive entity.
 fn process(world: &mut World) {
     for entity in alive_entities(world) {
-        if world.entity(entity).contains::<DyingComponent>() {
+        if entity_def::dying(world, entity) {
             continue;
         }
         let Some(mut queue) = world.entity_mut(entity).take::<OrderQueueComponent>() else {

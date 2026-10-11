@@ -98,7 +98,7 @@ fn holds(
             }
         }),
         Requirement::Built => {
-            actor.is_some_and(|actor| !world.entity(actor).contains::<UnderConstructionComponent>())
+            actor.is_some_and(|actor| !entity_def::under_construction(world, actor))
         }
         Requirement::Idle => actor.is_some_and(|actor| entity_def::idle(world, actor)),
         Requirement::IdleFor(ticks) => actor.is_some_and(|actor| {

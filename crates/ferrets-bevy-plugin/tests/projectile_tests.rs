@@ -90,6 +90,34 @@ fn blast_damages_bystanders_by_band() {
 }
 
 #[test]
+fn shot_whose_target_died_in_flight_hits_nobody_directly() {
+    let mut app = app();
+    let (_, gunner) = utils::create_entity(app.world_mut(), "gunner", utils::pos(5, 20), Some(0))
+        .expect("gunner spawns");
+    let (target, target_id) =
+        utils::create_entity(app.world_mut(), "dummy", utils::pos(9, 20), Some(1))
+            .expect("target spawns");
+    utils::attack(&mut app, gunner, target_id);
+    utils::run_ticks(&mut app, 5);
+    assert_eq!(
+        app.world().resource::<PendingImpacts>().in_flight().len(),
+        1
+    );
+
+    // The target is gone while the shell flies, and another stands on its
+    // cell when the shell lands.
+    spawn::destroy_entity(app.world_mut(), target);
+    utils::run_ticks(&mut app, 1);
+    let (stand_in, _) = utils::create_entity(app.world_mut(), "dummy", utils::pos(9, 20), Some(1))
+        .expect("stand-in spawns");
+    utils::run_ticks(&mut app, 8);
+
+    // A following shot hits its target or nobody: the stand-in takes only the
+    // burst, 20 × 0.5 = 10, not the direct 20.
+    assert_eq!(100 - utils::health_as_u32(&app, stand_in), 10);
+}
+
+#[test]
 fn blast_spares_own_side_without_friendly_fire() {
     let mut app = app();
     let (_, gunner) = utils::create_entity(app.world_mut(), "gunner", utils::pos(5, 26), Some(0))

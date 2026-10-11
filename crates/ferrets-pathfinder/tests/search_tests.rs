@@ -295,6 +295,61 @@ fn placement_gives_up_beyond_max_radius() {
 }
 
 //
+// ─── find_placement_near_toward ───────────────────────────────────────────────
+//
+
+#[test]
+fn placement_toward_takes_ring_cell_nearest_toward() {
+    // . . . . . .   y=2   anchor 2×2 at (3,3) fully occupied; ring 1 spans
+    // . . A A . T   y=3   (2,2)..(5,5). Without a lean the free cell nearest
+    // . . A A . .   y=4   the anchor's middle is (3,2); leaning toward T at
+    //                     (5,3) it is (5,3) itself.
+    let mut grid = utils::grid(10, 10);
+    for y in 3..5 {
+        for x in 3..5 {
+            grid.set_occupied(utils::GROUND, utils::nav(x, y), true);
+        }
+    }
+
+    let found = search::find_placement_near_toward(
+        &grid,
+        utils::GROUND,
+        CellRect::new(utils::nav(3, 3), CellSize::new(2, 2)),
+        CellSize::ONE,
+        8,
+        Footing::Free,
+        CellRect::new(utils::nav(5, 3), CellSize::ONE),
+    );
+
+    assert_eq!(found, Some(utils::nav(5, 3)));
+}
+
+#[test]
+fn placement_toward_stays_in_nearest_ring() {
+    // The lean ranks cells within a ring, never a farther ring over a nearer
+    // one: T at (9,3) is four cells out, yet the cell taken is in ring 1,
+    // (5,3), the ring-1 cell nearest T.
+    let mut grid = utils::grid(10, 10);
+    for y in 3..5 {
+        for x in 3..5 {
+            grid.set_occupied(utils::GROUND, utils::nav(x, y), true);
+        }
+    }
+
+    let found = search::find_placement_near_toward(
+        &grid,
+        utils::GROUND,
+        CellRect::new(utils::nav(3, 3), CellSize::new(2, 2)),
+        CellSize::ONE,
+        8,
+        Footing::Free,
+        CellRect::new(utils::nav(9, 3), CellSize::ONE),
+    );
+
+    assert_eq!(found, Some(utils::nav(5, 3)));
+}
+
+//
 // ─── find_placements_near ─────────────────────────────────────────────────────
 //
 

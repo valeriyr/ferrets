@@ -2,7 +2,7 @@
 //! Called by [`super::orders`] as part of the shared order lifecycle.
 
 use bevy_ecs::{entity::Entity, world::World};
-use ferrets_geometry::cell_size::CellSize;
+use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
 use ferrets_math::fixed_uvec2::FixedUVec2;
 
 use super::{
@@ -10,8 +10,10 @@ use super::{
     orders::{self, Processing, Refusal},
 };
 use crate::{
+    beside::{Beside, Lean},
     components::{
         order_queue::{CancelPolicy, OrderQueueComponent, OrderState},
+        rally::RallyTarget,
         transport::{
             BoardedComponent, GarrisonFireComponent, TransporterComponent, UnloadComponent,
         },
@@ -22,7 +24,8 @@ use crate::{
     order::Order,
     rally,
     simulation_id::SimulationId,
-    spawn,
+    spawn::{self, SetDown},
+    visibility,
 };
 use ferrets_content::entity_stats::EntityStatId;
 
@@ -91,8 +94,8 @@ pub fn survives_soft_cancel() -> bool {
 /// With a destination, a mobile transporter first walks into its `unload_range`
 /// of it — an immobile one, or one whose walk can make no more progress, lets
 /// its passengers out where it stands. Passengers then step out one per
-/// `unload_period` ticks (a zero period empties the hold at once), each
-/// revealed beside the transporter's footprint and sent on: to the
+/// `unload_period` ticks (a zero period empties the hold at once), each set
+/// down beside the transporter on the side of where it is sent, and sent on: to the
 /// destination when the order named one — walking as close to it as the map
 /// allows — otherwise to the rally point, if set. A blocked exit keeps the
 /// order running and retries every tick; the order finishes when the hold is
@@ -151,11 +154,17 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
             continue;
         };
 
-        let footprint = entity_def::footprint_rect(world, entity);
-        if !spawn::place_back_near(world, passenger, footprint.origin, footprint.size) {
+        // A passenger steps out on the side of where it is sent: the order's
+        // point, else the holder's rally point, else no side in particular.
+        let holder = entity_def::simulation_id(world, entity);
+        let lean = exit_lean(world, entity, unload.at);
+        match spawn::place_back_beside(world, passenger, Beside::Container(holder), lean) {
+            SetDown::Placed => {}
             // Boxed in: hold the door and retry next tick.
-            world.entity_mut(entity).insert(unload);
-            return Processing::state(OrderState::InProcessing);
+            SetDown::NoCell => {
+                world.entity_mut(entity).insert(unload);
+                return Processing::state(OrderState::InProcessing);
+            }
         }
 
         remove_passenger(world, entity, passenger_id);
@@ -212,5 +221,30 @@ fn dispatch(world: &mut World, holder: Entity, passenger: Entity, at: Option<Fix
             }
         }
         None => rally::owe(world, holder, passenger),
+    }
+}
+
+/// Which side of `holder` a passenger it lets out steps onto: toward `at`,
+/// else toward the holder's rally point — an entity there only while the
+/// holder's owner makes it out — else none in particular.
+fn exit_lean(world: &World, holder: Entity, at: Option<FixedUVec2>) -> Lean {
+    let toward_cell =
+        |position: FixedUVec2| Lean::Toward(CellRect::new(CellPos::from(position), CellSize::ONE));
+    match at {
+        Some(at) => toward_cell(at),
+        None => match rally::target_of(world, holder) {
+            Some(RallyTarget::Position(position)) => toward_cell(position),
+            Some(RallyTarget::Entity(id)) => {
+                let target = match entity_def::owner(world, holder) {
+                    Some(owner) => visibility::interactable_to(world, owner, id),
+                    None => world.resource::<EntityIndex>().interactable(world, id),
+                };
+                match target {
+                    Some(target) => Lean::Toward(entity_def::footprint_rect(world, target)),
+                    None => Lean::Nothing,
+                }
+            }
+            None => Lean::Nothing,
+        },
     }
 }

@@ -9,7 +9,6 @@ use ferrets_geometry::cell_pos::CellPos;
 use ferrets_simulation::{
     command::PlayerCommand,
     components::{
-        attached::AttachedComponent,
         build::{OverbuiltComponent, UnderConstructionComponent},
         entity_info::EntityInfoComponent,
         order_queue::{CancelPolicy, OrderQueueComponent},
@@ -137,7 +136,7 @@ fn finished_site_is_mined_directly_and_leaves_nothing_when_drained() {
     // Seated on the house's own cell on the third tick; two loads of five
     // drain the ten and bank them where it sits.
     utils::run_ticks(&mut app, utils::APPLY);
-    assert!(app.world().get::<AttachedComponent>(sylph).is_some());
+    assert!(entity_def::attached(app.world(), sylph));
     assert_eq!(utils::cell_of(app.world(), sylph), CellPos::new(10, 10));
     utils::run_ticks(&mut app, 4);
     assert_eq!(utils::gold(app.world()), 20);
@@ -146,7 +145,7 @@ fn finished_site_is_mined_directly_and_leaves_nothing_when_drained() {
     utils::run_ticks(&mut app, 4);
     assert_eq!(utils::count_of_type(app.world_mut(), "shaft_house"), 0);
     assert_eq!(utils::count_of_type(app.world_mut(), "mine"), 0);
-    assert!(app.world().get::<AttachedComponent>(sylph).is_none());
+    assert!(!entity_def::attached(app.world(), sylph));
 }
 
 #[test]
@@ -210,7 +209,7 @@ fn drained_site_over_persistent_source_gives_it_back_empty() {
         utils::cell_of(app.world(), *uncovered),
         CellPos::new(10, 10)
     );
-    assert!(app.world().get::<AttachedComponent>(sylph).is_none());
+    assert!(!entity_def::attached(app.world(), sylph));
 }
 
 //
@@ -247,7 +246,7 @@ fn owned_source_refuses_rival_and_unfinished_site_refuses_its_owner() {
         );
     utils::run_ticks(&mut app, 2);
     assert!(utils::order_queue_is_empty(app.world_mut(), sylph));
-    assert!(app.world().get::<AttachedComponent>(sylph).is_none());
+    assert!(!entity_def::attached(app.world(), sylph));
 
     // Finished, it is player 0's source: player 1's carrier has no business
     // there, and its order ends on its first tick.
@@ -265,7 +264,7 @@ fn owned_source_refuses_rival_and_unfinished_site_refuses_its_owner() {
             Some(CancelPolicy::Force),
         );
     utils::run_ticks(&mut app, 2);
-    assert!(app.world().get::<AttachedComponent>(rival).is_none());
+    assert!(!entity_def::attached(app.world(), rival));
     assert!(utils::order_queue_is_empty(app.world_mut(), rival));
     assert_eq!(utils::gold(app.world()), 10);
 }
@@ -323,7 +322,7 @@ fn unfinished_site_is_never_taken_up_as_replacement_source() {
             .is_some(),
         "the site is still going up"
     );
-    assert!(app.world().get::<AttachedComponent>(carrier).is_none());
+    assert!(!entity_def::attached(app.world(), carrier));
     assert!(utils::order_queue_is_empty(app.world_mut(), carrier));
     // The three the geyser held, and nothing out of the site.
     assert_eq!(utils::gold(app.world_mut()), 3);

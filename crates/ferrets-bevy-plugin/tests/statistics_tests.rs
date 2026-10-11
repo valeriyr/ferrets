@@ -24,8 +24,9 @@ use ferrets_content::{
     work::{CrewLimit, WorkPresence},
 };
 use ferrets_geometry::cell_size::CellSize;
-use ferrets_math::FixedU64;
+use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_simulation::{
+    beside::Lean,
     command::{PlayerCommand, SkillCasterRef, SkillTarget},
     components::resource::ResourceSourceComponent,
     entity_def,
@@ -360,7 +361,7 @@ fn captured_entity_moves_no_tally() {
     let (entity, _) = utils::create_entity(world, "soldier", utils::pos(4, 4), Some(0)).unwrap();
     let (_, taker) = utils::create_entity(world, "soldier", utils::pos(6, 4), Some(1)).unwrap();
 
-    spawn::change_owner(world, entity, 1, taker);
+    spawn::change_owner(world, entity, 1, taker, Lean::Nothing);
     utils::run_ticks(&mut app, 1);
 
     let soldier = type_id(&app, "soldier");
@@ -511,6 +512,75 @@ fn canceled_transport_takes_passengers_without_loss_or_kill() {
         0,
         "no enemy took it, so nobody lost it and nobody killed it"
     );
+}
+
+#[test]
+fn passengers_barred_at_capture_are_uncredited_losses() {
+    let mut app = utils::transport_app();
+    let (wagon_entity, wagon) = utils::create_owned(&mut app, "wagon", 10, 10, 0);
+    let (_, rider) = utils::create_owned(&mut app, "rifleman", 12, 10, 0);
+    let (_, taker) = utils::create_owned(&mut app, "rifleman", 20, 20, 2);
+    utils::send_to(&mut app, rider, wagon);
+    utils::run_until_aboard(&mut app, wagon_entity, 1, 30);
+
+    // Handed to player 2, the wagon bars player 0's rider and destroys it.
+    spawn::change_owner(app.world_mut(), wagon_entity, 2, taker, Lean::Nothing);
+    utils::run_ticks(&mut app, 1);
+
+    let statistics = app.world().resource::<Statistics>();
+    assert_eq!(
+        statistics.player(0).lost(type_id(&app, "rifleman")),
+        1,
+        "a passenger barred at capture is its owner's loss"
+    );
+    assert_eq!(
+        statistics.player(2).killed(type_id(&app, "rifleman")),
+        0,
+        "and nobody's kill"
+    );
+}
+
+#[test]
+fn passenger_barred_at_capture_stays_uncredited_when_holder_is_killed_same_tick() {
+    let mut app = utils::transport_app();
+    let (wagon_entity, wagon) = utils::create_owned(&mut app, "wagon", 10, 10, 0);
+    let (_, rider) = utils::create_owned(&mut app, "rifleman", 12, 10, 0);
+    let (_, taker) = utils::create_owned(&mut app, "rifleman", 20, 20, 2);
+    let (_, killer) = utils::create_owned(&mut app, "rifleman", 22, 20, 2);
+    utils::send_to(&mut app, rider, wagon);
+    utils::run_until_aboard(&mut app, wagon_entity, 1, 30);
+
+    // Captured and then killed in one tick: the rider was lost to the capture,
+    // not to the kill that came after it.
+    spawn::change_owner(app.world_mut(), wagon_entity, 2, taker, Lean::Nothing);
+    spawn::despawn_killed(
+        app.world_mut(),
+        wagon_entity,
+        killer,
+        Some(2),
+        Slain::Remains,
+    );
+    utils::run_ticks(&mut app, 1);
+
+    let statistics = app.world().resource::<Statistics>();
+    assert_eq!(statistics.player(0).lost(type_id(&app, "rifleman")), 1);
+    assert_eq!(statistics.player(2).killed(type_id(&app, "rifleman")), 0);
+}
+
+#[test]
+fn passenger_of_transport_removed_unannounced_is_no_loss() {
+    let mut app = utils::transport_app();
+    let (wagon_entity, wagon) = utils::create_owned(&mut app, "wagon", 10, 10, 0);
+    let (_, rider) = utils::create_owned(&mut app, "rifleman", 12, 10, 0);
+    utils::send_to(&mut app, rider, wagon);
+    utils::run_until_aboard(&mut app, wagon_entity, 1, 30);
+
+    spawn::destroy_entity(app.world_mut(), wagon_entity);
+    utils::run_ticks(&mut app, 3);
+
+    // The wagon dies unannounced, so the rider it takes with it is no loss.
+    let statistics = app.world().resource::<Statistics>();
+    assert_eq!(statistics.player(0).lost(type_id(&app, "rifleman")), 0);
 }
 
 //
@@ -987,12 +1057,14 @@ fn boarding_and_unloading_announce_going_off_map_and_back() {
         },
     );
     utils::run_ticks(&mut app, 30);
+    // In the wagon's load range already, the rider boards from where it
+    // stood, and the announcement says where that was.
     assert!(
         app.world()
             .resource::<Announced>()
             .hidden()
-            .contains(&rider),
-        "boarding takes the passenger off the map, and says so"
+            .contains(&(rider, utils::pos(12, 10))),
+        "boarding takes the passenger off the map, and says so and where"
     );
 
     utils::push_command(
@@ -1004,12 +1076,13 @@ fn boarding_and_unloading_announce_going_off_map_and_back() {
         },
     );
     utils::run_ticks(&mut app, 30);
+    // Set down beside the wagon on the ring's first free cell, (10, 9).
     assert!(
         app.world()
             .resource::<Announced>()
             .revealed()
-            .contains(&rider),
-        "and unloading puts it back, and says that too"
+            .contains(&(rider, utils::pos(10, 9))),
+        "and unloading puts it back, and says that and where too"
     );
 }
 
@@ -1276,23 +1349,23 @@ impl Announced {
             .collect()
     }
 
-    /// Every entity that went off the map.
-    fn hidden(&self) -> Vec<SimulationId> {
+    /// Every entity that went off the map, with where it stood as it went.
+    fn hidden(&self) -> Vec<(SimulationId, FixedUVec2)> {
         self.0
             .iter()
             .filter_map(|event| match event {
-                SimulationEvent::EntityHidden { entity, .. } => Some(*entity),
+                SimulationEvent::EntityHidden { entity, position } => Some((*entity, *position)),
                 _ => None,
             })
             .collect()
     }
 
-    /// Every entity that came back onto it.
-    fn revealed(&self) -> Vec<SimulationId> {
+    /// Every entity that came back onto it, with where it was set down.
+    fn revealed(&self) -> Vec<(SimulationId, FixedUVec2)> {
         self.0
             .iter()
             .filter_map(|event| match event {
-                SimulationEvent::EntityRevealed { entity, .. } => Some(*entity),
+                SimulationEvent::EntityRevealed { entity, position } => Some((*entity, *position)),
                 _ => None,
             })
             .collect()

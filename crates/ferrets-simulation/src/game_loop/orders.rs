@@ -17,6 +17,13 @@
 //! Each module owns its driver component lifecycle — inserting and removing the
 //! component as part of those calls. This module dispatches to the right
 //! implementation and enforces state-machine invariants with assertions.
+//!
+//! A processor resolves any other entity whose position it reads through
+//! [`EntityIndex::interactable`](crate::entity_index::EntityIndex::interactable)
+//! on every tick it reads it: a target that went off the map is lost to the
+//! order. `alive` and `any` are for lists, owners and events. A processor reads
+//! its own body's position only in the order that took the body off the map,
+//! or once its conduct lets it run standing.
 
 use bevy_ecs::{entity::Entity, world::World};
 
@@ -27,6 +34,7 @@ use super::{
 use crate::{
     components::{
         build::BuildComponent,
+        location::LocationComponent,
         order_queue::{CancelPolicy, IdlenessComponent, OrderQueueComponent, OrderState},
     },
     entity_def::{self, Operation, Outage},
@@ -47,14 +55,16 @@ pub enum Refusal {
     /// The entity is switched off: a field it needs is gone, or it is an
     /// annex standing with no primary on terms that stop it working.
     Disabled,
+    /// The entity is off the map, waiting on a free cell to come back to.
+    Stranded,
     /// The order has no work in it: nobody aboard, nothing to mend.
     NothingToDo,
     /// The named target is gone or out of sight.
     TargetGone,
     /// The target exists but is not one this order takes.
     TargetUnfit,
-    /// The entity's queue holds work a soft flush would leave in place, or
-    /// workers sit in its berths.
+    /// The entity's queue holds work a soft flush would leave in place, it is
+    /// changing form, it sits in a berth, or workers sit in its berths.
     Busy,
     /// Nothing around the entity can take what the order stands on the ground.
     NoRoom,
@@ -62,10 +72,12 @@ pub enum Refusal {
     NoSupply,
 }
 
-/// What an order does while its entity is disabled.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DisabledConduct {
-    /// Stays where it is, untouched, until the entity operates again.
+/// What an order does while its entity is in a given [`Operation`], or off
+/// the map.
+#[derive(Debug)]
+enum Conduct {
+    /// Stays where it is, untouched — neither started nor advanced — until the
+    /// entity operates again and stands on the map.
     Holds,
     /// Keeps running.
     Completes,
@@ -84,6 +96,9 @@ pub enum FollowUp {
     /// The entity died during the tick: cancel whatever else is queued and push
     /// its Die order, as a death from outside an order would have.
     Dies,
+    /// The order finished and whatever else is queued is canceled with this
+    /// policy.
+    Cancels(CancelPolicy),
 }
 
 /// Result of an order's step: a tick advanced, or a cancel judged.
@@ -117,6 +132,14 @@ impl Processing {
         Self {
             state: OrderState::Finished,
             follow_up: FollowUp::Dies,
+        }
+    }
+
+    /// Finishes the order and cancels the rest of the queue with `policy`.
+    pub fn finished_canceling(policy: CancelPolicy) -> Self {
+        Self {
+            state: OrderState::Finished,
+            follow_up: FollowUp::Cancels(policy),
         }
     }
 }
@@ -203,6 +226,8 @@ pub(super) fn admits_queued_work(world: &World, entity: Entity) -> Result<(), Re
         Operation::Disabled(Outage::Orphaned) => Err(Refusal::Disabled),
         Operation::Disabled(Outage::Field | Outage::Buff) => Ok(()),
         Operation::UnderConstruction => Err(Refusal::UnderConstruction),
+        // Off the map waiting on a cell, it takes no new work.
+        Operation::Stranded => Err(Refusal::Stranded),
     }
 }
 
@@ -213,6 +238,7 @@ pub(super) fn requires_operating(world: &World, entity: Entity) -> Result<(), Re
         Operation::Operating => Ok(()),
         Operation::UnderConstruction => Err(Refusal::UnderConstruction),
         Operation::Disabled(_) => Err(Refusal::Disabled),
+        Operation::Stranded => Err(Refusal::Stranded),
     }
 }
 
@@ -221,50 +247,100 @@ pub(super) fn requires_operating(world: &World, entity: Entity) -> Result<(), Re
 pub(super) fn target_operating(world: &World, target: Entity) -> Result<(), Refusal> {
     match entity_def::operation(world, target) {
         Operation::Operating => Ok(()),
-        Operation::UnderConstruction | Operation::Disabled(_) => Err(Refusal::TargetUnfit),
+        Operation::UnderConstruction | Operation::Disabled(_) | Operation::Stranded => {
+            Err(Refusal::TargetUnfit)
+        }
     }
 }
 
-/// The [`DisabledConduct`] of `entity`'s `order`, an entry in `state`.
-fn disabled_conduct(
+/// The [`Conduct`] of `entity`'s `order`, an entry in `state`, while the
+/// entity is in `operation`.
+fn conduct(
     world: &World,
     entity: Entity,
+    operation: Operation,
     order: &Order,
     state: OrderState,
-) -> DisabledConduct {
-    match order {
-        Order::Train | Order::Research { .. } => DisabledConduct::Holds,
-        Order::Die => DisabledConduct::Completes,
-        // A change under way lands; one still queued has nothing to finish.
-        Order::Morph { .. } => match state {
-            OrderState::InProcessing | OrderState::Suspended => DisabledConduct::Completes,
-            OrderState::New | OrderState::Finished => DisabledConduct::Cancels,
-        },
-        // A Build with its site raised finishes the site; one still queued or
-        // walking to the ground has raised nothing to finish.
-        Order::Build { .. } => match state {
-            OrderState::InProcessing | OrderState::Suspended => match world
-                .entity(entity)
-                .get::<BuildComponent>()
-                .and_then(|build| build.building)
-            {
-                Some(_) => DisabledConduct::Completes,
-                None => DisabledConduct::Cancels,
+) -> Conduct {
+    // Off the map, only the order that took the entity there runs, and a
+    // death; everything else waits for it to stand again.
+    if entity_def::hidden(world, entity) {
+        match order {
+            Order::Die => {}
+            Order::Harvest { .. } | Order::Build { .. } | Order::Repair { .. } => match state {
+                OrderState::InProcessing | OrderState::Suspended => {}
+                OrderState::New | OrderState::Finished => return Conduct::Holds,
             },
-            OrderState::New | OrderState::Finished => DisabledConduct::Cancels,
+            Order::Train
+            | Order::Research { .. }
+            | Order::Morph { .. }
+            | Order::Move { .. }
+            | Order::Attack { .. }
+            | Order::AttackMove { .. }
+            | Order::Patrol { .. }
+            | Order::Guard { .. }
+            | Order::Follow { .. }
+            | Order::Board { .. }
+            | Order::Load { .. }
+            | Order::Unload { .. }
+            | Order::Cast { .. } => return Conduct::Holds,
+        }
+    }
+    match operation {
+        Operation::Operating | Operation::UnderConstruction => Conduct::Completes,
+        // Off the map waiting on a cell: the work that stranded the body waits
+        // for it to stand, a death does not.
+        Operation::Stranded => match order {
+            Order::Die => Conduct::Completes,
+            Order::Build { .. } | Order::Harvest { .. } | Order::Repair { .. } => Conduct::Holds,
+            Order::Train
+            | Order::Research { .. }
+            | Order::Morph { .. }
+            | Order::Move { .. }
+            | Order::Attack { .. }
+            | Order::AttackMove { .. }
+            | Order::Patrol { .. }
+            | Order::Guard { .. }
+            | Order::Follow { .. }
+            | Order::Board { .. }
+            | Order::Load { .. }
+            | Order::Unload { .. }
+            | Order::Cast { .. } => unreachable!("the hidden rule holds it off the map"),
         },
-        Order::Move { .. }
-        | Order::Attack { .. }
-        | Order::AttackMove { .. }
-        | Order::Patrol { .. }
-        | Order::Guard { .. }
-        | Order::Follow { .. }
-        | Order::Harvest { .. }
-        | Order::Repair { .. }
-        | Order::Board { .. }
-        | Order::Load { .. }
-        | Order::Unload { .. }
-        | Order::Cast { .. } => DisabledConduct::Cancels,
+        Operation::Disabled(_) => match order {
+            Order::Train | Order::Research { .. } => Conduct::Holds,
+            Order::Die => Conduct::Completes,
+            // A change under way lands; one still queued has nothing to finish.
+            Order::Morph { .. } => match state {
+                OrderState::InProcessing | OrderState::Suspended => Conduct::Completes,
+                OrderState::New | OrderState::Finished => Conduct::Cancels,
+            },
+            // A Build with its site raised finishes the site; one still queued
+            // or walking to the ground has raised nothing to finish.
+            Order::Build { .. } => match state {
+                OrderState::InProcessing | OrderState::Suspended => match world
+                    .entity(entity)
+                    .get::<BuildComponent>()
+                    .and_then(|build| build.building)
+                {
+                    Some(_) => Conduct::Completes,
+                    None => Conduct::Cancels,
+                },
+                OrderState::New | OrderState::Finished => Conduct::Cancels,
+            },
+            Order::Move { .. }
+            | Order::Attack { .. }
+            | Order::AttackMove { .. }
+            | Order::Patrol { .. }
+            | Order::Guard { .. }
+            | Order::Follow { .. }
+            | Order::Harvest { .. }
+            | Order::Repair { .. }
+            | Order::Board { .. }
+            | Order::Load { .. }
+            | Order::Unload { .. }
+            | Order::Cast { .. } => Conduct::Cancels,
+        },
     }
 }
 
@@ -415,9 +491,9 @@ fn dispatch_watch(
 /// reinserting it after. This keeps the world borrow free so per-type handlers can
 /// access and mutate other components (e.g. `MoveComponent`, `LocationComponent`).
 ///
-/// **Sweep**: a disabled entity first marks every entry whose disabled
-/// conduct is `Cancels` for a force cancel, so the flush below
-/// empties them in the same tick.
+/// **Sweep**: an entity disabled or stranded first marks every entry whose
+/// conduct is `Cancels` for a force cancel, so the flush below empties them in
+/// the same tick.
 ///
 /// **Flush**: for every entry with a cancel policy, calls the per-type
 /// `cancel_processing` (which handles driver removal). If the result is `Finished`,
@@ -429,48 +505,95 @@ fn dispatch_watch(
 /// `Finished` immediately, removes the entry and loops to the next. If it returns
 /// `InProcessing`, sets the state and stops.
 ///
-/// After this call the front entry (if any) is always `InProcessing`.
+/// After this call the front entry (if any) is `InProcessing`, or held by its
+/// conduct.
 pub fn prepare_tick(entity: Entity, queue: &mut OrderQueueComponent, world: &mut World) {
-    match entity_def::operation(world, entity) {
-        Operation::Disabled(_) => {
+    let operation = entity_def::operation(world, entity);
+    match operation {
+        Operation::Operating | Operation::UnderConstruction => {}
+        Operation::Disabled(_) | Operation::Stranded => {
             for entry in &mut queue.0 {
-                match disabled_conduct(world, entity, &entry.order, entry.state) {
-                    DisabledConduct::Cancels => entry.cancel = Some(CancelPolicy::Force),
-                    DisabledConduct::Holds | DisabledConduct::Completes => {}
+                match conduct(world, entity, operation, &entry.order, entry.state) {
+                    Conduct::Cancels => entry.cancel = Some(CancelPolicy::Force),
+                    Conduct::Holds | Conduct::Completes => {}
                 }
             }
         }
-        Operation::Operating | Operation::UnderConstruction => {}
     }
 
-    flush_canceled(entity, queue, world);
-    prepare_front(entity, queue, world);
+    // A flushed cancel can take the entity off the map or set it down, so the
+    // front is prepared against what the entity is after it.
+    let operation = match flush_canceled(entity, queue, world) {
+        Flushed::Nothing => operation,
+        Flushed::Entries => entity_def::operation(world, entity),
+    };
+    prepare_front(entity, operation, queue, world);
 }
 
-/// Cancels every order `entity` holds and applies the cancels at once, with
-/// what each order took left spent: an entity changing hands carries away
-/// what its old owner paid. Only a death survives: a `Die` already queued, or
-/// one a canceled change of form hands on, keeps running.
-pub fn drop_all(world: &mut World, entity: Entity) {
+/// Cancels every order `entity` holds with `policy` and applies the cancels at
+/// once, with what each order took left spent. Under a force only a death
+/// survives: a `Die` already queued, or one a canceled change of form hands
+/// on, keeps running. Under a soft cancel the kinds that stand through one —
+/// production, a committed change of form, a death — answer for themselves,
+/// and every other order is forced.
+///
+/// How something outside the entity's own orders ends them; an order ending
+/// the rest of its own entity's queue returns [`FollowUp::Cancels`] instead.
+pub fn drop_all(world: &mut World, entity: Entity, policy: CancelPolicy) {
     let mut queue = world
         .entity_mut(entity)
         .take::<OrderQueueComponent>()
         .expect("simulation entities carry an order queue");
-    queue.cancel_all(CancelPolicy::Force);
+    match policy {
+        CancelPolicy::Force => queue.cancel_all(CancelPolicy::Force),
+        CancelPolicy::Soft => {
+            for entry in &mut queue.0 {
+                let entry_policy = if survives_soft_cancel(&entry.order) {
+                    CancelPolicy::Soft
+                } else {
+                    CancelPolicy::Force
+                };
+                entry.cancel = Some(
+                    entry
+                        .cancel
+                        .map_or(entry_policy, |marked| marked.stronger(entry_policy)),
+                );
+            }
+        }
+    }
     flush_canceled(entity, &mut queue, world);
-    assert!(
-        queue
-            .0
-            .iter()
-            .all(|entry| matches!(entry.order, Order::Die)),
-        "a force cancel finishes every order but a death"
-    );
+    match policy {
+        CancelPolicy::Force => assert!(
+            queue
+                .0
+                .iter()
+                .all(|entry| matches!(entry.order, Order::Die)),
+            "a force cancel finishes every order but a death"
+        ),
+        CancelPolicy::Soft => assert!(
+            queue
+                .0
+                .iter()
+                .all(|entry| survives_soft_cancel(&entry.order)),
+            "a soft drop finishes every order of a kind that does not stand"
+        ),
+    }
     world.entity_mut(entity).insert(queue);
+}
+
+/// What a flush of the canceled entries did.
+#[derive(Debug)]
+enum Flushed {
+    /// No entry was marked; the world is as it was.
+    Nothing,
+    /// At least one cancel was dispatched.
+    Entries,
 }
 
 /// Applies every pending cancel in `queue`: each flagged entry is dispatched
 /// to its processor's cancel and removed once it reports `Finished`.
-fn flush_canceled(entity: Entity, queue: &mut OrderQueueComponent, world: &mut World) {
+fn flush_canceled(entity: Entity, queue: &mut OrderQueueComponent, world: &mut World) -> Flushed {
+    let mut flushed = Flushed::Nothing;
     let mut i = 0;
     while let Some(e) = queue.0.get(i) {
         let Some(policy) = e.cancel else {
@@ -482,6 +605,7 @@ fn flush_canceled(entity: Entity, queue: &mut OrderQueueComponent, world: &mut W
 
         // Clear the flag before dispatching — prevents re-cancellation on the next tick.
         queue.0[i].cancel = None;
+        flushed = Flushed::Entries;
 
         let result = dispatch_cancel(entity, &order, policy, entry_state, world);
 
@@ -499,8 +623,10 @@ fn flush_canceled(entity: Entity, queue: &mut OrderQueueComponent, world: &mut W
             FollowUp::None => {}
             FollowUp::Dies => queue.push(Order::Die, Some(CancelPolicy::Force)),
             FollowUp::SubOrder(_) => unreachable!("a cancel never suspends into a sub-order"),
+            FollowUp::Cancels(_) => unreachable!("a cancel cancels nothing beyond itself"),
         }
     }
+    flushed
 }
 
 /// Give the entry directly behind the front — when it is `Suspended`, i.e. the
@@ -520,7 +646,14 @@ pub fn watch_tick(entity: Entity, queue: &mut OrderQueueComponent, world: &mut W
     if watcher.state != OrderState::Suspended {
         return;
     }
-    let position = entity_def::position(world, entity);
+    // Off the map no watcher interrupts anything: the front holds untouched.
+    let Some(position) = world
+        .entity(entity)
+        .get::<LocationComponent>()
+        .map(|location| location.position)
+    else {
+        return;
+    };
     match world.resource::<Map>().movement_model() {
         // A continuous mover's position is a free point with no crossing
         // state to finish — watchers may always interrupt.
@@ -554,7 +687,8 @@ pub fn watch_tick(entity: Entity, queue: &mut OrderQueueComponent, world: &mut W
     queue.0.pop_front();
     queue.push_front(replacement);
 
-    prepare_front(entity, queue, world);
+    let operation = entity_def::operation(world, entity);
+    prepare_front(entity, operation, queue, world);
 }
 
 /// Advance the front `InProcessing` order by one tick.
@@ -568,21 +702,20 @@ pub fn watch_tick(entity: Entity, queue: &mut OrderQueueComponent, world: &mut W
 ///   sub-order finishes.
 /// - A `Dies` follow-up: the entity was despawned during the tick; the rest of
 ///   the queue is marked for a force cancel and its Die order pushed.
+/// - A `Cancels` follow-up: the rest of the queue is canceled with its policy
+///   and the cancels applied at once.
 ///
-/// A disabled entity's front order is skipped without dispatch when its
-/// disabled conduct is `Holds`; it resumes untouched once the entity
-/// operates again.
+/// A front order whose conduct holds is skipped without dispatch; it resumes
+/// untouched once the entity operates again and stands on the map. One whose
+/// conduct cancels is skipped too, and the next [`prepare_tick`] flushes it.
 ///
 /// After this call the front entry (if any) is `New`, `InProcessing`, or `Suspended`.
 pub fn process_tick(entity: Entity, queue: &mut OrderQueueComponent, world: &mut World) {
     let Some(front) = queue.0.front() else { return };
-    match (
-        entity_def::operation(world, entity),
-        disabled_conduct(world, entity, &front.order, front.state),
-    ) {
-        (Operation::Disabled(_), DisabledConduct::Holds) => return,
-        (Operation::Disabled(_), DisabledConduct::Completes | DisabledConduct::Cancels)
-        | (Operation::Operating | Operation::UnderConstruction, _) => {}
+    let operation = entity_def::operation(world, entity);
+    match conduct(world, entity, operation, &front.order, front.state) {
+        Conduct::Holds | Conduct::Cancels => return,
+        Conduct::Completes => {}
     }
     // An order pushed onto this queue after its prepare ran — by another
     // entity's processing, e.g. a transporter dispatching a passenger it just
@@ -603,10 +736,10 @@ pub fn process_tick(entity: Entity, queue: &mut OrderQueueComponent, world: &mut
     debug_assert!(
         match result.follow_up {
             FollowUp::SubOrder(_) => result.state == OrderState::Suspended,
-            FollowUp::Dies => result.state == OrderState::Finished,
+            FollowUp::Dies | FollowUp::Cancels(_) => result.state == OrderState::Finished,
             FollowUp::None => true,
         },
-        "a sub-order goes with Suspended and a death with Finished"
+        "a sub-order goes with Suspended, a death or a cancel with Finished"
     );
 
     queue.0.front_mut().unwrap().state = result.state;
@@ -626,6 +759,10 @@ pub fn process_tick(entity: Entity, queue: &mut OrderQueueComponent, world: &mut
         FollowUp::None => {}
         FollowUp::SubOrder(sub_order) => queue.push_front(sub_order),
         FollowUp::Dies => queue.push(Order::Die, Some(CancelPolicy::Force)),
+        FollowUp::Cancels(policy) => {
+            queue.cancel_all(policy);
+            flush_canceled(entity, queue, world);
+        }
     }
 
     debug_assert!(
@@ -656,8 +793,14 @@ pub fn note_idleness(world: &mut World) {
     }
 }
 
-/// Prepare the front entry until it is `InProcessing` or the queue is empty.
-pub(crate) fn prepare_front(entity: Entity, queue: &mut OrderQueueComponent, world: &mut World) {
+/// Prepare the front entry until it is `InProcessing` or held by its conduct,
+/// or the queue is empty.
+pub(crate) fn prepare_front(
+    entity: Entity,
+    operation: Operation,
+    queue: &mut OrderQueueComponent,
+    world: &mut World,
+) {
     while let Some(front) = queue.front() {
         let state = front.state;
         let order = front.order.clone();
@@ -666,6 +809,12 @@ pub(crate) fn prepare_front(entity: Entity, queue: &mut OrderQueueComponent, wor
             !matches!(state, OrderState::Finished),
             "Finished entries must never stay in the queue"
         );
+
+        // A held front is left as it is, not started.
+        match conduct(world, entity, operation, &order, state) {
+            Conduct::Holds => break,
+            Conduct::Completes | Conduct::Cancels => {}
+        }
 
         let new_state = match state {
             OrderState::InProcessing => break,
@@ -690,9 +839,10 @@ pub(crate) fn prepare_front(entity: Entity, queue: &mut OrderQueueComponent, wor
     }
 
     debug_assert!(
-        queue
-            .front()
-            .is_none_or(|e| e.state == OrderState::InProcessing),
-        "after prepare, front must be InProcessing or queue must be empty"
+        queue.front().is_none_or(|e| {
+            let held = conduct(world, entity, operation, &e.order, e.state);
+            e.state == OrderState::InProcessing || matches!(held, Conduct::Holds)
+        }),
+        "after prepare, the front is InProcessing or held, or the queue is empty"
     );
 }

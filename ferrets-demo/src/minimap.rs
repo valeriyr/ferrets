@@ -21,8 +21,8 @@ use ferrets_bevy_plugin::PendingInput;
 use ferrets_content::registry::ContentRegistry;
 use ferrets_simulation::{
     components::{
-        entity_info::EntityInfoComponent, hidden::HiddenComponent, last_hit::LastHitComponent,
-        location::LocationComponent, owner::OwnerComponent, rally::RallyPointComponent,
+        entity_info::EntityInfoComponent, last_hit::LastHitComponent, location::LocationComponent,
+        owner::OwnerComponent, rally::RallyPointComponent,
     },
     fields::FieldGrid,
     map::Map,
@@ -531,16 +531,13 @@ pub fn refresh_minimap(
     minimap: Option<ResMut<Minimap>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
-    entities: Query<
-        (
-            &EntityInfoComponent,
-            &LocationComponent,
-            Option<&OwnerComponent>,
-            Option<&LastHitComponent>,
-            Option<&render::Sighted>,
-        ),
-        Without<HiddenComponent>,
-    >,
+    entities: Query<(
+        &EntityInfoComponent,
+        &LocationComponent,
+        Option<&OwnerComponent>,
+        Option<&LastHitComponent>,
+        Option<&render::Sighted>,
+    )>,
 ) {
     let Some(mut minimap) = minimap else {
         return;

@@ -27,7 +27,6 @@ use ferrets_simulation::{
         entity_skills::SkillsComponent,
         entity_stats::StatsComponent,
         hidden::HiddenComponent,
-        location::LocationComponent,
         morph::MorphComponent,
         order_queue::{OrderEntry, OrderQueueComponent},
         owner::OwnerComponent,
@@ -659,7 +658,7 @@ pub fn update_help(
 /// Shows details about the current selection: name, health, and resource amounts
 /// for the single selected entity, or a count when several are selected.
 pub fn update_selection(world: &mut World) {
-    let mut entities = world.query_filtered::<(
+    let mut entities = world.query::<(
         Entity,
         &EntityInfoComponent,
         Option<&OwnerComponent>,
@@ -671,7 +670,7 @@ pub fn update_selection(world: &mut World) {
         Option<&BuffsComponent>,
         Has<ConcealedComponent>,
         Option<&Sighted>,
-    ), With<LocationComponent>>();
+    )>();
     let world_ref: &World = world;
     let session = world_ref.resource::<GameSession>();
     let watch = world_ref.resource::<render::ObserverPerspective>();
@@ -801,6 +800,7 @@ pub fn update_selection(world: &mut World) {
                             parts.push("under construction".to_string());
                         }
                         Operation::Disabled(_) => parts.push("disabled".to_string()),
+                        Operation::Stranded => parts.push("waiting for room".to_string()),
                         Operation::Operating => {}
                     }
                     if concealed {
@@ -1983,6 +1983,7 @@ fn card_hint(
                 (None, Some(entity)) => match entity_def::operation(world, entity) {
                     Operation::UnderConstruction => "Still under construction".to_string(),
                     Operation::Disabled(_) => "Switched off".to_string(),
+                    Operation::Stranded => "Waiting for room to come back".to_string(),
                     Operation::Operating => match world.entity(entity).get::<SkillsComponent>() {
                         Some(skills) if skills.skills().any(|known| known == *skill) => {
                             "Cooling down".to_string()
@@ -2164,6 +2165,7 @@ fn refusal_words(refusal: Refusal) -> String {
         Refusal::Incapable => "It cannot do this",
         Refusal::UnderConstruction => "Still under construction",
         Refusal::Disabled => "Switched off",
+        Refusal::Stranded => "Waiting for room to come back",
         Refusal::NothingToDo => "Nothing to do",
         Refusal::TargetGone => "The target is gone",
         Refusal::TargetUnfit => "The target will not do",

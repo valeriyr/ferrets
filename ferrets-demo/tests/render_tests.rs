@@ -18,17 +18,21 @@ use ferrets_content::{
     turret::{TurretDef, TurretMount, TurretStats, WeaponConduct},
 };
 use ferrets_demo::{
-    render::{self, Directional, DrawnBearings, DrawnFacing, PrevPos, Sighted},
+    render::{self, Directional, DrawnBearings, DrawnFacing, PrevPos, Puffs, Sighted},
+    ruleset,
     time::NOMINAL_TICK_HZ,
 };
-use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
+use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
 use ferrets_math::{FixedU64, facing::Facing};
 use ferrets_simulation::{
-    components::{
-        hidden::HiddenComponent, location::LocationComponent, owner::OwnerComponent,
-        turret::TurretsComponent,
+    beside::{Beside, Lean},
+    components::{location::LocationComponent, owner::OwnerComponent, turret::TurretsComponent},
+    session::{
+        GameSession, ai_hosting::AiHosting, authority::Authority, drop_policy::DropPolicy,
+        finish_policy::FinishPolicy, local_role::LocalRole, player_id::PlayerId,
+        player_slot::PlayerSlot, player_type::PlayerType,
     },
-    session::{GameSession, player_id::PlayerId},
+    spawn::{self, Boarding, SetDown},
     visibility::Sighting,
 };
 
@@ -73,7 +77,20 @@ fn reveal_snaps_interpolation_anchor_to_where_entity_reappeared() {
     let worker = spawn_worker(&mut app, "20");
     let entered = anchor_of(&app, worker);
 
-    off_map_and_back(&mut app, worker, "21");
+    // Off the map and set back down one cell over, with no frame in between:
+    // the renderer reads nothing of the time spent hidden, only the frame of
+    // the set-down, which is what the snap keys on, not the distance.
+    spawn::hide_entity(app.world_mut(), worker);
+    assert_eq!(
+        spawn::place_back_beside(
+            app.world_mut(),
+            worker,
+            Beside::Footprint(CellRect::new(CellPos::new(21, 20), CellSize::ONE)),
+            Lean::WentIn
+        ),
+        SetDown::Placed,
+        "the cell beside the mine is free"
+    );
     app.world_mut()
         .run_system_once(render::snap_revealed)
         .expect("the reveal snaps");
@@ -116,11 +133,20 @@ fn reveal_snaps_look_to_where_entity_reappeared() {
         "the sprite opens facing the way the entity faces"
     );
 
-    app.world_mut().entity_mut(worker).insert(HiddenComponent);
+    // Off the map and set back down on the same cell, looking the other way:
+    // the set-down is what the snap keys on, not any distance or turn.
+    spawn::hide_entity(app.world_mut(), worker);
+    assert_eq!(
+        spawn::place_back_beside(
+            app.world_mut(),
+            worker,
+            Beside::Footprint(CellRect::new(CellPos::new(20, 20), CellSize::ONE)),
+            Lean::WentIn
+        ),
+        SetDown::Placed,
+        "the cell it went in by is free"
+    );
     face(&mut app, worker, Facing::EAST);
-    app.world_mut()
-        .entity_mut(worker)
-        .remove::<HiddenComponent>();
     app.world_mut()
         .run_system_once(render::snap_revealed)
         .expect("the reveal snaps");
@@ -132,6 +158,57 @@ fn reveal_snaps_look_to_where_entity_reappeared() {
     assert!(
         nose.distance(EAST) < 1e-6,
         "reappeared looking {nose} rather than east"
+    );
+}
+
+#[test]
+fn sprite_leaves_view_when_entity_goes_off_map_and_returns_once_set_down() {
+    // A seen worker steps into a mine: a body with no location has nothing to
+    // draw, so its sprite leaves view the frame it goes, and is drawn again
+    // where it is set back down.
+    let mut app = utils::view_app();
+    let worker = spawn_worker(&mut app, "20");
+    app.world_mut()
+        .entity_mut(worker)
+        .insert(Sighted(Sighting::Seen));
+    app.world_mut()
+        .run_system_once(render::interpolate_sprites)
+        .expect("the interpolation runs");
+    assert_eq!(
+        app.world().get::<Visibility>(worker),
+        Some(&Visibility::Visible),
+        "a seen worker on the map is drawn"
+    );
+
+    // One frame off the map is as long as any: the sprite is judged by what
+    // the entity carries this frame, not by how long it has been gone.
+    spawn::hide_entity(app.world_mut(), worker);
+    app.world_mut()
+        .run_system_once(render::interpolate_sprites)
+        .expect("the interpolation runs");
+    assert_eq!(
+        app.world().get::<Visibility>(worker),
+        Some(&Visibility::Hidden),
+        "off the map, the sprite leaves view"
+    );
+
+    assert_eq!(
+        spawn::place_back_beside(
+            app.world_mut(),
+            worker,
+            Beside::Footprint(CellRect::new(CellPos::new(22, 20), CellSize::ONE)),
+            Lean::WentIn
+        ),
+        SetDown::Placed,
+        "the cell two over is free"
+    );
+    app.world_mut()
+        .run_system_once(render::interpolate_sprites)
+        .expect("the interpolation runs");
+    assert_eq!(
+        app.world().get::<Visibility>(worker),
+        Some(&Visibility::Visible),
+        "set back down and still seen, it is drawn again"
     );
 }
 
@@ -393,6 +470,57 @@ fn refresh_sightings_stamps_undetected_cloak_under_sight_as_glimpsed() {
 }
 
 //
+// ─── Puffs ────────────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn hiding_marks_cell_entity_went_in_by() {
+    // The announcement names an entity that has no location any more; the
+    // marker stands where it went in.
+    let mut app = utils::view_app();
+    app.world_mut().init_resource::<Puffs>();
+    let worker = spawn_worker(&mut app, "20");
+
+    spawn::hide_entity(app.world_mut(), worker);
+    app.world_mut()
+        .run_system_once(render::collect_puffs)
+        .expect("the markers are collected");
+
+    assert_eq!(
+        app.world().resource::<Puffs>().marked(),
+        vec![(utils::part_way("20", "20"), CellSize::ONE)],
+        "one marker, where the announcement says the worker went in"
+    );
+}
+
+#[test]
+fn boarding_marks_cell_passenger_vanished_from_not_holder() {
+    let mut app = utils::view_app();
+    app.world_mut().init_resource::<Puffs>();
+    let (bunker, _) =
+        utils::create_entity(app.world_mut(), "bunker", utils::at_cell(20, 20), Some(0))
+            .expect("the demo content defines a bunker");
+    let (grunt, _) =
+        utils::create_entity(app.world_mut(), "grunt", utils::at_cell(24, 20), Some(0))
+            .expect("the demo content defines a grunt");
+
+    assert_eq!(
+        spawn::board(app.world_mut(), grunt, bunker),
+        Boarding::Boarded
+    );
+    app.world_mut()
+        .run_system_once(render::collect_puffs)
+        .expect("the markers are collected");
+
+    // The announcement carries where the grunt stood as it went, four cells
+    // from the bunker it now rides in.
+    assert_eq!(
+        app.world().resource::<Puffs>().marked(),
+        vec![(utils::at_cell(24, 20), CellSize::ONE)]
+    );
+}
+
+//
 // ─── Glimpses and crews ───────────────────────────────────────────────────────
 //
 
@@ -495,6 +623,49 @@ fn crew_counts_own_side_anywhere_and_rival_only_when_made_out() {
     ));
 }
 
+#[test]
+fn passenger_dot_takes_color_of_whose_passenger_is() {
+    // Players 0 and 1 share a team; player 2 stands alone.
+    let session = GameSession::configured(
+        LocalRole::Player(0),
+        vec![
+            PlayerSlot::occupied(0, PlayerType::Human, Some("human"), Some(1)),
+            PlayerSlot::occupied(1, PlayerType::Human, Some("human"), Some(1)),
+            PlayerSlot::occupied(2, PlayerType::Human, Some("orc"), Some(2)),
+        ],
+        "dots",
+        Authority::Host {
+            ai_hosting: AiHosting::Replicated,
+        },
+        DropPolicy::Automatic,
+        FinishPolicy::Endless,
+        ruleset::demo(),
+    );
+
+    let own = Color::srgb(0.4, 0.85, 0.4);
+    let allied = Color::srgb(0.95, 0.85, 0.35);
+    let enemy = Color::srgb(1.0, 0.35, 0.35);
+    let unowned = Color::srgb(0.6, 0.6, 0.65);
+    assert_eq!(render::passenger_dot_color(&session, Some(0), Some(0)), own);
+    assert_eq!(
+        render::passenger_dot_color(&session, Some(0), Some(1)),
+        allied
+    );
+    assert_eq!(
+        render::passenger_dot_color(&session, Some(0), Some(2)),
+        enemy
+    );
+    assert_eq!(
+        render::passenger_dot_color(&session, Some(0), None),
+        unowned
+    );
+    // With no viewed player, each dot is its owner's color: player 2's green.
+    assert_eq!(
+        render::passenger_dot_color(&session, None, Some(2)),
+        Color::srgb(0.4, 0.8, 0.4)
+    );
+}
+
 //
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 //
@@ -542,15 +713,6 @@ fn set_position(app: &mut App, entity: Entity, x: &str) {
         .get_mut::<LocationComponent>()
         .unwrap()
         .position = utils::part_way(x, "20");
-}
-
-/// Takes the entity off the map and sets it back down at `x`, as a reveal does.
-fn off_map_and_back(app: &mut App, entity: Entity, x: &str) {
-    app.world_mut().entity_mut(entity).insert(HiddenComponent);
-    set_position(app, entity, x);
-    app.world_mut()
-        .entity_mut(entity)
-        .remove::<HiddenComponent>();
 }
 
 /// Sets `entity`'s look, as a tick of the simulation would.

@@ -18,9 +18,7 @@ use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::FixedU64;
 use ferrets_simulation::{
     command::PlayerCommand,
-    components::{
-        dying::RemainsComponent, entity_info::EntityInfoComponent, hidden::HiddenComponent,
-    },
+    components::{dying::RemainsComponent, entity_info::EntityInfoComponent},
     entity_def,
     entity_index::EntityIndex,
     events::DeathCause,
@@ -398,7 +396,7 @@ fn passenger_that_goes_down_with_its_carrier_leaves_nothing() {
         .alive(rider)
         .expect("the rider is still alive");
     assert!(
-        app.world().entity(aboard).contains::<HiddenComponent>(),
+        entity_def::hidden(app.world(), aboard),
         "the rider is aboard, and so off the map"
     );
 

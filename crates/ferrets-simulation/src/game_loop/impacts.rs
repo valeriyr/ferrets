@@ -18,7 +18,7 @@ use crate::{
     },
     entity_def,
     entity_index::EntityIndex,
-    impacts::{FiredFrom, PendingImpact, PendingImpacts},
+    impacts::{FiredFrom, Following, PendingImpact, PendingImpacts},
     map::Map,
     session::GameSession,
     simulation_id::SimulationId,
@@ -89,7 +89,7 @@ pub(super) fn deliver(
                 &def,
                 fired_from,
                 attacker_id,
-                target_id,
+                target_id.map_or(Following::Nothing, Following::Target),
                 impact,
                 origin,
                 damage,
@@ -121,9 +121,9 @@ pub(super) fn deliver(
                 fired_from,
                 projectile,
                 // A cell-aimed shot has nobody to follow once it is in the air.
-                target: match aim {
-                    Aim::Entity => target_id,
-                    Aim::Position => None,
+                target: match (aim, target_id) {
+                    (Aim::Entity, Some(id)) => Following::Target(id),
+                    (Aim::Entity, None) | (Aim::Position, _) => Following::Nothing,
                 },
                 origin,
                 impact,
@@ -150,12 +150,22 @@ pub fn process_impacts(world: &mut World) {
             .resource::<ContentRegistry>()
             .def(shot.attacker_type)
             .clone();
-        // A shot that follows its target resolves where the target is now, so its
-        // blast lands with it; one aimed at a cell resolves where it was sent.
-        let target = shot
-            .target
-            .and_then(|id| world.resource::<EntityIndex>().alive(id));
-        let impact = target.map_or(shot.impact, |target| aim_cell(world, shot.origin, target));
+        // A shot that follows its target resolves where the target stands or
+        // lies now, so its blast lands with it; one aimed at a cell, one whose
+        // target went off the map (sent where it went in), or one whose target
+        // is gone resolves where it was sent.
+        let impact = match shot.target {
+            // A target hidden while this batch lands, after the latch took
+            // the batch out of the queue, is lost as the latch would lose it.
+            Following::Target(id) => match world.resource::<EntityIndex>().any(id) {
+                Some(target) => match world.get::<HiddenComponent>(target) {
+                    Some(hidden) => hidden.went_in.position,
+                    None => aim_cell(world, shot.origin, target),
+                },
+                None => shot.impact,
+            },
+            Following::Lost | Following::Nothing => shot.impact,
+        };
         land(
             world,
             &def,
@@ -180,21 +190,23 @@ fn land(
     attacker_def: &EntityTypeDef,
     fired_from: FiredFrom,
     attacker_id: SimulationId,
-    target_id: Option<SimulationId>,
+    target: Following,
     impact: FixedUVec2,
     origin: FixedUVec2,
     damage: FixedU64,
 ) {
     // Who takes the hit at full strength: the entity the shot followed, wherever it
-    // moved to, or — for a shot sent to a cell — whoever is standing on that cell when
-    // it arrives. Either way, an empty answer means the shot was wasted.
-    let direct: Vec<Entity> = match target_id {
-        Some(id) => world
+    // moved to, and nobody once it is gone or lost; a shot sent to a cell hits
+    // whoever is standing on it when it arrives. An empty answer means the shot was
+    // wasted, its blast aside.
+    let direct: Vec<Entity> = match target {
+        Following::Target(id) => world
             .resource::<EntityIndex>()
-            .alive(id)
+            .interactable(world, id)
             .into_iter()
             .collect(),
-        None => occupants_of(world, impact),
+        Following::Lost => Vec::new(),
+        Following::Nothing => occupants_of(world, impact),
     };
     // A weapon still cannot reach layers it does not target, even standing on
     // the cell the shot arrived at: a shell sent to the ground passes under
@@ -260,11 +272,10 @@ fn blast_victims(
             continue;
         }
         let entity_ref = world.entity(entity);
-        // Only damageable entities that are not already dying. Hidden entities
-        // hold no cells and their position is stale, so no blast reaches them.
+        // Only damageable entities that are not already dying; a hidden one has
+        // no position for the query to find.
         if !entity_def::has_pool(world, entity, PoolId::HEALTH)
             || entity_ref.contains::<DyingComponent>()
-            || entity_ref.contains::<HiddenComponent>()
         {
             continue;
         }
@@ -382,11 +393,10 @@ fn occupants_of(world: &mut World, cell: FixedUVec2) -> Vec<Entity> {
     let mut found: Vec<(SimulationId, Entity)> = Vec::new();
     for (entity, id, origin) in candidates {
         let entity_ref = world.entity(entity);
-        // Hidden entities hold no cells and their position is stale, so a shot
-        // arriving at the cell one stood on finds nobody there.
+        // A hidden entity has no position for the query to find: a shot arriving
+        // at the cell one stood on finds nobody there.
         if !entity_def::has_pool(world, entity, PoolId::HEALTH)
             || entity_ref.contains::<DyingComponent>()
-            || entity_ref.contains::<HiddenComponent>()
         {
             continue;
         }

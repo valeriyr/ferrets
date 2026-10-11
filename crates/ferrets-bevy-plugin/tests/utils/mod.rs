@@ -36,10 +36,14 @@ use ferrets_content::{
     projectile::{Aim, ProjectileDef},
     quantity::Quantity,
     registry::ContentRegistry,
+    repair::{RepairCost, RepairRate},
     requirement::Requirement,
     research::{ResearchDef, ResearchId},
     resource::{Banking, DepletionPolicy, HarvestData},
-    skills::{PlayerCastEffect, SkillCaster, SkillDef, SkillId},
+    skills::{
+        Casting, EntityCastEffect, EntityCastTarget, PlayerCastEffect, Reach, SkillCaster,
+        SkillDef, SkillId,
+    },
     splash::{SplashDef, SplashShape},
     stack_rule::StackRule,
     stats::{EntityModifier, ModifierOp},
@@ -76,11 +80,9 @@ use ferrets_simulation::{
         build::{SiteWork, UnderConstructionComponent},
         entity_info::EntityInfoComponent,
         entity_stats::StatsComponent,
-        hidden::HiddenComponent,
         location::LocationComponent,
         order_queue::{CancelPolicy, OrderQueueComponent},
         owner::OwnerComponent,
-        pending_reveal::PendingRevealComponent,
         pools,
         train::TrainQueueComponent,
         transport::TransporterComponent,
@@ -897,6 +899,11 @@ fn brood_change(into: &str) -> MorphTransition {
 ///   piglets it takes in from within three cells, and changes into `roomy_pen`
 ///   (the same seats and terms) through a seatless `pen_shell`. The great
 ///   hatch changes back into a `hatch`.
+/// - `cart` is a hold; `sow` rides and breeds `hog`s into two seats.
+/// - `delver` breeds an orbiting `mite` into two seats and builds a
+///   `ready_hatch`, harvests a gold `lode` and mends from inside, banking at
+///   a `larder`; `nurse` breeds a mite and mends seated in its patient's
+///   brood berths.
 /// - Buildings take two ticks to die, grubs one, movers two.
 ///
 /// One human player, session started.
@@ -1155,11 +1162,30 @@ pub fn brood_app(model: MovementModel) -> App {
                 .with_pool(Pool::health(100))
                 .with_dying(2, []),
         );
+        // A delayed cast on itself, for a cast held on a stranded broodling.
+        let squeal = registry.register_skill(
+            "squeal",
+            SkillDef {
+                cooldown: 10,
+                caster: SkillCaster::Entity {
+                    costs: Vec::new(),
+                    target: EntityCastTarget::Caster,
+                    reach: Reach::Wherever,
+                    casting: Casting::Delayed {
+                        point: Quantity::Constant(6),
+                        period: Quantity::Constant(8),
+                    },
+                    effect: EntityCastEffect::Damage(FixedU64::from_num(5)),
+                },
+                requires: Vec::new(),
+            },
+        );
         registry.register(
             EntityTypeDef::new("piglet")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
                 .with_pool(Pool::health(20))
                 .with_dying(2, [])
+                .with_skills([squeal])
                 .with_broodling(Attachment::new("brood", BerthStance::Still))
                 .with_morphs([MorphTransition::new(
                     "worker",
@@ -1189,6 +1215,104 @@ pub fn brood_app(model: MovementModel) -> App {
                         crew: CrewLimit::ONE,
                     }),
                 ),
+        );
+        // A hold and a breeder that rides: one seating a brood boards nothing.
+        registry.register(
+            EntityTypeDef::new("cart")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_pool(Pool::health(60))
+                .with_dying(2, [])
+                .with_stat(EntityStatId::CARGO_CAPACITY, FixedU64::from_num(4))
+                .with_stat(EntityStatId::LOAD_RANGE, FixedU64::from_num(2))
+                .with_stat(EntityStatId::UNLOAD_RANGE, FixedU64::ONE)
+                .with_stat(EntityStatId::LOAD_PERIOD, FixedU64::ZERO)
+                .with_stat(EntityStatId::UNLOAD_PERIOD, FixedU64::ZERO)
+                .with_transporter(
+                    Kinds::Any,
+                    Affiliation::Own,
+                    PassengerFate::Eject,
+                    PassengerConduct::Shelter,
+                ),
+        );
+        registry.register(
+            brood_mover("sow", 40)
+                .with_stat(EntityStatId::CARGO_SIZE, FixedU64::ONE)
+                .with_berths(brood_berths(2))
+                .with_breeder("hog", Quantity::Constant(10), 2, 0, OrphanFate::Perish),
+        );
+        registry.register(
+            EntityTypeDef::new("hog")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_pool(Pool::health(20))
+                .with_dying(2, [])
+                .with_broodling(Attachment::new("brood", BerthStance::Still)),
+        );
+        // Breeders that work from inside, or seated in a berth: one seating a
+        // brood is refused the work, or gives it up at the job.
+        let hidden = WorkPresence::Hidden {
+            crew: CrewLimit::ONE,
+        };
+        registry.register(
+            brood_mover("delver", 40)
+                .with_sight_range(40)
+                .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
+                .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
+                .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
+                .with_stat(EntityStatId::REPAIR_RANGE, FixedU64::ONE)
+                .with_berths(brood_berths(2))
+                .with_breeder("mite", Quantity::Constant(10), 1, 0, OrphanFate::Perish)
+                .with_builder(["ready_hatch"], BuilderAttendance::Crew(hidden.clone()))
+                .with_resource_carrier([(
+                    "gold",
+                    HarvestData::new(5, 5, 20, hidden.clone(), Banking::Direct, Kinds::Any),
+                )])
+                .with_repairer(
+                    Kinds::Any,
+                    RepairRate::PerTick(FixedU64::ONE),
+                    hidden,
+                    false,
+                    RepairCost::Free,
+                    None,
+                ),
+        );
+        registry.register(
+            brood_mover("nurse", 40)
+                .with_sight_range(40)
+                .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
+                .with_stat(EntityStatId::REPAIR_RANGE, FixedU64::ONE)
+                .with_berths(brood_berths(2))
+                .with_breeder("mite", Quantity::Constant(10), 1, 0, OrphanFate::Perish)
+                .with_repairer(
+                    Kinds::Any,
+                    RepairRate::PerTick(FixedU64::ONE),
+                    WorkPresence::Attached(Attachment::new("brood", BerthStance::Still)),
+                    false,
+                    RepairCost::Free,
+                    None,
+                ),
+        );
+        registry.register(
+            EntityTypeDef::new("mite")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_pool(Pool::health(20))
+                .with_dying(2, [])
+                .with_broodling(Attachment::new(
+                    "brood",
+                    BerthStance::Orbit {
+                        radius: fixed("0.25"),
+                        period: 4,
+                    },
+                )),
+        );
+        registry.register(
+            EntityTypeDef::new("lode")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_resource_source("gold", DepletionPolicy::Persist),
+        );
+        registry.register(
+            EntityTypeDef::new("larder")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_resource_storage(["gold"]),
         );
     }
     app.world_mut().resource::<ContentRegistry>().validate();
@@ -1394,11 +1518,11 @@ pub fn set_all_cells_statically_occupied(world: &mut World, occupied: bool) {
 /// both markers.
 pub fn assert_reveal_deferred_then_lands_on(app: &mut App, worker: Entity, cell: CellPos) {
     assert!(
-        app.world().get::<HiddenComponent>(worker).is_some(),
+        entity_def::hidden(app.world(), worker),
         "a boxed-in worker stays off the map"
     );
     assert!(
-        app.world().get::<PendingRevealComponent>(worker).is_some(),
+        entity_def::pending_reveal(app.world(), worker),
         "with its reveal queued rather than forced"
     );
 
@@ -1407,8 +1531,8 @@ pub fn assert_reveal_deferred_then_lands_on(app: &mut App, worker: Entity, cell:
         .set_static_occupied(GROUND, cell, false);
     run_ticks(app, 1);
 
-    assert!(app.world().get::<HiddenComponent>(worker).is_none());
-    assert!(app.world().get::<PendingRevealComponent>(worker).is_none());
+    assert!(!entity_def::hidden(app.world(), worker));
+    assert!(!entity_def::pending_reveal(app.world(), worker));
     assert_eq!(cell_of(app.world_mut(), worker), cell);
 }
 
@@ -2701,6 +2825,7 @@ pub fn transport_app() -> App {
     ]);
     {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
+        registry.register_resource("gold");
         registry.register_tag("infantry");
         registry.register(
             EntityTypeDef::new("rifleman")
@@ -2717,7 +2842,33 @@ pub fn transport_app() -> App {
                 .with_attack(weapon(GROUND), 10, 3, 5, 4, 2)
                 .with_sight_range(8)
                 .with_tags(["infantry"])
+                .with_price([("gold", 10)])
+                .with_train_time(5)
                 .with_stat(EntityStatId::CARGO_SIZE, FixedU64::ONE),
+        );
+        // A trainer and researcher that rides, for production carried across
+        // a ride.
+        let drill = registry.register_research(
+            "drill",
+            ResearchDef::new(price::from([("gold", 10)]), 10, None, Vec::new()),
+        );
+        registry.register(
+            EntityTypeDef::new("drillmaster")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_movement(
+                    fixed("0.5"),
+                    fixed("0.5"),
+                    FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
+                )
+                .with_pool(Pool::health(30))
+                .with_dying(2, [])
+                .with_sight_range(8)
+                .with_tags(["infantry"])
+                .with_stat(EntityStatId::CARGO_SIZE, FixedU64::ONE)
+                .with_trainer(["rifleman"])
+                .with_researcher([drill]),
         );
         registry.register(
             EntityTypeDef::new("grunt")
@@ -2773,7 +2924,221 @@ pub fn transport_app() -> App {
                 )
         };
         registry.register(carrier("wagon", Affiliation::Own));
+        // A holder that works from inside a seam, for riders inside a holder
+        // inside a job.
+        registry.register(
+            EntityTypeDef::new("ore_seam")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_resource_source("gold", DepletionPolicy::Persist),
+        );
+        registry.register(
+            carrier("hauler", Affiliation::Own)
+                .with_sight_range(8)
+                .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
+                .with_resource_carrier([(
+                    "gold",
+                    HarvestData::new(
+                        5,
+                        5,
+                        20,
+                        WorkPresence::Hidden {
+                            crew: CrewLimit::ONE,
+                        },
+                        Banking::Carried,
+                        Kinds::types(["ore_seam"]),
+                    ),
+                )]),
+        );
         registry.register(carrier("ferry", Affiliation::Allied));
+        registry.register(carrier("raft", Affiliation::Anyone));
+        // A mender that works from inside its patient, for a job that walks.
+        registry.register(
+            EntityTypeDef::new("surgeon")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_movement(
+                    fixed("0.5"),
+                    fixed("0.5"),
+                    FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
+                )
+                .with_pool(Pool::health(30))
+                .with_dying(2, [])
+                .with_sight_range(8)
+                .with_stat(EntityStatId::REPAIR_RANGE, FixedU64::ONE)
+                .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
+                .with_repairer(
+                    Kinds::tags(["infantry"]),
+                    RepairRate::PerTick(FixedU64::ONE),
+                    WorkPresence::Hidden {
+                        crew: CrewLimit::ONE,
+                    },
+                    false,
+                    RepairCost::Free,
+                    None,
+                ),
+        );
+        // A mender that rides, for a boarding that takes a worker off its job
+        // and for a patient that leaves its mender.
+        registry.register(
+            EntityTypeDef::new("orderly")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_movement(
+                    fixed("0.5"),
+                    fixed("0.5"),
+                    FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
+                )
+                .with_pool(Pool::health(30))
+                .with_dying(2, [])
+                .with_sight_range(8)
+                .with_tags(["infantry"])
+                .with_stat(EntityStatId::CARGO_SIZE, FixedU64::ONE)
+                .with_stat(EntityStatId::REPAIR_RANGE, FixedU64::ONE)
+                .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
+                .with_repairer(
+                    Kinds::Any,
+                    RepairRate::PerTick(FixedU64::from_num(5)),
+                    WorkPresence::Present {
+                        crew: CrewLimit::ONE,
+                    },
+                    false,
+                    RepairCost::Free,
+                    None,
+                ),
+        );
+        // An archer whose arrows fly a cell a tick and follow their target.
+        let arrow =
+            registry.register_projectile("arrow", ProjectileDef::new(FixedU64::ONE, Aim::Entity));
+        registry.register(
+            EntityTypeDef::new("archer")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_pool(Pool::health(30))
+                .with_dying(2, [])
+                .with_sight_range(10)
+                .with_attack(
+                    AttackDef::new(Weapon::new(
+                        GROUND,
+                        Delivery::Projectile(arrow),
+                        None,
+                        Slain::Remains,
+                    )),
+                    10,
+                    8,
+                    8,
+                    5,
+                    2,
+                ),
+        );
+        // The archer's twin whose shot also bursts, half its damage a cell
+        // around where it lands, friend or foe.
+        let stone =
+            registry.register_projectile("stone", ProjectileDef::new(FixedU64::ONE, Aim::Entity));
+        registry.register(
+            EntityTypeDef::new("slinger")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_pool(Pool::health(30))
+                .with_dying(2, [])
+                .with_sight_range(10)
+                .with_attack(
+                    AttackDef::new(Weapon::new(
+                        GROUND,
+                        Delivery::Projectile(stone),
+                        Some(SplashDef::new(
+                            SplashShape::Circular,
+                            vec![(1, fixed("0.5"))],
+                            GROUND,
+                            true,
+                        )),
+                        Slain::Remains,
+                    )),
+                    10,
+                    8,
+                    8,
+                    5,
+                    2,
+                ),
+        );
+        // A rider in a committed change of form that dies when interrupted.
+        registry.register(
+            EntityTypeDef::new("moth")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_movement(
+                    fixed("0.5"),
+                    fixed("0.5"),
+                    FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
+                )
+                .with_pool(Pool::health(30))
+                .with_dying(2, []),
+        );
+        registry.register(
+            EntityTypeDef::new("pupa")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_movement(
+                    fixed("0.5"),
+                    fixed("0.5"),
+                    FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
+                )
+                .with_pool(Pool::health(30))
+                .with_dying(2, [])
+                .with_tags(["infantry"])
+                .with_stat(EntityStatId::CARGO_SIZE, FixedU64::ONE)
+                .with_morphs([MorphTransition::new(
+                    "moth",
+                    MorphCourse::direct(MorphInterrupted::Dies),
+                    Quantity::Constant(10),
+                    MorphPlacement::Revalidate,
+                    MorphCancel::Committed,
+                    MorphReason::Change,
+                    Vec::new(),
+                    Vec::new(),
+                    [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
+                )]),
+        );
+        // A fighting holder that mends from inside its patient, so it goes off
+        // the map with passengers aboard.
+        registry.register(
+            EntityTypeDef::new("ambulance")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_movement(
+                    fixed("0.5"),
+                    fixed("0.5"),
+                    FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
+                )
+                .with_pool(Pool::health(60))
+                .with_dying(2, [])
+                .with_sight_range(8)
+                .with_stat(EntityStatId::CARGO_CAPACITY, FixedU64::from_num(2))
+                .with_stat(EntityStatId::LOAD_RANGE, FixedU64::from_num(2))
+                .with_stat(EntityStatId::UNLOAD_RANGE, FixedU64::ONE)
+                .with_stat(EntityStatId::LOAD_PERIOD, FixedU64::ZERO)
+                .with_stat(EntityStatId::UNLOAD_PERIOD, FixedU64::ZERO)
+                .with_stat(EntityStatId::REPAIR_RANGE, FixedU64::ONE)
+                .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
+                .with_transporter(
+                    Kinds::tags(["infantry"]),
+                    Affiliation::Own,
+                    PassengerFate::Eject,
+                    PassengerConduct::Fight,
+                )
+                .with_repairer(
+                    Kinds::types(["bunker"]),
+                    RepairRate::PerTick(FixedU64::from_num(5)),
+                    WorkPresence::Hidden {
+                        crew: CrewLimit::ONE,
+                    },
+                    false,
+                    RepairCost::Free,
+                    None,
+                ),
+        );
         // A rider whose only weapon is a turret, for the rule that a passenger
         // fights with what it points itself: a turret is mounted on a body that
         // stands somewhere, and a passenger stands nowhere.
@@ -3755,6 +4120,36 @@ pub fn register_orders_content(app: &mut App) {
                     ),
                 )]),
         );
+        // Banks what it takes straight from inside the seam, for a source
+        // drained to death by the carrier working inside it.
+        registry.register(
+            EntityTypeDef::new("siphon")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_sight_range(40)
+                .with_movement(
+                    fixed("0.5"),
+                    fixed("0.5"),
+                    FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
+                )
+                .with_pool(Pool::health(20))
+                .with_dying(2, [])
+                .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
+                .with_resource_carrier([(
+                    "gold",
+                    HarvestData::new(
+                        5,
+                        5,
+                        20,
+                        WorkPresence::Hidden {
+                            crew: CrewLimit::ONE,
+                        },
+                        Banking::Direct,
+                        Kinds::Any,
+                    ),
+                )]),
+        );
         // Works gold out of a geyser and nothing else, however much a bare
         // seam holds.
         registry.register(
@@ -3791,6 +4186,19 @@ pub fn register_orders_content(app: &mut App) {
             EntityTypeDef::new("mine")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
                 .with_resource_source("gold", DepletionPolicy::Destroy),
+        );
+        // A seam that walks, for a carrier inside a source that moves on.
+        registry.register(
+            EntityTypeDef::new("roaming_seam")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_movement(
+                    fixed("0.5"),
+                    fixed("0.5"),
+                    FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
+                )
+                .with_resource_source("gold", DepletionPolicy::Persist),
         );
         // A wide seam with three spots — two down its west edge and one at its
         // south-east, so a loop has a corner to turn and a crossing has a

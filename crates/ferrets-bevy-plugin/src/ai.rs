@@ -12,7 +12,10 @@
 use std::collections::BTreeMap;
 
 use bevy::{ecs::world::EntityRef, prelude::*};
-use ferrets_content::{entity_stats::EntityStatId, pool_def::PoolId, registry::ContentRegistry};
+use ferrets_content::{
+    affiliation::Affiliation, entity_stats::EntityStatId, pool_def::PoolId,
+    registry::ContentRegistry,
+};
 use ferrets_geometry::cell_pos::CellPos;
 use ferrets_script::ai::{
     AiRuntime,
@@ -31,6 +34,7 @@ use ferrets_simulation::{
         lifetime::LifetimeComponent,
         location::LocationComponent,
         order_queue::OrderQueueComponent,
+        owner,
         pools::{self, PoolsComponent},
         resource::{ResourceCarrierComponent, ResourceSourceComponent},
         stance::StanceComponent,
@@ -276,13 +280,15 @@ pub fn game_view(
         // else's, matching what its commands could target.
         // The view is built only for an entity the brain keeps: it allocates
         // its strings and lists, and most of another side is unseen.
-        let view = |entity_ref: &EntityRef| {
+        let view = |entity_ref: &EntityRef, hold: Hold| {
             entity_view(
                 world.resource::<ContentRegistry>(),
                 entity_ref,
                 id,
+                listed_cell(world, session, player, vision, detection, entity_ref),
                 entity_def::operation(world, entity),
                 entity_def::idle(world, entity),
+                hold,
             )
         };
         match owner {
@@ -290,16 +296,16 @@ pub fn game_view(
             // only as the seat's vision and detection make them out — fog
             // lifted by omniscient vision, a cloak pierced by detection
             // everywhere. A glimpse is a position and nothing more.
-            Some(owner) if owner == player => my_entities.push(view(&entity_ref)),
+            Some(owner) if owner == player => my_entities.push(view(&entity_ref, Hold::Listed)),
             Some(owner) if session.are_allied(player, owner) => {
-                ally_entities.push(view(&entity_ref))
+                ally_entities.push(view(&entity_ref, Hold::Listed))
             }
             Some(_) | None => {
                 match visibility::sighting(world, player, entity, Senses::Given(vision, detection))
                 {
                     Sighting::Seen => match owner {
-                        Some(_) => enemy_entities.push(view(&entity_ref)),
-                        None => neutral_entities.push(view(&entity_ref)),
+                        Some(_) => enemy_entities.push(view(&entity_ref, Hold::Withheld)),
+                        None => neutral_entities.push(view(&entity_ref, Hold::Withheld)),
                     },
                     Sighting::Glimpsed => {
                         let footprint = entity_def::occupied_rect(world, entity);
@@ -372,21 +378,82 @@ fn research_views(world: &World, player: PlayerId) -> (Vec<String>, Vec<String>)
     (researched, researching)
 }
 
-/// Snapshots one entity to its integer view, `operation` being the state it
-/// is in to carry out its type's work and `idle` whether it takes orders and
-/// runs none.
+/// Whether a holder's hold is listed to the brain.
+#[derive(Debug)]
+enum Hold {
+    /// An own or allied holder: its passengers are the brain's to know.
+    Listed,
+    /// Another side's holder: what rides inside is unseen.
+    Withheld,
+}
+
+/// The cell a brain lists `entity` at: where it is, except inside a holder, a
+/// job, or the container a waiting return is set down beside, that the brain
+/// neither sides with nor sights, whose cell is not the brain's to know; then
+/// the cell it went in by. A known container is listed by the same rule, and
+/// an entity inside nothing that remains at its [`entity_def::whereabouts`].
+fn listed_cell(
+    world: &World,
+    session: &GameSession,
+    player: PlayerId,
+    vision: AiVision,
+    detection: AiDetection,
+    entity_ref: &EntityRef,
+) -> CellPos {
+    if let Some(location) = entity_ref.get::<LocationComponent>() {
+        return CellPos::from(location.position);
+    }
+    let went_in = CellPos::from(
+        entity_ref
+            .get::<HiddenComponent>()
+            .expect("an entity with no location is hidden")
+            .went_in
+            .position,
+    );
+    match entity_def::inside(world, entity_ref.id()) {
+        Some(container) => {
+            let known = owner::admits(
+                session,
+                Affiliation::Allied,
+                Some(player),
+                entity_def::owner(world, container),
+            ) || visibility::sighting(
+                world,
+                player,
+                container,
+                Senses::Given(vision, detection),
+            )
+            .is_seen();
+            if known {
+                listed_cell(
+                    world,
+                    session,
+                    player,
+                    vision,
+                    detection,
+                    &world.entity(container),
+                )
+            } else {
+                went_in
+            }
+        }
+        None => CellPos::from(entity_def::whereabouts(world, entity_ref.id())),
+    }
+}
+
+/// Snapshots one entity to its integer view, `cell` being the cell
+/// [`listed_cell`] lists it at, `operation` the state it is in to carry out
+/// its type's work, `idle` whether it takes orders and runs none, and `hold`
+/// whether its passengers are listed.
 fn entity_view(
     registry: &ContentRegistry,
     entity: &EntityRef,
     id: SimulationId,
+    cell: CellPos,
     operation: Operation,
     idle: bool,
+    hold: Hold,
 ) -> EntityView {
-    let cell = entity
-        .get::<LocationComponent>()
-        .map_or(CellPos::new(0, 0), |location| {
-            CellPos::from(location.position)
-        });
     let entity_pools = entity
         .get::<PoolsComponent>()
         .expect("a simulation entity carries a pool store");
@@ -434,7 +501,7 @@ fn entity_view(
         under_construction: entity.contains::<UnderConstructionComponent>(),
         disabled: match operation {
             Operation::Disabled(_) => true,
-            Operation::Operating | Operation::UnderConstruction => false,
+            Operation::Operating | Operation::UnderConstruction | Operation::Stranded => false,
         },
         stance: entity
             .get::<StanceComponent>()
@@ -445,11 +512,14 @@ fn entity_view(
         boarded: entity
             .get::<BoardedComponent>()
             .map(|boarded| boarded.holder.0),
-        passengers: entity
-            .get::<TransporterComponent>()
-            .map_or_else(Vec::new, |transporter| {
-                transporter.passengers.iter().map(|id| id.0).collect()
-            }),
+        passengers: match hold {
+            Hold::Listed => entity
+                .get::<TransporterComponent>()
+                .map_or_else(Vec::new, |transporter| {
+                    transporter.passengers.iter().map(|id| id.0).collect()
+                }),
+            Hold::Withheld => Vec::new(),
+        },
         broodlings: entity
             .get::<BroodComponent>()
             .map_or_else(Vec::new, |brood| {

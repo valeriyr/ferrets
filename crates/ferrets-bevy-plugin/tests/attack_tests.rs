@@ -18,9 +18,10 @@ use ferrets_physics::body;
 use ferrets_simulation::{
     command::PlayerCommand,
     components::{
-        attack::AttackComponent, dying::DyingComponent, location::LocationComponent,
-        movement::MoveComponent, pools::PoolsComponent, stance::Stance, turret::TurretsComponent,
+        attack::AttackComponent, location::LocationComponent, movement::MoveComponent,
+        pools::PoolsComponent, stance::Stance, turret::TurretsComponent,
     },
+    entity_def,
     entity_index::EntityIndex,
     map::Map,
     movement_model::MovementModel,
@@ -53,7 +54,7 @@ fn attack_kills_adjacent_target() {
     // The target reaches 0 hp and starts dying: out of the alive set, but it
     // still holds its cell until the dying phase completes.
     utils::run_ticks(&mut app, 4);
-    assert!(app.world_mut().get::<DyingComponent>(target).is_some());
+    assert!(entity_def::dying(app.world(), target));
     {
         let world = app.world_mut();
         assert_eq!(world.resource::<EntityIndex>().alive(target_id), None);
@@ -197,7 +198,7 @@ fn stop_cancels_attack() {
     // The target survives on the one hit it took: the stop landed before the
     // second could.
     assert_eq!(utils::health_as_u32(&app, target), 10);
-    assert!(app.world_mut().get::<DyingComponent>(target).is_none());
+    assert!(!entity_def::dying(app.world(), target));
 }
 
 #[test]

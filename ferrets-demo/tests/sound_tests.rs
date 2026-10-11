@@ -33,7 +33,7 @@ use ferrets_simulation::{
     movement_model::MovementModel,
     session::{local_role::LocalRole, player_id::PlayerId},
     simulation_id::SimulationId,
-    spawn,
+    spawn::{self, Boarding},
 };
 
 #[test]
@@ -49,6 +49,60 @@ fn kill_is_heard_where_it_happened() {
         cue_cells(&mut app),
         vec![CellPos::new(6, 6)],
         "a death sounds from the cell it happened in, not from the listener"
+    );
+}
+
+#[test]
+fn hit_on_cargo_inside_holder_makes_no_sound() {
+    let mut app = sound_app();
+    // Under a seat's own sight, not the fog reveal, so the subject is judged.
+    app.world_mut().insert_resource(FogReveal(false));
+    let world = app.world_mut();
+    let (bunker, _) = utils::create_entity(world, "bunker", utils::at_cell(6, 6), Some(0)).unwrap();
+    let (cargo, cargo_id) =
+        utils::create_entity(world, "grunt", utils::at_cell(6, 8), Some(0)).unwrap();
+    assert_eq!(spawn::board(world, cargo, bunker), Boarding::Boarded);
+    let (_, standing) =
+        utils::create_entity(world, "grunt", utils::at_cell(8, 8), Some(0)).unwrap();
+    utils::run_ticks(&mut app, 1);
+    let world = app.world_mut();
+    world
+        .resource_mut::<EventRecord>()
+        .emit(hit_at(cargo_id, utils::at_cell(6, 6)));
+    world
+        .resource_mut::<EventRecord>()
+        .emit(hit_at(standing, utils::at_cell(8, 8)));
+    play(&mut app);
+
+    // Both cells are in sight; only the subject the seat makes out sounds.
+    assert_eq!(
+        cue_cells(&mut app),
+        vec![CellPos::new(8, 8)],
+        "a hit on cargo inside a holder is heard by nobody"
+    );
+}
+
+#[test]
+fn kill_of_cargo_inside_holder_makes_no_sound() {
+    let mut app = sound_app();
+    app.world_mut().insert_resource(FogReveal(false));
+    let world = app.world_mut();
+    let (bunker, _) = utils::create_entity(world, "bunker", utils::at_cell(6, 6), Some(0)).unwrap();
+    let (cargo, _) = utils::create_entity(world, "grunt", utils::at_cell(6, 8), Some(0)).unwrap();
+    assert_eq!(spawn::board(world, cargo, bunker), Boarding::Boarded);
+    let (standing, _) =
+        utils::create_entity(world, "grunt", utils::at_cell(8, 8), Some(0)).unwrap();
+    let (_, killer) = utils::create_entity(world, "grunt", utils::at_cell(9, 8), Some(1)).unwrap();
+    utils::run_ticks(&mut app, 1);
+    let world = app.world_mut();
+    spawn::despawn_killed(world, cargo, killer, Some(1), Slain::Remains);
+    spawn::despawn_killed(world, standing, killer, Some(1), Slain::Remains);
+    play(&mut app);
+
+    assert_eq!(
+        cue_cells(&mut app),
+        vec![CellPos::new(8, 8)],
+        "a kill of cargo inside a holder is heard by nobody"
     );
 }
 
@@ -90,15 +144,21 @@ fn burst_of_cues_stops_at_ceiling() {
 fn cue_out_of_earshot_leaves_slot_for_near_one() {
     let mut app = sound_app();
     let world = app.world_mut();
-    // More far-off hits than the ceiling holds, then one beside the listener.
+    // More far-off hits than the ceiling holds — each on a grunt standing in
+    // the map's far corner, beyond two views of the listener — then one on a
+    // grunt beside the listener.
     for step in 0..sound::MAX_CONCURRENT_CUES as u32 {
+        let far = utils::at_cell(95 - step, 95);
+        let (_, victim) = utils::create_entity(world, "grunt", far, Some(1)).unwrap();
         world
             .resource_mut::<EventRecord>()
-            .emit(hit_at(step, utils::at_cell(200 + step, 8)));
+            .emit(hit_at(victim, far));
     }
+    let near = utils::at_cell(5, 5);
+    let (_, victim) = utils::create_entity(world, "grunt", near, Some(1)).unwrap();
     world
         .resource_mut::<EventRecord>()
-        .emit(hit_at(99, utils::at_cell(5, 5)));
+        .emit(hit_at(victim, near));
     play(&mut app);
 
     assert_eq!(
@@ -612,11 +672,10 @@ fn cue_count(app: &mut App) -> usize {
         .count()
 }
 
-/// A hit announced at `position`, from nobody in particular — cue staging needs
-/// only the place.
-fn hit_at(victim: u32, position: FixedUVec2) -> SimulationEvent {
+/// A hit on `victim` announced at `position`, from nobody in particular.
+fn hit_at(victim: SimulationId, position: FixedUVec2) -> SimulationEvent {
     SimulationEvent::DamageLanded {
-        target: SimulationId(victim),
+        target: victim,
         target_owner: Some(1),
         attacker: SimulationId(0),
         attacker_owner: Some(0),

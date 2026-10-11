@@ -13,6 +13,7 @@ use ferrets_simulation::{
     control_groups::ControlGroups,
     entity_index::EntityIndex,
     events::EventRecord,
+    impacts::PendingImpacts,
     map::Map,
     movement_model::MovementModel,
     player_buffs::PlayerBuffs,
@@ -77,6 +78,7 @@ pub fn world(pools: impl IntoIterator<Item = Pool>) -> World {
     world.insert_resource(EntityIndex::default());
     world.insert_resource(SimulationIdGenerator::default());
     world.insert_resource(EventRecord::default());
+    world.insert_resource(PendingImpacts::default());
     world
 }
 

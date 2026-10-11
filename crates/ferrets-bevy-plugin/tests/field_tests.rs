@@ -53,8 +53,8 @@ use ferrets_simulation::{
     checksum,
     command::{PlayerCommand, SkillCasterRef, SkillTarget},
     components::{
-        hidden::HiddenComponent, pools, research::ResearchComponent,
-        resource::ResourceSourceComponent, train::TrainComponent,
+        pools, research::ResearchComponent, resource::ResourceSourceComponent,
+        train::TrainComponent,
     },
     entity_def::{self, Operation, Outage},
     entity_index::EntityIndex,
@@ -68,6 +68,7 @@ use ferrets_simulation::{
         GameSession, ai_detection::AiDetection, ai_vision::AiVision, player_id::PlayerId,
         player_slot::PlayerSlot, player_type::PlayerType,
     },
+    spawn,
     visibility::{CellVisibility, VisibilityGrid},
 };
 
@@ -484,7 +485,7 @@ fn hidden_body_takes_no_field_effects() {
     let mut app = field_app();
     utils::place(&mut app, "hive", 10, 10, 0);
     let zergling = utils::create_owned(&mut app, "zergling", 13, 10, 1).0;
-    app.world_mut().entity_mut(zergling).insert(HiddenComponent);
+    spawn::hide_entity(app.world_mut(), zergling);
 
     // On creep, but hidden: the base 0.5, not 0.5 × 2.
     utils::run_ticks(&mut app, 1);
@@ -504,7 +505,7 @@ fn hidden_body_takes_no_outside_effect_either() {
 
     // Hidden, it stands on no side of any field: the outside effect that froze
     // it no longer applies either.
-    app.world_mut().entity_mut(probe).insert(HiddenComponent);
+    spawn::hide_entity(app.world_mut(), probe);
     utils::run_ticks(&mut app, 1);
     assert_eq!(
         entity_def::operation(app.world(), probe),
@@ -688,6 +689,34 @@ fn withering_off_field_kills_what_runs_dry() {
     );
     utils::run_ticks(&mut app, 3);
     utils::assert_despawned(app.world_mut(), exposed);
+}
+
+#[test]
+fn train_queued_on_unpowered_trainer_is_not_started_until_powered() {
+    let mut app = field_app();
+    let pylon = utils::create_owned(&mut app, "pylon", 10, 10, 0).0;
+    let (gateway, gateway_id) = utils::create_owned(&mut app, "gateway", 12, 10, 0);
+    utils::run_ticks(&mut app, 1);
+    utils::deplete(&mut app, pylon);
+
+    utils::push_command(
+        &mut app,
+        PlayerCommand::TrainEntity {
+            trainer: gateway_id,
+            type_name: "zealot".into(),
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    // Held means untouched: the entry waits unstarted, nothing prepared.
+    assert_eq!(utils::train_queue_len(app.world(), gateway), 1);
+    assert!(app.world().get::<TrainComponent>(gateway).is_none());
+
+    // Powered, it starts: one tick of the four the zealot takes, then done.
+    utils::create_owned(&mut app, "pylon", 10, 12, 0);
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(training_progress(&app, gateway), 1);
+    utils::run_ticks(&mut app, 3);
+    assert_eq!(utils::count_of_type(app.world_mut(), "zealot"), 1);
 }
 
 #[test]
@@ -1577,6 +1606,80 @@ fn zealot_refuses_to_board_disabled_hangar() {
         },
     );
     utils::run_until_aboard(&mut app, hangar, 1, 40);
+}
+
+#[test]
+fn walker_disabled_mid_tick_takes_no_further_step() {
+    let mut app = field_app();
+    {
+        let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
+        let dazed = registry.register_entity_buff(
+            "dazed",
+            EntityBuffDef {
+                effects: vec![EntityEffect::Disable],
+                lasting: Lasting::For(10),
+                stack_rule: StackRule::Refresh,
+                interrupted_by: Vec::new(),
+            },
+        );
+        let stun = registry.register_skill(
+            "stun",
+            SkillDef {
+                cooldown: 1,
+                caster: SkillCaster::Entity {
+                    costs: Vec::new(),
+                    target: EntityCastTarget::Standing {
+                        side: Affiliation::Anyone,
+                        kinds: Kinds::Any,
+                    },
+                    reach: Reach::Wherever,
+                    casting: Casting::Instant,
+                    effect: EntityCastEffect::ApplyBuff(dazed),
+                },
+                requires: Vec::new(),
+            },
+        );
+        registry.register(
+            EntityTypeDef::new("stunner")
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_pool(Pool::health(20))
+                .with_skills([stun]),
+        );
+        registry.register(utils::walker("strider", utils::GROUND).with_pool(Pool::health(20)));
+    }
+    // The stunner has the lower id, so its cast lands in the tick's process
+    // pass before the walker's turn, after both were prepared.
+    let (_, stunner_id) = utils::create_owned(&mut app, "stunner", 2, 2, 0);
+    let (walker, walker_id) = utils::create_owned(&mut app, "strider", 5, 5, 0);
+    utils::select(&mut app, walker_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Move {
+            target: utils::pos(5, 15),
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY + 2);
+    utils::use_skill(
+        &mut app,
+        "stun",
+        SkillCasterRef::Entity(stunner_id),
+        Some(SkillTarget::Entity(walker_id)),
+    );
+
+    // The tick the stun lands, the walker takes no step after it.
+    let mut before = utils::position_of(app.world(), walker);
+    for _ in 0..utils::APPLY + 2 {
+        utils::run_ticks(&mut app, 1);
+        let after = utils::position_of(app.world(), walker);
+        let operation = entity_def::operation(app.world(), walker);
+        if matches!(operation, Operation::Disabled(_)) {
+            assert_eq!(after, before);
+            return;
+        }
+        before = after;
+    }
+    panic!("the stun lands within the command delay");
 }
 
 //

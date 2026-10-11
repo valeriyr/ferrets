@@ -12,7 +12,7 @@ use ferrets_pathfinder::{
     search::{self, Footing},
 };
 
-use ferrets_math::FixedU64;
+use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_physics::body;
 
 use crate::{
@@ -49,6 +49,22 @@ impl OccupancyClass {
             OccupancyClass::Claim
         } else {
             OccupancyClass::Static
+        }
+    }
+
+    /// The footprint of `size` a body at `position` holds on this plane,
+    /// anchored at the cell the plane anchors a body at.
+    pub fn footprint_rect(self, position: FixedUVec2, size: CellSize) -> CellRect {
+        CellRect::new(self.anchor(position), size)
+    }
+
+    /// The cell a footprint on this plane is anchored at for a body at
+    /// `position`: a standing form's stamped anchor, or the cell a mover's
+    /// claim lies on.
+    fn anchor(self, position: FixedUVec2) -> CellPos {
+        match self {
+            OccupancyClass::Static => body::anchor(position),
+            OccupancyClass::Claim => CellPos::from(position),
         }
     }
 }
@@ -379,6 +395,26 @@ impl Map {
             location_def.size(),
             MAX_RADIUS,
             footing(location_def),
+        )
+    }
+
+    /// Like [`Map::find_placement_near`], within each ring taking the free
+    /// position closest to the rectangle `toward` first.
+    pub fn find_placement_near_toward(
+        &self,
+        origin: CellPos,
+        size: CellSize,
+        location_def: &LocationDef,
+        toward: CellRect,
+    ) -> Option<CellPos> {
+        search::find_placement_near_toward(
+            &self.nav_grid,
+            location_def.occupation(),
+            CellRect::new(origin, size),
+            location_def.size(),
+            MAX_RADIUS,
+            footing(location_def),
+            toward,
         )
     }
 

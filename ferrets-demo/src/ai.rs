@@ -200,21 +200,47 @@ const COMMON_AI: &str = r#"
                 }
                 -- Ten seconds to walk there and place before a retry.
                 state.build_deadline = view.tick + 200
+                state.builder = builder.id
                 return builder.id
             end
         end
         return nil
     end
 
-    -- Idle workers gather gold; the first one fetches wood while `need_wood`.
-    local function assign_harvesters(commands, view, workers, need_wood, builder_id)
+    -- Idle workers gather gold; one fetches wood while `need_wood`. The wood
+    -- worker is remembered in `state.wood_worker` while it stays busy; when no
+    -- worker is idle to take the wood, a busy one other than the builder
+    -- `build_next` last sent is turned to it, one carrying no load first, so a
+    -- workforce that never idles is not starved of wood.
+    local function assign_harvesters(commands, state, view, workers, need_wood, builder_id)
+        local function nearest_tree(w)
+            return nearest(w, view.neutral_entities, function(e)
+                return e.type_name == "tree" and (e.resource_amount or 0) > 0
+            end)
+        end
+        local function send(w, target)
+            commands[#commands + 1] = { kind = "select", id = w.id }
+            commands[#commands + 1] = { kind = "send", target = target.id }
+        end
+
+        -- A remembered worker that idles, or is no longer among the workers,
+        -- is forgotten.
+        local wood_covered = false
+        local builder_present = false
+        for _, w in ipairs(workers) do
+            if w.id == state.wood_worker and not w.idle then wood_covered = true end
+            if w.id == state.builder and not w.idle then builder_present = true end
+        end
+        if not wood_covered then state.wood_worker = nil end
+        if not builder_present then state.builder = nil end
+        if wood_covered then need_wood = false end
+
         for _, w in ipairs(workers) do
             if w.idle and not w.hidden and w.id ~= builder_id then
                 local target = nil
                 if need_wood then
-                    target = nearest(w, view.neutral_entities, function(e)
-                        return e.type_name == "tree" and (e.resource_amount or 0) > 0
-                    end)
+                    target = nearest_tree(w)
+                    if target ~= nil then state.wood_worker = w.id end
                     need_wood = false
                 end
                 if target == nil then
@@ -222,9 +248,27 @@ const COMMON_AI: &str = r#"
                         return e.type_name == "gold_mine" and (e.resource_amount or 0) > 0
                     end)
                 end
+                if target ~= nil then send(w, target) end
+            end
+        end
+
+        if need_wood then
+            local pulled = nil
+            for _, w in ipairs(workers) do
+                if not w.idle and not w.hidden and w.id ~= builder_id
+                    and w.id ~= state.builder then
+                    if w.carrying == nil then
+                        pulled = w
+                        break
+                    end
+                    pulled = pulled or w
+                end
+            end
+            if pulled ~= nil then
+                local target = nearest_tree(pulled)
                 if target ~= nil then
-                    commands[#commands + 1] = { kind = "select", id = w.id }
-                    commands[#commands + 1] = { kind = "send", target = target.id }
+                    send(pulled, target)
+                    state.wood_worker = pulled.id
                 end
             end
         end
@@ -402,7 +446,7 @@ const HUMAN_AI: &str = r#"
             -- Wood feeds whatever structure is pending and the upgrade after it.
             local need_wood = (wanted ~= nil and budget.wood < cost_of(wanted, "wood"))
                 or (not contains(view.researched, "iron_weapons") and budget.wood < 50)
-            assign_harvesters(commands, view, workers, need_wood, builder_id)
+            assign_harvesters(commands, state, view, workers, need_wood, builder_id)
 
             -- The upgrade and the pending structure hold their price back from
             -- the army before any unit is queued.
@@ -527,7 +571,7 @@ const ORC_AI: &str = r#"
             end
             local need_wood = (wanted ~= nil and budget.wood < cost_of(wanted, "wood"))
                 or (#works > 0 and budget.wood < cost_of("war_wagon", "wood"))
-            assign_harvesters(commands, view, workers, need_wood, builder_id)
+            assign_harvesters(commands, state, view, workers, need_wood, builder_id)
 
             -- The ritual and the pending structure hold their price back from
             -- the army before any unit is queued.
@@ -716,7 +760,7 @@ const SWARM_AI: &str = r#"
                     wood_wanted = wood_wanted + morph_cost_of("swarmling", "ravager", "wood")
                 end
             end
-            assign_harvesters(commands, view, drones, budget.wood < wood_wanted, builder_id)
+            assign_harvesters(commands, state, view, drones, budget.wood < wood_wanted, builder_id)
 
             -- The pending structure holds its price back from the army.
             reserve(budget, wanted)
@@ -798,7 +842,7 @@ const CONCLAVE_AI: &str = r#"
             local builder_id =
                 build_next(commands, state, view, probes, hall, wanted, budget)
             local need_wood = wanted ~= nil and budget.wood < cost_of(wanted, "wood")
-            assign_harvesters(commands, view, probes, need_wood, builder_id)
+            assign_harvesters(commands, state, view, probes, need_wood, builder_id)
 
             -- The pending structure holds its price back from the army.
             reserve(budget, wanted)

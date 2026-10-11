@@ -383,9 +383,10 @@ pub fn play_cues(world: &mut World) {
     };
 
     let local = world.resource::<GameSession>().local_role();
+    let judge = render::sighting_judge(world);
     let mut wanted: Vec<(Cue, Option<FixedUVec2>)> = Vec::new();
     for event in world.resource::<EventRecord>().events() {
-        cues_for(world, local, event, &mut wanted);
+        cues_for(world, local, judge, event, &mut wanted);
     }
 
     for (cue, position) in wanted {
@@ -535,33 +536,60 @@ fn play_at(
 /// A cast is heard at whoever made it and, in its own voice, at whatever it was
 /// applied to. A self-cast is one place and so one sound.
 ///
+/// A hit, a kill and an expiry are heard only for a subject `judge` makes out:
+/// what happens to cargo inside a holder, or to anything the perspective does
+/// not sight, makes no sound.
+///
 /// A milestone cue is appended only when it belongs to `local` (see
 /// [`own_milestone`]).
 fn cues_for(
     world: &World,
     local: LocalRole,
+    judge: render::SightingJudge,
     event: &SimulationEvent,
     out: &mut Vec<(Cue, Option<FixedUVec2>)>,
 ) {
     let at = |id| {
         let entity = world.resource::<EntityIndex>().any(id)?;
-        Some(entity_def::position(world, entity))
+        Some(entity_def::whereabouts(world, entity))
+    };
+    let made_out = |id| {
+        world
+            .resource::<EntityIndex>()
+            .any(id)
+            .is_some_and(|entity| render::judged(world, judge, entity).is_seen())
     };
     match event {
-        SimulationEvent::DamageLanded { position, .. } => out.push((Cue::Hit, Some(*position))),
+        SimulationEvent::DamageLanded {
+            target, position, ..
+        } => {
+            if made_out(*target) {
+                out.push((Cue::Hit, Some(*position)));
+            }
+        }
         // Only a death an enemy caused: a canceled site or a mined-out node
         // going away is not an explosion.
         SimulationEvent::EntityDied {
+            entity,
             position,
             cause: DeathCause::Killed { .. },
             ..
-        } => out.push((Cue::Explosion, Some(*position))),
+        } => {
+            if made_out(*entity) {
+                out.push((Cue::Explosion, Some(*position)));
+            }
+        }
         // A summon's time running out, heard where it stood.
         SimulationEvent::EntityDied {
+            entity,
             position,
             cause: DeathCause::Expired,
             ..
-        } => out.push((Cue::Expiry, Some(*position))),
+        } => {
+            if made_out(*entity) {
+                out.push((Cue::Expiry, Some(*position)));
+            }
+        }
         SimulationEvent::EntityMorphed { entity, .. } => {
             out.extend(at(*entity).map(|place| (Cue::Morph, Some(place))));
         }
@@ -569,7 +597,7 @@ fn cues_for(
             if let Some(entity) = world.resource::<EntityIndex>().any(*building)
                 && own_milestone(local, entity_def::owner(world, entity))
             {
-                out.push((Cue::Completed, Some(entity_def::position(world, entity))));
+                out.push((Cue::Completed, Some(entity_def::whereabouts(world, entity))));
             }
         }
         SimulationEvent::ResourcesGathered { storage, .. } => {

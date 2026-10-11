@@ -3,8 +3,10 @@
 
 use bevy_ecs::{entity::Entity, world::World};
 use ferrets_content::{pool::Pool, pool_def::PoolId};
+use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
 use ferrets_math::{FixedU64, facing::Facing};
 use ferrets_simulation::{
+    beside::{Beside, Lean},
     checksum,
     components::{
         location::LocationComponent,
@@ -15,6 +17,7 @@ use ferrets_simulation::{
     entity_index::EntityIndex,
     resources::PlayerResources,
     session::player_id::PlayerId,
+    spawn::{self, SetDown},
 };
 
 mod utils;
@@ -138,6 +141,31 @@ fn changing_resources_changes_checksum() {
         checksum::state_checksum(&poor),
         checksum::state_checksum(&rich)
     );
+}
+
+#[test]
+fn hide_and_set_down_on_same_cell_leave_checksum_as_it_was() {
+    let mut world = utils::world([Pool::health(30)]);
+    let unit = utils::spawn_unit(&mut world, 5, 5);
+    let standing = checksum::state_checksum(&world);
+
+    spawn::hide_entity(&mut world, unit);
+    let hidden = checksum::state_checksum(&world);
+    assert_eq!(
+        spawn::place_back_beside(
+            &mut world,
+            unit,
+            Beside::Footprint(CellRect::new(CellPos::new(5, 5), CellSize::ONE)),
+            Lean::WentIn
+        ),
+        SetDown::Placed,
+        "its own cell is free"
+    );
+
+    // Hidden, the entity contributes no position, so the sum changes; back on
+    // the same cell with the same facing, nothing of the round trip remains.
+    assert_ne!(hidden, standing);
+    assert_eq!(checksum::state_checksum(&world), standing);
 }
 
 //

@@ -12,6 +12,7 @@ use super::{
 };
 use crate::{
     berths,
+    beside::Beside,
     components::{
         order_queue::{CancelPolicy, OrderState},
         resource::{
@@ -58,14 +59,30 @@ struct Reading {
 }
 
 /// Whether `entity` may start this Harvest: its type carries resources and it
-/// operates, and the target is an operating source of a kind it carries, or an
+/// operates, and the target is an operating source of a kind it carries, whose
+/// work would not take it off the map from under others seated on it, or an
 /// operating storage of its own that accepts the load it holds.
 pub fn can_start(world: &World, entity: Entity, order: &Order) -> Result<(), Refusal> {
     reading(world, entity, order).map(|_| ())
 }
 
-/// The [`Reading`] of `order`'s target for `entity`, or why there is none.
+/// The [`Reading`] of `order`'s target for `entity` when it may start the
+/// order, or why it may not — see [`can_start`].
 fn reading(world: &World, entity: Entity, order: &Order) -> Result<Reading, Refusal> {
+    let reading = read_target(world, entity, order)?;
+    // A delivery never leaves the map; the source the order goes on to is
+    // judged where it is taken up.
+    if reading.source.is_some() {
+        let harvest_data = entity_def::harvest_data(world, entity, &reading.kind)
+            .expect("a source reading names a kind the carrier carries");
+        work::requires_free_to_hide(world, entity, harvest_data.presence())?;
+    }
+    Ok(reading)
+}
+
+/// The [`Reading`] of `order`'s target for `entity`, or why the target takes
+/// no harvest from it.
+fn read_target(world: &World, entity: Entity, order: &Order) -> Result<Reading, Refusal> {
     let target_id = order
         .harvest_target()
         .expect("Harvest order must have a target");
@@ -176,7 +193,7 @@ pub fn cancel_processing(
     world: &mut World,
 ) -> Processing {
     if let Some(mut harvest_component) = world.entity_mut(entity).take::<HarvestComponent>() {
-        end_trip_or_retry(world, entity, &mut harvest_component);
+        end_trip(world, entity, &mut harvest_component);
     }
     Processing::state(OrderState::Finished)
 }
@@ -212,8 +229,9 @@ pub fn survives_soft_cancel() -> bool {
 /// touches — and never drifts to another. A source the carrier cannot reach is
 /// swapped for a nearby one of the same kind, or waited out in place when it is
 /// the only one around. The loop ends when no source of the order's kind is
-/// left and nothing is carried, or there is nowhere at all to deliver the
-/// carried load to.
+/// left and nothing is carried, there is nowhere at all to deliver the carried
+/// load to, or others sat down on the carrier since the order started and the
+/// kind's presence would take it off the map from under them.
 pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
     let Some(mut harvest_component) = world.entity_mut(entity).take::<HarvestComponent>() else {
         return Processing::state(OrderState::Finished);
@@ -224,7 +242,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
     // Whichever way the order ends, it ends here — one place stops the work and gives
     // the source back up, so no way out of [`advance`] has to remember to.
     match result.state {
-        OrderState::Finished => end_trip_or_retry(world, entity, &mut harvest_component),
+        OrderState::Finished => end_trip(world, entity, &mut harvest_component),
         OrderState::InProcessing | OrderState::Suspended => {
             world.entity_mut(entity).insert(harvest_component);
         }
@@ -267,12 +285,15 @@ fn advance(
 
     // A trip whose source no longer qualifies — vanished mid-work, or drained
     // while the carrier sat at it — is abandoned: the carrier stops working and
-    // comes back onto the map before anything else happens.
+    // gives the source up, and nothing else happens until it stands on the map
+    // again.
     if let Some(harvesting_id) = harvest_component.harvesting
         && source != Some(harvesting_id)
-        && !end_trip(world, entity, harvest_component)
     {
-        return Processing::state(OrderState::InProcessing);
+        end_trip(world, entity, harvest_component);
+        if entity_def::hidden(world, entity) {
+            return Processing::state(OrderState::InProcessing);
+        }
     }
 
     // A load of some other kind than the order's counts for nothing here: it
@@ -303,7 +324,8 @@ fn advance(
 
         // A delivery interrupting a partial trip ends it: the carrier cannot walk a
         // load anywhere while it is still at work in a seam.
-        if !end_trip(world, entity, harvest_component) {
+        end_trip(world, entity, harvest_component);
+        if entity_def::hidden(world, entity) {
             return Processing::state(OrderState::InProcessing);
         }
 
@@ -358,36 +380,6 @@ fn advance(
         .expect("resolve_source returns alive sources");
     harvest_component.source = Some(source_id);
 
-    match chase::advance_to_entity(
-        &mut harvest_component.last_chase,
-        world,
-        entity,
-        source_entity,
-        entity_def::effective_stat_u32(world, entity, EntityStatId::HARVEST_RANGE),
-    ) {
-        Destination::OutOfReach => {
-            // The way to this source is shut, not the source spent: pick
-            // another of the same kind beside it, and with none to pick wait
-            // here for the way to open — the order gives up only when no
-            // source of its kind is left at all.
-            let beside = entity_def::footprint_rect(world, source_entity);
-            let kind = harvest_component.kind.as_str();
-            let replacement = nearest(world, beside, Some(SOURCE_SEARCH_RADIUS), |id, _| {
-                id != source_id && source_matches(world, id, entity, &carrier_def, kind)
-            });
-            harvest_component.last_chase = None;
-            match replacement {
-                Some(replacement) => harvest_component.source = Some(replacement),
-                None => harvest_component.wait = BLOCKED_WALK_RETRY_PERIOD,
-            }
-            return Processing::state(OrderState::InProcessing);
-        }
-        Destination::Walk(move_order) => return Processing::suspend(move_order),
-        Destination::Arrived => {}
-    }
-
-    chase::face_entity(world, entity, source_entity);
-
     let (source_kind, depletion) = {
         let source_def = entity_def::of(world, source_entity)
             .resource_source
@@ -397,16 +389,60 @@ fn advance(
     };
     let harvest_data = carrier_def
         .harvest_data(&source_kind)
-        .expect("resolve_source returns carryable kinds")
-        .clone();
+        .expect("resolve_source returns carryable kinds");
+
+    // A carrier inside its source stands nowhere to walk from: it is at the
+    // source for as long as the trip runs. One at work on the map is chased
+    // back into reach if anything moved it.
+    let inside_source = harvest_component.harvesting == Some(source_id)
+        && match harvest_data.presence() {
+            WorkPresence::Hidden { .. } => true,
+            WorkPresence::Present { .. } | WorkPresence::Attached(_) => false,
+        };
+    if !inside_source {
+        match chase::advance_to_entity(
+            &mut harvest_component.last_chase,
+            world,
+            entity,
+            source_entity,
+            entity_def::effective_stat_u32(world, entity, EntityStatId::HARVEST_RANGE),
+        ) {
+            Destination::OutOfReach => {
+                // The way to this source is shut, not the source spent: pick
+                // another of the same kind beside it, and with none to pick wait
+                // here for the way to open — the order gives up only when no
+                // source of its kind is left at all.
+                let beside = entity_def::footprint_rect(world, source_entity);
+                let kind = harvest_component.kind.as_str();
+                let replacement = nearest(world, beside, Some(SOURCE_SEARCH_RADIUS), |id, _| {
+                    id != source_id && source_matches(world, id, entity, &carrier_def, kind)
+                });
+                harvest_component.last_chase = None;
+                match replacement {
+                    Some(replacement) => harvest_component.source = Some(replacement),
+                    None => harvest_component.wait = BLOCKED_WALK_RETRY_PERIOD,
+                }
+                return Processing::state(OrderState::InProcessing);
+            }
+            Destination::Walk(move_order) => return Processing::suspend(move_order),
+            Destination::Arrived => {}
+        }
+
+        chase::face_entity(world, entity, source_entity);
+    }
 
     // Take up the source, waiting in place while one that cannot be shared is
-    // worked by somebody else, or every berth of it is taken.
+    // worked by somebody else, or every berth of it is taken. A carrier that
+    // others sat down on since the order started gives the order up.
     if harvest_component.harvesting != Some(source_id) {
         if source_excludes(world, source_entity, entity, &source_kind)
             || berths::shut(world, source_entity, harvest_data.presence())
         {
             return Processing::state(OrderState::InProcessing);
+        }
+        match work::requires_free_to_hide(world, entity, harvest_data.presence()) {
+            Ok(()) => {}
+            Err(_) => return Processing::state(OrderState::Finished),
         }
         begin_trip(
             world,
@@ -420,17 +456,6 @@ fn advance(
     harvest_component.progress += 1;
 
     if harvest_component.progress >= harvest_data.harvest_time() {
-        match harvest_data.banking() {
-            // The carrier must be back on the grid before the load can move on.
-            Banking::Carried => {
-                if !end_trip(world, entity, harvest_component) {
-                    return Processing::state(OrderState::InProcessing);
-                }
-            }
-            // Nothing moves on: the carrier stays at the source.
-            Banking::Direct => {}
-        }
-
         let available = world
             .entity(source_entity)
             .get::<ResourceSourceComponent>()
@@ -480,6 +505,14 @@ fn advance(
             source_resources.amount
         };
 
+        match harvest_data.banking() {
+            // The load moves on once the carrier is back on the grid; one with
+            // no cell to return to waits off the map with its load in hand.
+            Banking::Carried => end_trip(world, entity, harvest_component),
+            // Nothing moves on: the carrier stays at the source.
+            Banking::Direct => {}
+        }
+
         if remaining == 0 {
             match depletion {
                 DepletionPolicy::Destroy => {
@@ -525,30 +558,13 @@ fn begin_trip(
     work::enter(world, entity, presence, source);
 }
 
-/// Ends the trip in progress: the carrier stops working, comes back onto the grid if it
-/// left it for the source, and gives the source back up.
-///
-/// Returns `false` when a carrier off the grid has no free cell to return to. The trip
-/// stands in that case — it is still at work and still holds its source — and the
-/// caller retries next tick.
-fn end_trip(world: &mut World, entity: Entity, harvest: &mut HarvestComponent) -> bool {
-    let footprint = entity_def::footprint_rect(world, entity);
-    if !spawn::place_back_near(world, entity, footprint.origin, footprint.size) {
-        return false;
-    }
-
+/// Ends the trip in progress: the carrier stops working and gives the source back
+/// up, then comes back onto the grid if it left it for the source — or stays off the
+/// grid with its return queued for a later tick when no cell is free.
+fn end_trip(world: &mut World, entity: Entity, harvest: &mut HarvestComponent) {
+    let beside = beside_source(harvest);
     stop_work(world, entity, harvest);
-    true
-}
-
-/// Like [`end_trip`], but for the paths that cannot retry: the trip ends either way,
-/// and a carrier with nowhere to return to stays off the grid with the return queued
-/// for a later tick.
-fn end_trip_or_retry(world: &mut World, entity: Entity, harvest: &mut HarvestComponent) {
-    stop_work(world, entity, harvest);
-
-    let footprint = entity_def::footprint_rect(world, entity);
-    work::leave(world, entity, footprint.origin, footprint.size);
+    work::leave(world, entity, beside);
 }
 
 /// Puts down the work: the carrier is at it no longer, and its source is given back up
@@ -599,10 +615,12 @@ fn resolve_source(
         }
     }
 
-    let standing = entity_def::standing_rect(world, entity);
-    nearest(world, standing, Some(SOURCE_SEARCH_RADIUS), |id, _| {
-        source_matches(world, id, entity, carrier_def, kind)
-    })
+    nearest(
+        world,
+        searching_from(world, entity, beside_source(hc)),
+        Some(SOURCE_SEARCH_RADIUS),
+        |id, _| source_matches(world, id, entity, carrier_def, kind),
+    )
 }
 
 /// Whether `id` is a live, raised source of `kind`, with anything left in it,
@@ -625,6 +643,7 @@ fn source_matches(
         // covers; it becomes a source of its own only once it stands.
         Operation::UnderConstruction => false,
         Operation::Operating | Operation::Disabled(_) => true,
+        Operation::Stranded => unreachable!("a stranded body is hidden"),
     };
     raised
         && world
@@ -666,14 +685,39 @@ fn resolve_storage(
         return Some(target);
     }
 
-    let standing = entity_def::standing_rect(world, entity);
-    let id = nearest(world, standing, None, |_, e| qualifies(e))?;
+    // A carrier delivers standing: its trip ended before the search.
+    let id = nearest(
+        world,
+        entity_def::standing_rect(world, entity),
+        None,
+        |_, e| qualifies(e),
+    )?;
     world.resource::<EntityIndex>().alive(id)
+}
+
+/// The cells a carrier searches from: the ones it stands on, per
+/// [`entity_def::standing_rect`], or, off the map, the footprint it would be
+/// set down beside.
+fn searching_from(world: &World, entity: Entity, beside: Beside) -> CellRect {
+    if entity_def::hidden(world, entity) {
+        entity_def::beside_rect(world, entity, beside)
+    } else {
+        entity_def::standing_rect(world, entity)
+    }
+}
+
+/// What a carrier off the map is set down beside: the source it works, or
+/// where it went in when it works none.
+fn beside_source(harvest: &HarvestComponent) -> Beside {
+    match harvest.harvesting {
+        Some(source) => Beside::Container(source),
+        None => Beside::WentIn,
+    }
 }
 
 /// Finds the alive entity matching `filter` nearest to `from`, measured to the
 /// entity's footprint with the map's projection metric — so `from` is the
-/// searcher's [`entity_def::standing_rect`], the side that does the reaching.
+/// searcher's [`searching_from`], the side that does the reaching.
 /// Ties break on the lower [`SimulationId`], so the result is deterministic.
 fn nearest(
     world: &World,
@@ -685,7 +729,8 @@ fn nearest(
     let mut best: Option<(u32, SimulationId)> = None;
 
     for (id, entity) in world.resource::<EntityIndex>().alive_entries() {
-        if !filter(id, entity) {
+        // Nothing off the map is reached.
+        if !filter(id, entity) || entity_def::hidden(world, entity) {
             continue;
         }
         let reached = entity_def::footprint_rect(world, entity);

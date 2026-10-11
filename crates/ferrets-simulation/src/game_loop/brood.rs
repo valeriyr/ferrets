@@ -38,9 +38,15 @@ pub fn advance(world: &mut World) {
         let Some(terms) = entity_def::of(world, entity).breeder.clone() else {
             continue;
         };
+        // Off the map or seated in another's berths, a breeder seats nobody,
+        // so it breeds nothing either.
+        if entity_def::hidden(world, entity) || entity_def::attached(world, entity) {
+            continue;
+        }
         match entity_def::operation(world, entity) {
             Operation::Operating => {}
             Operation::UnderConstruction | Operation::Disabled(_) => continue,
+            Operation::Stranded => unreachable!("a stranded body is hidden"),
         }
 
         match terms.orphans() {

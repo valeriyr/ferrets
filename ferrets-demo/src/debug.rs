@@ -10,7 +10,7 @@ use ferrets_physics::body;
 use ferrets_simulation::{
     command::{PlayerCommand, SkillTarget},
     components::{
-        entity_info::EntityInfoComponent, entity_stats::StatsComponent, hidden::HiddenComponent,
+        entity_info::EntityInfoComponent, entity_stats::StatsComponent,
         location::LocationComponent, movement::MoveComponent, order_queue::OrderQueueComponent,
         patrol::PatrolComponent,
     },
@@ -153,15 +153,12 @@ pub fn debug_readout(
     muted: Res<Muted>,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
-    entities: Query<
-        (
-            &EntityInfoComponent,
-            &LocationComponent,
-            &Visibility,
-            Option<&render::Sighted>,
-        ),
-        Without<HiddenComponent>,
-    >,
+    entities: Query<(
+        &EntityInfoComponent,
+        &LocationComponent,
+        &Visibility,
+        Option<&render::Sighted>,
+    )>,
     mut text: Query<&mut Text, With<DebugText>>,
 ) {
     let cell = cursor_cell(&windows, &cameras);
@@ -255,10 +252,7 @@ pub fn draw_grid(
     fog: Res<VisibilityGrid>,
     watch: Res<render::ObserverPerspective>,
     reveal: Res<FogReveal>,
-    shimmering: Query<
-        (&EntityInfoComponent, &LocationComponent, &render::Sighted),
-        Without<HiddenComponent>,
-    >,
+    shimmering: Query<(&EntityInfoComponent, &LocationComponent, &render::Sighted)>,
 ) {
     if !debug.grid {
         return;
@@ -328,16 +322,13 @@ pub fn draw_bodies(
     watch: Res<render::ObserverPerspective>,
     reveal: Res<FogReveal>,
     registry: Res<ContentRegistry>,
-    movers: Query<
-        (
-            &EntityInfoComponent,
-            &LocationComponent,
-            &StatsComponent,
-            &Visibility,
-            Option<&render::Sighted>,
-        ),
-        Without<HiddenComponent>,
-    >,
+    movers: Query<(
+        &EntityInfoComponent,
+        &LocationComponent,
+        &StatsComponent,
+        &Visibility,
+        Option<&render::Sighted>,
+    )>,
 ) {
     const BODY: Color = Color::srgb(0.35, 0.9, 1.0);
     const CLAIM: Color = Color::srgba(0.35, 0.9, 1.0, 0.5);
@@ -473,26 +464,20 @@ pub fn draw_orders(
     mut gizmos: Gizmos,
     debug: Res<DebugState>,
     registry: Res<ContentRegistry>,
-    units: Query<
-        (
-            &EntityInfoComponent,
-            &LocationComponent,
-            &OrderQueueComponent,
-            Option<&PatrolComponent>,
-            &Visibility,
-            Option<&render::Sighted>,
-        ),
-        Without<HiddenComponent>,
-    >,
-    targets: Query<
-        (
-            &EntityInfoComponent,
-            &LocationComponent,
-            &Visibility,
-            Option<&render::Sighted>,
-        ),
-        Without<HiddenComponent>,
-    >,
+    units: Query<(
+        &EntityInfoComponent,
+        &LocationComponent,
+        &OrderQueueComponent,
+        Option<&PatrolComponent>,
+        &Visibility,
+        Option<&render::Sighted>,
+    )>,
+    targets: Query<(
+        &EntityInfoComponent,
+        &LocationComponent,
+        &Visibility,
+        Option<&render::Sighted>,
+    )>,
 ) {
     const MOVE: Color = Color::srgb(0.3, 0.85, 0.4);
     const COMBAT: Color = Color::srgb(1.0, 0.35, 0.25);

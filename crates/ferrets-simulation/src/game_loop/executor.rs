@@ -14,7 +14,6 @@ use crate::{
     components::{
         build::UnderConstructionComponent,
         entity_info::EntityInfoComponent,
-        location::LocationComponent,
         order_queue::{CancelPolicy, OrderQueueComponent},
         owner,
         rally::{RallyPointComponent, RallyTarget},
@@ -543,7 +542,9 @@ fn train_entity(world: &mut World, player: PlayerId, trainer: SimulationId, type
 /// for one with no production queue, or for a slot past the end of it. The
 /// Train order finishes on its own once the queue it works is empty.
 fn cancel_train(world: &mut World, player: PlayerId, trainer: SimulationId, slot: u8) {
-    let Some(entity) = find_owned_interactable(world, player, trainer) else {
+    // Production needs no position to be called off: a trainer aboard a
+    // holder takes the command too.
+    let Some(entity) = find_owned_alive(world, player, trainer) else {
         return;
     };
     let type_name = {
@@ -640,7 +641,8 @@ fn cancel_research(
     researcher: SimulationId,
     research: ResearchId,
 ) {
-    let Some(entity) = find_owned_interactable(world, player, researcher) else {
+    // A researcher aboard a holder takes the command too.
+    let Some(entity) = find_owned_alive(world, player, researcher) else {
         return;
     };
     let mut entity_mut = world.entity_mut(entity);
@@ -683,10 +685,7 @@ fn cancel_build(world: &mut World, player: PlayerId, site: SimulationId) {
     let Some(building) = find_owned_interactable(world, player, site) else {
         return;
     };
-    if !world
-        .entity(building)
-        .contains::<UnderConstructionComponent>()
-    {
+    if !entity_def::under_construction(world, building) {
         return;
     }
     let price = entity_def::of(world, building).price.clone();
@@ -773,7 +772,6 @@ fn resolve_box_selection(world: &World, player: PlayerId, rect: &FixedURect) -> 
         .into_iter()
         .filter(|&(id, entity)| {
             visibility::interactable_to(world, player, id).is_some()
-                && world.entity(entity).contains::<LocationComponent>()
                 && rect.contains(entity_def::footprint_center(world, entity))
                 && !world
                     .entity(entity)
@@ -817,7 +815,6 @@ fn resolve_type_selection(
         .filter(|&(id, entity)| {
             index.interactable(world, id).is_some()
                 && entity_def::owner(world, entity) == Some(player)
-                && world.entity(entity).contains::<LocationComponent>()
                 && rect.contains(entity_def::footprint_center(world, entity))
                 && world
                     .entity(entity)
@@ -875,6 +872,12 @@ fn commanded_selection_excluding(
 /// Resolves `id` if it is interactable and owned by `player`.
 fn find_owned_interactable(world: &World, player: PlayerId, id: SimulationId) -> Option<Entity> {
     let entity = world.resource::<EntityIndex>().interactable(world, id)?;
+    (entity_def::owner(world, entity) == Some(player)).then_some(entity)
+}
+
+/// Resolves `id` if it is alive and owned by `player`, on the map or off it.
+fn find_owned_alive(world: &World, player: PlayerId, id: SimulationId) -> Option<Entity> {
+    let entity = world.resource::<EntityIndex>().alive(id)?;
     (entity_def::owner(world, entity) == Some(player)).then_some(entity)
 }
 

@@ -32,6 +32,11 @@ pub fn process_garrison_attacks(world: &mut World) {
         .collect();
 
     for holder in holders {
+        // Off the map there is nothing to fire from: a holder inside a job
+        // sits its passengers' fight out.
+        if entity_def::hidden(world, holder) {
+            continue;
+        }
         let conduct = entity_def::of(world, holder)
             .transporter
             .as_ref()

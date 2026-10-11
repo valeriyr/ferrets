@@ -37,7 +37,6 @@ use crate::{
     command::SkillTarget,
     components::{
         cast::{CastComponent, CastStage},
-        dying::DyingComponent,
         entity_skills::{self, SkillsComponent},
         order_queue::{CancelPolicy, OrderState},
         owner, pools,
@@ -199,7 +198,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
             // stood on being spent — ends here: the queue is out of the world
             // while an order runs, so the loop is what hands the caster its
             // Die order.
-            if world.entity(entity).contains::<DyingComponent>() {
+            if entity_def::dying(world, entity) {
                 return Processing::finished_dying();
             }
         }

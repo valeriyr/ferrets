@@ -228,12 +228,21 @@ fn fire_behind(mut cause: DeathCause, deaths: &BTreeMap<SimulationId, DeathCause
                     None => Loss::Uncredited,
                 });
             }
-            DeathCause::PassengerLost { holder } | DeathCause::Orphaned { of: holder } => {
-                match deaths.get(&holder) {
-                    Some(holder_cause) => cause = *holder_cause,
-                    None => return None,
-                }
-            }
+            // A passenger lost with its holder is lost to whoever took the
+            // holder down, and no loss with a holder removed unannounced; one
+            // barred at its holder's capture and destroyed by its fate is a
+            // loss nobody is credited with.
+            DeathCause::PassengerLost { holder } => match deaths.get(&holder) {
+                Some(holder_cause) => cause = *holder_cause,
+                None => return None,
+            },
+            DeathCause::PassengerBarred { .. } => return Some(Loss::Uncredited),
+            // A broodling orphaned by its breeder's death is lost with it; one
+            // its breeder's change of form left behind is nobody's loss.
+            DeathCause::Orphaned { of: breeder } => match deaths.get(&breeder) {
+                Some(breeder_cause) => cause = *breeder_cause,
+                None => return None,
+            },
             // A health pool drained to nothing — a fading annex, a building
             // burned down — is a loss nobody is credited with.
             DeathCause::Decayed => return Some(Loss::Uncredited),

@@ -9,18 +9,21 @@ use ferrets_geometry::cell_pos::CellPos;
 use ferrets_math::fixed_uvec2::FixedUVec2;
 use ferrets_physics::body;
 use ferrets_simulation::{
+    beside::Beside,
     command::{PlayerCommand, SelectMode},
     components::{
-        attached::AttachedComponent,
         hidden::HiddenComponent,
+        location::LocationComponent,
         order_queue::{CancelPolicy, OrderQueueComponent},
+        pending_reveal::PendingRevealComponent,
         resource::{
-            HarvestingComponent, ResourceCarrierComponent, ResourceSourceComponent,
+            HarvestComponent, ResourceCarrierComponent, ResourceSourceComponent,
             UnderHarvestComponent,
         },
     },
-    entity_def,
+    entity_def::{self, Operation},
     entity_index::EntityIndex,
+    events::{DeathCause, EventRecord, SimulationEvent},
     map::Map,
     order::{AttackTarget, Order},
     resources::PlayerResources,
@@ -52,14 +55,14 @@ fn collect_harvests_until_source_depletes() {
 
     // Gold trips are hidden: the worker disappears into the mine while working.
     utils::run_ticks(&mut app, 10);
-    assert!(app.world_mut().get::<HiddenComponent>(worker).is_some());
+    assert!(entity_def::hidden(app.world(), worker));
 
     // 12 gold arrive over three trips (5 + 5 + 2), then the empty mine is removed
     // and the worker stops, back on the map.
     utils::run_ticks(&mut app, 63);
     assert_eq!(utils::gold(app.world_mut()), 12);
     utils::run_ticks(&mut app, 1);
-    assert!(app.world_mut().get::<HiddenComponent>(worker).is_none());
+    assert!(!entity_def::hidden(app.world(), worker));
     utils::run_ticks(&mut app, 1);
     utils::assert_despawned(app.world_mut(), mine);
     utils::run_ticks(&mut app, 1);
@@ -89,12 +92,8 @@ fn visible_harvest_marks_carrier() {
 
     // Wood trips are visible: the lumberjack stays on the map, marked as working.
     utils::run_ticks(&mut app, 10);
-    assert!(
-        app.world_mut()
-            .get::<HarvestingComponent>(lumberjack)
-            .is_some()
-    );
-    assert!(app.world_mut().get::<HiddenComponent>(lumberjack).is_none());
+    assert!(entity_def::harvesting(app.world(), lumberjack));
+    assert!(!entity_def::hidden(app.world(), lumberjack));
 
     // The load is delivered, the felled tree is removed, and the marker is gone.
     utils::run_ticks(&mut app, 13);
@@ -107,7 +106,7 @@ fn visible_harvest_marks_carrier() {
     utils::run_ticks(&mut app, 1);
     utils::assert_despawned(app.world_mut(), tree);
     let world = app.world_mut();
-    assert!(world.get::<HarvestingComponent>(lumberjack).is_none());
+    assert!(!entity_def::harvesting(world, lumberjack));
 }
 
 #[test]
@@ -135,11 +134,528 @@ fn hidden_harvest_marks_carrier_inside_source() {
     // facts, and a carrier down a mine is both.
     utils::run_ticks(&mut app, 10);
     let world = app.world_mut();
-    assert!(world.get::<HiddenComponent>(worker).is_some());
+    assert!(entity_def::hidden(world, worker));
     assert!(
-        world.get::<HarvestingComponent>(worker).is_some(),
+        entity_def::harvesting(world, worker),
         "a carrier inside a source is working it"
     );
+}
+
+#[test]
+fn hidden_carrier_holds_no_location_and_returns_beside_its_source() {
+    let mut app = utils::orders_app();
+    let (worker, worker_id) = utils::create_owned(&mut app, "worker", 5, 5, 0);
+    let (geyser, geyser_id) =
+        utils::create_entity(app.world_mut(), "geyser", utils::pos(9, 5), None).unwrap();
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(geyser)
+        .unwrap()
+        .amount = 20;
+    utils::create_owned(&mut app, "depot", 2, 4, 0);
+
+    utils::select(&mut app, worker_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SendToEntity {
+            target: geyser_id,
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, 10);
+    assert!(
+        app.world().get::<LocationComponent>(worker).is_none(),
+        "a carrier inside its source stands nowhere"
+    );
+    assert_eq!(
+        app.world()
+            .get::<HarvestComponent>(worker)
+            .expect("the worker harvests")
+            .harvesting,
+        Some(geyser_id),
+        "at work inside the source"
+    );
+
+    // The second tick of a two-tick gather runs inside, with nothing to chase
+    // from a body that stands nowhere, and ends the trip: the worker comes
+    // back out beside the geyser, on the free cell nearest where it went in —
+    // that cell itself, (8, 5) — carrying the full load of five.
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(utils::position_of(app.world(), worker), utils::pos(8, 5));
+    assert_eq!(
+        app.world()
+            .get::<ResourceCarrierComponent>(worker)
+            .expect("the worker carries")
+            .amount,
+        5
+    );
+}
+
+#[test]
+fn carrier_inside_drained_source_searches_from_source() {
+    let mut app = utils::continuous_orders_app();
+    let (worker, worker_id) = utils::create_owned(&mut app, "worker", 14, 5, 0);
+    let (geyser, geyser_id) =
+        utils::create_entity(app.world_mut(), "geyser", utils::pos(9, 5), None).unwrap();
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(geyser)
+        .unwrap()
+        .amount = 20;
+    utils::create_owned(&mut app, "depot", 2, 20, 0);
+
+    // Walked to a spot across two cells: standing on (10.6, 5) the worker
+    // holds cells 10 and 11 of row 5, in reach of the geyser at 9.
+    let corner = utils::part_way("10.6", "5");
+    utils::select(&mut app, worker_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Move {
+            target: corner,
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, 20);
+    assert_eq!(utils::position_of(app.world_mut(), worker), corner);
+
+    utils::select(&mut app, worker_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SendToEntity {
+            target: geyser_id,
+            flush: true,
+        },
+    );
+    // The command lands and the worker goes in on the same tick, the first
+    // of a two-tick gather.
+    utils::run_ticks(&mut app, utils::APPLY);
+    assert_eq!(
+        app.world()
+            .get::<HiddenComponent>(worker)
+            .expect("the worker went in")
+            .went_in
+            .position,
+        corner,
+        "in reach already, it went in without a step"
+    );
+
+    // Two more seams, three cells out from either end of the cells it went
+    // in on: the lower id, east of cell 11, and the other, west of cell 10.
+    // Searched from where it went in they tie and the lower id would win;
+    // searched from the drained geyser's cell, 9, the western one is two
+    // cells off and the eastern five.
+    let (east, _) =
+        utils::create_entity(app.world_mut(), "geyser", utils::pos(14, 5), None).unwrap();
+    let (west, west_id) =
+        utils::create_entity(app.world_mut(), "geyser", utils::pos(7, 5), None).unwrap();
+    for seam in [east, west] {
+        app.world_mut()
+            .get_mut::<ResourceSourceComponent>(seam)
+            .unwrap()
+            .amount = 20;
+    }
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(geyser)
+        .unwrap()
+        .amount = 0;
+    // The replacement is picked before the trip ends, from inside.
+    utils::run_ticks(&mut app, 1);
+
+    assert_eq!(
+        app.world()
+            .get::<HarvestComponent>(worker)
+            .expect("the order goes on")
+            .source,
+        Some(west_id)
+    );
+}
+
+#[test]
+fn carrier_inside_source_that_walks_comes_out_beside_it() {
+    let mut app = utils::orders_app();
+    let (worker, worker_id) = utils::create_owned(&mut app, "lone_digger", 8, 5, 0);
+    let (seam, seam_id) = utils::create_owned(&mut app, "roaming_seam", 9, 5, 0);
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(seam)
+        .unwrap()
+        .amount = 40;
+    utils::create_owned(&mut app, "depot", 2, 4, 0);
+    utils::select(&mut app, worker_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SendToEntity {
+            target: seam_id,
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    assert!(entity_def::hidden(app.world(), worker));
+
+    // The seam walks off east with the digger inside, and the trip ends
+    // there: the digger comes out beside the seam, not where it went in.
+    utils::select(&mut app, seam_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Move {
+            target: utils::pos(16, 5),
+            flush: true,
+        },
+    );
+    // Half a cell a tick, the seam stands on (16, 5) by the sixteenth tick;
+    // the digger's trip ends on the eighteenth, and it steps out beside the
+    // seam on the side it went in from, (15, 5), before walking its load off
+    // to the depot.
+    utils::run_ticks(&mut app, 18);
+    assert_eq!(utils::cell_of(app.world(), seam), CellPos::new(16, 5));
+    assert!(!entity_def::hidden(app.world(), worker));
+    assert_eq!(utils::cell_of(app.world(), worker), CellPos::new(15, 5));
+}
+
+#[test]
+fn carrier_inside_walked_source_destroyed_comes_out_beside_it() {
+    let mut app = utils::orders_app();
+    let (worker, worker_id) = utils::create_owned(&mut app, "lone_digger", 8, 5, 0);
+    let (seam, seam_id) = utils::create_owned(&mut app, "roaming_seam", 9, 5, 0);
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(seam)
+        .unwrap()
+        .amount = 40;
+    utils::create_owned(&mut app, "depot", 2, 4, 0);
+    utils::select(&mut app, worker_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SendToEntity {
+            target: seam_id,
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    utils::select(&mut app, seam_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Move {
+            target: utils::pos(16, 5),
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, 16);
+    assert_eq!(utils::cell_of(app.world(), seam), CellPos::new(16, 5));
+    assert!(entity_def::hidden(app.world(), worker));
+
+    // The seam, which has no dying phase, is razed with the digger inside: it
+    // is set down beside the seam as the seam dies, on the side it went in
+    // from, (15, 5) — not back where it went in, (8, 5).
+    spawn::destroy_entity(app.world_mut(), seam);
+    assert!(!entity_def::hidden(app.world(), worker));
+    assert_eq!(utils::cell_of(app.world(), worker), CellPos::new(15, 5));
+}
+
+#[test]
+fn carrier_draining_source_to_death_from_inside_stands_as_it_dies() {
+    let mut app = utils::orders_app();
+    let (worker, worker_id) = utils::create_owned(&mut app, "siphon", 8, 5, 0);
+    let (mine, mine_id) =
+        utils::create_entity(app.world_mut(), "mine", utils::pos(9, 5), None).unwrap();
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(mine)
+        .unwrap()
+        .amount = 5;
+    utils::select(&mut app, worker_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SendToEntity {
+            target: mine_id,
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    assert!(entity_def::hidden(app.world(), worker));
+
+    // The trip began the tick before, its first tick of work landing as it
+    // began: 2 of a harvest time of 20 are in, so 17 more leave it one short
+    // and the mine standing.
+    utils::run_ticks(&mut app, 17);
+    assert!(
+        app.world()
+            .resource::<EntityIndex>()
+            .alive(mine_id)
+            .is_some()
+    );
+    assert!(entity_def::hidden(app.world(), worker));
+
+    // The 20th banks the last 5 from inside and the mine dies of it: the
+    // siphon is set down beside it in that same tick, not on its next turn,
+    // on the cell it went in by (8, 5), the ring cell its lean names first.
+    utils::run_ticks(&mut app, 1);
+    assert!(
+        app.world()
+            .resource::<EntityIndex>()
+            .alive(mine_id)
+            .is_none()
+    );
+    assert!(!entity_def::hidden(app.world(), worker));
+    assert_eq!(utils::cell_of(app.world(), worker), CellPos::new(8, 5));
+}
+
+#[test]
+fn carrier_boxed_in_at_trip_end_frees_source_and_waits_off_map() {
+    let mut app = utils::orders_app();
+    let (worker, worker_id) = utils::create_owned(&mut app, "worker", 5, 5, 0);
+    let (geyser, geyser_id) =
+        utils::create_entity(app.world_mut(), "geyser", utils::pos(9, 5), None).unwrap();
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(geyser)
+        .unwrap()
+        .amount = 20;
+    utils::create_owned(&mut app, "depot", 2, 4, 0);
+    utils::select(&mut app, worker_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SendToEntity {
+            target: geyser_id,
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, 10);
+    assert!(entity_def::hidden(app.world(), worker));
+    assert!(entity_def::under_harvest(app.world(), geyser));
+
+    // The trip ends with no cell to come back to: the source is given back
+    // up at once and the carrier waits off the map, its order held.
+    utils::set_all_cells_statically_occupied(app.world_mut(), true);
+    utils::run_ticks(&mut app, 10);
+    assert!(!entity_def::under_harvest(app.world(), geyser));
+    assert!(!entity_def::harvesting(app.world(), worker));
+    assert!(entity_def::hidden(app.world(), worker));
+    assert!(entity_def::pending_reveal(app.world(), worker));
+    assert_eq!(
+        entity_def::operation(app.world(), worker),
+        Operation::Stranded
+    );
+    assert!(app.world().get::<HarvestComponent>(worker).is_some());
+    // It waits with its load in hand: 20 - 5 = 15 left in the geyser.
+    assert_eq!(carried(&app, worker), 5);
+    assert_eq!(source_amount(&app, geyser), 15);
+    // Waiting, it is said to be where the geyser stands.
+    assert_eq!(
+        entity_def::whereabouts(app.world(), worker),
+        utils::pos(9, 5)
+    );
+    // Its return waits beside the geyser, read again on every attempt.
+    let beside = app
+        .world()
+        .get::<PendingRevealComponent>(worker)
+        .expect("its return is deferred")
+        .beside;
+    assert!(matches!(beside, Beside::Container(id) if id == geyser_id));
+
+    // The one cell freed beside the geyser takes it, and the order goes on.
+    app.world_mut().resource_mut::<Map>().set_static_occupied(
+        utils::GROUND,
+        CellPos::new(8, 5),
+        false,
+    );
+    utils::run_ticks(&mut app, 1);
+    assert!(!entity_def::hidden(app.world(), worker));
+    assert!(!entity_def::pending_reveal(app.world(), worker));
+    assert_eq!(utils::cell_of(app.world(), worker), CellPos::new(8, 5));
+    assert!(app.world().get::<HarvestComponent>(worker).is_some());
+    assert_eq!(carried(&app, worker), 5);
+    assert_eq!(source_amount(&app, geyser), 15);
+}
+
+#[test]
+fn carrier_boxed_in_with_last_load_still_destroys_spent_source() {
+    let mut app = utils::orders_app();
+    let (worker, worker_id) = utils::create_owned(&mut app, "lone_digger", 5, 5, 0);
+    let (mine, mine_id) =
+        utils::create_entity(app.world_mut(), "mine", utils::pos(9, 5), None).unwrap();
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(mine)
+        .unwrap()
+        .amount = 5;
+    utils::create_owned(&mut app, "depot", 2, 4, 0);
+    utils::select(&mut app, worker_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SendToEntity {
+            target: mine_id,
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, 10);
+    assert!(entity_def::hidden(app.world(), worker));
+
+    // The trip takes the last 5 and ends with no cell to come back to: the
+    // spent mine goes as content declares, while the carrier waits off the
+    // map with the load.
+    utils::set_all_cells_statically_occupied(app.world_mut(), true);
+    // The twenty-tick trip ends nineteen ticks on.
+    utils::run_ticks(&mut app, 19);
+    assert!(entity_def::pending_reveal(app.world(), worker));
+    assert_eq!(carried(&app, worker), 5);
+    assert!(
+        app.world()
+            .resource::<EntityIndex>()
+            .alive(mine_id)
+            .is_none()
+    );
+
+    // The spent mine's cell is the one that frees, and the carrier stands on
+    // it.
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(utils::cell_of(app.world(), worker), CellPos::new(9, 5));
+}
+
+#[test]
+fn waiting_carrier_returns_beside_its_source_not_where_it_went_in() {
+    let (mut app, worker) = carrier_boxed_in_at_geyser();
+
+    // One cell frees beside the geyser, one beside where the worker went in,
+    // (8, 5): the return searches beside the geyser and takes (10, 5).
+    free(&mut app, [CellPos::new(10, 5), CellPos::new(7, 5)]);
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(utils::cell_of(app.world(), worker), CellPos::new(10, 5));
+}
+
+#[test]
+fn waiting_carrier_returns_on_ring_cell_nearest_where_it_went_in() {
+    let (mut app, worker) = carrier_boxed_in_at_geyser();
+
+    // Two cells of the geyser's ring free: (8, 4), a cell from where the
+    // worker went in at (8, 5), and (10, 5), two cells off; the return leans
+    // toward where it went in.
+    free(&mut app, [CellPos::new(10, 5), CellPos::new(8, 4)]);
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(utils::cell_of(app.world(), worker), CellPos::new(8, 4));
+}
+
+#[test]
+fn waiting_carrier_whose_source_is_removed_returns_where_source_stood() {
+    let mut app = utils::orders_app();
+    let (worker, worker_id) = utils::create_owned(&mut app, "lone_digger", 5, 5, 0);
+    let (seam, seam_id) = utils::create_owned(&mut app, "roaming_seam", 9, 5, 0);
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(seam)
+        .unwrap()
+        .amount = 40;
+    utils::create_owned(&mut app, "depot", 2, 4, 0);
+    utils::select(&mut app, worker_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SendToEntity {
+            target: seam_id,
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, 10);
+    utils::set_all_cells_statically_occupied(app.world_mut(), true);
+    // The twenty-tick trip ends nineteen ticks on, boxed in.
+    utils::run_ticks(&mut app, 19);
+    assert!(entity_def::pending_reveal(app.world(), worker));
+
+    // The seam, which has no dying phase, is razed while the digger waits:
+    // the digger is said to be where the seam stood, (9, 5), and comes back
+    // there once that cell and one beside where it went in, (8, 5), free.
+    spawn::destroy_entity(app.world_mut(), seam);
+    utils::run_ticks(&mut app, 1);
+    assert!(app.world().resource::<EntityIndex>().any(seam_id).is_none());
+    assert!(entity_def::hidden(app.world(), worker));
+    assert_eq!(
+        entity_def::whereabouts(app.world(), worker),
+        utils::pos(9, 5)
+    );
+    free(&mut app, [CellPos::new(9, 5), CellPos::new(7, 5)]);
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(utils::cell_of(app.world(), worker), CellPos::new(9, 5));
+}
+
+#[test]
+fn worker_that_dies_inside_source_dies_off_map() {
+    let mut app = utils::orders_app();
+    let (worker, worker_id) = utils::create_owned(&mut app, "worker", 5, 5, 0);
+    let (geyser, geyser_id) =
+        utils::create_entity(app.world_mut(), "geyser", utils::pos(9, 5), None).unwrap();
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(geyser)
+        .unwrap()
+        .amount = 20;
+    utils::create_owned(&mut app, "depot", 2, 4, 0);
+    utils::select(&mut app, worker_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SendToEntity {
+            target: geyser_id,
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, 10);
+    assert!(entity_def::hidden(app.world(), worker));
+
+    // A death off the map finishes there: the canceled trip sets no dying
+    // body back on the grid, the death is announced where the source it
+    // works inside stands, and nothing announces a return.
+    spawn::despawn_entity(app.world_mut(), worker, DeathCause::Decayed);
+    let died_at = app
+        .world()
+        .resource::<EventRecord>()
+        .events()
+        .iter()
+        .find_map(|event| match event {
+            SimulationEvent::EntityDied {
+                entity, position, ..
+            } if *entity == worker_id => Some(*position),
+            _ => None,
+        });
+    assert_eq!(died_at, Some(utils::pos(9, 5)));
+    utils::run_ticks(&mut app, 1);
+    assert!(app.world().get::<LocationComponent>(worker).is_none());
+    assert!(
+        !app.world()
+            .resource::<EventRecord>()
+            .events()
+            .iter()
+            .any(|event| matches!(
+                event,
+                SimulationEvent::EntityRevealed { entity, .. } if *entity == worker_id
+            )),
+        "nothing comes back for a death"
+    );
+    utils::run_ticks(&mut app, 2);
+    utils::assert_despawned(app.world_mut(), worker);
+}
+
+#[test]
+fn source_destroyed_under_worker_lets_it_out() {
+    let mut app = utils::orders_app();
+    let (worker, worker_id) = utils::create_owned(&mut app, "worker", 5, 5, 0);
+    let (geyser, geyser_id) =
+        utils::create_entity(app.world_mut(), "geyser", utils::pos(9, 5), None).unwrap();
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(geyser)
+        .unwrap()
+        .amount = 20;
+    utils::create_owned(&mut app, "depot", 2, 4, 0);
+    utils::select(&mut app, worker_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SendToEntity {
+            target: geyser_id,
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, 10);
+    let went_in = app
+        .world()
+        .get::<HiddenComponent>(worker)
+        .expect("the worker is inside")
+        .went_in;
+
+    // The seam is razed under the worker: the trip is abandoned and the worker
+    // comes back out where it went in, that cell being the first the search
+    // around it finds free.
+    spawn::destroy_entity(app.world_mut(), geyser);
+    utils::run_ticks(&mut app, 1);
+    assert!(!entity_def::hidden(app.world(), worker));
+    assert_eq!(utils::position_of(app.world(), worker), went_in.position);
 }
 
 #[test]
@@ -164,7 +680,7 @@ fn source_emptied_mid_trip_lets_carrier_out() {
     );
     utils::run_ticks(&mut app, 10);
     assert!(
-        app.world().get::<HiddenComponent>(worker).is_some(),
+        entity_def::hidden(app.world(), worker),
         "the trip is under way, with the worker inside"
     );
 
@@ -178,9 +694,9 @@ fn source_emptied_mid_trip_lets_carrier_out() {
     utils::run_ticks(&mut app, 1);
 
     let world = app.world_mut();
-    assert!(world.get::<HiddenComponent>(worker).is_none());
-    assert!(world.get::<HarvestingComponent>(worker).is_none());
-    assert!(world.get::<UnderHarvestComponent>(geyser).is_none());
+    assert!(!entity_def::hidden(world, worker));
+    assert!(!entity_def::harvesting(world, worker));
+    assert!(!entity_def::under_harvest(world, geyser));
     assert!(utils::order_queue_is_empty(app.world_mut(), worker));
 }
 
@@ -240,7 +756,7 @@ fn boxed_in_cancel_defers_reveal_until_cell_frees() {
         },
     );
     utils::run_ticks(&mut app, 6);
-    assert!(app.world_mut().get::<HiddenComponent>(worker).is_some());
+    assert!(entity_def::hidden(app.world(), worker));
 
     // Box the worker in — every cell is occupied, so it has nowhere to reappear —
     // then cancel the harvest while it is still inside the mine.
@@ -249,8 +765,14 @@ fn boxed_in_cancel_defers_reveal_until_cell_frees() {
     utils::run_ticks(&mut app, 1);
 
     // The cancel cannot retry itself, so rather than forcing an overlap it queues
-    // the reveal; freeing the worker's own cell brings it back there.
-    let anchor = utils::cell_of(app.world_mut(), worker);
+    // the reveal; freeing the cell the worker went in from brings it back there.
+    let anchor = CellPos::from(
+        app.world()
+            .get::<HiddenComponent>(worker)
+            .expect("still inside")
+            .went_in
+            .position,
+    );
     utils::assert_reveal_deferred_then_lands_on(&mut app, worker, anchor);
 }
 
@@ -281,9 +803,7 @@ fn harvest_range_reaches_source_but_not_drop_off() {
     // order lands rather than after a walk.
     utils::run_ticks(&mut app, utils::APPLY);
     assert!(
-        app.world_mut()
-            .get::<HarvestingComponent>(prospector)
-            .is_some(),
+        entity_def::harvesting(app.world(), prospector),
         "the trip is under way"
     );
     assert_eq!(
@@ -320,8 +840,8 @@ fn crew_shares_one_source() {
 
     // Both start in reach of the stand, and neither has to wait for the other.
     utils::run_ticks(&mut app, utils::APPLY);
-    assert!(app.world_mut().get::<HarvestingComponent>(first).is_some());
-    assert!(app.world_mut().get::<HarvestingComponent>(second).is_some());
+    assert!(entity_def::harvesting(app.world(), first));
+    assert!(entity_def::harvesting(app.world(), second));
 }
 
 #[test]
@@ -384,7 +904,7 @@ fn carrier_that_works_alone_waits_for_source_another_holds() {
     let world = app.world_mut();
     let working = [first, second]
         .into_iter()
-        .filter(|carrier| world.get::<HarvestingComponent>(*carrier).is_some())
+        .filter(|carrier| entity_def::harvesting(world, *carrier))
         .count();
     assert_eq!(working, 1, "one carrier has the stand and the other waits");
     assert!(
@@ -776,9 +1296,9 @@ fn attached_carrier_sits_in_tree_and_banks_wood_without_felling_it() {
     // The order lands on the third tick and the sylph, already in reach, takes
     // the tree up: on the tree's own cell, at work, on the map.
     utils::run_ticks(&mut app, utils::APPLY);
-    assert!(app.world().get::<AttachedComponent>(sylph).is_some());
-    assert!(app.world().get::<HiddenComponent>(sylph).is_none());
-    assert!(app.world().get::<HarvestingComponent>(sylph).is_some());
+    assert!(entity_def::attached(app.world(), sylph));
+    assert!(!entity_def::hidden(app.world(), sylph));
+    assert!(entity_def::harvesting(app.world(), sylph));
     assert_eq!(utils::cell_of(app.world(), sylph), CellPos::new(8, 5));
     let grid = app.world().resource::<Map>().nav_grid();
     assert!(
@@ -799,7 +1319,7 @@ fn attached_carrier_sits_in_tree_and_banks_wood_without_felling_it() {
             .amount,
         20
     );
-    assert!(app.world().get::<AttachedComponent>(sylph).is_some());
+    assert!(entity_def::attached(app.world(), sylph));
     assert_eq!(
         app.world()
             .get::<ResourceCarrierComponent>(sylph)
@@ -854,7 +1374,7 @@ fn attached_carriers_fill_berths_of_one_vein_and_drain_it_together() {
     utils::run_ticks(&mut app, 4);
     utils::assert_despawned(app.world_mut(), vein);
     for carrier in [first, second] {
-        assert!(app.world().get::<AttachedComponent>(carrier).is_none());
+        assert!(!entity_def::attached(app.world(), carrier));
         assert!(utils::order_queue_is_empty(app.world_mut(), carrier));
     }
     assert_ne!(
@@ -889,9 +1409,9 @@ fn attached_carrier_waits_for_free_berth() {
         },
     );
     utils::run_ticks(&mut app, utils::APPLY + 2);
-    assert!(app.world().get::<AttachedComponent>(third).is_none());
+    assert!(!entity_def::attached(app.world(), third));
     assert!(
-        app.world().get::<HarvestingComponent>(third).is_none(),
+        !entity_def::harvesting(app.world(), third),
         "the third waits in place, not at work"
     );
     assert!(!utils::order_queue_is_empty(app.world_mut(), third));
@@ -903,7 +1423,7 @@ fn attached_carrier_waits_for_free_berth() {
     // The first is called off; its berth is the third's on the next tick.
     utils::force_cancel_orders(app.world_mut(), first);
     utils::run_ticks(&mut app, 2);
-    assert!(app.world().get::<AttachedComponent>(third).is_some());
+    assert!(entity_def::attached(app.world(), third));
     assert_eq!(utils::cell_of(app.world(), third), CellPos::new(8, 5));
     assert_eq!(
         crew_of(&app, vein),
@@ -940,7 +1460,7 @@ fn berth_group_seats_no_more_than_its_slots() {
         crew_of(&app, lode),
         Some(BTreeSet::from([first_id, second_id]))
     );
-    assert!(app.world().get::<AttachedComponent>(third).is_none());
+    assert!(!entity_def::attached(app.world(), third));
     assert!(!utils::order_queue_is_empty(app.world_mut(), third));
 }
 
@@ -968,7 +1488,7 @@ fn attached_carrier_turned_away_by_source_without_its_berths() {
         );
     utils::run_ticks(&mut app, 2);
     assert!(utils::order_queue_is_empty(app.world_mut(), sylph));
-    assert!(app.world().get::<AttachedComponent>(sylph).is_none());
+    assert!(!entity_def::attached(app.world(), sylph));
     assert_eq!(utils::gold(app.world()), 0);
 }
 
@@ -1010,7 +1530,7 @@ fn roaming_carrier_crosses_straight_to_berth_of_its_own_pick() {
     utils::run_ticks(&mut app, 3);
     assert_eq!(utils::position_of(app.world(), roamer), point("9.0", "6.0"));
     assert!(
-        app.world().get::<HarvestingComponent>(roamer).is_some(),
+        entity_def::harvesting(app.world(), roamer),
         "moving between the berths never interrupts the work"
     );
 }
@@ -1123,7 +1643,7 @@ fn orbiting_carrier_circles_its_berth_without_leaving_it() {
     // Two ticks a load, five wood a load, banked as it hovers: on the fourth
     // tick and the sixth.
     assert_eq!(utils::wood(app.world()), 10);
-    assert!(app.world().get::<HarvestingComponent>(hoverer).is_some());
+    assert!(entity_def::harvesting(app.world(), hoverer));
 }
 
 #[test]
@@ -1206,7 +1726,7 @@ fn attached_carrier_can_be_killed_at_work() {
         },
     );
     utils::run_ticks(&mut app, utils::APPLY);
-    assert!(app.world().get::<AttachedComponent>(sylph).is_some());
+    assert!(entity_def::attached(app.world(), sylph));
 
     // The soldier is not the local player's, so its order is pushed straight
     // onto its queue: attack the sylph where it sits.
@@ -1255,7 +1775,7 @@ fn attached_carrier_is_walked_through_and_never_pushed_under_continuous_model() 
         },
     );
     utils::run_ticks(&mut app, utils::APPLY);
-    assert!(app.world().get::<AttachedComponent>(sylph).is_some());
+    assert!(entity_def::attached(app.world(), sylph));
     let seat = utils::position_of(app.world(), sylph);
 
     // The soldier is sent onto the cell the sylph left, right beside the tree.
@@ -1297,12 +1817,12 @@ fn stopped_attached_carrier_steps_back_beside_source() {
         },
     );
     utils::run_ticks(&mut app, utils::APPLY);
-    assert!(app.world().get::<AttachedComponent>(sylph).is_some());
+    assert!(entity_def::attached(app.world(), sylph));
 
     utils::force_cancel_orders(app.world_mut(), sylph);
     utils::run_ticks(&mut app, 1);
-    assert!(app.world().get::<AttachedComponent>(sylph).is_none());
-    assert!(app.world().get::<HarvestingComponent>(sylph).is_none());
+    assert!(!entity_def::attached(app.world(), sylph));
+    assert!(!entity_def::harvesting(app.world(), sylph));
     utils::assert_adjacent_to_footprint(app.world_mut(), sylph, tree);
     let cell = utils::cell_of(app.world(), sylph);
     let grid = app.world().resource::<Map>().nav_grid();
@@ -1346,8 +1866,8 @@ fn direct_carrier_steps_back_when_source_runs_dry() {
     // With nothing left to draw and no other seam near, the trip ends on the
     // next tick: the carrier is back on the grid and the geyser is nobody's job.
     utils::run_ticks(&mut app, 1);
-    assert!(app.world().get::<AttachedComponent>(sylph).is_none());
-    assert!(app.world().get::<HarvestingComponent>(sylph).is_none());
+    assert!(!entity_def::attached(app.world(), sylph));
+    assert!(!entity_def::harvesting(app.world(), sylph));
     assert_eq!(crew_of(&app, geyser), None);
     assert!(utils::order_queue_is_empty(app.world_mut(), sylph));
     // Back on the grid, holding a cell of its own again.
@@ -1397,7 +1917,7 @@ fn direct_carrier_leaves_dry_source_behind_when_it_moves_on() {
         "the emptied geyser is nobody's job once the carrier moves on"
     );
     assert_eq!(crew_of(&app, far), Some(BTreeSet::from([sylph_id])));
-    assert!(app.world().get::<AttachedComponent>(sylph).is_some());
+    assert!(entity_def::attached(app.world(), sylph));
 }
 
 #[test]
@@ -1451,7 +1971,7 @@ fn carrier_killed_in_berth_gives_it_back() {
         },
     );
     utils::run_ticks(&mut app, utils::APPLY);
-    assert!(app.world().get::<AttachedComponent>(first).is_some());
+    assert!(entity_def::attached(app.world(), first));
 
     // Boxed in, so the berth is the only place it holds when it dies.
     utils::set_all_cells_statically_occupied(app.world_mut(), true);
@@ -1472,7 +1992,7 @@ fn carrier_killed_in_berth_gives_it_back() {
         },
     );
     utils::run_ticks(&mut app, utils::APPLY + 2);
-    assert!(app.world().get::<AttachedComponent>(second).is_some());
+    assert!(entity_def::attached(app.world(), second));
 }
 
 //
@@ -1509,14 +2029,14 @@ fn hidden_crew_of_two_admits_two_and_leaves_third_waiting() {
     // The seam takes the two the carrier's crew limit allows, and both are
     // inside it while they work.
     assert_eq!(crew_of(&app, mine).map(|crew| crew.len()), Some(2));
-    assert!(app.world().get::<HarvestingComponent>(first).is_some());
-    assert!(app.world().get::<HarvestingComponent>(second).is_some());
-    assert!(app.world().get::<HiddenComponent>(first).is_some());
+    assert!(entity_def::harvesting(app.world(), first));
+    assert!(entity_def::harvesting(app.world(), second));
+    assert!(entity_def::hidden(app.world(), first));
 
     // The third is turned away and waits, rather than joining or giving up:
     // its order stands, so it takes the seam up when a place frees.
-    assert!(app.world().get::<HarvestingComponent>(third).is_none());
-    assert!(app.world().get::<HiddenComponent>(third).is_none());
+    assert!(!entity_def::harvesting(app.world(), third));
+    assert!(!entity_def::hidden(app.world(), third));
     assert!(!utils::order_queue_is_empty(app.world_mut(), third));
 }
 
@@ -1537,7 +2057,7 @@ fn carrier_that_works_alone_shuts_out_one_that_would_share() {
     send_to(&mut app, lone_id, mine_id);
     utils::run_ticks(&mut app, utils::APPLY);
     assert!(
-        app.world().get::<HarvestingComponent>(lone).is_some(),
+        entity_def::harvesting(app.world(), lone),
         "the first one down the shaft is working it"
     );
 
@@ -1547,7 +2067,7 @@ fn carrier_that_works_alone_shuts_out_one_that_would_share() {
     send_to(&mut app, paired_id, mine_id);
     utils::run_ticks(&mut app, utils::APPLY);
     assert!(
-        app.world().get::<HarvestingComponent>(paired).is_none(),
+        !entity_def::harvesting(app.world(), paired),
         "a crew of one that admits nobody turns away a carrier that would share"
     );
     assert_eq!(
@@ -1591,7 +2111,7 @@ fn carrier_turns_down_source_its_kind_does_not_list() {
 
     // A bare seam is not a source it lists, so the gold in it is no business
     // of the tapper's.
-    assert!(app.world().get::<HarvestingComponent>(tapper).is_none());
+    assert!(!entity_def::harvesting(app.world(), tapper));
     assert!(crew_of(&app, mine).is_none());
 
     // The click is not swallowed, though: with nothing to work there it reads
@@ -1616,7 +2136,7 @@ fn carrier_turns_down_source_its_kind_does_not_list() {
         },
     );
     utils::run_ticks(&mut app, utils::APPLY + 4);
-    assert!(app.world().get::<HarvestingComponent>(tapper).is_some());
+    assert!(entity_def::harvesting(app.world(), tapper));
     assert_eq!(crew_of(&app, geyser).map(|crew| crew.len()), Some(1));
 }
 
@@ -1709,4 +2229,55 @@ fn crew_of(app: &App, source: Entity) -> Option<BTreeSet<SimulationId>> {
     app.world()
         .get::<UnderHarvestComponent>(source)
         .map(|crew| crew.carriers.clone())
+}
+
+/// What `carrier` holds.
+fn carried(app: &App, carrier: Entity) -> u32 {
+    app.world()
+        .get::<ResourceCarrierComponent>(carrier)
+        .unwrap()
+        .amount
+}
+
+/// What `source` has left.
+fn source_amount(app: &App, source: Entity) -> u32 {
+    app.world()
+        .get::<ResourceSourceComponent>(source)
+        .unwrap()
+        .amount
+}
+
+/// A `worker` inside a 20-gold geyser at (9, 5), gone in from (8, 5), whose
+/// trip ends with every cell taken: it waits off the map, owed a cell.
+fn carrier_boxed_in_at_geyser() -> (App, Entity) {
+    let mut app = utils::orders_app();
+    let (worker, worker_id) = utils::create_owned(&mut app, "worker", 5, 5, 0);
+    let (geyser, geyser_id) =
+        utils::create_entity(app.world_mut(), "geyser", utils::pos(9, 5), None).unwrap();
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(geyser)
+        .unwrap()
+        .amount = 20;
+    utils::create_owned(&mut app, "depot", 2, 4, 0);
+    utils::select(&mut app, worker_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SendToEntity {
+            target: geyser_id,
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, 10);
+    utils::set_all_cells_statically_occupied(app.world_mut(), true);
+    utils::run_ticks(&mut app, 10);
+    assert!(entity_def::pending_reveal(app.world(), worker));
+    (app, worker)
+}
+
+/// Frees `cells` on the ground plane.
+fn free<const N: usize>(app: &mut App, cells: [CellPos; N]) {
+    let mut map = app.world_mut().resource_mut::<Map>();
+    for cell in cells {
+        map.set_static_occupied(utils::GROUND, cell, false);
+    }
 }

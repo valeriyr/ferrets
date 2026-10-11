@@ -3,20 +3,37 @@
 
 mod utils;
 
-use ferrets_content::{entity_stats::EntityStatId, stats::ModifierOp};
-use ferrets_geometry::cell_pos::CellPos;
+use bevy::prelude::*;
+use ferrets_content::{
+    attack::Slain,
+    entity_buffs::{EntityBuffDef, Lasting},
+    entity_effect::EntityEffect,
+    entity_stats::EntityStatId,
+    registry::ContentRegistry,
+    stack_rule::StackRule,
+    stats::ModifierOp,
+};
+use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
+use ferrets_math::fixed_uvec2::FixedUVec2;
 use ferrets_simulation::{
+    beside::{Beside, Lean},
     command::{PlayerCommand, SelectMode},
     components::{
         hidden::HiddenComponent,
+        location::LocationComponent,
         order_queue::OrderQueueComponent,
-        pending_reveal::PendingRevealComponent,
         rally::RallyTarget,
         transport::{BoardedComponent, GarrisonFireComponent},
     },
+    entity_def,
     entity_index::EntityIndex,
+    events::{EventRecord, SimulationEvent},
+    game_loop::orders::Refusal,
     map::Map,
-    spawn,
+    order::Order,
+    simulation_id::SimulationId,
+    spawn::{self, Boarding, SetDown},
+    statistics::Statistics,
     visibility::{self, Senses, Sighting},
 };
 
@@ -34,7 +51,7 @@ fn unit_boards_transport_and_leaves_map_and_selection() {
     utils::run_until_aboard(&mut app, wagon, 1, 40);
 
     assert_eq!(utils::passengers_of(app.world(), wagon), [rifleman_id]);
-    assert!(app.world().get::<HiddenComponent>(rifleman).is_some());
+    assert!(entity_def::hidden(app.world(), rifleman));
     assert_eq!(
         app.world()
             .get::<BoardedComponent>(rifleman)
@@ -45,6 +62,373 @@ fn unit_boards_transport_and_leaves_map_and_selection() {
         !utils::selection(&app).contains(&rifleman_id),
         "a unit off the map leaves the selection"
     );
+}
+
+#[test]
+fn boarded_passenger_holds_no_location_and_marker_keeps_where_it_went_in() {
+    let mut app = utils::transport_app();
+    let (wagon, wagon_id) = utils::create_owned(&mut app, "wagon", 10, 10, 0);
+    let (rifleman, rifleman_id) = utils::create_owned(&mut app, "rifleman", 11, 10, 0);
+    utils::send_to(&mut app, rifleman_id, wagon_id);
+    utils::run_until_aboard(&mut app, wagon, 1, 10);
+
+    assert!(
+        app.world().get::<LocationComponent>(rifleman).is_none(),
+        "an entity off the map stands nowhere"
+    );
+    // Already in reach at (11, 10), it boarded without a step.
+    let went_in = app
+        .world()
+        .get::<HiddenComponent>(rifleman)
+        .expect("a passenger is hidden")
+        .went_in;
+    assert_eq!(went_in.position, utils::pos(11, 10));
+
+    utils::unload(&mut app, wagon_id, None);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+
+    assert!(!entity_def::hidden(app.world(), rifleman));
+    // Beside the wagon, on the ring's first free cell: a ride's end leans
+    // nowhere in particular.
+    assert_eq!(
+        utils::cell_of(app.world(), rifleman),
+        CellPos::new(10, 9),
+        "set back down beside the holder"
+    );
+    assert_eq!(
+        utils::facing_of(app.world(), rifleman),
+        went_in.facing,
+        "comes back facing the way it went in"
+    );
+}
+
+#[test]
+fn order_queued_behind_boarding_is_dropped_once_aboard() {
+    let mut app = utils::transport_app();
+    let (wagon, wagon_id) = utils::create_owned(&mut app, "wagon", 10, 10, 0);
+    let (rifleman, rifleman_id) = utils::create_owned(&mut app, "rifleman", 11, 10, 0);
+    utils::send_to(&mut app, rifleman_id, wagon_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Move {
+            target: utils::pos(15, 10),
+            flush: false,
+        },
+    );
+    utils::run_until_aboard(&mut app, wagon, 1, 10);
+    utils::run_ticks(&mut app, 3);
+
+    // An entity aboard runs nothing of its own: the walk queued behind the
+    // boarding is dropped rather than started from no cell.
+    assert!(entity_def::boarded(app.world(), rifleman));
+    assert!(utils::order_queue_is_empty(app.world_mut(), rifleman));
+}
+
+#[test]
+fn riding_trainer_keeps_paid_production_across_ride() {
+    let mut app = utils::transport_app();
+    let (wagon, wagon_id) = utils::create_owned(&mut app, "wagon", 10, 10, 0);
+    let (drillmaster, drillmaster_id) = utils::create_owned(&mut app, "drillmaster", 11, 10, 0);
+    utils::grant_gold(&mut app, 10);
+
+    // Boards first, with a rifleman queued behind the boarding and paid for.
+    utils::send_to(&mut app, drillmaster_id, wagon_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::TrainEntity {
+            trainer: drillmaster_id,
+            type_name: "rifleman".into(),
+        },
+    );
+    utils::run_until_aboard(&mut app, wagon, 1, 10);
+    assert!(entity_def::hidden(app.world(), drillmaster));
+    assert_eq!(utils::gold(app.world()), 0);
+
+    // Aboard, the production holds: nothing is trained and nothing refunded.
+    utils::run_ticks(&mut app, 20);
+    let orders = entity_def::orders(app.world(), drillmaster);
+    assert!(matches!(orders.as_slice(), [Order::Train]));
+    assert_eq!(utils::count_of_type(app.world_mut(), "rifleman"), 0);
+
+    // Set down, the trainer finishes what it was paid for.
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Unload {
+            transport: wagon_id,
+            at: None,
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, 20);
+    assert!(!entity_def::hidden(app.world(), drillmaster));
+    assert!(entity_def::orders(app.world(), drillmaster).is_empty());
+    assert_eq!(utils::count_of_type(app.world_mut(), "rifleman"), 1);
+}
+
+#[test]
+fn loaded_trainer_keeps_paid_production_across_ride() {
+    let mut app = utils::transport_app();
+    let (wagon, wagon_id) = utils::create_owned(&mut app, "wagon", 10, 10, 0);
+    let (drillmaster, drillmaster_id) = utils::create_owned(&mut app, "drillmaster", 11, 10, 0);
+    utils::grant_gold(&mut app, 10);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::TrainEntity {
+            trainer: drillmaster_id,
+            type_name: "rifleman".into(),
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+
+    // The wagon takes the trainer in mid-production.
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Load {
+            transport: wagon_id,
+            target: drillmaster_id,
+            flush: true,
+        },
+    );
+    utils::run_until_aboard(&mut app, wagon, 1, 10);
+    assert_eq!(utils::gold(app.world()), 0);
+    let orders = entity_def::orders(app.world(), drillmaster);
+    assert!(matches!(orders.as_slice(), [Order::Train]));
+    utils::run_ticks(&mut app, 20);
+    assert_eq!(utils::count_of_type(app.world_mut(), "rifleman"), 0);
+
+    // Set down, the trainer finishes what it was paid for.
+    utils::unload(&mut app, wagon_id, None);
+    utils::run_ticks(&mut app, 20);
+    assert!(entity_def::orders(app.world(), drillmaster).is_empty());
+    assert_eq!(utils::count_of_type(app.world_mut(), "rifleman"), 1);
+}
+
+#[test]
+fn passenger_production_can_be_canceled_and_refunded_mid_ride() {
+    let mut app = utils::transport_app();
+    let (wagon, wagon_id) = utils::create_owned(&mut app, "wagon", 10, 10, 0);
+    let (drillmaster, drillmaster_id) = utils::create_owned(&mut app, "drillmaster", 11, 10, 0);
+    utils::grant_gold(&mut app, 10);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::TrainEntity {
+            trainer: drillmaster_id,
+            type_name: "rifleman".into(),
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Load {
+            transport: wagon_id,
+            target: drillmaster_id,
+            flush: true,
+        },
+    );
+    utils::run_until_aboard(&mut app, wagon, 1, 10);
+    assert_eq!(utils::gold(app.world()), 0);
+
+    // Production needs no position to be called off: the owner cancels it
+    // aboard and is paid back the rifleman's 10.
+    utils::push_command(
+        &mut app,
+        PlayerCommand::CancelTrain {
+            trainer: drillmaster_id,
+            slot: 0,
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    assert!(entity_def::hidden(app.world(), drillmaster));
+    assert_eq!(utils::gold(app.world()), 10);
+
+    // Set down, it trains nothing.
+    utils::unload(&mut app, wagon_id, None);
+    utils::run_ticks(&mut app, 20);
+    assert_eq!(utils::count_of_type(app.world_mut(), "rifleman"), 0);
+}
+
+#[test]
+fn passenger_research_can_be_canceled_and_refunded_mid_ride() {
+    let mut app = utils::transport_app();
+    let (wagon, wagon_id) = utils::create_owned(&mut app, "wagon", 10, 10, 0);
+    let (drillmaster, drillmaster_id) = utils::create_owned(&mut app, "drillmaster", 11, 10, 0);
+    let drill = utils::research_id(&app, "drill");
+    utils::grant_gold(&mut app, 10);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::StartResearch {
+            researcher: drillmaster_id,
+            research: drill,
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Load {
+            transport: wagon_id,
+            target: drillmaster_id,
+            flush: true,
+        },
+    );
+    utils::run_until_aboard(&mut app, wagon, 1, 10);
+    // 10 granted − 10 for the drill.
+    assert_eq!(utils::gold(app.world()), 0);
+
+    // The topic is called off aboard and its 10 paid back.
+    utils::push_command(
+        &mut app,
+        PlayerCommand::CancelResearch {
+            researcher: drillmaster_id,
+            research: drill,
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    assert!(entity_def::hidden(app.world(), drillmaster));
+    assert_eq!(utils::gold(app.world()), 10);
+    assert!(entity_def::orders(app.world(), drillmaster).is_empty());
+}
+
+#[test]
+fn unit_loaded_mid_walk_stands_once_set_down() {
+    let mut app = utils::transport_app();
+    let (wagon, wagon_id) = utils::create_owned(&mut app, "wagon", 10, 10, 0);
+    let (grunt, grunt_id) = utils::create_owned(&mut app, "grunt", 11, 10, 0);
+    utils::select(&mut app, grunt_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Move {
+            target: utils::pos(11, 20),
+            flush: true,
+        },
+    );
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Load {
+            transport: wagon_id,
+            target: grunt_id,
+            flush: true,
+        },
+    );
+    utils::run_until_aboard(&mut app, wagon, 1, 20);
+
+    // The walk ends with the boarding; nothing of it waits out the ride.
+    assert!(entity_def::orders(app.world(), grunt).is_empty());
+
+    utils::unload(&mut app, wagon_id, None);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    let set_down = utils::cell_of(app.world(), grunt);
+    utils::run_ticks(&mut app, 10);
+    assert_eq!(utils::cell_of(app.world(), grunt), set_down);
+    assert!(entity_def::orders(app.world(), grunt).is_empty());
+}
+
+#[test]
+fn worker_loaded_off_job_leaves_job_before_boarding() {
+    let mut app = utils::transport_app();
+    let (wagon, wagon_id) = utils::create_owned(&mut app, "wagon", 10, 10, 0);
+    let (orderly, orderly_id) = utils::create_owned(&mut app, "orderly", 11, 10, 0);
+    utils::wound(&mut app, wagon, "20");
+    utils::select(&mut app, orderly_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Repair {
+            target: wagon_id,
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    // 40 + 2 × 5: two ticks of mending from the open.
+    assert_eq!(utils::health_as_u32(&app, wagon), 50);
+
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Load {
+            transport: wagon_id,
+            target: orderly_id,
+            flush: true,
+        },
+    );
+    utils::run_until_aboard(&mut app, wagon, 1, 10);
+    let mended_to = utils::health_as_u32(&app, wagon);
+    utils::run_ticks(&mut app, 2);
+
+    // The job ends before the boarding, so no cancel sets a boarded body back
+    // on the grid, and the mending stops with it.
+    assert!(app.world().get::<LocationComponent>(orderly).is_none());
+    assert!(entity_def::boarded(app.world(), orderly));
+    assert!(utils::order_queue_is_empty(app.world_mut(), orderly));
+    assert_eq!(utils::health_as_u32(&app, wagon), mended_to);
+}
+
+#[test]
+fn patient_that_boards_mid_repair_ends_mender_order() {
+    let mut app = utils::transport_app();
+    let (wagon, wagon_id) = utils::create_owned(&mut app, "wagon", 10, 10, 0);
+    let (rifleman, rifleman_id) = utils::create_owned(&mut app, "rifleman", 11, 10, 0);
+    let (orderly, orderly_id) = utils::create_owned(&mut app, "orderly", 12, 10, 0);
+    utils::wound(&mut app, rifleman, "20");
+    utils::select(&mut app, orderly_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Repair {
+            target: rifleman_id,
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    // 10 + 2 × 5: two ticks of mending.
+    assert_eq!(utils::health_as_u32(&app, rifleman), 20);
+
+    // The patient climbs into the wagon beside it: gone from the map, gone
+    // from the order, with the mender standing where it worked.
+    utils::send_to(&mut app, rifleman_id, wagon_id);
+    utils::run_until_aboard(&mut app, wagon, 1, 10);
+    let boarded_at = utils::health_as_u32(&app, rifleman);
+    utils::run_ticks(&mut app, 1);
+
+    assert!(utils::order_queue_is_empty(app.world_mut(), orderly));
+    assert_eq!(utils::cell_of(app.world(), orderly), CellPos::new(12, 10));
+    // Mended no further once aboard.
+    utils::run_ticks(&mut app, 3);
+    assert_eq!(utils::health_as_u32(&app, rifleman), boarded_at);
+}
+
+#[test]
+fn load_refuses_unit_changing_form() {
+    let mut app = utils::transport_app();
+    let (wagon, wagon_id) = utils::create_owned(&mut app, "wagon", 10, 10, 0);
+    let (pupa, pupa_id) = utils::create_owned(&mut app, "pupa", 11, 10, 0);
+    utils::select(&mut app, pupa_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Morph {
+            type_name: "moth".into(),
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    assert!(entity_def::changing(app.world(), pupa));
+
+    // A body changing form boards nothing: the hold turns it away and the
+    // change goes on where it stands.
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Load {
+            transport: wagon_id,
+            target: pupa_id,
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY + 4);
+
+    assert!(
+        app.world()
+            .resource::<EntityIndex>()
+            .alive(pupa_id)
+            .is_some()
+    );
+    assert!(!entity_def::hidden(app.world(), pupa));
+    assert_eq!(utils::passengers_of(app.world(), wagon), []);
 }
 
 #[test]
@@ -76,6 +460,83 @@ fn passenger_aboard_is_seen_by_nobody() {
 }
 
 #[test]
+fn boarder_turns_away_from_holder_switched_off_on_way() {
+    let mut app = utils::transport_app();
+    let (wagon, wagon_id) = utils::create_owned(&mut app, "wagon", 10, 10, 0);
+    let (rifleman, rifleman_id) = utils::create_owned(&mut app, "rifleman", 16, 10, 0);
+    utils::send_to(&mut app, rifleman_id, wagon_id);
+    utils::run_ticks(&mut app, utils::APPLY + 2);
+
+    // A daze stops the wagon working while the rifleman is on the way: it
+    // turns away on arrival, and nobody boards a holder that is switched off.
+    let dazed = app
+        .world_mut()
+        .resource_mut::<ContentRegistry>()
+        .register_entity_buff(
+            "dazed",
+            EntityBuffDef {
+                effects: vec![EntityEffect::Disable],
+                lasting: Lasting::For(30),
+                stack_rule: StackRule::Refresh,
+                interrupted_by: Vec::new(),
+            },
+        );
+    utils::apply_buff(app.world_mut(), wagon, dazed);
+    utils::run_ticks(&mut app, 20);
+
+    assert!(!entity_def::hidden(app.world(), rifleman));
+    assert_eq!(utils::passengers_of(app.world(), wagon), []);
+    assert!(utils::order_queue_is_empty(app.world_mut(), rifleman));
+}
+
+#[test]
+#[should_panic(expected = "a passenger boards a holder alive, on the map and operating")]
+fn board_panics_for_dying_holder() {
+    let mut app = utils::transport_app();
+    let (wagon, _) = utils::create_owned(&mut app, "wagon", 10, 10, 0);
+    let (rifleman, _) = utils::create_owned(&mut app, "rifleman", 11, 10, 0);
+    spawn::destroy_entity(app.world_mut(), wagon);
+    spawn::board(app.world_mut(), rifleman, wagon);
+}
+
+#[test]
+fn loader_turns_away_from_target_switched_off_on_way() {
+    let mut app = utils::transport_app();
+    let (wagon, wagon_id) = utils::create_owned(&mut app, "wagon", 10, 10, 0);
+    let (grunt, grunt_id) = utils::create_owned(&mut app, "grunt", 16, 10, 0);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Load {
+            transport: wagon_id,
+            target: grunt_id,
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY + 2);
+
+    // A daze stops the grunt working while the wagon is on its way: the
+    // wagon turns away, and nobody is loaded who is switched off.
+    let dazed = app
+        .world_mut()
+        .resource_mut::<ContentRegistry>()
+        .register_entity_buff(
+            "dazed",
+            EntityBuffDef {
+                effects: vec![EntityEffect::Disable],
+                lasting: Lasting::For(30),
+                stack_rule: StackRule::Refresh,
+                interrupted_by: Vec::new(),
+            },
+        );
+    utils::apply_buff(app.world_mut(), grunt, dazed);
+    utils::run_ticks(&mut app, 20);
+
+    assert!(!entity_def::hidden(app.world(), grunt));
+    assert_eq!(utils::passengers_of(app.world(), wagon), []);
+    assert!(utils::order_queue_is_empty(app.world_mut(), wagon));
+}
+
+#[test]
 fn untransportable_unit_does_not_board() {
     let mut app = utils::transport_app();
     let (wagon, wagon_id) = utils::create_owned(&mut app, "wagon", 10, 10, 0);
@@ -86,9 +547,36 @@ fn untransportable_unit_does_not_board() {
 
     assert!(utils::passengers_of(app.world(), wagon).is_empty());
     assert!(
-        app.world().get::<HiddenComponent>(civilian).is_none(),
+        !entity_def::hidden(app.world(), civilian),
         "a unit without cargo_size stays in the open"
     );
+}
+
+#[test]
+fn board_refuses_unit_that_cannot_ride_and_leaves_it_standing() {
+    let mut app = utils::transport_app();
+    let (wagon, _) = utils::create_owned(&mut app, "wagon", 10, 10, 0);
+    let (civilian, _) = utils::create_owned(&mut app, "civilian", 11, 10, 0);
+    let (bunker, _) = utils::create_owned(&mut app, "bunker", 14, 10, 0);
+    let (grunt, _) = utils::create_owned(&mut app, "grunt", 13, 12, 0);
+
+    // A civilian declares no cargo_size; a bunker carries no grunt.
+    assert_eq!(
+        spawn::board(app.world_mut(), civilian, wagon),
+        Boarding::Refused(Refusal::Incapable)
+    );
+    assert_eq!(
+        spawn::board(app.world_mut(), grunt, bunker),
+        Boarding::Refused(Refusal::TargetUnfit)
+    );
+
+    // A refused passenger is untouched.
+    assert_eq!(utils::cell_of(app.world(), civilian), CellPos::new(11, 10));
+    assert_eq!(utils::cell_of(app.world(), grunt), CellPos::new(13, 12));
+    assert!(!entity_def::hidden(app.world(), civilian));
+    assert!(!entity_def::hidden(app.world(), grunt));
+    assert_eq!(utils::passengers_of(app.world(), wagon), []);
+    assert_eq!(utils::passengers_of(app.world(), bunker), []);
 }
 
 #[test]
@@ -105,7 +593,7 @@ fn admission_list_matches_type_name() {
     utils::run_ticks(&mut app, 30);
 
     assert_eq!(utils::passengers_of(app.world(), bunker), [rifleman_id]);
-    assert!(app.world().get::<HiddenComponent>(grunt).is_none());
+    assert!(!entity_def::hidden(app.world(), grunt));
 }
 
 #[test]
@@ -130,7 +618,7 @@ fn debuff_sealing_hold_turns_boarder_away() {
 
     assert!(utils::passengers_of(app.world(), wagon).is_empty());
     assert!(
-        app.world().get::<HiddenComponent>(rifleman).is_none(),
+        !entity_def::hidden(app.world(), rifleman),
         "a sealed hold admits nobody"
     );
 }
@@ -154,7 +642,7 @@ fn full_transport_turns_boarder_away() {
 
     assert_eq!(utils::passengers_of(app.world(), wagon).len(), 2);
     assert!(
-        app.world().get::<HiddenComponent>(rifleman).is_none(),
+        !entity_def::hidden(app.world(), rifleman),
         "no slot left for even a one-slot passenger"
     );
 }
@@ -170,7 +658,7 @@ fn own_boarding_policy_rejects_allied_holder() {
     utils::run_ticks(&mut app, 30);
 
     assert!(utils::passengers_of(app.world(), wagon).is_empty());
-    assert!(app.world().get::<HiddenComponent>(rifleman).is_none());
+    assert!(!entity_def::hidden(app.world(), rifleman));
 }
 
 #[test]
@@ -249,9 +737,9 @@ fn explicit_board_command_boards_mixed_selection() {
         [rifleman_id],
         "the eligible unit boards"
     );
-    assert!(app.world().get::<HiddenComponent>(rifleman).is_some());
+    assert!(entity_def::hidden(app.world(), rifleman));
     assert!(
-        app.world().get::<HiddenComponent>(civilian).is_none(),
+        !entity_def::hidden(app.world(), civilian),
         "the ineligible unit drops the order and stays out"
     );
 }
@@ -275,7 +763,7 @@ fn explicit_follow_command_tails_own_transporter() {
     utils::run_ticks(&mut app, 20);
 
     assert!(utils::passengers_of(app.world(), wagon).is_empty());
-    assert!(app.world().get::<HiddenComponent>(rifleman).is_none());
+    assert!(!entity_def::hidden(app.world(), rifleman));
     assert!(
         utils::within(app.world_mut(), rifleman, wagon, 2),
         "the follower stays close without climbing in"
@@ -308,7 +796,7 @@ fn transport_fetches_targeted_unit_aboard() {
     utils::run_until_aboard(&mut app, wagon, 1, 80);
 
     assert_eq!(utils::passengers_of(app.world(), wagon), [grunt_id]);
-    assert!(app.world().get::<HiddenComponent>(grunt).is_some());
+    assert!(entity_def::hidden(app.world(), grunt));
     assert!(
         app.world()
             .get::<OrderQueueComponent>(grunt)
@@ -335,9 +823,120 @@ fn load_refuses_ineligible_unit() {
 
     assert!(utils::passengers_of(app.world(), wagon).is_empty());
     assert!(
-        app.world().get::<HiddenComponent>(civilian).is_none(),
+        !entity_def::hidden(app.world(), civilian),
         "a unit without cargo_size is not fetched"
     );
+}
+
+//
+// ─── Shots in flight ────────────────────────────────────────────────────────
+//
+
+#[test]
+fn shot_following_target_that_boards_hits_nobody() {
+    let mut app = utils::transport_app();
+    let (_, archer_id) = utils::create_owned(&mut app, "archer", 19, 10, 0);
+    let (wagon, _) = utils::create_owned(&mut app, "wagon", 11, 20, 0);
+    let rifleman = board_walker_under_fire(&mut app, archer_id, wagon);
+    let (went_in_grunt, _) = utils::create_owned(&mut app, "grunt", 11, 12, 0);
+    let (fired_at_grunt, _) = utils::create_owned(&mut app, "grunt", 11, 10, 0);
+    utils::run_ticks(&mut app, 10);
+
+    // A shot that follows its target hits that target or nobody: the arrow
+    // lands with no one to strike, on neither cell's occupant.
+    assert_eq!(utils::health_as_u32(&app, went_in_grunt), 20);
+    assert_eq!(utils::health_as_u32(&app, fired_at_grunt), 20);
+    // 30, the rifleman's full health: aboard, nothing reached it.
+    assert_eq!(utils::health_as_u32(&app, rifleman), 30);
+}
+
+#[test]
+fn burst_of_shot_following_target_that_boards_lands_where_target_went_in() {
+    let mut app = utils::transport_app();
+    let (_, slinger_id) = utils::create_owned(&mut app, "slinger", 19, 10, 0);
+    let (wagon, _) = utils::create_owned(&mut app, "wagon", 11, 20, 0);
+    let rifleman = board_walker_under_fire(&mut app, slinger_id, wagon);
+    let (went_in_grunt, _) = utils::create_owned(&mut app, "grunt", 11, 12, 0);
+    let (fired_at_grunt, _) = utils::create_owned(&mut app, "grunt", 11, 10, 0);
+    utils::run_ticks(&mut app, 10);
+
+    // No direct victim, but the stone bursts where its target went in:
+    // 20 − 10 × 0.5 = 15 on that cell, nothing two cells off.
+    assert_eq!(utils::health_as_u32(&app, went_in_grunt), 15);
+    assert_eq!(utils::health_as_u32(&app, fired_at_grunt), 20);
+    // 30, the rifleman's full health: aboard, nothing reached it.
+    assert_eq!(utils::health_as_u32(&app, rifleman), 30);
+}
+
+#[test]
+fn shot_following_target_that_left_map_hits_it_no_more() {
+    let mut app = utils::transport_app();
+    let (_, archer_id) = utils::create_owned(&mut app, "archer", 19, 10, 0);
+    let (rifleman, rifleman_id) = utils::create_owned(&mut app, "rifleman", 11, 10, 0);
+    utils::attack(&mut app, archer_id, rifleman_id);
+    // The arrow leaves on tick 3 and lands on tick 11.
+    utils::run_ticks(&mut app, 6);
+
+    // The target goes off the map and straight back while the arrow flies:
+    // the arrow lost it when it went, and lands on nobody.
+    spawn::hide_entity(app.world_mut(), rifleman);
+    assert_eq!(
+        spawn::place_back_beside(
+            app.world_mut(),
+            rifleman,
+            Beside::Footprint(CellRect::new(CellPos::new(11, 10), CellSize::ONE)),
+            Lean::WentIn
+        ),
+        SetDown::Placed
+    );
+    utils::select(&mut app, archer_id);
+    utils::push_command(&mut app, PlayerCommand::Stop);
+    utils::run_ticks(&mut app, 10);
+    // 30, the rifleman's full health: the arrow hit nobody.
+    assert_eq!(utils::health_as_u32(&app, rifleman), 30);
+}
+
+#[test]
+fn burst_of_shot_at_dying_target_lands_where_it_lies() {
+    let mut app = utils::transport_app();
+    let (_, slinger_id) = utils::create_owned(&mut app, "slinger", 19, 10, 0);
+    let (rifleman, rifleman_id) = utils::create_owned(&mut app, "rifleman", 11, 10, 0);
+    let (_, killer_id) = utils::create_owned(&mut app, "grunt", 30, 30, 2);
+    utils::select(&mut app, rifleman_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Move {
+            target: utils::pos(11, 19),
+            flush: true,
+        },
+    );
+    utils::attack(&mut app, slinger_id, rifleman_id);
+    // The stone leaves sent to (11, 10); the walker, ten ticks on, stands on
+    // (11, 14) and is killed there, two ticks before the stone lands.
+    utils::run_ticks(&mut app, 10);
+    assert_eq!(utils::cell_of(app.world(), rifleman), CellPos::new(11, 14));
+    spawn::despawn_killed(
+        app.world_mut(),
+        rifleman,
+        killer_id,
+        Some(2),
+        Slain::Remains,
+    );
+    let (beside, _) = utils::create_owned(&mut app, "grunt", 12, 14, 0);
+    let (fired_at, _) = utils::create_owned(&mut app, "grunt", 11, 10, 0);
+    utils::run_ticks(&mut app, 2);
+
+    // The stone bursts where its dying target lies: 20 − 10 × 0.5 = 15 a cell
+    // from it, nothing at the cell it was sent to.
+    assert!(
+        app.world()
+            .resource::<EntityIndex>()
+            .any(rifleman_id)
+            .is_some(),
+        "still lying there, dying"
+    );
+    assert_eq!(utils::health_as_u32(&app, beside), 15);
+    assert_eq!(utils::health_as_u32(&app, fired_at), 20);
 }
 
 //
@@ -359,16 +958,16 @@ fn unload_period_meters_exits_in_id_order() {
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
     assert!(
-        app.world().get::<HiddenComponent>(first).is_none(),
+        !entity_def::hidden(app.world(), first),
         "the lower id steps out first"
     );
-    assert!(app.world().get::<HiddenComponent>(second).is_some());
+    assert!(entity_def::hidden(app.world(), second));
 
     // The second follows after the two-tick unloading period.
     utils::run_ticks(&mut app, 2);
-    assert!(app.world().get::<HiddenComponent>(second).is_none());
+    assert!(!entity_def::hidden(app.world(), second));
     assert!(utils::passengers_of(app.world(), wagon).is_empty());
-    assert!(app.world().get::<BoardedComponent>(first).is_none());
+    assert!(!entity_def::boarded(app.world(), first));
 }
 
 #[test]
@@ -396,13 +995,13 @@ fn fractional_unload_period_rounds_up() {
     // ticks later.
     utils::unload(&mut app, wagon_id, None);
     utils::run_ticks(&mut app, utils::APPLY);
-    assert!(app.world().get::<HiddenComponent>(first).is_none());
-    assert!(app.world().get::<HiddenComponent>(second).is_some());
+    assert!(!entity_def::hidden(app.world(), first));
+    assert!(entity_def::hidden(app.world(), second));
 
     utils::run_ticks(&mut app, 1);
-    assert!(app.world().get::<HiddenComponent>(second).is_some());
+    assert!(entity_def::hidden(app.world(), second));
     utils::run_ticks(&mut app, 1);
-    assert!(app.world().get::<HiddenComponent>(second).is_none());
+    assert!(!entity_def::hidden(app.world(), second));
 }
 
 #[test]
@@ -457,8 +1056,8 @@ fn unmetered_holder_empties_in_one_tick() {
     utils::unload(&mut app, bunker_id, None);
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
-    assert!(app.world().get::<HiddenComponent>(first).is_none());
-    assert!(app.world().get::<HiddenComponent>(second).is_none());
+    assert!(!entity_def::hidden(app.world(), first));
+    assert!(!entity_def::hidden(app.world(), second));
     assert!(utils::passengers_of(app.world(), bunker).is_empty());
 }
 
@@ -473,7 +1072,7 @@ fn unload_at_point_walks_there_and_sends_passengers_on() {
     utils::unload(&mut app, wagon_id, Some(utils::pos(20, 5)));
     utils::run_ticks(&mut app, 80);
 
-    assert!(app.world().get::<HiddenComponent>(rifleman).is_none());
+    assert!(!entity_def::hidden(app.world(), rifleman));
     let wagon_cell = utils::cell_of(app.world_mut(), wagon);
     assert!(
         app.world()
@@ -505,7 +1104,7 @@ fn immobile_holder_unloads_in_place_toward_point() {
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
     assert!(
-        app.world().get::<HiddenComponent>(rifleman).is_none(),
+        !entity_def::hidden(app.world(), rifleman),
         "a holder that cannot walk lets everyone out where it stands"
     );
     utils::run_ticks(&mut app, 60);
@@ -517,6 +1116,45 @@ fn immobile_holder_unloads_in_place_toward_point() {
             .in_range(rifleman_cell, CellPos::new(20, 10), 1),
         "the passenger still walks to the point, stands at {rifleman_cell:?}"
     );
+}
+
+#[test]
+fn passenger_unloaded_toward_point_steps_out_on_its_side() {
+    let mut app = utils::transport_app();
+    let (bunker, bunker_id) = utils::create_owned(&mut app, "bunker", 10, 10, 0);
+    // It boards from the bunker's west side.
+    let (rifleman, rifleman_id) = utils::create_owned(&mut app, "rifleman", 8, 10, 0);
+    utils::send_to(&mut app, rifleman_id, bunker_id);
+    utils::run_until_aboard(&mut app, bunker, 1, 30);
+
+    // Unloaded toward a point east: of the ring around the bunker's (10, 10)
+    // 2×2, the free cell nearest (20, 10) is (12, 10).
+    utils::unload(&mut app, bunker_id, Some(utils::pos(20, 10)));
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    assert_eq!(utils::cell_of(app.world(), rifleman), CellPos::new(12, 10));
+}
+
+#[test]
+fn passenger_unloaded_without_point_steps_out_toward_rally_point() {
+    let mut app = utils::transport_app();
+    let (bunker, bunker_id) = utils::create_owned(&mut app, "bunker", 10, 10, 0);
+    // It boards from the bunker's west side.
+    let (rifleman, rifleman_id) = utils::create_owned(&mut app, "rifleman", 8, 10, 0);
+    utils::send_to(&mut app, rifleman_id, bunker_id);
+    utils::run_until_aboard(&mut app, bunker, 1, 30);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SetRallyPoint {
+            entity: bunker_id,
+            target: Some(RallyTarget::Position(utils::pos(20, 10))),
+        },
+    );
+
+    // Unloaded with no point of its own: it steps out on the side of the
+    // rally point east, (12, 10), the ring cell nearest (20, 10).
+    utils::unload(&mut app, bunker_id, None);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    assert_eq!(utils::cell_of(app.world(), rifleman), CellPos::new(12, 10));
 }
 
 #[test]
@@ -560,7 +1198,7 @@ fn blocked_exit_holds_passenger_and_retries() {
     utils::run_ticks(&mut app, utils::APPLY + 4);
 
     assert!(
-        app.world().get::<HiddenComponent>(rifleman).is_some(),
+        entity_def::hidden(app.world(), rifleman),
         "a boxed-in exit keeps the passenger aboard"
     );
     assert_eq!(utils::passengers_of(app.world(), wagon), [rifleman_id]);
@@ -572,7 +1210,7 @@ fn blocked_exit_holds_passenger_and_retries() {
         false,
     );
     utils::run_ticks(&mut app, 2);
-    assert!(app.world().get::<HiddenComponent>(rifleman).is_none());
+    assert!(!entity_def::hidden(app.world(), rifleman));
     assert!(utils::passengers_of(app.world(), wagon).is_empty());
 }
 
@@ -602,6 +1240,33 @@ fn destroyed_wagon_takes_passengers_with_it() {
 }
 
 #[test]
+fn passenger_destroyed_with_holder_dies_where_holder_stands() {
+    let mut app = utils::transport_app();
+    let (wagon, wagon_id) = utils::create_owned(&mut app, "wagon", 10, 10, 0);
+    let (_, rifleman_id) = utils::create_owned(&mut app, "rifleman", 11, 10, 0);
+    utils::send_to(&mut app, rifleman_id, wagon_id);
+    utils::run_until_aboard(&mut app, wagon, 1, 10);
+    app.world_mut().resource_mut::<EventRecord>().clear();
+
+    spawn::destroy_entity(app.world_mut(), wagon);
+
+    // The wagon's own cell, not the one the rifleman boarded from.
+    let died_at: Vec<FixedUVec2> = app
+        .world()
+        .resource::<EventRecord>()
+        .events()
+        .iter()
+        .filter_map(|event| match event {
+            SimulationEvent::EntityDied {
+                entity, position, ..
+            } if *entity == rifleman_id => Some(*position),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(died_at, [utils::pos(10, 10)]);
+}
+
+#[test]
 fn destroyed_bunker_ejects_passengers() {
     let mut app = utils::transport_app();
     let (bunker, bunker_id) = utils::create_owned(&mut app, "bunker", 10, 10, 0);
@@ -613,10 +1278,10 @@ fn destroyed_bunker_ejects_passengers() {
     utils::run_ticks(&mut app, 1);
 
     assert!(
-        app.world().get::<HiddenComponent>(rifleman).is_none(),
+        !entity_def::hidden(app.world(), rifleman),
         "an eject-fated holder puts its passengers back on the map"
     );
-    assert!(app.world().get::<BoardedComponent>(rifleman).is_none());
+    assert!(!entity_def::boarded(app.world(), rifleman));
     assert!(
         utils::within(app.world_mut(), rifleman, bunker, 2),
         "ejected beside the holder's footprint"
@@ -642,11 +1307,115 @@ fn ejected_passenger_without_room_dies() {
         "a passenger the ring scan cannot place dies with its holder"
     );
     assert!(
-        app.world()
-            .get::<PendingRevealComponent>(rifleman)
-            .is_none(),
+        !entity_def::pending_reveal(app.world(), rifleman),
         "nothing lingers hidden waiting for a holder that is gone"
     );
+}
+
+#[test]
+fn holder_destroyed_inside_job_sets_passengers_down_beside_job() {
+    let mut app = utils::transport_app();
+    let (bunker, bunker_id) = utils::create_owned(&mut app, "bunker", 10, 10, 0);
+    let (ambulance, ambulance_id) = utils::create_owned(&mut app, "ambulance", 13, 10, 0);
+    let (rifleman, _) = utils::create_owned(&mut app, "rifleman", 14, 10, 0);
+    assert_eq!(
+        spawn::board(app.world_mut(), rifleman, ambulance),
+        Boarding::Boarded
+    );
+    utils::wound(&mut app, bunker, "50");
+    utils::select(&mut app, ambulance_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Repair {
+            target: bunker_id,
+            flush: true,
+        },
+    );
+    run_until_hidden(&mut app, ambulance, 10);
+
+    spawn::destroy_entity(app.world_mut(), ambulance);
+
+    // The holder is inside the bunker, so the rider comes out beside the
+    // bunker, on its ring's first free cell, (10, 9).
+    assert!(!entity_def::boarded(app.world(), rifleman));
+    assert_eq!(utils::cell_of(app.world(), rifleman), CellPos::new(10, 9));
+}
+
+//
+// ─── Capture ────────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn captured_holder_with_destroy_fate_loses_passengers_its_new_owner_bars() {
+    let mut app = utils::transport_app();
+    let (wagon, wagon_id) = utils::create_owned(&mut app, "wagon", 10, 10, 0);
+    let (_, rifleman_id) = utils::create_owned(&mut app, "rifleman", 11, 10, 0);
+    let (_, taker_id) = utils::create_owned(&mut app, "rifleman", 20, 20, 2);
+    utils::send_to(&mut app, rifleman_id, wagon_id);
+    utils::run_until_aboard(&mut app, wagon, 1, 10);
+
+    // The wagon boards its owner's side only; handed to player 2, it no
+    // longer admits player 0's rifleman, and its fate for the lost is death.
+    spawn::change_owner(app.world_mut(), wagon, 2, taker_id, Lean::Nothing);
+
+    assert!(
+        app.world()
+            .resource::<EntityIndex>()
+            .alive(rifleman_id)
+            .is_none()
+    );
+    assert_eq!(utils::passengers_of(app.world(), wagon), []);
+
+    // Lost to its owner, a kill for nobody: the taker fired no shot.
+    utils::run_ticks(&mut app, 1);
+    let rifleman_type = app
+        .world()
+        .resource::<ContentRegistry>()
+        .type_id("rifleman")
+        .expect("test content registers the type");
+    let statistics = app.world().resource::<Statistics>();
+    assert_eq!(statistics.player(0).lost(rifleman_type), 1);
+    assert_eq!(statistics.player(2).killed(rifleman_type), 0);
+}
+
+#[test]
+fn captured_holder_with_eject_fate_sets_barred_passengers_down() {
+    let mut app = utils::transport_app();
+    let (bunker, bunker_id) = utils::create_owned(&mut app, "bunker", 10, 10, 0);
+    let (rifleman, rifleman_id) = utils::create_owned(&mut app, "rifleman", 12, 10, 0);
+    let (_, taker_id) = utils::create_owned(&mut app, "rifleman", 20, 20, 2);
+    utils::send_to(&mut app, rifleman_id, bunker_id);
+    utils::run_until_aboard(&mut app, bunker, 1, 30);
+
+    spawn::change_owner(app.world_mut(), bunker, 2, taker_id, Lean::Nothing);
+
+    assert!(!entity_def::boarded(app.world(), rifleman));
+    assert!(!entity_def::hidden(app.world(), rifleman));
+    // Beside the bunker, on its ring's first free cell, (10, 9): a ride's end
+    // leans nowhere in particular.
+    assert_eq!(utils::cell_of(app.world(), rifleman), CellPos::new(10, 9));
+    assert_eq!(utils::passengers_of(app.world(), bunker), []);
+}
+
+#[test]
+fn captured_holder_keeps_passengers_its_new_owner_admits() {
+    let mut app = utils::transport_app();
+    let (raft, raft_id) = utils::create_owned(&mut app, "raft", 10, 10, 0);
+    let (rifleman, rifleman_id) = utils::create_owned(&mut app, "rifleman", 11, 10, 0);
+    let (_, taker_id) = utils::create_owned(&mut app, "rifleman", 20, 20, 2);
+    utils::send_to(&mut app, rifleman_id, raft_id);
+    utils::run_until_aboard(&mut app, raft, 1, 10);
+
+    // A raft boards anyone, so the new owner admits what is already aboard.
+    spawn::change_owner(app.world_mut(), raft, 2, taker_id, Lean::Nothing);
+
+    assert_eq!(
+        app.world()
+            .get::<BoardedComponent>(rifleman)
+            .map(|boarded| boarded.holder),
+        Some(raft_id)
+    );
+    assert_eq!(utils::passengers_of(app.world(), raft), [rifleman_id]);
 }
 
 //
@@ -690,7 +1459,7 @@ fn garrison_fire_stops_once_unloaded() {
 
     utils::unload(&mut app, bunker_id, None);
     utils::run_ticks(&mut app, utils::APPLY + 1);
-    assert!(app.world().get::<HiddenComponent>(rifleman).is_none());
+    assert!(!entity_def::hidden(app.world(), rifleman));
     assert!(
         app.world().get::<GarrisonFireComponent>(rifleman).is_none(),
         "the firing state leaves with the passenger"
@@ -715,12 +1484,176 @@ fn wagon_passengers_do_not_fire() {
     );
 }
 
+#[test]
+fn garrison_of_holder_inside_job_holds_its_fire() {
+    let mut app = utils::transport_app();
+    let (bunker, bunker_id) = utils::create_owned(&mut app, "bunker", 10, 10, 0);
+    let (ambulance, ambulance_id) = utils::create_owned(&mut app, "ambulance", 13, 10, 0);
+    let (rifleman, _) = utils::create_owned(&mut app, "rifleman", 14, 10, 0);
+    assert_eq!(
+        spawn::board(app.world_mut(), rifleman, ambulance),
+        Boarding::Boarded
+    );
+    utils::wound(&mut app, bunker, "50");
+    // In the rifleman's reach of the ambulance, out of the bunker's.
+    let (grunt, _) = utils::create_owned(&mut app, "grunt", 15, 12, 2);
+    utils::select(&mut app, ambulance_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Repair {
+            target: bunker_id,
+            flush: true,
+        },
+    );
+    run_until_hidden(&mut app, ambulance, 10);
+
+    // Off the map there is nothing to fire from: the grunt is untouched for
+    // as long as the mending lasts.
+    utils::run_ticks(&mut app, 5);
+    assert!(entity_def::hidden(app.world(), ambulance));
+    assert_eq!(utils::health_as_u32(&app, grunt), 20);
+
+    // Once the bunker is whole the ambulance stands again beside it, on the
+    // side it went in from, (12, 10) — three cells from the grunt — and its
+    // rifleman fires from it.
+    utils::run_ticks(&mut app, 5);
+    assert_eq!(utils::cell_of(app.world(), ambulance), CellPos::new(12, 10));
+    utils::run_ticks(&mut app, 40);
+    // 20 − 10: one shot lands, then the unarmed grunt flees past the
+    // rifleman's range of 3.
+    assert_eq!(utils::health_as_u32(&app, grunt), 10);
+}
+
+//
+// ─── Workers inside a job ───────────────────────────────────────────────────
+//
+
+#[test]
+fn worker_inside_walking_patient_is_with_patient_and_comes_out_beside_it() {
+    let mut app = utils::transport_app();
+    let (rifleman, rifleman_id) = utils::create_owned(&mut app, "rifleman", 11, 10, 0);
+    let (surgeon, surgeon_id) = utils::create_owned(&mut app, "surgeon", 12, 10, 0);
+    utils::wound(&mut app, rifleman, "20");
+    utils::select(&mut app, surgeon_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Repair {
+            target: rifleman_id,
+            flush: true,
+        },
+    );
+    run_until_hidden(&mut app, surgeon, 10);
+    let went_in = app
+        .world()
+        .get::<HiddenComponent>(surgeon)
+        .expect("the surgeon works hidden")
+        .went_in
+        .position;
+
+    // The patient walks on with the surgeon inside it: the surgeon is
+    // wherever its patient is, and comes out beside it once it is whole.
+    utils::select(&mut app, rifleman_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Move {
+            target: utils::pos(11, 16),
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, 8);
+    let patient_at = entity_def::position(app.world(), rifleman);
+    assert_ne!(patient_at, went_in);
+    assert_eq!(entity_def::whereabouts(app.world(), surgeon), patient_at);
+
+    // 10 + 1 a tick: whole within the twenty ticks.
+    utils::run_ticks(&mut app, 20);
+    assert!(!entity_def::hidden(app.world(), surgeon));
+    // The rifleman stands on (11, 16), its walk done; of the cells around it
+    // the free one nearest where the surgeon went in, (12, 10), is (12, 15).
+    assert_eq!(utils::cell_of(app.world(), rifleman), CellPos::new(11, 16));
+    assert_eq!(utils::cell_of(app.world(), surgeon), CellPos::new(12, 15));
+}
+
+#[test]
+fn worker_inside_patient_killed_comes_out_beside_dying_patient() {
+    let mut app = utils::transport_app();
+    let (rifleman, rifleman_id) = utils::create_owned(&mut app, "rifleman", 11, 10, 0);
+    let (surgeon, surgeon_id) = utils::create_owned(&mut app, "surgeon", 12, 10, 0);
+    let (_, killer_id) = utils::create_owned(&mut app, "grunt", 30, 30, 2);
+    utils::wound(&mut app, rifleman, "20");
+    utils::select(&mut app, surgeon_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Repair {
+            target: rifleman_id,
+            flush: true,
+        },
+    );
+    run_until_hidden(&mut app, surgeon, 10);
+    utils::select(&mut app, rifleman_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Move {
+            target: utils::pos(11, 16),
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, 14);
+    assert_eq!(utils::cell_of(app.world(), rifleman), CellPos::new(11, 16));
+    assert!(entity_def::hidden(app.world(), surgeon));
+
+    // The patient is killed with the surgeon inside: while it lies dying on
+    // (11, 16) the surgeon comes out beside it, on the free cell nearest
+    // where it went in, (12, 15), not back at (12, 10).
+    spawn::despawn_killed(
+        app.world_mut(),
+        rifleman,
+        killer_id,
+        Some(2),
+        Slain::Remains,
+    );
+    // The death sets the surgeon down at once, before any tick runs.
+    assert!(!entity_def::hidden(app.world(), surgeon));
+    utils::run_ticks(&mut app, 1);
+    assert!(entity_def::dying(app.world(), rifleman));
+    assert!(!entity_def::hidden(app.world(), surgeon));
+    assert_eq!(utils::cell_of(app.world(), surgeon), CellPos::new(12, 15));
+}
+
+#[test]
+fn worker_inside_patient_that_boards_comes_out_beside_holder() {
+    let mut app = utils::transport_app();
+    let (wagon, wagon_id) = utils::create_owned(&mut app, "wagon", 11, 15, 0);
+    let (rifleman, rifleman_id) = utils::create_owned(&mut app, "rifleman", 11, 10, 0);
+    let (surgeon, surgeon_id) = utils::create_owned(&mut app, "surgeon", 12, 10, 0);
+    utils::wound(&mut app, rifleman, "20");
+    utils::select(&mut app, surgeon_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Repair {
+            target: rifleman_id,
+            flush: true,
+        },
+    );
+    run_until_hidden(&mut app, surgeon, 10);
+
+    // The patient walks to the wagon and climbs in with the surgeon inside
+    // it: the mending ends, and the surgeon comes out beside the wagon.
+    utils::send_to(&mut app, rifleman_id, wagon_id);
+    utils::run_until_aboard(&mut app, wagon, 1, 30);
+    utils::run_ticks(&mut app, 1);
+    assert!(!entity_def::hidden(app.world(), surgeon));
+    // Around the wagon on (11, 15), the free cell nearest where the surgeon
+    // went in, (12, 10), is (12, 14).
+    assert_eq!(utils::cell_of(app.world(), surgeon), CellPos::new(12, 14));
+}
+
 //
 // ─── Hidden entities and blasts ─────────────────────────────────────────────
 //
 
 #[test]
-fn blast_spares_hidden_passenger_at_stale_position() {
+fn blast_spares_hidden_passenger_where_it_went_in() {
     let mut app = utils::transport_app();
     let (bunker, bunker_id) = utils::create_owned(&mut app, "bunker", 10, 10, 0);
     let (rifleman, rifleman_id) = utils::create_owned(&mut app, "rifleman", 12, 10, 0);
@@ -778,13 +1711,59 @@ fn turret_only_passenger_sits_ride_out() {
         utils::passengers_of(app.world(), bunker).contains(&rider_id),
         "the rider is aboard"
     );
-    assert!(
-        app.world().get::<HiddenComponent>(rider).is_some(),
-        "and stowed"
-    );
+    assert!(entity_def::hidden(app.world(), rider), "and stowed");
     assert_eq!(
         utils::health_as_u32(&app, foe),
         20,
         "its gun stayed silent: a turret has no place to stand from inside"
     );
+}
+
+//
+// ─── Helpers ────────────────────────────────────────────────────────────────
+//
+
+/// Runs ticks until `entity` is off the map, at most `limit` of them.
+fn run_until_hidden(app: &mut App, entity: Entity, limit: u32) {
+    for _ in 0..limit {
+        if entity_def::hidden(app.world(), entity) {
+            return;
+        }
+        utils::run_ticks(app, 1);
+    }
+    assert!(
+        entity_def::hidden(app.world(), entity),
+        "the entity went off the map within {limit} ticks"
+    );
+}
+
+/// Sends a rifleman of player 0 walking south from (11, 10) while `shooter`
+/// fires a following shot at it, and boards it into `wagon` on (11, 12)
+/// before the shot lands.
+fn board_walker_under_fire(app: &mut App, shooter: SimulationId, wagon: Entity) -> Entity {
+    let (rifleman, rifleman_id) = utils::create_owned(app, "rifleman", 11, 10, 0);
+    utils::select(app, rifleman_id);
+    utils::push_command(
+        app,
+        PlayerCommand::Move {
+            target: utils::pos(11, 19),
+            flush: true,
+        },
+    );
+    utils::attack(app, shooter, rifleman_id);
+    // The shot leaves on tick 3, sent to (11, 10) where the walker then is,
+    // and lands on tick 11; by tick 6 the walker stands on (11, 12) and
+    // climbs aboard there.
+    utils::run_ticks(app, 6);
+    assert_eq!(
+        spawn::board(app.world_mut(), rifleman, wagon),
+        Boarding::Boarded
+    );
+    let went_in = app
+        .world()
+        .get::<HiddenComponent>(rifleman)
+        .expect("a passenger is hidden")
+        .went_in;
+    assert_eq!(went_in.position, utils::pos(11, 12));
+    rifleman
 }

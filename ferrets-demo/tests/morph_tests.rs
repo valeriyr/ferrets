@@ -21,7 +21,7 @@ use ferrets_simulation::{
     order::Order,
     resources::PlayerResources,
     simulation_id::SimulationId,
-    spawn,
+    spawn::{self, Boarding},
 };
 
 //
@@ -351,7 +351,7 @@ fn rider_fires_from_moving_holder() {
         Some(0),
     )
     .expect("the gryphon spawns");
-    let (rider, rider_id) = utils::create_entity(
+    let (rider, _) = utils::create_entity(
         app.world_mut(),
         "archer",
         utils::at_cell(CLEAR.0 + 4, CLEAR.1),
@@ -359,15 +359,10 @@ fn rider_fires_from_moving_holder() {
     )
     .expect("the rider spawns");
     // Aboard: hidden, holding no cells, taking no orders of its own.
-    app.world_mut()
-        .entity_mut(gryphon)
-        .get_mut::<TransporterComponent>()
-        .expect("the gryphon is a holder")
-        .passengers
-        .insert(rider_id);
-    app.world_mut()
-        .entity_mut(rider)
-        .insert(ferrets_simulation::components::hidden::HiddenComponent);
+    assert_eq!(
+        spawn::board(app.world_mut(), rider, gryphon),
+        Boarding::Boarded
+    );
 
     let (_, victim_id) = utils::create_entity(
         app.world_mut(),

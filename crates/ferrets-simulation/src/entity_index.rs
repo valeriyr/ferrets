@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use bevy_ecs::prelude::*;
 
-use crate::{components::hidden::HiddenComponent, simulation_id::SimulationId};
+use crate::{entity_def, simulation_id::SimulationId};
 
 /// Maps every [`SimulationId`] to its [`Entity`], split into alive and dying
 /// sets, with the remains among the dying kept in a set of their own.
@@ -46,7 +46,7 @@ impl EntityIndex {
     /// dying, hidden, or gone.
     pub fn interactable(&self, world: &World, id: SimulationId) -> Option<Entity> {
         let entity = self.alive(id)?;
-        if world.entity(entity).contains::<HiddenComponent>() {
+        if entity_def::hidden(world, entity) {
             None
         } else {
             Some(entity)
