@@ -296,6 +296,29 @@ fn ordered_cell_is_worked_by_cell_aimed_gun_alone() {
     );
 }
 
+#[test]
+fn ordered_point_is_reached_at_cell_it_lies_in() {
+    let mut app = utils::combat_app();
+    let world = app.world_mut();
+    let (_, bombardier_id) =
+        utils::create_entity(world, "bombardier", utils::pos(13, 10), Some(0)).unwrap();
+    let (bystander, _) = utils::create_entity(world, "hulk", utils::pos(8, 10), Some(1)).unwrap();
+
+    // (8.6, 10) lies in cell (8, 10), five cells off, one past the gun's four,
+    // though the point is nearer the cell's side toward the gun.
+    utils::select(&mut app, bombardier_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Attack {
+            target: AttackTarget::Position(utils::part_way("8.6", "10")),
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, 8);
+
+    assert_eq!(utils::health_as_u32(&app, bystander), 500, "no lob landed");
+}
+
 /// The mirror: an ordered cell leaves a gun that follows bodies free — and with
 /// nothing hostile about, free means working nothing.
 #[test]

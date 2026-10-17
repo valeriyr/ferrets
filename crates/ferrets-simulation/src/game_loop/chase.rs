@@ -29,9 +29,10 @@ pub enum Destination {
     OutOfReach,
 }
 
-/// Decides whether `from` is within `range` of the footprint at `destination`
-/// with `destination_size`, and otherwise whether to walk toward it or give up.
-pub fn advance(
+/// Decides whether `from` is within `range` of the point `destination`, a
+/// footprint of `destination_size` reached at the cells it lies in from its
+/// floored corner, and otherwise whether to walk toward it or give up.
+pub fn advance_to_point(
     last_chase: &mut ChaseState,
     projection: Projection,
     from: FixedUVec2,
@@ -40,45 +41,43 @@ pub fn advance(
     destination_size: CellSize,
     range: u32,
 ) -> Destination {
-    // The chaser reaches from every cell it stands on, and the destination
-    // stays anchor-floored: that is the cell the walk below plans toward and
-    // accepts by, so arrival and the walk name the same spot. Judging the
-    // chaser by one cell of the two it lies across leaves a body a little past
-    // a destination corner reading as out of range on one axis or the other
-    // however it is quantized, and a working neighbor's nudge decides which —
-    // so the walk arrives, the nudge lands, this says out of range, and the
-    // round counts as no progress until the whole order gives up.
-    //
-    // Both sides are footprints: a wide chaser reaches as far as its nearest
-    // edge, which is also how acquisition measures — the two must agree, or a
-    // wide unit would acquire a target it then walks straight past.
     let goal = CellRect::new(CellPos::from(destination), destination_size);
-    if projection.in_range_for_rects(body::standing_rect(from, from_size), goal, range) {
-        *last_chase = None;
-        return Destination::Arrived;
-    }
-
-    let (own, destination_cell) = (body::anchor(from), CellPos::from(destination));
-    match last_chase {
-        Some(round) if (round.own, round.destination) == (own, destination_cell) => {
-            round.repeats += 1;
-            if round.exhausted() {
-                return Destination::OutOfReach;
-            }
-        }
-        _ => {
-            *last_chase = Some(ChaseRound {
-                own,
-                destination: destination_cell,
-                repeats: 0,
-            });
-        }
-    }
-    Destination::Walk(Order::Move {
-        target: destination,
-        size: destination_size,
+    close_on(
+        last_chase,
+        projection,
+        from,
+        from_size,
+        goal,
+        destination,
+        destination_size,
         range,
-    })
+    )
+}
+
+/// Like [`advance_to_point`], toward the target entity `destination`, a body
+/// reached at every cell it stands on ([`body::standing_rect`]).
+pub fn advance_to_entity(
+    last_chase: &mut ChaseState,
+    world: &World,
+    chaser: Entity,
+    destination: Entity,
+    range: u32,
+) -> Destination {
+    let (from, from_size) = entity_def::footprint(world, chaser);
+    let (destination_position, destination_size) = entity_def::footprint(world, destination);
+    let projection = world.resource::<Map>().projection();
+    let goal = body::standing_rect(destination_position, destination_size);
+
+    close_on(
+        last_chase,
+        projection,
+        from,
+        from_size,
+        goal,
+        destination_position,
+        destination_size,
+        range,
+    )
 }
 
 /// Turns `entity` to look at the footprint at `target`/`target_size`, from its own
@@ -121,29 +120,6 @@ pub fn bearing_to(
     Facing::of(nearest_point_on(target, target_size, middle) - middle)
 }
 
-/// Like [`advance`], with the destination taken from a target entity's location.
-pub fn advance_to_entity(
-    last_chase: &mut ChaseState,
-    world: &World,
-    chaser: Entity,
-    destination: Entity,
-    range: u32,
-) -> Destination {
-    let (from, from_size) = entity_def::footprint(world, chaser);
-    let (destination_position, destination_size) = entity_def::footprint(world, destination);
-    let projection = world.resource::<Map>().projection();
-
-    advance(
-        last_chase,
-        projection,
-        from,
-        from_size,
-        destination_position,
-        destination_size,
-        range,
-    )
-}
-
 /// The point of the footprint at `origin`/`size` closest to `from`, clamping each
 /// axis into the footprint's span. Continuous rather than per-cell, so a unit part
 /// way across a cell turns smoothly instead of in steps.
@@ -164,4 +140,58 @@ fn center_of((origin, size): (FixedUVec2, CellSize)) -> FixedVec2 {
         origin.x.to_num::<FixedI64>() + half(size.width),
         origin.y.to_num::<FixedI64>() + half(size.height),
     )
+}
+
+/// Arrives when `from` reaches `goal` within `range`, else walks toward the
+/// footprint at `destination`, or gives up when the last walk made no
+/// progress.
+#[allow(clippy::too_many_arguments)]
+fn close_on(
+    last_chase: &mut ChaseState,
+    projection: Projection,
+    from: FixedUVec2,
+    from_size: CellSize,
+    goal: CellRect,
+    destination: FixedUVec2,
+    destination_size: CellSize,
+    range: u32,
+) -> Destination {
+    // The chaser is judged by every cell it stands on. Judging a body by one
+    // cell of the two it lies across leaves it a little past a corner reading
+    // as out of range on one axis or the other however it is quantized, and a
+    // working neighbor's nudge decides which — so the walk arrives, the nudge
+    // lands, this says out of range, and the round counts as no progress until
+    // the whole order gives up. The walk below plans toward the destination's
+    // floored cell, one of the goal's cells, so a walk that arrives by its own
+    // measure arrives by this one too.
+    //
+    // Both sides are footprints: a wide chaser reaches as far as its nearest
+    // edge, which is also how acquisition measures — the two must agree, or a
+    // wide unit would acquire a target it then walks straight past.
+    if projection.in_range_for_rects(body::standing_rect(from, from_size), goal, range) {
+        *last_chase = None;
+        return Destination::Arrived;
+    }
+
+    let (own, destination_cell) = (body::anchor(from), CellPos::from(destination));
+    match last_chase {
+        Some(round) if (round.own, round.destination) == (own, destination_cell) => {
+            round.repeats += 1;
+            if round.exhausted() {
+                return Destination::OutOfReach;
+            }
+        }
+        _ => {
+            *last_chase = Some(ChaseRound {
+                own,
+                destination: destination_cell,
+                repeats: 0,
+            });
+        }
+    }
+    Destination::Walk(Order::Move {
+        target: destination,
+        size: destination_size,
+        range,
+    })
 }

@@ -26,7 +26,7 @@ use ferrets_simulation::{
         finish_policy::FinishPolicy, local_role::LocalRole, player_slot::PlayerSlot,
         player_type::PlayerType,
     },
-    simulation_id::SimulationIdGenerator,
+    simulation_id::SimulationIds,
     spawn::{self, Arrival, FieldReach},
 };
 
@@ -76,7 +76,7 @@ pub fn world(pools: impl IntoIterator<Item = Pool>) -> World {
     world.insert_resource(PlayerStats::new(PLAYERS));
     world.insert_resource(PlayerBuffs::new(PLAYERS));
     world.insert_resource(EntityIndex::default());
-    world.insert_resource(SimulationIdGenerator::default());
+    world.insert_resource(SimulationIds::default());
     world.insert_resource(EventRecord::default());
     world.insert_resource(PendingImpacts::default());
     world

@@ -2,6 +2,8 @@
 
 mod utils;
 
+use std::collections::HashSet;
+
 use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
 use ferrets_pathfinder::{
     nav_grid::NavGrid,
@@ -193,7 +195,7 @@ fn placement_returns_free_anchor_cell_first() {
 }
 
 #[test]
-fn placement_skips_occupied_anchor_and_picks_nearest_ring_cell() {
+fn free_placement_skips_occupied_anchor_where_shared_takes_it() {
     // . . . . . .   y=2   anchor 2×2 at (3,3) fully occupied → ring 1 spans
     // . . A A . .   y=3   (2,2)..(5,5); the free cell nearest the anchor's
     // . . A A . .   y=4   middle is (3,2), not the corner (2,2).
@@ -262,7 +264,7 @@ fn placement_requires_whole_spawn_footprint() {
 }
 
 #[test]
-fn placement_gives_up_beyond_max_radius() {
+fn free_placement_gives_up_beyond_max_radius_where_shared_does_not() {
     // Everything within radius 1 of the anchor is occupied; radius 1 search fails.
     let mut grid = utils::grid(10, 10);
     for y in 2..6 {
@@ -350,6 +352,66 @@ fn placement_toward_stays_in_nearest_ring() {
 }
 
 //
+// ─── find_placement_near_toward_where ─────────────────────────────────────────
+//
+
+#[test]
+fn placement_where_takes_first_cell_its_test_accepts_in_toward_order() {
+    // Ring 0 is (3,3); in ring 1 the cell nearest T at (5,3) is (4,3), then
+    // (4,2) and (4,4) tie on T and on the middle, and the lower row goes
+    // first. The test refuses (3,3) and (4,3), so (4,2) is taken.
+    let grid = utils::grid(10, 10);
+    let refused = [utils::nav(3, 3), utils::nav(4, 3)];
+
+    let found = search::find_placement_near_toward_where(
+        &grid,
+        CellRect::new(utils::nav(3, 3), CellSize::ONE),
+        CellSize::ONE,
+        8,
+        CellRect::new(utils::nav(5, 3), CellSize::ONE),
+        |cell| !refused.contains(&cell),
+    );
+
+    assert_eq!(found, Some(utils::nav(4, 2)));
+}
+
+#[test]
+fn placement_where_asks_each_cell_once_ring_by_ring() {
+    // 3 4 5 6 7   x     radius 2 around M at (5,5): each cell marked with
+    // 2 2 2 2 2   y=3   the ring it lies in. The test refuses every cell,
+    // 2 1 1 1 2   y=4   so all 25 are asked, each once: M first, then
+    // 2 1 M 1 2   y=5   ring 1's eight, then ring 2's sixteen.
+    // 2 1 1 1 2   y=6
+    // 2 2 2 2 2   y=7
+    let grid = utils::grid(10, 10);
+    let mut asked: Vec<CellPos> = Vec::new();
+
+    let found = search::find_placement_near_toward_where(
+        &grid,
+        CellRect::new(utils::nav(5, 5), CellSize::ONE),
+        CellSize::ONE,
+        2,
+        CellRect::new(utils::nav(5, 5), CellSize::ONE),
+        |cell| {
+            asked.push(cell);
+            false
+        },
+    );
+
+    assert_eq!(found, None, "a test that takes nothing finds nothing");
+    let rings: Vec<u32> = asked
+        .iter()
+        .map(|cell| cell.x.abs_diff(5).max(cell.y.abs_diff(5)))
+        .collect();
+    assert_eq!(rings, [vec![0], vec![1; 8], vec![2; 16]].concat());
+    assert_eq!(
+        asked.iter().collect::<HashSet<_>>().len(),
+        25,
+        "every cell asked once"
+    );
+}
+
+//
 // ─── find_placements_near ─────────────────────────────────────────────────────
 //
 
@@ -406,7 +468,7 @@ fn placements_never_overlap_each_other() {
 }
 
 #[test]
-fn placements_run_out_with_room() {
+fn placements_return_fewer_than_asked_when_room_runs_out() {
     // Everything is held but (2,2) and (0,0), and (1,1) is water. What is held
     // is room for a shared footing and not for a free one; what the terrain
     // refuses is room for neither.
@@ -450,7 +512,7 @@ fn placements_run_out_with_room() {
 }
 
 #[test]
-fn placements_ring_entity_standing_on_its_own_cells() {
+fn free_placements_ring_building_while_shared_lie_under_it() {
     // What a cast summons around a standing 3×3 building: the building holds
     // its own footprint, so ring 0 yields nothing and the four stand at the
     // middle of each side of it rather than along one edge.

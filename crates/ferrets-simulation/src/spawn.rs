@@ -2,7 +2,11 @@
 
 use std::collections::BTreeSet;
 
-use bevy_ecs::{component::Component, entity::Entity, world::EntityWorldMut, world::World};
+use bevy_ecs::{
+    component::Component,
+    entity::Entity,
+    world::{EntityWorldMut, Mut, World},
+};
 use ferrets_content::{
     attack::Slain,
     base_stats::BaseStats,
@@ -11,23 +15,26 @@ use ferrets_content::{
     dying::{DeathKind, DyingDef},
     entity_stats::EntityStatId,
     entity_type_def::{EntityTypeDef, EntityTypeId},
+    field::FieldSourceDef,
+    gateway::{GatewayDef, Joins},
     location::LocationDef,
     morph::MorphReason,
     pool::PoolInitial,
     pool_def::PoolId,
     registry::ContentRegistry,
     resource::DepletionPolicy,
+    skills::SkillId,
     transport::PassengerFate,
     work::Attachment,
 };
 use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
 use ferrets_math::{facing::Facing, fixed_uvec2::FixedUVec2};
-use ferrets_pathfinder::layer_mask::LayerMask;
 use ferrets_physics::body;
 
 use crate::{
     berths,
     beside::{Beside, Lean},
+    bore_id::BoreIds,
     brood,
     components::{
         annex::{AnnexComponent, DocksComponent},
@@ -40,14 +47,14 @@ use crate::{
         entity_skills::SkillsComponent,
         entity_stats::StatsComponent,
         field_source::FieldSourcesComponent,
-        hidden::HiddenComponent,
+        gateway::GatewayComponent,
+        hidden::{self, HiddenComponent, Inside},
         lifetime::LifetimeComponent,
         location::LocationComponent,
         morph::MorphComponent,
         movement::MoveComponent,
         order_queue::{CancelPolicy, OrderQueueComponent},
         owner::{self, OwnerComponent},
-        pending_reveal::PendingRevealComponent,
         pool_shifts::PoolShiftsComponent,
         pools::{self, PoolsComponent},
         rally::RallyPointComponent,
@@ -58,25 +65,30 @@ use crate::{
         tags::TagsComponent,
         train::TrainQueueComponent,
         transport::{BoardedComponent, GarrisonFireComponent, TransporterComponent},
+        tunnel::TunnelEndComponent,
         turret::{TurretState, TurretsComponent},
     },
     control_groups::ControlGroups,
     entity_def::{self, Operation},
     entity_index::EntityIndex,
     events::{DeathCause, EventRecord, SimulationEvent, SpawnCause},
+    fields,
     game_loop::{
         board, buffs,
         orders::{self, Refusal},
         stats,
     },
+    ground,
     impacts::PendingImpacts,
+    links::{self, LinkKey, LinkPassengers, Membership},
     map::{Map, OccupancyClass},
     movement_model::{self, MovementModel},
     order::Order,
     ruleset::RemainsLimit,
     selection::Selection,
     session::{GameSession, player_id::PlayerId},
-    simulation_id::{SimulationId, SimulationIdGenerator},
+    simulation_id::{SimulationId, SimulationIds},
+    tunnels::{self, EndLoss},
 };
 /// Look direction a freshly spawned entity starts with: south, the conventional
 /// resting facing toward the viewer.
@@ -163,7 +175,7 @@ pub fn create_entity(
         (def.location?, OccupancyClass::of(def))
     };
     let location = LocationComponent::new(position, DEFAULT_FACING);
-    if !ground_takes(world, &location, location_def, occupancy, None) {
+    if !ground::can_place(world, &location, location_def, occupancy, &[], &[]) {
         return None;
     }
 
@@ -172,37 +184,6 @@ pub fn create_entity(
     // above.
     restore_footprint(world, entity);
     Some((entity, id))
-}
-
-/// What the entity being placed holds on the map already: a form changing in
-/// place overlaps its own cells, and never stands in its own way.
-#[derive(Debug, Clone, Copy)]
-pub struct Own {
-    /// The entity itself.
-    pub entity: Entity,
-    /// Where it stands.
-    pub location: LocationComponent,
-    /// The form it wears there.
-    pub def: LocationDef,
-    /// The plane its footprint marks.
-    pub class: OccupancyClass,
-}
-
-/// Whether the ground takes a footprint of `to` at `placed` on the plane
-/// `occupancy` selects: every cell free on the grid, and nothing standing
-/// underfoot in it. `own` is what the entity being placed holds already.
-pub fn ground_takes(
-    world: &World,
-    placed: &LocationComponent,
-    to: LocationDef,
-    occupancy: OccupancyClass,
-    own: Option<Own>,
-) -> bool {
-    world.resource::<Map>().can_place_entity_over_own(
-        placed,
-        &to,
-        own.as_ref().map(|own| (&own.location, &own.def, own.class)),
-    ) && nothing_underfoot(world, placed, to, occupancy, own.map(|own| own.entity))
 }
 
 /// Creates one of the map's placements, each pool `starts` names started
@@ -557,7 +538,7 @@ fn spawn_remains(
     // claim their cells — rubble — can genuinely be blocked, by what the grid
     // marks and by what has dug in under it.
     if location_def.solidity().claims_cells()
-        && !ground_takes(world, &location, location_def, class, None)
+        && !ground::can_place(world, &location, location_def, class, &[], &[])
     {
         return;
     }
@@ -565,7 +546,7 @@ fn spawn_remains(
         .resource_mut::<Map>()
         .place_entity(&location, &location_def, class);
 
-    let id = world.resource_mut::<SimulationIdGenerator>().generate();
+    let id = world.resource_mut::<SimulationIds>().mint();
     let mut queue = OrderQueueComponent::default();
     queue.push(Order::Die, None);
 
@@ -651,45 +632,37 @@ pub(crate) fn despawn_remains(world: &mut World, entity: Entity) {
     world.despawn(entity);
 }
 
-/// Takes an entity off the map: frees the cells it holds, gives up its berth,
-/// and takes its location, kept in [`HiddenComponent::went_in`] until a return
-/// puts one back. A hidden entity holds no cells and is neither selected nor
-/// targeted; [`place_back_beside`] sets it down again.
+/// Takes an entity off the map into `inside`: frees the cells it holds, gives
+/// up its berth, and takes its location, kept in [`HiddenComponent::went_in`]
+/// until a return puts one back. A hidden entity holds no cells and is neither
+/// selected nor targeted; [`place_back_beside`] sets it down again.
 ///
-/// On an entity already hidden it drops a pending return and nothing else.
-pub fn hide_entity(world: &mut World, entity: Entity) {
-    if !entity_def::hidden(world, entity) {
-        lift_footprint(world, entity);
-        unseat(world, entity);
-        take_off_map(world, entity);
-    }
-    // Hiding is the inverse of a pending return: drop any stale retry so a new hide
-    // is not undone by `process_pending_reveals` on a later tick. This is the part
-    // that still matters for an entity that was already hidden — it is off the map
-    // for a new reason now, and comes back where that reason says rather than where
-    // the abandoned one would have put it.
-    drop_deferred_return(world, entity);
-}
-
-/// Defers the return of a hidden entity: the search for a free cell beside
-/// `beside`, leaning as `lean` says, is retried every tick by
-/// [`game_loop::pending_reveal::process_pending_reveals`] until one opens.
-///
-/// Panics for an entity that is not hidden: it has no return to defer.
-fn defer_return(world: &mut World, entity: Entity, beside: Beside, lean: Lean) {
+/// Panics for an entity already hidden: [`hidden::record_inside`] says where one
+/// is now.
+pub fn hide_entity(world: &mut World, entity: Entity, inside: Inside) {
     assert!(
-        entity_def::hidden(world, entity),
-        "a return is deferred for a hidden entity"
+        !entity_def::hidden(world, entity),
+        "only an entity on the map is hidden"
     );
-    let last = entity_def::beside_rect(world, entity, beside);
-    world
-        .entity_mut(entity)
-        .insert(PendingRevealComponent { beside, lean, last });
+    lift_footprint(world, entity);
+    unseat(world, entity);
+    take_off_map(world, entity, inside);
 }
 
-/// Ends a deferred return. Nothing for an entity with no return deferred.
-pub(crate) fn drop_deferred_return(world: &mut World, entity: Entity) {
-    world.entity_mut(entity).remove::<PendingRevealComponent>();
+/// Puts a body with no cell to stand on off the map to wait for one beside
+/// `beside`, leaning as `lean` says: one still on the map, holding no cells and
+/// no berth, is taken off it; one already hidden leaves what it was inside.
+/// Either way it is [`Inside::Waiting`] from then on, and
+/// [`game_loop::pending_reveal::process_pending_reveals`] retries the return
+/// every tick until a cell opens.
+fn wait_off_map(world: &mut World, entity: Entity, beside: Beside, lean: Lean) {
+    let last = entity_def::beside_rect(world, entity, beside);
+    let waiting = Inside::Waiting { beside, lean, last };
+    if entity_def::hidden(world, entity) {
+        hidden::record_inside(world, entity, waiting);
+    } else {
+        take_off_map(world, entity, waiting);
+    }
 }
 
 /// Whether a boarding was made or refused.
@@ -709,8 +682,8 @@ pub enum Boarding {
 /// untouched.
 ///
 /// Panics unless the passenger is alive, aboard nothing, seated nowhere, on
-/// the map and not the holder itself, and the holder is alive, on the map and
-/// operating.
+/// the map and not the holder itself, and the holder is a transporter alive,
+/// on the map and operating.
 pub fn board(world: &mut World, passenger: Entity, holder: Entity) -> Boarding {
     assert!(
         !entity_def::dying(world, passenger)
@@ -720,6 +693,10 @@ pub fn board(world: &mut World, passenger: Entity, holder: Entity) -> Boarding {
         "a passenger boards alive, from the map"
     );
     assert_ne!(passenger, holder, "nothing boards itself");
+    assert!(
+        entity_def::of(world, holder).transporter().is_some(),
+        "only a transporter takes a passenger aboard"
+    );
     let holder_operation = entity_def::operation(world, holder);
     assert!(
         !entity_def::dying(world, holder)
@@ -737,9 +714,9 @@ pub fn board(world: &mut World, passenger: Entity, holder: Entity) -> Boarding {
 
 /// The boarding itself, judged by the caller.
 fn put_aboard(world: &mut World, passenger: Entity, holder: Entity) {
-    hide_entity(world, passenger);
     let passenger_id = entity_def::simulation_id(world, passenger);
     let holder_id = entity_def::simulation_id(world, holder);
+    hide_entity(world, passenger, Inside::Transporter(holder_id));
     world
         .entity_mut(holder)
         .get_mut::<TransporterComponent>()
@@ -752,30 +729,40 @@ fn put_aboard(world: &mut World, passenger: Entity, holder: Entity) {
     world.resource_mut::<Selection>().remove(passenger_id);
 }
 
-/// Takes an entity that holds no cells and no berth off the map, announcing
-/// it. Panics for one that is already hidden.
-fn take_off_map(world: &mut World, entity: Entity) {
+/// Takes `body` off the map into the link `key`, announcing it.
+///
+/// Panics for a body already off the map.
+pub(crate) fn put_into_link(world: &mut World, body: Entity, key: LinkKey) {
+    let body_id = entity_def::simulation_id(world, body);
+    hide_entity(world, body, Inside::Link(key));
+    world.resource_mut::<LinkPassengers>().insert(key, body_id);
+    world.resource_mut::<Selection>().remove(body_id);
+}
+
+/// Takes an entity that holds no cells and no berth off the map into
+/// `inside`, announcing it. Panics for one that is already hidden.
+fn take_off_map(world: &mut World, entity: Entity, inside: Inside) {
     let announced = SimulationEvent::EntityHidden {
         entity: entity_def::simulation_id(world, entity),
         position: entity_def::position(world, entity),
     };
     world.resource_mut::<EventRecord>().emit(announced);
-    mark_hidden(world, entity);
+    mark_hidden(world, entity, inside);
 }
 
-/// Marks an entity that holds no cells and no berth as hidden, taking its
-/// location into the marker; every shot following it loses it and lands where
-/// it went in. Panics for one that is already hidden: there is nothing to take.
-fn mark_hidden(world: &mut World, entity: Entity) {
+/// Marks an entity that holds no cells and no berth as hidden inside
+/// `inside`, taking its location into the marker; every shot following it
+/// loses it and lands where it went in. Panics for one that is already
+/// hidden: there is nothing to take.
+fn mark_hidden(world: &mut World, entity: Entity, inside: Inside) {
     let id = entity_def::simulation_id(world, entity);
     let mut entity_mut = world.entity_mut(entity);
     let went_in = entity_mut
         .take::<LocationComponent>()
         .expect("an entity taken off the map stood somewhere");
-    entity_mut.insert(HiddenComponent::new(went_in));
-    world
-        .resource_mut::<PendingImpacts>()
-        .lose(id, went_in.position);
+    let position = went_in.position;
+    entity_mut.insert(HiddenComponent::new(went_in, inside));
+    world.resource_mut::<PendingImpacts>().lose(id, position);
 }
 
 /// Seats an entity in a berth of `job`'s group named by `attachment`: it frees
@@ -835,7 +822,7 @@ fn seat_at(
     let job_id = entity_def::simulation_id(world, job);
     berths::occupy(world, job, attachment.berths(), seat, id);
 
-    let position = berths::position_centred_on(world, entity, point);
+    let position = berths::position_centered_on(world, entity, point);
     let mut entity_mut = world.entity_mut(entity);
     entity_mut
         .get_mut::<LocationComponent>()
@@ -870,18 +857,17 @@ pub(crate) fn lift_footprint(world: &mut World, entity: Entity) {
     if !entity_def::stands_on_grid(world, entity) {
         return;
     }
-    let location = *world
-        .entity(entity)
-        .get::<LocationComponent>()
-        .expect("only entities with LocationComponent hold a footprint");
     let def = entity_def::of(world, entity);
     let location_def = def
         .location
         .expect("only entities with LocationDef hold a footprint");
     let class = OccupancyClass::of(def);
-    world
-        .resource_mut::<Map>()
-        .displace_entity(&location, &location_def, class);
+    world.resource_scope(|world, mut map: Mut<Map>| {
+        let location = world
+            .get::<LocationComponent>(entity)
+            .expect("only entities with LocationComponent hold a footprint");
+        map.displace_entity(location, &location_def, class);
+    });
 }
 
 /// Stamps back the footprint [`lift_footprint`] took off an entity that
@@ -890,18 +876,17 @@ pub(crate) fn restore_footprint(world: &mut World, entity: Entity) {
     if !entity_def::stands_on_grid(world, entity) {
         return;
     }
-    let location = *world
-        .entity(entity)
-        .get::<LocationComponent>()
-        .expect("only entities with LocationComponent hold a footprint");
     let def = entity_def::of(world, entity);
     let location_def = def
         .location
         .expect("only entities with LocationDef hold a footprint");
     let class = OccupancyClass::of(def);
-    world
-        .resource_mut::<Map>()
-        .place_entity(&location, &location_def, class);
+    world.resource_scope(|world, mut map: Mut<Map>| {
+        let location = world
+            .get::<LocationComponent>(entity)
+            .expect("only entities with LocationComponent hold a footprint");
+        map.place_entity(location, &location_def, class);
+    });
 }
 
 /// Whether a body coming back onto the map was set down.
@@ -927,6 +912,85 @@ pub fn place_back_beside(world: &mut World, entity: Entity, beside: Beside, lean
         .location
         .expect("only entities with LocationDef can be placed back");
     match cell_back_beside(world, entity, beside, lean, &location_def) {
+        Some(cell) => {
+            place_back_at(world, entity, cell, &location_def);
+            SetDown::Placed
+        }
+        None => SetDown::NoCell,
+    }
+}
+
+/// Stands the hidden `entity` back on the free cell nearest `point` at most
+/// `range` cells from `rect` that its placement rules admit, announcing it,
+/// or `SetDown::NoCell` when none within the search radius takes it. The
+/// search starts from the cell within the range nearest `point` (see
+/// [`Projection::nearest_in_range_of_rect`](ferrets_geometry::projection::Projection::nearest_in_range_of_rect)).
+pub(crate) fn place_back_near(
+    world: &mut World,
+    entity: Entity,
+    point: CellPos,
+    rect: CellRect,
+    range: u32,
+) -> SetDown {
+    let def = entity_def::of(world, entity);
+    let location_def = def
+        .location
+        .expect("only entities with LocationDef can be placed back");
+    let class = OccupancyClass::of(def);
+    let owner = entity_def::owner(world, entity);
+    let size = location_def.size();
+    let spot = CellRect::new(point, CellSize::ONE);
+    let map = world.resource::<Map>();
+    let projection = map.projection();
+    let start = projection.nearest_in_range_of_rect(rect, range, point);
+    let cell = map.find_placement_near_toward_where(start, CellSize::ONE, size, spot, |cell| {
+        let placed = LocationComponent::new(FixedUVec2::from(cell), DEFAULT_FACING);
+        projection.in_range_for_rects(CellRect::new(cell, size), rect, range)
+            && ground::can_place(world, &placed, location_def, class, &[], &[])
+            && fields::allows_placement(world, owner, def, cell)
+    });
+    match cell {
+        Some(cell) => {
+            place_back_at(world, entity, cell, &location_def);
+            SetDown::Placed
+        }
+        None => SetDown::NoCell,
+    }
+}
+
+/// Stands the hidden `entity` back beside `beside` on the free cell nearest
+/// it that its placement rules admit, leaning as `lean` says, announcing it,
+/// or `SetDown::NoCell` when none within the search radius takes it.
+pub(crate) fn place_back_beside_admitted(
+    world: &mut World,
+    entity: Entity,
+    beside: Beside,
+    lean: Lean,
+) -> SetDown {
+    let def = entity_def::of(world, entity);
+    let location_def = def
+        .location
+        .expect("only entities with LocationDef can be placed back");
+    let class = OccupancyClass::of(def);
+    let owner = entity_def::owner(world, entity);
+    let around = entity_def::beside_rect(world, entity, beside);
+    let toward = match lean {
+        Lean::WentIn => entity_def::went_in_rect(world, entity),
+        Lean::Toward(toward) => toward,
+        Lean::Nothing => around,
+    };
+    let cell = world.resource::<Map>().find_placement_near_toward_where(
+        around.origin,
+        around.size,
+        location_def.size(),
+        toward,
+        |cell| {
+            let placed = LocationComponent::new(FixedUVec2::from(cell), DEFAULT_FACING);
+            ground::can_place(world, &placed, location_def, class, &[], &[])
+                && fields::allows_placement(world, owner, def, cell)
+        },
+    );
+    match cell {
         Some(cell) => {
             place_back_at(world, entity, cell, &location_def);
             SetDown::Placed
@@ -984,13 +1048,13 @@ pub(crate) fn place_back_beside_or_retry(
     }
     // A seated body gives its berth back and waits off the map like any other.
     match unseat(world, entity) {
-        Some(_) => take_off_map(world, entity),
+        Some(_) => {}
         None => assert!(
             entity_def::hidden(world, entity),
             "an entity placed nowhere is seated or hidden"
         ),
     }
-    defer_return(world, entity, beside, lean);
+    wait_off_map(world, entity, beside, lean);
 }
 
 /// Stands an attached entity on `cell`, giving its berth up.
@@ -1010,7 +1074,7 @@ pub(crate) fn step_out(world: &mut World, entity: Entity, cell: CellPos) {
 /// Stands an entity that holds no cells and no berth — one that has just given
 /// its seat up through [`unseat`] — on the nearest free cell beside `beside`,
 /// leaning as `lean` says. With no free cell within the search
-/// radius it is hidden instead and tagged with [`PendingRevealComponent`], so
+/// radius it is hidden instead, [`Inside::Waiting`], so
 /// [`game_loop::pending_reveal::process_pending_reveals`] stands it up as soon
 /// as a cell opens.
 pub(crate) fn stand_or_retry(world: &mut World, entity: Entity, beside: Beside, lean: Lean) {
@@ -1019,10 +1083,7 @@ pub(crate) fn stand_or_retry(world: &mut World, entity: Entity, beside: Beside, 
         .expect("only entities with LocationDef can stand");
     match cell_back_beside(world, entity, beside, lean, &location_def) {
         Some(cell) => place_back_at(world, entity, cell, &location_def),
-        None => {
-            take_off_map(world, entity);
-            defer_return(world, entity, beside, lean);
-        }
+        None => wait_off_map(world, entity, beside, lean),
     }
 }
 
@@ -1115,31 +1176,28 @@ enum Return {
 fn place_back_at(world: &mut World, entity: Entity, cell: CellPos, location_def: &LocationDef) {
     let class = OccupancyClass::of(entity_def::of(world, entity));
     let seat = unseat(world, entity);
-    let mut entity_mut = world.entity_mut(entity);
 
-    // A hidden entity comes back facing the way it went in; one on the map
-    // already, seated or unseated, keeps the location it has.
-    let (location, came_back) = match (entity_mut.take::<HiddenComponent>(), seat) {
+    // A hidden entity comes back with the location it went in with, facing
+    // the way it went in; one on the map already, seated or unseated, keeps
+    // the location it has. Either is moved to the cell.
+    let hidden = world.entity_mut(entity).take::<HiddenComponent>();
+    let came_back = match (hidden, seat) {
         (Some(hidden), None) => {
-            let location = LocationComponent::new(FixedUVec2::from(cell), hidden.went_in.facing);
-            entity_mut.insert(location);
-            (location, Return::OffMap)
+            world.entity_mut(entity).insert(hidden.went_in);
+            Return::OffMap
         }
-        (None, Some(_)) => (move_to(&mut entity_mut, cell), Return::Berth),
-        (None, None) => (move_to(&mut entity_mut, cell), Return::Unseated),
+        (None, Some(_)) => Return::Berth,
+        (None, None) => Return::Unseated,
         (Some(_), Some(_)) => unreachable!("a hidden entity is never seated"),
     };
-    world
-        .resource_mut::<Map>()
-        .place_entity(&location, location_def, class);
+    stand_at(world, entity, cell, location_def, class);
+    fit_concealment(world, entity);
 
     match came_back {
         Return::OffMap => {
-            // A return deferred for this body ends here, whoever placed it.
-            drop_deferred_return(world, entity);
             let announced = SimulationEvent::EntityRevealed {
                 entity: entity_def::simulation_id(world, entity),
-                position: location.position,
+                position: entity_def::position(world, entity),
             };
             world.resource_mut::<EventRecord>().emit(announced);
         }
@@ -1147,14 +1205,77 @@ fn place_back_at(world: &mut World, entity: Entity, cell: CellPos, location_def:
     }
 }
 
-/// Moves a located entity's position to `cell`, returning the location it
-/// then has. Panics for an entity with no location.
-fn move_to(entity_mut: &mut EntityWorldMut, cell: CellPos) -> LocationComponent {
-    let mut location = entity_mut
-        .get_mut::<LocationComponent>()
-        .expect("an entity on the map has a location");
-    location.position = FixedUVec2::from(cell);
-    *location
+/// Moves entities standing on the grid to stand anchored at their cells, all
+/// at once: every footprint is lifted before any is set down, so one may land
+/// on cells another held. Each keeps its facing, workers seated on one follow
+/// it onto its berths' new points, and each move is announced.
+///
+/// Panics for an entity that does not stand on the grid at rest, is dying, is
+/// a site, was raised over a resource source or is changing form: the caller
+/// judged every move, and every cell free with the moved bodies lifted.
+pub fn relocate(world: &mut World, moves: &[(Entity, CellPos)]) {
+    let mut from = Vec::with_capacity(moves.len());
+    for &(entity, _) in moves {
+        assert!(
+            entity_def::relocatable(world, entity),
+            "only a finished body standing on the grid, over no resource source and not dying or changing form, is relocated"
+        );
+        let position = entity_def::position(world, entity);
+        assert!(
+            match world.resource::<Map>().movement_model() {
+                MovementModel::Cell => !movement_model::is_mid_crossing(position),
+                MovementModel::Continuous => true,
+            },
+            "a relocated body stands at rest, its walk dropped before it moves"
+        );
+        from.push(position);
+    }
+    for &(entity, _) in moves {
+        lift_footprint(world, entity);
+    }
+    for (&(entity, cell), from) in moves.iter().zip(from) {
+        let def = entity_def::of(world, entity);
+        let class = OccupancyClass::of(def);
+        let location_def = def
+            .location
+            .expect("only entities with LocationDef stand on the grid");
+        stand_at(world, entity, cell, &location_def, class);
+        fit_concealment(world, entity);
+        for worker in berths::reseat(world, entity) {
+            fit_concealment(world, worker);
+        }
+        let announced = SimulationEvent::EntityRelocated {
+            entity: entity_def::simulation_id(world, entity),
+            from,
+            to: entity_def::position(world, entity),
+        };
+        world.resource_mut::<EventRecord>().emit(announced);
+    }
+}
+
+/// Fits `entity` with concealment as its type, buffs and the fields where it
+/// stands now say.
+pub(crate) fn fit_concealment(world: &mut World, entity: Entity) {
+    let concealed = entity_def::concealed(world, entity);
+    fit_default::<ConcealedComponent>(&mut world.entity_mut(entity), concealed);
+}
+
+/// Moves a located entity to stand anchored at `cell` and stamps its footprint
+/// there, on the plane `class` selects. Panics for an entity with no location.
+fn stand_at(
+    world: &mut World,
+    entity: Entity,
+    cell: CellPos,
+    location_def: &LocationDef,
+    class: OccupancyClass,
+) {
+    world.resource_scope(|world, mut map: Mut<Map>| {
+        let mut location = world
+            .get_mut::<LocationComponent>(entity)
+            .expect("an entity on the map has a location");
+        location.position = FixedUVec2::from(cell);
+        map.place_entity(&location, location_def, class);
+    });
 }
 
 /// Takes `source` off the map under the `site` raised over it, handing the
@@ -1170,7 +1291,7 @@ pub(crate) fn cover_source(world: &mut World, source: Entity, site: Entity) {
         .amount;
     let uncovers = entity_def::type_id(world, source);
     let anchor = body::anchor(entity_def::position(world, source));
-    mark_hidden(world, source);
+    mark_hidden(world, source, Inside::Nothing);
     despawn_entity(world, source, DeathCause::Overbuilt);
 
     let mut site_mut = world.entity_mut(site);
@@ -1309,15 +1430,20 @@ fn start_dying(world: &mut World, entity: Entity, passing: Passing) {
     world.resource_mut::<Selection>().remove(id);
     world.resource_mut::<ControlGroups>().remove(id);
 
-    // A ride's end leans nowhere in particular; a worker comes out on the side
-    // it went in by.
+    // What it holds, then what it is in. A ride's end leans nowhere in
+    // particular; a worker comes out on the side it went in by.
     settle_passengers(world, entity, Lean::Nothing);
+    settle_gateway(world, entity, GatewayLoss::Died, Lean::Nothing);
     settle_workers(world, entity, Lean::WentIn);
-    leave_holder(world, entity, id);
     settle_broodlings(world, entity, entity_def::morph_origin(world, entity));
+    leave_transporter(world, entity, id);
+    leave_link(world, entity, id);
     leave_brood(world, entity, id);
-    // A dying entity never comes back to the grid.
-    drop_deferred_return(world, entity);
+    // A dying entity never comes back to the grid: a waiting body waits no
+    // more.
+    if entity_def::pending_reveal(world, entity) {
+        hidden::record_inside(world, entity, Inside::Nothing);
+    }
 
     // What waits is the death; a type that states none goes the tick it dies,
     // and a body has already spent its whole existence lying there.
@@ -1426,8 +1552,9 @@ pub fn change_owner(world: &mut World, entity: Entity, to: PlayerId, by: Simulat
 
     world.resource_mut::<Selection>().remove(id);
     world.resource_mut::<ControlGroups>().remove(id);
-    world.entity_mut(entity).insert(OwnerComponent::new(to));
 
+    // Announced before what it costs, as a death is: the capture precedes the
+    // passengers it loses in the record.
     let announced = SimulationEvent::EntityCaptured {
         entity: id,
         entity_type: entity_def::type_id(world, entity),
@@ -1438,7 +1565,13 @@ pub fn change_owner(world: &mut World, entity: Entity, to: PlayerId, by: Simulat
     };
     world.resource_mut::<EventRecord>().emit(announced);
 
+    // What changing hands costs what it holds: the link it leaves, judged
+    // against the old owner's gateways, and the passengers `to` does not
+    // admit.
+    settle_gateway(world, entity, GatewayLoss::Captured { to }, lean);
     settle_unadmitted_passengers(world, entity, to, lean);
+
+    world.entity_mut(entity).insert(OwnerComponent::new(to));
 }
 
 /// Keeps aboard a transporter handed to `to` only what `to`'s boarding admits;
@@ -1447,8 +1580,7 @@ pub fn change_owner(world: &mut World, entity: Entity, to: PlayerId, by: Simulat
 /// carries nobody.
 fn settle_unadmitted_passengers(world: &mut World, entity: Entity, to: PlayerId, lean: Lean) {
     let Some((boarding, fate)) = entity_def::of(world, entity)
-        .transporter
-        .as_ref()
+        .transporter()
         .map(|transporter| (transporter.boarding(), transporter.passenger_fate()))
     else {
         return;
@@ -1486,6 +1618,7 @@ fn settle_unadmitted_passengers(world: &mut World, entity: Entity, to: PlayerId,
         settle_passenger(
             world,
             passenger,
+            holder,
             fate,
             DeathCause::PassengerBarred { holder },
             lean,
@@ -1493,11 +1626,155 @@ fn settle_unadmitted_passengers(world: &mut World, entity: Entity, to: PlayerId,
     }
 }
 
+/// Keeps the link of `entity`, a gateway changing into the form `into`, when
+/// `into` joins what it joins, and leaves it as a loss does otherwise — into
+/// a gateway of anything else or into no gateway — set down leaning as `lean`
+/// says. Nothing for an entity that is no gateway.
+pub(crate) fn keep_or_leave_link(
+    world: &mut World,
+    entity: Entity,
+    into: EntityTypeId,
+    lean: Lean,
+) {
+    let Some(joins) = entity_def::of(world, entity)
+        .gateway()
+        .map(GatewayDef::joins)
+    else {
+        return;
+    };
+    let joins_into = world
+        .resource::<ContentRegistry>()
+        .def(into)
+        .gateway()
+        .map(GatewayDef::joins);
+    if joins_into == Some(joins) {
+        return;
+    }
+    settle_gateway(world, entity, GatewayLoss::Changed, lean);
+}
+
+/// How a gateway was lost to its link.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GatewayLoss {
+    /// It started dying.
+    Died,
+    /// It changed hands, to this player.
+    Captured {
+        /// Its new owner.
+        to: PlayerId,
+    },
+    /// It changed into a form that is no gateway of its link.
+    Changed,
+}
+
+/// Settles what losing `gateway` as `loss` says costs: a tunnel's other end
+/// fares as the tunnel says, a link no other gateway keeps any longer meets
+/// its fate beside `gateway`, one set down leaning as `lean` says, and a
+/// tunnel end keeps what the loss leaves it of its state. Nothing for an
+/// entity that is no gateway, nor for a network gateway a capture leaves in
+/// the link it was one of.
+fn settle_gateway(world: &mut World, gateway: Entity, loss: GatewayLoss, lean: Lean) {
+    let Some(joins) = entity_def::of(world, gateway)
+        .gateway()
+        .map(GatewayDef::joins)
+    else {
+        return;
+    };
+    // The link it leaves, read before anything below changes it.
+    let membership = links::membership_of(world, gateway);
+    match (joins, loss) {
+        (Joins::Network(_), GatewayLoss::Captured { to }) => {
+            let after = links::membership_from(
+                world.resource::<ContentRegistry>(),
+                world.resource::<GameSession>(),
+                entity_def::of(world, gateway),
+                Some(to),
+                None,
+            );
+            if after == membership {
+                return;
+            }
+        }
+        (Joins::Network(_), GatewayLoss::Died | GatewayLoss::Changed) | (Joins::Tunnel(_), _) => {}
+    }
+    // A razed other end starts dying first, so it keeps the link no longer.
+    match (joins, loss) {
+        (Joins::Tunnel(_), GatewayLoss::Captured { .. }) => {
+            tunnels::end_lost(world, gateway, EndLoss::Captured)
+        }
+        (Joins::Tunnel(_), GatewayLoss::Died | GatewayLoss::Changed) => {
+            tunnels::end_lost(world, gateway, EndLoss::Gone)
+        }
+        (Joins::Network(_), _) => {}
+    }
+    match membership {
+        Membership::Joined(key) => {
+            if !links::kept_by_others(world, key, gateway) {
+                // A link lost with its gateway's death is lost to whatever took
+                // the gateway down; one a capture or a change of form left is
+                // a loss nobody is credited with.
+                let holder = entity_def::simulation_id(world, gateway);
+                let lost = match loss {
+                    GatewayLoss::Died => DeathCause::PassengerLost { holder },
+                    GatewayLoss::Captured { .. } | GatewayLoss::Changed => {
+                        DeathCause::PassengerBarred { holder }
+                    }
+                };
+                settle_link(world, gateway, key, lost, lean);
+            }
+        }
+        Membership::Apart => {}
+    }
+    match joins {
+        Joins::Tunnel(_) => tunnel_end_after(world, gateway, loss),
+        Joins::Network(_) => {}
+    }
+}
+
+/// What the tunnel end `end` keeps of its state after `loss`: a dying end
+/// all of it, a captured one starts on a newly minted bore, and a changed one
+/// sheds it for its new form's to be fitted afresh.
+fn tunnel_end_after(world: &mut World, end: Entity, loss: GatewayLoss) {
+    match loss {
+        GatewayLoss::Died => {}
+        GatewayLoss::Captured { .. } => tunnels::bore_anew(world, end),
+        GatewayLoss::Changed => {
+            world.entity_mut(end).remove::<TunnelEndComponent>();
+        }
+    }
+}
+
+/// Applies the fate of the link `gateway` is one of to everyone inside
+/// `key`, in id order, as a dying transporter's to its passengers: each is
+/// let go of the link and taken to have been at `gateway`, where it dies of
+/// `lost` or is set down beside. Nothing for a link that holds nobody.
+fn settle_link(world: &mut World, gateway: Entity, key: LinkKey, lost: DeathCause, lean: Lean) {
+    let Some(fate) = links::fate_of(world, gateway) else {
+        return;
+    };
+    let holder = entity_def::simulation_id(world, gateway);
+    let at = entity_def::whereabouts(world, gateway);
+    let passengers = world.resource_mut::<LinkPassengers>().take(key);
+    for id in passengers {
+        let Some(passenger) = world.resource::<EntityIndex>().alive(id) else {
+            continue;
+        };
+        hidden::record_inside(world, passenger, Inside::Nothing);
+        let facing = world
+            .get::<HiddenComponent>(passenger)
+            .expect("a body in a link is hidden")
+            .went_in
+            .facing;
+        hidden::record_went_in(world, passenger, LocationComponent::new(at, facing));
+        settle_passenger(world, passenger, holder, fate, lost, lean);
+    }
+}
+
 /// Applies a dying transporter's declared passenger fate to everyone aboard.
 ///
-/// Ejection is one placement attempt per passenger, in id order so earlier ids
-/// take the closer cells on every peer; a passenger the ring scan cannot place
-/// dies with its holder rather than lingering hidden with nothing holding it.
+/// Ejection is one placement attempt per passenger, in id order, on the cells
+/// its placement rules admit; a passenger no such cell takes dies with its
+/// holder.
 fn settle_passengers(world: &mut World, entity: Entity, lean: Lean) {
     let Some(passengers) = world
         .entity_mut(entity)
@@ -1510,8 +1787,7 @@ fn settle_passengers(world: &mut World, entity: Entity, lean: Lean) {
         return;
     }
     let fate = entity_def::of(world, entity)
-        .transporter
-        .as_ref()
+        .transporter()
         .expect("a passenger list belongs to a transporter")
         .passenger_fate();
     let holder = entity_def::simulation_id(world, entity);
@@ -1523,6 +1799,7 @@ fn settle_passengers(world: &mut World, entity: Entity, lean: Lean) {
         settle_passenger(
             world,
             passenger,
+            holder,
             fate,
             DeathCause::PassengerLost { holder },
             lean,
@@ -1566,13 +1843,14 @@ fn settle_workers(world: &mut World, job: Entity, lean: Lean) {
     }
 }
 
-/// Settles one passenger on its holder's `fate`: destroyed with `lost` as the
-/// cause, or set down on the nearest free cell beside the holder, leaning as
-/// `lean` says, and destroyed with `lost` when there is none. Its boarding ends
-/// after it is settled.
+/// Settles one passenger of `holder` on `fate`: destroyed with `lost` as the
+/// cause, or set down on the nearest free cell beside `holder` that its
+/// placement rules admit, leaning as `lean` says, and destroyed with `lost`
+/// when there is none. Its boarding ends after it is settled.
 fn settle_passenger(
     world: &mut World,
     passenger: Entity,
+    holder: SimulationId,
     fate: PassengerFate,
     lost: DeathCause,
     lean: Lean,
@@ -1580,12 +1858,7 @@ fn settle_passenger(
     match fate {
         PassengerFate::Destroy => despawn_entity(world, passenger, lost),
         PassengerFate::Eject => {
-            let holder = world
-                .entity(passenger)
-                .get::<BoardedComponent>()
-                .expect("a passenger settled is still boarded")
-                .holder;
-            match place_back_beside(world, passenger, Beside::Container(holder), lean) {
+            match place_back_beside_admitted(world, passenger, Beside::Container(holder), lean) {
                 SetDown::Placed => {}
                 SetDown::NoCell => despawn_entity(world, passenger, lost),
             }
@@ -1675,8 +1948,9 @@ fn leave_brood(world: &mut World, entity: Entity, id: SimulationId) {
     }
 }
 
-/// Takes a dying passenger off its holder's list, freeing the slots it held.
-fn leave_holder(world: &mut World, entity: Entity, id: SimulationId) {
+/// Takes a dying passenger off its transporter's list, freeing the slots it
+/// held, and takes it to have been where the transporter is.
+fn leave_transporter(world: &mut World, entity: Entity, id: SimulationId) {
     let Some(boarded) = world.entity_mut(entity).take::<BoardedComponent>() else {
         return;
     };
@@ -1690,6 +1964,30 @@ fn leave_holder(world: &mut World, entity: Entity, id: SimulationId) {
         .expect("a holder with something aboard is a transporter")
         .passengers
         .remove(&id);
+    hidden::record_inside(world, entity, Inside::Nothing);
+    let at = entity_def::whereabouts(world, holder);
+    let facing = world
+        .get::<HiddenComponent>(entity)
+        .expect("a body aboard is hidden")
+        .went_in
+        .facing;
+    hidden::record_went_in(world, entity, LocationComponent::new(at, facing));
+}
+
+/// Takes a dying passenger off the link it is inside. Nothing for an entity
+/// inside no link.
+fn leave_link(world: &mut World, entity: Entity, id: SimulationId) {
+    let key = match world
+        .get::<HiddenComponent>(entity)
+        .map(|hidden| &hidden.inside)
+    {
+        Some(Inside::Link(key)) => *key,
+        Some(
+            Inside::Transporter(_) | Inside::Job(_) | Inside::Waiting { .. } | Inside::Nothing,
+        )
+        | None => return,
+    };
+    world.resource_mut::<LinkPassengers>().remove(key, id);
 }
 
 /// Removes a dead entity from the world after its dying phase has completed.
@@ -1749,6 +2047,7 @@ pub(crate) fn fit_components(
         has_health,
         trainer,
         transporter,
+        gateway,
         source,
         carrier,
         annex,
@@ -1770,6 +2069,7 @@ pub(crate) fn fit_components(
             def.has_pool(PoolId::HEALTH),
             def.trainer.is_some(),
             def.can_transport(),
+            def.gateway().map(GatewayDef::joins),
             def.resource_source.is_some(),
             def.resource_carrier.is_some(),
             def.annex.is_some(),
@@ -1806,18 +2106,10 @@ pub(crate) fn fit_components(
             }),
         Wearing::Own => false,
     };
-    let wants_rally = trainer || transporter || breeds_producers || producing;
+    let wants_rally = trainer || transporter || gateway.is_some() || breeds_producers || producing;
     let mut entity_mut = world.entity_mut(entity);
 
-    // Armed entities default to defending themselves; unarmed but movable,
-    // damageable ones to fleeing; the rest have no initiative to configure.
-    if !entity_mut.contains::<StanceComponent>() {
-        if can_attack {
-            entity_mut.insert(StanceComponent(Stance::Defend));
-        } else if can_move && has_health {
-            entity_mut.insert(StanceComponent(Stance::Flee));
-        }
-    }
+    fit_stance(&mut entity_mut, can_attack, can_move && has_health);
 
     // Runtime-state components for the roles the type carries; the
     // type-constant config stays on the definition, read via its handle.
@@ -1841,132 +2133,57 @@ pub(crate) fn fit_components(
     fit_default::<ConcealedComponent>(&mut entity_mut, concealed);
     fit_default::<TrainQueueComponent>(&mut entity_mut, trainer);
     fit_default::<TransporterComponent>(&mut entity_mut, transporter);
+    fit_default::<GatewayComponent>(&mut entity_mut, gateway.is_some());
+    // An end is born unbound on a bore of its own; the birth that raised it
+    // binds it after.
+    fit_with(
+        &mut entity_mut,
+        gateway.and_then(Joins::tunnel).is_some(),
+        |entity_mut| {
+            let bore = entity_mut.world_scope(|world| world.resource_mut::<BoreIds>().mint());
+            TunnelEndComponent::unbound(bore)
+        },
+    );
     fit_default::<ResourceSourceComponent>(&mut entity_mut, source);
     fit_default::<ResourceCarrierComponent>(&mut entity_mut, carrier);
     // Which primary an annex stands with is re-derived every tick, so a form
     // that becomes an annex starts alone and is docked by the next pass.
-    // Standing alone is a state with terms of its own, not an empty one, so it
-    // is fitted by name rather than by default.
-    match (annex, entity_mut.contains::<AnnexComponent>()) {
-        (true, false) => {
-            entity_mut.insert(AnnexComponent::alone());
-        }
-        (false, true) => {
-            entity_mut.remove::<AnnexComponent>();
-        }
-        (true, true) | (false, false) => {}
-    }
-    // A rally point is live state — where the player pointed — so it stays
-    // through a form change, including one wearing an interim form that
-    // releases nothing on the way, and goes only with a form that releases
-    // nothing for good.
-    match (wants_rally, entity_mut.contains::<RallyPointComponent>()) {
-        (true, false) => {
-            entity_mut.insert(RallyPointComponent::default());
-        }
-        (false, true) => match wearing {
-            Wearing::Interim => {}
-            Wearing::Own => {
-                entity_mut.remove::<RallyPointComponent>();
-            }
-        },
-        (true, true) | (false, false) => {}
-    }
-    // A brood is live state — the broodlings counted, the ticks toward the
-    // next — so it stays through a form change, including one wearing an
-    // interim form that breeds nothing on the way, and goes only with a form
-    // that breeds nothing for good.
-    match (breeds, entity_mut.contains::<BroodComponent>()) {
-        (true, false) => {
-            entity_mut.insert(BroodComponent::default());
-        }
-        (false, true) => match wearing {
-            Wearing::Interim => {}
-            Wearing::Own => {
-                entity_mut.remove::<BroodComponent>();
-            }
-        },
-        (true, true) | (false, false) => {}
-    }
+    fit_with(&mut entity_mut, annex, |_| AnnexComponent::alone());
+    // A rally point is live state — where the player pointed — and a brood
+    // too — the broodlings counted, the ticks toward the next — so each stays
+    // through an interim form that releases or breeds nothing on the way.
+    fit_kept_while_interim::<RallyPointComponent>(&mut entity_mut, wants_rally, wearing);
+    fit_kept_while_interim::<BroodComponent>(&mut entity_mut, breeds, wearing);
     // Offering docks is a standing fact about a type, so the component that
-    // records what stands in them is fitted with the form rather than by
-    // whatever settles the bonds: a primary with every dock empty still has
-    // one, which is what makes "offers docks" a query rather than a lookup.
-    // A form that stops offering docks drops what stood in them there and then.
+    // records what stands in them is fitted with the form: a primary with
+    // every dock empty still has one, and a form that stops offering docks
+    // drops what stood in them there and then.
     fit_default::<DocksComponent>(&mut entity_mut, docks);
-
-    // A turret remembers where it is trained, which no other component can hold
-    // for it: a fight's state is gone the moment the fight ends, and the body of a
-    // keep never turns. Mounted looking the way its body does, and left where it
-    // was last trained through any change that keeps the mount — a form with more
-    // guns than the last one trains the new ones forward, and one with fewer drops
-    // the guns it no longer has.
-    if mounted_turrets == 0 {
-        entity_mut.remove::<TurretsComponent>();
-    } else {
-        let facing = entity_mut
-            .get::<LocationComponent>()
-            .expect("a placed entity has a location")
-            .facing;
-        let mut turrets = entity_mut.take::<TurretsComponent>().unwrap_or_default();
-        turrets
-            .0
-            .resize(mounted_turrets, TurretState::mounted(facing));
-        entity_mut.insert(turrets);
-    }
-
-    // Tags and skills are the type's own vocabulary rather than live state, so
-    // they are replaced outright.
-    if tags.is_empty() {
-        entity_mut.remove::<TagsComponent>();
-    } else {
-        entity_mut.insert(TagsComponent::new(tags));
-    }
-    if skills.is_empty() {
-        entity_mut.remove::<SkillsComponent>();
-    } else {
-        entity_mut.insert(SkillsComponent::new(skills));
-    }
-
-    if acts_on_standing {
-        match acts {
-            StandingActs::Rearm => {
-                entity_mut.insert(StandComponent(Standing::Pending));
-            }
-            StandingActs::Keep => {
-                if !entity_mut.contains::<StandComponent>() {
-                    entity_mut.insert(StandComponent(Standing::Pending));
-                }
-            }
-        }
-    } else {
-        entity_mut.remove::<StandComponent>();
-    }
-
-    // Field sources reach as far as asked. Left to grow, a source takes over
-    // the reach of the one it replaces at the same index, so a form change
-    // does not pull a field back to its seed.
-    if field_sources.is_empty() {
-        entity_mut.remove::<FieldSourcesComponent>();
-    } else {
-        let sources = match reach {
-            FieldReach::Full => FieldSourcesComponent::full(&field_sources),
-            FieldReach::Initial => match entity_mut.get::<FieldSourcesComponent>() {
-                Some(previous) => FieldSourcesComponent::carried(&field_sources, previous),
-                None => FieldSourcesComponent::seeded(&field_sources),
-            },
-        };
-        entity_mut.insert(sources);
-    }
+    fit_turrets(&mut entity_mut, mounted_turrets);
+    fit_vocabulary(&mut entity_mut, tags, skills);
+    fit_standing_acts(&mut entity_mut, acts_on_standing, acts);
+    fit_field_sources(&mut entity_mut, &field_sources, reach);
 }
 
 /// Inserts a default `C` when the type wants one and it is absent, removes it
 /// when the type does not, and leaves an existing one untouched — so whatever
 /// live state it holds survives.
-pub(crate) fn fit_default<C: Component + Default>(entity: &mut EntityWorldMut, wanted: bool) {
+fn fit_default<C: Component + Default>(entity: &mut EntityWorldMut, wanted: bool) {
+    fit_with(entity, wanted, |_| C::default());
+}
+
+/// Inserts the `C` that `make` builds when the type wants one and it is
+/// absent, removes it when the type does not, and leaves an existing one
+/// untouched.
+fn fit_with<C: Component>(
+    entity: &mut EntityWorldMut,
+    wanted: bool,
+    make: impl FnOnce(&mut EntityWorldMut) -> C,
+) {
     match (wanted, entity.contains::<C>()) {
         (true, false) => {
-            entity.insert(C::default());
+            let component = make(entity);
+            entity.insert(component);
         }
         (false, true) => {
             entity.remove::<C>();
@@ -1975,53 +2192,109 @@ pub(crate) fn fit_default<C: Component + Default>(entity: &mut EntityWorldMut, w
     }
 }
 
-/// Whether nothing standing underfoot in a footprint of `location_def` at
-/// `location` keeps it from being raised there, `placing` being the entity
-/// the footprint is for when it is one already standing.
-///
-/// The navigation grid answers for everything that claims its cells; this
-/// answers for what claims none and is still there
-/// ([`Solidity::Underfoot`](ferrets_content::location::Solidity::Underfoot)):
-/// a mover crosses it, a static footprint is not raised over it. A mover
-/// being placed is never refused by it.
-fn nothing_underfoot(
-    world: &World,
-    location: &LocationComponent,
-    location_def: LocationDef,
-    occupancy: OccupancyClass,
-    placing: Option<Entity>,
-) -> bool {
-    match occupancy {
-        OccupancyClass::Claim => return true,
-        OccupancyClass::Static => {}
+/// Fits a default `C` as [`fit_default`] does, except that a form `wearing`
+/// an interim form keeps one it no longer wants.
+fn fit_kept_while_interim<C: Component + Default>(
+    entity: &mut EntityWorldMut,
+    wanted: bool,
+    wearing: Wearing,
+) {
+    match (wanted, entity.contains::<C>(), wearing) {
+        (true, false, _) => {
+            entity.insert(C::default());
+        }
+        (false, true, Wearing::Own) => {
+            entity.remove::<C>();
+        }
+        (false, true, Wearing::Interim) | (true, true, _) | (false, false, _) => {}
     }
-    let footprint = CellRect::new(body::anchor(location.position), location_def.size());
-    !world
-        .resource::<EntityIndex>()
-        .alive_entries()
-        .into_iter()
-        .any(|(_, entity)| {
-            if placing == Some(entity) {
-                return false;
+}
+
+/// Gives an entity with no stance yet its default one: an armed one defends
+/// itself, an unarmed one that `flees` (it moves and can be hurt) flees, and
+/// the rest have no initiative to configure.
+fn fit_stance(entity: &mut EntityWorldMut, can_attack: bool, flees: bool) {
+    if entity.contains::<StanceComponent>() {
+        return;
+    }
+    if can_attack {
+        entity.insert(StanceComponent(Stance::Defend));
+    } else if flees {
+        entity.insert(StanceComponent(Stance::Flee));
+    }
+}
+
+/// Fits `mounted` turrets: mounted looking the way the body does, and left
+/// where each was last trained through any change that keeps its mount — a
+/// form with more guns than the last trains the new ones forward, and one
+/// with fewer drops the guns it no longer has.
+fn fit_turrets(entity: &mut EntityWorldMut, mounted: usize) {
+    if mounted == 0 {
+        entity.remove::<TurretsComponent>();
+        return;
+    }
+    let facing = entity
+        .get::<LocationComponent>()
+        .expect("a placed entity has a location")
+        .facing;
+    let mut turrets = entity.take::<TurretsComponent>().unwrap_or_default();
+    turrets.0.resize(mounted, TurretState::mounted(facing));
+    entity.insert(turrets);
+}
+
+/// Replaces the entity's tags and skills outright with the type's own.
+fn fit_vocabulary(entity: &mut EntityWorldMut, tags: BTreeSet<String>, skills: Vec<SkillId>) {
+    if tags.is_empty() {
+        entity.remove::<TagsComponent>();
+    } else {
+        entity.insert(TagsComponent::new(tags));
+    }
+    if skills.is_empty() {
+        entity.remove::<SkillsComponent>();
+    } else {
+        entity.insert(SkillsComponent::new(skills));
+    }
+}
+
+/// Arms the acts a type performs on standing, as `acts` says, for a type
+/// that has any.
+fn fit_standing_acts(entity: &mut EntityWorldMut, acts_on_standing: bool, acts: StandingActs) {
+    if !acts_on_standing {
+        entity.remove::<StandComponent>();
+        return;
+    }
+    match acts {
+        StandingActs::Rearm => {
+            entity.insert(StandComponent(Standing::Pending));
+        }
+        StandingActs::Keep => {
+            if !entity.contains::<StandComponent>() {
+                entity.insert(StandComponent(Standing::Pending));
             }
-            // An entity off the map holds no ground and stands nowhere.
-            if entity_def::hidden(world, entity) {
-                return false;
-            }
-            let standing_def = entity_def::of(world, entity);
-            let Some(standing_location) = standing_def.location else {
-                return false;
-            };
-            // What claims its cells is the grid's to refuse; what neither
-            // claims nor holds ground stops nothing.
-            if standing_location.solidity().claims_cells()
-                || !standing_location.solidity().holds_ground()
-            {
-                return false;
-            }
-            standing_location.occupation() & location_def.occupation() != LayerMask::EMPTY
-                && entity_def::footprint_rect_of(world, standing_def, entity).intersects(footprint)
-        })
+        }
+    }
+}
+
+/// Fits the type's field sources, reaching as far as `reach` asks: left to
+/// grow, a source takes over the reach of the one it replaces at the same
+/// index.
+fn fit_field_sources(
+    entity: &mut EntityWorldMut,
+    field_sources: &[FieldSourceDef],
+    reach: FieldReach,
+) {
+    if field_sources.is_empty() {
+        entity.remove::<FieldSourcesComponent>();
+        return;
+    }
+    let sources = match reach {
+        FieldReach::Full => FieldSourcesComponent::full(field_sources),
+        FieldReach::Initial => match entity.get::<FieldSourcesComponent>() {
+            Some(previous) => FieldSourcesComponent::carried(field_sources, previous),
+            None => FieldSourcesComponent::seeded(field_sources),
+        },
+    };
+    entity.insert(sources);
 }
 
 /// Brings an entity of the given type into the world at `location`, owned by
@@ -2053,7 +2326,7 @@ fn conjure(
         (type_id, type_def.base_stats.clone())
     };
 
-    let id = world.resource_mut::<SimulationIdGenerator>().generate();
+    let id = world.resource_mut::<SimulationIds>().mint();
 
     let mut entity_mut = world.spawn((
         EntityInfoComponent::new(id, type_id, type_name),
@@ -2112,6 +2385,7 @@ fn spawn(
     cause: SpawnCause,
 ) -> Option<(Entity, SimulationId)> {
     let (entity, id) = create_entity(world, type_name, position, owner, reach, arrival)?;
+    tunnels::bind_at_birth(world, entity, cause);
     announce(world, id, cause);
     Some((entity, id))
 }

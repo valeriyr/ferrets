@@ -67,18 +67,19 @@ impl EntityStatId {
     /// continuous movement model resolves contact. Every mover defines one;
     /// half a cell makes resting neighbors touch at one-cell spacing.
     pub const RADIUS: EntityStatId = EntityStatId(19);
-    /// Transporter slots one instance occupies as a passenger. Declaring it is
-    /// what makes a type transportable.
+    /// Slots one instance takes in what holds it. Declaring it is what makes a
+    /// type able to board.
     pub const CARGO_SIZE: EntityStatId = EntityStatId(20);
-    /// How close a boarder must be to its transporter, in cells.
+    /// How close a boarder must be to its holder, in cells.
     pub const LOAD_RANGE: EntityStatId = EntityStatId(21);
-    /// How close a transporter must be to an unload destination before it
-    /// starts letting passengers out, in cells.
+    /// How close a holder must be to an unload destination before it starts
+    /// letting bodies out, in cells; how far from itself a gateway sets one
+    /// down.
     pub const UNLOAD_RANGE: EntityStatId = EntityStatId(22);
-    /// Minimum ticks between successive boardings into one transporter. Zero
+    /// Minimum ticks between successive boardings into one holder. Zero
     /// admits passengers as fast as they arrive.
     pub const LOAD_PERIOD: EntityStatId = EntityStatId(23);
-    /// Minimum ticks between successive passenger exits from one transporter.
+    /// Minimum ticks between successive exits from one holder.
     /// Zero lets everyone out at once.
     pub const UNLOAD_PERIOD: EntityStatId = EntityStatId(24);
     /// Total transporter slots aboard one instance. Each passenger consumes

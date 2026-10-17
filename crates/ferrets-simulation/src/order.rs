@@ -98,15 +98,16 @@ pub enum Order {
     /// tick at a time until the pool is full, it is gone, or the work can no longer
     /// be paid for.
     Repair { target: SimulationId },
-    /// Ride inside the transporter with the given id: walk into its load range,
-    /// then disappear aboard until it unloads.
+    /// Go into the holder with the given id: walk into its load range, then
+    /// go aboard a transporter or through a gateway.
     Board { target: SimulationId },
-    /// Fetch the entity with the given id aboard: walk into own load range of
-    /// it, then take it in. The holder-side mirror of [`Board`](Self::Board).
+    /// Take the entity with the given id in: walk into own load range of it,
+    /// or send it to board when the holder cannot move, then take it in. The
+    /// holder-side mirror of [`Board`](Self::Board).
     Load { target: SimulationId },
-    /// Let every passenger out, one at a time. With a destination, walk into
-    /// unload range of it first and send each freed passenger marching there;
-    /// without one, freed passengers go to the rally point, if set.
+    /// Let every body held out, one at a time. With a destination, walk into
+    /// unload range of it first and send each freed body marching there;
+    /// without one, freed bodies go to the rally point, if set.
     Unload { at: Option<FixedUVec2> },
     /// Cast `skill` at `target`: walk into the skill's reach of what it is
     /// aimed at, then work at it until it lands. A skill that declares no

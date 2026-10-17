@@ -34,7 +34,7 @@ use crate::{
     session::{GameSession, player_id::PlayerId},
     simulation_id::SimulationId,
     spawn::{self, FieldReach},
-    supply, visibility,
+    supply, tunnels, visibility,
 };
 use ferrets_content::{
     pool_def::PoolId,
@@ -317,11 +317,11 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
             );
         }
         PlayerCommand::Load {
-            transport,
+            holder,
             target,
             flush,
         } => {
-            let Some(entity) = find_owned_interactable(world, player, *transport) else {
+            let Some(entity) = find_owned_interactable(world, player, *holder) else {
                 return;
             };
             if visibility::interactable_to(world, player, *target).is_none() {
@@ -334,14 +334,10 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
                 CancelPolicy::from_bool(*flush),
             );
         }
-        PlayerCommand::Unload {
-            transport,
-            at,
-            flush,
-        } => {
+        PlayerCommand::Unload { holder, at, flush } => {
             // Only the holder's owner opens the hold, whoever the passengers
             // belong to.
-            let Some(entity) = find_owned_interactable(world, player, *transport) else {
+            let Some(entity) = find_owned_interactable(world, player, *holder) else {
                 return;
             };
             issue(
@@ -449,11 +445,7 @@ fn assist_construction(world: &World, entity: Entity, target: Entity) -> Option<
     if !target_ref.contains::<UnderConstructionComponent>() {
         return None;
     }
-    let same_owner = matches!(
-        (entity_def::owner(world, entity), entity_def::owner(world, target)),
-        (Some(builder), Some(site)) if builder == site
-    );
-    if !same_owner {
+    if !entity_def::same_owner(world, entity, target) {
         return None;
     }
     let type_name = target_ref
@@ -481,6 +473,14 @@ fn train_entity(world: &mut World, player: PlayerId, trainer: SimulationId, type
         .as_ref()
         .is_some_and(|t| t.can_train(type_name))
     {
+        return;
+    }
+    // A bound tunnel end has its other end already.
+    let trainee = world
+        .resource::<ContentRegistry>()
+        .entity(type_name)
+        .expect("a trainer trains only registered types");
+    if tunnels::refuses_raising(world, entity, trainee) {
         return;
     }
 

@@ -6,11 +6,13 @@ use bevy_ecs::{entity::Entity, world::World};
 use super::{
     board,
     chase::{self, Destination},
+    gateways::{self, Intake},
     orders::{self, Processing, Refusal},
+    transporters,
 };
 use crate::{
     components::{
-        order_queue::{CancelPolicy, OrderState},
+        order_queue::{CancelPolicy, OrderQueueComponent, OrderState},
         transport::LoadComponent,
     },
     entity_def,
@@ -20,14 +22,14 @@ use crate::{
     order::Order,
     session::GameSession,
 };
-use ferrets_content::entity_stats::EntityStatId;
+use ferrets_content::{entity_stats::EntityStatId, holder::Holder};
 
-/// Whether `entity` may start this Load: its type transports and it operates,
-/// and the passenger is there, operating, and one it would take aboard (see
-/// `board::would_board`).
+/// Whether `entity` may start this Load: it holds others, as a transporter or
+/// a gateway, and it operates, and the target is there, operating, its own
+/// owner's, and one it would take in (see `board::would_board`).
 pub fn can_start(world: &World, entity: Entity, order: &Order) -> Result<(), Refusal> {
     let target_id = order.load_target().expect("Load order must have a target");
-    if !entity_def::of(world, entity).can_transport() {
+    if entity_def::of(world, entity).holder.is_none() {
         return Err(Refusal::Incapable);
     }
     orders::requires_operating(world, entity)?;
@@ -38,6 +40,9 @@ pub fn can_start(world: &World, entity: Entity, order: &Order) -> Result<(), Ref
         return Err(Refusal::TargetGone);
     };
     orders::target_operating(world, target)?;
+    if !entity_def::same_owner(world, entity, target) {
+        return Err(Refusal::TargetUnfit);
+    }
     match board::would_board(world, target, entity) {
         Ok(()) => Ok(()),
         // Judged from the holder's side: a passenger that cannot ride, or is
@@ -102,11 +107,13 @@ pub fn survives_soft_cancel() -> bool {
 /// Advance a Load order by one tick.
 ///
 /// Walk to within own `load_range` of the target (suspending on a chase move,
-/// following it as it moves), then take it in: the target's own orders are
-/// soft-canceled, production kept — a walk cut down mid-crossing settles onto
-/// its claimed cell first — and it disappears aboard through the same transfer boarding
-/// uses, cooldown included. Everything is re-checked every tick; a target that
-/// stopped qualifying on the way ends the order.
+/// following it as it moves; a holder that cannot move sends a target out of
+/// range to board it instead, and is done), then take it in: the target's own
+/// orders are soft-canceled, production kept — a walk cut down mid-crossing
+/// settles onto its claimed cell first — and it goes aboard a transporter, or
+/// into a gateway's link or across its tunnel, through the same transfer
+/// boarding uses, pace included. Everything is re-checked every tick; a target
+/// that stopped qualifying on the way ends the order.
 pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing {
     let Some(mut load) = world.entity_mut(entity).take::<LoadComponent>() else {
         return Processing::state(OrderState::Finished);
@@ -120,6 +127,7 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
         return Processing::state(OrderState::Finished);
     };
     if orders::target_operating(world, target).is_err()
+        || !entity_def::same_owner(world, entity, target)
         || board::would_board(world, target, entity).is_err()
     {
         return Processing::state(OrderState::Finished);
@@ -133,6 +141,13 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
         entity_def::effective_stat_u32(world, entity, EntityStatId::LOAD_RANGE),
     ) {
         Destination::OutOfReach => return Processing::state(OrderState::Finished),
+        // A holder that cannot go to its target calls the target over.
+        Destination::Walk(_) if !entity_def::of(world, entity).can_move() => {
+            match call_over(world, entity, target) {
+                Call::Sent | Call::AlreadyBoarding => {}
+            }
+            return Processing::state(OrderState::Finished);
+        }
         Destination::Walk(move_order) => {
             world.entity_mut(entity).insert(load);
             return Processing::suspend(move_order);
@@ -158,6 +173,53 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
         world.entity_mut(entity).insert(load);
         return Processing::state(OrderState::InProcessing);
     }
-    board::admit(world, entity, target);
+    match &entity_def::of(world, entity).holder {
+        Some(Holder::Transporter(_)) => transporters::admit(world, entity, target),
+        Some(Holder::Gateway(_)) => match gateways::take_in(world, entity, target) {
+            Intake::Taken(_) => {}
+            // Nothing beside the other end takes it yet: it waits its turn
+            // again.
+            Intake::Waits => {
+                world.entity_mut(entity).insert(load);
+                return Processing::state(OrderState::InProcessing);
+            }
+        },
+        None => unreachable!("only a holder loads"),
+    }
     Processing::state(OrderState::Finished)
+}
+
+/// What came of calling a target over.
+enum Call {
+    /// It was sent to board the holder.
+    Sent,
+    /// It already boards a holder, this one or another, and goes on doing so.
+    AlreadyBoarding,
+}
+
+/// Sends `target` to board `holder`, dropping what it was doing as a
+/// replacing command does, unless it already boards a holder.
+fn call_over(world: &mut World, holder: Entity, target: Entity) -> Call {
+    let boarding = world
+        .get::<OrderQueueComponent>(target)
+        .expect("every spawned entity carries an order queue")
+        .0
+        .iter()
+        .any(|entry| entry.cancel.is_none() && entry.order.board_target().is_some());
+    if boarding {
+        return Call::AlreadyBoarding;
+    }
+    let order = Order::Board {
+        target: entity_def::simulation_id(world, holder),
+    };
+    match board::can_start(world, target, &order) {
+        Ok(()) => {}
+        Err(refusal) => unreachable!("the boarding was judged this tick, got {refusal:?}"),
+    }
+    world
+        .entity_mut(target)
+        .get_mut::<OrderQueueComponent>()
+        .expect("every spawned entity carries an order queue")
+        .push(order, Some(CancelPolicy::Soft));
+    Call::Sent
 }

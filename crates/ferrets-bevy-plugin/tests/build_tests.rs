@@ -30,6 +30,7 @@ use ferrets_simulation::{
     components::{
         build::{self, BuildComponent, SiteWork, UnderConstructionComponent},
         entity_info::EntityInfoComponent,
+        hidden::Inside,
         location::LocationComponent,
         order_queue::{CancelPolicy, OrderQueueComponent},
         pools,
@@ -1015,11 +1016,7 @@ fn boxed_in_attached_builder_goes_off_map_and_waits() {
     );
 
     // The cell frees: the roofer comes back onto it.
-    app.world_mut().resource_mut::<Map>().set_static_occupied(
-        utils::GROUND,
-        CellPos::new(9, 9),
-        false,
-    );
+    utils::free_cell(&mut app, CellPos::new(9, 9));
     utils::run_ticks(&mut app, 1);
     assert!(!entity_def::hidden(app.world(), roofer));
     assert!(!entity_def::pending_reveal(app.world(), roofer));
@@ -1049,11 +1046,7 @@ fn destroyed_while_waiting_for_cell_dies_off_map() {
     // once, and a cell freeing afterwards sets nothing down.
     spawn::destroy_entity(app.world_mut(), worker);
     assert!(!entity_def::pending_reveal(app.world(), worker));
-    app.world_mut().resource_mut::<Map>().set_static_occupied(
-        utils::GROUND,
-        CellPos::new(9, 9),
-        false,
-    );
+    utils::free_cell(&mut app, CellPos::new(9, 9));
     utils::run_ticks(&mut app, 1);
     assert!(app.world().get::<LocationComponent>(worker).is_none());
     utils::run_ticks(&mut app, 2);
@@ -1453,7 +1446,7 @@ fn attached_builder_shot_dead_on_its_site_leaves_it_halted() {
 }
 
 #[test]
-fn attached_builder_killed_at_work_leaves_site_halted() {
+fn attached_builder_destroyed_at_work_leaves_site_halted() {
     let mut app = utils::orders_app();
     let (roofer, roofer_id) = utils::create_owned(&mut app, "roofer", 9, 10, 0);
     utils::grant_gold(&mut app, 80);
@@ -1776,7 +1769,7 @@ fn static_footprint_is_raised_over_underfoot_body_that_is_off_map() {
     let mut app = solidity_app();
     let mole = place(&mut app, "mole", 10, 10).expect("the mole stands");
     // Off the map — aboard, inside a site or down a mine — it holds no ground.
-    spawn::hide_entity(app.world_mut(), mole);
+    spawn::hide_entity(app.world_mut(), mole, Inside::Nothing);
 
     assert!(
         place(&mut app, "depot", 10, 10).is_some(),

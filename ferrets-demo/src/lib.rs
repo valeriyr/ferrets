@@ -79,6 +79,7 @@ pub fn run() {
         .init_resource::<minimap::Looking>()
         .init_resource::<render::SkillPulses>()
         .init_resource::<render::Puffs>()
+        .init_resource::<render::Relocated>()
         .init_resource::<debug::DebugState>()
         // Camera and content exist for every screen; the game scene is set up on
         // entering InGame once the lobby has configured the session.
@@ -258,9 +259,10 @@ pub fn run() {
                 (
                     render::refresh_changed_sprites,
                     render::attach_sprites,
-                    // Before the interpolation it corrects, so a reappearance
-                    // never draws a frame of the slide it would otherwise make.
-                    render::snap_revealed,
+                    // Before the interpolation they correct, so a reappearance
+                    // or a relocation never draws a frame of the slide it
+                    // would otherwise make.
+                    (render::snap_revealed, render::snap_relocated),
                     // The sighting each sprite is drawn by is stamped first.
                     (render::refresh_sightings, render::interpolate_sprites).chain(),
                     render::update_fog_overlay,
@@ -312,6 +314,7 @@ pub fn run() {
             (
                 render::collect_skill_pulses,
                 render::collect_puffs,
+                render::collect_relocations,
                 sound::play_cues,
                 sound::play_fire_cues,
             )
@@ -324,6 +327,13 @@ pub fn run() {
         .add_systems(
             Update,
             (
+                // In the frame the view changes, before anything draws or the
+                // next tick collects against it.
+                render::forget_marks_on_view_change
+                    .after(render::perspective_input)
+                    .after(render::toggle_fog_reveal)
+                    .before(render::draw_puffs)
+                    .before(render::draw_skill_pulses),
                 minimap::follow_view,
                 minimap::look_input,
                 // The picture reads the remembered-buildings store that

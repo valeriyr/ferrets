@@ -601,7 +601,7 @@ fn revert_declared_share_carries_from_interim() {
 }
 
 #[test]
-fn buff_interim_cannot_carry_leaves_origin_before_record() {
+fn buff_interim_cannot_carry_leaves_origin_by_share_before_record() {
     let mut app = app();
     let (caterpillar, _) = utils::create_owned(&mut app, "caterpillar", 5, 5, 0);
     utils::run_ticks(&mut app, 1);
@@ -723,7 +723,7 @@ fn landing_carries_pool_interim_lacked_under_origin_passives() {
 }
 
 #[test]
-fn buff_interim_cannot_carry_leaves_origin_before_its_pools_are_recorded() {
+fn buff_interim_cannot_carry_leaves_origin_by_difference_before_record() {
     let mut app = app();
     let (silkworm, _) = utils::create_owned(&mut app, "silkworm", 5, 5, 0);
     utils::run_ticks(&mut app, 1);
@@ -1032,7 +1032,7 @@ fn buff_that_fits_rides_through_change() {
 //
 
 #[test]
-fn stepwise_fold_moves_pools_as_expected() {
+fn shift_table_moves_health_and_maximum_tick_by_tick() {
     use Act::{Apply, ApplyPlayer, Heal, Remove};
     // (row, wound at the start (`None` unwounded), then per tick: what changes, health, maximum)
     let rows: Vec<(&str, Option<&str>, Vec<Tick>)> = vec![

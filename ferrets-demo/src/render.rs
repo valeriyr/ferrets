@@ -16,6 +16,7 @@ use ferrets_content::{
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     field::FieldId,
+    holder::Holder,
     pool_def::PoolId,
     registry::ContentRegistry,
     resource::ResourceSourceDef,
@@ -57,6 +58,7 @@ use ferrets_simulation::{
         tags::TagsComponent,
         train::{TrainComponent, TrainQueueComponent},
         transport::TransporterComponent,
+        tunnel::TunnelEndComponent,
         turret::TurretsComponent,
     },
     entity_def,
@@ -64,6 +66,7 @@ use ferrets_simulation::{
     events::{EventRecord, SimulationEvent, SpawnCause},
     fields::FieldGrid,
     impacts::{Following, PendingImpacts},
+    links::{self, LinkPassengers, Membership},
     order::Order,
     selection::Selection,
     session::{
@@ -327,12 +330,15 @@ pub fn reset_per_game(
     mut ghosts: ResMut<Ghosts>,
     mut pulses: ResMut<SkillPulses>,
     mut puffs: ResMut<Puffs>,
+    mut relocated: ResMut<Relocated>,
 ) {
     watch.0 = None;
     inspected.0.clear();
     ghosts.0.clear();
     pulses.active.clear();
     puffs.active.clear();
+    puffs.made_out.clear();
+    relocated.0.clear();
 }
 
 /// The knowledge this node watches the map through: the local player's own
@@ -604,6 +610,18 @@ enum Shape {
     /// The missile turret — a square pad; the rack on it is drawn from the
     /// gun it mounts, like the fortress's.
     Pad,
+    /// The warren — a wide mound with three dark holes across its face.
+    Warren,
+    /// A burrow — a lighter rim around a dark hole going down.
+    Hole,
+    /// The burrower — a worm of three discs nose to tail, the head lighter,
+    /// lying along where it crawls.
+    Worm,
+    /// A tunnel end — a square base with a dark arched mouth between two
+    /// lighter posts.
+    TunnelEnd,
+    /// The stalker — a small body on four long legs splayed to the corners.
+    Stalker,
 }
 
 /// Picks a shape from the entity type name. Add new types here.
@@ -637,6 +655,11 @@ fn shape_for(type_name: &str) -> Shape {
         "zeppelin" => Shape::Zeppelin,
         "overlord" => Shape::Overlord,
         "hive" => Shape::Hive,
+        "warren" => Shape::Warren,
+        "burrow" => Shape::Hole,
+        "burrower" => Shape::Worm,
+        "tunnel" => Shape::TunnelEnd,
+        "stalker" => Shape::Stalker,
         "war_wagon" => Shape::WarWagon,
         "siege_works" | "factory" | "factory_aloft" => Shape::Octagon,
         "watch_tower" => Shape::WatchTower,
@@ -1261,6 +1284,107 @@ pub fn attach_sprites(
                     ));
                 });
             }
+            Shape::Warren => {
+                // A wide mound filling the footprint, three holes across its
+                // face where bodies go down.
+                entity.insert((
+                    Mesh2d(meshes.add(Ellipse::new(radius * 0.95, radius * 0.75))),
+                    MeshMaterial2d(materials.add(color)),
+                ));
+                entity.with_children(|parent| {
+                    for (lane, lift) in [(-0.5, -0.15), (0.0, 0.25), (0.5, -0.15)] {
+                        parent.spawn((
+                            Mesh2d(meshes.add(Ellipse::new(radius * 0.18, radius * 0.12))),
+                            MeshMaterial2d(materials.add(color.darker(0.45))),
+                            Transform::from_translation(Vec3::new(
+                                radius * lane,
+                                radius * lift,
+                                0.1,
+                            )),
+                        ));
+                    }
+                });
+            }
+            Shape::Hole => {
+                // A lighter rim around a dark hole: a way down, nothing standing
+                // on the ground but its lip.
+                entity.insert((
+                    Mesh2d(meshes.add(Circle::new(radius * 0.85))),
+                    MeshMaterial2d(materials.add(color.lighter(0.1))),
+                ));
+                entity.with_children(|parent| {
+                    parent.spawn((
+                        Mesh2d(meshes.add(Circle::new(radius * 0.5))),
+                        MeshMaterial2d(materials.add(color.darker(0.5))),
+                        Transform::from_translation(Vec3::new(0.0, 0.0, 0.1)),
+                    ));
+                });
+            }
+            Shape::Worm => {
+                // Three discs nose to tail along the body's length, the head
+                // lighter, so the crawl reads which way it goes.
+                entity.insert((
+                    Mesh2d(meshes.add(Circle::new(radius * 0.42))),
+                    MeshMaterial2d(materials.add(color)),
+                ));
+                entity.with_children(|parent| {
+                    parent.spawn((
+                        Mesh2d(meshes.add(Circle::new(radius * 0.36))),
+                        MeshMaterial2d(materials.add(color.lighter(0.15))),
+                        Transform::from_translation(Vec3::new(0.0, radius * 0.55, 0.1)),
+                    ));
+                    parent.spawn((
+                        Mesh2d(meshes.add(Circle::new(radius * 0.32))),
+                        MeshMaterial2d(materials.add(color.darker(0.15))),
+                        Transform::from_translation(Vec3::new(0.0, -radius * 0.55, 0.1)),
+                    ));
+                });
+            }
+            Shape::TunnelEnd => {
+                // A square base, a dark arched mouth at its heart and a
+                // lighter post either side of it.
+                let px = Vec2::new(size.width as f32, size.height as f32) * CELL_PX * 0.85;
+                let post = Vec2::new(radius * 0.18, radius * 0.9);
+                entity.insert(Sprite::from_color(color, px));
+                entity.with_children(|parent| {
+                    parent.spawn((
+                        Mesh2d(meshes.add(Ellipse::new(radius * 0.45, radius * 0.55))),
+                        MeshMaterial2d(materials.add(color.darker(0.5))),
+                        Transform::from_translation(Vec3::new(0.0, 0.0, 0.1)),
+                    ));
+                    for side in [-1.0, 1.0] {
+                        parent.spawn((
+                            Sprite::from_color(color.lighter(0.2), post),
+                            Transform::from_translation(Vec3::new(side * radius * 0.62, 0.0, 0.2)),
+                        ));
+                    }
+                });
+            }
+            Shape::Stalker => {
+                // A small body on four long legs splayed to the corners: a
+                // walker, not a runner.
+                let leg = Vec2::new(radius * 0.12, radius * 1.7);
+                entity.insert((
+                    Mesh2d(meshes.add(Circle::new(radius * 0.45))),
+                    MeshMaterial2d(materials.add(color)),
+                ));
+                entity.with_children(|parent| {
+                    for quarter in 0..4 {
+                        let angle = std::f32::consts::FRAC_PI_4
+                            + quarter as f32 * std::f32::consts::FRAC_PI_2;
+                        parent.spawn((
+                            Sprite::from_color(color.darker(0.3), leg),
+                            Transform::from_translation(Vec3::new(0.0, 0.0, -0.1))
+                                .with_rotation(Quat::from_rotation_z(angle)),
+                        ));
+                    }
+                    parent.spawn((
+                        Mesh2d(meshes.add(Circle::new(radius * 0.18))),
+                        MeshMaterial2d(materials.add(color.lighter(0.25))),
+                        Transform::from_translation(Vec3::new(0.0, radius * 0.15, 0.1)),
+                    ));
+                });
+            }
             Shape::Wraith => {
                 // A narrow dart with a swept wing bar behind its nose: the
                 // fighter among the fliers, pointing where it flies.
@@ -1537,6 +1661,40 @@ pub fn snap_revealed(
             previous.0 = turrets.iter().map(|turret| turret.bearing).collect();
             shown.0 = previous.0.clone();
         }
+    }
+}
+
+/// The bodies the ticks since the last frame relocated.
+#[derive(Resource, Default)]
+pub struct Relocated(Vec<SimulationId>);
+
+/// Notes every body the tick relocated (run once per tick, in the game's
+/// slot).
+pub fn collect_relocations(record: Res<EventRecord>, mut relocated: ResMut<Relocated>) {
+    relocated
+        .0
+        .extend(record.events().iter().filter_map(|event| match event {
+            SimulationEvent::EntityRelocated { entity, .. } => Some(*entity),
+            _ => None,
+        }));
+}
+
+/// Snaps the drawing of each entity the ticks since the last frame relocated —
+/// where it interpolates from — to where it was set down.
+pub fn snap_relocated(
+    registry: Res<ContentRegistry>,
+    mut relocated: ResMut<Relocated>,
+    index: Res<EntityIndex>,
+    mut query: Query<(&EntityInfoComponent, &LocationComponent, &mut PrevPos)>,
+) {
+    for id in relocated.0.drain(..) {
+        let Some(entity) = index.alive(id) else {
+            continue;
+        };
+        let Ok((info, location, mut prev)) = query.get_mut(entity) else {
+            continue;
+        };
+        prev.0 = draw_anchor(&registry, registry.def(info.type_id()), location.position);
     }
 }
 
@@ -2020,26 +2178,45 @@ pub struct SkillPulses {
     active: Vec<(SkillTarget, u32)>,
 }
 
+impl SkillPulses {
+    /// What each live pulse marks.
+    pub fn pulsed(&self) -> Vec<SkillTarget> {
+        self.active.iter().map(|&(target, _)| target).collect()
+    }
+}
+
 /// Starts a pulse for every skill the simulation announced this tick, and drops
 /// the expired ones (run once per tick, in the game's slot).
 ///
 /// A refused cast — too little energy, or still cooling down — is never
 /// announced and draws nothing. Pruning here keeps the store bounded across a
 /// seek, which runs many ticks before anything draws.
-pub fn collect_skill_pulses(
-    record: Res<EventRecord>,
-    session: Res<GameSession>,
-    mut pulses: ResMut<SkillPulses>,
-) {
-    let tick = session.tick();
-    pulses
-        .active
-        .retain(|&(_, started)| tick.saturating_sub(started) <= PULSE_TICKS);
-    for event in record.events() {
-        if let SimulationEvent::SkillCast { target, .. } = event {
-            pulses.active.push((*target, tick));
+///
+/// A cast aimed at a cell is pulsed only when the watched perspective makes
+/// its caster out.
+pub fn collect_skill_pulses(world: &mut World) {
+    let tick = world.resource::<GameSession>().tick();
+    let judge = sighting_judge(world);
+    world.resource_scope(|world, mut pulses: Mut<SkillPulses>| {
+        pulses
+            .active
+            .retain(|&(_, started)| tick.saturating_sub(started) <= PULSE_TICKS);
+        let index = world.resource::<EntityIndex>();
+        for event in world.resource::<EventRecord>().events() {
+            let SimulationEvent::SkillCast { caster, target, .. } = event else {
+                continue;
+            };
+            let shown = match target {
+                SkillTarget::Entity(_) => true,
+                SkillTarget::Position(_) => index
+                    .any(*caster)
+                    .is_some_and(|entity| judged(world, judge, entity).is_seen()),
+            };
+            if shown {
+                pulses.active.push((*target, tick));
+            }
         }
-    }
+    });
 }
 
 /// What a brief place-marker is standing for.
@@ -2052,15 +2229,18 @@ enum PuffKind {
     Hidden,
     /// Something came back onto the map here.
     Revealed,
+    /// Something was moved across the map at once, from here or to here.
+    Relocated,
 }
 
 impl PuffKind {
-    /// The ring's colour, so the three read apart at a glance.
+    /// The ring's color, so the kinds read apart at a glance.
     fn color(self, fade: f32) -> Color {
         match self {
             PuffKind::Bequeathed => Color::srgba(0.55, 0.5, 0.45, fade),
             PuffKind::Hidden => Color::srgba(0.45, 0.6, 0.85, fade),
             PuffKind::Revealed => Color::srgba(0.6, 0.85, 0.5, fade),
+            PuffKind::Relocated => Color::srgba(0.75, 0.5, 0.9, fade),
         }
     }
 }
@@ -2070,6 +2250,8 @@ impl PuffKind {
 #[derive(Resource, Default)]
 pub struct Puffs {
     active: Vec<(FixedUVec2, CellSize, PuffKind, u32)>,
+    /// The bodies the watched perspective made out as the last tick ended.
+    made_out: BTreeSet<SimulationId>,
 }
 
 impl Puffs {
@@ -2082,34 +2264,57 @@ impl Puffs {
     }
 }
 
-/// Starts a marker for each remains, hiding and reveal the tick announced, and
-/// drops the expired ones (run once per tick, in the game's slot).
+/// Starts a marker for each remains, hiding, reveal and relocation the tick
+/// announced, and drops the expired ones (run once per tick, in the game's
+/// slot). A hiding, a reveal or a relocation is marked only when the watched
+/// perspective makes its subject out: as the last tick ended for a hiding and
+/// a relocation's start, as it stands now for a reveal and a relocation's end.
 pub fn collect_puffs(world: &mut World) {
     let tick = world.resource::<GameSession>().tick();
+    let judge = sighting_judge(world);
     world.resource_scope(|world, mut puffs: Mut<Puffs>| {
         puffs
             .active
             .retain(|&(_, _, _, started)| tick.saturating_sub(started) <= PULSE_TICKS);
+        let index = world.resource::<EntityIndex>();
+        let before = std::mem::take(&mut puffs.made_out);
+        let made_out_before = |id| before.contains(&id);
+        let made_out_now = |id| {
+            index
+                .any(id)
+                .is_some_and(|entity| judged(world, judge, entity).is_seen())
+        };
         for event in world.resource::<EventRecord>().events() {
-            let marked = match event {
-                SimulationEvent::EntitySpawned {
-                    entity,
-                    cause: SpawnCause::Bequeathed { .. },
-                } => Some((*entity, None, PuffKind::Bequeathed)),
-                SimulationEvent::EntityHidden { entity, position } => {
-                    Some((*entity, Some(*position), PuffKind::Hidden))
-                }
-                SimulationEvent::EntityRevealed { entity, position } => {
-                    Some((*entity, Some(*position), PuffKind::Revealed))
-                }
-                _ => None,
-            };
+            let marked =
+                match event {
+                    SimulationEvent::EntitySpawned {
+                        entity,
+                        cause: SpawnCause::Bequeathed { .. },
+                    } => Some((*entity, None, PuffKind::Bequeathed)),
+                    SimulationEvent::EntityHidden { entity, position } => made_out_before(*entity)
+                        .then_some((*entity, Some(*position), PuffKind::Hidden)),
+                    SimulationEvent::EntityRevealed { entity, position } => made_out_now(*entity)
+                        .then_some((*entity, Some(*position), PuffKind::Revealed)),
+                    // Both ends are marked, each judged by what the watched
+                    // player makes of the body there, then gated by its cell
+                    // when drawn.
+                    SimulationEvent::EntityRelocated { entity, from, to } => {
+                        if made_out_before(*entity)
+                            && let Some(moved) = index.any(*entity)
+                        {
+                            let (_, size) = entity_def::whereabouts_footprint(world, moved);
+                            puffs.active.push((*from, size, PuffKind::Relocated, tick));
+                        }
+                        made_out_now(*entity).then_some((*entity, Some(*to), PuffKind::Relocated))
+                    }
+                    _ => None,
+                };
             // A hide or a return announces its place; what a death leaves names
             // only its subject, which stands where it was set down. How much
             // ground the marker covers is the subject's footprint, and a body
             // begins its life dying, so the lookup accepts that stage too.
             if let Some((id, place, kind)) = marked
-                && let Some(entity) = world.resource::<EntityIndex>().any(id)
+                && let Some(entity) = index.any(id)
             {
                 let (whereabouts, size) = entity_def::whereabouts_footprint(world, entity);
                 let position = match place {
@@ -2119,13 +2324,41 @@ pub fn collect_puffs(world: &mut World) {
                 puffs.active.push((position, size, kind, tick));
             }
         }
+        puffs.made_out = index
+            .alive_entries()
+            .into_iter()
+            .filter(|&(_, entity)| judged(world, judge, entity).is_seen())
+            .map(|(id, _)| id)
+            .collect();
     });
+}
+
+/// Forgets every ring and pulse, and what the last tick made out, when the
+/// viewed player or the fog reveal changes (run in `Update`).
+pub fn forget_marks_on_view_change(
+    session: Res<GameSession>,
+    watch: Res<ObserverPerspective>,
+    reveal: Res<FogReveal>,
+    mut pulses: ResMut<SkillPulses>,
+    mut puffs: ResMut<Puffs>,
+    mut last: Local<Option<(Option<PlayerId>, bool)>>,
+) {
+    let view = (viewed_player(&session, &watch), reveal.0);
+    match *last {
+        Some(seen) if seen == view => {}
+        Some(_) => {
+            pulses.active.clear();
+            puffs.active.clear();
+            puffs.made_out.clear();
+        }
+        None => {}
+    }
+    *last = Some(view);
 }
 
 /// Draws each live marker as a ring that grows and fades (run in `Update`).
 ///
-/// A marker over a cell the viewer cannot see is skipped: a mark is gated by
-/// its cell alone, not by what the viewer makes of its subject.
+/// A marker over a cell the viewer cannot see is skipped.
 pub fn draw_puffs(
     mut gizmos: Gizmos,
     session: Res<GameSession>,
@@ -2863,6 +3096,10 @@ fn ghost_shape(type_name: &str, size: CellSize) -> GhostShape {
         | Shape::Grub
         | Shape::Hive
         | Shape::Burrow
+        | Shape::Warren
+        | Shape::Hole
+        | Shape::Worm
+        | Shape::Stalker
         | Shape::Observer
         | Shape::Arbiter => GhostShape::Circle { circumradius },
         // Everything else is ghosted by its footprint: the shapes that are
@@ -2893,6 +3130,7 @@ fn ghost_shape(type_name: &str, size: CellSize) -> GhostShape {
         | Shape::Refinery
         | Shape::Wraith
         | Shape::Pad
+        | Shape::TunnelEnd
         | Shape::Tank { .. } => GhostShape::Rect {
             extent: Vec2::new(size.width as f32, size.height as f32) * CELL_PX * 0.85,
         },
@@ -3337,10 +3575,16 @@ pub fn draw_status_bars(
             Option<&MorphComponent>,
             Option<&TransporterComponent>,
             Option<&BroodComponent>,
-            (Option<&Sighted>, Option<&BuffsComponent>),
+            (
+                Option<&Sighted>,
+                Option<&BuffsComponent>,
+                Option<&TunnelEndComponent>,
+                Option<&OwnerComponent>,
+            ),
         ),
         Without<HiddenComponent>,
     >,
+    link_passengers: Res<LinkPassengers>,
 ) {
     let camera = cameras.single().ok().cloned().unwrap_or_default();
     let on_fire = registry.entity_buff(ON_FIRE);
@@ -3359,7 +3603,7 @@ pub fn draw_status_bars(
         morph,
         transporter,
         brood,
-        (sighted, buffs),
+        (sighted, buffs, tunnel_end, own),
     ) in &query
     {
         // A glimpse is a presence and no more: nothing about it is read out.
@@ -3525,21 +3769,35 @@ pub fn draw_status_bars(
 
         // A dot per passenger, like the trainer's queue dots, so a manned
         // bunker or a loaded shelter reads at a glance, each in the color of
-        // whose it is.
-        if let Some(transporter) = transporter {
-            let gap = 7.0;
-            let left = -(transporter.passengers.len().saturating_sub(1) as f32) * gap / 2.0;
-            for (i, &passenger) in transporter.passengers.iter().enumerate() {
-                let owner = index
-                    .any(passenger)
-                    .and_then(|entity| owners.get(entity).ok())
-                    .map(OwnerComponent::player);
-                gizmos.circle_2d(
-                    anchored(Vec2::new(left + i as f32 * gap, y + 5.0)),
-                    2.5,
-                    passenger_dot_color(&session, viewed, owner),
-                );
+        // whose it is; a gateway shows everyone inside its link.
+        let aboard: Vec<SimulationId> = match &def.holder {
+            Some(Holder::Transporter(_)) => transporter
+                .expect("a transporter keeps its passenger list")
+                .passengers
+                .iter()
+                .copied()
+                .collect(),
+            Some(Holder::Gateway(_)) => {
+                let owner = own.map(OwnerComponent::player);
+                match links::membership_from(&registry, &session, def, owner, tunnel_end) {
+                    Membership::Joined(key) => link_passengers.passengers(key).collect(),
+                    Membership::Apart => Vec::new(),
+                }
             }
+            None => Vec::new(),
+        };
+        let gap = 7.0;
+        let left = -(aboard.len().saturating_sub(1) as f32) * gap / 2.0;
+        for (i, &passenger) in aboard.iter().enumerate() {
+            let owner = index
+                .any(passenger)
+                .and_then(|entity| owners.get(entity).ok())
+                .map(OwnerComponent::player);
+            gizmos.circle_2d(
+                anchored(Vec2::new(left + i as f32 * gap, y + 5.0)),
+                2.5,
+                passenger_dot_color(&session, viewed, owner),
+            );
         }
     }
 }

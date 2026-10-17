@@ -22,8 +22,11 @@ use ferrets_content::{
         Emission, FieldDecay, FieldDef, FieldEffect, FieldGrowth, FieldId, FieldLayer,
         FieldPlacement, FieldSourceDef, FieldVision,
     },
+    gateway::{GatewayDef, Joins},
+    holder::Holder,
     kinds::{Kind, Kinds},
     morph::{MorphCourse, MorphInterrupted, MorphReason, MorphTransition, ViaInterrupted},
+    network::NetworkDef,
     player_buffs::PlayerBuffDef,
     pool::{Pool, PoolInitial},
     pool_def::PoolId,
@@ -36,11 +39,16 @@ use ferrets_content::{
     research::{ResearchDef, ResearchId},
     resource::{Banking, HarvestData},
     skills::{
-        Casting, EntityCastEffect, EntityCastTarget, PlayerCastEffect, Reach, SkillCaster, SkillDef,
+        AimParty, Away, CasterParty, Casting, Count, EntityCastEffect, FromAimTo, FromCasterTo,
+        Gathering, Journey, PaymentPoint, PlayerCastEffect, Reach, Recipient, SkillCaster,
+        SkillDef, Spot, SummonAt, Whom,
     },
     splash::SplashDef,
     stand::StandingAct,
     stats::{EntityModifier, ModifierOp, PlayerModifier},
+    train::Release,
+    transport::TransporterDef,
+    tunnel::{Passage, TunnelDef},
     turret::{TurretDef, TurretMount, TurretStats, WeaponConduct},
     work::{Attachment, BerthStance, CrewLimit, WorkPresence},
 };
@@ -140,6 +148,26 @@ pub(super) fn register(lua: &Lua, registry: &Rc<RefCell<ContentRegistry>>) -> ml
         lua.create_function(move |_, (name, table): (String, Table)| {
             let field = parse_field(&table).map_err(mlua::Error::external)?;
             fields.borrow_mut().register_field(name, field);
+            Ok(())
+        })?,
+    )?;
+
+    let networks = Rc::clone(registry);
+    globals.set(
+        "define_network",
+        lua.create_function(move |_, (name, table): (String, Table)| {
+            let network = parse_network(&table).map_err(mlua::Error::external)?;
+            networks.borrow_mut().register_network(name, network);
+            Ok(())
+        })?,
+    )?;
+
+    let tunnels = Rc::clone(registry);
+    globals.set(
+        "define_tunnel",
+        lua.create_function(move |_, (name, table): (String, Table)| {
+            let tunnel = parse_tunnel(&table).map_err(mlua::Error::external)?;
+            tunnels.borrow_mut().register_tunnel(name, tunnel);
             Ok(())
         })?,
     )?;
@@ -291,21 +319,13 @@ fn build_entity(
         let (time, pools) = parse_build(&build, registry)?;
         def = def.with_build(time, pools);
     }
-    if let Some(trainer) = optional::<Vec<String>>(table, "trainer")? {
-        def = def.with_trainer(trainer);
-    }
-    if let Some(transporter) = optional::<Table>(table, "transporter")? {
-        let carries = parse_kinds(&required::<Value>(&transporter, "carries")?, "carries")?;
-        let boarding = required::<String>(&transporter, "boarding")?;
-        let fate = required::<String>(&transporter, "fate")?;
-        let conduct = required::<String>(&transporter, "conduct")?;
-        def = def.with_transporter(
-            carries,
-            content::affiliation(&boarding)?,
-            content::passenger_fate(&fate)?,
-            content::passenger_conduct(&conduct)?,
+    if let Some(trainer) = optional::<Table>(table, "trainer")? {
+        def = def.with_trainer(
+            required::<Vec<String>>(&trainer, "trains")?,
+            parse_release(&trainer, registry)?,
         );
     }
+    def.holder = parse_holder(table, registry)?;
     if let Some(researcher) = optional::<Vec<String>>(table, "researcher")? {
         let ids = researcher
             .iter()
@@ -529,52 +549,146 @@ fn parse_projectile(table: &Table) -> crate::Result<ProjectileDef> {
     ))
 }
 
-/// Reads what a cast is aimed at: `"caster"`, `"position"`, `"ally"`,
-/// `"enemy"` or `"fallen"` on their own, or any of the last three as a table
-/// with a filter — `{ kind = "ally", only = { tags = { "biological" } } }`.
-fn parse_cast_target(value: &Value) -> crate::Result<EntityCastTarget> {
-    let (kind, only) = match value {
-        Value::String(kind) => (kind.to_string_lossy(), Kinds::Any),
-        Value::Table(target) => {
-            let kind = required::<String>(target, "kind")?;
-            let only = match optional::<Value>(target, "only")? {
-                Some(only) => parse_kinds(&only, "cast target filter")?,
-                None => Kinds::Any,
-            };
-            (kind, only)
-        }
+/// The sides an aim at something standing may name.
+const SIDES: [&str; 4] = ["'own'", "'allied'", "'enemy'", "'anyone'"];
+
+/// Reads where a summon sets its units down, which may be any aim:
+/// `"caster"`, `"position"`, `"fallen"` or a side (`"own"`, `"allied"`,
+/// `"enemy"`, `"anyone"`) on its own, or any but `"caster"` as a
+/// `{ kind, only, range }` table — `only` the filter an aimed entity must
+/// pass, `range` how close the caster must come (a cell count or a
+/// `{ stat = ... }` table), each left out for none.
+fn parse_summon_at(value: &Value, registry: &ContentRegistry) -> crate::Result<SummonAt> {
+    let (kind, only, reach) = match value {
+        Value::String(kind) => (kind.to_string_lossy(), None, Reach::Wherever),
+        Value::Table(aim) => (
+            required::<String>(aim, "kind")?,
+            optional::<Value>(aim, "only")?,
+            parse_reach(aim, registry)?,
+        ),
         other => {
             return Err(content::unexpected(
-                "skill target",
-                &["a target name", "a { kind = ..., only = ... } table"],
+                "aim",
+                &[
+                    "an aim name",
+                    "a { kind = ..., only = ..., range = ... } table",
+                ],
                 &found(other),
             ));
         }
     };
+    let filter = |only: Option<Value>| match only {
+        Some(only) => parse_kinds(&only, "aim filter"),
+        None => Ok(Kinds::Any),
+    };
     match kind.as_str() {
-        "caster" => Ok(EntityCastTarget::Caster),
-        "position" => Ok(EntityCastTarget::Position),
-        "fallen" => Ok(EntityCastTarget::Fallen { kinds: only }),
+        "caster" => match (only, value) {
+            (None, Value::String(_)) => Ok(SummonAt::Caster),
+            _ => Err(ScriptError::ContentError(
+                "a caster aim is written \"caster\": it takes no filter and no range".to_string(),
+            )),
+        },
+        "position" => match only {
+            None => Ok(SummonAt::Cell { reach }),
+            Some(_) => Err(ScriptError::ContentError(
+                "a position aim takes no filter".to_string(),
+            )),
+        },
+        "fallen" => Ok(SummonAt::Fallen {
+            kinds: filter(only)?,
+            reach,
+        }),
         // Anything else names whose it must be, in the same words every other
         // capability uses.
         whose => {
             let side = content::affiliation(whose).map_err(|_| {
-                content::unexpected(
-                    "skill target",
-                    &[
-                        "'caster'",
-                        "'position'",
-                        "'fallen'",
-                        "'own'",
-                        "'allied'",
-                        "'enemy'",
-                        "'anyone'",
-                    ],
-                    &content::quoted(whose),
-                )
+                let mut expected = vec!["'caster'", "'position'", "'fallen'"];
+                expected.extend_from_slice(&SIDES);
+                content::unexpected("aim", &expected, &content::quoted(whose))
             })?;
-            Ok(EntityCastTarget::Standing { side, kinds: only })
+            Ok(SummonAt::Standing {
+                whom: Whom {
+                    side,
+                    kinds: filter(only)?,
+                },
+                reach,
+            })
         }
+    }
+}
+
+/// Reads the entity a cast acts on: `"caster"`, or something standing.
+fn parse_recipient(value: &Value, registry: &ContentRegistry) -> crate::Result<Recipient> {
+    let expected = || {
+        let mut expected = vec!["'caster'"];
+        expected.extend_from_slice(&SIDES);
+        expected
+    };
+    match parse_summon_at(value, registry)? {
+        SummonAt::Caster => Ok(Recipient::Caster),
+        SummonAt::Standing { whom, reach } => Ok(Recipient::Standing { whom, reach }),
+        SummonAt::Cell { .. } => Err(content::unexpected("recipient", &expected(), "'position'")),
+        SummonAt::Fallen { .. } => Err(content::unexpected("recipient", &expected(), "'fallen'")),
+    }
+}
+
+/// Reads the spot a cast acts around: `"caster"`, a position, or something
+/// standing.
+fn parse_spot(value: &Value, registry: &ContentRegistry) -> crate::Result<Spot> {
+    match parse_summon_at(value, registry)? {
+        SummonAt::Caster => Ok(Spot::Caster),
+        SummonAt::Cell { reach } => Ok(Spot::Cell { reach }),
+        SummonAt::Standing { whom, reach } => Ok(Spot::Standing { whom, reach }),
+        SummonAt::Fallen { .. } => {
+            let mut expected = vec!["'caster'", "'position'"];
+            expected.extend_from_slice(&SIDES);
+            Err(content::unexpected("spot", &expected, "'fallen'"))
+        }
+    }
+}
+
+/// Reads an aim away from the caster: a position, or something standing.
+fn parse_away(value: &Value, registry: &ContentRegistry) -> crate::Result<Away> {
+    let expected = || {
+        let mut expected = vec!["'position'"];
+        expected.extend_from_slice(&SIDES);
+        expected
+    };
+    match parse_summon_at(value, registry)? {
+        SummonAt::Cell { reach } => Ok(Away::Cell { reach }),
+        SummonAt::Standing { whom, reach } => Ok(Away::Standing { whom, reach }),
+        SummonAt::Caster => Err(content::unexpected(
+            "aim away from the caster",
+            &expected(),
+            "'caster'",
+        )),
+        SummonAt::Fallen { .. } => Err(content::unexpected(
+            "aim away from the caster",
+            &expected(),
+            "'fallen'",
+        )),
+    }
+}
+
+/// Reads an aim at something standing.
+fn parse_standing_aim(value: &Value, registry: &ContentRegistry) -> crate::Result<(Whom, Reach)> {
+    match parse_summon_at(value, registry)? {
+        SummonAt::Standing { whom, reach } => Ok((whom, reach)),
+        SummonAt::Caster => Err(content::unexpected(
+            "aim at something standing",
+            &SIDES,
+            "'caster'",
+        )),
+        SummonAt::Cell { .. } => Err(content::unexpected(
+            "aim at something standing",
+            &SIDES,
+            "'position'",
+        )),
+        SummonAt::Fallen { .. } => Err(content::unexpected(
+            "aim at something standing",
+            &SIDES,
+            "'fallen'",
+        )),
     }
 }
 
@@ -1227,20 +1341,27 @@ fn field_error(field: &str, error: mlua::Error) -> ScriptError {
 }
 
 /// Reads one skill: `{ caster, cooldown, ... }` — the `caster` arm decides the
-/// remaining fields. An entity cast reads `{ cost?, target, range?, effect }`;
-/// a player cast reads `{ price?, effect }` and takes no target (the cast lands
-/// on the casting player). A missing `cost` block (a player cast's `price`) is a free skill, and a
-/// missing `range` a cast that lands from wherever the caster stands.
+/// remaining fields. An entity cast reads `{ cost?, cast?, effect }`, its aim
+/// said inside the effect; a player cast reads `{ price?, effect }` and takes
+/// no target (the cast lands on the casting player). A missing `cost` block (a
+/// player cast's `price`) is a free skill.
 fn parse_skill(table: &Table, registry: &ContentRegistry) -> crate::Result<SkillDef> {
     let cooldown = required::<u32>(table, "cooldown")?;
     let caster = match required::<String>(table, "caster")?.as_str() {
+        "entity"
+            if optional::<Value>(table, "target")?.is_some()
+                || optional::<Value>(table, "range")?.is_some() =>
+        {
+            return Err(ScriptError::ContentError(
+                "an entity skill says its aim and range inside its effect, not beside it"
+                    .to_string(),
+            ));
+        }
         "entity" => SkillCaster::Entity {
             costs: match optional::<Table>(table, "cost")? {
                 Some(cost) => parse_costs(&cost)?,
                 None => Vec::new(),
             },
-            target: parse_cast_target(&required::<Value>(table, "target")?)?,
-            reach: parse_reach(table, registry)?,
             casting: parse_casting(table, registry)?,
             effect: parse_entity_effect(&required::<Table>(table, "effect")?, registry)?,
         },
@@ -1472,9 +1593,11 @@ fn parse_carries<T>(
     Ok(carries)
 }
 
-/// Reads how long a cast holds its caster: `cast = { point = ..., period = ... }`
-/// in ticks or as `{ stat = ... }` tables, or nothing at all for a cast that
-/// lands at once. An omitted `period` is the point itself — no recovery.
+/// Reads how long a cast holds its caster: `cast = { point, period, pays,
+/// refund }`, `point` and `period` in ticks or as `{ stat = ... }` tables, or
+/// nothing at all for a cast that lands at once. An omitted `period` is the
+/// point itself — no recovery. `pays` is `"start"`, with `refund` `"none"` or
+/// `"full"`, or `"landing"`, with no `refund`.
 fn parse_casting(table: &Table, registry: &ContentRegistry) -> crate::Result<Casting> {
     let Some(cast) = optional::<Table>(table, "cast")? else {
         return Ok(Casting::Instant);
@@ -1489,12 +1612,38 @@ fn parse_casting(table: &Table, registry: &ContentRegistry) -> crate::Result<Cas
         Some(period) => parse_quantity("cast period", "tick", &period, registry)?,
         None => point,
     };
-    Ok(Casting::Delayed { point, period })
+    let pays = required::<String>(&cast, "pays")?;
+    let pays = match (pays.as_str(), optional::<String>(&cast, "refund")?) {
+        ("start", Some(refund)) => PaymentPoint::AtStart(content::refund(&refund)?),
+        ("start", None) => {
+            return Err(ScriptError::ContentError(
+                "a cast that pays at its start says its refund: 'none' or 'full'".to_string(),
+            ));
+        }
+        ("landing", None) => PaymentPoint::AtLanding,
+        ("landing", Some(_)) => {
+            return Err(ScriptError::ContentError(
+                "a cast that pays when it lands has nothing to refund".to_string(),
+            ));
+        }
+        (other, _) => {
+            return Err(content::unexpected(
+                "cast payment",
+                &["'start'", "'landing'"],
+                &content::quoted(other),
+            ));
+        }
+    };
+    Ok(Casting::Delayed {
+        point,
+        period,
+        pays,
+    })
 }
 
-/// Reads how close a cast is made from: a cell count, a `{ stat = ... }` table
-/// naming a registered entity stat, or nothing at all for a cast that lands
-/// from wherever the caster stands.
+/// Reads how close an aim is cast from: its `range`, a cell count or a
+/// `{ stat = ... }` table naming a registered entity stat, or nothing at all
+/// for a cast that lands from wherever the caster stands.
 fn parse_reach(table: &Table, registry: &ContentRegistry) -> crate::Result<Reach> {
     match optional::<Value>(table, "range")? {
         None => Ok(Reach::Wherever),
@@ -1508,37 +1657,68 @@ fn parse_reach(table: &Table, registry: &ContentRegistry) -> crate::Result<Reach
 }
 
 /// Reads an entity cast's effect: exactly one of `apply_buff`, `remove_buff`,
-/// `damage`, `heal`, `field`, `watch`, `summon`. Buff names resolve in the
-/// entity-buff registry, field names in the field registry, and a summoned type
-/// in the entity registry.
+/// `damage`, `heal`, `field`, `watch`, `summon`, `relocate`, each naming its
+/// aim — `on` for who a buff, damage or heal lands on, `at` for where a field,
+/// watch or summon acts, the journey's own aims for a relocation. Buff names
+/// resolve in the entity-buff registry, field names in the field registry, and
+/// a summoned type in the entity registry.
 fn parse_entity_effect(
     table: &Table,
     registry: &ContentRegistry,
 ) -> crate::Result<EntityCastEffect> {
-    if let Some(name) = optional::<String>(table, "apply_buff")? {
-        let id = registry.entity_buff(&name).ok_or_else(|| {
+    let buff = |table: &Table| {
+        let name = required::<String>(table, "buff")?;
+        registry.entity_buff(&name).ok_or_else(|| {
             ScriptError::ContentError(format!("entity buff '{name}' is not defined"))
-        })?;
-        Ok(EntityCastEffect::ApplyBuff(id))
-    } else if let Some(name) = optional::<String>(table, "remove_buff")? {
-        let id = registry.entity_buff(&name).ok_or_else(|| {
-            ScriptError::ContentError(format!("entity buff '{name}' is not defined"))
-        })?;
-        Ok(EntityCastEffect::RemoveBuff(id))
-    } else if let Some(amount) = optional::<String>(table, "damage")? {
-        Ok(EntityCastEffect::Damage(content::fixed(&amount)?))
-    } else if let Some(amount) = optional::<String>(table, "heal")? {
-        Ok(EntityCastEffect::Heal(content::fixed(&amount)?))
+        })
+    };
+    if let Some(apply) = optional::<Table>(table, "apply_buff")? {
+        Ok(EntityCastEffect::ApplyBuff {
+            buff: buff(&apply)?,
+            on: parse_recipient(&required::<Value>(&apply, "on")?, registry)?,
+        })
+    } else if let Some(remove) = optional::<Table>(table, "remove_buff")? {
+        Ok(EntityCastEffect::RemoveBuff {
+            buff: buff(&remove)?,
+            on: parse_recipient(&required::<Value>(&remove, "on")?, registry)?,
+        })
+    } else if let Some(damage) = optional::<Table>(table, "damage")? {
+        Ok(EntityCastEffect::Damage {
+            amount: content::fixed(&required::<String>(&damage, "amount")?)?,
+            on: parse_recipient(&required::<Value>(&damage, "on")?, registry)?,
+        })
+    } else if let Some(heal) = optional::<Table>(table, "heal")? {
+        Ok(EntityCastEffect::Heal {
+            amount: content::fixed(&required::<String>(&heal, "amount")?)?,
+            on: parse_recipient(&required::<Value>(&heal, "on")?, registry)?,
+        })
     } else if let Some(field) = optional::<Table>(table, "field")? {
         Ok(EntityCastEffect::Field {
+            at: parse_spot(&required::<Value>(&field, "at")?, registry)?,
             field: field_id(&field, registry)?,
-            radius: required::<u32>(&field, "radius")?,
+            radius: parse_quantity(
+                "field radius",
+                "cell",
+                &required::<Value>(&field, "radius")?,
+                registry,
+            )?,
             action: content::field_action(&required::<String>(&field, "action")?)?,
         })
     } else if let Some(watch) = optional::<Table>(table, "watch")? {
         Ok(EntityCastEffect::Watch {
-            radius: required::<u32>(&watch, "radius")?,
-            duration: required::<u32>(&watch, "duration")?,
+            at: parse_spot(&required::<Value>(&watch, "at")?, registry)?,
+            radius: parse_quantity(
+                "watch radius",
+                "cell",
+                &required::<Value>(&watch, "radius")?,
+                registry,
+            )?,
+            duration: parse_quantity(
+                "watch duration",
+                "tick",
+                &required::<Value>(&watch, "duration")?,
+                registry,
+            )?,
             detection: parse_detection(&watch)?,
         })
     } else if let Some(summon) = optional::<Table>(table, "summon")? {
@@ -1547,14 +1727,280 @@ fn parse_entity_effect(
             ScriptError::ContentError(format!("entity type '{name}' is not defined"))
         })?;
         Ok(EntityCastEffect::Summon {
+            at: parse_summon_at(&required::<Value>(&summon, "at")?, registry)?,
             entity_type,
-            count: required::<u32>(&summon, "count")?,
+            count: parse_quantity(
+                "summon count",
+                "unit",
+                &required::<Value>(&summon, "count")?,
+                registry,
+            )?,
+            landing: content::landing(&required::<String>(&summon, "landing")?)?,
+            arrives: content::summon_arrival(&required::<String>(&summon, "arrives")?)?,
+        })
+    } else if let Some(relocate) = optional::<Table>(table, "relocate")? {
+        Ok(EntityCastEffect::Relocate {
+            journey: Box::new(parse_journey(
+                &required::<Value>(&relocate, "journey")?,
+                registry,
+            )?),
+            landing: content::landing(&required::<String>(&relocate, "landing")?)?,
         })
     } else {
         Err(ScriptError::ContentError(
-            "skill effect must be one of apply_buff, remove_buff, damage, heal, field, watch, or summon"
+            "skill effect must be one of apply_buff, remove_buff, damage, heal, field, watch, summon, or relocate"
                 .to_string(),
         ))
+    }
+}
+
+/// Reads a relocation's journey: a table with exactly one of `from_caster`
+/// or `from_aim`, each `{ party, to }`, or `swap`, an aim at something
+/// standing.
+fn parse_journey(value: &Value, registry: &ContentRegistry) -> crate::Result<Journey> {
+    let Value::Table(table) = value else {
+        return Err(content::unexpected(
+            "relocation journey",
+            &[
+                "a { from_caster = ... } table",
+                "a { from_aim = ... } table",
+                "a { swap = ... } table",
+            ],
+            &found(value),
+        ));
+    };
+    let from_caster = optional::<Table>(table, "from_caster")?;
+    let from_aim = optional::<Table>(table, "from_aim")?;
+    let swap = optional::<Value>(table, "swap")?;
+    match (from_caster, from_aim, swap) {
+        (Some(trip), None, None) => Ok(Journey::FromCaster {
+            party: parse_caster_party(&required::<Value>(&trip, "party")?, registry)?,
+            to: parse_from_caster_to(&required::<Table>(&trip, "to")?, registry)?,
+        }),
+        (None, Some(trip), None) => Ok(Journey::FromAim {
+            party: parse_aim_party(&required::<Table>(&trip, "party")?, registry)?,
+            to: parse_from_aim_to(&required::<Value>(&trip, "to")?)?,
+        }),
+        (None, None, Some(aim)) => {
+            let (whom, reach) = parse_standing_aim(&aim, registry)?;
+            Ok(Journey::Swap { whom, reach })
+        }
+        _ => Err(ScriptError::ContentError(
+            "a relocation journey table must have exactly one of 'from_caster', 'from_aim' or 'swap'"
+                .to_string(),
+        )),
+    }
+}
+
+/// Reads who a relocation gathers at the caster: `"caster"`, or a table with
+/// exactly one of `caster_and_around` or `around`, each a [`parse_gathering`]
+/// table.
+fn parse_caster_party(value: &Value, registry: &ContentRegistry) -> crate::Result<CasterParty> {
+    keyword_or_table(
+        "party at the caster",
+        value,
+        &[("caster", CasterParty::Caster)],
+        &[
+            "a { caster_and_around = ... } table",
+            "an { around = ... } table",
+        ],
+        |table| {
+            let caster_and_around = optional::<Table>(table, "caster_and_around")?;
+            let around = optional::<Table>(table, "around")?;
+            match (caster_and_around, around) {
+                (Some(gathering), None) => Ok(CasterParty::CasterAndAround(parse_gathering(
+                    &gathering, registry,
+                )?)),
+                (None, Some(gathering)) => {
+                    Ok(CasterParty::Around(parse_gathering(&gathering, registry)?))
+                }
+                _ => Err(ScriptError::ContentError(
+                    "a party at the caster table must have exactly one of 'caster_and_around' or 'around'"
+                        .to_string(),
+                )),
+            }
+        },
+    )
+}
+
+/// Reads who a relocation gathers at the aim: a table with exactly one of
+/// `target`, an aim at something standing, or `around`, a
+/// [`parse_gathering`] table that also names the aim it lies `at`.
+fn parse_aim_party(table: &Table, registry: &ContentRegistry) -> crate::Result<AimParty> {
+    let target = optional::<Value>(table, "target")?;
+    let around = optional::<Table>(table, "around")?;
+    match (target, around) {
+        (Some(aim), None) => {
+            let (whom, reach) = parse_standing_aim(&aim, registry)?;
+            Ok(AimParty::Target { whom, reach })
+        }
+        (None, Some(around)) => Ok(AimParty::Around {
+            at: parse_away(&required::<Value>(&around, "at")?, registry)?,
+            gathering: parse_gathering(&around, registry)?,
+        }),
+        _ => Err(ScriptError::ContentError(
+            "a party at the aim table must have exactly one of 'target' or 'around'".to_string(),
+        )),
+    }
+}
+
+/// Reads where a party gathered at the caster goes: a table with exactly one
+/// of `aim`, an aim away from the caster, or `home`, the kinds a home is.
+fn parse_from_caster_to(table: &Table, registry: &ContentRegistry) -> crate::Result<FromCasterTo> {
+    let aim = optional::<Value>(table, "aim")?;
+    let home = optional::<Value>(table, "home")?;
+    match (aim, home) {
+        (Some(aim), None) => Ok(FromCasterTo::Aim(parse_away(&aim, registry)?)),
+        (None, Some(home)) => Ok(FromCasterTo::Home(parse_kinds(&home, "relocation home")?)),
+        _ => Err(ScriptError::ContentError(
+            "a destination from the caster table must have exactly one of 'aim' or 'home'"
+                .to_string(),
+        )),
+    }
+}
+
+/// Reads where a party gathered at the aim goes: `"caster"`, or `{ home =
+/// kinds }`.
+fn parse_from_aim_to(value: &Value) -> crate::Result<FromAimTo> {
+    keyword_or_table(
+        "destination from the aim",
+        value,
+        &[("caster", FromAimTo::Caster)],
+        &["a { home = ... } table"],
+        |table| {
+            Ok(FromAimTo::Home(parse_kinds(
+                &required::<Value>(table, "home")?,
+                "relocation home",
+            )?))
+        },
+    )
+}
+
+/// Reads the bodies a relocation gathers: `{ radius, side, kinds, sight,
+/// count, shortfall }`, where `sight` is `"blind"` or `"seen"` and `count` is
+/// `"all"` or `{ at_most = n }`.
+fn parse_gathering(table: &Table, registry: &ContentRegistry) -> crate::Result<Gathering> {
+    Ok(Gathering {
+        radius: parse_quantity(
+            "relocation radius",
+            "cell",
+            &required::<Value>(table, "radius")?,
+            registry,
+        )?,
+        side: content::affiliation(&required::<String>(table, "side")?)?,
+        kinds: parse_kinds(&required::<Value>(table, "kinds")?, "relocation kinds")?,
+        sight: content::gather_sight(&required::<String>(table, "sight")?)?,
+        count: parse_count(&required::<Value>(table, "count")?, registry)?,
+        shortfall: content::shortfall(&required::<String>(table, "shortfall")?)?,
+    })
+}
+
+/// Reads how many bodies a gathering takes: `"all"`, or `{ at_most = n }`,
+/// `n` a body count or `{ stat = ... }`.
+fn parse_count(value: &Value, registry: &ContentRegistry) -> crate::Result<Count> {
+    keyword_or_table(
+        "relocation count",
+        value,
+        &[("all", Count::All)],
+        &["an { at_most = n } table"],
+        |table| {
+            Ok(Count::AtMost(parse_quantity(
+                "relocation count",
+                "body",
+                &required::<Value>(table, "at_most")?,
+                registry,
+            )?))
+        },
+    )
+}
+
+/// Reads a network definition: `carries` and `boarding`, whom it lets in;
+/// `capacity`, the cargo size the bodies inside may add up to; and `fate`,
+/// what becomes of them when its last gateway is lost.
+fn parse_network(table: &Table) -> crate::Result<NetworkDef> {
+    Ok(NetworkDef::new(
+        parse_kinds(&required::<Value>(table, "carries")?, "carries")?,
+        content::affiliation(&required::<String>(table, "boarding")?)?,
+        required::<u32>(table, "capacity")?,
+        content::passenger_fate(&required::<String>(table, "fate")?)?,
+    ))
+}
+
+/// Reads a tunnel definition: `carries` and `boarding`, whom it lets in;
+/// `other_end_lost`, what one end does when the other is lost; and its
+/// `passage` (see [`parse_passage`]).
+fn parse_tunnel(table: &Table) -> crate::Result<TunnelDef> {
+    Ok(TunnelDef::new(
+        parse_kinds(&required::<Value>(table, "carries")?, "carries")?,
+        content::affiliation(&required::<String>(table, "boarding")?)?,
+        content::other_end_lost(&required::<String>(table, "other_end_lost")?)?,
+        parse_passage(&required::<Value>(table, "passage")?)?,
+    ))
+}
+
+/// Reads what entering a tunnel does: `"crosses"`, or `{ held = { capacity,
+/// fate } }`.
+fn parse_passage(value: &Value) -> crate::Result<Passage> {
+    keyword_or_table(
+        "passage",
+        value,
+        &[("crosses", Passage::Crosses)],
+        &["a { held = ... } table"],
+        |table| {
+            let held = required::<Table>(table, "held")?;
+            Ok(Passage::Held {
+                capacity: required::<u32>(&held, "capacity")?,
+                fate: content::passenger_fate(&required::<String>(&held, "fate")?)?,
+            })
+        },
+    )
+}
+
+/// Reads what an entity holds others as: a `transporter` table — `carries`,
+/// `boarding`, `fate`, `conduct` — or a `gateway` table — what it joins and
+/// its `doors` — never both; `None` with neither.
+fn parse_holder(table: &Table, registry: &ContentRegistry) -> crate::Result<Option<Holder>> {
+    let transporter = optional::<Table>(table, "transporter")?;
+    let gateway = optional::<Table>(table, "gateway")?;
+    match (transporter, gateway) {
+        (Some(transporter), None) => {
+            let carries = parse_kinds(&required::<Value>(&transporter, "carries")?, "carries")?;
+            let boarding = required::<String>(&transporter, "boarding")?;
+            let fate = required::<String>(&transporter, "fate")?;
+            let conduct = required::<String>(&transporter, "conduct")?;
+            Ok(Some(Holder::Transporter(TransporterDef::new(
+                carries,
+                content::affiliation(&boarding)?,
+                content::passenger_fate(&fate)?,
+                content::passenger_conduct(&conduct)?,
+            ))))
+        }
+        (None, Some(gateway)) => Ok(Some(Holder::Gateway(GatewayDef::new(
+            parse_joins(&gateway, registry)?,
+            content::doors(&required::<String>(&gateway, "doors")?)?,
+        )))),
+        (None, None) => Ok(None),
+        (Some(_), Some(_)) => Err(ScriptError::ContentError(
+            "an entity holds others as a 'transporter' or a 'gateway', not both".to_string(),
+        )),
+    }
+}
+
+/// Reads what a gateway joins: exactly one of `network` or `tunnel`,
+/// each a registered name.
+fn parse_joins(gateway: &Table, registry: &ContentRegistry) -> crate::Result<Joins> {
+    let network = optional::<String>(gateway, "network")?;
+    let tunnel = optional::<String>(gateway, "tunnel")?;
+    match (network, tunnel) {
+        (Some(name), None) => Ok(Joins::Network(registry.network(&name).ok_or_else(
+            || ScriptError::ContentError(format!("network '{name}' is not defined")),
+        )?)),
+        (None, Some(name)) => Ok(Joins::Tunnel(registry.tunnel(&name).ok_or_else(|| {
+            ScriptError::ContentError(format!("tunnel '{name}' is not defined"))
+        })?)),
+        _ => Err(ScriptError::ContentError(
+            "a gateway table must have exactly one of 'network' or 'tunnel'".to_string(),
+        )),
     }
 }
 
@@ -2070,6 +2516,27 @@ fn research_by_name(name: &str, registry: &ContentRegistry) -> crate::Result<Res
     registry
         .research(name)
         .ok_or_else(|| ScriptError::ContentError(format!("research '{name}' is not defined")))
+}
+
+/// Reads how a trainer's units come into the world: `release = "beside"`, or
+/// `release = { warp = { within, landing } }`, the field rules a picked cell
+/// must meet and the landing word.
+fn parse_release(trainer: &Table, registry: &ContentRegistry) -> crate::Result<Release> {
+    match optional::<Value>(trainer, "release")? {
+        Some(Value::String(word)) if word.to_str().is_ok_and(|word| word == "beside") => {
+            Ok(Release::Beside)
+        }
+        Some(Value::Table(release)) => {
+            let warp = required::<Table>(&release, "warp")?;
+            Ok(Release::Warped {
+                within: parse_field_placement(&required::<Vec<Table>>(&warp, "within")?, registry)?,
+                landing: content::landing(&required::<String>(&warp, "landing")?)?,
+            })
+        }
+        Some(_) | None => Err(ScriptError::ContentError(
+            "a trainer's release must be 'beside' or a { warp = ... } table".to_string(),
+        )),
+    }
 }
 
 /// Reads the `field_placement` list: each entry either `requires` a field

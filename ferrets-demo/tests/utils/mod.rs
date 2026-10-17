@@ -233,7 +233,12 @@ pub fn position_bits(x: u64, y: u64) -> FixedUVec2 {
 /// drawing and minimap systems can be driven directly without a window or a
 /// renderer.
 pub fn view_app() -> App {
-    let mut app = demo_map_app(MovementModel::Continuous);
+    view_app_as(LocalRole::Player(0))
+}
+
+/// [`view_app`] on a node playing `role`.
+pub fn view_app_as(role: LocalRole) -> App {
+    let mut app = demo_map_app_as(role, MovementModel::Continuous);
     let world = app.world_mut();
     world.insert_resource(Assets::<Image>::default());
     // The stores the sprite attachment draws from and the clocks the drawing

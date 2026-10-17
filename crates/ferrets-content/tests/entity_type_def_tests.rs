@@ -16,6 +16,7 @@ use ferrets_content::{
     pool_def::PoolId,
     quantity::Quantity,
     resource::{Banking, DepletionPolicy, HarvestData},
+    train::Release,
     work::{Attachment, BerthStance, CrewLimit, WorkPresence},
 };
 use ferrets_geometry::cell_size::CellSize;
@@ -43,7 +44,7 @@ fn fully_loaded_definition_is_valid() {
         .with_price([("gold", 30), ("wood", 10)])
         .with_train_time(4)
         .with_build(6, utils::site_initial(&[PoolId::HEALTH]))
-        .with_trainer(["footman"])
+        .with_trainer(["footman"], Release::Beside)
         .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
         .with_builder(
             ["depot"],
@@ -248,13 +249,13 @@ fn build_naming_pool_twice_panics() {
 #[test]
 #[should_panic(expected = "trains must not be empty")]
 fn empty_trains_list_panics() {
-    footman().with_trainer(Vec::<String>::new());
+    footman().with_trainer(Vec::<String>::new(), Release::Beside);
 }
 
 #[test]
 #[should_panic(expected = "trained type names must not be empty")]
 fn empty_trains_entry_panics() {
-    footman().with_trainer(["footman", ""]);
+    footman().with_trainer(["footman", ""], Release::Beside);
 }
 
 #[test]

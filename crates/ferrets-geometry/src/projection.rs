@@ -107,6 +107,28 @@ impl Projection {
         cells
     }
 
+    /// The cell within `distance` of `rect` nearest `point`: by this
+    /// projection's metric, ties by the straighter way to it ([`octile`]),
+    /// then by row, then column.
+    pub fn nearest_in_range_of_rect(
+        self,
+        rect: CellRect,
+        distance: u32,
+        point: CellPos,
+    ) -> CellPos {
+        self.cells_in_range_of_rect(rect, distance)
+            .into_iter()
+            .min_by_key(|&cell| {
+                (
+                    self.metric(cell, point),
+                    octile(cell, point),
+                    cell.y,
+                    cell.x,
+                )
+            })
+            .expect("a rectangle is in range of its own cells")
+    }
+
     /// Whether a `size` footprint anchored at `from` satisfies stopping
     /// within `distance` of `goal`: measured by the footprint's nearest edge
     /// for a ranged stop, by the anchor itself for a stop of zero (see

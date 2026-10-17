@@ -184,7 +184,7 @@ fn command(table: &Table, index: usize, names: &CommandNames) -> crate::Result<P
             flush: flush(table, index)?,
         }),
         "load" => Ok(PlayerCommand::Load {
-            transport: SimulationId(integer(table, index, "transport")?),
+            holder: SimulationId(integer(table, index, "holder")?),
             target: SimulationId(integer(table, index, "target")?),
             flush: flush(table, index)?,
         }),
@@ -197,7 +197,7 @@ fn command(table: &Table, index: usize, names: &CommandNames) -> crate::Result<P
                 _ => return Err(element_error(index, "unload cell needs both x and y")),
             };
             Ok(PlayerCommand::Unload {
-                transport: SimulationId(integer(table, index, "transport")?),
+                holder: SimulationId(integer(table, index, "holder")?),
                 at,
                 flush: flush(table, index)?,
             })

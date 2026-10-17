@@ -24,30 +24,38 @@ use ferrets_content::{
         Emission, FieldAction, FieldCoverage, FieldDecay, FieldEffect, FieldGrowth, FieldLayer,
         FieldPlacement, FieldSourceDef, FieldVision,
     },
+    gateway::{Doors, GatewayDef, Joins},
     kinds::{Kind, Kinds},
+    landing::Landing,
     location::Solidity,
     morph::{
         MorphCancel, MorphCourse, MorphInterrupted, MorphPlacement, MorphReason, PoolCarry,
         RevertCarry, ViaInterrupted,
     },
+    network::NetworkDef,
     player_stats::PlayerStatId,
     pool::{Pool, PoolInitial},
     pool_def::PoolId,
     pool_shift::PoolShift,
     price::{self, Price},
     quantity::Quantity,
+    registry::ContentRegistry,
     repair::{RepairCost, RepairRate},
     requirement::{Bound, Requirement, Threshold},
     research::ResearchDef,
     resource::Banking,
     skills::{
-        Casting, EntityCastEffect, EntityCastTarget, PlayerCastEffect, Reach, SkillCaster, SkillDef,
+        AimParty, Away, CasterParty, Casting, Count, EntityCastEffect, EntityCastTarget, FromAimTo,
+        FromCasterTo, GatherSight, Gathering, Journey, PaymentPoint, PlayerCastEffect, Reach,
+        Recipient, Refund, Shortfall, SkillCaster, SkillDef, Spot, SummonArrival, SummonAt, Whom,
     },
     splash::{SplashDef, SplashShape},
     stack_rule::StackRule,
     stand::StandingAct,
     stats::{EntityModifier, ModifierOp, PlayerModifier},
+    train::Release,
     transport::{PassengerConduct, PassengerFate},
+    tunnel::{OtherEndLost, Passage, TunnelDef},
     turret::{TurretDef, TurretMount, TurretStats, WeaponConduct},
     work::{Attachment, BerthStance, CrewLimit, WorkPresence},
 };
@@ -587,7 +595,7 @@ fn parses_transporter() {
     let registry = content::load(&engine(), source).expect("load content");
 
     let wagon = registry.entity("wagon").expect("wagon defined");
-    let transporter = wagon.transporter.as_ref().expect("wagon can transport");
+    let transporter = wagon.transporter().expect("wagon can transport");
     assert_eq!(
         transporter.carries(),
         &Kinds::only([
@@ -638,8 +646,7 @@ fn parses_sheltering_transporter() {
     let transporter = registry
         .entity("cart")
         .expect("cart defined")
-        .transporter
-        .as_ref()
+        .transporter()
         .expect("cart can transport");
     assert_eq!(transporter.boarding(), Affiliation::Own);
     assert_eq!(transporter.passenger_fate(), PassengerFate::Destroy);
@@ -715,6 +722,155 @@ fn unknown_passenger_fate_errors() {
     assert!(
         matches!(&error, ScriptError::ContentError(m) if m.contains("passenger fate must be 'destroy' or 'eject', found 'scatter'")),
         "unexpected error: {error:?}"
+    );
+}
+
+//
+// ─── Gateways ─────────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn parses_network_and_its_gateway() {
+    let source = gateway_content(CROSSING, r#"network = "warren", doors = "both""#, HELD);
+    let registry = content::load(&engine(), &source).expect("load content");
+
+    let warren = registry.network("warren").expect("warren defined");
+    assert_eq!(
+        registry.network_def(warren),
+        &NetworkDef::new(
+            Kinds::tags(["ground"]),
+            Affiliation::Own,
+            40,
+            PassengerFate::Destroy,
+        )
+    );
+    assert_eq!(
+        registry.entity("burrow").expect("burrow defined").gateway(),
+        Some(&GatewayDef::new(Joins::Network(warren), Doors::Both))
+    );
+}
+
+#[test]
+fn parses_crossing_tunnel_and_its_end() {
+    let source = gateway_content(CROSSING, r#"tunnel = "tunnel", doors = "both""#, BOARDING);
+    let registry = content::load(&engine(), &source).expect("load content");
+
+    let tunnel = registry.tunnel("tunnel").expect("tunnel defined");
+    assert_eq!(
+        registry.tunnel_def(tunnel),
+        &TunnelDef::new(
+            Kinds::Any,
+            Affiliation::Allied,
+            OtherEndLost::Stands,
+            Passage::Crosses,
+        )
+    );
+    assert_eq!(
+        registry.entity("burrow").expect("burrow defined").gateway(),
+        Some(&GatewayDef::new(Joins::Tunnel(tunnel), Doors::Both))
+    );
+}
+
+#[test]
+fn parses_held_tunnel() {
+    let source = gateway_content(
+        r#"carries = "any", boarding = "own", other_end_lost = "razed", passage = { held = { capacity = 8, fate = "eject" } }"#,
+        r#"tunnel = "tunnel", doors = "both""#,
+        HELD,
+    );
+    let registry = content::load(&engine(), &source).expect("load content");
+
+    let tunnel = registry.tunnel("tunnel").expect("tunnel defined");
+    assert_eq!(
+        registry.tunnel_def(tunnel).passage(),
+        Passage::Held {
+            capacity: 8,
+            fate: PassengerFate::Eject,
+        }
+    );
+    assert_eq!(
+        registry.tunnel_def(tunnel).other_end_lost(),
+        OtherEndLost::Razed
+    );
+}
+
+#[test]
+fn gateway_of_undefined_network_errors() {
+    let source = gateway_content(CROSSING, r#"network = "tunnels", doors = "both""#, HELD);
+    assert_content_error(&source, "network 'tunnels' is not defined");
+}
+
+#[test]
+fn gateway_of_undefined_tunnel_errors() {
+    let source = gateway_content(CROSSING, r#"tunnel = "burrows", doors = "both""#, BOARDING);
+    assert_content_error(&source, "tunnel 'burrows' is not defined");
+}
+
+#[test]
+fn entity_holding_as_transporter_and_gateway_errors() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_network("warren", {
+            carries = "any", boarding = "own", capacity = 40, fate = "destroy",
+        })
+        define_entity("burrow", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            pools = { health = { maximum = 100 } },
+            gateway = { network = "warren", doors = "both" },
+            transporter = { carries = "any", boarding = "own", fate = "destroy", conduct = "shelter" },
+        })
+    "#;
+    assert_content_error(
+        source,
+        "an entity holds others as a 'transporter' or a 'gateway', not both",
+    );
+}
+
+#[test]
+fn gateway_naming_both_network_and_tunnel_errors() {
+    let source = gateway_content(
+        CROSSING,
+        r#"network = "warren", tunnel = "tunnel", doors = "both""#,
+        HELD,
+    );
+    assert_content_error(
+        &source,
+        "a gateway table must have exactly one of 'network' or 'tunnel'",
+    );
+}
+
+#[test]
+fn unknown_doors_errors() {
+    let source = gateway_content(CROSSING, r#"network = "warren", doors = "window""#, HELD);
+    assert_content_error(
+        &source,
+        "doors must be 'both', 'entrance', or 'exit', found 'window'",
+    );
+}
+
+#[test]
+fn unknown_other_end_lost_errors() {
+    let source = gateway_content(
+        r#"carries = "any", boarding = "own", other_end_lost = "mourns", passage = "crosses""#,
+        r#"network = "warren", doors = "both""#,
+        HELD,
+    );
+    assert_content_error(
+        &source,
+        "other end lost must be 'razed' or 'stands', found 'mourns'",
+    );
+}
+
+#[test]
+fn unknown_passage_errors() {
+    let source = gateway_content(
+        r#"carries = "any", boarding = "own", other_end_lost = "stands", passage = "hold""#,
+        r#"network = "warren", doors = "both""#,
+        HELD,
+    );
+    assert_content_error(
+        &source,
+        "passage must be 'crosses' or a { held = ... } table, found 'hold'",
     );
 }
 
@@ -820,8 +976,7 @@ fn parses_skill_with_buff_effect() {
             caster = "entity",
             cooldown = 5,
             cost = { energy = "30" },
-            target = "caster",
-            effect = { apply_buff = "haste" },
+            effect = { apply_buff = { buff = "haste", on = "caster" } },
         })
 
         define_entity("mage", {
@@ -844,10 +999,11 @@ fn parses_skill_with_buff_effect() {
             cooldown: 5,
             caster: SkillCaster::Entity {
                 costs: vec![Cost::Energy(FixedU64::from_num(30))],
-                target: EntityCastTarget::Caster,
-                reach: Reach::Wherever,
                 casting: Casting::Instant,
-                effect: EntityCastEffect::ApplyBuff(haste),
+                effect: EntityCastEffect::ApplyBuff {
+                    buff: haste,
+                    on: Recipient::Caster,
+                },
             },
             requires: Vec::new(),
         })
@@ -870,8 +1026,7 @@ fn parses_skill_requirements() {
         define_skill("war_secret", {
             caster = "entity",
             cooldown = 5,
-            target = "caster",
-            effect = { apply_buff = "haste" },
+            effect = { apply_buff = { buff = "haste", on = "caster" } },
             requires = { { research = "arcana" } },
         })
         define_entity("mage", {
@@ -1039,8 +1194,7 @@ fn unknown_skill_caster_errors() {
         define_skill("war_cry", {
             caster = "building",
             cooldown = 30,
-            target = "caster_player",
-            effect = { damage = "5" },
+            effect = { damage = { amount = "5", on = "caster" } },
         })
     "#;
     let Err(error) = content::load(&engine(), source) else {
@@ -1053,20 +1207,77 @@ fn unknown_skill_caster_errors() {
 }
 
 #[test]
-fn unknown_skill_target_errors() {
+fn unknown_aim_errors() {
+    let error = skill_error(r#"{ damage = { amount = "5", on = "everyone" } }"#);
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("aim must be 'caster', 'position', 'fallen', 'own', 'allied', 'enemy', or 'anyone', found 'everyone'")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn entity_skill_with_target_beside_effect_errors() {
     let source = r#"
         define_skill("war_cry", {
             caster = "entity",
             cooldown = 30,
-            target = "everyone",
-            effect = { damage = "5" },
+            target = "enemy",
+            effect = { damage = { amount = "5", on = "enemy" } },
         })
     "#;
     let Err(error) = content::load(&engine(), source) else {
-        panic!("must reject an unknown target");
+        panic!("must reject a target written beside the effect");
     };
     assert!(
-        matches!(&error, ScriptError::ContentError(m) if m.contains("skill target must be 'caster', 'position', 'fallen', 'own', 'allied', 'enemy', or 'anyone', found 'everyone'")),
+        matches!(&error, ScriptError::ContentError(m) if m.contains("an entity skill says its aim and range inside its effect, not beside it")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn damage_on_position_errors() {
+    let error = skill_error(r#"{ damage = { amount = "5", on = "position" } }"#);
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("recipient must be 'caster', 'own', 'allied', 'enemy', or 'anyone', found 'position'")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn heal_on_fallen_errors() {
+    let error = skill_error(r#"{ heal = { amount = "5", on = "fallen" } }"#);
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("recipient must be 'caster', 'own', 'allied', 'enemy', or 'anyone', found 'fallen'")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn watch_at_fallen_errors() {
+    let error = skill_error(r#"{ watch = { at = "fallen", radius = 6, duration = 40 } }"#);
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("spot must be 'caster', 'position', 'own', 'allied', 'enemy', or 'anyone', found 'fallen'")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn caster_aim_with_range_errors() {
+    let error =
+        skill_error(r#"{ damage = { amount = "5", on = { kind = "caster", range = 4 } } }"#);
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("a caster aim is written \"caster\": it takes no filter and no range")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn position_aim_with_filter_errors() {
+    let error = skill_error(
+        r#"{ watch = { at = { kind = "position", only = { tags = { "hall" } } }, radius = 6, duration = 40 } }"#,
+    );
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("a position aim takes no filter")),
         "unexpected error: {error:?}"
     );
 }
@@ -1077,7 +1288,7 @@ fn player_cast_skill_with_target_errors() {
         define_skill("war_cry", {
             caster = "player",
             cooldown = 30,
-            target = "caster_player",
+            target = "caster",
             effect = { remove_buff = "haste" },
         })
     "#;
@@ -1711,7 +1922,7 @@ fn as_long_as_list_with_stray_key_errors() {
 }
 
 #[test]
-fn requirement_string_other_than_idle_errors() {
+fn requirement_string_other_than_built_or_idle_errors() {
     let source = r#"
         local ground = define_layer("ground")
         define_entity("knight", {
@@ -1791,7 +2002,7 @@ fn as_long_as_reads_bare_list_as_all() {
 }
 
 #[test]
-fn bound_naming_both_sides_errors() {
+fn bound_naming_two_thresholds_errors() {
     let source = r#"
         local ground = define_layer("ground")
         define_entity("knight", {
@@ -2271,8 +2482,7 @@ fn watch_effect_reads_its_radius_and_duration() {
         define_skill("scan", {
             cooldown = 10,
             caster = "entity",
-            target = "position",
-            effect = { watch = { radius = 6, duration = 40 } },
+            effect = { watch = { at = "position", radius = 6, duration = 40 } },
         })
     "#;
     let registry = content::load(&engine(), source).expect("content loads");
@@ -2286,8 +2496,11 @@ fn watch_effect_reads_its_radius_and_duration() {
     assert_eq!(
         *effect,
         EntityCastEffect::Watch {
-            radius: 6,
-            duration: 40,
+            at: Spot::Cell {
+                reach: Reach::Wherever,
+            },
+            radius: Quantity::Constant(6),
+            duration: Quantity::Constant(40),
             detection: Detection::Blind,
         }
     );
@@ -2302,22 +2515,19 @@ fn skill_reads_time_it_is_worked_over() {
         define_skill("bolt", {
             cooldown = 10,
             caster = "entity",
-            target = "enemy",
-            effect = { damage = "5" },
+            effect = { damage = { amount = "5", on = "enemy" } },
         })
         define_skill("raise_dead", {
             cooldown = 10,
             caster = "entity",
-            target = "enemy",
-            cast = { point = 30, period = 45 },
-            effect = { damage = "5" },
+            cast = { point = 30, period = 45, pays = "landing" },
+            effect = { damage = { amount = "5", on = "enemy" } },
         })
         define_skill("ritual", {
             cooldown = 10,
             caster = "entity",
-            target = "enemy",
-            cast = { point = { stat = "ritual_time" } },
-            effect = { damage = "5" },
+            cast = { point = { stat = "ritual_time" }, pays = "landing" },
+            effect = { damage = { amount = "5", on = "enemy" } },
         })
     "#;
     let registry = content::load(&engine(), source).expect("content loads");
@@ -2345,6 +2555,7 @@ fn skill_reads_time_it_is_worked_over() {
         Casting::Delayed {
             point: Quantity::Constant(30),
             period: Quantity::Constant(45),
+            pays: PaymentPoint::AtLanding,
         }
     );
     assert_eq!(
@@ -2352,8 +2563,88 @@ fn skill_reads_time_it_is_worked_over() {
         Casting::Delayed {
             point: Quantity::Stat(ritual_time),
             period: Quantity::Stat(ritual_time),
+            pays: PaymentPoint::AtLanding,
         },
         "an omitted period is the point itself: the caster is free the tick it lands"
+    );
+}
+
+#[test]
+fn delayed_cast_reads_when_it_pays_and_what_it_refunds() {
+    let source = r#"
+        define_layer("ground")
+        define_skill("portal", {
+            cooldown = 10,
+            caster = "entity",
+            cast = { point = 100, pays = "start", refund = "none" },
+            effect = { damage = { amount = "5", on = "enemy" } },
+        })
+        define_skill("recall", {
+            cooldown = 10,
+            caster = "entity",
+            cast = { point = 26, pays = "start", refund = "full" },
+            effect = { damage = { amount = "5", on = "enemy" } },
+        })
+        define_skill("raise", {
+            cooldown = 10,
+            caster = "entity",
+            cast = { point = 30, period = 45, pays = "landing" },
+            effect = { damage = { amount = "5", on = "enemy" } },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("content loads");
+    let pays = |name: &str| {
+        let def = registry
+            .skill(name)
+            .and_then(|id| registry.skill_def(id))
+            .expect("the skill is defined");
+        let SkillCaster::Entity {
+            casting: Casting::Delayed { pays, .. },
+            ..
+        } = &def.caster
+        else {
+            panic!("{name} is a delayed entity cast");
+        };
+        *pays
+    };
+    assert_eq!(pays("portal"), PaymentPoint::AtStart(Refund::None));
+    assert_eq!(pays("recall"), PaymentPoint::AtStart(Refund::Full));
+    assert_eq!(pays("raise"), PaymentPoint::AtLanding);
+}
+
+#[test]
+fn cast_paid_at_start_without_refund_errors() {
+    let error = casting_error(r#"{ point = 10, pays = "start" }"#);
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("a cast that pays at its start says its refund: 'none' or 'full'")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn cast_paid_at_landing_with_refund_errors() {
+    let error = casting_error(r#"{ point = 10, pays = "landing", refund = "full" }"#);
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("a cast that pays when it lands has nothing to refund")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn cast_payment_of_unknown_word_errors() {
+    let error = casting_error(r#"{ point = 10, pays = "upfront" }"#);
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("cast payment must be 'start' or 'landing', found 'upfront'")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn cast_refund_of_unknown_word_errors() {
+    let error = casting_error(r#"{ point = 10, pays = "start", refund = "half" }"#);
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("cast refund must be 'none' or 'full', found 'half'")),
+        "unexpected error: {error:?}"
     );
 }
 
@@ -2381,22 +2672,17 @@ fn skill_reads_reach_it_is_cast_from() {
         define_skill("bolt", {
             cooldown = 10,
             caster = "entity",
-            target = "enemy",
-            effect = { damage = "5" },
+            effect = { damage = { amount = "5", on = "enemy" } },
         })
         define_skill("raise_dead", {
             cooldown = 10,
             caster = "entity",
-            target = "enemy",
-            range = 6,
-            effect = { damage = "5" },
+            effect = { damage = { amount = "5", on = { kind = "enemy", range = 6 } } },
         })
         define_skill("far_sight", {
             cooldown = 10,
             caster = "entity",
-            target = "enemy",
-            range = { stat = "raise_range" },
-            effect = { damage = "5" },
+            effect = { damage = { amount = "5", on = { kind = "enemy", range = { stat = "raise_range" } } } },
         })
     "#;
     let registry = content::load(&engine(), source).expect("content loads");
@@ -2408,10 +2694,13 @@ fn skill_reads_reach_it_is_cast_from() {
             .skill(name)
             .and_then(|id| registry.skill_def(id))
             .expect("the skill is defined");
-        let SkillCaster::Entity { reach, .. } = &def.caster else {
+        let SkillCaster::Entity { effect, .. } = &def.caster else {
             panic!("{name} is cast by an entity");
         };
-        *reach
+        match effect.target() {
+            EntityCastTarget::Standing { reach, .. } => reach,
+            other => panic!("{name} is aimed at something standing, not {other:?}"),
+        }
     };
 
     assert_eq!(
@@ -2434,9 +2723,7 @@ fn skill_reach_by_undefined_stat_errors() {
         define_skill("far_sight", {
             cooldown = 10,
             caster = "entity",
-            target = "enemy",
-            range = { stat = "raise_range" },
-            effect = { damage = "5" },
+            effect = { damage = { amount = "5", on = { kind = "enemy", range = { stat = "raise_range" } } } },
         })
     "#;
     let Err(error) = content::load(&engine(), source) else {
@@ -2460,8 +2747,7 @@ fn summon_effect_reads_its_type_and_count() {
         define_skill("raise_dead", {
             cooldown = 10,
             caster = "entity",
-            target = "fallen",
-            effect = { summon = { entity = "skeleton", count = 2 } },
+            effect = { summon = { at = "fallen", entity = "skeleton", count = 2, landing = "anywhere", arrives = "standing" } },
         })
     "#;
     let registry = content::load(&engine(), source).expect("content loads");
@@ -2470,16 +2756,265 @@ fn summon_effect_reads_its_type_and_count() {
         .skill("raise_dead")
         .and_then(|id| registry.skill_def(id))
         .expect("raise_dead defined");
-    let SkillCaster::Entity { target, effect, .. } = &skill.caster else {
+    let SkillCaster::Entity { effect, .. } = &skill.caster else {
         panic!("raise_dead is cast by an entity");
     };
-    assert_eq!(*target, EntityCastTarget::Fallen { kinds: Kinds::Any });
     assert_eq!(
         *effect,
         EntityCastEffect::Summon {
+            at: SummonAt::Fallen {
+                kinds: Kinds::Any,
+                reach: Reach::Wherever,
+            },
             entity_type: skeleton,
-            count: 2,
+            count: Quantity::Constant(2),
+            landing: Landing::Anywhere,
+            arrives: SummonArrival::Standing,
         }
+    );
+}
+
+#[test]
+fn summon_effect_reads_its_landing_and_arrival() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+
+        define_entity("mound", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            pools = { health = { maximum = 20 } },
+            build = { time = 30, pools = { health = "initial" } },
+        })
+        define_skill("raise_mound", {
+            cooldown = 10,
+            caster = "entity",
+            effect = { summon = { at = "caster", entity = "mound", count = 1, landing = "sighted", arrives = "rising" } },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("content loads");
+    let skill = registry
+        .skill("raise_mound")
+        .and_then(|id| registry.skill_def(id))
+        .expect("raise_mound defined");
+    let SkillCaster::Entity { effect, .. } = &skill.caster else {
+        panic!("raise_mound is cast by an entity");
+    };
+    let EntityCastEffect::Summon {
+        landing, arrives, ..
+    } = effect
+    else {
+        panic!("raise_mound summons");
+    };
+    assert_eq!(
+        (*landing, *arrives),
+        (Landing::Sighted, SummonArrival::Rising)
+    );
+}
+
+#[test]
+fn summon_without_landing_errors() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_entity("mound", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            pools = { health = { maximum = 20 } },
+        })
+        define_skill("raise_mound", {
+            cooldown = 10,
+            caster = "entity",
+            effect = { summon = { at = "caster", entity = "mound", count = 1, arrives = "standing" } },
+        })
+    "#;
+    assert_content_error(
+        source,
+        "field 'landing': error converting Lua nil to String",
+    );
+}
+
+#[test]
+fn summon_without_arrival_errors() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_entity("mound", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            pools = { health = { maximum = 20 } },
+        })
+        define_skill("raise_mound", {
+            cooldown = 10,
+            caster = "entity",
+            effect = { summon = { at = "caster", entity = "mound", count = 1, landing = "anywhere" } },
+        })
+    "#;
+    assert_content_error(
+        source,
+        "field 'arrives': error converting Lua nil to String",
+    );
+}
+
+#[test]
+fn summon_naming_unknown_arrival_errors() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_entity("mound", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            pools = { health = { maximum = 20 } },
+        })
+        define_skill("raise_mound", {
+            cooldown = 10,
+            caster = "entity",
+            effect = { summon = { at = "caster", entity = "mound", count = 1, landing = "anywhere", arrives = "falling" } },
+        })
+    "#;
+    assert_content_error(
+        source,
+        "summon arrival must be 'standing' or 'rising', found 'falling'",
+    );
+}
+
+#[test]
+fn trainer_reads_its_warp_release() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_field("power", { layer = "anywhere", decay = "instant" })
+        define_entity("recruit", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            pools = { health = { maximum = 20 } },
+            train_time = 10,
+            build = { time = 30, pools = { health = "initial" } },
+        })
+        define_entity("relay", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            pools = { health = { maximum = 20 } },
+            trainer = {
+                trains = { "recruit" },
+                release = { warp = {
+                    within = { { requires = "power", of = "own", coverage = "every" } },
+                    landing = "sighted",
+                } },
+            },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("content loads");
+    let power = registry.field("power").expect("power defined");
+    let release = registry
+        .entity("relay")
+        .and_then(|def| def.trainer.as_ref())
+        .map(|trainer| trainer.release().clone())
+        .expect("relay trains");
+    assert_eq!(
+        release,
+        Release::Warped {
+            within: vec![FieldPlacement::Requires {
+                field: power,
+                of: Affiliation::Own,
+                coverage: FieldCoverage::Every,
+            }],
+            landing: Landing::Sighted,
+        }
+    );
+}
+
+#[test]
+fn trainer_without_release_errors() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_entity("recruit", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            pools = { health = { maximum = 20 } },
+            train_time = 10,
+        })
+        define_entity("relay", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            pools = { health = { maximum = 20 } },
+            trainer = { trains = { "recruit" } },
+        })
+    "#;
+    assert_content_error(
+        source,
+        "a trainer's release must be 'beside' or a { warp = ... } table",
+    );
+}
+
+#[test]
+fn trainer_without_trains_errors() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_entity("relay", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            pools = { health = { maximum = 20 } },
+            trainer = { release = "beside" },
+        })
+    "#;
+    assert_content_error(
+        source,
+        "field 'trains': error converting Lua nil to Vec<String> (expected table)",
+    );
+}
+
+#[test]
+fn skill_numbers_read_stats() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_entity_stat("scan_radius", 0)
+        define_entity_stat("scan_time", 1)
+        define_entity_stat("host_size", 1)
+        define_field("creep", { layer = "anywhere", decay = "instant" })
+        define_entity("skeleton", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            pools = { health = { maximum = 20 } },
+        })
+        define_skill("scan", {
+            cooldown = 10,
+            caster = "entity",
+            effect = { watch = { at = "position", radius = { stat = "scan_radius" }, duration = { stat = "scan_time" } } },
+        })
+        define_skill("spew", {
+            cooldown = 10,
+            caster = "entity",
+            effect = { field = { at = "caster", field = "creep", radius = { stat = "scan_radius" }, action = "cover" } },
+        })
+        define_skill("raise_host", {
+            cooldown = 10,
+            caster = "entity",
+            effect = { summon = { at = "caster", entity = "skeleton", count = { stat = "host_size" }, landing = "anywhere", arrives = "standing" } },
+        })
+        define_skill("recall", {
+            cooldown = 10,
+            caster = "entity",
+            effect = { relocate = {
+                journey = { from_aim = {
+                    party = { around = {
+                        at = "position", radius = 2, side = "own", kinds = "any",
+                        sight = "blind", count = { at_most = { stat = "host_size" } }, shortfall = "leave",
+                    } },
+                    to = "caster",
+                } },
+                landing = "anywhere",
+            } },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("content loads");
+    let stat = |name: &str| Quantity::Stat(registry.entity_stat(name).expect("defined"));
+    let EntityCastEffect::Watch {
+        radius, duration, ..
+    } = entity_effect(&registry, "scan")
+    else {
+        panic!("scan watches");
+    };
+    assert_eq!((radius, duration), (stat("scan_radius"), stat("scan_time")));
+    let EntityCastEffect::Field { radius, .. } = entity_effect(&registry, "spew") else {
+        panic!("spew acts on a field");
+    };
+    assert_eq!(radius, stat("scan_radius"));
+    let EntityCastEffect::Summon { count, .. } = entity_effect(&registry, "raise_host") else {
+        panic!("raise_host summons");
+    };
+    assert_eq!(count, stat("host_size"));
+    let EntityCastEffect::Relocate { journey, .. } = entity_effect(&registry, "recall") else {
+        panic!("recall relocates");
+    };
+    assert_eq!(
+        journey.gathering().map(|gathering| gathering.count),
+        Some(Count::AtMost(stat("host_size")))
     );
 }
 
@@ -2491,8 +3026,7 @@ fn summon_of_undefined_type_errors() {
         define_skill("raise_dead", {
             cooldown = 10,
             caster = "entity",
-            target = "fallen",
-            effect = { summon = { entity = "skeleton", count = 2 } },
+            effect = { summon = { at = "fallen", entity = "skeleton", count = 2, landing = "anywhere", arrives = "standing" } },
         })
     "#;
     let Err(error) = content::load(&engine(), source) else {
@@ -3242,12 +3776,13 @@ fn parses_fields_sources_placement_and_effects() {
             cooldown: 20,
             caster: SkillCaster::Entity {
                 costs: Vec::new(),
-                target: EntityCastTarget::Position,
-                reach: Reach::Wherever,
                 casting: Casting::Instant,
                 effect: EntityCastEffect::Field {
+                    at: Spot::Cell {
+                        reach: Reach::Wherever,
+                    },
                     field: creep,
-                    radius: 1,
+                    radius: Quantity::Constant(1),
                     action: FieldAction::Cover,
                 },
             },
@@ -4343,8 +4878,7 @@ fn parses_field_detection_and_watch_detection() {
         define_skill("scan", {
             cooldown = 10,
             caster = "entity",
-            target = "position",
-            effect = { watch = { radius = 6, duration = 40, detection = AIR } },
+            effect = { watch = { at = "position", radius = 6, duration = 40, detection = AIR } },
         })
     "#;
     let registry = content::load(&engine(), source).expect("content loads");
@@ -4369,10 +4903,416 @@ fn parses_field_detection_and_watch_detection() {
     assert_eq!(
         *effect,
         EntityCastEffect::Watch {
-            radius: 6,
-            duration: 40,
+            at: Spot::Cell {
+                reach: Reach::Wherever,
+            },
+            radius: Quantity::Constant(6),
+            duration: Quantity::Constant(40),
             detection: Detection::Reveals(LayerMask::EMPTY | air),
         }
+    );
+}
+
+//
+// ─── Relocation ───────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn relocate_effect_reads_journey_and_landing() {
+    let source = r#"
+        define_layer("ground")
+        define_skill("blink", {
+            cooldown = 140,
+            caster = "entity",
+            effect = { relocate = {
+                journey = { from_caster = { party = "caster", to = { aim = { kind = "position", range = 8 } } } },
+                landing = "sighted",
+            } },
+        })
+        define_skill("pull", {
+            cooldown = 1,
+            caster = "entity",
+            effect = { relocate = {
+                journey = { from_aim = { party = { target = "enemy" }, to = "caster" } },
+                landing = "explored",
+            } },
+        })
+        define_skill("swap", {
+            cooldown = 1,
+            caster = "entity",
+            effect = { relocate = { journey = { swap = { kind = "own", range = 10 } }, landing = "anywhere" } },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("content loads");
+    assert_eq!(
+        entity_effect(&registry, "blink"),
+        EntityCastEffect::Relocate {
+            journey: Box::new(Journey::FromCaster {
+                party: CasterParty::Caster,
+                to: FromCasterTo::Aim(Away::Cell {
+                    reach: Reach::Within(Quantity::Constant(8)),
+                }),
+            }),
+            landing: Landing::Sighted,
+        }
+    );
+    assert_eq!(
+        entity_effect(&registry, "pull"),
+        EntityCastEffect::Relocate {
+            journey: Box::new(Journey::FromAim {
+                party: AimParty::Target {
+                    whom: Whom {
+                        side: Affiliation::Enemy,
+                        kinds: Kinds::Any,
+                    },
+                    reach: Reach::Wherever,
+                },
+                to: FromAimTo::Caster,
+            }),
+            landing: Landing::Explored,
+        }
+    );
+    assert_eq!(
+        entity_effect(&registry, "swap"),
+        EntityCastEffect::Relocate {
+            journey: Box::new(Journey::Swap {
+                whom: Whom {
+                    side: Affiliation::Own,
+                    kinds: Kinds::Any,
+                },
+                reach: Reach::Within(Quantity::Constant(10)),
+            }),
+            landing: Landing::Anywhere,
+        }
+    );
+}
+
+#[test]
+fn relocate_gathering_reads_radius_filter_sight_count_and_shortfall() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_tag("undead")
+        define_entity("crypt", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+        })
+        define_skill("grave_gate", {
+            cooldown = 600,
+            caster = "entity",
+            effect = { relocate = {
+                journey = { from_caster = {
+                    party = { caster_and_around = {
+                        radius = 4, side = "own", kinds = { tags = { "undead" } },
+                        sight = "blind", count = { at_most = 24 }, shortfall = "refuse",
+                    } },
+                    to = { aim = { kind = "own", only = { types = { "crypt" } } } },
+                } },
+                landing = "explored",
+            } },
+        })
+        define_skill("send_off", {
+            cooldown = 1,
+            caster = "entity",
+            effect = { relocate = {
+                journey = { from_caster = {
+                    party = { around = {
+                        radius = 3, side = "enemy", kinds = "any", sight = "seen", count = { at_most = 2 }, shortfall = "leave",
+                    } },
+                    to = { aim = "position" },
+                } },
+                landing = "anywhere",
+            } },
+        })
+        define_skill("recall", {
+            cooldown = 0,
+            caster = "entity",
+            effect = { relocate = {
+                journey = { from_aim = {
+                    party = { around = {
+                        at = "position", radius = 2, side = "allied", kinds = "any", sight = "blind", count = "all", shortfall = "leave",
+                    } },
+                    to = "caster",
+                } },
+                landing = "anywhere",
+            } },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("content loads");
+    assert_eq!(
+        entity_effect(&registry, "grave_gate"),
+        EntityCastEffect::Relocate {
+            journey: Box::new(Journey::FromCaster {
+                party: CasterParty::CasterAndAround(Gathering {
+                    radius: Quantity::Constant(4),
+                    side: Affiliation::Own,
+                    kinds: Kinds::only([Kind::Tag("undead".to_string())]),
+                    sight: GatherSight::Blind,
+                    count: Count::AtMost(Quantity::Constant(24)),
+                    shortfall: Shortfall::Refuse,
+                }),
+                to: FromCasterTo::Aim(Away::Standing {
+                    whom: Whom {
+                        side: Affiliation::Own,
+                        kinds: Kinds::only([Kind::Type("crypt".to_string())]),
+                    },
+                    reach: Reach::Wherever,
+                }),
+            }),
+            landing: Landing::Explored,
+        }
+    );
+    assert_eq!(
+        entity_effect(&registry, "send_off"),
+        EntityCastEffect::Relocate {
+            journey: Box::new(Journey::FromCaster {
+                party: CasterParty::Around(Gathering {
+                    radius: Quantity::Constant(3),
+                    side: Affiliation::Enemy,
+                    kinds: Kinds::Any,
+                    sight: GatherSight::Seen,
+                    count: Count::AtMost(Quantity::Constant(2)),
+                    shortfall: Shortfall::Leave,
+                }),
+                to: FromCasterTo::Aim(Away::Cell {
+                    reach: Reach::Wherever,
+                }),
+            }),
+            landing: Landing::Anywhere,
+        }
+    );
+    assert_eq!(
+        entity_effect(&registry, "recall"),
+        EntityCastEffect::Relocate {
+            journey: Box::new(Journey::FromAim {
+                party: AimParty::Around {
+                    at: Away::Cell {
+                        reach: Reach::Wherever,
+                    },
+                    gathering: Gathering {
+                        radius: Quantity::Constant(2),
+                        side: Affiliation::Allied,
+                        kinds: Kinds::Any,
+                        sight: GatherSight::Blind,
+                        count: Count::All,
+                        shortfall: Shortfall::Leave,
+                    },
+                },
+                to: FromAimTo::Caster,
+            }),
+            landing: Landing::Anywhere,
+        }
+    );
+}
+
+#[test]
+fn relocate_gathering_without_sight_errors() {
+    let source = r#"
+        define_skill("send_off", {
+            cooldown = 10,
+            caster = "entity",
+            effect = { relocate = {
+                journey = { from_caster = {
+                    party = { around = {
+                        radius = 3, side = "enemy", kinds = "any", count = "all", shortfall = "leave",
+                    } },
+                    to = { aim = "position" },
+                } },
+                landing = "anywhere",
+            } },
+        })
+    "#;
+    assert_content_error(
+        source,
+        "field 'sight': error converting Lua nil to String (expected string or number)",
+    );
+}
+
+#[test]
+fn relocate_gathering_with_unknown_sight_errors() {
+    let source = r#"
+        define_skill("send_off", {
+            cooldown = 10,
+            caster = "entity",
+            effect = { relocate = {
+                journey = { from_caster = {
+                    party = { around = {
+                        radius = 3, side = "enemy", kinds = "any", sight = "keen",
+                        count = "all", shortfall = "leave",
+                    } },
+                    to = { aim = "position" },
+                } },
+                landing = "anywhere",
+            } },
+        })
+    "#;
+    assert_content_error(
+        source,
+        "gather sight must be 'blind' or 'seen', found 'keen'",
+    );
+}
+
+#[test]
+fn relocate_home_reads_its_kinds_from_either_spot() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_entity("crypt", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+        })
+        define_skill("homeward", {
+            cooldown = 900,
+            caster = "entity",
+            effect = { relocate = {
+                journey = { from_caster = { party = "caster", to = { home = { types = { "crypt" } } } } },
+                landing = "anywhere",
+            } },
+        })
+        define_skill("send_home", {
+            cooldown = 1,
+            caster = "entity",
+            effect = { relocate = {
+                journey = { from_aim = { party = { target = "own" }, to = { home = "any" } } },
+                landing = "anywhere",
+            } },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("content loads");
+    assert_eq!(
+        entity_effect(&registry, "homeward"),
+        EntityCastEffect::Relocate {
+            journey: Box::new(Journey::FromCaster {
+                party: CasterParty::Caster,
+                to: FromCasterTo::Home(Kinds::only([Kind::Type("crypt".to_string())])),
+            }),
+            landing: Landing::Anywhere,
+        }
+    );
+    assert_eq!(
+        entity_effect(&registry, "send_home"),
+        EntityCastEffect::Relocate {
+            journey: Box::new(Journey::FromAim {
+                party: AimParty::Target {
+                    whom: Whom {
+                        side: Affiliation::Own,
+                        kinds: Kinds::Any,
+                    },
+                    reach: Reach::Wherever,
+                },
+                to: FromAimTo::Home(Kinds::Any),
+            }),
+            landing: Landing::Anywhere,
+        }
+    );
+}
+
+#[test]
+fn relocate_journey_of_unknown_word_errors() {
+    let error = relocation_error(r#""teleport""#);
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("relocation journey must be a { from_caster = ... } table, a { from_aim = ... } table, or a { swap = ... } table, found 'teleport'")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn relocate_journey_with_two_directions_errors() {
+    let error = relocation_error(
+        r#"{ from_caster = { party = "caster", to = { aim = "position" } }, swap = "own" }"#,
+    );
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("a relocation journey table must have exactly one of 'from_caster', 'from_aim' or 'swap'")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn relocate_party_at_caster_of_unknown_word_errors() {
+    let error =
+        relocation_error(r#"{ from_caster = { party = "target", to = { aim = "position" } } }"#);
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("party at the caster must be 'caster', a { caster_and_around = ... } table, or an { around = ... } table, found 'target'")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn relocate_party_at_aim_naming_target_and_around_errors() {
+    let error = relocation_error(
+        r#"{ from_aim = { party = { target = "own", around = { at = "position", radius = 2, side = "own", kinds = "any", sight = "blind", count = "all", shortfall = "leave" } }, to = "caster" } }"#,
+    );
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("a party at the aim table must have exactly one of 'target' or 'around'")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn relocate_destination_from_caster_naming_aim_and_home_errors() {
+    let error = relocation_error(
+        r#"{ from_caster = { party = "caster", to = { aim = "position", home = "any" } } }"#,
+    );
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("a destination from the caster table must have exactly one of 'aim' or 'home'")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn relocate_destination_from_aim_of_unknown_word_errors() {
+    let error = relocation_error(r#"{ from_aim = { party = { target = "own" }, to = "aim" } }"#);
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("destination from the aim must be 'caster' or a { home = ... } table, found 'aim'")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn relocate_aim_at_caster_errors() {
+    let error =
+        relocation_error(r#"{ from_caster = { party = "caster", to = { aim = "caster" } } }"#);
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("aim away from the caster must be 'position', 'own', 'allied', 'enemy', or 'anyone', found 'caster'")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn relocate_swap_aimed_at_position_errors() {
+    let error = relocation_error(r#"{ swap = "position" }"#);
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("aim at something standing must be 'own', 'allied', 'enemy', or 'anyone', found 'position'")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn relocate_count_of_unknown_shape_errors() {
+    let error = relocation_error(
+        r#"{ from_aim = { party = { around = { at = "position", radius = 2, side = "own", kinds = "any", sight = "blind", count = 3, shortfall = "leave" } }, to = "caster" } }"#,
+    );
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("relocation count must be 'all' or an { at_most = n } table, found integer")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn relocate_landing_of_unknown_word_errors() {
+    let source = r#"
+        define_layer("ground")
+        define_skill("blink", {
+            cooldown = 1,
+            caster = "entity",
+            effect = { relocate = {
+                journey = { from_caster = { party = "caster", to = { aim = "position" } } },
+                landing = "lit",
+            } },
+        })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject an unknown landing");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("landing must be 'anywhere', 'explored', or 'sighted', found 'lit'")),
+        "unexpected error: {error:?}"
     );
 }
 
@@ -4462,7 +5402,7 @@ const BASE: &str = r#"
         dying = { time = 2 },
         price = { gold = 400 },
         build = { time = 200, pools = { health = "initial" } },
-        trainer = { "peasant" },
+        trainer = { trains = { "peasant" }, release = "beside" },
         resource_storage = { "gold", "wood" },
     })
 "#;
@@ -4520,8 +5460,7 @@ const FIELDS: &str = r#"
     define_skill("spew", {
         caster = "entity",
         cooldown = 20,
-        target = "position",
-        effect = { field = { field = "creep", radius = 1, action = "cover" } },
+        effect = { field = { at = "position", field = "creep", radius = 1, action = "cover" } },
     })
 "#;
 
@@ -4842,6 +5781,121 @@ fn rejects_mount_of_undefined_turret() {
     };
     assert!(
         matches!(&error, ScriptError::ContentError(m) if m.contains("turret 'gun' is not defined")),
+        "unexpected error: {error:?}"
+    );
+}
+
+/// What the named entity-cast skill does at its aim.
+fn entity_effect(registry: &ContentRegistry, name: &str) -> EntityCastEffect {
+    let def = registry
+        .skill(name)
+        .and_then(|id| registry.skill_def(id))
+        .unwrap_or_else(|| panic!("skill '{name}' is registered"));
+    let SkillCaster::Entity { effect, .. } = &def.caster else {
+        panic!("'{name}' is cast by an entity");
+    };
+    effect.clone()
+}
+
+/// The error loading a free entity skill worked over the `cast` table written
+/// as Lua.
+fn casting_error(cast: &str) -> ScriptError {
+    let source = format!(
+        r#"
+        define_layer("ground")
+        define_skill("trip", {{
+            cooldown = 1,
+            caster = "entity",
+            cast = {cast},
+            effect = {{ damage = {{ amount = "5", on = "enemy" }} }},
+        }})
+        "#
+    );
+    match content::load(&engine(), &source) {
+        Ok(_) => panic!("must reject the cast {cast}"),
+        Err(error) => error,
+    }
+}
+
+/// The error loading a free entity skill whose `effect` is written as Lua.
+fn skill_error(effect: &str) -> ScriptError {
+    let source = format!(
+        r#"
+        define_layer("ground")
+        define_tag("hall")
+        define_skill("trip", {{ cooldown = 1, caster = "entity", effect = {effect} }})
+        "#
+    );
+    match content::load(&engine(), &source) {
+        Ok(_) => panic!("must reject the effect {effect}"),
+        Err(error) => error,
+    }
+}
+
+/// The error loading a free entity skill that relocates on `journey`,
+/// written as Lua.
+fn relocation_error(journey: &str) -> ScriptError {
+    let source = format!(
+        r#"
+        define_layer("ground")
+        define_skill("trip", {{
+            cooldown = 1,
+            caster = "entity",
+            effect = {{ relocate = {{ journey = {journey}, landing = "anywhere" }} }},
+        }})
+        "#
+    );
+    match content::load(&engine(), &source) {
+        Ok(_) => panic!("must reject the relocation {journey}"),
+        Err(error) => error,
+    }
+}
+
+/// The `tunnel` definition, written as Lua: letting in anyone allied,
+/// crossing at once, and an end standing when its other end is lost.
+const CROSSING: &str =
+    r#"carries = "any", boarding = "allied", other_end_lost = "stands", passage = "crosses""#;
+
+/// The boarding pair of stats a crossing gateway reads, written as Lua.
+const BOARDING: &str = "load_range = 1, load_period = 2";
+
+/// Every stat a held gateway both ways reads, written as Lua.
+const HELD: &str = "load_range = 1, load_period = 2, unload_range = 1, unload_period = 4";
+
+/// A `warren` network of 40 letting in its owner's `ground` units and killing
+/// whoever is inside with its last gateway; a `tunnel` defined by `tunnel`;
+/// and a one-cell `burrow` that trains more of itself, whose gateway block
+/// holds `gateway` and whose stats are `stats`, all written as Lua.
+fn gateway_content(tunnel: &str, gateway: &str, stats: &str) -> String {
+    format!(
+        r#"
+        local GROUND = define_layer("ground")
+        define_tag("ground")
+        define_network("warren", {{
+            carries = {{ tags = {{ "ground" }} }}, boarding = "own", capacity = 40, fate = "destroy",
+        }})
+        define_tunnel("tunnel", {{ {tunnel} }})
+
+        define_entity("burrow", {{
+            location = {{ occupation = GROUND, size = 1, solidity = "solid" }},
+            stats = {{ {stats} }},
+            pools = {{ health = {{ maximum = 100 }} }},
+            train_time = 10,
+            trainer = {{ trains = {{ "burrow" }}, release = "beside" }},
+            gateway = {{ {gateway} }},
+        }})
+    "#
+    )
+}
+
+/// Loads `source` and asserts it is refused with a content error containing
+/// `message`.
+fn assert_content_error(source: &str, message: &str) {
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must refuse the content");
+    };
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains(message)),
         "unexpected error: {error:?}"
     );
 }

@@ -155,7 +155,7 @@ pub(crate) fn hatch(world: &mut World, entity: Entity, own: Option<RallyTarget>)
         rally::target_of(world, breeder)
     });
     if let Some(target) = target {
-        rally::owe_target(world, entity, target);
+        rally::mark_rally_due_to(world, entity, target);
     }
 }
 

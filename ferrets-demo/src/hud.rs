@@ -13,7 +13,7 @@ use ferrets_content::{
     registry::ContentRegistry,
     requirement::{Bound, Requirement, Threshold},
     research::ResearchId,
-    skills::{EntityCastTarget, SkillCaster, SkillId},
+    skills::{EntityCastEffect, EntityCastTarget, SkillCaster, SkillId},
 };
 use ferrets_math::fixed_uvec2::FixedUVec2;
 use ferrets_simulation::{
@@ -36,6 +36,7 @@ use ferrets_simulation::{
         train::TrainQueueComponent,
     },
     control_groups::{CONTROL_GROUP_COUNT, ControlGroups},
+    cooldown::Cooldown,
     entity_def::{self, Operation},
     entity_index::EntityIndex,
     game_loop::{
@@ -55,7 +56,7 @@ use ferrets_simulation::{
     },
     simulation_id::SimulationId,
     statistics::{PlayerTally, Statistics},
-    supply,
+    supply, tunnels,
 };
 
 use crate::{
@@ -196,7 +197,17 @@ pub struct SkillButton {
     skill: SkillId,
 }
 
-/// A command-card button that unloads the leading transporter's passengers.
+/// Whether a gated command-card button acts on a click, as the last
+/// availability pass judged it.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CardGate {
+    /// Lit: a click issues what the button does.
+    Open,
+    /// Grayed: a click does nothing.
+    Shut,
+}
+
+/// A command-card button that lets out the leading holder's passengers.
 #[derive(Component)]
 pub struct UnloadButton {
     /// `false` unloads in place; `true` arms a click that names the
@@ -205,7 +216,7 @@ pub struct UnloadButton {
 }
 
 /// A command-card button that arms a click naming the unit the leading
-/// transporter fetches aboard.
+/// holder takes in.
 #[derive(Component)]
 pub struct LoadButton;
 
@@ -640,6 +651,11 @@ pub fn update_help(
         }
         if !def.morphs.is_empty() {
             message = String::from("Change: click a command-card button");
+        }
+        if def.holder.is_some() {
+            message = String::from(
+                "Load: click a unit to take in   |   Unload: let everyone out (Unload To: click where)",
+            );
         }
         if def.builder.is_some() {
             message =
@@ -1209,6 +1225,14 @@ pub fn update_command_card(
     let trains_any = !trains.is_empty();
     let researches_any = !researches.is_empty();
     let transports = def.can_transport();
+    // A gateway takes bodies in where its doors open.
+    let lets_in = def
+        .gateway()
+        .is_some_and(|gateway| gateway.doors().admits_entrance());
+    // A gateway lets bodies out where its doors open and what it joins holds.
+    let lets_out = def.gateway().is_some_and(|gateway| {
+        gateway.doors().admits_exit() && registry.joins_hold(gateway.joins())
+    });
     let own_site = session.local_player().is_some_and(|local| {
         sites
             .iter()
@@ -1270,8 +1294,10 @@ pub fn update_command_card(
         if has_brood {
             parent.spawn((SelectBroodButton, card_button("Brood", BUTTON_NORMAL)));
         }
-        if transports {
+        if transports || lets_in {
             parent.spawn((LoadButton, card_button("Load", BUTTON_NORMAL)));
+        }
+        if transports || lets_out {
             parent.spawn((
                 UnloadButton { at_point: false },
                 card_button("Unload", BUTTON_NORMAL),
@@ -1286,12 +1312,21 @@ pub fn update_command_card(
 
 /// Trains the button's unit on the leading producer when a train button is clicked.
 pub fn command_card_input(
-    mut buttons: Query<(&Interaction, &TrainButton, &mut BackgroundColor), Changed<Interaction>>,
+    mut buttons: Query<
+        (
+            &Interaction,
+            &TrainButton,
+            &mut BackgroundColor,
+            Option<&CardGate>,
+        ),
+        Changed<Interaction>,
+    >,
     leading: Res<Leading>,
     mut pending: ResMut<PendingInput>,
 ) {
-    for (interaction, button, mut color) in &mut buttons {
+    for (interaction, button, mut color, gate) in &mut buttons {
         match interaction {
+            Interaction::Pressed if shut(gate) => {}
             Interaction::Pressed => {
                 if let Some(trainer) = leading.0 {
                     pending.push(PlayerCommand::TrainEntity {
@@ -1306,39 +1341,39 @@ pub fn command_card_input(
     }
 }
 
-/// Arms the fetch-aboard click when the load button is clicked.
+/// Arms the take-in click when the load button is clicked.
 pub fn load_card_input(
-    mut buttons: Query<&Interaction, (With<LoadButton>, Changed<Interaction>)>,
+    mut buttons: Query<(&Interaction, Option<&CardGate>), (With<LoadButton>, Changed<Interaction>)>,
     leading: Res<Leading>,
     mut mode: ResMut<InputMode>,
 ) {
-    for interaction in &mut buttons {
-        if matches!(interaction, Interaction::Pressed) && leading.0.is_some() {
+    for (interaction, gate) in &mut buttons {
+        if matches!(interaction, Interaction::Pressed) && !shut(gate) && leading.0.is_some() {
             *mode = InputMode::Targeting(TargetedOrder::Load);
         }
     }
 }
 
-/// Unloads the leading transporter when an unload button is clicked: in place,
-/// or — for the at-point button — by arming a click that names the destination.
+/// Unloads the leading holder when an unload button is clicked: in place, or
+/// — for the at-point button — by arming a click that names the destination.
 pub fn unload_card_input(
-    mut buttons: Query<(&Interaction, &UnloadButton), Changed<Interaction>>,
+    mut buttons: Query<(&Interaction, &UnloadButton, Option<&CardGate>), Changed<Interaction>>,
     leading: Res<Leading>,
     mut mode: ResMut<InputMode>,
     mut pending: ResMut<PendingInput>,
 ) {
-    for (interaction, button) in &mut buttons {
-        if !matches!(interaction, Interaction::Pressed) {
+    for (interaction, button, gate) in &mut buttons {
+        if !matches!(interaction, Interaction::Pressed) || shut(gate) {
             continue;
         }
-        let Some(transport) = leading.0 else {
+        let Some(holder) = leading.0 else {
             continue;
         };
         if button.at_point {
             *mode = InputMode::Targeting(TargetedOrder::Unload);
         } else {
             pending.push(PlayerCommand::Unload {
-                transport,
+                holder,
                 at: None,
                 flush: true,
             });
@@ -1352,11 +1387,20 @@ pub fn unload_card_input(
 /// selection reads naturally as "everyone that can, change" — the executor
 /// drops whoever cannot.
 pub fn morph_card_input(
-    mut buttons: Query<(&Interaction, &MorphButton, &mut BackgroundColor), Changed<Interaction>>,
+    mut buttons: Query<
+        (
+            &Interaction,
+            &MorphButton,
+            &mut BackgroundColor,
+            Option<&CardGate>,
+        ),
+        Changed<Interaction>,
+    >,
     mut pending: ResMut<PendingInput>,
 ) {
-    for (interaction, button, mut color) in &mut buttons {
+    for (interaction, button, mut color, gate) in &mut buttons {
         match interaction {
+            Interaction::Pressed if shut(gate) => {}
             Interaction::Pressed => {
                 pending.push(PlayerCommand::Morph {
                     type_name: button.type_name.clone(),
@@ -1462,12 +1506,16 @@ pub fn cancel_build_card_input(
 /// back and returns the entity to what it was, and a committed one holds
 /// until its window closes.
 pub fn cancel_morph_card_input(
-    buttons: Query<&Interaction, (With<CancelMorphButton>, Changed<Interaction>)>,
+    buttons: Query<
+        (&Interaction, Option<&CardGate>),
+        (With<CancelMorphButton>, Changed<Interaction>),
+    >,
     leading: Res<Leading>,
     mut pending: ResMut<PendingInput>,
 ) {
-    for interaction in &buttons {
+    for (interaction, gate) in &buttons {
         if matches!(interaction, Interaction::Pressed)
+            && !shut(gate)
             && let Some(entity) = leading.0
         {
             pending.push(PlayerCommand::CancelMorph { entity });
@@ -1479,12 +1527,16 @@ pub fn cancel_morph_card_input(
 /// clicked, refunding its price. Slot 0 is the one in progress; the executor
 /// ignores a click on an empty queue.
 pub fn cancel_train_card_input(
-    buttons: Query<&Interaction, (With<CancelTrainButton>, Changed<Interaction>)>,
+    buttons: Query<
+        (&Interaction, Option<&CardGate>),
+        (With<CancelTrainButton>, Changed<Interaction>),
+    >,
     leading: Res<Leading>,
     mut pending: ResMut<PendingInput>,
 ) {
-    for interaction in &buttons {
+    for (interaction, gate) in &buttons {
         if matches!(interaction, Interaction::Pressed)
+            && !shut(gate)
             && let Some(trainer) = leading.0
         {
             pending.push(PlayerCommand::CancelTrain { trainer, slot: 0 });
@@ -1496,13 +1548,17 @@ pub fn cancel_train_card_input(
 /// clicked, refunding its price. The topic comes from the researcher's own
 /// order queue, so a researcher working nothing sends no command.
 pub fn cancel_research_card_input(
-    buttons: Query<&Interaction, (With<CancelResearchButton>, Changed<Interaction>)>,
+    buttons: Query<
+        (&Interaction, Option<&CardGate>),
+        (With<CancelResearchButton>, Changed<Interaction>),
+    >,
     researchers: Query<(&EntityInfoComponent, &OrderQueueComponent)>,
     leading: Res<Leading>,
     mut pending: ResMut<PendingInput>,
 ) {
-    for interaction in &buttons {
+    for (interaction, gate) in &buttons {
         if matches!(interaction, Interaction::Pressed)
+            && !shut(gate)
             && let Some(researcher) = leading.0
             && let Some(research) = researchers
                 .iter()
@@ -1521,12 +1577,13 @@ pub fn cancel_research_card_input(
 /// executor holds every gate (requirements, completion, the one-per-topic
 /// rule), so a click that slips past the greyed-out tint is still refused.
 pub fn research_card_input(
-    mut buttons: Query<(&Interaction, &ResearchButton), Changed<Interaction>>,
+    mut buttons: Query<(&Interaction, &ResearchButton, Option<&CardGate>), Changed<Interaction>>,
     leading: Res<Leading>,
     mut pending: ResMut<PendingInput>,
 ) {
-    for (interaction, button) in &mut buttons {
+    for (interaction, button, gate) in &mut buttons {
         if matches!(interaction, Interaction::Pressed)
+            && !shut(gate)
             && let Some(researcher) = leading.0
         {
             pending.push(PlayerCommand::StartResearch {
@@ -1558,6 +1615,10 @@ enum CardAction {
     CancelTrain,
     /// Calls off the topic the leading researcher works.
     CancelResearch,
+    /// Arms the click naming the unit the leading holder takes in.
+    Load,
+    /// Lets the leading holder's passengers out.
+    Unload,
 }
 
 /// Recolors the gated card buttons from what the executor would currently
@@ -1652,6 +1713,8 @@ pub fn update_card_availability(world: &mut World) {
         Option<&CancelMorphButton>,
         Option<&CancelTrainButton>,
         Option<&CancelResearchButton>,
+        Option<&LoadButton>,
+        Option<&UnloadButton>,
     )>();
     for (
         entity,
@@ -1665,6 +1728,8 @@ pub fn update_card_availability(world: &mut World) {
         cancel,
         cancel_train,
         cancel_research,
+        load,
+        unload,
     ) in query.iter(world)
     {
         let action = if let Some(button) = train {
@@ -1685,6 +1750,10 @@ pub fn update_card_availability(world: &mut World) {
             CardAction::CancelTrain
         } else if cancel_research.is_some() {
             CardAction::CancelResearch
+        } else if load.is_some() {
+            CardAction::Load
+        } else if unload.is_some() {
+            CardAction::Unload
         } else {
             continue;
         };
@@ -1707,7 +1776,9 @@ pub fn update_card_availability(world: &mut World) {
         };
         let (available, normal, hovered) = match &action {
             CardAction::Train(type_name) => (
-                type_requirements_met(world, type_name) && starts(world, Order::Train),
+                type_requirements_met(world, type_name)
+                    && !raising_refused(world, leading, type_name)
+                    && starts(world, Order::Train),
                 BUTTON_NORMAL,
                 BUTTON_HOVERED,
             ),
@@ -1745,7 +1816,10 @@ pub fn update_card_availability(world: &mut World) {
             // still cooling down is refused outright: the button says so
             // rather than swallowing the click.
             CardAction::Skill(skill) => (
-                skill_requirements_met(world, *skill) && operating(world) && ready(world, *skill),
+                skill_requirements_met(world, *skill)
+                    && !summon_refused(world, leading, *skill)
+                    && operating(world)
+                    && ready(world, *skill),
                 SKILL_NORMAL,
                 SKILL_HOVERED,
             ),
@@ -1766,6 +1840,14 @@ pub fn update_card_availability(world: &mut World) {
             // Nothing queued and nothing under way is nothing to call off.
             CardAction::CancelTrain => (producing(world), BUTTON_NORMAL, BUTTON_HOVERED),
             CardAction::CancelResearch => (researching(world), BUTTON_NORMAL, BUTTON_HOVERED),
+            // Whom it takes is picked after the click; the holder only has to
+            // be working.
+            CardAction::Load => (operating(world), BUTTON_NORMAL, BUTTON_HOVERED),
+            CardAction::Unload => (
+                starts(world, Order::Unload { at: None }),
+                BUTTON_NORMAL,
+                BUTTON_HOVERED,
+            ),
         };
 
         let color = match (available, interaction) {
@@ -1776,6 +1858,11 @@ pub fn update_card_availability(world: &mut World) {
         if let Some(mut background) = world.entity_mut(entity).get_mut::<BackgroundColor>() {
             background.0 = color;
         }
+        world.entity_mut(entity).insert(if available {
+            CardGate::Open
+        } else {
+            CardGate::Shut
+        });
         if matches!(interaction, Interaction::Hovered | Interaction::Pressed) {
             hint = Some(if available {
                 price_words(world, &action)
@@ -1813,6 +1900,7 @@ fn aim_refusal_words(refusal: AimRefusal) -> &'static str {
         AimRefusal::WrongSide => "Not a side it can be cast on",
         AimRefusal::WrongKind => "Not something it can be cast on",
         AimRefusal::Uncarried => "It would do nothing to that",
+        AimRefusal::LandingUnseen => "Cannot land where it cannot see",
     }
 }
 
@@ -1870,12 +1958,19 @@ fn price_words(world: &World, action: &CardAction) -> String {
                     .morphs
                     .iter()
                     .find(|transition| transition.into_type() == type_name)
-                    .map(|transition| cost_parts(transition.costs()).join(", "))
+                    .map(|transition| {
+                        let mut parts = cost_parts(transition.costs());
+                        let ticks = entity_def::quantity_ticks(world, entity, transition.time());
+                        parts.push(time::seconds_text(time::seconds(ticks)));
+                        parts.join(", ")
+                    })
             })
             .unwrap_or_default(),
         CardAction::CancelMorph | CardAction::CancelTrain | CardAction::CancelResearch => {
             String::new()
         }
+        CardAction::Load => "Pick a unit to take in".to_string(),
+        CardAction::Unload => "Let everyone inside out".to_string(),
     }
 }
 
@@ -1919,7 +2014,9 @@ fn card_hint(
         | CardAction::Morph(_)
         | CardAction::CancelMorph
         | CardAction::CancelTrain
-        | CardAction::CancelResearch => false,
+        | CardAction::CancelResearch
+        | CardAction::Load
+        | CardAction::Unload => false,
     };
     let world: &World = world;
     let registry = world.resource::<ContentRegistry>();
@@ -1935,11 +2032,18 @@ fn card_hint(
             .entity(type_name)
             .and_then(|def| needs(&def.requires))
     };
+    // A bound tunnel end has its other end already, whatever raises it.
+    let bound = |type_name: &str| {
+        raising_refused(world, leading, type_name)
+            .then(|| "Already bound to its other end".to_string())
+    };
     match action {
         CardAction::Train(type_name) => of_type(type_name)
+            .or_else(|| bound(type_name))
             .or_else(|| refused(world, Order::Train))
             .unwrap_or_default(),
         CardAction::Build(type_name) => of_type(type_name)
+            .or_else(|| bound(type_name))
             .or_else(|| {
                 refused(
                     world,
@@ -1979,6 +2083,9 @@ fn card_hint(
                 .and_then(|def| needs(&def.requires));
             match (unmet, leading) {
                 (Some(words), _) => words,
+                (None, Some(_)) if summon_refused(world, leading, *skill) => {
+                    "Already bound to its other end".to_string()
+                }
                 (None, None) => "Nothing selected can cast it".to_string(),
                 (None, Some(entity)) => match entity_def::operation(world, entity) {
                     Operation::UnderConstruction => "Still under construction".to_string(),
@@ -2024,6 +2131,63 @@ fn card_hint(
         CardAction::CancelMorph => "The change is committed".to_string(),
         CardAction::CancelTrain => "Nothing is being trained".to_string(),
         CardAction::CancelResearch => "Nothing is being researched".to_string(),
+        CardAction::Load => leading
+            .map(|entity| operation_words(entity_def::operation(world, entity)))
+            .unwrap_or_default(),
+        CardAction::Unload => leading
+            .and_then(|entity| orders::can_start(world, entity, &Order::Unload { at: None }).err())
+            .map(|refusal| match refusal {
+                Refusal::NothingToDo => "Nobody inside".to_string(),
+                Refusal::Incapable
+                | Refusal::UnderConstruction
+                | Refusal::Disabled
+                | Refusal::Stranded
+                | Refusal::TargetGone
+                | Refusal::TargetUnfit
+                | Refusal::Busy
+                | Refusal::NoRoom
+                | Refusal::NoSupply => refusal_words(refusal),
+            })
+            .unwrap_or_default(),
+    }
+}
+
+/// Whether the leading entity, a bound tunnel end, may not raise one of
+/// `type_name`, an end of its tunnel.
+fn raising_refused(world: &World, leading: Option<Entity>, type_name: &str) -> bool {
+    let Some(entity) = leading else {
+        return false;
+    };
+    world
+        .resource::<ContentRegistry>()
+        .entity(type_name)
+        .is_some_and(|def| tunnels::refuses_raising(world, entity, def))
+}
+
+/// Whether `skill` summons an end of the leading entity's tunnel while that
+/// entity, a tunnel end, is already bound.
+fn summon_refused(world: &World, leading: Option<Entity>, skill: SkillId) -> bool {
+    let Some(entity) = leading else {
+        return false;
+    };
+    let registry = world.resource::<ContentRegistry>();
+    match registry.skill_def(skill).map(|def| &def.caster) {
+        Some(SkillCaster::Entity {
+            effect: EntityCastEffect::Summon { entity_type, .. },
+            ..
+        }) => tunnels::refuses_raising(world, entity, registry.def(*entity_type)),
+        Some(SkillCaster::Entity { .. } | SkillCaster::Player { .. }) | None => false,
+    }
+}
+
+/// Why an entity in `operation` does not act, in words; empty when it
+/// operates.
+fn operation_words(operation: Operation) -> String {
+    match operation {
+        Operation::Operating => String::new(),
+        Operation::UnderConstruction => "Still under construction".to_string(),
+        Operation::Disabled(_) => "Switched off".to_string(),
+        Operation::Stranded => "Waiting for room to come back".to_string(),
     }
 }
 
@@ -2195,15 +2359,23 @@ fn research_under_way(world: &mut World, player: PlayerId, research: ResearchId)
 /// it and nowhere else, so the click sends the command at that dock's cell
 /// instead of arming a placement.
 pub fn build_card_input(world: &mut World) {
-    let mut clicked: Vec<(Entity, Interaction, String)> = Vec::new();
-    let mut query =
-        world.query_filtered::<(Entity, &Interaction, &BuildButton), Changed<Interaction>>();
-    for (entity, interaction, button) in query.iter(world) {
-        clicked.push((entity, *interaction, button.type_name.clone()));
+    let mut clicked: Vec<(Entity, Interaction, String, Option<CardGate>)> = Vec::new();
+    let mut query = world.query_filtered::<
+        (Entity, &Interaction, &BuildButton, Option<&CardGate>),
+        Changed<Interaction>,
+    >();
+    for (entity, interaction, button, gate) in query.iter(world) {
+        clicked.push((
+            entity,
+            *interaction,
+            button.type_name.clone(),
+            gate.copied(),
+        ));
     }
 
-    for (entity, interaction, type_name) in clicked {
+    for (entity, interaction, type_name, gate) in clicked {
         match interaction {
+            Interaction::Pressed if shut(gate.as_ref()) => {}
             Interaction::Pressed => {
                 let annex = world
                     .resource::<ContentRegistry>()
@@ -2254,6 +2426,17 @@ pub fn build_card_input(world: &mut World) {
     }
 }
 
+/// Whether a gated button's last verdict grays it out. A button not judged
+/// yet — the frame its card was built — passes the click on, and the
+/// executor refuses what it must.
+fn shut(gate: Option<&CardGate>) -> bool {
+    match gate {
+        Some(CardGate::Shut) => true,
+        Some(CardGate::Open) => false,
+        None => false,
+    }
+}
+
 /// Paints one button's background.
 fn set_background(world: &mut World, button: Entity, color: Color) {
     if let Some(mut background) = world.entity_mut(button).get_mut::<BackgroundColor>() {
@@ -2264,21 +2447,30 @@ fn set_background(world: &mut World, button: Entity, color: Color) {
 /// Handles a click on a skill button: a self-cast fires for every selected
 /// unit at once; a targeted skill arms the click that names the target.
 pub fn skill_card_input(
-    mut buttons: Query<(&Interaction, &SkillButton, &mut BackgroundColor), Changed<Interaction>>,
+    mut buttons: Query<
+        (
+            &Interaction,
+            &SkillButton,
+            &mut BackgroundColor,
+            Option<&CardGate>,
+        ),
+        Changed<Interaction>,
+    >,
     registry: Res<ContentRegistry>,
     session: Res<GameSession>,
     selection: Res<Selection>,
     mut mode: ResMut<InputMode>,
     mut pending: ResMut<PendingInput>,
 ) {
-    for (interaction, button, mut color) in &mut buttons {
+    for (interaction, button, mut color, gate) in &mut buttons {
         match interaction {
+            Interaction::Pressed if shut(gate) => {}
             Interaction::Pressed => {
                 let Some(def) = registry.skill_def(button.skill) else {
                     continue;
                 };
                 let target = match &def.caster {
-                    SkillCaster::Entity { target, .. } => target,
+                    SkillCaster::Entity { effect, .. } => effect.target(),
                     SkillCaster::Player { .. } => {
                         unreachable!("entity types declare only entity-cast skills")
                     }
@@ -2300,7 +2492,7 @@ pub fn skill_card_input(
                     }
                     // Targeted cast: arm the click that names the target.
                     EntityCastTarget::Standing { .. }
-                    | EntityCastTarget::Position
+                    | EntityCastTarget::Position { .. }
                     | EntityCastTarget::Fallen { .. } => {
                         *mode = InputMode::Targeting(TargetedOrder::Skill(button.skill));
                     }
@@ -2315,13 +2507,19 @@ pub fn skill_card_input(
 /// Casts its button's player skill when clicked.
 pub fn player_skill_card_input(
     mut buttons: Query<
-        (&Interaction, &PlayerSkillButton, &mut BackgroundColor),
+        (
+            &Interaction,
+            &PlayerSkillButton,
+            &mut BackgroundColor,
+            Option<&CardGate>,
+        ),
         Changed<Interaction>,
     >,
     mut pending: ResMut<PendingInput>,
 ) {
-    for (interaction, button, mut color) in &mut buttons {
+    for (interaction, button, mut color, gate) in &mut buttons {
         match interaction {
+            Interaction::Pressed if shut(gate) => {}
             Interaction::Pressed => {
                 pending.push(PlayerCommand::UseSkill {
                     skill: button.skill,
@@ -2349,8 +2547,7 @@ pub fn update_player_skill_cooldown(
     };
     for (button, children) in &buttons {
         let name = pretty_name(registry.skill_name(button.skill).unwrap_or("skill"));
-        let remaining = skills.cooldown_remaining(local, button.skill);
-        let label = cooldown_label(name, remaining);
+        let label = cooldown_label(name, skills.cooldown(local, button.skill));
         for &child in children {
             if let Ok(mut text) = texts.get_mut(child)
                 && text.0 != label
@@ -2381,8 +2578,13 @@ pub fn update_skill_cooldowns(
         return;
     };
     for (button, children) in &buttons {
+        // A card still showing the last selection's buttons waits for its
+        // rebuild: the new leader is not asked after a skill it lacks.
+        if !skills.skills().any(|skill| skill == button.skill) {
+            continue;
+        }
         let name = pretty_name(registry.skill_name(button.skill).unwrap_or("skill"));
-        let label = cooldown_label(name, skills.cooldown_remaining(button.skill));
+        let label = cooldown_label(name, skills.cooldown(button.skill));
         for &child in children {
             if let Ok(mut text) = texts.get_mut(child)
                 && text.0 != label
@@ -2396,10 +2598,10 @@ pub fn update_skill_cooldowns(
 /// A skill button's label: the bare name when ready, "name (Ns)" while the
 /// cast recharges. Ticks are 20 Hz, so seconds are the remaining ticks over
 /// twenty, rounded up.
-fn cooldown_label(name: String, remaining: u32) -> String {
-    match remaining {
-        0 => name,
-        ticks => format!("{name} ({}s)", ticks.div_ceil(20)),
+fn cooldown_label(name: String, cooldown: Cooldown) -> String {
+    match cooldown {
+        Cooldown::Ready => name,
+        Cooldown::Cooling { remaining } => format!("{name} ({}s)", remaining.div_ceil(20)),
     }
 }
 

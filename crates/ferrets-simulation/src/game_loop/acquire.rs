@@ -37,9 +37,9 @@ pub fn due(id: SimulationId, tick: u32) -> bool {
 ///
 /// A qualifying [`fresh_attacker`] wins; otherwise the nearest hostile,
 /// damageable, interactable entity is chosen — nearest by
-/// [`Projection::distance_for_rects`], the same footprint measure the range gate
-/// uses — with distance ties resolved to the lower [`SimulationId`], fully
-/// deterministic.
+/// [`Projection::distance_for_rects`] to the cells it stands on, the measure
+/// the range gate uses — with distance ties resolved to the lower
+/// [`SimulationId`].
 pub fn find_target(
     world: &World,
     seeker: Entity,
@@ -99,7 +99,7 @@ pub fn find_target_apart_from(
         if !qualifies(world, seeker, targets, id, range) {
             continue;
         }
-        let rank = (taken(id), footprint_distance(world, from, id), id);
+        let rank = (taken(id), standing_distance(world, from, id), id);
         if best.is_none_or(|best| rank < best) {
             best = Some(rank);
         }
@@ -108,7 +108,7 @@ pub fn find_target_apart_from(
 }
 
 /// Whether `target_id` is something `seeker` may auto-engage within `range`:
-/// interactable, hostile, damageable, and with its footprint in range. Layer
+/// interactable, hostile, damageable, and standing in range. Layer
 /// reach is judged against `targets`, which is what the weapon that would fire
 /// reaches — its bearer stands wherever the seeker does.
 pub(super) fn qualifies(
@@ -149,14 +149,14 @@ pub(super) fn qualifies(
     // Both footprints, not a point against a rect: a wide seeker reaches as far
     // as its nearest edge, so it does not have to walk a cell deeper than a
     // narrow one to count as in range of the same thing. Reaching from every
-    // cell the seeker stands on and measuring to the target's own footprint is
-    // the chase's measure exactly — a seeker must not pick out a target its
+    // cell the seeker stands on to every cell the target stands on is the
+    // chase's measure exactly — a seeker must not pick out a target its
     // chase then declines to reach, nor pass over one it could already hit.
     // Range first: it is a few subtractions, where the sighting below reads
     // the grid and the fields, and most of a battle stands out of range.
     if !world.resource::<Map>().projection().in_range_for_rects(
         entity_def::standing_rect(world, seeker),
-        entity_def::footprint_rect_of(world, target_def, target),
+        entity_def::standing_rect(world, target),
         range,
     ) {
         return false;
@@ -184,13 +184,12 @@ pub(super) fn fresh_attacker(world: &World, entity: Entity) -> Option<Simulation
         .map(|hit| hit.attacker)
 }
 
-/// Distance from `from` to the footprint of the alive entity with the given id,
-/// on the scale the range gate measures in — so the nearest of the targets that
-/// qualify is the nearest by the same reckoning that let them qualify.
-fn footprint_distance(world: &World, from: CellRect, id: SimulationId) -> u32 {
+/// Distance from `from` to the cells the alive entity with the given id stands
+/// on, on the scale the range gate measures in.
+fn standing_distance(world: &World, from: CellRect, id: SimulationId) -> u32 {
     let entity = world.resource::<EntityIndex>().alive(id).unwrap();
     world
         .resource::<Map>()
         .projection()
-        .distance_for_rects(from, entity_def::footprint_rect(world, entity))
+        .distance_for_rects(from, entity_def::standing_rect(world, entity))
 }

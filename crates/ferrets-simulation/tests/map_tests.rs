@@ -429,7 +429,7 @@ fn terrain_query_ignores_what_stands_on_cell() {
 }
 
 #[test]
-fn map_without_terrain_passes_every_layer_everywhere() {
+fn terrain_query_passes_every_layer_on_map_without_terrain() {
     let data = MapData::new("pond", Projection::Isometric, 4, 4);
     let registry = lake_registry();
     let map = Map::from_data(&data, &registry);

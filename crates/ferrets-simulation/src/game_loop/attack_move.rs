@@ -101,7 +101,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
 
     let (position, size) = entity_def::footprint(world, entity);
     let projection = world.resource::<Map>().projection();
-    match chase::advance(
+    match chase::advance_to_point(
         &mut driver.last_chase,
         projection,
         position,

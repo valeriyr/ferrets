@@ -765,7 +765,7 @@ fn diagonal_blocked_between_claimed_cells() {
 //
 
 #[test]
-fn equal_cost_ties_break_identically() {
+fn equal_cost_ties_break_toward_straight_cardinal_run() {
     // . . S . . G . . . .   y=2   S = start (2,2), G = goal (5,2): every
     //                               3-step walk costs the same — diagonals
     //                               included.

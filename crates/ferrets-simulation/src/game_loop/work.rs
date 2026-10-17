@@ -10,6 +10,7 @@ use super::orders::Refusal;
 use crate::{
     berths,
     beside::{Beside, Lean},
+    components::hidden::Inside,
     entity_def, spawn,
 };
 use ferrets_content::work::WorkPresence;
@@ -42,7 +43,10 @@ pub(super) fn requires_free_to_hide(
 /// its own account.
 pub(super) fn enter(world: &mut World, entity: Entity, presence: &WorkPresence, job: Entity) {
     match presence {
-        WorkPresence::Hidden { .. } => spawn::hide_entity(world, entity),
+        WorkPresence::Hidden { .. } => {
+            let job_id = entity_def::simulation_id(world, job);
+            spawn::hide_entity(world, entity, Inside::Job(job_id));
+        }
         WorkPresence::Attached(attachment) => spawn::attach_entity(world, entity, job, attachment),
         WorkPresence::Present { .. } => {}
     }

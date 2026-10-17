@@ -7,16 +7,16 @@ use ferrets_math::fixed_uvec2::FixedUVec2;
 
 use super::{
     chase::{self, Destination},
+    gateways,
     orders::{self, Processing, Refusal},
+    transporters,
 };
 use crate::{
-    beside::{Beside, Lean},
+    beside::Lean,
     components::{
         order_queue::{CancelPolicy, OrderQueueComponent, OrderState},
         rally::RallyTarget,
-        transport::{
-            BoardedComponent, GarrisonFireComponent, TransporterComponent, UnloadComponent,
-        },
+        transport::UnloadComponent,
     },
     entity_def,
     entity_index::EntityIndex,
@@ -24,23 +24,25 @@ use crate::{
     order::Order,
     rally,
     simulation_id::SimulationId,
-    spawn::{self, SetDown},
+    spawn::SetDown,
     visibility,
 };
-use ferrets_content::entity_stats::EntityStatId;
+use ferrets_content::{entity_stats::EntityStatId, holder::Holder};
 
-/// Whether `entity` may start an Unload: its type transports, it operates,
-/// and somebody is aboard.
+/// Whether `entity` may start an Unload: it is a transporter, or a gateway
+/// that lets bodies out of its link; it operates; and somebody is
+/// aboard or inside.
 pub fn can_start(world: &World, entity: Entity, _order: &Order) -> Result<(), Refusal> {
-    if !entity_def::of(world, entity).can_transport() {
+    let lets_out = match &entity_def::of(world, entity).holder {
+        Some(Holder::Transporter(_)) => true,
+        Some(Holder::Gateway(_)) => gateways::lets_out(world, entity),
+        None => false,
+    };
+    if !lets_out {
         return Err(Refusal::Incapable);
     }
     orders::requires_operating(world, entity)?;
-    if world
-        .entity(entity)
-        .get::<TransporterComponent>()
-        .is_none_or(|transporter| transporter.passengers.is_empty())
-    {
+    if next_out(world, entity, None).is_none() {
         return Err(Refusal::NothingToDo);
     }
     Ok(())
@@ -91,15 +93,17 @@ pub fn survives_soft_cancel() -> bool {
 
 /// Advance an Unload order by one tick.
 ///
-/// With a destination, a mobile transporter first walks into its `unload_range`
-/// of it — an immobile one, or one whose walk can make no more progress, lets
-/// its passengers out where it stands. Passengers then step out one per
+/// With a destination, a mobile holder first walks into its `unload_range` of
+/// it — an immobile one, or one whose walk can make no more progress, lets its
+/// passengers out where it stands. Passengers then step out one per
 /// `unload_period` ticks (a zero period empties the hold at once), each set
-/// down beside the transporter on the side of where it is sent, and sent on: to the
-/// destination when the order named one — walking as close to it as the map
-/// allows — otherwise to the rally point, if set. A blocked exit keeps the
-/// order running and retries every tick; the order finishes when the hold is
-/// empty.
+/// down — beside a transporter on the side of where it is sent, from a gateway
+/// on the free cell nearest the destination within its `unload_range` — and
+/// sent on: to the destination when the order named one — walking as close to
+/// it as the map allows — otherwise to the holder's rally point, if set. A
+/// passenger no cell it may stand on takes stays inside and the next one
+/// goes; the order keeps running and retries it every tick, and finishes
+/// when the hold is empty.
 pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing {
     let Some(mut unload) = world.entity_mut(entity).take::<UnloadComponent>() else {
         return Processing::state(OrderState::Finished);
@@ -110,7 +114,7 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
     {
         let projection = world.resource::<Map>().projection();
         let (chaser_position, chaser_size) = entity_def::footprint(world, entity);
-        match chase::advance(
+        match chase::advance_to_point(
             &mut unload.last_chase,
             projection,
             chaser_position,
@@ -136,41 +140,32 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
     }
 
     let period = entity_def::effective_ticks(world, entity, EntityStatId::UNLOAD_PERIOD);
+    // The last body this tick that nothing it may stand on took: it waits
+    // inside, and the bodies after it go first.
+    let mut waiting = None;
     loop {
-        let Some(passenger_id) = world
-            .entity(entity)
-            .get::<TransporterComponent>()
-            .expect("a transporter holds a passenger list")
-            .passengers
-            .first()
-            .copied()
-        else {
-            return Processing::state(OrderState::Finished);
+        let Some(passenger_id) = next_out(world, entity, waiting) else {
+            break;
         };
 
         let Some(passenger) = world.resource::<EntityIndex>().alive(passenger_id) else {
             // A passenger that died aboard left a stale entry; drop it and move on.
-            remove_passenger(world, entity, passenger_id);
+            drop_stale(world, entity, passenger_id);
             continue;
         };
 
         // A passenger steps out on the side of where it is sent: the order's
         // point, else the holder's rally point, else no side in particular.
-        let holder = entity_def::simulation_id(world, entity);
         let lean = exit_lean(world, entity, unload.at);
-        match spawn::place_back_beside(world, passenger, Beside::Container(holder), lean) {
+        match let_out(world, entity, passenger, unload.at, lean) {
             SetDown::Placed => {}
-            // Boxed in: hold the door and retry next tick.
+            // No cell it may stand on: it stays inside to retry next tick,
+            // and the next body tries.
             SetDown::NoCell => {
-                world.entity_mut(entity).insert(unload);
-                return Processing::state(OrderState::InProcessing);
+                waiting = Some(passenger_id);
+                continue;
             }
         }
-
-        remove_passenger(world, entity, passenger_id);
-        world
-            .entity_mut(passenger)
-            .remove::<(BoardedComponent, GarrisonFireComponent)>();
         dispatch(world, entity, passenger, unload.at);
 
         if period > 0 {
@@ -181,33 +176,53 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
         }
     }
 
-    let emptied = world
-        .entity(entity)
-        .get::<TransporterComponent>()
-        .expect("a transporter holds a passenger list")
-        .passengers
-        .is_empty();
-    if emptied {
+    if next_out(world, entity, None).is_none() {
         return Processing::state(OrderState::Finished);
     }
     world.entity_mut(entity).insert(unload);
     Processing::state(OrderState::InProcessing)
 }
 
-/// Drops `passenger_id` from the passenger list on `holder`.
-fn remove_passenger(world: &mut World, holder: Entity, passenger_id: SimulationId) {
-    world
-        .entity_mut(holder)
-        .get_mut::<TransporterComponent>()
-        .expect("a transporter holds a passenger list")
-        .passengers
-        .remove(&passenger_id);
+/// The first body `holder` lets out next, past `after` when given.
+fn next_out(world: &World, holder: Entity, after: Option<SimulationId>) -> Option<SimulationId> {
+    match &entity_def::of(world, holder).holder {
+        Some(Holder::Transporter(_)) => transporters::next_aboard(world, holder, after),
+        Some(Holder::Gateway(_)) => gateways::next_held(world, holder, after),
+        None => unreachable!("only a holder unloads"),
+    }
+}
+
+/// Takes `body`, gone from the world, off what `holder` keeps of it.
+fn drop_stale(world: &mut World, holder: Entity, body: SimulationId) {
+    match &entity_def::of(world, holder).holder {
+        Some(Holder::Transporter(_)) => transporters::drop_stale(world, holder, body),
+        Some(Holder::Gateway(_)) => gateways::drop_stale(world, holder, body),
+        None => unreachable!("only a holder unloads"),
+    }
+}
+
+/// Sets `body` down out of `holder`, toward `at` where the holder sets down
+/// near a point, leaning as `lean` says.
+fn let_out(
+    world: &mut World,
+    holder: Entity,
+    body: Entity,
+    at: Option<FixedUVec2>,
+    lean: Lean,
+) -> SetDown {
+    match &entity_def::of(world, holder).holder {
+        Some(Holder::Transporter(_)) => transporters::let_out(world, holder, body, lean),
+        Some(Holder::Gateway(_)) => gateways::let_out(world, holder, body, at, lean),
+        None => unreachable!("only a holder unloads"),
+    }
 }
 
 /// Sends a freshly unloaded passenger on its way: to the order's destination if
-/// it named one, otherwise wherever the transporter's rally point says.
+/// it named one, otherwise wherever the holder's rally point says.
 fn dispatch(world: &mut World, holder: Entity, passenger: Entity, at: Option<FixedUVec2>) {
     match at {
+        // A holder sends on only its own owner's units.
+        Some(_) if !entity_def::same_owner(world, holder, passenger) => {}
         Some(target) => {
             if let Some(mut queue) = world.entity_mut(passenger).get_mut::<OrderQueueComponent>() {
                 queue.push(
@@ -220,7 +235,7 @@ fn dispatch(world: &mut World, holder: Entity, passenger: Entity, at: Option<Fix
                 );
             }
         }
-        None => rally::owe(world, holder, passenger),
+        None => rally::mark_rally_due(world, holder, passenger),
     }
 }
 

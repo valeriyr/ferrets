@@ -180,6 +180,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
         }
         AttackTarget::Position(cell) => (None, cell, CellSize::ONE),
     };
+    let reached = reached(target, target_position, target_size);
 
     let (position, size) = entity_def::footprint(world, entity);
     // How far the body must be walked is the longest reach it has among the
@@ -192,12 +193,13 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
     if let Some(leash) = order.attack_leash() {
         // Footprint-based like every range check, and judged exactly like the
         // chase below — the cells the body stood on when it was leashed reach
-        // for the target's own footprint — because a mid-cell target must not
-        // read as leashed to the leash and out of range to the chase, or the
-        // one extra walk breaks a stand-ground stance's never-move promise.
+        // for the cells the target is reached at — because a mid-cell target
+        // must not read as leashed to the leash and out of range to the chase,
+        // or the one extra walk breaks a stand-ground stance's never-move
+        // promise.
         if !world.resource::<Map>().projection().in_range_for_rects(
             body::standing_rect(leash.anchor, size),
-            CellRect::new(CellPos::from(target_position), target_size),
+            reached,
             leash.radius,
         ) {
             return Processing::state(OrderState::Finished);
@@ -209,11 +211,9 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
     // own initiative, so it tracks what it might yet shoot and lets go of the rest
     // — and never consults the chase, whose patience is about walks that get
     // nowhere and would end a fight a turret is right to be holding.
-    if !entity_def::of(world, entity).can_move()
-        && !within(world, position, size, target_position, target_size, range)
-    {
+    if !entity_def::of(world, entity).can_move() && !within(world, position, size, reached, range) {
         let notice = entity_def::notice_range_serving(world, entity, target);
-        if !within(world, position, size, target_position, target_size, notice) {
+        if !within(world, position, size, reached, notice) {
             return Processing::state(OrderState::Finished);
         }
         // The swing resets while out of range, as it does for a walker, and the
@@ -238,7 +238,8 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
             target,
             range,
         ),
-        None => chase::advance(
+        // A bare point is reached at the cell it lies in.
+        None => chase::advance_to_point(
             &mut attack_component.last_chase,
             world.resource::<Map>().projection(),
             position,
@@ -287,16 +288,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
             registry.weapon_aims_at_cells(weapon)
         }
     };
-    if !body_serves
-        || !within(
-            world,
-            position,
-            size,
-            target_position,
-            target_size,
-            stats.range,
-        )
-    {
+    if !body_serves || !within(world, position, size, reached, stats.range) {
         // Out of its own reach the swing waits at its start, as every weapon's
         // does, and the body still comes round on what it is waiting for.
         attack_component.phase = 0;
@@ -339,22 +331,31 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
     Processing::state(OrderState::InProcessing)
 }
 
-/// Whether `range` reaches from the attacker's footprint to its target's, judged
-/// exactly as the chase judges arrival — both sides by their footprints, so a wide
-/// attacker reaches from its nearest edge.
+/// Whether `range` reaches from every cell the attacker at `position` of
+/// `size` stands on to the cells `reached`, judged exactly as the chase judges
+/// arrival, so a wide attacker reaches from its nearest edge.
 pub(super) fn within(
     world: &World,
     position: FixedUVec2,
     size: CellSize,
-    target_position: FixedUVec2,
-    target_size: CellSize,
+    reached: CellRect,
     range: u32,
 ) -> bool {
     world.resource::<Map>().projection().in_range_for_rects(
         body::standing_rect(position, size),
-        CellRect::new(CellPos::from(target_position), target_size),
+        reached,
         range,
     )
+}
+
+/// The cells an attack on the footprint at `position` of `size` is measured
+/// to: every cell the body `target` stands on, or the cells a bare point's
+/// footprint lies in from its floored corner when there is no target.
+pub(super) fn reached(target: Option<Entity>, position: FixedUVec2, size: CellSize) -> CellRect {
+    match target {
+        Some(_) => body::standing_rect(position, size),
+        None => CellRect::new(CellPos::from(position), size),
+    }
 }
 
 /// Whether a weapon pointing `off_aim` angle units away from its target may fire

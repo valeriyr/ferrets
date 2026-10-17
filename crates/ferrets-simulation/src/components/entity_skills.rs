@@ -6,21 +6,22 @@ use ferrets_content::skills::SkillId;
 
 use crate::{
     command::SkillTarget,
+    cooldown::Cooldown,
     entity_def,
     events::{EventRecord, SimulationEvent},
 };
 
-/// An entity's skills, each paired with the ticks remaining on its cooldown.
-#[derive(Component, Debug, Clone, Default, PartialEq, Eq)]
+/// An entity's skills, each with where its cooldown stands.
+#[derive(Component, Debug, Clone, PartialEq, Eq)]
 pub struct SkillsComponent {
-    skills: Vec<(SkillId, u32)>,
+    skills: Vec<(SkillId, Cooldown)>,
 }
 
 impl SkillsComponent {
-    /// Creates a skills component from the given skill ids, all off cooldown.
+    /// Creates a skills component from the given skill ids, all ready.
     pub fn new(skills: impl IntoIterator<Item = SkillId>) -> Self {
         Self {
-            skills: skills.into_iter().map(|id| (id, 0)).collect(),
+            skills: skills.into_iter().map(|id| (id, Cooldown::Ready)).collect(),
         }
     }
 
@@ -29,53 +30,84 @@ impl SkillsComponent {
         self.skills.iter().map(|&(id, _)| id)
     }
 
-    /// `true` if the entity has skill `id` and it is off cooldown.
+    /// `true` if the entity has skill `id` and it is ready.
     pub fn ready(&self, id: SkillId) -> bool {
         self.skills
             .iter()
-            .any(|&(skill, remaining)| skill == id && remaining == 0)
+            .any(|&(skill, cooldown)| skill == id && cooldown == Cooldown::Ready)
     }
 
-    /// Remaining cooldown ticks for skill `id`; zero when ready or absent.
-    pub fn cooldown_remaining(&self, id: SkillId) -> u32 {
+    /// Where skill `id`'s cooldown stands.
+    ///
+    /// Panics if the entity lacks the skill: only a skill it has is asked
+    /// after.
+    pub fn cooldown(&self, id: SkillId) -> Cooldown {
         self.skills
             .iter()
             .find(|&&(skill, _)| skill == id)
-            .map(|&(_, remaining)| remaining)
-            .unwrap_or(0)
+            .map(|&(_, cooldown)| cooldown)
+            .expect("only a skill the entity has is asked after")
     }
 
-    /// Puts skill `id` on `cooldown` ticks; a no-op if the entity lacks it.
-    pub fn start_cooldown(&mut self, id: SkillId, cooldown: u32) {
-        if let Some((_, remaining)) = self.skills.iter_mut().find(|(skill, _)| *skill == id) {
-            *remaining = cooldown;
-        }
+    /// Puts skill `id` on a cooldown `ticks` long.
+    ///
+    /// Panics if the entity lacks the skill: only a skill it has is cast.
+    pub fn start_cooldown(&mut self, id: SkillId, ticks: u32) {
+        *self.cooldown_mut(id) = Cooldown::of(ticks);
     }
 
-    /// Decrements every cooldown by one tick.
+    /// Makes skill `id` ready again at once.
+    ///
+    /// Panics if the entity lacks the skill: only a skill it has is cast.
+    pub fn reset_cooldown(&mut self, id: SkillId) {
+        *self.cooldown_mut(id) = Cooldown::Ready;
+    }
+
+    /// Ages every cooldown by one tick.
     pub fn tick_cooldowns(&mut self) {
-        for (_, remaining) in &mut self.skills {
-            *remaining = remaining.saturating_sub(1);
+        for (_, cooldown) in &mut self.skills {
+            *cooldown = cooldown.ticked();
         }
+    }
+
+    /// Skill `id`'s cooldown, to rewrite. Panics if the entity lacks the
+    /// skill.
+    fn cooldown_mut(&mut self, id: SkillId) -> &mut Cooldown {
+        self.skills
+            .iter_mut()
+            .find(|(skill, _)| *skill == id)
+            .map(|(_, cooldown)| cooldown)
+            .expect("only a skill the entity has is cast")
     }
 }
 
-/// Puts `skill` on `caster`'s cooldown and announces the cast against `target`.
+/// Puts `caster`'s `skill` on a cooldown `ticks` long, announcing nothing.
 ///
-/// The announcing counterpart to [`SkillsComponent::start_cooldown`], which
-/// starts the timer and says nothing. A caster with no skills component is left
-/// alone, and nothing is announced for a cast that could not have happened.
-pub fn cast(world: &mut World, caster: Entity, target: SkillTarget, skill: SkillId, cooldown: u32) {
-    let mut caster_mut = world.entity_mut(caster);
-    let Some(mut skills) = caster_mut.get_mut::<SkillsComponent>() else {
-        return;
-    };
-    skills.start_cooldown(skill, cooldown);
+/// Panics if `caster` has no skills: only an entity with skills casts.
+pub fn start_cooldown(world: &mut World, caster: Entity, skill: SkillId, ticks: u32) {
+    skills_mut(world, caster).start_cooldown(skill, ticks);
+}
 
+/// Makes `caster`'s `skill` ready again at once, announcing nothing.
+///
+/// Panics if `caster` has no skills: only an entity with skills casts.
+pub fn reset_cooldown(world: &mut World, caster: Entity, skill: SkillId) {
+    skills_mut(world, caster).reset_cooldown(skill);
+}
+
+/// Announces `caster`'s cast of `skill` landing against `target`.
+pub fn announce_cast(world: &mut World, caster: Entity, target: SkillTarget, skill: SkillId) {
     let announced = SimulationEvent::SkillCast {
         caster: entity_def::simulation_id(world, caster),
         target,
         skill,
     };
     world.resource_mut::<EventRecord>().emit(announced);
+}
+
+/// `caster`'s skills, to rewrite. Panics if it has none.
+fn skills_mut(world: &mut World, caster: Entity) -> Mut<'_, SkillsComponent> {
+    world
+        .get_mut::<SkillsComponent>(caster)
+        .expect("only an entity with skills casts")
 }

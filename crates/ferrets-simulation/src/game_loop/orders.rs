@@ -757,7 +757,16 @@ pub fn process_tick(entity: Entity, queue: &mut OrderQueueComponent, world: &mut
 
     match result.follow_up {
         FollowUp::None => {}
-        FollowUp::SubOrder(sub_order) => queue.push_front(sub_order),
+        FollowUp::SubOrder(sub_order) => {
+            // A sub-order of an entry marked for cancel — marked by something
+            // outside this queue earlier in the tick — goes with it.
+            let mark = queue.front().and_then(|parent| parent.cancel);
+            queue.push_front(sub_order);
+            queue
+                .front_mut()
+                .expect("the sub-order was just pushed")
+                .cancel = mark;
+        }
         FollowUp::Dies => queue.push(Order::Die, Some(CancelPolicy::Force)),
         FollowUp::Cancels(policy) => {
             queue.cancel_all(policy);

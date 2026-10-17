@@ -7,7 +7,7 @@ use ferrets_math::{facing::Facing, fixed_uvec2::FixedUVec2};
 ///
 /// One unit = one grid cell. Sub-unit precision supports smooth movement between
 /// cells; integer values land on cell origin corners.
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Component, Debug, Clone, PartialEq, Eq)]
 pub struct LocationComponent {
     /// Where the entity stands, in simulation coordinates.
     ///

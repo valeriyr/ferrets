@@ -218,8 +218,7 @@ fn work_turret(world: &mut World, entity: Entity, gun: &Gun, state: &mut TurretS
         world,
         position,
         size,
-        target_position,
-        target_size,
+        attack::reached(target, target_position, target_size),
         stats.range,
     ) {
         // Out of reach the cycle waits at its start, as a walking attacker's swing
@@ -306,7 +305,13 @@ fn bears(world: &World, entity: Entity, gun: &Gun, ordered: AttackTarget) -> boo
     }
     let range = entity_def::effective_stat_u32(world, entity, gun.reads.acquire_range);
     let (position, size) = entity_def::footprint(world, entity);
-    attack::within(world, position, size, target_position, target_size, range)
+    attack::within(
+        world,
+        position,
+        size,
+        attack::reached(target, target_position, target_size),
+        range,
+    )
 }
 
 /// What the body has been ordered to attack, if anything.

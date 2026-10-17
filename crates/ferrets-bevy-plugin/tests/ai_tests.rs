@@ -18,7 +18,9 @@ use ferrets_script::{
 use ferrets_simulation::{
     checksum::{self, CHECKSUM_INTERVAL},
     command::PlayerCommand,
-    components::{order_queue::OrderQueueComponent, resource::ResourceSourceComponent},
+    components::{
+        hidden::Inside, order_queue::OrderQueueComponent, resource::ResourceSourceComponent,
+    },
     entity_def,
     input::{InputFrames, PlayerFrame, SYNC_LATENCY},
     resources::PlayerResources,
@@ -235,7 +237,7 @@ fn game_view_classifies_and_snapshots_entities() {
     // The source takes no orders.
     world.entity_mut(mine).remove::<OrderQueueComponent>();
     for hidden in [hidden_own, hidden_enemy, hidden_ally] {
-        spawn::hide_entity(world, hidden);
+        spawn::hide_entity(world, hidden, Inside::Nothing);
     }
     world.resource_mut::<PlayerResources>().add(1, "gold", 120);
 
@@ -353,7 +355,7 @@ fn game_view_rounds_fractional_supply_use_up() {
 }
 
 #[test]
-fn passenger_aboard_another_side_holder_is_listed_where_it_boarded() {
+fn passenger_aboard_unseen_holder_of_another_side_is_listed_where_it_boarded() {
     let mut app = utils::transport_app();
     // A raft boards anyone; this one is player 2's, player 1's rival.
     let (raft, _) = utils::create_owned(&mut app, "raft", 10, 10, 2);

@@ -9,6 +9,8 @@ use ferrets_bevy_plugin::{ai::game_view, map};
 use ferrets_content::{
     affiliation::Affiliation,
     attack::{AttackDef, Delivery, Slain, Weapon},
+    berths::BerthGroup,
+    brood::OrphanFate,
     concealment::Concealment,
     cost::Cost,
     detection::Detection,
@@ -33,20 +35,24 @@ use ferrets_content::{
     projectile::{Aim, ProjectileDef},
     quantity::Quantity,
     registry::ContentRegistry,
-    skills::{Casting, EntityCastEffect, EntityCastTarget, Reach, SkillCaster, SkillDef},
+    skills::{Casting, EntityCastEffect, Reach, Recipient, SkillCaster, SkillDef, Spot, Whom},
     splash::{SplashDef, SplashShape},
     stack_rule::StackRule,
     turret::{TurretDef, TurretMount, TurretStats, WeaponConduct},
+    work::{Attachment, BerthStance},
 };
-use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize, projection::Projection};
+use ferrets_geometry::{
+    cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize, projection::Projection,
+};
 use ferrets_math::FixedU64;
 use ferrets_pathfinder::{layer_mask::LayerMask, mover_shape::MoverShape, nav_grid::NavGrid};
 use ferrets_script::ai::view::game::Glimpse;
 use ferrets_simulation::{
+    beside::{Beside, Lean},
     command::{PlayerCommand, SelectMode, SkillCasterRef, SkillTarget},
     components::{
         concealed::ConcealedComponent, dying::DyingComponent, follow::FollowComponent,
-        guard::GuardComponent,
+        guard::GuardComponent, hidden::Inside,
     },
     entity_def::{self, Operation, Outage},
     events::{SimulationEvent, SpendCause},
@@ -57,7 +63,7 @@ use ferrets_simulation::{
         GameSession, ai_detection::AiDetection, ai_vision::AiVision, player_slot::PlayerSlot,
         player_type::PlayerType,
     },
-    spawn,
+    spawn::{self, SetDown},
     visibility::Sighting,
 };
 
@@ -382,12 +388,7 @@ fn watch_detects_concealed_enemy_for_its_duration() {
     // A sweep over the shade's cell names it from the tick the cast lands
     // through the six ticks after, then the patch lapses and it is a shimmer
     // again.
-    utils::use_skill(
-        &mut app,
-        "sweep",
-        SkillCasterRef::Entity(mage_id),
-        Some(SkillTarget::Position(utils::pos(8, 5))),
-    );
+    utils::cast_at(&mut app, mage_id, "sweep", 8, 5);
     utils::run_ticks(&mut app, utils::APPLY);
     assert_eq!(utils::sighting_of(&app, 0, shade), Sighting::Seen);
     utils::run_ticks(&mut app, 5);
@@ -408,12 +409,7 @@ fn watch_naming_ground_leaves_cloaked_flier_glimpsed() {
     let (phantom, _) = utils::create_owned(&mut app, "phantom", 8, 6, 1);
     utils::run_ticks(&mut app, utils::APPLY);
 
-    utils::use_skill(
-        &mut app,
-        "ground_sweep",
-        SkillCasterRef::Entity(mage_id),
-        Some(SkillTarget::Position(utils::pos(8, 5))),
-    );
+    utils::cast_at(&mut app, mage_id, "ground_sweep", 8, 5);
     utils::run_ticks(&mut app, utils::APPLY + 1);
     assert_eq!(utils::sighting_of(&app, 0, shade), Sighting::Seen);
     assert_eq!(utils::sighting_of(&app, 0, phantom), Sighting::Glimpsed);
@@ -447,7 +443,7 @@ fn concealed_unit_auto_engages_as_any_other() {
     let mut app = concealment_app(rivals());
     let (mage, mage_id) = utils::create_owned(&mut app, "mage", 5, 5, 0);
     utils::run_ticks(&mut app, utils::APPLY);
-    utils::use_skill(&mut app, "ambush", SkillCasterRef::Entity(mage_id), None);
+    utils::cast_self(&mut app, mage_id, "ambush");
     utils::run_ticks(&mut app, utils::APPLY + 1);
     assert!(app.world().entity(mage).contains::<ConcealedComponent>());
 
@@ -656,7 +652,67 @@ fn veil_conceals_allied_units_inside_and_not_its_source() {
 }
 
 #[test]
-fn veil_hides_wide_body_only_once_it_covers_every_cell() {
+fn zealot_relocated_under_veil_is_concealed_as_it_lands() {
+    let mut app = concealment_app(rivals());
+    utils::create_owned(&mut app, "arbiter", 5, 5, 0);
+    let (zealot, _) = utils::create_owned(&mut app, "zealot", 20, 20, 0);
+    utils::run_ticks(&mut app, utils::APPLY);
+    assert!(!app.world().entity(zealot).contains::<ConcealedComponent>());
+
+    spawn::relocate(app.world_mut(), &[(zealot, CellPos::new(6, 6))]);
+
+    // Concealed the moment it stands under the veil, not at the next tick's
+    // refit.
+    assert!(app.world().entity(zealot).contains::<ConcealedComponent>());
+}
+
+#[test]
+fn worker_carried_with_relocated_job_under_veil_is_concealed_as_it_lands() {
+    let mut app = concealment_app(rivals());
+    utils::create_owned(&mut app, "arbiter", 5, 5, 0);
+    let nest = utils::place(&mut app, "nest", 20, 20, 0);
+    utils::run_ticks(&mut app, utils::APPLY);
+    let nestling = utils::single_owned_of_type(app.world_mut(), "nestling", 0);
+    assert!(
+        !app.world()
+            .entity(nestling)
+            .contains::<ConcealedComponent>()
+    );
+
+    // The nest to (6, 4), its nestling seated a cell below it, at (6, 5):
+    // within the veil's three cells of the arbiter at (5, 5).
+    spawn::relocate(app.world_mut(), &[(nest, CellPos::new(6, 4))]);
+
+    assert!(
+        app.world()
+            .entity(nestling)
+            .contains::<ConcealedComponent>()
+    );
+}
+
+#[test]
+fn body_set_back_down_under_veil_is_concealed_as_it_stands() {
+    let mut app = concealment_app(rivals());
+    utils::create_owned(&mut app, "arbiter", 5, 5, 0);
+    let (zealot, _) = utils::create_owned(&mut app, "zealot", 20, 20, 0);
+    utils::run_ticks(&mut app, utils::APPLY);
+    spawn::hide_entity(app.world_mut(), zealot, Inside::Nothing);
+    assert!(!app.world().entity(zealot).contains::<ConcealedComponent>());
+
+    // Beside (6, 6): every cell of its ring lies within the veil's three
+    // cells of the arbiter at (5, 5).
+    let beside = Beside::Footprint(CellRect::new(CellPos::new(6, 6), CellSize::ONE));
+    assert_eq!(
+        spawn::place_back_beside(app.world_mut(), zealot, beside, Lean::Nothing),
+        SetDown::Placed
+    );
+
+    // Concealed the moment it stands, not at the next tick's refit.
+    assert!(app.world().entity(zealot).contains::<ConcealedComponent>());
+}
+
+#[test]
+fn veil_hides_wide_body_by_its_declared_coverage() {
     // The veil reaches three cells from the arbiter at (5, 5), as a circle: of
     // a two-by-two body anchored at (7, 3) it covers (7, 3) at 2.83 and (7, 4)
     // at 2.24, and not (8, 3) at 3.61 or (8, 4) at 3.16. The rival scout at
@@ -721,7 +777,7 @@ fn upkeep_buff_drains_energy_each_period_and_ends_when_pool_is_dry() {
     let (mage, mage_id) = utils::create_owned(&mut app, "mage", 5, 5, 0);
     utils::run_ticks(&mut app, utils::APPLY);
 
-    utils::use_skill(&mut app, "cloak", SkillCasterRef::Entity(mage_id), None);
+    utils::cast_self(&mut app, mage_id, "cloak");
     // The cast lands on the third tick and costs 20 of 100; the marker is
     // refitted the tick after, and the first upkeep of 10 falls due a full
     // period — two ticks — after the cast: four ticks on, 80 energy and
@@ -751,7 +807,7 @@ fn resource_upkeep_pays_from_stockpile_and_ends_when_it_cannot() {
     let (lurker, lurker_id) = utils::create_owned(&mut app, "lurker", 5, 5, 0);
     utils::grant_gold(&mut app, 12);
     utils::run_ticks(&mut app, utils::APPLY);
-    utils::use_skill(&mut app, "hire", SkillCasterRef::Entity(lurker_id), None);
+    utils::cast_self(&mut app, lurker_id, "hire");
     // The cast lands on the third tick, free; the marker follows the tick
     // after, and nothing is paid until the first period runs out.
     utils::run_ticks(&mut app, utils::APPLY + 1);
@@ -853,11 +909,11 @@ fn decloak_removes_upkeep_buff() {
     let mut app = concealment_app(rivals());
     let (mage, mage_id) = utils::create_owned(&mut app, "mage", 5, 5, 0);
     utils::run_ticks(&mut app, utils::APPLY);
-    utils::use_skill(&mut app, "cloak", SkillCasterRef::Entity(mage_id), None);
+    utils::cast_self(&mut app, mage_id, "cloak");
     utils::run_ticks(&mut app, utils::APPLY + 1);
     assert!(app.world().entity(mage).contains::<ConcealedComponent>());
 
-    utils::use_skill(&mut app, "decloak", SkillCasterRef::Entity(mage_id), None);
+    utils::cast_self(&mut app, mage_id, "decloak");
     utils::run_ticks(&mut app, utils::APPLY + 1);
     assert!(!app.world().entity(mage).contains::<ConcealedComponent>());
 }
@@ -867,13 +923,13 @@ fn decloak_on_ambushing_mage_takes_nothing_off() {
     let mut app = concealment_app(rivals());
     let (mage, mage_id) = utils::create_owned(&mut app, "mage", 5, 5, 0);
     utils::run_ticks(&mut app, utils::APPLY);
-    utils::use_skill(&mut app, "ambush", SkillCasterRef::Entity(mage_id), None);
+    utils::cast_self(&mut app, mage_id, "ambush");
     utils::run_ticks(&mut app, utils::APPLY + 1);
     assert!(app.world().entity(mage).contains::<ConcealedComponent>());
 
     // Decloak removes `cloaked`, which the mage does not bear: the ambush
     // keeps concealing it.
-    utils::use_skill(&mut app, "decloak", SkillCasterRef::Entity(mage_id), None);
+    utils::cast_self(&mut app, mage_id, "decloak");
     utils::run_ticks(&mut app, utils::APPLY + 1);
     assert!(app.world().entity(mage).contains::<ConcealedComponent>());
 }
@@ -884,7 +940,7 @@ fn ambush_ends_when_bearer_attacks() {
     let (mage, mage_id) = utils::create_owned(&mut app, "mage", 5, 5, 0);
     let (dummy, dummy_id) = utils::create_owned(&mut app, "dummy", 6, 5, 1);
     utils::run_ticks(&mut app, utils::APPLY);
-    utils::use_skill(&mut app, "ambush", SkillCasterRef::Entity(mage_id), None);
+    utils::cast_self(&mut app, mage_id, "ambush");
     utils::run_ticks(&mut app, utils::APPLY + 1);
     assert!(app.world().entity(mage).contains::<ConcealedComponent>());
 
@@ -913,7 +969,7 @@ fn ambush_ends_when_bearer_is_hit() {
     utils::create_owned(&mut app, "sniper", 5, 9, 1);
     utils::create_owned(&mut app, "tower", 7, 7, 1);
     utils::run_ticks(&mut app, utils::APPLY);
-    utils::use_skill(&mut app, "ambush", SkillCasterRef::Entity(lurker_id), None);
+    utils::cast_self(&mut app, lurker_id, "ambush");
     utils::run_ticks(&mut app, utils::APPLY + 1);
     assert!(app.world().entity(lurker).contains::<ConcealedComponent>());
 
@@ -936,7 +992,7 @@ fn damaging_cast_ends_ambush_of_its_target() {
     let (_, mage_id) = utils::create_owned(&mut app, "mage", 5, 9, 1);
     utils::create_owned(&mut app, "tower", 7, 7, 1);
     utils::run_ticks(&mut app, utils::APPLY);
-    utils::use_skill(&mut app, "ambush", SkillCasterRef::Entity(lurker_id), None);
+    utils::cast_self(&mut app, lurker_id, "ambush");
     utils::run_ticks(&mut app, utils::APPLY + 1);
     assert!(app.world().entity(lurker).contains::<ConcealedComponent>());
 
@@ -966,7 +1022,7 @@ fn turret_gun_ends_ambush_of_its_bearer() {
     let (gunner, gunner_id) = utils::create_owned(&mut app, "gunner", 5, 5, 0);
     let (dummy, _) = utils::create_owned(&mut app, "dummy", 6, 5, 1);
     utils::run_ticks(&mut app, utils::APPLY);
-    utils::use_skill(&mut app, "ambush", SkillCasterRef::Entity(gunner_id), None);
+    utils::cast_self(&mut app, gunner_id, "ambush");
     utils::run_ticks(&mut app, utils::APPLY + 1);
     assert!(app.world().entity(gunner).contains::<ConcealedComponent>());
 
@@ -986,7 +1042,7 @@ fn projectile_turret_ends_ambush_when_its_shot_leaves() {
     let (lobber, lobber_id) = utils::create_owned(&mut app, "lobber", 5, 5, 0);
     let (dummy, _) = utils::create_owned(&mut app, "dummy", 5, 9, 1);
     utils::run_ticks(&mut app, utils::APPLY);
-    utils::use_skill(&mut app, "ambush", SkillCasterRef::Entity(lobber_id), None);
+    utils::cast_self(&mut app, lobber_id, "ambush");
     utils::run_ticks(&mut app, utils::APPLY + 1);
     assert!(app.world().entity(lobber).contains::<ConcealedComponent>());
 
@@ -1013,12 +1069,7 @@ fn swing_canceled_before_its_point_keeps_ambush() {
     let (spearman, spearman_id) = utils::create_owned(&mut app, "spearman", 5, 5, 0);
     let (dummy, dummy_id) = utils::create_owned(&mut app, "dummy", 5, 8, 1);
     utils::run_ticks(&mut app, utils::APPLY);
-    utils::use_skill(
-        &mut app,
-        "ambush",
-        SkillCasterRef::Entity(spearman_id),
-        None,
-    );
+    utils::cast_self(&mut app, spearman_id, "ambush");
     utils::run_ticks(&mut app, utils::APPLY + 1);
     assert!(
         app.world()
@@ -1063,13 +1114,13 @@ fn cast_ends_buff_interrupted_by_casting() {
     let mut app = concealment_app(rivals());
     let (mage, mage_id) = utils::create_owned(&mut app, "mage", 5, 5, 0);
     utils::run_ticks(&mut app, utils::APPLY);
-    utils::use_skill(&mut app, "focus", SkillCasterRef::Entity(mage_id), None);
+    utils::cast_self(&mut app, mage_id, "focus");
     utils::run_ticks(&mut app, utils::APPLY + 1);
     assert!(app.world().entity(mage).contains::<ConcealedComponent>());
 
     // The daze is a cast: it ends the focus as it lands, and its own buff —
     // applied after the cut — stays.
-    utils::use_skill(&mut app, "daze", SkillCasterRef::Entity(mage_id), None);
+    utils::cast_self(&mut app, mage_id, "daze");
     utils::run_ticks(&mut app, utils::APPLY + 1);
     assert!(!app.world().entity(mage).contains::<ConcealedComponent>());
     assert_eq!(
@@ -1083,7 +1134,7 @@ fn timed_concealment_ends_with_its_ticks() {
     let mut app = concealment_app(rivals());
     let (mage, mage_id) = utils::create_owned(&mut app, "mage", 5, 5, 0);
     utils::run_ticks(&mut app, utils::APPLY);
-    utils::use_skill(&mut app, "ambush", SkillCasterRef::Entity(mage_id), None);
+    utils::cast_self(&mut app, mage_id, "ambush");
     utils::run_ticks(&mut app, utils::APPLY + 1);
     assert!(app.world().entity(mage).contains::<ConcealedComponent>());
 
@@ -1100,7 +1151,7 @@ fn disabling_buff_stops_operation() {
     let mut app = concealment_app(rivals());
     let (mage, mage_id) = utils::create_owned(&mut app, "mage", 5, 5, 0);
     utils::run_ticks(&mut app, utils::APPLY);
-    utils::use_skill(&mut app, "daze", SkillCasterRef::Entity(mage_id), None);
+    utils::cast_self(&mut app, mage_id, "daze");
     utils::run_ticks(&mut app, utils::APPLY);
     assert_eq!(
         entity_def::operation(app.world(), mage),
@@ -1210,7 +1261,7 @@ fn attack_order_lapses_when_target_cloaks() {
     );
     assert!(!utils::order_queue_is_empty(app.world_mut(), sniper));
 
-    utils::use_skill(&mut app, "cloak", SkillCasterRef::Entity(mage_id), None);
+    utils::cast_self(&mut app, mage_id, "cloak");
     utils::run_ticks(&mut app, utils::APPLY + 2);
     assert!(utils::order_queue_is_empty(app.world_mut(), sniper));
     // Nothing lands on what the sniper cannot make out any more.
@@ -1465,14 +1516,12 @@ fn seat_detecting_everywhere() -> Vec<PlayerSlot> {
     ]
 }
 
-/// A free, instant skill an entity aims at `target` with the given effect.
-fn aimed(target: EntityCastTarget, effect: EntityCastEffect) -> SkillDef {
+/// A free, instant skill an entity casts with the given effect.
+fn free_cast(effect: EntityCastEffect) -> SkillDef {
     SkillDef {
         cooldown: 1,
         caster: SkillCaster::Entity {
             costs: Vec::new(),
-            target,
-            reach: Reach::Wherever,
             casting: Casting::Instant,
             effect,
         },
@@ -1487,8 +1536,6 @@ fn self_cast(effect: EntityCastEffect, costs: Vec<Cost>) -> SkillDef {
         cooldown: 1,
         caster: SkillCaster::Entity {
             costs,
-            target: EntityCastTarget::Caster,
-            reach: Reach::Wherever,
             casting: Casting::Instant,
             effect,
         },
@@ -1511,7 +1558,8 @@ fn walker(name: &str, occupation: impl Into<LayerMask>, health: u32, sight: u32)
 /// air, a `dummy`, a 3×3 `hall` and a concealed 3×3 `crypt`; a `tower` and a
 /// `ground_eye` detecting to six on every layer and on the ground alone, the
 /// tower blind and halted under an enemy veil; an `arbiter` veiling allied
-/// units around it, a `zealot` that answers to the veil and changes into a
+/// units around it, a `nest` breeding one veiled `nestling` into its berth,
+/// a `zealot` that answers to the veil and changes into a
 /// `sentinel` that answers to it too, and a 2×2 `phalanx` and `rabble` that
 /// answer to it over every cell and over any; a `mage` with the `cloak`,
 /// `decloak`, `ambush`, `daze`, `focus`, `sweep`, `ground_sweep` and `bolt`
@@ -1657,61 +1705,97 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
         let cloak = registry.register_skill(
             "cloak",
             self_cast(
-                EntityCastEffect::ApplyBuff(cloaked),
+                EntityCastEffect::ApplyBuff {
+                    buff: cloaked,
+                    on: Recipient::Caster,
+                },
                 vec![Cost::Energy(FixedU64::from_num(20))],
             ),
         );
         let decloak = registry.register_skill(
             "decloak",
-            self_cast(EntityCastEffect::RemoveBuff(cloaked), Vec::new()),
+            self_cast(
+                EntityCastEffect::RemoveBuff {
+                    buff: cloaked,
+                    on: Recipient::Caster,
+                },
+                Vec::new(),
+            ),
         );
         let ambush = registry.register_skill(
             "ambush",
-            self_cast(EntityCastEffect::ApplyBuff(ambushing), Vec::new()),
+            self_cast(
+                EntityCastEffect::ApplyBuff {
+                    buff: ambushing,
+                    on: Recipient::Caster,
+                },
+                Vec::new(),
+            ),
         );
         let daze = registry.register_skill(
             "daze",
-            self_cast(EntityCastEffect::ApplyBuff(dazed), Vec::new()),
+            self_cast(
+                EntityCastEffect::ApplyBuff {
+                    buff: dazed,
+                    on: Recipient::Caster,
+                },
+                Vec::new(),
+            ),
         );
         let focus = registry.register_skill(
             "focus",
-            self_cast(EntityCastEffect::ApplyBuff(focused), Vec::new()),
+            self_cast(
+                EntityCastEffect::ApplyBuff {
+                    buff: focused,
+                    on: Recipient::Caster,
+                },
+                Vec::new(),
+            ),
         );
         let hire = registry.register_skill(
             "hire",
-            self_cast(EntityCastEffect::ApplyBuff(hired), Vec::new()),
+            self_cast(
+                EntityCastEffect::ApplyBuff {
+                    buff: hired,
+                    on: Recipient::Caster,
+                },
+                Vec::new(),
+            ),
         );
         let sweep = registry.register_skill(
             "sweep",
-            aimed(
-                EntityCastTarget::Position,
-                EntityCastEffect::Watch {
-                    radius: 3,
-                    duration: 6,
-                    detection: Detection::Reveals(LayerMask::EMPTY | utils::GROUND | air),
+            free_cast(EntityCastEffect::Watch {
+                at: Spot::Cell {
+                    reach: Reach::Wherever,
                 },
-            ),
+                radius: Quantity::Constant(3),
+                duration: Quantity::Constant(6),
+                detection: Detection::Reveals(LayerMask::EMPTY | utils::GROUND | air),
+            }),
         );
         let ground_sweep = registry.register_skill(
             "ground_sweep",
-            aimed(
-                EntityCastTarget::Position,
-                EntityCastEffect::Watch {
-                    radius: 3,
-                    duration: 6,
-                    detection: Detection::Reveals(utils::GROUND.into()),
+            free_cast(EntityCastEffect::Watch {
+                at: Spot::Cell {
+                    reach: Reach::Wherever,
                 },
-            ),
+                radius: Quantity::Constant(3),
+                duration: Quantity::Constant(6),
+                detection: Detection::Reveals(utils::GROUND.into()),
+            }),
         );
         let bolt = registry.register_skill(
             "bolt",
-            aimed(
-                EntityCastTarget::Standing {
-                    side: Affiliation::Enemy,
-                    kinds: Kinds::Any,
+            free_cast(EntityCastEffect::Damage {
+                amount: FixedU64::from_num(10),
+                on: Recipient::Standing {
+                    whom: Whom {
+                        side: Affiliation::Enemy,
+                        kinds: Kinds::Any,
+                    },
+                    reach: Reach::Wherever,
                 },
-                EntityCastEffect::Damage(FixedU64::from_num(10)),
-            ),
+            }),
         );
         let gun = registry.register_turret(
             "gun",
@@ -1849,6 +1933,28 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
                 None,
             )
         };
+        registry.register(
+            EntityTypeDef::new("nest")
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_pool(Pool::health(50))
+                .with_dying(1, [])
+                .with_berths([("brood", BerthGroup::new([utils::berth("0.5", "1.5")], 1))])
+                .with_breeder(
+                    "nestling",
+                    Quantity::Constant(1000),
+                    1,
+                    1,
+                    OrphanFate::Perish,
+                ),
+        );
+        registry.register(
+            EntityTypeDef::new("nestling")
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Passable)
+                .with_pool(Pool::health(5))
+                .with_dying(1, [])
+                .with_broodling(Attachment::new("brood", BerthStance::Still))
+                .with_field_effects([veiled()]),
+        );
         registry.register(
             walker("zealot", utils::GROUND, 60, 6)
                 .with_field_effects([veiled()])

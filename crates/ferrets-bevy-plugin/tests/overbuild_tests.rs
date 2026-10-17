@@ -149,6 +149,29 @@ fn finished_site_is_mined_directly_and_leaves_nothing_when_drained() {
 }
 
 #[test]
+#[should_panic(
+    expected = "only a finished body standing on the grid, over no resource source and not dying or changing form, is relocated"
+)]
+fn relocating_finished_house_over_mine_breaks_contract() {
+    let mut app = utils::orders_app();
+    let (_, sylph_id) = utils::create_owned(&mut app, "sylph", 8, 10, 0);
+    let (mine, _) =
+        utils::create_entity(app.world_mut(), "mine", utils::pos(10, 10), None).unwrap();
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(mine)
+        .unwrap()
+        .amount = 10;
+    utils::grant_gold(&mut app, 30);
+    order_shaft_house(&mut app, sylph_id, 10, 10);
+    // Placed on the fifth tick, and twenty ticks of its own work finish it.
+    utils::run_ticks(&mut app, utils::APPLY + 4 + 20);
+    let house = utils::single_owned_of_type(app.world_mut(), "shaft_house", 0);
+    assert!(!entity_def::under_construction(app.world(), house));
+
+    spawn::relocate(app.world_mut(), &[(house, CellPos::new(20, 20))]);
+}
+
+#[test]
 fn drained_site_over_persistent_source_gives_it_back_empty() {
     // A geyser stays on the map when it runs dry. Drained through the pump
     // house raised over it and then destroyed, the pump house gives the empty

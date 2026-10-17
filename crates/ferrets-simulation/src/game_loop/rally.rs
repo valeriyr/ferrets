@@ -1,5 +1,5 @@
 //! Dispatching a unit per its holder's rally point, once the tick's orders
-//! have run. The owing side lives in [`crate::rally`].
+//! have run. The marking side lives in [`crate::rally`].
 
 use bevy_ecs::{entity::Entity, world::World};
 use ferrets_geometry::cell_size::CellSize;
@@ -17,8 +17,9 @@ use crate::{
 };
 
 /// Drops the entity rally target of every holder whose owner can no longer
-/// make it out, and gives every unit owed a rally dispatch its order, in
-/// ascending simulation-id order.
+/// make it out, and gives every unit due a rally dispatch with nothing
+/// queued its order, in ascending simulation-id order; a unit with orders of
+/// its own keeps them and goes without.
 ///
 /// A rally set on an entity lapses with the sight of it, as an order aimed at
 /// it would: the holder rallies nowhere until it is set again. A position
@@ -38,7 +39,13 @@ pub fn dispatch(world: &mut World) {
         let Some(due) = world.entity_mut(entity).take::<RallyDueComponent>() else {
             continue;
         };
-        if let Some(order) = resolve(world, entity, due.target) {
+        let idle = world
+            .entity(entity)
+            .get::<OrderQueueComponent>()
+            .expect("every spawned entity carries an order queue")
+            .0
+            .is_empty();
+        if idle && let Some(order) = resolve(world, entity, due.target) {
             world
                 .entity_mut(entity)
                 .get_mut::<OrderQueueComponent>()

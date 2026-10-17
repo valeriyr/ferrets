@@ -8,16 +8,20 @@ use ferrets_content::{
     dying::DeathKind,
     entity_buffs::Interruption,
     field::{FieldAction, FieldCoverage, FieldVision},
+    gateway::Doors,
+    landing::Landing,
     location::Solidity,
     morph::{MorphCancel, MorphInterrupted, MorphPlacement, MorphReason, PoolCarry, RevertCarry},
     pool_shift::PoolShift,
     projectile::Aim,
     registry::ContentRegistry,
     resource::{Banking, DepletionPolicy},
+    skills::{GatherSight, Refund, Shortfall, SummonArrival},
     splash::SplashShape,
     stack_rule::StackRule,
     stats::ModifierOp,
     transport::{PassengerConduct, PassengerFate},
+    tunnel::OtherEndLost,
     turret::{TurretFire, WeaponConduct},
 };
 use ferrets_math::{FixedI64, FixedU64};
@@ -213,6 +217,31 @@ pub(crate) fn passenger_fate(value: &str) -> crate::Result<PassengerFate> {
     )
 }
 
+/// Maps a doors name to its enum.
+pub(crate) fn doors(value: &str) -> crate::Result<Doors> {
+    keyword(
+        "doors",
+        value,
+        &[
+            ("both", Doors::Both),
+            ("entrance", Doors::Entrance),
+            ("exit", Doors::Exit),
+        ],
+    )
+}
+
+/// Maps an other-end-lost name to its enum.
+pub(crate) fn other_end_lost(value: &str) -> crate::Result<OtherEndLost> {
+    keyword(
+        "other end lost",
+        value,
+        &[
+            ("razed", OtherEndLost::Razed),
+            ("stands", OtherEndLost::Stands),
+        ],
+    )
+}
+
 /// Maps a passenger conduct name to its enum.
 pub(crate) fn passenger_conduct(value: &str) -> crate::Result<PassengerConduct> {
     keyword(
@@ -404,6 +433,63 @@ pub(crate) fn field_action(value: &str) -> crate::Result<FieldAction> {
         "field action",
         value,
         &[("cover", FieldAction::Cover), ("clear", FieldAction::Clear)],
+    )
+}
+
+/// Maps a summon arrival name to its enum: whether summoned bodies stand at
+/// once or rise as sites.
+pub(crate) fn summon_arrival(value: &str) -> crate::Result<SummonArrival> {
+    keyword(
+        "summon arrival",
+        value,
+        &[
+            ("standing", SummonArrival::Standing),
+            ("rising", SummonArrival::Rising),
+        ],
+    )
+}
+
+/// Maps a landing name to its enum: which cells a body may be set down on, by
+/// what the acting team sees.
+pub(crate) fn landing(value: &str) -> crate::Result<Landing> {
+    keyword(
+        "landing",
+        value,
+        &[
+            ("anywhere", Landing::Anywhere),
+            ("explored", Landing::Explored),
+            ("sighted", Landing::Sighted),
+        ],
+    )
+}
+
+/// Maps a refund name to its enum: what a cast paid at its start gives back
+/// when it is cut short.
+pub(crate) fn refund(value: &str) -> crate::Result<Refund> {
+    keyword(
+        "cast refund",
+        value,
+        &[("none", Refund::None), ("full", Refund::Full)],
+    )
+}
+
+/// Maps a shortfall name to its enum: what a relocation does when some of its
+/// bodies fit nowhere.
+pub(crate) fn shortfall(value: &str) -> crate::Result<Shortfall> {
+    keyword(
+        "shortfall",
+        value,
+        &[("refuse", Shortfall::Refuse), ("leave", Shortfall::Leave)],
+    )
+}
+
+/// Maps a gather-sight name to its enum: whether a relocation gathers only
+/// the bodies the caster's side makes out.
+pub(crate) fn gather_sight(value: &str) -> crate::Result<GatherSight> {
+    keyword(
+        "gather sight",
+        value,
+        &[("blind", GatherSight::Blind), ("seen", GatherSight::Seen)],
     )
 }
 

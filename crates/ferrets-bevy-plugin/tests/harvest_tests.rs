@@ -12,10 +12,9 @@ use ferrets_simulation::{
     beside::Beside,
     command::{PlayerCommand, SelectMode},
     components::{
-        hidden::HiddenComponent,
+        hidden::{HiddenComponent, Inside},
         location::LocationComponent,
         order_queue::{CancelPolicy, OrderQueueComponent},
-        pending_reveal::PendingRevealComponent,
         resource::{
             HarvestComponent, ResourceCarrierComponent, ResourceSourceComponent,
             UnderHarvestComponent,
@@ -440,19 +439,18 @@ fn carrier_boxed_in_at_trip_end_frees_source_and_waits_off_map() {
         utils::pos(9, 5)
     );
     // Its return waits beside the geyser, read again on every attempt.
-    let beside = app
+    let Inside::Waiting { beside, .. } = app
         .world()
-        .get::<PendingRevealComponent>(worker)
-        .expect("its return is deferred")
-        .beside;
-    assert!(matches!(beside, Beside::Container(id) if id == geyser_id));
+        .get::<HiddenComponent>(worker)
+        .expect("a waiting carrier is hidden")
+        .inside
+    else {
+        panic!("its return is deferred");
+    };
+    assert_eq!(beside, Beside::Container(geyser_id));
 
     // The one cell freed beside the geyser takes it, and the order goes on.
-    app.world_mut().resource_mut::<Map>().set_static_occupied(
-        utils::GROUND,
-        CellPos::new(8, 5),
-        false,
-    );
+    utils::free_cell(&mut app, CellPos::new(8, 5));
     utils::run_ticks(&mut app, 1);
     assert!(!entity_def::hidden(app.world(), worker));
     assert!(!entity_def::pending_reveal(app.world(), worker));
@@ -643,11 +641,12 @@ fn source_destroyed_under_worker_lets_it_out() {
         },
     );
     utils::run_ticks(&mut app, 10);
-    let went_in = app
+    let went_in_at = app
         .world()
         .get::<HiddenComponent>(worker)
         .expect("the worker is inside")
-        .went_in;
+        .went_in
+        .position;
 
     // The seam is razed under the worker: the trip is abandoned and the worker
     // comes back out where it went in, that cell being the first the search
@@ -655,7 +654,7 @@ fn source_destroyed_under_worker_lets_it_out() {
     spawn::destroy_entity(app.world_mut(), geyser);
     utils::run_ticks(&mut app, 1);
     assert!(!entity_def::hidden(app.world(), worker));
-    assert_eq!(utils::position_of(app.world(), worker), went_in.position);
+    assert_eq!(utils::position_of(app.world(), worker), went_in_at);
 }
 
 #[test]
@@ -1952,7 +1951,7 @@ fn drain_takes_less_from_source_than_carrier_banks() {
 //
 
 #[test]
-fn carrier_killed_in_berth_gives_it_back() {
+fn carrier_destroyed_in_berth_gives_it_back() {
     let mut app = utils::orders_app();
     let (first, first_id) = utils::create_owned(&mut app, "sylph", 7, 5, 0);
     let (tree, tree_id) =

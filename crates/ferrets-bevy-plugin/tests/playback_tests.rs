@@ -36,7 +36,7 @@ fn run_playback_reaches_recorded_end_without_mismatch() {
 }
 
 #[test]
-fn run_playback_reports_spawn_recording_carried() {
+fn run_playback_replays_recorded_spawn() {
     let (replay, _) = recorded_game(40);
     let mut app = playback_app(replay);
 

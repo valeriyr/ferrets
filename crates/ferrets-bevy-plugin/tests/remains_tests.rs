@@ -134,7 +134,7 @@ fn type_that_names_no_deaths_leaves_body() {
 }
 
 #[test]
-fn canceled_construction_leaves_no_body_under_its_own_rule() {
+fn canceled_death_leaves_no_body_under_engine_rule() {
     let mut app = app(RemainsLimit::Unbounded);
     let (soldier, _) = utils::create_owned(&mut app, "soldier", 5, 5, 0);
 

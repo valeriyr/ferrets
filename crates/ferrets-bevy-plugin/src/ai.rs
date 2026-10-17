@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 
 use bevy::{ecs::world::EntityRef, prelude::*};
 use ferrets_content::{
-    affiliation::Affiliation, entity_stats::EntityStatId, pool_def::PoolId,
+    affiliation::Affiliation, entity_stats::EntityStatId, holder::Holder, pool_def::PoolId,
     registry::ContentRegistry,
 };
 use ferrets_geometry::cell_pos::CellPos;
@@ -44,6 +44,7 @@ use ferrets_simulation::{
     entity_def::{self, Operation},
     entity_index::EntityIndex,
     input::{InputFrames, PlayerFrame, SYNC_LATENCY},
+    links,
     map::Map,
     order::Order,
     player_research::PlayerResearch,
@@ -288,7 +289,10 @@ pub fn game_view(
                 listed_cell(world, session, player, vision, detection, entity_ref),
                 entity_def::operation(world, entity),
                 entity_def::idle(world, entity),
-                hold,
+                match hold {
+                    Hold::Listed => passengers(world, entity_ref, player),
+                    Hold::Withheld => Vec::new(),
+                },
             )
         };
         match owner {
@@ -378,6 +382,33 @@ fn research_views(world: &World, player: PlayerId) -> (Vec<String>, Vec<String>)
     (researched, researching)
 }
 
+/// The ids `entity` holds that `player` or its allies own; none for anything
+/// else.
+fn passengers(world: &World, entity: &EntityRef, player: PlayerId) -> Vec<u32> {
+    let ids: Vec<SimulationId> = match &entity_def::of(world, entity.id()).holder {
+        Some(Holder::Transporter(_)) => entity
+            .get::<TransporterComponent>()
+            .expect("a transporter keeps its passenger list")
+            .passengers
+            .iter()
+            .copied()
+            .collect(),
+        Some(Holder::Gateway(_)) => links::passengers_of(world, entity.id()).collect(),
+        None => Vec::new(),
+    };
+    let session = world.resource::<GameSession>();
+    let index = world.resource::<EntityIndex>();
+    ids.into_iter()
+        .filter(|&id| {
+            let owner = index
+                .alive(id)
+                .and_then(|body| entity_def::owner(world, body));
+            owner::admits(session, Affiliation::Allied, Some(player), owner)
+        })
+        .map(|id| id.0)
+        .collect()
+}
+
 /// Whether a holder's hold is listed to the brain.
 #[derive(Debug)]
 enum Hold {
@@ -443,8 +474,8 @@ fn listed_cell(
 
 /// Snapshots one entity to its integer view, `cell` being the cell
 /// [`listed_cell`] lists it at, `operation` the state it is in to carry out
-/// its type's work, `idle` whether it takes orders and runs none, and `hold`
-/// whether its passengers are listed.
+/// its type's work, `idle` whether it takes orders and runs none, and
+/// `passengers` the ids it lists as aboard or inside its link.
 fn entity_view(
     registry: &ContentRegistry,
     entity: &EntityRef,
@@ -452,7 +483,7 @@ fn entity_view(
     cell: CellPos,
     operation: Operation,
     idle: bool,
-    hold: Hold,
+    passengers: Vec<u32>,
 ) -> EntityView {
     let entity_pools = entity
         .get::<PoolsComponent>()
@@ -512,14 +543,7 @@ fn entity_view(
         boarded: entity
             .get::<BoardedComponent>()
             .map(|boarded| boarded.holder.0),
-        passengers: match hold {
-            Hold::Listed => entity
-                .get::<TransporterComponent>()
-                .map_or_else(Vec::new, |transporter| {
-                    transporter.passengers.iter().map(|id| id.0).collect()
-                }),
-            Hold::Withheld => Vec::new(),
-        },
+        passengers,
         broodlings: entity
             .get::<BroodComponent>()
             .map_or_else(Vec::new, |brood| {

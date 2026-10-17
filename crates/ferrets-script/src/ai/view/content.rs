@@ -10,7 +10,7 @@ use ferrets_content::{
     registry::ContentRegistry,
     requirement::{Bound, Requirement, Threshold},
     research::ResearchId,
-    skills::{EntityCastTarget, SkillCaster, SkillId},
+    skills::{EntityCastTarget, SkillCaster, SkillId, Whom},
 };
 
 /// The limit a requirement compares against, as a script reads it: an amount,
@@ -113,13 +113,16 @@ impl ContentView {
                         .skill_def(id)
                         .expect("a listed skill resolves in its own registry");
                     let (caster, target) = match &def.caster {
-                        SkillCaster::Entity { target, .. } => (
+                        SkillCaster::Entity { effect, .. } => (
                             "entity",
-                            Some(match target {
+                            Some(match effect.target() {
                                 EntityCastTarget::Caster => "caster",
-                                EntityCastTarget::Position => "position",
+                                EntityCastTarget::Position { .. } => "position",
                                 EntityCastTarget::Fallen { .. } => "fallen",
-                                EntityCastTarget::Standing { side, .. } => match side {
+                                EntityCastTarget::Standing {
+                                    whom: Whom { side, .. },
+                                    ..
+                                } => match side {
                                     Affiliation::Own => "own",
                                     Affiliation::Allied => "allied",
                                     Affiliation::Enemy => "enemy",

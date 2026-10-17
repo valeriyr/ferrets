@@ -62,16 +62,33 @@ pub fn find_placements_near(
     max_amount: usize,
     footing: Footing,
 ) -> Vec<CellPos> {
-    placements_near(
+    let layer_mask = layer_mask.into();
+    let mut found: Vec<CellPos> = Vec::with_capacity(max_amount);
+    if max_amount == 0 {
+        return found;
+    }
+    walk_rings(
         grid,
-        layer_mask.into(),
         around,
-        spawn_size,
         max_radius,
-        max_amount,
-        footing,
         |cell| (from_middle(around, cell, spawn_size), cell.y, cell.x),
-    )
+        |candidate| {
+            let rect = CellRect::new(candidate, spawn_size);
+            if fits(grid, layer_mask, candidate, spawn_size, footing)
+                && !found
+                    .iter()
+                    .any(|&taken| CellRect::new(taken, spawn_size).intersects(rect))
+            {
+                found.push(candidate);
+            }
+            if found.len() == max_amount {
+                Walk::Stop
+            } else {
+                Walk::Next
+            }
+        },
+    );
+    found
 }
 
 /// Finds the nearest placement for a `spawn_size` footprint near the rectangle
@@ -87,14 +104,29 @@ pub fn find_placement_near_toward(
     footing: Footing,
     toward: CellRect,
 ) -> Option<CellPos> {
-    placements_near(
+    let layer_mask = layer_mask.into();
+    find_placement_near_toward_where(grid, around, spawn_size, max_radius, toward, |cell| {
+        fits(grid, layer_mask, cell, spawn_size, footing)
+    })
+}
+
+/// Finds the first anchor near the rectangle at `around` that `accept` takes
+/// for a `spawn_size` footprint, in the order [`find_placement_near_toward`]
+/// tries them: ring by ring outward to `max_radius`, each cell once, within a
+/// ring the ground closest to `toward` first.
+pub fn find_placement_near_toward_where(
+    grid: &NavGrid,
+    around: CellRect,
+    spawn_size: CellSize,
+    max_radius: u32,
+    toward: CellRect,
+    mut accept: impl FnMut(CellPos) -> bool,
+) -> Option<CellPos> {
+    let mut found = None;
+    walk_rings(
         grid,
-        layer_mask.into(),
         around,
-        spawn_size,
         max_radius,
-        1,
-        footing,
         |cell| {
             (
                 from_middle(toward, cell, spawn_size),
@@ -103,9 +135,16 @@ pub fn find_placement_near_toward(
                 cell.x,
             )
         },
-    )
-    .into_iter()
-    .next()
+        |cell| {
+            if accept(cell) {
+                found = Some(cell);
+                Walk::Stop
+            } else {
+                Walk::Next
+            }
+        },
+    );
+    found
 }
 
 /// Finds the nearest placement for a `spawn_size` footprint near the rectangle
@@ -176,21 +215,41 @@ pub fn find_nearest_free_pos(
     None
 }
 
-/// The ring search behind the placement finders, `order` ranking the cells
-/// within a ring.
-#[allow(clippy::too_many_arguments)]
-fn placements_near<K: Ord>(
+/// Whether a ring walk goes on to the next cell.
+enum Walk {
+    /// On to the next cell.
+    Next,
+    /// Done.
+    Stop,
+}
+
+/// Whether a `spawn_size` footprint anchored at `candidate` has the ground
+/// `footing` asks for.
+fn fits(
     grid: &NavGrid,
     layer_mask: LayerMask,
-    around: CellRect,
+    candidate: CellPos,
     spawn_size: CellSize,
-    max_radius: u32,
-    max_amount: usize,
     footing: Footing,
-    order: impl Fn(CellPos) -> K,
-) -> Vec<CellPos> {
-    let mut found: Vec<CellPos> = Vec::with_capacity(max_amount);
+) -> bool {
+    match footing {
+        Footing::Free => grid.is_footprint_passable_by(layer_mask, candidate, spawn_size),
+        Footing::Shared => grid.is_footprint_terrain_passable_by(layer_mask, candidate, spawn_size),
+    }
+}
 
+/// Hands `visit` every anchor near the rectangle at `around`, ring by ring
+/// outward to `max_radius`, each cell once and within a ring in `order`, until
+/// it says stop.
+fn walk_rings<K: Ord>(
+    grid: &NavGrid,
+    around: CellRect,
+    max_radius: u32,
+    order: impl Fn(CellPos) -> K,
+    mut visit: impl FnMut(CellPos) -> Walk,
+) {
+    // The rectangle the rings so far have covered.
+    let mut covered: Option<CellRect> = None;
     for radius in 0..=max_radius {
         let min_x = around.origin.x.saturating_sub(radius);
         let min_y = around.origin.y.saturating_sub(radius);
@@ -200,35 +259,24 @@ fn placements_near<K: Ord>(
         let mut ring: Vec<CellPos> = Vec::new();
         for y in min_y..=max_y {
             for x in min_x..=max_x {
-                ring.push(CellPos::new(x, y));
+                let cell = CellPos::new(x, y);
+                if !covered.is_some_and(|covered| covered.contains(cell)) {
+                    ring.push(cell);
+                }
             }
         }
         ring.sort_by_key(|&cell| order(cell));
-
-        for candidate in ring {
-            if found.len() == max_amount {
-                return found;
+        for cell in ring {
+            match visit(cell) {
+                Walk::Next => {}
+                Walk::Stop => return,
             }
-            let fits = match footing {
-                Footing::Free => grid.is_footprint_passable_by(layer_mask, candidate, spawn_size),
-                Footing::Shared => {
-                    grid.is_footprint_terrain_passable_by(layer_mask, candidate, spawn_size)
-                }
-            };
-            if !fits {
-                continue;
-            }
-            let rect = CellRect::new(candidate, spawn_size);
-            if found
-                .iter()
-                .any(|&taken| CellRect::new(taken, spawn_size).intersects(rect))
-            {
-                continue;
-            }
-            found.push(candidate);
         }
+        covered = Some(CellRect::new(
+            CellPos::new(min_x, min_y),
+            CellSize::new(max_x - min_x + 1, max_y - min_y + 1),
+        ));
     }
-    found
 }
 
 /// How far the middle of a `spawn_size` footprint placed at `candidate` sits

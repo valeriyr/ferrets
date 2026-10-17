@@ -630,7 +630,7 @@ const ORC_AI: &str = r#"
                 if #f.passengers > 0 then
                     local threat = nearest(f, view.enemy_entities)
                     if threat == nil or not within(f, threat, 10) then
-                        commands[#commands + 1] = { kind = "unload", transport = f.id }
+                        commands[#commands + 1] = { kind = "unload", holder = f.id }
                     end
                 end
             end

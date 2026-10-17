@@ -19,7 +19,7 @@ use ferrets_math::{FixedU64, fixed_urect::FixedURect};
 use ferrets_pathfinder::layer_mask::LayerMask;
 use ferrets_simulation::{
     brood,
-    command::{PlayerCommand, SelectMode, SkillCasterRef},
+    command::{PlayerCommand, SelectMode},
     components::{
         attached::AttachedComponent,
         brood::{BredComponent, BroodComponent},
@@ -671,7 +671,7 @@ fn breeder_with_broodling_seated_is_not_loaded() {
     utils::push_command(
         &mut app,
         PlayerCommand::Load {
-            transport: cart_id,
+            holder: cart_id,
             target: sow_id,
             flush: true,
         },
@@ -1805,7 +1805,7 @@ fn cast_under_way_on_stranded_broodling_holds_and_resumes_when_it_stands() {
     // at the sixth tick of an eight-tick cast, due after the change lands.
     order_morph(&mut app, pen, "bare_pen");
     utils::run_ticks(&mut app, 4);
-    utils::use_skill(&mut app, "squeal", SkillCasterRef::Entity(piglet_id), None);
+    utils::cast_self(&mut app, piglet_id, "squeal");
     utils::run_ticks(&mut app, utils::APPLY + 1);
     let orders = entity_def::orders(app.world(), piglet);
     assert!(matches!(orders.as_slice(), [Order::Cast { .. }]));
@@ -1824,11 +1824,7 @@ fn cast_under_way_on_stranded_broodling_holds_and_resumes_when_it_stands() {
 
     // The one cell beside its berth frees: it stands, and the cast resumes
     // where it left off and lands.
-    app.world_mut().resource_mut::<Map>().set_static_occupied(
-        utils::GROUND,
-        CellPos::new(11, 13),
-        false,
-    );
+    utils::free_cell(&mut app, CellPos::new(11, 13));
     utils::run_ticks(&mut app, 1);
     assert!(!entity_def::hidden(app.world(), piglet));
     // Three of the six ticks to the point ran before the change landed, so

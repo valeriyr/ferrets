@@ -5,7 +5,7 @@ use ferrets_geometry::cell_rect::CellRect;
 use crate::simulation_id::SimulationId;
 
 /// What a body coming back onto the map is set down beside.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Beside {
     /// What it was inside — its holder or its job — as that stands now, or
     /// what that is itself inside; once nothing of it remains in the world,
@@ -19,7 +19,7 @@ pub enum Beside {
 }
 
 /// Which of the free cells in the nearest ring a returning body takes first.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Lean {
     /// The one nearest where it went in.
     WentIn,

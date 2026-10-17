@@ -353,7 +353,7 @@ fn workers_on_one_job_split_bill_rather_than_each_paying_it() {
 }
 
 #[test]
-fn flat_per_tick_cost_is_charged_for_each_worker() {
+fn flat_per_tick_cost_totals_same_bill_for_crew_of_two() {
     // Forty points at five a tick is eight worker-ticks of work however it is
     // divided, and a flat rate bills each of them once.
     let one = per_tick_spend(&["hauler"]);
@@ -678,11 +678,12 @@ fn patient_destroyed_mid_repair_finishes_order_and_frees_worker() {
 
     repair(&mut app, worker_id, depot_id);
     utils::run_ticks(&mut app, utils::APPLY + 4);
-    let went_in = app
+    let went_in_at = app
         .world()
         .get::<HiddenComponent>(worker)
         .expect("the mole works inside its patient")
-        .went_in;
+        .went_in
+        .position;
 
     // The patient goes down under the hands mending it.
     spawn::destroy_entity(app.world_mut(), depot);
@@ -695,7 +696,7 @@ fn patient_destroyed_mid_repair_finishes_order_and_frees_worker() {
     // Beside where it went in, that cell being the first the search finds free.
     assert_eq!(
         utils::cell_of(app.world(), worker),
-        CellPos::from(went_in.position)
+        CellPos::from(went_in_at)
     );
     assert!(
         utils::order_queue_is_empty(app.world_mut(), worker),

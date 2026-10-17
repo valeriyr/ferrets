@@ -24,7 +24,6 @@ use crate::{
     entity_def,
     entity_index::EntityIndex,
     events::SpendCause,
-    map::Map,
     order::Order,
     resources::{self, PlayerResources},
     session::GameSession,
@@ -158,15 +157,11 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
     // hands mending it.
     if !repair.inside_job {
         let (target_position, target_size) = entity_def::footprint(world, target);
-        let projection = world.resource::<Map>().projection();
-        let (chaser_position, chaser_size) = entity_def::footprint(world, entity);
-        match chase::advance(
+        match chase::advance_to_entity(
             &mut repair.last_chase,
-            projection,
-            chaser_position,
-            chaser_size,
-            target_position,
-            target_size,
+            world,
+            entity,
+            target,
             entity_def::effective_stat_u32(world, entity, EntityStatId::REPAIR_RANGE),
         ) {
             Destination::OutOfReach => return finish(world, entity, target_id),

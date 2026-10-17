@@ -981,18 +981,18 @@ pub fn targeting_input(
             let Some(target) = entity_at(cursor, Clicked::Standing, &registry, &entities) else {
                 return;
             };
-            if let Some(transport) = leading.0 {
+            if let Some(holder) = leading.0 {
                 pending.push(PlayerCommand::Load {
-                    transport,
+                    holder,
                     target,
                     flush,
                 });
             }
         }
         TargetedOrder::Unload => {
-            if let Some(transport) = leading.0 {
+            if let Some(holder) = leading.0 {
                 pending.push(PlayerCommand::Unload {
-                    transport,
+                    holder,
                     at: Some(world_to_pos(cursor)),
                     flush,
                 });
@@ -1381,11 +1381,11 @@ fn skill_target_at(
     )>,
 ) -> Option<SkillTarget> {
     let aim = match registry.skill_def(skill).map(|def| &def.caster) {
-        Some(SkillCaster::Entity { target, .. }) => target,
+        Some(SkillCaster::Entity { effect, .. }) => effect.target(),
         Some(SkillCaster::Player { .. }) | None => return None,
     };
     match aim {
-        EntityCastTarget::Position => Some(SkillTarget::Position(world_to_pos(cursor))),
+        EntityCastTarget::Position { .. } => Some(SkillTarget::Position(world_to_pos(cursor))),
         EntityCastTarget::Fallen { .. } => {
             entity_at(cursor, Clicked::Remains, registry, entities).map(SkillTarget::Entity)
         }

@@ -94,7 +94,7 @@ fn wide_entrance_yields_transitions_at_both_ends() {
 }
 
 #[test]
-fn wall_splits_border_into_separate_entrances() {
+fn blocked_border_pairs_shrink_entrance_to_remaining_run() {
     // . . . X|. . . .   y=0   the border column pair is x=3 | x=4;
     // . . . .|X . . .   y=1   X at (3,0) kills the y=0 pair and X at (4,1)
     // . . . .|. . . .   y=2   kills the y=1 pair, leaving one 2-cell run at

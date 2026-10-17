@@ -21,7 +21,7 @@ use ferrets_content::{
     requirement::{Bound, Requirement, Threshold},
     research::{ResearchDef, ResearchId},
     skills::{
-        Casting, EntityCastEffect, EntityCastTarget, PlayerCastEffect, Reach, SkillCaster, SkillDef,
+        Casting, EntityCastEffect, PlayerCastEffect, Reach, Recipient, SkillCaster, SkillDef, Whom,
     },
     stack_rule::StackRule,
     stats::{EntityModifier, ModifierOp},
@@ -966,10 +966,11 @@ fn research_content() -> (ContentView, ResearchId) {
             cooldown: 5,
             caster: SkillCaster::Entity {
                 costs: Vec::new(),
-                target: EntityCastTarget::Caster,
-                reach: Reach::Wherever,
                 casting: Casting::Instant,
-                effect: EntityCastEffect::Damage(FixedU64::ONE),
+                effect: EntityCastEffect::Damage {
+                    amount: FixedU64::ONE,
+                    on: Recipient::Caster,
+                },
             },
             requires: vec![Requirement::Research(smithing)],
         },
@@ -980,13 +981,17 @@ fn research_content() -> (ContentView, ResearchId) {
             cooldown: 5,
             caster: SkillCaster::Entity {
                 costs: Vec::new(),
-                target: EntityCastTarget::Standing {
-                    side: Affiliation::Allied,
-                    kinds: Kinds::Any,
-                },
-                reach: Reach::Wherever,
                 casting: Casting::Instant,
-                effect: EntityCastEffect::Heal(FixedU64::ONE),
+                effect: EntityCastEffect::Heal {
+                    amount: FixedU64::ONE,
+                    on: Recipient::Standing {
+                        whom: Whom {
+                            side: Affiliation::Allied,
+                            kinds: Kinds::Any,
+                        },
+                        reach: Reach::Wherever,
+                    },
+                },
             },
             requires: Vec::new(),
         },

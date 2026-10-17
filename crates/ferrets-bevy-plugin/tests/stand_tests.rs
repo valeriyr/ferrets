@@ -24,16 +24,13 @@ use ferrets_content::{
     pool_shift::PoolShift,
     quantity::Quantity,
     registry::ContentRegistry,
-    skills::{Casting, EntityCastEffect, EntityCastTarget, Reach, SkillCaster, SkillDef},
+    skills::{Casting, EntityCastEffect, Reach, SkillCaster, SkillDef, Spot},
     stand::StandingAct,
     work::{CrewLimit, WorkPresence},
 };
 use ferrets_geometry::cell_size::CellSize;
 use ferrets_math::FixedU64;
-use ferrets_simulation::{
-    command::{PlayerCommand, SkillCasterRef, SkillTarget},
-    session::GameSession,
-};
+use ferrets_simulation::{command::PlayerCommand, session::GameSession};
 
 //
 // ─── When the act happens ─────────────────────────────────────────────────────
@@ -171,12 +168,7 @@ fn form_change_keeps_standing_act_performed() {
 /// Player 0's overlord spews a patch of blight on the cell and the ticks apply.
 fn spew_at(app: &mut App, x: u32, y: u32) {
     let (_, overlord) = utils::create_owned(app, "overlord", 20, 20, 0);
-    utils::use_skill(
-        app,
-        "spew",
-        SkillCasterRef::Entity(overlord),
-        Some(SkillTarget::Position(utils::pos(x, y))),
-    );
+    utils::cast_at(app, overlord, "spew", x, y);
     utils::run_ticks(app, utils::APPLY);
 }
 
@@ -260,12 +252,13 @@ fn stand_app() -> App {
                 cooldown: 1,
                 caster: SkillCaster::Entity {
                     costs: Vec::new(),
-                    target: EntityCastTarget::Position,
-                    reach: Reach::Wherever,
                     casting: Casting::Instant,
                     effect: EntityCastEffect::Field {
+                        at: Spot::Cell {
+                            reach: Reach::Wherever,
+                        },
                         field: blight,
-                        radius: 1,
+                        radius: Quantity::Constant(1),
                         action: FieldAction::Cover,
                     },
                 },

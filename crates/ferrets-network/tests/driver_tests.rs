@@ -41,7 +41,7 @@ fn broadcast_frames_reach_other_peer() {
 //
 
 #[test]
-fn checksum_round_trips() {
+fn sent_checksum_reaches_other_peer_tagged_with_sender_player() {
     let (mut host, mut peer) = connected_pair();
 
     host.send_checksum(8, 0xDEAD_BEEF).expect("send");

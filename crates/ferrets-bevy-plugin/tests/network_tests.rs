@@ -550,7 +550,7 @@ fn frames_from_keeping_up_peer_arrive_ahead_of_tick_that_needs_them() {
 }
 
 #[test]
-fn margin_of_peer_that_stopped_sending_is_forgotten() {
+fn stale_frame_margin_stops_constraining_cadence() {
     // Whatever margin a departed peer left behind, it is no longer a statement
     // about keeping up — holding the cadence down on it for the rest of the match
     // would be a bug.
@@ -1927,7 +1927,7 @@ fn observer_node_stays_synced_and_stalls_nobody() {
 }
 
 #[test]
-fn frozen_observer_node_stalls_and_drops_nobody() {
+fn frozen_observer_node_stalls_nobody_and_drops_nobody() {
     let mut apps: Vec<App> = LoopbackTransport::mesh(3)
         .into_iter()
         .map(|t| {

@@ -18,21 +18,24 @@ use ferrets_content::{
     cost::Cost,
     detection::Detection,
     dying::{Bequest, DeathKind, DyingDef, LeftBy},
-    entity_buffs::{EntityBuffDef, Interruption, Lasting},
+    entity_buffs::{EntityBuffDef, EntityBuffId, Interruption, Lasting},
     entity_effect::EntityEffect,
     entity_modifiers::EntityModifiers,
     entity_stats::EntityStatId,
-    entity_type_def::EntityTypeDef,
+    entity_type_def::{EntityTypeDef, EntityTypeId},
     field::{
         Emission, FieldAction, FieldCoverage, FieldDecay, FieldDef, FieldEffect, FieldGrowth,
         FieldId, FieldLayer, FieldPlacement, FieldSourceDef, FieldVision,
     },
-    kinds::Kinds,
+    gateway::{Doors, Joins},
+    kinds::{Kind, Kinds},
+    landing::Landing,
     location::Solidity,
     morph::{
         MorphCancel, MorphCourse, MorphInterrupted, MorphPlacement, MorphReason, MorphTransition,
         PoolCarry, RevertCarry, ViaInterrupted,
     },
+    network::NetworkDef,
     player_buffs::{PlayerBuffDef, PlayerBuffId},
     player_stats::PlayerStatId,
     pool::{Pool, PoolInitial},
@@ -46,13 +49,17 @@ use ferrets_content::{
     research::{ResearchDef, ResearcherDef},
     resource::{Banking, DepletionPolicy, HarvestData},
     skills::{
-        Casting, EntityCastEffect, EntityCastTarget, PlayerCastEffect, Reach, SkillCaster, SkillDef,
+        AimParty, Away, CasterParty, Casting, Count, EntityCastEffect, FromAimTo, FromCasterTo,
+        GatherSight, Gathering, Journey, PaymentPoint, PlayerCastEffect, Reach, Recipient,
+        Shortfall, SkillCaster, SkillDef, Spot, SummonArrival, SummonAt, Whom,
     },
     stack_rule::StackRule,
     stand::StandingAct,
     stats::{EntityModifier, ModifierOp},
     tags,
+    train::Release,
     transport::{PassengerConduct, PassengerFate},
+    tunnel::{OtherEndLost, Passage, TunnelDef},
     turret::{TurretDef, TurretMount, TurretStats, WeaponConduct},
     work::{Attachment, BerthStance, CrewLimit, WorkPresence},
 };
@@ -133,7 +140,7 @@ fn register_accepts_definitions_without_resources() {
 }
 
 #[test]
-fn register_accepts_registered_kinds() {
+fn register_accepts_registered_resource_kinds() {
     gold_registry_with(
         utils::standing("worker", GROUND)
             .with_price([("gold", 10)])
@@ -241,8 +248,10 @@ fn validate_accepts_registered_production_catalogues() {
 
     registry.register(utils::standing("soldier", GROUND).with_train_time(4));
     registry.register(utils::sized("depot", GROUND, CellSize::new(2, 2)).with_build(6, []));
-    registry
-        .register(utils::sized("barracks", GROUND, CellSize::new(2, 2)).with_trainer(["soldier"]));
+    registry.register(
+        utils::sized("barracks", GROUND, CellSize::new(2, 2))
+            .with_trainer(["soldier"], Release::Beside),
+    );
     registry.register(
         utils::standing("worker", GROUND)
             .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
@@ -510,7 +519,7 @@ fn validate_accepts_production_cycle() {
     registry.register(
         utils::sized("town_hall", GROUND, CellSize::new(2, 2))
             .with_build(6, [])
-            .with_trainer(["worker"]),
+            .with_trainer(["worker"], Release::Beside),
     );
     registry.register(
         utils::standing("worker", GROUND)
@@ -533,9 +542,70 @@ fn validate_accepts_production_cycle() {
 )]
 fn validate_rejects_unknown_trained_type() {
     let mut registry = utils::ground_registry();
-    registry
-        .register(utils::sized("barracks", GROUND, CellSize::new(2, 2)).with_trainer(["ghost"]));
+    registry.register(
+        utils::sized("barracks", GROUND, CellSize::new(2, 2))
+            .with_trainer(["ghost"], Release::Beside),
+    );
     registry.validate();
+}
+
+#[test]
+#[should_panic(expected = "entity type 'relay' warps in 'recruit', which declares no build")]
+fn validate_rejects_warped_trainee_declaring_no_build() {
+    let mut registry = utils::ground_registry();
+    registry.register(utils::standing("recruit", GROUND).with_train_time(10));
+    registry.register(utils::standing("relay", GROUND).with_trainer(
+        ["recruit"],
+        Release::Warped {
+            within: Vec::new(),
+            landing: Landing::Sighted,
+        },
+    ));
+    registry.validate();
+}
+
+#[test]
+fn validate_accepts_warped_trainee_declaring_build() {
+    let mut registry = utils::ground_registry();
+    registry.register(
+        utils::standing("recruit", GROUND)
+            .with_train_time(10)
+            .with_build(10, Vec::new()),
+    );
+    registry.register(utils::standing("relay", GROUND).with_trainer(
+        ["recruit"],
+        Release::Warped {
+            within: Vec::new(),
+            landing: Landing::Sighted,
+        },
+    ));
+    registry.validate();
+}
+
+#[test]
+#[should_panic(expected = "skill 'raise_mound' summons 'mound' rising, but it declares no build")]
+fn register_rejects_rising_summon_of_type_declaring_no_build() {
+    let mut registry = utils::ground_registry();
+    registry.register(utils::standing("mound", GROUND));
+    let mound = registry.type_id("mound").expect("just registered");
+    registry.register_skill(
+        "raise_mound",
+        SkillDef {
+            cooldown: 1,
+            caster: SkillCaster::Entity {
+                costs: Vec::new(),
+                casting: Casting::Instant,
+                effect: EntityCastEffect::Summon {
+                    at: SummonAt::Caster,
+                    entity_type: mound,
+                    count: Quantity::Constant(1),
+                    landing: Landing::Anywhere,
+                    arrives: SummonArrival::Rising,
+                },
+            },
+            requires: Vec::new(),
+        },
+    );
 }
 
 #[test]
@@ -547,8 +617,10 @@ fn validate_rejects_untrainable_trained_type() {
         CellSize::ONE,
         Solidity::Solid,
     ));
-    registry
-        .register(utils::sized("barracks", GROUND, CellSize::new(2, 2)).with_trainer(["statue"]));
+    registry.register(
+        utils::sized("barracks", GROUND, CellSize::new(2, 2))
+            .with_trainer(["statue"], Release::Beside),
+    );
     registry.validate();
 }
 
@@ -1053,7 +1125,7 @@ fn register_rejects_zero_damage_point() {
 
 #[test]
 #[should_panic(expected = "with an energy cost but no energy pool")]
-fn register_rejects_costed_skill_without_energy_pool() {
+fn register_rejects_energy_costed_skill_without_energy_pool() {
     let mut registry = utils::ground_registry();
     let jolt = registry.register_skill(
         "jolt",
@@ -1061,10 +1133,11 @@ fn register_rejects_costed_skill_without_energy_pool() {
             cooldown: 10,
             caster: SkillCaster::Entity {
                 costs: vec![Cost::Energy(FixedU64::from_num(25))],
-                target: EntityCastTarget::Caster,
-                reach: Reach::Wherever,
                 casting: Casting::Instant,
-                effect: EntityCastEffect::Damage(FixedU64::from_num(5)),
+                effect: EntityCastEffect::Damage {
+                    amount: FixedU64::from_num(5),
+                    on: Recipient::Caster,
+                },
             },
             requires: Vec::new(),
         },
@@ -1085,10 +1158,11 @@ fn register_accepts_free_skill_without_energy_pool() {
             cooldown: 10,
             caster: SkillCaster::Entity {
                 costs: Vec::new(),
-                target: EntityCastTarget::Caster,
-                reach: Reach::Wherever,
                 casting: Casting::Instant,
-                effect: EntityCastEffect::Damage(FixedU64::from_num(5)),
+                effect: EntityCastEffect::Damage {
+                    amount: FixedU64::from_num(5),
+                    on: Recipient::Caster,
+                },
             },
             requires: Vec::new(),
         },
@@ -1111,10 +1185,11 @@ fn register_rejects_skill_costing_unregistered_resource() {
             cooldown: 10,
             caster: SkillCaster::Entity {
                 costs: vec![Cost::Resources(price::from([("wood", 5)]))],
-                target: EntityCastTarget::Caster,
-                reach: Reach::Wherever,
                 casting: Casting::Instant,
-                effect: EntityCastEffect::Damage(FixedU64::from_num(5)),
+                effect: EntityCastEffect::Damage {
+                    amount: FixedU64::from_num(5),
+                    on: Recipient::Caster,
+                },
             },
             requires: Vec::new(),
         },
@@ -1133,10 +1208,11 @@ fn register_accepts_resource_costed_skill_without_pools() {
             cooldown: 10,
             caster: SkillCaster::Entity {
                 costs: vec![Cost::Resources(price::from([("gold", 25)]))],
-                target: EntityCastTarget::Caster,
-                reach: Reach::Wherever,
                 casting: Casting::Instant,
-                effect: EntityCastEffect::Damage(FixedU64::from_num(5)),
+                effect: EntityCastEffect::Damage {
+                    amount: FixedU64::from_num(5),
+                    on: Recipient::Caster,
+                },
             },
             requires: Vec::new(),
         },
@@ -1159,10 +1235,11 @@ fn register_rejects_health_costed_skill_without_health_pool() {
             cooldown: 10,
             caster: SkillCaster::Entity {
                 costs: vec![Cost::Health(FixedU64::from_num(5))],
-                target: EntityCastTarget::Caster,
-                reach: Reach::Wherever,
                 casting: Casting::Instant,
-                effect: EntityCastEffect::Damage(FixedU64::from_num(5)),
+                effect: EntityCastEffect::Damage {
+                    amount: FixedU64::from_num(5),
+                    on: Recipient::Caster,
+                },
             },
             requires: Vec::new(),
         },
@@ -1522,7 +1599,7 @@ fn register_rejects_attacker_without_weapon_stats() {
 //
 
 #[test]
-#[should_panic(expected = "can transport but is missing load_range")]
+#[should_panic(expected = "is missing load_range")]
 fn register_rejects_transporter_without_reach() {
     let mut registry = utils::ground_registry();
     registry.register_tag("infantry");
@@ -1560,7 +1637,7 @@ fn register_rejects_zero_cargo_capacity() {
 }
 
 #[test]
-#[should_panic(expected = "can transport but is missing cargo_capacity")]
+#[should_panic(expected = "is missing cargo_capacity")]
 fn register_rejects_transporter_without_capacity() {
     let mut registry = utils::ground_registry();
     registry.register_tag("infantry");
@@ -1580,7 +1657,7 @@ fn register_rejects_transporter_without_capacity() {
 }
 
 #[test]
-#[should_panic(expected = "declares unload_period but cannot transport")]
+#[should_panic(expected = "declares unload_period, which nothing it does reads")]
 fn register_rejects_transport_stat_without_capability() {
     let mut registry = utils::ground_registry();
     registry.register(
@@ -1590,7 +1667,7 @@ fn register_rejects_transport_stat_without_capability() {
 }
 
 #[test]
-#[should_panic(expected = "can transport and so cannot declare cargo_size")]
+#[should_panic(expected = "lets bodies in and so cannot declare cargo_size")]
 fn register_rejects_transportable_transporter() {
     let mut registry = utils::ground_registry();
     registry.register_tag("infantry");
@@ -1653,6 +1730,409 @@ fn validate_accepts_carries_entry_registered_later() {
         utils::standing("footman", GROUND).with_stat(EntityStatId::CARGO_SIZE, FixedU64::ONE),
     );
     registry.validate();
+}
+
+//
+// ─── Gateways ─────────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn register_links_assigns_ids_in_registration_order() {
+    let mut registry = ContentRegistry::default();
+    let warren = registry.register_network("warren", warren_def(255));
+    let nest = registry.register_network(
+        "nest",
+        NetworkDef::new(Kinds::Any, Affiliation::Allied, 8, PassengerFate::Eject),
+    );
+    let tunnel = registry.register_tunnel("tunnel", tunnel_def(Passage::Crosses));
+
+    assert_eq!((warren.index(), nest.index(), tunnel.index()), (0, 1, 0));
+    assert_eq!(registry.network("nest"), Some(nest));
+    assert_eq!(registry.network_name(warren), Some("warren"));
+    assert_eq!(registry.tunnel("tunnel"), Some(tunnel));
+    assert_eq!(registry.tunnel_name(tunnel), Some("tunnel"));
+    assert_eq!(registry.network_def(nest).boarding(), Affiliation::Allied);
+    assert_eq!(
+        registry.tunnel_def(tunnel).other_end_lost(),
+        OtherEndLost::Stands
+    );
+}
+
+#[test]
+#[should_panic(expected = "network 'warren' is already registered")]
+fn register_network_rejects_duplicate_name() {
+    let mut registry = ContentRegistry::default();
+    registry.register_network("warren", warren_def(255));
+    registry.register_network("warren", warren_def(8));
+}
+
+#[test]
+#[should_panic(expected = "tunnel 'tunnel' is already registered")]
+fn register_tunnel_rejects_duplicate_name() {
+    let mut registry = ContentRegistry::default();
+    registry.register_tunnel("tunnel", tunnel_def(Passage::Crosses));
+    registry.register_tunnel("tunnel", tunnel_def(held(8)));
+}
+
+#[test]
+#[should_panic(expected = "network 'warren' holds nothing at all")]
+fn register_network_rejects_no_capacity() {
+    ContentRegistry::default().register_network("warren", warren_def(0));
+}
+
+#[test]
+#[should_panic(expected = "network 'warren' admits only enemies, so no gateways ever link")]
+fn register_network_rejects_enemy_boarding() {
+    ContentRegistry::default().register_network(
+        "warren",
+        NetworkDef::new(Kinds::Any, Affiliation::Enemy, 8, PassengerFate::Destroy),
+    );
+}
+
+#[test]
+#[should_panic(expected = "tunnel 'tunnel' admits only enemies")]
+fn register_tunnel_rejects_enemy_boarding() {
+    ContentRegistry::default().register_tunnel(
+        "tunnel",
+        TunnelDef::new(
+            Kinds::Any,
+            Affiliation::Enemy,
+            OtherEndLost::Stands,
+            Passage::Crosses,
+        ),
+    );
+}
+
+#[test]
+#[should_panic(expected = "tunnel 'tunnel' holds nothing at all")]
+fn register_tunnel_rejects_held_passage_of_no_capacity() {
+    ContentRegistry::default().register_tunnel("tunnel", tunnel_def(held(0)));
+}
+
+#[test]
+fn register_accepts_gateways_reading_only_stats_they_use() {
+    let mut registry = utils::ground_registry();
+    let warren = registry.register_network("warren", warren_def(255));
+    let tunnel = registry.register_tunnel("tunnel", tunnel_def(Passage::Crosses));
+    // A held gateway both ways reads all four; a crossing one the boarding
+    // pair; a crossing way out nothing at all.
+    registry.register(leaving(entering(gateway(
+        "burrow",
+        Joins::Network(warren),
+        Doors::Both,
+    ))));
+    registry.register(entering(gateway(
+        "tunnel",
+        Joins::Tunnel(tunnel),
+        Doors::Both,
+    )));
+    registry.register(gateway("tunnel_exit", Joins::Tunnel(tunnel), Doors::Exit));
+}
+
+#[test]
+#[should_panic(expected = "entity type 'burrow' joins an unregistered tunnel")]
+fn register_rejects_gateway_of_link_minted_elsewhere() {
+    let mut elsewhere = ContentRegistry::default();
+    elsewhere.register_tunnel("other", tunnel_def(Passage::Crosses));
+    let foreign = elsewhere.register_tunnel("tunnel", tunnel_def(Passage::Crosses));
+    let mut registry = utils::ground_registry();
+    registry.register(gateway("burrow", Joins::Tunnel(foreign), Doors::Exit));
+}
+
+#[test]
+#[should_panic(expected = "entity type 'burrow' is missing unload_range")]
+fn register_rejects_held_gateway_without_unloading_stats() {
+    let mut registry = utils::ground_registry();
+    let warren = registry.register_network("warren", warren_def(255));
+    registry.register(entering(gateway(
+        "burrow",
+        Joins::Network(warren),
+        Doors::Both,
+    )));
+}
+
+#[test]
+#[should_panic(expected = "entity type 'chamber' is missing unload_range")]
+fn register_rejects_held_tunnel_end_without_unloading_stats() {
+    let mut registry = utils::ground_registry();
+    let chamber = registry.register_tunnel("chamber", tunnel_def(held(8)));
+    registry.register(entering(gateway(
+        "chamber",
+        Joins::Tunnel(chamber),
+        Doors::Both,
+    )));
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'tunnel' declares unload_range, which nothing it does reads"
+)]
+fn register_rejects_unloading_stats_on_crossing_gateway() {
+    let mut registry = utils::ground_registry();
+    let tunnel = registry.register_tunnel("tunnel", tunnel_def(Passage::Crosses));
+    registry.register(leaving(entering(gateway(
+        "tunnel",
+        Joins::Tunnel(tunnel),
+        Doors::Both,
+    ))));
+}
+
+#[test]
+#[should_panic(expected = "entity type 'burrow' declares load_range, which nothing it does reads")]
+fn register_rejects_boarding_stats_on_way_out() {
+    let mut registry = utils::ground_registry();
+    let warren = registry.register_network("warren", warren_def(255));
+    registry.register(leaving(entering(gateway(
+        "burrow",
+        Joins::Network(warren),
+        Doors::Exit,
+    ))));
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'tunnel' declares cargo_capacity, which nothing it does reads"
+)]
+fn register_rejects_capacity_on_gateway() {
+    let mut registry = utils::ground_registry();
+    let tunnel = registry.register_tunnel("tunnel", tunnel_def(Passage::Crosses));
+    registry.register(
+        entering(gateway("tunnel", Joins::Tunnel(tunnel), Doors::Both))
+            .with_stat(EntityStatId::CARGO_CAPACITY, FixedU64::from_num(4)),
+    );
+}
+
+#[test]
+#[should_panic(expected = "network 'nest' lets in the gateway 'burrow'")]
+fn validate_rejects_network_letting_in_another_networks_gateway() {
+    let mut registry = utils::ground_registry();
+    registry.register_tag("burrows");
+    registry.register_tag("infantry");
+    let warren = registry.register_network(
+        "warren",
+        NetworkDef::new(
+            Kinds::tags(["infantry"]),
+            Affiliation::Own,
+            255,
+            PassengerFate::Destroy,
+        ),
+    );
+    let nest = registry.register_network(
+        "nest",
+        NetworkDef::new(
+            Kinds::tags(["burrows"]),
+            Affiliation::Own,
+            8,
+            PassengerFate::Destroy,
+        ),
+    );
+    // A burrow of the infantry's warren would go into the nest.
+    registry.register(
+        leaving(entering(gateway(
+            "burrow",
+            Joins::Network(warren),
+            Doors::Both,
+        )))
+        .with_stat(EntityStatId::CARGO_SIZE, FixedU64::ONE)
+        .with_tags(["burrows"]),
+    );
+    registry.register(leaving(gateway(
+        "nest_exit",
+        Joins::Network(nest),
+        Doors::Exit,
+    )));
+    registry.validate();
+}
+
+#[test]
+#[should_panic(expected = "network 'warren' lets in the gateway 'burrow'")]
+fn validate_rejects_network_letting_in_its_own_gateway() {
+    let mut registry = utils::ground_registry();
+    let warren = registry.register_network("warren", warren_def(255));
+    registry.register(
+        leaving(entering(gateway(
+            "burrow",
+            Joins::Network(warren),
+            Doors::Both,
+        )))
+        .with_stat(EntityStatId::CARGO_SIZE, FixedU64::ONE),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(expected = "tunnel 'tunnel' lets in the gateway 'exit'")]
+fn validate_rejects_tunnel_letting_in_its_own_gateway() {
+    let mut registry = utils::ground_registry();
+    let tunnel = registry.register_tunnel("tunnel", tunnel_def(Passage::Crosses));
+    registry.register(
+        gateway("exit", Joins::Tunnel(tunnel), Doors::Exit)
+            .with_stat(EntityStatId::CARGO_SIZE, FixedU64::ONE),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(expected = "network 'warren' lets in the gateway 'exit'")]
+fn validate_rejects_network_letting_in_tunnel_gateway() {
+    let mut registry = utils::ground_registry();
+    registry.register_network("warren", warren_def(255));
+    let tunnel = registry.register_tunnel("tunnel", tunnel_def(Passage::Crosses));
+    registry.register(
+        gateway("exit", Joins::Tunnel(tunnel), Doors::Exit)
+            .with_stat(EntityStatId::CARGO_SIZE, FixedU64::ONE),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(expected = "network 'warren' has gateways, but none lets bodies out")]
+fn validate_rejects_network_whose_gateways_let_nobody_out() {
+    let mut registry = utils::ground_registry();
+    let warren = registry.register_network("warren", warren_def(255));
+    registry.register(entering(gateway(
+        "burrow",
+        Joins::Network(warren),
+        Doors::Entrance,
+    )));
+    registry.validate();
+}
+
+#[test]
+#[should_panic(expected = "network 'warren' carries tag 'critters', which is not registered")]
+fn validate_rejects_unresolved_network_carries_entry() {
+    let mut registry = utils::ground_registry();
+    registry.register_network(
+        "warren",
+        NetworkDef::new(
+            Kinds::tags(["critters"]),
+            Affiliation::Own,
+            8,
+            PassengerFate::Destroy,
+        ),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(expected = "tunnel 'tunnel' carries tag 'critters', which is not registered")]
+fn validate_rejects_unresolved_tunnel_carries_entry() {
+    let mut registry = utils::ground_registry();
+    registry.register_tunnel(
+        "tunnel",
+        TunnelDef::new(
+            Kinds::tags(["critters"]),
+            Affiliation::Own,
+            OtherEndLost::Stands,
+            Passage::Crosses,
+        ),
+    );
+    registry.validate();
+}
+
+#[test]
+fn validate_accepts_tunnel_end_raised_by_build_summon_or_training() {
+    let mut registry = utils::ground_registry();
+    let tunnel = registry.register_tunnel("tunnel", tunnel_def(Passage::Crosses));
+    registry.register(
+        entering(gateway("exit", Joins::Tunnel(tunnel), Doors::Both))
+            .with_pool(Pool::health(100))
+            .with_build(10, utils::site_initial(&[PoolId::HEALTH]))
+            .with_train_time(10),
+    );
+    let exit = registry.type_id("exit").expect("just registered");
+    let dig = registry.register_skill("dig", summoning_end(exit, 1));
+    registry.register(
+        entering(gateway("built", Joins::Tunnel(tunnel), Doors::Both))
+            .with_stat(EntityStatId::BUILD_RANGE, FixedU64::from_num(40))
+            .with_builder(["exit"], BuilderAttendance::Unattended),
+    );
+    registry.register(
+        entering(gateway("summoned", Joins::Tunnel(tunnel), Doors::Both)).with_skills([dig]),
+    );
+    registry.register(
+        entering(gateway("trained", Joins::Tunnel(tunnel), Doors::Both))
+            .with_trainer(["exit"], Release::Beside),
+    );
+    registry.validate();
+}
+
+#[test]
+fn validate_accepts_one_way_tunnel() {
+    let mut registry = utils::ground_registry();
+    let tunnel = registry.register_tunnel("tunnel", tunnel_def(Passage::Crosses));
+    registry.register(gateway("exit", Joins::Tunnel(tunnel), Doors::Exit));
+    let exit = registry.type_id("exit").expect("just registered");
+    let dig = registry.register_skill("dig", summoning_end(exit, 1));
+    registry.register(
+        entering(gateway("entrance", Joins::Tunnel(tunnel), Doors::Entrance)).with_skills([dig]),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(expected = "tunnel 'tunnel' has ends, but none builds, summons or trains another")]
+fn validate_rejects_tunnel_whose_ends_never_raise_another() {
+    let mut registry = utils::ground_registry();
+    let tunnel = registry.register_tunnel("tunnel", tunnel_def(Passage::Crosses));
+    registry.register(entering(gateway(
+        "entrance",
+        Joins::Tunnel(tunnel),
+        Doors::Both,
+    )));
+    registry.register(entering(gateway(
+        "exit",
+        Joins::Tunnel(tunnel),
+        Doors::Both,
+    )));
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "tunnel 'tunnel': 'entrance' raises 'exit', but neither end lets bodies in where the other lets them out"
+)]
+fn validate_rejects_tunnel_both_of_whose_ends_only_let_bodies_in() {
+    let mut registry = utils::ground_registry();
+    let tunnel = registry.register_tunnel("tunnel", tunnel_def(Passage::Crosses));
+    registry.register(entering(gateway(
+        "exit",
+        Joins::Tunnel(tunnel),
+        Doors::Entrance,
+    )));
+    let exit = registry.type_id("exit").expect("just registered");
+    let dig = registry.register_skill("dig", summoning_end(exit, 1));
+    registry.register(
+        entering(gateway("entrance", Joins::Tunnel(tunnel), Doors::Entrance)).with_skills([dig]),
+    );
+    registry.validate();
+}
+
+#[test]
+fn validate_accepts_change_of_form_into_gateway() {
+    let mut registry = utils::ground_registry();
+    let warren = registry.register_network("warren", warren_def(255));
+    registry.register(leaving(entering(gateway(
+        "burrow",
+        Joins::Network(warren),
+        Doors::Both,
+    ))));
+    registry.register(utils::standing("pupa", GROUND).with_morphs([morph_into("burrow")]));
+    registry.validate();
+}
+
+#[test]
+#[should_panic(expected = "skill 'dig' summons tunnel end 'exit' in a count other than one")]
+fn register_rejects_summon_of_several_tunnel_ends() {
+    let mut registry = utils::ground_registry();
+    let tunnel = registry.register_tunnel("tunnel", tunnel_def(Passage::Crosses));
+    registry.register(entering(gateway(
+        "exit",
+        Joins::Tunnel(tunnel),
+        Doors::Both,
+    )));
+    let exit = registry.type_id("exit").expect("just registered");
+    registry.register_skill("dig", summoning_end(exit, 2));
 }
 
 //
@@ -1779,10 +2259,11 @@ fn register_rejects_entity_cast_skill_with_unregistered_buff() {
             cooldown: 10,
             caster: SkillCaster::Entity {
                 costs: Vec::new(),
-                target: EntityCastTarget::Caster,
-                reach: Reach::Wherever,
                 casting: Casting::Instant,
-                effect: EntityCastEffect::ApplyBuff(buff),
+                effect: EntityCastEffect::ApplyBuff {
+                    buff,
+                    on: Recipient::Caster,
+                },
             },
             requires: Vec::new(),
         },
@@ -1870,7 +2351,7 @@ fn validate_rejects_self_repairer_seated_on_itself() {
 
 #[test]
 #[should_panic(expected = "can repair but is missing repair_speed")]
-fn register_rejects_repairer_without_rate() {
+fn register_rejects_repairer_without_repair_speed() {
     let mut registry = utils::ground_registry();
     registry.register(
         utils::standing("worker", GROUND)
@@ -4446,7 +4927,7 @@ fn validate_accepts_transition_with_payable_costs() {
 #[should_panic(
     expected = "entity type 'bunker' carries a turret that fires on the move but cannot move"
 )]
-fn validate_rejects_turret_firing_while_moving_without_movement() {
+fn register_rejects_turret_firing_while_moving_without_movement() {
     let mut registry = utils::ground_registry();
     let rolling = registry.register_turret(
         "rolling",
@@ -4471,7 +4952,7 @@ fn validate_rejects_turret_firing_while_moving_without_movement() {
 
 #[test]
 #[should_panic(expected = "entity type 'keep' mounts a turret outside its own footprint")]
-fn validate_rejects_turret_mounted_off_its_footprint() {
+fn register_rejects_turret_mounted_off_its_footprint() {
     let mut registry = utils::ground_registry();
     let gun = registry.register_turret(
         "gun",
@@ -4503,7 +4984,7 @@ fn validate_rejects_turret_mounted_off_its_footprint() {
     expected = "entity type 'keep' carries a turret whose damage reads damage, which it does not \
                 declare"
 )]
-fn validate_rejects_turret_reading_stat_its_body_lacks() {
+fn register_rejects_turret_reading_stat_its_body_lacks() {
     let mut registry = utils::ground_registry();
     let gun = registry.register_turret(
         "gun",
@@ -4571,7 +5052,7 @@ fn register_accepts_field_sources_placement_and_effects() {
 
 #[test]
 #[should_panic(expected = "acts on an unregistered field when it stands")]
-fn validate_rejects_standing_act_on_unregistered_field() {
+fn register_rejects_standing_act_on_foreign_field() {
     let mut registry = utils::ground_registry();
     // A handle minted by another registry, which this one never registered.
     let foreign = utils::ground_registry().register_field(
@@ -4887,12 +5368,13 @@ fn register_rejects_watch_that_lasts_no_time() {
             cooldown: 1,
             caster: SkillCaster::Entity {
                 costs: Vec::new(),
-                target: EntityCastTarget::Position,
-                reach: Reach::Wherever,
                 casting: Casting::Instant,
                 effect: EntityCastEffect::Watch {
-                    radius: 3,
-                    duration: 0,
+                    at: Spot::Cell {
+                        reach: Reach::Wherever,
+                    },
+                    radius: Quantity::Constant(3),
+                    duration: Quantity::Constant(0),
                     detection: Detection::Blind,
                 },
             },
@@ -4969,12 +5451,13 @@ fn register_accepts_position_cast_with_field_effect() {
             cooldown: 1,
             caster: SkillCaster::Entity {
                 costs: Vec::new(),
-                target: EntityCastTarget::Position,
-                reach: Reach::Wherever,
                 casting: Casting::Instant,
                 effect: EntityCastEffect::Field {
+                    at: Spot::Cell {
+                        reach: Reach::Wherever,
+                    },
                     field: creep,
-                    radius: 2,
+                    radius: Quantity::Constant(2),
                     action: FieldAction::Cover,
                 },
             },
@@ -4999,12 +5482,16 @@ fn register_rejects_summon_of_remains() {
             cooldown: 1,
             caster: SkillCaster::Entity {
                 costs: Vec::new(),
-                target: EntityCastTarget::Fallen { kinds: Kinds::Any },
-                reach: Reach::Wherever,
                 casting: Casting::Instant,
                 effect: EntityCastEffect::Summon {
+                    at: SummonAt::Fallen {
+                        kinds: Kinds::Any,
+                        reach: Reach::Wherever,
+                    },
                     entity_type: corpse,
-                    count: 2,
+                    count: Quantity::Constant(2),
+                    landing: Landing::Anywhere,
+                    arrives: SummonArrival::Standing,
                 },
             },
             requires: Vec::new(),
@@ -5023,12 +5510,16 @@ fn register_accepts_remains_cast_with_summon_effect() {
             cooldown: 1,
             caster: SkillCaster::Entity {
                 costs: Vec::new(),
-                target: EntityCastTarget::Fallen { kinds: Kinds::Any },
-                reach: Reach::Wherever,
                 casting: Casting::Instant,
                 effect: EntityCastEffect::Summon {
+                    at: SummonAt::Fallen {
+                        kinds: Kinds::Any,
+                        reach: Reach::Wherever,
+                    },
                     entity_type: skeleton,
-                    count: 2,
+                    count: Quantity::Constant(2),
+                    landing: Landing::Anywhere,
+                    arrives: SummonArrival::Standing,
                 },
             },
             requires: Vec::new(),
@@ -5046,13 +5537,17 @@ fn validate_rejects_skill_aimed_at_unregistered_type() {
             cooldown: 1,
             caster: SkillCaster::Entity {
                 costs: Vec::new(),
-                target: EntityCastTarget::Standing {
-                    side: Affiliation::Enemy,
-                    kinds: Kinds::types(["ghost"]),
-                },
-                reach: Reach::Wherever,
                 casting: Casting::Instant,
-                effect: EntityCastEffect::Damage(FixedU64::ONE),
+                effect: EntityCastEffect::Damage {
+                    amount: FixedU64::ONE,
+                    on: Recipient::Standing {
+                        whom: Whom {
+                            side: Affiliation::Enemy,
+                            kinds: Kinds::types(["ghost"]),
+                        },
+                        reach: Reach::Wherever,
+                    },
+                },
             },
             requires: Vec::new(),
         },
@@ -5073,13 +5568,17 @@ fn validate_accepts_skill_aimed_at_type_that_carries_it() {
             cooldown: 1,
             caster: SkillCaster::Entity {
                 costs: Vec::new(),
-                target: EntityCastTarget::Standing {
-                    side: Affiliation::Allied,
-                    kinds: Kinds::types(["priest"]),
-                },
-                reach: Reach::Wherever,
                 casting: Casting::Instant,
-                effect: EntityCastEffect::Heal(FixedU64::ONE),
+                effect: EntityCastEffect::Heal {
+                    amount: FixedU64::ONE,
+                    on: Recipient::Standing {
+                        whom: Whom {
+                            side: Affiliation::Allied,
+                            kinds: Kinds::types(["priest"]),
+                        },
+                        reach: Reach::Wherever,
+                    },
+                },
             },
             requires: Vec::new(),
         },
@@ -5094,45 +5593,32 @@ fn validate_accepts_skill_aimed_at_type_that_carries_it() {
 }
 
 #[test]
-#[should_panic(expected = "skill 'feast' aims at the fallen, which only a summon may spend")]
-fn register_rejects_remains_cast_with_other_effect() {
-    utils::ground_registry().register_skill(
-        "feast",
-        SkillDef {
-            cooldown: 1,
-            caster: SkillCaster::Entity {
-                costs: Vec::new(),
-                target: EntityCastTarget::Fallen { kinds: Kinds::Any },
-                reach: Reach::Wherever,
-                casting: Casting::Instant,
-                effect: EntityCastEffect::Heal(FixedU64::ONE),
-            },
-            requires: Vec::new(),
-        },
-    );
-}
-
-#[test]
 fn register_accepts_summon_aimed_at_caster_and_at_cell() {
     let mut registry = utils::ground_registry();
     registry.register(utils::standing("skeleton", GROUND));
     let skeleton = registry.type_id("skeleton").expect("just registered");
-    let summons = |target| SkillDef {
+    let summons = |at| SkillDef {
         cooldown: 1,
         caster: SkillCaster::Entity {
             costs: Vec::new(),
-            target,
-            reach: Reach::Wherever,
             casting: Casting::Instant,
             effect: EntityCastEffect::Summon {
+                at,
                 entity_type: skeleton,
-                count: 1,
+                count: Quantity::Constant(1),
+                landing: Landing::Anywhere,
+                arrives: SummonArrival::Standing,
             },
         },
         requires: Vec::new(),
     };
-    registry.register_skill("guard_me", summons(EntityCastTarget::Caster));
-    registry.register_skill("guard_there", summons(EntityCastTarget::Position));
+    registry.register_skill("guard_me", summons(SummonAt::Caster));
+    registry.register_skill(
+        "guard_there",
+        summons(SummonAt::Cell {
+            reach: Reach::Wherever,
+        }),
+    );
 }
 
 #[test]
@@ -5147,12 +5633,16 @@ fn register_rejects_summon_of_foreign_type() {
             cooldown: 1,
             caster: SkillCaster::Entity {
                 costs: Vec::new(),
-                target: EntityCastTarget::Fallen { kinds: Kinds::Any },
-                reach: Reach::Wherever,
                 casting: Casting::Instant,
                 effect: EntityCastEffect::Summon {
+                    at: SummonAt::Fallen {
+                        kinds: Kinds::Any,
+                        reach: Reach::Wherever,
+                    },
                     entity_type: skeleton,
-                    count: 1,
+                    count: Quantity::Constant(1),
+                    landing: Landing::Anywhere,
+                    arrives: SummonArrival::Standing,
                 },
             },
             requires: Vec::new(),
@@ -5172,12 +5662,16 @@ fn register_rejects_summon_of_nobody() {
             cooldown: 1,
             caster: SkillCaster::Entity {
                 costs: Vec::new(),
-                target: EntityCastTarget::Fallen { kinds: Kinds::Any },
-                reach: Reach::Wherever,
                 casting: Casting::Instant,
                 effect: EntityCastEffect::Summon {
+                    at: SummonAt::Fallen {
+                        kinds: Kinds::Any,
+                        reach: Reach::Wherever,
+                    },
                     entity_type: skeleton,
-                    count: 0,
+                    count: Quantity::Constant(0),
+                    landing: Landing::Anywhere,
+                    arrives: SummonArrival::Standing,
                 },
             },
             requires: Vec::new(),
@@ -5195,13 +5689,17 @@ fn register_accepts_reach_read_from_stat_caster_carries() {
             cooldown: 1,
             caster: SkillCaster::Entity {
                 costs: Vec::new(),
-                target: EntityCastTarget::Standing {
-                    side: Affiliation::Enemy,
-                    kinds: Kinds::Any,
-                },
-                reach: Reach::Within(Quantity::Stat(raise_range)),
                 casting: Casting::Instant,
-                effect: EntityCastEffect::Damage(FixedU64::ONE),
+                effect: EntityCastEffect::Damage {
+                    amount: FixedU64::ONE,
+                    on: Recipient::Standing {
+                        whom: Whom {
+                            side: Affiliation::Enemy,
+                            kinds: Kinds::Any,
+                        },
+                        reach: Reach::Within(Quantity::Stat(raise_range)),
+                    },
+                },
             },
             requires: Vec::new(),
         },
@@ -5226,18 +5724,69 @@ fn register_rejects_reach_by_stat_caster_lacks() {
             cooldown: 1,
             caster: SkillCaster::Entity {
                 costs: Vec::new(),
-                target: EntityCastTarget::Standing {
-                    side: Affiliation::Enemy,
-                    kinds: Kinds::Any,
-                },
-                reach: Reach::Within(Quantity::Stat(raise_range)),
                 casting: Casting::Instant,
-                effect: EntityCastEffect::Damage(FixedU64::ONE),
+                effect: EntityCastEffect::Damage {
+                    amount: FixedU64::ONE,
+                    on: Recipient::Standing {
+                        whom: Whom {
+                            side: Affiliation::Enemy,
+                            kinds: Kinds::Any,
+                        },
+                        reach: Reach::Within(Quantity::Stat(raise_range)),
+                    },
+                },
             },
             requires: Vec::new(),
         },
     );
     registry.register(utils::standing("necromancer", GROUND).with_skills([bolt]));
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'observatory' has skill 'scan' reading its watch radius from a stat it does not carry"
+)]
+fn register_rejects_watch_radius_by_stat_caster_lacks() {
+    let mut registry = utils::ground_registry();
+    let scan_radius = registry.register_entity_stat("scan_radius", FixedU64::ZERO);
+    let scan = registry.register_skill(
+        "scan",
+        watching(Quantity::Stat(scan_radius), Quantity::Constant(40)),
+    );
+    registry.register(utils::standing("observatory", GROUND).with_skills([scan]));
+}
+
+#[test]
+#[should_panic(expected = "skill 'scan' watches for no time at all")]
+fn register_rejects_watch_duration_by_stat_with_zero_floor() {
+    let mut registry = utils::ground_registry();
+    let scan_time = registry.register_entity_stat("scan_time", FixedU64::ZERO);
+    registry.register_skill(
+        "scan",
+        watching(Quantity::Constant(6), Quantity::Stat(scan_time)),
+    );
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'necromancer' has skill 'raise_host' reading its summon count from a stat it does not carry"
+)]
+fn register_rejects_summon_count_by_stat_caster_lacks() {
+    let mut registry = utils::ground_registry();
+    let host_size = registry.register_entity_stat("host_size", FixedU64::ONE);
+    let raise_host = summoning(&mut registry, host_size);
+    let raise_host = registry.register_skill("raise_host", raise_host);
+    registry.register(utils::standing("necromancer", GROUND).with_skills([raise_host]));
+}
+
+#[test]
+#[should_panic(expected = "skill 'raise_host' summons nothing at all")]
+fn register_rejects_summon_count_by_stat_with_floor_under_one() {
+    let mut registry = utils::ground_registry();
+    // A floor of one half truncates to no skeleton at all.
+    let host_size = registry.register_entity_stat("host_size", FixedU64::lit("0.5"));
+    let raise_host = summoning(&mut registry, host_size);
+    registry.register_skill("raise_host", raise_host);
 }
 
 #[test]
@@ -5253,16 +5802,21 @@ fn register_rejects_cast_point_by_stat_caster_lacks() {
             cooldown: 1,
             caster: SkillCaster::Entity {
                 costs: Vec::new(),
-                target: EntityCastTarget::Standing {
-                    side: Affiliation::Enemy,
-                    kinds: Kinds::Any,
-                },
-                reach: Reach::Wherever,
                 casting: Casting::Delayed {
                     point: Quantity::Stat(ritual_time),
                     period: Quantity::Constant(20),
+                    pays: PaymentPoint::AtLanding,
                 },
-                effect: EntityCastEffect::Damage(FixedU64::ONE),
+                effect: EntityCastEffect::Damage {
+                    amount: FixedU64::ONE,
+                    on: Recipient::Standing {
+                        whom: Whom {
+                            side: Affiliation::Enemy,
+                            kinds: Kinds::Any,
+                        },
+                        reach: Reach::Wherever,
+                    },
+                },
             },
             requires: Vec::new(),
         },
@@ -5282,13 +5836,15 @@ fn register_rejects_cast_over_no_time() {
             cooldown: 1,
             caster: SkillCaster::Entity {
                 costs: Vec::new(),
-                target: EntityCastTarget::Caster,
-                reach: Reach::Wherever,
                 casting: Casting::Delayed {
                     point: Quantity::Constant(0),
                     period: Quantity::Constant(10),
+                    pays: PaymentPoint::AtLanding,
                 },
-                effect: EntityCastEffect::Damage(FixedU64::ONE),
+                effect: EntityCastEffect::Damage {
+                    amount: FixedU64::ONE,
+                    on: Recipient::Caster,
+                },
             },
             requires: Vec::new(),
         },
@@ -5308,13 +5864,15 @@ fn register_rejects_cast_period_stat_that_folds_under_its_point() {
             cooldown: 1,
             caster: SkillCaster::Entity {
                 costs: Vec::new(),
-                target: EntityCastTarget::Caster,
-                reach: Reach::Wherever,
                 casting: Casting::Delayed {
                     point: Quantity::Constant(10),
                     period: Quantity::Stat(recovery),
+                    pays: PaymentPoint::AtLanding,
                 },
-                effect: EntityCastEffect::Damage(FixedU64::ONE),
+                effect: EntityCastEffect::Damage {
+                    amount: FixedU64::ONE,
+                    on: Recipient::Caster,
+                },
             },
             requires: Vec::new(),
         },
@@ -5331,13 +5889,15 @@ fn register_rejects_cast_period_shorter_than_its_point() {
             cooldown: 1,
             caster: SkillCaster::Entity {
                 costs: Vec::new(),
-                target: EntityCastTarget::Caster,
-                reach: Reach::Wherever,
                 casting: Casting::Delayed {
                     point: Quantity::Constant(10),
                     period: Quantity::Constant(5),
+                    pays: PaymentPoint::AtLanding,
                 },
-                effect: EntityCastEffect::Damage(FixedU64::ONE),
+                effect: EntityCastEffect::Damage {
+                    amount: FixedU64::ONE,
+                    on: Recipient::Caster,
+                },
             },
             requires: Vec::new(),
         },
@@ -5355,13 +5915,15 @@ fn register_rejects_cast_point_from_floorless_stat() {
             cooldown: 1,
             caster: SkillCaster::Entity {
                 costs: Vec::new(),
-                target: EntityCastTarget::Caster,
-                reach: Reach::Wherever,
                 casting: Casting::Delayed {
                     point: Quantity::Stat(ritual_time),
                     period: Quantity::Stat(ritual_time),
+                    pays: PaymentPoint::AtLanding,
                 },
-                effect: EntityCastEffect::Damage(FixedU64::ONE),
+                effect: EntityCastEffect::Damage {
+                    amount: FixedU64::ONE,
+                    on: Recipient::Caster,
+                },
             },
             requires: Vec::new(),
         },
@@ -5379,13 +5941,15 @@ fn register_accepts_cast_point_from_stat_floored_under_one_tick() {
             cooldown: 1,
             caster: SkillCaster::Entity {
                 costs: Vec::new(),
-                target: EntityCastTarget::Caster,
-                reach: Reach::Wherever,
                 casting: Casting::Delayed {
                     point: Quantity::Stat(ritual_time),
                     period: Quantity::Stat(ritual_time),
+                    pays: PaymentPoint::AtLanding,
                 },
-                effect: EntityCastEffect::Damage(FixedU64::ONE),
+                effect: EntityCastEffect::Damage {
+                    amount: FixedU64::ONE,
+                    on: Recipient::Caster,
+                },
             },
             requires: Vec::new(),
         },
@@ -5402,16 +5966,21 @@ fn register_accepts_cast_worked_on_stats_caster_carries() {
             cooldown: 1,
             caster: SkillCaster::Entity {
                 costs: Vec::new(),
-                target: EntityCastTarget::Standing {
-                    side: Affiliation::Enemy,
-                    kinds: Kinds::Any,
-                },
-                reach: Reach::Wherever,
                 casting: Casting::Delayed {
                     point: Quantity::Stat(ritual_time),
                     period: Quantity::Stat(ritual_time),
+                    pays: PaymentPoint::AtLanding,
                 },
-                effect: EntityCastEffect::Damage(FixedU64::ONE),
+                effect: EntityCastEffect::Damage {
+                    amount: FixedU64::ONE,
+                    on: Recipient::Standing {
+                        whom: Whom {
+                            side: Affiliation::Enemy,
+                            kinds: Kinds::Any,
+                        },
+                        reach: Reach::Wherever,
+                    },
+                },
             },
             requires: Vec::new(),
         },
@@ -5457,25 +6026,6 @@ fn register_accepts_weapon_beside_carrier() {
 }
 
 #[test]
-#[should_panic(expected = "skill 'zap' aims at a position but its effect needs an entity")]
-fn register_rejects_position_cast_with_entity_effect() {
-    utils::ground_registry().register_skill(
-        "zap",
-        SkillDef {
-            cooldown: 1,
-            caster: SkillCaster::Entity {
-                costs: Vec::new(),
-                target: EntityCastTarget::Position,
-                reach: Reach::Wherever,
-                casting: Casting::Instant,
-                effect: EntityCastEffect::Damage(FixedU64::ONE),
-            },
-            requires: Vec::new(),
-        },
-    );
-}
-
-#[test]
 #[should_panic(expected = "skill 'spew' acts on an unregistered field")]
 fn register_rejects_cast_on_foreign_field() {
     let mut foreign = utils::ground_registry();
@@ -5486,12 +6036,13 @@ fn register_rejects_cast_on_foreign_field() {
             cooldown: 1,
             caster: SkillCaster::Entity {
                 costs: Vec::new(),
-                target: EntityCastTarget::Position,
-                reach: Reach::Wherever,
                 casting: Casting::Instant,
                 effect: EntityCastEffect::Field {
+                    at: Spot::Cell {
+                        reach: Reach::Wherever,
+                    },
                     field: creep,
-                    radius: 2,
+                    radius: Quantity::Constant(2),
                     action: FieldAction::Cover,
                 },
             },
@@ -5666,12 +6217,13 @@ fn register_rejects_watch_detecting_unregistered_layer() {
             cooldown: 1,
             caster: SkillCaster::Entity {
                 costs: Vec::new(),
-                target: EntityCastTarget::Position,
-                reach: Reach::Wherever,
                 casting: Casting::Instant,
                 effect: EntityCastEffect::Watch {
-                    radius: 3,
-                    duration: 5,
+                    at: Spot::Cell {
+                        reach: Reach::Wherever,
+                    },
+                    radius: Quantity::Constant(3),
+                    duration: Quantity::Constant(5),
                     detection: Detection::Reveals(utils::WATER.into()),
                 },
             },
@@ -5708,7 +6260,7 @@ fn register_rejects_self_cast_health_upkeep_on_type_without_health() {
             period: 1,
         }),
     );
-    let skill = registry.register_skill("bleed", self_cast(EntityCastEffect::ApplyBuff(bleeding)));
+    let skill = registry.register_skill("bleed", self_cast(bleeding));
     registry.register(utils::standing("ghost", GROUND).with_skills([skill]));
 }
 
@@ -5725,7 +6277,7 @@ fn register_rejects_self_cast_upkeep_from_pool_type_lacks() {
             period: 1,
         }),
     );
-    let skill = registry.register_skill("cloak", self_cast(EntityCastEffect::ApplyBuff(cloak)));
+    let skill = registry.register_skill("cloak", self_cast(cloak));
     registry.register(
         utils::standing("ghost", GROUND)
             .with_pool(Pool::health(40))
@@ -5743,7 +6295,7 @@ fn register_accepts_self_cast_upkeep_from_pool_type_carries() {
             period: 1,
         }),
     );
-    let skill = registry.register_skill("cloak", self_cast(EntityCastEffect::ApplyBuff(cloak)));
+    let skill = registry.register_skill("cloak", self_cast(cloak));
     registry.register(
         utils::standing("ghost", GROUND)
             .with_pool(Pool::health(40))
@@ -5993,6 +6545,188 @@ fn pool_role_names_each_stat_of_built_in_pools() {
 }
 
 //
+// ─── Relocation ───────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn register_accepts_every_journey() {
+    let mut registry = utils::ground_registry();
+    let target = || AimParty::Target {
+        whom: own_anything(),
+        reach: Reach::Wherever,
+    };
+    let around = |count| AimParty::Around {
+        at: cell(),
+        gathering: gathering(count),
+    };
+    let skills = [
+        (
+            "blink",
+            from_caster(CasterParty::Caster, FromCasterTo::Aim(cell())),
+        ),
+        (
+            "portal",
+            from_caster(
+                CasterParty::CasterAndAround(gathering(Count::AtMost(Quantity::Constant(24)))),
+                FromCasterTo::Aim(Away::Standing {
+                    whom: own_anything(),
+                    reach: Reach::Wherever,
+                }),
+            ),
+        ),
+        (
+            "send_off",
+            from_caster(
+                CasterParty::Around(gathering(Count::All)),
+                FromCasterTo::Aim(cell()),
+            ),
+        ),
+        (
+            "homeward",
+            from_caster(CasterParty::Caster, FromCasterTo::Home(Kinds::Any)),
+        ),
+        ("pull", from_aim(target(), FromAimTo::Caster)),
+        ("recall", from_aim(around(Count::All), FromAimTo::Caster)),
+        (
+            "evacuate",
+            from_aim(around(Count::All), FromAimTo::Home(Kinds::Any)),
+        ),
+        ("send_home", from_aim(target(), FromAimTo::Home(Kinds::Any))),
+        (
+            "swap",
+            Journey::Swap {
+                whom: own_anything(),
+                reach: Reach::Within(Quantity::Constant(10)),
+            },
+        ),
+    ];
+    for (name, journey) in skills {
+        registry.register_skill(name, relocating(journey));
+    }
+    registry.validate();
+}
+
+#[test]
+#[should_panic(expected = "skill 'recall' relocates nobody at all")]
+fn register_rejects_relocation_of_nobody() {
+    utils::ground_registry().register_skill(
+        "recall",
+        relocating(from_aim(
+            AimParty::Around {
+                at: cell(),
+                gathering: gathering(Count::AtMost(Quantity::Constant(0))),
+            },
+            FromAimTo::Caster,
+        )),
+    );
+}
+
+#[test]
+#[should_panic(expected = "skill 'homeward' relocates nobody at all")]
+fn register_rejects_home_journey_of_nobody() {
+    utils::ground_registry().register_skill(
+        "homeward",
+        relocating(from_caster(
+            CasterParty::Around(gathering(Count::AtMost(Quantity::Constant(0)))),
+            FromCasterTo::Home(Kinds::Any),
+        )),
+    );
+}
+
+#[test]
+#[should_panic(expected = "skill 'recall' relocates nobody at all")]
+fn register_rejects_relocation_count_by_stat_with_zero_floor() {
+    let mut registry = utils::ground_registry();
+    let host_size = registry.register_entity_stat("host_size", FixedU64::ZERO);
+    registry.register_skill(
+        "recall",
+        relocating(from_aim(
+            AimParty::Around {
+                at: cell(),
+                gathering: gathering(Count::AtMost(Quantity::Stat(host_size))),
+            },
+            FromAimTo::Caster,
+        )),
+    );
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'recaller' has skill 'recall' reading its gathering radius from a stat it does not carry"
+)]
+fn register_rejects_gathering_radius_by_stat_caster_lacks() {
+    let mut registry = utils::ground_registry();
+    let recall_radius = registry.register_entity_stat("recall_radius", FixedU64::ZERO);
+    let mut taken = gathering(Count::All);
+    taken.radius = Quantity::Stat(recall_radius);
+    let recall = registry.register_skill(
+        "recall",
+        relocating(from_aim(
+            AimParty::Around {
+                at: cell(),
+                gathering: taken,
+            },
+            FromAimTo::Caster,
+        )),
+    );
+    registry.register(utils::standing("recaller", GROUND).with_skills([recall]));
+}
+
+#[test]
+#[should_panic(
+    expected = "skill 'evacuate' relocation gathers entity type 'ghost', which is not registered"
+)]
+fn validate_rejects_relocation_gathering_unregistered_type() {
+    let mut registry = utils::ground_registry();
+    let mut taken = gathering(Count::All);
+    taken.kinds = Kinds::only(vec![Kind::Type("ghost".into())]);
+    registry.register_skill(
+        "evacuate",
+        relocating(from_aim(
+            AimParty::Around {
+                at: cell(),
+                gathering: taken,
+            },
+            FromAimTo::Home(Kinds::Any),
+        )),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "skill 'homeward' relocation goes home to entity type 'ghost', which is not registered"
+)]
+fn validate_rejects_home_of_unregistered_type() {
+    let mut registry = utils::ground_registry();
+    registry.register_skill(
+        "homeward",
+        relocating(from_caster(
+            CasterParty::Caster,
+            FromCasterTo::Home(Kinds::only(vec![Kind::Type("ghost".into())])),
+        )),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(expected = "skill 'swap' aims at entity type 'ghost', which is not registered")]
+fn validate_rejects_swap_aimed_at_unregistered_type() {
+    let mut registry = utils::ground_registry();
+    registry.register_skill(
+        "swap",
+        relocating(Journey::Swap {
+            whom: Whom {
+                side: Affiliation::Own,
+                kinds: Kinds::only(vec![Kind::Type("ghost".into())]),
+            },
+            reach: Reach::Wherever,
+        }),
+    );
+    registry.validate();
+}
+
+//
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 //
 
@@ -6165,16 +6899,17 @@ fn concealing(lasting: Lasting) -> EntityBuffDef {
     }
 }
 
-/// A free, instant skill an entity casts on itself with the given effect.
-fn self_cast(effect: EntityCastEffect) -> SkillDef {
+/// A free, instant skill an entity casts to put `buff` on itself.
+fn self_cast(buff: EntityBuffId) -> SkillDef {
     SkillDef {
         cooldown: 1,
         caster: SkillCaster::Entity {
             costs: Vec::new(),
-            target: EntityCastTarget::Caster,
-            reach: Reach::Wherever,
             casting: Casting::Instant,
-            effect,
+            effect: EntityCastEffect::ApplyBuff {
+                buff,
+                on: Recipient::Caster,
+            },
         },
         requires: Vec::new(),
     }
@@ -6277,4 +7012,166 @@ fn health_starting(initial: PoolInitial) -> Pool {
         FixedU64::ZERO,
         initial,
     )
+}
+
+/// A free, instant entity skill that watches `radius` cells around an aimed
+/// cell for `duration` ticks.
+fn watching(radius: Quantity, duration: Quantity) -> SkillDef {
+    SkillDef {
+        cooldown: 1,
+        caster: SkillCaster::Entity {
+            costs: Vec::new(),
+            casting: Casting::Instant,
+            effect: EntityCastEffect::Watch {
+                at: Spot::Cell {
+                    reach: Reach::Wherever,
+                },
+                radius,
+                duration,
+                detection: Detection::Blind,
+            },
+        },
+        requires: Vec::new(),
+    }
+}
+
+/// A free, instant entity skill that raises as many `skeleton`s, registered
+/// here, as the caster's `count` stat says, around itself.
+fn summoning(registry: &mut ContentRegistry, count: EntityStatId) -> SkillDef {
+    registry.register(utils::standing("skeleton", GROUND));
+    let skeleton = registry.type_id("skeleton").expect("just registered");
+    SkillDef {
+        cooldown: 1,
+        caster: SkillCaster::Entity {
+            costs: Vec::new(),
+            casting: Casting::Instant,
+            effect: EntityCastEffect::Summon {
+                at: SummonAt::Caster,
+                entity_type: skeleton,
+                count: Quantity::Stat(count),
+                landing: Landing::Anywhere,
+                arrives: SummonArrival::Standing,
+            },
+        },
+        requires: Vec::new(),
+    }
+}
+
+/// A free, instant entity skill that relocates on `journey`, landing
+/// anywhere.
+fn relocating(journey: Journey) -> SkillDef {
+    SkillDef {
+        cooldown: 1,
+        caster: SkillCaster::Entity {
+            costs: Vec::new(),
+            casting: Casting::Instant,
+            effect: EntityCastEffect::Relocate {
+                journey: Box::new(journey),
+                landing: Landing::Anywhere,
+            },
+        },
+        requires: Vec::new(),
+    }
+}
+
+/// Every own body within 2 cells, up to `count`, the rest left standing.
+fn gathering(count: Count) -> Gathering {
+    Gathering {
+        radius: Quantity::Constant(2),
+        side: Affiliation::Own,
+        kinds: Kinds::Any,
+        sight: GatherSight::Blind,
+        count,
+        shortfall: Shortfall::Leave,
+    }
+}
+
+/// `party` gathered at the caster, going `to`.
+fn from_caster(party: CasterParty, to: FromCasterTo) -> Journey {
+    Journey::FromCaster { party, to }
+}
+
+/// `party` gathered at the aim, going `to`.
+fn from_aim(party: AimParty, to: FromAimTo) -> Journey {
+    Journey::FromAim { party, to }
+}
+
+/// Something own standing, of any kind.
+fn own_anything() -> Whom {
+    Whom {
+        side: Affiliation::Own,
+        kinds: Kinds::Any,
+    }
+}
+
+/// An aimed cell, cast from wherever the caster stands.
+fn cell() -> Away {
+    Away::Cell {
+        reach: Reach::Wherever,
+    }
+}
+
+/// A `warren` network of `capacity` letting in anyone of its owner's and
+/// killing whoever is inside with its last gateway.
+fn warren_def(capacity: u32) -> NetworkDef {
+    NetworkDef::new(
+        Kinds::Any,
+        Affiliation::Own,
+        capacity,
+        PassengerFate::Destroy,
+    )
+}
+
+/// A tunnel of `passage`, letting in anyone of its owner's, its survivor
+/// standing.
+fn tunnel_def(passage: Passage) -> TunnelDef {
+    TunnelDef::new(Kinds::Any, Affiliation::Own, OtherEndLost::Stands, passage)
+}
+
+/// A held passage of `capacity` that kills whoever is inside with the
+/// tunnel's last end.
+fn held(capacity: u32) -> Passage {
+    Passage::Held {
+        capacity,
+        fate: PassengerFate::Destroy,
+    }
+}
+
+/// A one-cell gateway of what `joins` names with `doors`, declaring no
+/// transport stat.
+fn gateway(name: &str, joins: Joins, doors: Doors) -> EntityTypeDef {
+    utils::standing(name, GROUND).with_gateway(joins, doors)
+}
+
+/// A free instant skill summoning `count` of `entity_type` at any cell.
+fn summoning_end(entity_type: EntityTypeId, count: u32) -> SkillDef {
+    SkillDef {
+        cooldown: 1,
+        caster: SkillCaster::Entity {
+            costs: Vec::new(),
+            casting: Casting::Instant,
+            effect: EntityCastEffect::Summon {
+                at: SummonAt::Cell {
+                    reach: Reach::Wherever,
+                },
+                entity_type,
+                count: Quantity::Constant(count),
+                landing: Landing::Anywhere,
+                arrives: SummonArrival::Standing,
+            },
+        },
+        requires: Vec::new(),
+    }
+}
+
+/// `def` with the boarding pair of stats.
+fn entering(def: EntityTypeDef) -> EntityTypeDef {
+    def.with_stat(EntityStatId::LOAD_RANGE, FixedU64::ONE)
+        .with_stat(EntityStatId::LOAD_PERIOD, FixedU64::ZERO)
+}
+
+/// `def` with the unloading pair of stats.
+fn leaving(def: EntityTypeDef) -> EntityTypeDef {
+    def.with_stat(EntityStatId::UNLOAD_RANGE, FixedU64::ONE)
+        .with_stat(EntityStatId::UNLOAD_PERIOD, FixedU64::ZERO)
 }

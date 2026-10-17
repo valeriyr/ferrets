@@ -23,6 +23,7 @@ use crate::{
         build::{self, BuildComponent, SiteWork, UnderConstructionComponent},
         dying::DyingComponent,
         entity_info::EntityInfoComponent,
+        hidden::{self, Inside},
         location::LocationComponent,
         order_queue::{CancelPolicy, OrderState},
         owner::OwnerComponent,
@@ -39,7 +40,7 @@ use crate::{
     session::player_id::PlayerId,
     simulation_id::SimulationId,
     spawn::{self, FieldReach},
-    supply,
+    supply, tunnels,
 };
 use ferrets_content::{
     build::BuilderAttendance, entity_stats::EntityStatId, registry::ContentRegistry,
@@ -59,11 +60,15 @@ pub fn can_start(world: &World, entity: Entity, order: &Order) -> Result<(), Ref
     {
         return Err(Refusal::Incapable);
     }
-    let constructible = world
+    let Some(constructible) = world
         .resource::<ContentRegistry>()
         .entity(type_name)
-        .is_some_and(|def| def.build.is_some());
-    if !constructible {
+        .filter(|def| def.build.is_some())
+    else {
+        return Err(Refusal::Incapable);
+    };
+    // A bound tunnel end has its other end already.
+    if tunnels::refuses_raising(world, entity, constructible) {
         return Err(Refusal::Incapable);
     }
     orders::requires_operating(world, entity)?;
@@ -192,7 +197,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
         let projection = world.resource::<Map>().projection();
 
         let (chaser_position, chaser_size) = entity_def::footprint(world, entity);
-        match chase::advance(
+        match chase::advance_to_point(
             &mut build_component.last_chase,
             projection,
             chaser_position,
@@ -303,10 +308,12 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
         // A builder that disappears into its work leaves the grid now, which
         // frees any of the site's cells it was standing on. One that stays in
         // the open blocks the site the way anything else standing there would;
-        // one that attaches to the site sits in its berths once it stands.
+        // one that attaches to the site sits in its berths once it stands. The
+        // site is not raised yet, so the builder is inside nothing until it
+        // takes the site up.
         match attendance(world, entity) {
             BuilderAttendance::Crew(WorkPresence::Hidden { .. }) | BuilderAttendance::Consumed => {
-                spawn::hide_entity(world, entity);
+                spawn::hide_entity(world, entity, Inside::Nothing);
             }
             BuilderAttendance::Crew(WorkPresence::Present { .. } | WorkPresence::Attached(_))
             | BuilderAttendance::Unattended => {}
@@ -341,7 +348,18 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
             spawn::cover_source(world, source, building);
         }
 
-        enter_site(world, entity, building);
+        // A builder hidden before the site was raised is inside it now; one in
+        // the open or in a berth takes it up as it would one under way; one
+        // that leaves it to itself stays where it walked to.
+        match attendance(world, entity) {
+            BuilderAttendance::Crew(WorkPresence::Hidden { .. }) | BuilderAttendance::Consumed => {
+                hidden::record_inside(world, entity, Inside::Job(building_sim_id));
+            }
+            BuilderAttendance::Crew(WorkPresence::Present { .. } | WorkPresence::Attached(_)) => {
+                enter_site(world, entity, building);
+            }
+            BuilderAttendance::Unattended => {}
+        }
         if let Some(player) = owner {
             resources::charge(
                 world,
@@ -629,8 +647,6 @@ fn leave_crew(world: &mut World, site: SimulationId, entity: Entity) -> Departur
 /// Puts the builder where its attendance has it stand as it takes up `site`:
 /// a crew builder as its presence says, one consumed by the site hidden inside
 /// it. One that leaves the site unattended stays exactly where it walked to.
-///
-/// Safe to call on a builder already hidden for a site it just raised.
 fn enter_site(world: &mut World, entity: Entity, site: Entity) {
     if let Some(presence) = attendance(world, entity).presence() {
         work::enter(world, entity, &presence, site);

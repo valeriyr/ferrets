@@ -1,7 +1,10 @@
 //! Die order implementation.
 //! Called by [`super::orders`] as part of the shared order lifecycle.
 
-use bevy_ecs::{entity::Entity, world::World};
+use bevy_ecs::{
+    entity::Entity,
+    world::{Mut, World},
+};
 use ferrets_physics::body;
 
 use ferrets_content::dying::DyingDef;
@@ -108,13 +111,13 @@ fn free_footprint(world: &mut World, entity: Entity) {
         return;
     }
 
-    let location = *world.entity(entity).get::<LocationComponent>().unwrap();
     let def = entity_def::of(world, entity);
     let location_def = def.location.unwrap();
     let class = OccupancyClass::of(def);
-    world
-        .resource_mut::<Map>()
-        .displace_entity(&location, &location_def, class);
+    world.resource_scope(|world, mut map: Mut<Map>| {
+        let location = world.get::<LocationComponent>(entity).unwrap();
+        map.displace_entity(location, &location_def, class);
+    });
 }
 
 /// Hands on what the entity's type leaves for the death it died.

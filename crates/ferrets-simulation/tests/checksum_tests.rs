@@ -9,6 +9,7 @@ use ferrets_simulation::{
     beside::{Beside, Lean},
     checksum,
     components::{
+        hidden::Inside,
         location::LocationComponent,
         owner::OwnerComponent,
         pools,
@@ -149,7 +150,7 @@ fn hide_and_set_down_on_same_cell_leave_checksum_as_it_was() {
     let unit = utils::spawn_unit(&mut world, 5, 5);
     let standing = checksum::state_checksum(&world);
 
-    spawn::hide_entity(&mut world, unit);
+    spawn::hide_entity(&mut world, unit, Inside::Nothing);
     let hidden = checksum::state_checksum(&world);
     assert_eq!(
         spawn::place_back_beside(

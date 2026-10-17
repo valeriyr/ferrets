@@ -21,7 +21,7 @@ pub enum RallyTarget {
 #[derive(Component, Debug, Default)]
 pub struct RallyPointComponent(pub Option<RallyTarget>);
 
-/// A unit just released by a holder with a rally point set, owed the dispatch
+/// A unit just released by a holder with a rally point set, due the dispatch
 /// to its target.
 #[derive(Component, Debug, Clone, PartialEq, Eq)]
 pub struct RallyDueComponent {

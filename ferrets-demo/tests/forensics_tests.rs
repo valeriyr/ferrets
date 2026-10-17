@@ -14,6 +14,8 @@
 //! field's coverage as a map at that tick, with every source of it marked.
 //! `PASSIVES=<type substring>` prints every tick the set of buffs a matching
 //! entity bears changes, with its pools, within the same range.
+//! `COMMANDS=<substring>` prints every recorded command whose text holds the
+//! substring, with the tick and the player it came from.
 
 use std::{collections::BTreeMap, fs::File, io::BufReader};
 
@@ -68,6 +70,18 @@ fn replay_forensics() {
     let path = std::env::var("FREP").expect("set FREP to a .frep path");
     let replay = Replay::read(BufReader::new(File::open(&path).expect("replay opens")))
         .expect("replay reads");
+    if let Ok(wanted) = std::env::var("COMMANDS") {
+        for tick in 0..=replay.last_tick().unwrap_or(0) {
+            for (player, commands) in replay.inputs_at(tick) {
+                for command in commands {
+                    let text = format!("{command:?}");
+                    if text.contains(wanted.as_str()) {
+                        println!("command t{tick} p{player} {text}");
+                    }
+                }
+            }
+        }
+    }
     let mut rebuilt = playback::rebuild(replay).expect("the replay's game rebuilds");
     let last = rebuilt.last_tick.expect("the recording holds ticks");
     let app = &mut rebuilt.app;

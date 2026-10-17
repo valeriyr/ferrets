@@ -19,6 +19,8 @@ use crate::{
     entity_buffs::EntityBuffId,
     entity_stats::EntityStatId,
     field::{FieldEffect, FieldPlacement, FieldSourceDef},
+    gateway::{Doors, GatewayDef, Joins},
+    holder::Holder,
     kinds::Kinds,
     location::{LocationDef, Solidity},
     morph::{MorphReason, MorphTransition},
@@ -37,7 +39,7 @@ use crate::{
     splash::SplashDef,
     stand::StandingAct,
     tags,
-    train::TrainerDef,
+    train::{Release, TrainerDef},
     transport::{PassengerConduct, PassengerFate, TransporterDef},
     turret::{TurretFire, TurretMount},
     work::{Attachment, WorkPresence},
@@ -149,9 +151,8 @@ pub struct EntityTypeDef {
     pub build: Option<BuildDef>,
     /// The entity types instances can train. `None` means instances cannot train.
     pub trainer: Option<TrainerDef>,
-    /// The passengers instances admit aboard, and on what terms. `None` means
-    /// instances cannot carry passengers.
-    pub transporter: Option<TransporterDef>,
+    /// What instances hold others as. `None` means instances hold nobody.
+    pub holder: Option<Holder>,
     /// The researches instances can host. `None` means instances cannot research.
     pub researcher: Option<ResearcherDef>,
     /// The entity types instances can construct. `None` means instances cannot build.
@@ -224,7 +225,7 @@ impl EntityTypeDef {
             train_time: None,
             build: None,
             trainer: None,
-            transporter: None,
+            holder: None,
             researcher: None,
             builder: None,
             repairer: None,
@@ -304,7 +305,19 @@ impl EntityTypeDef {
 
     /// Whether instances can carry passengers.
     pub fn can_transport(&self) -> bool {
-        self.transporter.is_some()
+        self.transporter().is_some()
+    }
+
+    /// The passengers instances admit aboard, and on what terms, or `None`
+    /// for a type that is no transporter.
+    pub fn transporter(&self) -> Option<&TransporterDef> {
+        self.holder.as_ref().and_then(Holder::transporter)
+    }
+
+    /// What instances join as gateways, and which ways their doors open, or
+    /// `None` for a type that is no gateway.
+    pub fn gateway(&self) -> Option<&GatewayDef> {
+        self.holder.as_ref().and_then(Holder::gateway)
     }
 
     /// Whether one of the changes of form instances take makes a unit.
@@ -666,11 +679,16 @@ impl EntityTypeDef {
         self
     }
 
-    /// Allows instances of this type to train units of the `trains` types.
+    /// Allows instances of this type to train units of the `trains` types,
+    /// released into the world as `release` says.
     ///
     /// Panics if `trains` is empty or any entry is empty.
-    pub fn with_trainer(mut self, trains: impl IntoIterator<Item = impl Into<String>>) -> Self {
-        self.trainer = Some(TrainerDef::new(trains));
+    pub fn with_trainer(
+        mut self,
+        trains: impl IntoIterator<Item = impl Into<String>>,
+        release: Release,
+    ) -> Self {
+        self.trainer = Some(TrainerDef::new(trains, release));
         self
     }
 
@@ -683,12 +701,19 @@ impl EntityTypeDef {
         passenger_fate: PassengerFate,
         conduct: PassengerConduct,
     ) -> Self {
-        self.transporter = Some(TransporterDef::new(
+        self.holder = Some(Holder::Transporter(TransporterDef::new(
             carries,
             boarding,
             passenger_fate,
             conduct,
-        ));
+        )));
+        self
+    }
+
+    /// Makes instances of this type gateways of what `joins` names, their doors
+    /// opening as `doors` says.
+    pub fn with_gateway(mut self, joins: Joins, doors: Doors) -> Self {
+        self.holder = Some(Holder::Gateway(GatewayDef::new(joins, doors)));
         self
     }
 

@@ -11,12 +11,15 @@ use ferrets_content::{
     entity_type_def::EntityTypeDef,
     location::Solidity,
     pool::Pool,
+    quantity::Quantity,
     registry::ContentRegistry,
-    skills::{Casting, EntityCastEffect, EntityCastTarget, Reach, SkillCaster, SkillDef},
+    skills::{Casting, EntityCastEffect, Reach, SkillCaster, SkillDef, Spot},
+    train::Release,
 };
 use ferrets_geometry::cell_size::CellSize;
+use ferrets_math::FixedU64;
 use ferrets_simulation::{
-    command::{PlayerCommand, SelectMode, SkillCasterRef, SkillTarget},
+    command::{PlayerCommand, SelectMode},
     components::rally::{RallyPointComponent, RallyTarget},
     order::AttackTarget,
     session::{
@@ -473,6 +476,25 @@ fn watch_lapses_exactly_when_its_duration_runs_out() {
 }
 
 #[test]
+fn watch_reads_its_radius_and_duration_off_caster() {
+    let mut app = fog_app(vec![PlayerSlot::occupied(0, PlayerType::Human, None, None)]);
+    let (_, observatory) =
+        utils::create_entity(app.world_mut(), "observatory", utils::pos(2, 2), Some(0)).unwrap();
+    utils::run_ticks(&mut app, utils::APPLY);
+
+    utils::cast_at(&mut app, observatory, "far_sweep", 20, 20);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    // `scan_radius` 3: three cells out from the aim, and not four.
+    assert!(visible(&app, 0, 20, 23));
+    assert!(!visible(&app, 0, 20, 24));
+    // `scan_time` 2: the cast lands on the third tick and holds two more.
+    utils::run_ticks(&mut app, 1);
+    assert!(visible(&app, 0, 20, 20), "the second tick still sees it");
+    utils::run_ticks(&mut app, 1);
+    assert!(!visible(&app, 0, 20, 20), "the third does not");
+}
+
+#[test]
 fn watch_outlives_caster_and_is_shared_with_allies() {
     let mut app = fog_app(vec![
         PlayerSlot::occupied(0, PlayerType::Human, None, Some(0)),
@@ -574,12 +596,7 @@ fn scripted_sniper_attacks_fogged_mark(vision: AiVision) -> (App, Entity, Entity
 
 /// Casts the station's sweep at `(x, y)`.
 fn sweep_at(app: &mut App, caster: SimulationId, x: u32, y: u32) {
-    utils::use_skill(
-        app,
-        "sweep",
-        SkillCasterRef::Entity(caster),
-        Some(SkillTarget::Position(utils::pos(x, y))),
-    );
+    utils::cast_at(app, caster, "sweep", x, y);
 }
 
 /// Whether the local-team vision of `player` covers `(x, y)`.
@@ -641,7 +658,7 @@ fn fog_app(slots: Vec<PlayerSlot>) -> App {
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
                 .with_pool(Pool::health(50))
                 .with_dying(1, [])
-                .with_trainer(["scout"]),
+                .with_trainer(["scout"], Release::Beside),
         );
         // A station that watches a patch of map from afar: the sight it leaves
         // behind belongs to no entity, so it lasts its stated ticks whatever
@@ -652,12 +669,13 @@ fn fog_app(slots: Vec<PlayerSlot>) -> App {
                 cooldown: 4,
                 caster: SkillCaster::Entity {
                     costs: Vec::new(),
-                    target: EntityCastTarget::Position,
-                    reach: Reach::Wherever,
                     casting: Casting::Instant,
                     effect: EntityCastEffect::Watch {
-                        radius: 2,
-                        duration: 5,
+                        at: Spot::Cell {
+                            reach: Reach::Wherever,
+                        },
+                        radius: Quantity::Constant(2),
+                        duration: Quantity::Constant(5),
                         detection: Detection::Blind,
                     },
                 },
@@ -671,6 +689,38 @@ fn fog_app(slots: Vec<PlayerSlot>) -> App {
                 .with_dying(1, [])
                 .with_sight_range(2)
                 .with_skills([sweep]),
+        );
+        // The same sweep reading its reach and its time off the caster.
+        let scan_radius = registry.register_entity_stat("scan_radius", FixedU64::ZERO);
+        let scan_time = registry.register_entity_stat("scan_time", FixedU64::ONE);
+        let far_sweep = registry.register_skill(
+            "far_sweep",
+            SkillDef {
+                cooldown: 4,
+                caster: SkillCaster::Entity {
+                    costs: Vec::new(),
+                    casting: Casting::Instant,
+                    effect: EntityCastEffect::Watch {
+                        at: Spot::Cell {
+                            reach: Reach::Wherever,
+                        },
+                        radius: Quantity::Stat(scan_radius),
+                        duration: Quantity::Stat(scan_time),
+                        detection: Detection::Blind,
+                    },
+                },
+                requires: Vec::new(),
+            },
+        );
+        registry.register(
+            EntityTypeDef::new("observatory")
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_pool(Pool::health(50))
+                .with_dying(1, [])
+                .with_sight_range(2)
+                .with_stat(scan_radius, FixedU64::from_num(3))
+                .with_stat(scan_time, FixedU64::from_num(2))
+                .with_skills([far_sweep]),
         );
     }
     app.world_mut().resource::<ContentRegistry>().validate();

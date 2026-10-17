@@ -19,7 +19,7 @@ use ferrets_simulation::{
     beside::{Beside, Lean},
     command::{PlayerCommand, SelectMode},
     components::{
-        hidden::HiddenComponent,
+        hidden::{HiddenComponent, Inside},
         location::LocationComponent,
         order_queue::OrderQueueComponent,
         rally::RallyTarget,
@@ -77,12 +77,13 @@ fn boarded_passenger_holds_no_location_and_marker_keeps_where_it_went_in() {
         "an entity off the map stands nowhere"
     );
     // Already in reach at (11, 10), it boarded without a step.
-    let went_in = app
+    let went_in = &app
         .world()
         .get::<HiddenComponent>(rifleman)
         .expect("a passenger is hidden")
         .went_in;
     assert_eq!(went_in.position, utils::pos(11, 10));
+    let went_in_facing = went_in.facing;
 
     utils::unload(&mut app, wagon_id, None);
     utils::run_ticks(&mut app, utils::APPLY + 1);
@@ -97,7 +98,7 @@ fn boarded_passenger_holds_no_location_and_marker_keeps_where_it_went_in() {
     );
     assert_eq!(
         utils::facing_of(app.world(), rifleman),
-        went_in.facing,
+        went_in_facing,
         "comes back facing the way it went in"
     );
 }
@@ -154,7 +155,7 @@ fn riding_trainer_keeps_paid_production_across_ride() {
     utils::push_command(
         &mut app,
         PlayerCommand::Unload {
-            transport: wagon_id,
+            holder: wagon_id,
             at: None,
             flush: true,
         },
@@ -184,7 +185,7 @@ fn loaded_trainer_keeps_paid_production_across_ride() {
     utils::push_command(
         &mut app,
         PlayerCommand::Load {
-            transport: wagon_id,
+            holder: wagon_id,
             target: drillmaster_id,
             flush: true,
         },
@@ -220,7 +221,7 @@ fn passenger_production_can_be_canceled_and_refunded_mid_ride() {
     utils::push_command(
         &mut app,
         PlayerCommand::Load {
-            transport: wagon_id,
+            holder: wagon_id,
             target: drillmaster_id,
             flush: true,
         },
@@ -265,7 +266,7 @@ fn passenger_research_can_be_canceled_and_refunded_mid_ride() {
     utils::push_command(
         &mut app,
         PlayerCommand::Load {
-            transport: wagon_id,
+            holder: wagon_id,
             target: drillmaster_id,
             flush: true,
         },
@@ -304,7 +305,7 @@ fn unit_loaded_mid_walk_stands_once_set_down() {
     utils::push_command(
         &mut app,
         PlayerCommand::Load {
-            transport: wagon_id,
+            holder: wagon_id,
             target: grunt_id,
             flush: true,
         },
@@ -343,7 +344,7 @@ fn worker_loaded_off_job_leaves_job_before_boarding() {
     utils::push_command(
         &mut app,
         PlayerCommand::Load {
-            transport: wagon_id,
+            holder: wagon_id,
             target: orderly_id,
             flush: true,
         },
@@ -414,7 +415,7 @@ fn load_refuses_unit_changing_form() {
     utils::push_command(
         &mut app,
         PlayerCommand::Load {
-            transport: wagon_id,
+            holder: wagon_id,
             target: pupa_id,
             flush: true,
         },
@@ -507,7 +508,7 @@ fn loader_turns_away_from_target_switched_off_on_way() {
     utils::push_command(
         &mut app,
         PlayerCommand::Load {
-            transport: wagon_id,
+            holder: wagon_id,
             target: grunt_id,
             flush: true,
         },
@@ -648,7 +649,7 @@ fn full_transport_turns_boarder_away() {
 }
 
 #[test]
-fn own_boarding_policy_rejects_allied_holder() {
+fn own_boarding_policy_turns_away_allied_unit() {
     let mut app = utils::transport_app();
     // Player 1 is allied with the local player 0; the wagon admits own only.
     let (wagon, wagon_id) = utils::create_owned(&mut app, "wagon", 10, 10, 1);
@@ -671,6 +672,20 @@ fn allies_boarding_policy_admits_allied_unit() {
     utils::run_until_aboard(&mut app, ferry, 1, 40);
 
     assert_eq!(utils::passengers_of(app.world(), ferry), [rifleman_id]);
+}
+
+#[test]
+fn allied_boarding_ferry_loads_nobody_of_its_ally() {
+    let mut app = utils::transport_app();
+    let (ferry, ferry_id) = utils::create_owned(&mut app, "ferry", 10, 10, 0);
+    // Player 1 is player 0's ally; it may board the ferry itself.
+    let (rifleman, rifleman_id) = utils::create_owned(&mut app, "rifleman", 11, 10, 1);
+
+    utils::load(&mut app, ferry_id, rifleman_id);
+    utils::run_ticks(&mut app, utils::APPLY + 5);
+
+    assert!(utils::passengers_of(app.world(), ferry).is_empty());
+    assert!(!entity_def::hidden(app.world(), rifleman));
 }
 
 #[test]
@@ -788,7 +803,7 @@ fn transport_fetches_targeted_unit_aboard() {
     utils::push_command(
         &mut app,
         PlayerCommand::Load {
-            transport: wagon_id,
+            holder: wagon_id,
             target: grunt_id,
             flush: true,
         },
@@ -806,6 +821,65 @@ fn transport_fetches_targeted_unit_aboard() {
 }
 
 #[test]
+fn bunker_calls_rifleman_beyond_its_load_range_over_to_board_it() {
+    let mut app = utils::transport_app();
+    let (bunker, bunker_id) = utils::create_owned(&mut app, "bunker", 10, 10, 0);
+    // Four cells off, beyond the one-cell load range of a bunker that cannot
+    // walk to it.
+    let (rifleman, rifleman_id) = utils::create_owned(&mut app, "rifleman", 14, 10, 0);
+
+    utils::load(&mut app, bunker_id, rifleman_id);
+    utils::run_until_aboard(&mut app, bunker, 1, 40);
+
+    assert!(entity_def::hidden(app.world(), rifleman));
+}
+
+#[test]
+fn rifleman_called_over_mid_chase_drops_its_chase_walk() {
+    let mut app = utils::transport_app();
+    let (_, bunker_id) = utils::create_owned(&mut app, "bunker", 10, 10, 0);
+    // Created after the bunker, so processed after it in the tick of the call.
+    let (rifleman, rifleman_id) = utils::create_owned(&mut app, "rifleman", 14, 10, 0);
+    let (_, leader_id) = utils::create_owned(&mut app, "rifleman", 14, 25, 0);
+    // Told to follow and called over in the same tick: the follow's first
+    // step pushes a walk toward the leader after the call marked the queue.
+    utils::select(&mut app, rifleman_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Follow {
+            target: leader_id,
+            flush: true,
+        },
+    );
+    utils::load(&mut app, bunker_id, rifleman_id);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+
+    // Walking to the bunker at (10, 10) to board it, not toward the leader.
+    let orders = entity_def::orders(app.world(), rifleman);
+    let Order::Move { target, .. } = orders[0] else {
+        panic!("the boarding walks first, got {orders:?}");
+    };
+    assert_eq!(target, utils::pos(10, 10));
+    assert_eq!(orders[1].board_target(), Some(bunker_id));
+}
+
+#[test]
+fn rifleman_called_over_by_two_bunkers_boards_first_caller() {
+    let mut app = utils::transport_app();
+    let (first, first_id) = utils::create_owned(&mut app, "bunker", 10, 10, 0);
+    let (second, second_id) = utils::create_owned(&mut app, "bunker", 18, 10, 0);
+    // Four cells from each, beyond either's one-cell load range.
+    let (rifleman, rifleman_id) = utils::create_owned(&mut app, "rifleman", 14, 10, 0);
+
+    utils::load(&mut app, first_id, rifleman_id);
+    utils::load(&mut app, second_id, rifleman_id);
+    utils::run_until_aboard(&mut app, first, 1, 40);
+
+    assert!(entity_def::hidden(app.world(), rifleman));
+    assert!(utils::passengers_of(app.world(), second).is_empty());
+}
+
+#[test]
 fn load_refuses_ineligible_unit() {
     let mut app = utils::transport_app();
     let (wagon, wagon_id) = utils::create_owned(&mut app, "wagon", 5, 5, 0);
@@ -814,7 +888,7 @@ fn load_refuses_ineligible_unit() {
     utils::push_command(
         &mut app,
         PlayerCommand::Load {
-            transport: wagon_id,
+            holder: wagon_id,
             target: civilian_id,
             flush: true,
         },
@@ -879,7 +953,7 @@ fn shot_following_target_that_left_map_hits_it_no_more() {
 
     // The target goes off the map and straight back while the arrow flies:
     // the arrow lost it when it went, and lands on nobody.
-    spawn::hide_entity(app.world_mut(), rifleman);
+    spawn::hide_entity(app.world_mut(), rifleman, Inside::Nothing);
     assert_eq!(
         spawn::place_back_beside(
             app.world_mut(),
@@ -1204,11 +1278,7 @@ fn blocked_exit_holds_passenger_and_retries() {
     assert_eq!(utils::passengers_of(app.world(), wagon), [rifleman_id]);
 
     // Free one cell beside the wagon; the held exit lands on it.
-    app.world_mut().resource_mut::<Map>().set_static_occupied(
-        utils::GROUND,
-        CellPos::new(11, 10),
-        false,
-    );
+    utils::free_cell(&mut app, CellPos::new(11, 10));
     utils::run_ticks(&mut app, 2);
     assert!(!entity_def::hidden(app.world(), rifleman));
     assert!(utils::passengers_of(app.world(), wagon).is_empty());
@@ -1759,11 +1829,12 @@ fn board_walker_under_fire(app: &mut App, shooter: SimulationId, wagon: Entity) 
         spawn::board(app.world_mut(), rifleman, wagon),
         Boarding::Boarded
     );
-    let went_in = app
+    let went_in_at = app
         .world()
         .get::<HiddenComponent>(rifleman)
         .expect("a passenger is hidden")
-        .went_in;
-    assert_eq!(went_in.position, utils::pos(11, 12));
+        .went_in
+        .position;
+    assert_eq!(went_in_at, utils::pos(11, 12));
     rifleman
 }

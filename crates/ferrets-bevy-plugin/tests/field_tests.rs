@@ -39,9 +39,10 @@ use ferrets_content::{
     requirement::{Bound, Requirement, Threshold},
     research::ResearchDef,
     resource::{Banking, DepletionPolicy, HarvestData},
-    skills::{Casting, EntityCastEffect, EntityCastTarget, Reach, SkillCaster, SkillDef},
+    skills::{Casting, EntityCastEffect, Reach, Recipient, SkillCaster, SkillDef, Spot, Whom},
     stack_rule::StackRule,
     stats::{EntityModifier, ModifierOp},
+    train::Release,
     transport::{PassengerConduct, PassengerFate},
     turret::{TurretDef, TurretMount, TurretStats, WeaponConduct},
     work::{CrewLimit, WorkPresence},
@@ -51,9 +52,9 @@ use ferrets_math::FixedU64;
 use ferrets_pathfinder::layer_mask::LayerMask;
 use ferrets_simulation::{
     checksum,
-    command::{PlayerCommand, SkillCasterRef, SkillTarget},
+    command::PlayerCommand,
     components::{
-        pools, research::ResearchComponent, resource::ResourceSourceComponent,
+        hidden::Inside, pools, research::ResearchComponent, resource::ResourceSourceComponent,
         train::TrainComponent,
     },
     entity_def::{self, Operation, Outage},
@@ -485,7 +486,7 @@ fn hidden_body_takes_no_field_effects() {
     let mut app = field_app();
     utils::place(&mut app, "hive", 10, 10, 0);
     let zergling = utils::create_owned(&mut app, "zergling", 13, 10, 1).0;
-    spawn::hide_entity(app.world_mut(), zergling);
+    spawn::hide_entity(app.world_mut(), zergling, Inside::Nothing);
 
     // On creep, but hidden: the base 0.5, not 0.5 × 2.
     utils::run_ticks(&mut app, 1);
@@ -505,7 +506,7 @@ fn hidden_body_takes_no_outside_effect_either() {
 
     // Hidden, it stands on no side of any field: the outside effect that froze
     // it no longer applies either.
-    spawn::hide_entity(app.world_mut(), probe);
+    spawn::hide_entity(app.world_mut(), probe, Inside::Nothing);
     utils::run_ticks(&mut app, 1);
     assert_eq!(
         entity_def::operation(app.world(), probe),
@@ -539,12 +540,7 @@ fn checksum_ignores_field_coverage() {
     utils::run_ticks(&mut app, 1);
     let before = checksum::state_checksum(app.world());
 
-    utils::use_skill(
-        &mut app,
-        "spew",
-        SkillCasterRef::Entity(overlord),
-        Some(SkillTarget::Position(utils::pos(24, 24))),
-    );
+    utils::cast_at(&mut app, overlord, "spew", 24, 24);
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
     assert!(
@@ -775,19 +771,7 @@ fn buff_disabled_trainer_queues_command_and_holds_it() {
     let mut app = field_app();
     utils::create_owned(&mut app, "pylon", 10, 10, 0);
     let (gateway, gateway_id) = utils::create_owned(&mut app, "gateway", 12, 10, 0);
-    let dazed = app
-        .world_mut()
-        .resource_mut::<ContentRegistry>()
-        .register_entity_buff(
-            "dazed",
-            EntityBuffDef {
-                effects: vec![EntityEffect::Disable],
-                lasting: Lasting::For(12),
-                stack_rule: StackRule::Refresh,
-                interrupted_by: Vec::new(),
-            },
-        );
-    utils::apply_buff(app.world_mut(), gateway, dazed);
+    utils::disable_for(&mut app, gateway, 12);
     utils::run_ticks(&mut app, 1);
     assert_eq!(
         entity_def::operation(app.world(), gateway),
@@ -1310,7 +1294,7 @@ fn build_under_way_completes_while_queued_build_is_swept() {
 }
 
 #[test]
-fn disabled_researcher_queues_research_and_holds_progress_until_powered_again() {
+fn researcher_losing_power_holds_progress_until_powered_again() {
     let mut app = field_app();
     let pylon = utils::create_owned(&mut app, "pylon", 10, 10, 0).0;
     let (library, library_id) = utils::create_owned(&mut app, "library", 12, 10, 0);
@@ -1377,7 +1361,7 @@ fn disabled_hangar_refuses_load_and_unload() {
     utils::push_command(
         &mut app,
         PlayerCommand::Unload {
-            transport: hangar_id,
+            holder: hangar_id,
             at: None,
             flush: true,
         },
@@ -1385,7 +1369,7 @@ fn disabled_hangar_refuses_load_and_unload() {
     utils::push_command(
         &mut app,
         PlayerCommand::Load {
-            transport: hangar_id,
+            holder: hangar_id,
             target: waiting_id,
             flush: false,
         },
@@ -1628,13 +1612,17 @@ fn walker_disabled_mid_tick_takes_no_further_step() {
                 cooldown: 1,
                 caster: SkillCaster::Entity {
                     costs: Vec::new(),
-                    target: EntityCastTarget::Standing {
-                        side: Affiliation::Anyone,
-                        kinds: Kinds::Any,
-                    },
-                    reach: Reach::Wherever,
                     casting: Casting::Instant,
-                    effect: EntityCastEffect::ApplyBuff(dazed),
+                    effect: EntityCastEffect::ApplyBuff {
+                        buff: dazed,
+                        on: Recipient::Standing {
+                            whom: Whom {
+                                side: Affiliation::Anyone,
+                                kinds: Kinds::Any,
+                            },
+                            reach: Reach::Wherever,
+                        },
+                    },
                 },
                 requires: Vec::new(),
             },
@@ -1660,12 +1648,7 @@ fn walker_disabled_mid_tick_takes_no_further_step() {
         },
     );
     utils::run_ticks(&mut app, utils::APPLY + 2);
-    utils::use_skill(
-        &mut app,
-        "stun",
-        SkillCasterRef::Entity(stunner_id),
-        Some(SkillTarget::Entity(walker_id)),
-    );
+    utils::cast_on(&mut app, stunner_id, "stun", walker_id);
 
     // The tick the stun lands, the walker takes no step after it.
     let mut before = utils::position_of(app.world(), walker);
@@ -1692,12 +1675,7 @@ fn position_cast_covers_cells_that_then_decay_unsustained() {
     let Fields { creep, .. } = fields(&app);
     let (_, overlord) = utils::create_owned(&mut app, "overlord", 20, 20, 0);
 
-    utils::use_skill(
-        &mut app,
-        "spew",
-        SkillCasterRef::Entity(overlord),
-        Some(SkillTarget::Position(utils::pos(24, 20))),
-    );
+    utils::cast_at(&mut app, overlord, "spew", 24, 20);
     utils::run_ticks(&mut app, utils::APPLY);
     assert!(utils::covered_by(&app, creep, 24, 20, 0));
     assert!(utils::covered_by(&app, creep, 25, 20, 0));
@@ -1719,24 +1697,14 @@ fn position_cast_clears_orphaned_coverage() {
     utils::run_ticks(&mut app, 1);
 
     // Sustained creep shrugs the cast off.
-    utils::use_skill(
-        &mut app,
-        "scour",
-        SkillCasterRef::Entity(overlord),
-        Some(SkillTarget::Position(utils::pos(13, 10))),
-    );
+    utils::cast_at(&mut app, overlord, "scour", 13, 10);
     utils::run_ticks(&mut app, utils::APPLY);
     assert!(utils::covered_by(&app, creep, 13, 10, 0));
 
     // Orphaned creep goes.
     utils::deplete(&mut app, hive);
     utils::run_ticks(&mut app, 1);
-    utils::use_skill(
-        &mut app,
-        "scour",
-        SkillCasterRef::Entity(overlord),
-        Some(SkillTarget::Position(utils::pos(11, 10))),
-    );
+    utils::cast_at(&mut app, overlord, "scour", 11, 10);
     utils::run_ticks(&mut app, utils::APPLY);
     assert!(!covered_by_anyone(&app, creep, 11, 10));
     assert!(!covered_by_anyone(&app, creep, 13, 10));
@@ -1755,12 +1723,7 @@ fn watching_field_reveals_covered_cells_to_whoever_covers_them() {
     utils::run_ticks(&mut app, 1);
     assert_eq!(seen_by(&app, 0, 24, 20), CellVisibility::Unexplored);
 
-    utils::use_skill(
-        &mut app,
-        "spew",
-        SkillCasterRef::Entity(overlord),
-        Some(SkillTarget::Position(utils::pos(24, 20))),
-    );
+    utils::cast_at(&mut app, overlord, "spew", 24, 20);
     // One tick past the command's own delay: a cast is an order, so the
     // creep is laid in the order phase, which the tick's fog pass has
     // already run.
@@ -1799,12 +1762,7 @@ fn ally_sees_through_watched_field_and_enemy_does_not() {
     ]);
     let (_, overlord) = utils::create_owned(&mut app, "overlord", 20, 20, 0);
 
-    utils::use_skill(
-        &mut app,
-        "spew",
-        SkillCasterRef::Entity(overlord),
-        Some(SkillTarget::Position(utils::pos(24, 20))),
-    );
+    utils::cast_at(&mut app, overlord, "spew", 24, 20);
     // One tick past the command's own delay: a cast is an order, so the
     // creep is laid in the order phase, which the tick's fog pass has
     // already run.
@@ -2366,7 +2324,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
         registry.register(
             building("gateway", 2, 4)
                 .with_tags(["structure"])
-                .with_trainer(["zealot"])
+                .with_trainer(["zealot"], Release::Beside)
                 .with_field_placement([FieldPlacement::Requires {
                     field: power,
                     of: Affiliation::Own,
@@ -2525,12 +2483,13 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 cooldown: 1,
                 caster: SkillCaster::Entity {
                     costs: Vec::new(),
-                    target: EntityCastTarget::Position,
-                    reach: Reach::Wherever,
                     casting: Casting::Instant,
                     effect: EntityCastEffect::Field {
+                        at: Spot::Cell {
+                            reach: Reach::Wherever,
+                        },
                         field: creep,
-                        radius: 1,
+                        radius: Quantity::Constant(1),
                         action: FieldAction::Cover,
                     },
                 },
@@ -2543,12 +2502,13 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 cooldown: 1,
                 caster: SkillCaster::Entity {
                     costs: Vec::new(),
-                    target: EntityCastTarget::Position,
-                    reach: Reach::Wherever,
                     casting: Casting::Instant,
                     effect: EntityCastEffect::Field {
+                        at: Spot::Cell {
+                            reach: Reach::Wherever,
+                        },
                         field: creep,
-                        radius: 2,
+                        radius: Quantity::Constant(2),
                         action: FieldAction::Clear,
                     },
                 },

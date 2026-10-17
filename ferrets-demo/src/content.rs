@@ -167,8 +167,7 @@ pub const CONTENT: &str = r#"
         caster = "entity",
         cooldown = 80,
         cost = { energy = "30" },
-        target = "caster",
-        effect = { apply_buff = "frenzy" },
+        effect = { apply_buff = { buff = "frenzy", on = "caster" } },
     })
     -- The shaman mends the living and nothing else: a filter on the aim, in
     -- the same vocabulary a transporter says whom it carries.
@@ -176,8 +175,7 @@ pub const CONTENT: &str = r#"
         caster = "entity",
         cooldown = 120,
         cost = { energy = "20" },
-        target = { kind = "allied", only = { tags = { "biological" } } },
-        effect = { heal = "15" },
+        effect = { heal = { amount = "15", on = { kind = "allied", only = { tags = { "biological" } } } } },
     })
     -- The shaman's curse withers an enemy's body for ten seconds: its health
     -- ceiling falls by nearly a third, and a unit at half health stays at half
@@ -194,8 +192,7 @@ pub const CONTENT: &str = r#"
         caster = "entity",
         cooldown = 200,
         cost = { energy = "25" },
-        target = { kind = "enemy" },
-        effect = { apply_buff = "withering" },
+        effect = { apply_buff = { buff = "withering", on = "enemy" } },
     })
     -- Blood rite unlocks with the frenzy ritual: the button sits greyed on
     -- every grunt until the war camp finishes the research.
@@ -203,8 +200,7 @@ pub const CONTENT: &str = r#"
         caster = "entity",
         cooldown = 160,
         cost = { health = "8", resources = { gold = 10 } },
-        target = "caster",
-        effect = { apply_buff = "frenzy" },
+        effect = { apply_buff = { buff = "frenzy", on = "caster" } },
         requires = { { research = "frenzy_ritual" } },
     })
 
@@ -287,7 +283,7 @@ pub const CONTENT: &str = r#"
             { turret = "keep_gun", at = { 3, 3 }, size = { 2, 2 } },
         },
         turret_fire = "spread",
-        trainer = { "ship" },
+        trainer = { trains = { "ship" }, release = "beside" },
         tags = { "building" },
     })
 
@@ -390,7 +386,7 @@ pub const CONTENT: &str = r#"
             dying = { time = 2 },
             price = { gold = 400 },
             build = { time = 200, pools = { health = "initial" } },
-            trainer = { trains },
+            trainer = { trains = { trains }, release = "beside" },
             resource_storage = { "gold", "wood" },
             tags = { "building" },
             berths = berths,
@@ -424,7 +420,7 @@ pub const CONTENT: &str = r#"
             -- Mends in half the time it took to raise: a camp is quicker to
             -- patch up than to put up.
             repair_ratio = "0.5",
-            trainer = trains,
+            trainer = trains and { trains = trains, release = "beside" },
             researcher = researches,
             tags = { "building" },
             berths = berths,
@@ -863,7 +859,7 @@ pub const CONTENT: &str = r#"
         price = { gold = 180, wood = 120 },
         build = { time = 130, pools = { health = "initial" } },
         repair_ratio = "0.5",
-        trainer = { "war_wagon" },
+        trainer = { trains = { "war_wagon" }, release = "beside" },
         tags = { "building" },
         berths = { rim = { points = rim(3, 3) } },
         requires = { { entity_type = "war_camp" } },
@@ -1198,8 +1194,7 @@ pub const CONTENT: &str = r#"
     define_skill("spew_creep", {
         caster = "entity",
         cooldown = 200,
-        target = "position",
-        effect = { field = { field = "creep", radius = 2, action = "cover" } },
+        effect = { field = { at = "position", field = "creep", radius = 2, action = "cover" } },
     })
     define_entity("drone", {
         race = "swarm",
@@ -1212,7 +1207,7 @@ pub const CONTENT: &str = r#"
         },
         pools = { health = { maximum = 30 } },
         dying = FALLS,
-        builder = { builds = { "hatchery", "tumor", "spawning_pit" }, attendance = "consumed" },
+        builder = { builds = { "hatchery", "tumor", "spawning_pit", "warren", "tunnel" }, attendance = "consumed" },
         tags = { "biological" },
         skills = { "spew_creep" },
         resource_carrier = {
@@ -1250,6 +1245,105 @@ pub const CONTENT: &str = r#"
         tags = { "building" },
         field_placement = { ON_CREEP },
         field_effects = { WITHERS_OFF_CREEP },
+    })
+
+    -- The warren: one passage under the creep for every swarm unit its owner
+    -- sends down, let out at the warren or at any burrow it raises. Whoever is
+    -- inside is lost with the last way out.
+    define_network("warren", {
+        carries = { tags = { "biological" } }, boarding = "own", capacity = 40, fate = "destroy",
+    })
+
+    -- A burrow breaks ground anywhere the warren reaches, creep or not, and
+    -- spreads a little of its own.
+    define_entity("burrow", {
+        race = "swarm",
+        location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
+        stats = { sight_range = 6, load_range = 1, load_period = 2, unload_range = 1, unload_period = 4 },
+        pools = { health = { maximum = 300 } },
+        dying = { time = 2 },
+        tags = { "building" },
+        gateway = { network = "warren", doors = "both" },
+        field_sources = {
+            { field = "creep", radius = 3, growth = "instant", while_constructing = "nothing", while_disabled = "full" },
+        },
+        -- Uprooting takes two seconds and cannot be called off; the burrow
+        -- stops being a way out of the warren, and if it was the last one,
+        -- whoever is inside is lost.
+        morphs = {
+            { into = "burrower", land_pool_carry = { health = "clamp" },
+              time = 40,
+              placement = "reserve",
+              cancel = "committed",
+              reason = "change" },
+        },
+    })
+
+    -- An uprooted burrow: a slow, armored worm that carries a way out of
+    -- the warren to wherever it digs in again, three seconds that cannot be
+    -- called off. While it crawls, nobody comes out of it.
+    define_entity("burrower", {
+        race = "swarm",
+        location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
+        stats = {
+            speed = "0.15", turn_rate = 12, pivot_rate = 12, radius = "1", weight = 6,
+            armor = 2,
+            sight_range = 7,
+        },
+        pools = { health = { maximum = 300 } },
+        dying = { time = 2 },
+        selection = { priority = 6 },
+        morphs = {
+            { into = "burrow", land_pool_carry = { health = "clamp" },
+              time = 60,
+              placement = "reserve",
+              cancel = "committed",
+              reason = "change" },
+        },
+    })
+
+    define_skill("raise_burrow", {
+        caster = "entity",
+        cooldown = 280,
+        cost = { resources = { gold = 75, wood = 75 } },
+        effect = { summon = { at = { kind = "position", range = 30 }, entity = "burrow", count = 1, landing = "anywhere", arrives = "standing" } },
+    })
+
+    define_entity("warren", {
+        race = "swarm",
+        location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
+        stats = { sight_range = 7, load_range = 1, load_period = 2, unload_range = 1, unload_period = 4 },
+        pools = { health = { maximum = 600 } },
+        dying = { time = 2, leaves = BURSTS },
+        price = { gold = 150, wood = 150 },
+        build = { time = 100, pools = { health = "initial" } },
+        tags = { "building" },
+        field_placement = { ON_CREEP },
+        field_effects = { WITHERS_OFF_CREEP },
+        gateway = { network = "warren", doors = "both" },
+        skills = { "raise_burrow" },
+    })
+
+    -- A tunnel digs its own other end anywhere on creep it can see; whoever
+    -- steps in comes out at the other end at once. A tunnel whose other end
+    -- is lost stands, free to dig another.
+    define_tunnel("tunnel", {
+        carries = { tags = { "biological" } }, boarding = "own", other_end_lost = "stands", passage = "crosses",
+    })
+
+    define_entity("tunnel", {
+        race = "swarm",
+        location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
+        stats = { sight_range = 6, load_range = 1, load_period = 1, build_range = 40 },
+        pools = { health = { maximum = 250 } },
+        dying = { time = 2 },
+        price = { gold = 100, wood = 50 },
+        build = { time = 80, pools = { health = "initial" } },
+        tags = { "building" },
+        field_placement = { ON_CREEP },
+        field_effects = { WITHERS_OFF_CREEP },
+        gateway = { tunnel = "tunnel", doors = "both" },
+        builder = { builds = { "tunnel" }, attendance = "unattended" },
     })
 
     define_entity("swarmling", {
@@ -1383,7 +1477,7 @@ pub const CONTENT: &str = r#"
         dying = { time = 2 },
         price = { gold = 400 },
         build = { time = 200, pools = { health = "initial" } },
-        trainer = { "probe" },
+        trainer = { trains = { "probe" }, release = "beside" },
         resource_storage = { "gold", "wood" },
         tags = { "building" },
         field_placement = { NOT_ON_CREEP },
@@ -1397,8 +1491,7 @@ pub const CONTENT: &str = r#"
     define_skill("purge_creep", {
         caster = "entity",
         cooldown = 200,
-        target = "position",
-        effect = { field = { field = "creep", radius = 3, action = "clear" } },
+        effect = { field = { at = "position", field = "creep", radius = 3, action = "clear" } },
     })
     define_entity("probe", {
         race = "conclave",
@@ -1450,7 +1543,7 @@ pub const CONTENT: &str = r#"
         price = { gold = 200, wood = 100 },
         build = { time = 120, pools = { health = "initial" } },
         repair_ratio = "0.5",
-        trainer = { "zealot", "dark_templar", "observer", "arbiter" },
+        trainer = { trains = { "zealot", "stalker", "dark_templar", "observer", "arbiter" }, release = "beside" },
         tags = { "building" },
         field_placement = { POWERED, NOT_ON_CREEP },
         field_effects = { UNPOWERED_IDLES },
@@ -1499,6 +1592,48 @@ pub const CONTENT: &str = r#"
         field_effects = { VEILED },
     })
 
+    -- Blink: the stalker steps to a cell its side sees, at once; blocked
+    -- there, it lands on the free cell nearest the side it came from.
+    define_skill("blink", {
+        caster = "entity",
+        cooldown = 140,
+        effect = { relocate = {
+            journey = { from_caster = { party = "caster", to = { aim = { kind = "position", range = 8 } } } },
+            landing = "sighted",
+        } },
+    })
+    define_entity("stalker", {
+        race = "conclave",
+        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        stats = {
+            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 3,
+            damage = 10, attack_range = 5, acquire_range = 6, attack_period = 20, damage_point = 4,
+            armor = 1,
+            sight_range = 9,
+            supply_cost = 2,
+            cargo_size = 1,
+        },
+        pools = { health = { maximum = 80 } },
+        dying = FALLS,
+        tags = { "mechanical" },
+        attack = { targets = GROUND | WATER | AIR, projectile = "arrow" },
+        price = { gold = 125, wood = 50 },
+        train_time = 70,
+        selection = { priority = 10 },
+        skills = { "blink" },
+        field_effects = { VEILED },
+    })
+
+    -- Swap: the dark templar and one of its side's units trade places at
+    -- once; if either would fit nowhere, nothing happens.
+    define_skill("swap", {
+        caster = "entity",
+        cooldown = 200,
+        effect = { relocate = {
+            journey = { swap = { kind = "own", only = { tags = { "biological", "mechanical" } }, range = 10 } },
+            landing = "anywhere",
+        } },
+    })
     -- The dark templar is never seen by an enemy without a detector, and
     -- nothing it does gives it away: it walks, swings and kills under the
     -- cloak it was born with.
@@ -1521,6 +1656,7 @@ pub const CONTENT: &str = r#"
         price = { gold = 125, wood = 50 },
         train_time = 75,
         selection = { priority = 10 },
+        skills = { "swap" },
         field_effects = { VEILED },
     })
 
@@ -1548,6 +1684,46 @@ pub const CONTENT: &str = r#"
         field_effects = { VEILED },
     })
 
+    -- Recall: every unit of the arbiter's side standing near the aim is
+    -- called back around the arbiter, buildings left where they stand; one
+    -- that fits nowhere stays.
+    define_skill("recall", {
+        caster = "entity",
+        cooldown = 0,
+        cost = { energy = "150" },
+        cast = { point = 26, period = 26, pays = "start", refund = "full" },
+        effect = { relocate = {
+            journey = { from_aim = {
+                party = { around = {
+                    at = "position", radius = 2, side = "own",
+                    kinds = { tags = { "biological", "mechanical" } },
+                    sight = "seen", count = "all", shortfall = "leave",
+                } },
+                to = "caster",
+            } },
+            landing = "anywhere",
+        } },
+    })
+    -- Drag in: up to four enemy units the arbiter's side makes out near the
+    -- aim are pulled in around the arbiter; a cloaked one it does not detect
+    -- stays where it is.
+    define_skill("drag_in", {
+        caster = "entity",
+        cooldown = 300,
+        cost = { energy = "100" },
+        cast = { point = 20, period = 20, pays = "start", refund = "full" },
+        effect = { relocate = {
+            journey = { from_aim = {
+                party = { around = {
+                    at = { kind = "position", range = 9 }, radius = 2, side = "enemy",
+                    kinds = { tags = { "biological", "mechanical" } },
+                    sight = "seen", count = { at_most = 4 }, shortfall = "leave",
+                } },
+                to = "caster",
+            } },
+            landing = "anywhere",
+        } },
+    })
     -- The arbiter carries the veil: everything of its side's under it is
     -- concealed, itself excepted, and the veil moves with it.
     define_entity("arbiter", {
@@ -1559,12 +1735,13 @@ pub const CONTENT: &str = r#"
             sight_range = 9,
             supply_cost = 3,
         },
-        pools = { health = { maximum = 200 } },
+        pools = { health = { maximum = 200 }, energy = { maximum = 200, regen = "0.5", initial = { share = "0.75" } } },
         dying = { time = 2 },
         tags = { "mechanical" },
         price = { gold = 200, wood = 150 },
         train_time = 120,
         selection = { priority = 5 },
+        skills = { "recall", "drag_in" },
         field_sources = {
             { field = "veil", radius = 4, growth = "instant", while_constructing = "nothing", while_disabled = "nothing" },
         },
@@ -1683,7 +1860,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 800 } },
         price = { gold = 400 },
         build = { time = 200, pools = { health = "initial" } },
-        trainer = { "wisp" },
+        trainer = { trains = { "wisp" }, release = "beside" },
     }, {
         stats = {
             speed = "0.1", turn_rate = 6, pivot_rate = 6, pivot_angle = 90, radius = "1.5", weight = 12, sight_range = 9, supply_provided = 10,
@@ -1710,7 +1887,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 500 } },
         price = { gold = 200, wood = 100 },
         build = { time = 120, pools = { health = "initial" } },
-        trainer = { "huntress" },
+        trainer = { trains = { "huntress" }, release = "beside" },
     }, {
         stats = {
             speed = "0.15", turn_rate = 8, pivot_rate = 8, pivot_angle = 90, radius = "1.5", weight = 10, sight_range = 6,
@@ -1751,8 +1928,7 @@ pub const CONTENT: &str = r#"
     define_skill("ambush", {
         caster = "entity",
         cooldown = 400,
-        target = "caster",
-        effect = { apply_buff = "ambushing" },
+        effect = { apply_buff = { buff = "ambushing", on = "caster" } },
     })
     -- Two seconds standing still and a huntress is not there to an enemy
     -- without detection; a step or a swing shows her.
@@ -1831,8 +2007,7 @@ pub const CONTENT: &str = r#"
         caster = "entity",
         cooldown = 200,
         cost = { energy = "50" },
-        target = "position",
-        effect = { watch = { radius = 6, duration = 180, detection = GROUND | AIR } },
+        effect = { watch = { at = "position", radius = 6, duration = 180, detection = GROUND | AIR } },
     })
 
     -- The wraith's cloak: a buff that conceals and nothing else, switched on
@@ -1849,14 +2024,12 @@ pub const CONTENT: &str = r#"
         caster = "entity",
         cooldown = 20,
         cost = { energy = "25" },
-        target = "caster",
-        effect = { apply_buff = "cloaked" },
+        effect = { apply_buff = { buff = "cloaked", on = "caster" } },
     })
     define_skill("decloak", {
         caster = "entity",
         cooldown = 0,
-        target = "caster",
-        effect = { remove_buff = "cloaked" },
+        effect = { remove_buff = { buff = "cloaked", on = "caster" } },
     })
 
     -- Siege mechanics, researched in the tech lab and unlocking nothing but
@@ -1920,7 +2093,7 @@ pub const CONTENT: &str = r#"
         dying = { time = 2 },
         price = { gold = 400 },
         build = { time = 200, pools = { health = { rises_from = { share = "0.1" } } } },
-        trainer = { "scv" },
+        trainer = { trains = { "scv" }, release = "beside" },
         resource_storage = { "gold", "wood" },
         -- It raises its own annex, standing where it stands while the work is
         -- done: the dock is the next cell over, so there is nowhere to walk.
@@ -1963,7 +2136,7 @@ pub const CONTENT: &str = r#"
         price = { gold = 150 },
         build = { time = 100, pools = { health = { rises_from = { share = "0.1" } } } },
         repair_ratio = "0.5",
-        trainer = { "marine" },
+        trainer = { trains = { "marine" }, release = "beside" },
         berths = { rim = { points = rim(3, 3), slots = 1 } },
         tags = { "building" },
         passives = { "on_fire" },
@@ -1996,7 +2169,7 @@ pub const CONTENT: &str = r#"
         price = { gold = 200, wood = 100 },
         build = { time = 120, pools = { health = { rises_from = { share = "0.1" } } } },
         repair_ratio = "0.5",
-        trainer = { "tank", "wraith" },
+        trainer = { trains = { "tank", "wraith" }, release = "beside" },
         builder = { builds = { "tech_lab" }, attendance = { present = { crew = 1 } } },
         docks = { { at = { 3, 0 }, accepts = { types = { "tech_lab" } } } },
         berths = { rim = { points = rim(3, 3), slots = 1 } },
@@ -2367,12 +2540,16 @@ pub const CONTENT: &str = r#"
         caster = "entity",
         cooldown = 160,
         cost = { energy = "40" },
+        cast = { point = 30, period = 45, pays = "landing" },
         -- Bodies, and bodies only: the filter names what it raises from rather
         -- than taking whatever the field happens to leave lying.
-        target = { kind = "fallen", only = { types = { "corpse" } } },
-        range = 6,
-        cast = { point = 30, period = 45 },
-        effect = { summon = { entity = "skeleton", count = 2 } },
+        effect = { summon = {
+            at = { kind = "fallen", only = { types = { "corpse" } }, range = 6 },
+            entity = "skeleton",
+            count = 2,
+            landing = "anywhere",
+            arrives = "standing",
+        } },
     })
     define_player_buff("skeletal_longevity", {
         stack = "ignore",
@@ -2382,6 +2559,42 @@ pub const CONTENT: &str = r#"
         price = { gold = 100 },
         time = 200,
         buff = "skeletal_longevity",
+    })
+
+    -- The grave gate: the necromancer and up to two dozen of his side's
+    -- units around him — acolytes, ghouls and skeletons, never a building —
+    -- step out at one of his halls, after a long incantation; if they would
+    -- not all fit there, the gate does not open.
+    define_skill("grave_gate", {
+        caster = "entity",
+        cooldown = 600,
+        cost = { energy = "100" },
+        cast = { point = 100, period = 100, pays = "start", refund = "none" },
+        effect = { relocate = {
+            journey = { from_caster = {
+                party = { caster_and_around = {
+                    radius = 4, side = "own",
+                    kinds = { types = { "acolyte", "ghoul", "skeleton" } },
+                    sight = "seen", count = { at_most = 24 }, shortfall = "refuse",
+                } },
+                to = { aim = { kind = "own", only = { types = { "necropolis", "halls_of_the_dead", "black_citadel" } } } },
+            } },
+            landing = "anywhere",
+        } },
+    })
+    -- Homeward: the necromancer alone steps out at whichever of his
+    -- halls is nearest, wherever he stands.
+    define_skill("homeward", {
+        caster = "entity",
+        cooldown = 900,
+        cast = { point = 60, period = 60, pays = "start", refund = "none" },
+        effect = { relocate = {
+            journey = { from_caster = {
+                party = "caster",
+                to = { home = { types = { "necropolis", "halls_of_the_dead", "black_citadel" } } },
+            } },
+            landing = "anywhere",
+        } },
     })
 
     -- Unhurt, the necromancer's mana comes quicker; once wounded, only blight
@@ -2407,7 +2620,7 @@ pub const CONTENT: &str = r#"
         train_time = 60,
         tags = { "biological" },
         attack = { targets = GROUND | WATER, projectile = "arrow" },
-        skills = { "raise_dead" },
+        skills = { "raise_dead", "grave_gate", "homeward" },
         passives = { "composed" },
         field_effects = { BOUND_TO_BLIGHT },
     })
@@ -2424,7 +2637,7 @@ pub const CONTENT: &str = r#"
             pools = pools,
             dying = { time = 2 },
             tags = { "building" },
-            trainer = { "acolyte" },
+            trainer = { trains = { "acolyte" }, release = "beside" },
             resource_storage = { "wood" },
             field_sources = blights(6),
         }
@@ -2561,7 +2774,7 @@ pub const CONTENT: &str = r#"
         price = { gold = 200, wood = 50 },
         build = { time = 120, pools = { health = "initial" } },
         tags = { "building" },
-        trainer = { "ghoul" },
+        trainer = { trains = { "ghoul" }, release = "beside" },
         field_placement = { ON_BLIGHT },
         field_sources = blights(4),
     })
@@ -2590,7 +2803,7 @@ pub const CONTENT: &str = r#"
         price = { gold = 250, wood = 100 },
         build = { time = 140, pools = { health = "initial" } },
         tags = { "building" },
-        trainer = { "necromancer" },
+        trainer = { trains = { "necromancer" }, release = "beside" },
         researcher = { "skeletal_longevity" },
         requires = { { tag = "grown_hall" } },
         field_placement = { ON_BLIGHT },

@@ -951,6 +951,32 @@ fn ground_attack_takes_gun_back_from_its_last_target() {
     );
 }
 
+#[test]
+fn ground_attack_reaches_point_at_cell_it_lies_in() {
+    let mut app = utils::combat_app();
+    let world = app.world_mut();
+    let (mortar, mortar_id) =
+        utils::create_entity(world, "rolling_mortar", utils::pos(13, 10), Some(0)).unwrap();
+
+    // (6.6, 10) lies in cell (6, 10), seven cells off: one beyond the
+    // mortar's six, though the point is nearer the cell's far side.
+    utils::select(&mut app, mortar_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Attack {
+            target: AttackTarget::Position(utils::part_way("6.6", "10")),
+            flush: true,
+        },
+    );
+    // Half a cell a tick: two ticks for the one cell it closes.
+    utils::run_ticks(&mut app, utils::APPLY + 4);
+
+    assert_eq!(
+        utils::cell_of(app.world_mut(), mortar),
+        CellPos::new(12, 10)
+    );
+}
+
 /// The same gun on the same wheels, authored to halt for its fights, rolls past
 /// the same target without firing — which is what every other armed type in the
 /// game does, and the only thing the conduct changes.

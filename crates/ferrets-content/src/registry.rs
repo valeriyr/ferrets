@@ -8,6 +8,7 @@ use ferrets_math::{FixedI64, FixedU64};
 use ferrets_pathfinder::{layer_id::LayerId, layer_mask::LayerMask};
 
 use crate::{
+    affiliation::Affiliation,
     annex::{AloneConduct, AnnexLife},
     attack::{AttackDef, Delivery, Weapon},
     brood::BroodlingDef,
@@ -20,8 +21,11 @@ use crate::{
     entity_stats::{ENTITY_BUILTIN_STATS, EntityStatDef, EntityStatId},
     entity_type_def::{EntityTypeDef, EntityTypeId},
     field::{Emission, FieldDef, FieldGrowth, FieldId, FieldLayer},
+    gateway::{Doors, GatewayDef, Joins},
+    holder::Holder,
     kinds::{Kind, Kinds},
     morph::{MorphCourse, MorphPlacement, ViaInterrupted},
+    network::{NetworkDef, NetworkId},
     player_buffs::{PlayerBuffDef, PlayerBuffId},
     player_stats::{PLAYER_BUILTIN_STATS, PlayerStatId},
     pool::PoolInitial,
@@ -33,12 +37,14 @@ use crate::{
     requirement::{Bound, Requirement, Scope, Threshold},
     research::{ResearchDef, ResearchId},
     skills::{
-        Casting, EntityCastEffect, EntityCastTarget, PlayerCastEffect, Reach, SkillCaster,
-        SkillDef, SkillId,
+        Casting, Count, EntityCastEffect, EntityCastTarget, FromAimTo, FromCasterTo, Journey,
+        PlayerCastEffect, Reach, Recipient, SkillCaster, SkillDef, SkillId, SummonArrival, Whom,
     },
     stand::StandingAct,
     stats::EntityModifier,
     tags,
+    train::Release,
+    tunnel::{Passage, TunnelDef, TunnelId},
     turret::{TurretDef, TurretId, WeaponConduct},
     work::{Crewing, WorkPresence},
 };
@@ -61,6 +67,10 @@ pub struct ContentRegistry {
     terrains: BTreeMap<String, LayerMask>,
     fields: BTreeMap<String, FieldId>,
     field_defs: Vec<FieldDef>,
+    networks: BTreeMap<String, NetworkId>,
+    network_defs: Vec<NetworkDef>,
+    tunnels: BTreeMap<String, TunnelId>,
+    tunnel_defs: Vec<TunnelDef>,
     entity_stats: BTreeMap<String, EntityStatId>,
     /// What each entity stat is, by registration index — the builtins first,
     /// then what content declares.
@@ -98,6 +108,10 @@ impl Default for ContentRegistry {
             terrains: BTreeMap::new(),
             fields: BTreeMap::new(),
             field_defs: Vec::new(),
+            networks: BTreeMap::new(),
+            network_defs: Vec::new(),
+            tunnels: BTreeMap::new(),
+            tunnel_defs: Vec::new(),
             entity_stats: ENTITY_BUILTIN_STATS
                 .iter()
                 .map(|builtin| (builtin.name.to_string(), builtin.id))
@@ -177,6 +191,8 @@ impl ContentRegistry {
         self.validate_build(&def);
         self.validate_harvest(&def);
         self.validate_transport(&def);
+        self.validate_gateway(&def);
+        self.validate_transport_stats(&def);
         self.validate_fields(&def);
 
         let id = EntityTypeId::from_index(self.defs.len());
@@ -234,10 +250,12 @@ impl ContentRegistry {
                 &self.skill_defs[id.index()].requires,
             );
             self.validate_aim(name, &self.skill_defs[id.index()]);
+            self.validate_journey(name, &self.skill_defs[id.index()]);
         }
         for (name, &id) in &self.entity_buffs {
             self.validate_while(name, &self.entity_buff_defs[id.index()]);
         }
+        self.validate_joins();
         self.validate_requirements_attainable();
     }
 
@@ -778,22 +796,17 @@ impl ContentRegistry {
         match &skill.caster {
             SkillCaster::Entity {
                 costs,
-                target,
-                reach: _,
                 casting,
                 effect,
             } => {
-                // A cast that lands on no tick at all never lands: a number
-                // content spells out is held to that here, and a stat is held
-                // to it by the floor it was registered with.
-                if let Casting::Delayed { point, period } = casting {
-                    // The least either ever folds to: a number content spells
-                    // out is that number, and a stat is the floor it was
-                    // registered with.
-                    let least = |quantity: &Quantity| match quantity {
-                        Quantity::Constant(value) => FixedU64::from_num(*value),
-                        Quantity::Stat(stat) => self.entity_stat_def(*stat).floor(),
-                    };
+                // The least a number ever folds to: one content spells out is
+                // that number, and a stat is the floor it was registered with.
+                let least = |quantity: &Quantity| match quantity {
+                    Quantity::Constant(value) => FixedU64::from_num(*value),
+                    Quantity::Stat(stat) => self.entity_stat_def(*stat).floor(),
+                };
+                // A cast that lands on no tick at all never lands.
+                if let Casting::Delayed { point, period, .. } = casting {
                     assert!(
                         least(point) > FixedU64::ZERO,
                         "skill '{name}' is cast over no time at all: an instant cast declares no `cast`, and a point read from a stat is held to that stat's floor"
@@ -822,13 +835,14 @@ impl ContentRegistry {
                     }
                 }
                 match effect {
-                    EntityCastEffect::ApplyBuff(buff) | EntityCastEffect::RemoveBuff(buff) => {
+                    EntityCastEffect::ApplyBuff { buff, .. }
+                    | EntityCastEffect::RemoveBuff { buff, .. } => {
                         assert!(
                             buff.index() < self.entity_buff_defs.len(),
                             "skill '{name}' references an unregistered entity buff"
                         )
                     }
-                    EntityCastEffect::Damage(_) | EntityCastEffect::Heal(_) => {}
+                    EntityCastEffect::Damage { .. } | EntityCastEffect::Heal { .. } => {}
                     EntityCastEffect::Field { field, .. } => assert!(
                         field.index() < self.field_defs.len(),
                         "skill '{name}' acts on an unregistered field"
@@ -838,10 +852,18 @@ impl ContentRegistry {
                         detection,
                         ..
                     } => {
-                        assert!(*duration > 0, "skill '{name}' watches for no time at all");
+                        assert!(
+                            least(duration) > FixedU64::ZERO,
+                            "skill '{name}' watches for no time at all"
+                        );
                         self.validate_detection(&format!("skill '{name}'"), *detection);
                     }
-                    EntityCastEffect::Summon { entity_type, count } => {
+                    EntityCastEffect::Summon {
+                        entity_type,
+                        count,
+                        arrives,
+                        ..
+                    } => {
                         let summoned = self.defs.get(entity_type.index()).unwrap_or_else(|| {
                             panic!("skill '{name}' summons an unregistered entity type")
                         });
@@ -855,39 +877,40 @@ impl ContentRegistry {
                             "skill '{name}' summons '{}', which is remains: a cast raises something from a body, it does not lay one",
                             summoned.name
                         );
-                        assert!(*count > 0, "skill '{name}' summons nothing at all");
+                        // A count read from a stat is truncated: a floor under
+                        // one may summon nobody.
+                        assert!(
+                            least(count) >= FixedU64::ONE,
+                            "skill '{name}' summons nothing at all"
+                        );
+                        // A tunnel end has one other end: a summon of several
+                        // would leave all but one unbound.
+                        match summoned.gateway().map(GatewayDef::joins) {
+                            Some(Joins::Tunnel(_)) => assert!(
+                                *count == Quantity::Constant(1),
+                                "skill '{name}' summons tunnel end '{}' in a count other than one",
+                                summoned.name
+                            ),
+                            Some(Joins::Network(_)) | None => {}
+                        }
+                        match arrives {
+                            SummonArrival::Standing => {}
+                            SummonArrival::Rising => assert!(
+                                summoned.build.is_some(),
+                                "skill '{name}' summons '{}' rising, but it declares no build",
+                                summoned.name
+                            ),
+                        }
                     }
-                }
-                // A cell has no pools to buff, damage, or heal; only a field
-                // action and a watch land on one.
-                match (target, effect) {
-                    (
-                        EntityCastTarget::Position,
-                        EntityCastEffect::Field { .. }
-                        | EntityCastEffect::Watch { .. }
-                        | EntityCastEffect::Summon { .. },
-                    ) => {}
-                    (
-                        EntityCastTarget::Position,
-                        EntityCastEffect::ApplyBuff(_)
-                        | EntityCastEffect::RemoveBuff(_)
-                        | EntityCastEffect::Damage(_)
-                        | EntityCastEffect::Heal(_),
-                    ) => panic!("skill '{name}' aims at a position but its effect needs an entity"),
-                    // What lies where it fell has no pools and no ground of its
-                    // own to act on: what a cast does with a body is raise
-                    // something from it.
-                    (EntityCastTarget::Fallen { .. }, EntityCastEffect::Summon { .. }) => {}
-                    (
-                        EntityCastTarget::Fallen { .. },
-                        EntityCastEffect::ApplyBuff(_)
-                        | EntityCastEffect::RemoveBuff(_)
-                        | EntityCastEffect::Damage(_)
-                        | EntityCastEffect::Heal(_)
-                        | EntityCastEffect::Field { .. }
-                        | EntityCastEffect::Watch { .. },
-                    ) => panic!("skill '{name}' aims at the fallen, which only a summon may spend"),
-                    (EntityCastTarget::Caster | EntityCastTarget::Standing { .. }, _) => {}
+                    EntityCastEffect::Relocate { journey, .. } => {
+                        match journey.gathering().map(|gathering| gathering.count) {
+                            Some(Count::AtMost(count)) => assert!(
+                                least(&count) >= FixedU64::ONE,
+                                "skill '{name}' relocates nobody at all"
+                            ),
+                            Some(Count::All) | None => {}
+                        }
+                    }
                 }
             }
             SkillCaster::Player { price, effect } => {
@@ -1130,6 +1153,124 @@ impl ContentRegistry {
     /// Every registered field handle, in registration order.
     pub fn field_ids(&self) -> impl Iterator<Item = FieldId> {
         (0..self.field_defs.len()).map(FieldId::from_index)
+    }
+
+    /// Registers a network under `name` and returns its
+    /// assigned [`NetworkId`]. Ids are assigned in registration order, so
+    /// identical content registered in the same order resolves to identical
+    /// ids everywhere.
+    ///
+    /// Panics if `name` is empty, the network is already registered, it holds
+    /// no cargo at all, or it admits only enemies.
+    pub fn register_network(&mut self, name: impl Into<String>, network: NetworkDef) -> NetworkId {
+        let name = name.into();
+        assert!(!name.is_empty(), "network name must not be empty");
+        assert!(
+            !self.networks.contains_key(&name),
+            "network '{name}' is already registered"
+        );
+        assert!(
+            network.capacity() > 0,
+            "network '{name}' holds nothing at all"
+        );
+        match network.boarding() {
+            Affiliation::Own | Affiliation::Allied | Affiliation::Anyone => {}
+            Affiliation::Enemy => {
+                panic!("network '{name}' admits only enemies, so no gateways ever link")
+            }
+        }
+
+        let id = NetworkId::from_index(self.network_defs.len());
+        self.networks.insert(name, id);
+        self.network_defs.push(network);
+        id
+    }
+
+    /// Returns the [`NetworkId`] for the given network name, or `None` if not
+    /// registered.
+    pub fn network(&self, name: &str) -> Option<NetworkId> {
+        self.networks.get(name).copied()
+    }
+
+    /// Returns the name the given network is registered under, or `None` if
+    /// the handle did not come from this registry.
+    pub fn network_name(&self, id: NetworkId) -> Option<&str> {
+        self.networks
+            .iter()
+            .find(|&(_, &network)| network == id)
+            .map(|(name, _)| name.as_str())
+    }
+
+    /// Returns the network definition for the given handle.
+    ///
+    /// Panics if the handle did not come from this registry.
+    pub fn network_def(&self, id: NetworkId) -> &NetworkDef {
+        &self.network_defs[id.index()]
+    }
+
+    /// Registers a tunnel under `name` and returns its assigned [`TunnelId`]. Ids
+    /// are assigned in registration order, so identical content registered in
+    /// the same order resolves to identical ids everywhere.
+    ///
+    /// Panics if `name` is empty, the tunnel is already registered, it holds
+    /// no cargo at all, or it admits only enemies.
+    pub fn register_tunnel(&mut self, name: impl Into<String>, tunnel: TunnelDef) -> TunnelId {
+        let name = name.into();
+        assert!(!name.is_empty(), "tunnel name must not be empty");
+        assert!(
+            !self.tunnels.contains_key(&name),
+            "tunnel '{name}' is already registered"
+        );
+        match tunnel.passage() {
+            Passage::Held { capacity, .. } => {
+                assert!(capacity > 0, "tunnel '{name}' holds nothing at all")
+            }
+            Passage::Crosses => {}
+        }
+        match tunnel.boarding() {
+            Affiliation::Own | Affiliation::Allied | Affiliation::Anyone => {}
+            Affiliation::Enemy => panic!("tunnel '{name}' admits only enemies"),
+        }
+
+        let id = TunnelId::from_index(self.tunnel_defs.len());
+        self.tunnels.insert(name, id);
+        self.tunnel_defs.push(tunnel);
+        id
+    }
+
+    /// Returns the [`TunnelId`] for the given tunnel name, or `None` if not
+    /// registered.
+    pub fn tunnel(&self, name: &str) -> Option<TunnelId> {
+        self.tunnels.get(name).copied()
+    }
+
+    /// Returns the name the given tunnel is registered under, or `None` if the
+    /// handle did not come from this registry.
+    pub fn tunnel_name(&self, id: TunnelId) -> Option<&str> {
+        self.tunnels
+            .iter()
+            .find(|&(_, &tunnel)| tunnel == id)
+            .map(|(name, _)| name.as_str())
+    }
+
+    /// Returns the tunnel definition for the given handle.
+    ///
+    /// Panics if the handle did not come from this registry.
+    pub fn tunnel_def(&self, id: TunnelId) -> &TunnelDef {
+        &self.tunnel_defs[id.index()]
+    }
+
+    /// Whether what `joins` names holds the bodies that enter it.
+    ///
+    /// Panics if its handle did not come from this registry.
+    pub fn joins_hold(&self, joins: Joins) -> bool {
+        match joins {
+            Joins::Network(_) => true,
+            Joins::Tunnel(tunnel) => match self.tunnel_def(tunnel).passage() {
+                Passage::Held { .. } => true,
+                Passage::Crosses => false,
+            },
+        }
     }
 
     /// Every field whose detection reveals something, with the layers it
@@ -1391,7 +1532,10 @@ impl ContentRegistry {
             // Every number a cast reads from a stat is read off whoever casts,
             // so the caster must carry it: a reach it cannot read could never
             // be closed, and a cast it cannot time would never land.
-            if let SkillCaster::Entity { reach, casting, .. } = &skill_def.caster {
+            if let SkillCaster::Entity {
+                casting, effect, ..
+            } = &skill_def.caster
+            {
                 let require = |quantity: Quantity, what: &str| {
                     if let Quantity::Stat(stat) = quantity {
                         assert!(
@@ -1402,12 +1546,40 @@ impl ContentRegistry {
                         );
                     }
                 };
-                match reach {
-                    Reach::Within(cells) => require(*cells, "reach"),
-                    Reach::Wherever => {}
+                match effect.target() {
+                    EntityCastTarget::Position { reach }
+                    | EntityCastTarget::Standing { reach, .. }
+                    | EntityCastTarget::Fallen { reach, .. } => match reach {
+                        Reach::Within(cells) => require(cells, "reach"),
+                        Reach::Wherever => {}
+                    },
+                    EntityCastTarget::Caster => {}
+                }
+                match effect {
+                    EntityCastEffect::Watch {
+                        radius, duration, ..
+                    } => {
+                        require(*radius, "watch radius");
+                        require(*duration, "watch duration");
+                    }
+                    EntityCastEffect::Field { radius, .. } => require(*radius, "field radius"),
+                    EntityCastEffect::Summon { count, .. } => require(*count, "summon count"),
+                    EntityCastEffect::Relocate { journey, .. } => {
+                        if let Some(gathering) = journey.gathering() {
+                            require(gathering.radius, "gathering radius");
+                            match gathering.count {
+                                Count::AtMost(count) => require(count, "gathering count"),
+                                Count::All => {}
+                            }
+                        }
+                    }
+                    EntityCastEffect::ApplyBuff { .. }
+                    | EntityCastEffect::RemoveBuff { .. }
+                    | EntityCastEffect::Damage { .. }
+                    | EntityCastEffect::Heal { .. } => {}
                 }
                 match casting {
-                    Casting::Delayed { point, period } => {
+                    Casting::Delayed { point, period, .. } => {
                         require(*point, "cast point");
                         require(*period, "cast period");
                         // Registration held the two to each other by the least
@@ -1455,8 +1627,11 @@ impl ContentRegistry {
             // something else draws from whatever it lands on, which only the
             // cast can know.
             if let SkillCaster::Entity {
-                target: EntityCastTarget::Caster,
-                effect: EntityCastEffect::ApplyBuff(buff),
+                effect:
+                    EntityCastEffect::ApplyBuff {
+                        buff,
+                        on: Recipient::Caster,
+                    },
                 ..
             } = &skill_def.caster
                 && let Lasting::Upkeep { costs: upkeep, .. } =
@@ -2055,7 +2230,7 @@ impl ContentRegistry {
     /// its field effects — never feed each other around a loop: one moving
     /// what the next one's requirement judges, back to the first.
     fn validate_holder_loops(&self, def: &EntityTypeDef) {
-        let mut holders: Vec<Holder> = Vec::new();
+        let mut holders: Vec<RequirementHolder> = Vec::new();
         for &passive in &def.passives {
             let buff = &self.entity_buff_defs[passive.index()];
             match &buff.lasting {
@@ -2065,7 +2240,7 @@ impl ContentRegistry {
                     let name = self
                         .entity_buff_name(passive)
                         .expect("a passive is a registered buff");
-                    holders.push(Holder {
+                    holders.push(RequirementHolder {
                         name: format!("passive '{name}'"),
                         judged,
                         effects: buff.effects.clone(),
@@ -2080,7 +2255,7 @@ impl ContentRegistry {
             if let Some(requirement) = field_effect.holds_while() {
                 let mut judged = Vec::new();
                 judged_stats(requirement, Negation::Plain, &mut judged);
-                holders.push(Holder {
+                holders.push(RequirementHolder {
                     name: format!("field effect {}", index + 1),
                     judged,
                     effects: field_effect.effects().cloned().collect(),
@@ -2323,56 +2498,71 @@ impl ContentRegistry {
         }
     }
 
-    /// Checks that a transport capability carries the stats the orders read, that
-    /// none of those stats is declared by something that cannot transport, and
-    /// that a transporter is not itself transportable.
+    /// Checks that a transporter is not itself transportable.
     fn validate_transport(&self, def: &EntityTypeDef) {
-        // Every transport stat is read only through a transport capability, so any
-        // one alone is content that can never take effect.
-        for stat in [
-            EntityStatId::CARGO_CAPACITY,
-            EntityStatId::LOAD_RANGE,
-            EntityStatId::UNLOAD_RANGE,
-            EntityStatId::LOAD_PERIOD,
-            EntityStatId::UNLOAD_PERIOD,
-        ] {
-            if def.base_stat(stat).is_some() {
-                assert!(
-                    def.can_transport(),
-                    "entity type '{}' declares {} but cannot transport",
-                    def.name,
-                    ENTITY_BUILTIN_STATS[stat.index()].name,
-                );
-            }
-        }
-
-        if !def.can_transport() {
+        if def.transporter().is_none() {
             return;
         }
-
-        // All of them, the periods included: zero is the unmetered pace, and the
-        // author writes it rather than having the engine assume it.
-        for stat in [
-            EntityStatId::CARGO_CAPACITY,
-            EntityStatId::LOAD_RANGE,
-            EntityStatId::UNLOAD_RANGE,
-            EntityStatId::LOAD_PERIOD,
-            EntityStatId::UNLOAD_PERIOD,
-        ] {
-            assert!(
-                def.base_stat(stat).is_some(),
-                "entity type '{}' can transport but is missing {}",
-                def.name,
-                ENTITY_BUILTIN_STATS[stat.index()].name,
-            );
-        }
-        // A transporter riding inside another would nest holders; keeping the two
-        // capabilities apart makes that unrepresentable.
+        // A transporter riding inside another would nest holders; keeping the
+        // two capabilities apart makes that unrepresentable.
         assert!(
             def.base_stat(EntityStatId::CARGO_SIZE).is_none(),
-            "entity type '{}' can transport and so cannot declare cargo_size",
+            "entity type '{}' lets bodies in and so cannot declare cargo_size",
             def.name
         );
+    }
+
+    /// Checks that what a gateway joins was minted by this registry.
+    fn validate_gateway(&self, def: &EntityTypeDef) {
+        let Some(gateway) = def.gateway() else {
+            return;
+        };
+        let (what, minted) = match gateway.joins() {
+            Joins::Network(network) => ("network", network.index() < self.network_defs.len()),
+            Joins::Tunnel(tunnel) => ("tunnel", tunnel.index() < self.tunnel_defs.len()),
+        };
+        assert!(
+            minted,
+            "entity type '{}' joins an unregistered {what}",
+            def.name
+        );
+    }
+
+    /// Checks that a type declares every transport stat what it does reads,
+    /// and none it leaves unread: a transporter reads all five; a gateway the
+    /// boarding pair through doors bodies enter by, and the unloading pair
+    /// through doors bodies leave by when what it joins holds, the periods
+    /// included.
+    fn validate_transport_stats(&self, def: &EntityTypeDef) {
+        let (capacity, entering, leaving) = match &def.holder {
+            Some(Holder::Transporter(_)) => (true, true, true),
+            Some(Holder::Gateway(gateway)) => {
+                let held = self.joins_hold(gateway.joins());
+                (
+                    false,
+                    gateway.doors().admits_entrance(),
+                    held && gateway.doors().admits_exit(),
+                )
+            }
+            None => (false, false, false),
+        };
+        for (stat, read) in [
+            (EntityStatId::CARGO_CAPACITY, capacity),
+            (EntityStatId::LOAD_RANGE, entering),
+            (EntityStatId::LOAD_PERIOD, entering),
+            (EntityStatId::UNLOAD_RANGE, leaving),
+            (EntityStatId::UNLOAD_PERIOD, leaving),
+        ] {
+            let name = ENTITY_BUILTIN_STATS[stat.index()].name;
+            match (read, def.base_stat(stat).is_some()) {
+                (true, true) | (false, false) => {}
+                (true, false) => panic!("entity type '{}' is missing {name}", def.name),
+                (false, true) => panic!(
+                    "entity type '{}' declares {name}, which nothing it does reads",
+                    def.name
+                ),
+            }
+        }
     }
 
     /// Checks that a carrying capability carries the reach the order reads, and that
@@ -2548,6 +2738,15 @@ impl ContentRegistry {
                 "entity type '{}' trains '{type_name}', which is not a registered trainable type",
                 def.name
             );
+            match trainer.release() {
+                Release::Beside => {}
+                Release::Warped { .. } => assert!(
+                    self.entity(type_name)
+                        .is_some_and(|trained| trained.build.is_some()),
+                    "entity type '{}' warps in '{type_name}', which declares no build",
+                    def.name
+                ),
+            }
         }
     }
 
@@ -2648,14 +2847,55 @@ impl ContentRegistry {
     /// because a skill is registered before the type that carries it, and may
     /// well name that type.
     fn validate_aim(&self, name: &str, def: &SkillDef) {
-        let SkillCaster::Entity { target, .. } = &def.caster else {
+        let SkillCaster::Entity { effect, .. } = &def.caster else {
             return;
         };
-        match target {
-            EntityCastTarget::Standing { kinds, .. } | EntityCastTarget::Fallen { kinds } => {
+        match effect.target() {
+            EntityCastTarget::Standing {
+                whom: Whom { kinds, .. },
+                ..
+            }
+            | EntityCastTarget::Fallen { kinds, .. } => {
                 self.validate_kinds(&format!("skill '{name}'"), "aims at", kinds);
             }
-            EntityCastTarget::Caster | EntityCastTarget::Position => {}
+            EntityCastTarget::Caster | EntityCastTarget::Position { .. } => {}
+        }
+    }
+
+    /// Checks that every type and tag a relocation names is registered: what
+    /// its gathering takes, and what counts as a home.
+    ///
+    /// Runs in [`validate`](Self::validate).
+    fn validate_journey(&self, name: &str, def: &SkillDef) {
+        let SkillCaster::Entity {
+            effect: EntityCastEffect::Relocate { journey, .. },
+            ..
+        } = &def.caster
+        else {
+            return;
+        };
+        let owner = format!("skill '{name}' relocation");
+        match journey.as_ref() {
+            Journey::FromCaster {
+                to: FromCasterTo::Home(kinds),
+                ..
+            }
+            | Journey::FromAim {
+                to: FromAimTo::Home(kinds),
+                ..
+            } => self.validate_kinds(&owner, "goes home to", kinds),
+            Journey::FromCaster {
+                to: FromCasterTo::Aim(_),
+                ..
+            }
+            | Journey::FromAim {
+                to: FromAimTo::Caster,
+                ..
+            }
+            | Journey::Swap { .. } => {}
+        }
+        if let Some(gathering) = journey.gathering() {
+            self.validate_kinds(&owner, "gathers", &gathering.kinds);
         }
     }
 
@@ -2679,15 +2919,122 @@ impl ContentRegistry {
     /// type or tag. Carried types may register after their carrier, so this
     /// runs in the deferred pass.
     fn validate_carries(&self, def: &EntityTypeDef) {
-        let Some(transporter) = &def.transporter else {
+        let Some(transporter) = def.transporter() else {
             return;
         };
-
         self.validate_kinds(
             &format!("entity type '{}'", def.name),
             "carries",
             transporter.carries(),
         );
+    }
+
+    /// Checks what gateways join: that every name its admission lists is
+    /// registered, that it lets in no gateway that can be carried, that a
+    /// network with gateways lets bodies out through one of them, and that a
+    /// tunnel with ends can be bound and crossed: one of its end types builds,
+    /// summons or trains one of them, and every such raiser and raised end let
+    /// bodies across one way at least.
+    fn validate_joins(&self) {
+        for (name, &id) in &self.networks {
+            let carries = self.network_defs[id.index()].carries();
+            self.validate_kinds(&format!("network '{name}'"), "carries", carries);
+            self.validate_no_gateway_carried(&format!("network '{name}'"), carries);
+            let doors: Vec<Doors> = self
+                .defs
+                .iter()
+                .filter_map(|def| {
+                    let gateway = def.gateway()?;
+                    match gateway.joins() {
+                        Joins::Network(network) if network == id => Some(gateway.doors()),
+                        Joins::Network(_) | Joins::Tunnel(_) => None,
+                    }
+                })
+                .collect();
+            assert!(
+                doors.is_empty() || doors.iter().any(|doors| doors.admits_exit()),
+                "network '{name}' has gateways, but none lets bodies out"
+            );
+        }
+        for (name, &id) in &self.tunnels {
+            let carries = self.tunnel_defs[id.index()].carries();
+            self.validate_kinds(&format!("tunnel '{name}'"), "carries", carries);
+            self.validate_no_gateway_carried(&format!("tunnel '{name}'"), carries);
+            let ends: Vec<(&EntityTypeDef, Doors)> = self
+                .defs
+                .iter()
+                .filter_map(|def| {
+                    let gateway = def.gateway()?;
+                    match gateway.joins() {
+                        Joins::Tunnel(tunnel) if tunnel == id => Some((def, gateway.doors())),
+                        Joins::Tunnel(_) | Joins::Network(_) => None,
+                    }
+                })
+                .collect();
+            if ends.is_empty() {
+                continue;
+            }
+            let mut bound = false;
+            for &(raiser, raiser_doors) in &ends {
+                for &(raised, raised_doors) in &ends {
+                    if !self.raises(raiser, &raised.name) {
+                        continue;
+                    }
+                    bound = true;
+                    assert!(
+                        (raiser_doors.admits_entrance() && raised_doors.admits_exit())
+                            || (raised_doors.admits_entrance() && raiser_doors.admits_exit()),
+                        "tunnel '{name}': '{}' raises '{}', but neither end lets bodies in where the other lets them out",
+                        raiser.name,
+                        raised.name
+                    );
+                }
+            }
+            assert!(
+                bound,
+                "tunnel '{name}' has ends, but none builds, summons or trains another"
+            );
+        }
+    }
+
+    /// Checks that `carries` admits no gateway that can be carried.
+    fn validate_no_gateway_carried(&self, what: &str, carries: &Kinds) {
+        for def in &self.defs {
+            if def.gateway().is_some() && def.base_stat(EntityStatId::CARGO_SIZE).is_some() {
+                assert!(
+                    !carries.admits(def),
+                    "{what} lets in the gateway '{}'",
+                    def.name
+                );
+            }
+        }
+    }
+
+    /// Whether `def` builds, summons (by a skill of its own) or trains the
+    /// type named `other`.
+    fn raises(&self, def: &EntityTypeDef, other: &str) -> bool {
+        let builds = def
+            .builder
+            .as_ref()
+            .is_some_and(|builder| builder.can_build(other));
+        let trains = def
+            .trainer
+            .as_ref()
+            .is_some_and(|trainer| trainer.can_train(other));
+        let summons = def
+            .skills
+            .iter()
+            .filter_map(|&skill| self.skill_def(skill))
+            .any(|skill| {
+                matches!(
+                    &skill.caster,
+                    SkillCaster::Entity {
+                        effect: EntityCastEffect::Summon { entity_type, .. },
+                        ..
+                    } if self.def(*entity_type).name == other
+                )
+            });
+        builds || trains || summons
     }
 
     /// Every registered type a filter names — one it lists, or one wearing a
@@ -3563,7 +3910,7 @@ fn walk_back_to(
 }
 
 /// Something a type holds on a requirement, as the loop check reads it.
-struct Holder {
+struct RequirementHolder {
     /// What it is, in a refusal.
     name: String,
     /// The stats its requirement judges, and how.

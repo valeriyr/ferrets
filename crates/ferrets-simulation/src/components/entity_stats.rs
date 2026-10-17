@@ -88,6 +88,17 @@ impl StatsComponent {
         }
     }
 
+    /// The whole units `quantity` comes to: a constant is what it says, a stat
+    /// the entity's effective value truncated, or `None` if the entity does not
+    /// have it.
+    #[inline]
+    pub fn quantity_count(&self, quantity: Quantity) -> Option<u32> {
+        match quantity {
+            Quantity::Constant(value) => Some(value),
+            Quantity::Stat(id) => self.effective_as_u32(id),
+        }
+    }
+
     /// `true` if the entity has `stat` declared.
     #[inline]
     pub fn has(&self, stat: EntityStatId) -> bool {

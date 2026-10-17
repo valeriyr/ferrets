@@ -10,16 +10,18 @@ use std::collections::BTreeMap;
 use bevy_ecs::prelude::*;
 
 use crate::{
+    cooldown::Cooldown,
     events::{EventRecord, SimulationEvent},
     session::player_id::PlayerId,
 };
 use ferrets_content::skills::SkillId;
 
 /// Skill cooldowns for all players in the session, indexed by [`PlayerId`].
-#[derive(Resource, Debug, Default)]
+#[derive(Resource, Debug)]
 pub struct PlayerSkills {
-    /// Remaining cooldown per skill, per player. Absent means ready.
-    cooldowns: Vec<BTreeMap<SkillId, u32>>,
+    /// Where each skill's cooldown stands, per player; a skill not listed is
+    /// ready.
+    cooldowns: Vec<BTreeMap<SkillId, Cooldown>>,
 }
 
 impl PlayerSkills {
@@ -30,33 +32,31 @@ impl PlayerSkills {
         }
     }
 
-    /// Whether the player's `skill` is off cooldown.
+    /// Whether the player's `skill` is ready.
     pub fn ready(&self, player: PlayerId, skill: SkillId) -> bool {
-        !self.cooldowns[player as usize].contains_key(&skill)
+        self.cooldown(player, skill) == Cooldown::Ready
     }
 
-    /// Remaining cooldown ticks for the player's `skill`; zero when ready.
-    pub fn cooldown_remaining(&self, player: PlayerId, skill: SkillId) -> u32 {
+    /// Where the player's `skill` cooldown stands.
+    pub fn cooldown(&self, player: PlayerId, skill: SkillId) -> Cooldown {
         self.cooldowns[player as usize]
             .get(&skill)
             .copied()
-            .unwrap_or(0)
+            .unwrap_or(Cooldown::Ready)
     }
 
     /// Starts the skill's cooldown after a cast.
     pub(crate) fn start_cooldown(&mut self, player: PlayerId, skill: SkillId, cooldown: u32) {
-        if cooldown > 0 {
-            self.cooldowns[player as usize].insert(skill, cooldown);
-        }
+        self.cooldowns[player as usize].insert(skill, Cooldown::of(cooldown));
     }
 
-    /// Ages every cooldown by one tick, dropping those that reach zero.
+    /// Ages every cooldown by one tick, dropping those that come ready.
     pub(crate) fn tick_cooldowns(&mut self) {
         for cooldowns in &mut self.cooldowns {
-            cooldowns.retain(|_, remaining| {
-                *remaining -= 1;
-                *remaining > 0
-            });
+            for cooldown in cooldowns.values_mut() {
+                *cooldown = cooldown.ticked();
+            }
+            cooldowns.retain(|_, cooldown| *cooldown != Cooldown::Ready);
         }
     }
 }

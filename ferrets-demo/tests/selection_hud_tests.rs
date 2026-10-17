@@ -35,7 +35,11 @@ use ferrets_math::FixedU64;
 use ferrets_simulation::{
     command::{PlayerCommand, SelectMode, SkillTarget},
     components::{
-        build, entity_skills::SkillsComponent, last_hit, order_queue::OrderQueueComponent,
+        build::{self, SiteWork},
+        entity_skills::SkillsComponent,
+        hidden::Inside,
+        last_hit,
+        order_queue::OrderQueueComponent,
         train::TrainQueueComponent,
     },
     game_loop::{self, buffs::Bearing},
@@ -44,7 +48,8 @@ use ferrets_simulation::{
     player_research::PlayerResearch,
     resources::PlayerResources,
     session::GameSession,
-    spawn, supply,
+    spawn::{self, FieldReach},
+    supply,
     visibility::Sighting,
 };
 
@@ -53,7 +58,7 @@ use ferrets_simulation::{
 //
 
 #[test]
-fn panel_reports_live_values_of_pick_in_sight() {
+fn panel_names_own_pick_and_reports_its_health() {
     let mut app = utils::demo_map_app(MovementModel::Cell);
     spawn_panel(&mut app);
     let (_, grunt) =
@@ -299,7 +304,7 @@ fn panel_keeps_own_pick_that_goes_off_map() {
 
     // Into a mine or aboard a wagon, the pick stays a pick: its side reads it
     // where it is.
-    spawn::hide_entity(app.world_mut(), entity);
+    spawn::hide_entity(app.world_mut(), entity, Inside::Nothing);
     let shown = panel_text(&mut app);
     assert!(
         shown.contains("HP "),
@@ -605,7 +610,7 @@ fn hovered_skill_names_its_cost_or_why_it_cannot_cast() {
     app.world_mut()
         .get_mut::<SkillsComponent>(archer)
         .unwrap()
-        .start_cooldown(battle_focus, 0);
+        .reset_cooldown(battle_focus);
     // Led by a site: whatever the skill, the site cannot cast yet.
     let (_, farm_id) = utils::create_site(app.world_mut(), "farm", utils::at_cell(28, 20), Some(0))
         .expect("the demo content defines a farm");
@@ -714,6 +719,36 @@ fn hovered_skill_names_health_it_costs() {
 }
 
 #[test]
+fn cooldowns_leave_last_selections_skill_buttons_alone_until_card_rebuilds() {
+    let mut app = card_app();
+    app.world_mut().spawn((hud::CommandCard, Node::default()));
+    let (_, grunt) =
+        utils::create_entity(app.world_mut(), "grunt", utils::at_cell(20, 20), Some(0))
+            .expect("the demo content defines a grunt");
+    app.world_mut().insert_resource(Leading(Some(grunt)));
+    app.world_mut()
+        .run_system_once(hud::update_command_card)
+        .expect("the command card system runs");
+    let before = skill_button_labels(&mut app);
+
+    // The selection moves to a caster without the grunt's blood rite before
+    // the card is rebuilt for it.
+    let (_, necromancer) = utils::create_entity(
+        app.world_mut(),
+        "necromancer",
+        utils::at_cell(24, 20),
+        Some(0),
+    )
+    .expect("the demo content defines a necromancer");
+    app.world_mut().insert_resource(Leading(Some(necromancer)));
+    app.world_mut()
+        .run_system_once(hud::update_skill_cooldowns)
+        .expect("the cooldown labels update");
+
+    assert_eq!(skill_button_labels(&mut app), before);
+}
+
+#[test]
 fn hovered_player_skill_names_its_price_and_cooldown() {
     let mut app = card_app();
     app.world_mut().insert_resource(Leading(None));
@@ -746,11 +781,14 @@ fn hovered_build_buttons_name_their_price_and_time() {
         .run_system_once(hud::update_command_card)
         .expect("the command card system runs");
 
-    // A spawning pit is 200 gold and 100 wood in 120 ticks, 6.0 s; a tumor 25
-    // gold in 40, 2.0 s; a hatchery 400 gold in 200, 10.0 s.
+    // A tunnel is 100 gold and 50 wood in 80 ticks, 4.0 s; a warren 150 gold
+    // and 150 wood in 100, 5.0 s; a spawning pit 200 gold and 100 wood in 120,
+    // 6.0 s; a tumor 25 gold in 40, 2.0 s; a hatchery 400 gold in 200, 10.0 s.
     assert_eq!(
         hover_each::<hud::BuildButton>(&mut app),
         vec![
+            "100 gold, 50 wood, 4.0 s".to_string(),
+            "150 gold, 150 wood, 5.0 s".to_string(),
             "200 gold, 100 wood, 6.0 s".to_string(),
             "25 gold, 2.0 s".to_string(),
             "400 gold, 10.0 s".to_string(),
@@ -784,9 +822,73 @@ fn hovered_morph_names_its_price() {
         .expect("the command card system runs");
     hover_only::<hud::MorphButton>(&mut app);
 
-    // Into a guard tower: 80 gold and 20 wood.
+    // Into a guard tower: 80 gold and 20 wood, and 60 ticks at 20 a second.
     recolor_card(&mut app);
-    assert_eq!(hint_text(&mut app), "80 gold, 20 wood");
+    assert_eq!(hint_text(&mut app), "80 gold, 20 wood, 3.0 s");
+}
+
+#[test]
+fn bound_tunnel_grays_its_build_button_naming_its_other_end() {
+    let mut app = card_app();
+    app.world_mut().spawn((hud::CommandCard, Node::default()));
+    app.world_mut().spawn((hud::CardHint, Text::new("")));
+    let (_, tunnel) =
+        utils::create_entity(app.world_mut(), "tunnel", utils::at_cell(20, 20), Some(0))
+            .expect("the demo content defines a tunnel");
+    spawn::spawn_founded(
+        app.world_mut(),
+        "tunnel",
+        utils::at_cell(30, 20),
+        Some(0),
+        FieldReach::Initial,
+        tunnel,
+        SiteWork::Unattended { founder: tunnel },
+    )
+    .expect("the other end fits at (30, 20)");
+    utils::select(&mut app, tunnel, SelectMode::Replace);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    app.world_mut().insert_resource(Leading(Some(tunnel)));
+    app.world_mut()
+        .run_system_once(hud::update_command_card)
+        .expect("the command card system runs");
+    hover_only::<hud::BuildButton>(&mut app);
+
+    recolor_card(&mut app);
+
+    assert_eq!(card_color::<hud::BuildButton>(&mut app), hud::CARD_DISABLED);
+    assert_eq!(hint_text(&mut app), "Already bound to its other end");
+}
+
+#[test]
+fn pressing_grayed_unload_on_empty_burrow_sends_nothing() {
+    let mut app = card_app();
+    app.world_mut().spawn((hud::CommandCard, Node::default()));
+    let (_, burrow) =
+        utils::create_entity(app.world_mut(), "burrow", utils::at_cell(20, 20), Some(0))
+            .expect("the demo content defines a burrow");
+    utils::select(&mut app, burrow, SelectMode::Replace);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    app.world_mut().insert_resource(Leading(Some(burrow)));
+    app.world_mut()
+        .run_system_once(hud::update_command_card)
+        .expect("the command card system runs");
+    recolor_card(&mut app);
+
+    let mut unloads = app
+        .world_mut()
+        .query_filtered::<&mut Interaction, With<hud::UnloadButton>>();
+    for mut interaction in unloads.iter_mut(app.world_mut()) {
+        *interaction = Interaction::Pressed;
+    }
+    app.world_mut()
+        .run_system_once(hud::unload_card_input)
+        .expect("the input system runs");
+
+    assert!(app.world().resource::<PendingInput>().queued().is_empty());
+    assert!(matches!(
+        app.world().resource::<InputMode>(),
+        InputMode::Normal
+    ));
 }
 
 #[test]
@@ -1026,4 +1128,18 @@ fn hover_only<C: Component>(app: &mut App) {
             Interaction::None
         };
     }
+}
+
+/// The text on each skill button of the card, in query order.
+fn skill_button_labels(app: &mut App) -> Vec<String> {
+    let world = app.world_mut();
+    let children: Vec<Entity> = world
+        .query::<(&hud::SkillButton, &Children)>()
+        .iter(world)
+        .flat_map(|(_, children)| children.iter().collect::<Vec<_>>())
+        .collect();
+    children
+        .into_iter()
+        .filter_map(|child| world.get::<Text>(child).map(|text| text.0.clone()))
+        .collect()
 }

@@ -19,8 +19,9 @@ use ferrets_content::{
     location::Solidity,
     pool::Pool,
     pool_def::PoolId,
+    quantity::Quantity,
     repair::{RepairCost, RepairRate},
-    skills::{Casting, EntityCastEffect, EntityCastTarget, Reach, SkillCaster, SkillDef},
+    skills::{Casting, EntityCastEffect, Reach, Recipient, SkillCaster, SkillDef, Spot, Whom},
     work::{CrewLimit, WorkPresence},
 };
 use ferrets_geometry::cell_size::CellSize;
@@ -1070,7 +1071,7 @@ fn boarding_and_unloading_announce_going_off_map_and_back() {
     utils::push_command(
         &mut app,
         PlayerCommand::Unload {
-            transport: wagon,
+            holder: wagon,
             at: None,
             flush: true,
         },
@@ -1115,13 +1116,17 @@ fn enemy_skill_app() -> (App, ferrets_content::skills::SkillId) {
                 cooldown: 5,
                 caster: SkillCaster::Entity {
                     costs: Vec::new(),
-                    target: EntityCastTarget::Standing {
-                        side: Affiliation::Enemy,
-                        kinds: Kinds::Any,
-                    },
-                    reach: Reach::Wherever,
                     casting: Casting::Instant,
-                    effect: EntityCastEffect::Damage(FixedU64::from_num(5)),
+                    effect: EntityCastEffect::Damage {
+                        amount: FixedU64::from_num(5),
+                        on: Recipient::Standing {
+                            whom: Whom {
+                                side: Affiliation::Enemy,
+                                kinds: Kinds::Any,
+                            },
+                            reach: Reach::Wherever,
+                        },
+                    },
                 },
                 requires: Vec::new(),
             },
@@ -1166,12 +1171,13 @@ fn ground_skill_app() -> (App, ferrets_content::skills::SkillId) {
                 cooldown: 5,
                 caster: SkillCaster::Entity {
                     costs: Vec::new(),
-                    target: EntityCastTarget::Position,
-                    reach: Reach::Wherever,
                     casting: Casting::Instant,
                     effect: EntityCastEffect::Watch {
-                        radius: 2,
-                        duration: 5,
+                        at: Spot::Cell {
+                            reach: Reach::Wherever,
+                        },
+                        radius: Quantity::Constant(2),
+                        duration: Quantity::Constant(5),
                         detection: Detection::Blind,
                     },
                 },

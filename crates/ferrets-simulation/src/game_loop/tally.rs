@@ -196,6 +196,7 @@ fn fold(
         // unmakes nothing either — the same building stands where it stood,
         // under another flag.
         SimulationEvent::EntityHidden { .. }
+        | SimulationEvent::EntityRelocated { .. }
         | SimulationEvent::EntityRevealed { .. }
         | SimulationEvent::EntityCaptured { .. }
         // Remains were never anyone's to lose, so spending them is nothing to

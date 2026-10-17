@@ -37,9 +37,9 @@ pub struct GarrisonFireComponent {
 /// Per-entity in-flight boarding state.
 #[derive(Component, Debug)]
 pub struct BoardComponent {
-    /// The transporter being boarded.
+    /// The holder being boarded.
     pub target: SimulationId,
-    /// The last chase round toward the transporter; identical rounds
+    /// The last chase round toward the holder; identical rounds
     /// accumulate until the chase gives up (see [`ChaseState`]).
     pub last_chase: ChaseState,
 }

@@ -112,7 +112,7 @@ fn difference_takes_short_way_across_north() {
 }
 
 #[test]
-fn difference_never_exceeds_half_turn() {
+fn distance_never_exceeds_half_turn() {
     let half = facing::PER_TURN / 2;
 
     for bits in [0u16, 1, 12_345, 32_767, 32_768, 60_000, u16::MAX] {
@@ -251,7 +251,7 @@ fn cardinal_bearings_give_exact_unit_offsets() {
 }
 
 #[test]
-fn bearing_between_vertices_reads_along_edge() {
+fn unit_offset_between_vertices_lies_on_their_edge() {
     // Half way from north to the first vertex east of it (an eighth of a
     // quarter turn along): the midpoint of the edge between (0, -1) and
     // (0.38268343236, -0.92387953251).

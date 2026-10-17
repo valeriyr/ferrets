@@ -35,8 +35,8 @@
 //! | `"train"` | `trainer`, `type_name` |
 //! | `"build"` | `builder`, `type_name`, `x`, `y`, `flush?` |
 //! | `"cancel_build"` | `site` |
-//! | `"load"` | `transport`, `target`, `flush?` |
-//! | `"unload"` | `transport`, `x?`, `y?`, `flush?` |
+//! | `"load"` | `holder`, `target`, `flush?` |
+//! | `"unload"` | `holder`, `x?`, `y?`, `flush?` |
 //! | `"stop"` | — |
 //!
 //! Determinism contract: view entity lists are ordered by ascending simulation

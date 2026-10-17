@@ -41,12 +41,13 @@ use ferrets_content::{
     research::{ResearchDef, ResearchId},
     resource::{Banking, DepletionPolicy, HarvestData},
     skills::{
-        Casting, EntityCastEffect, EntityCastTarget, PlayerCastEffect, Reach, SkillCaster,
+        Casting, EntityCastEffect, PaymentPoint, PlayerCastEffect, Recipient, SkillCaster,
         SkillDef, SkillId,
     },
     splash::{SplashDef, SplashShape},
     stack_rule::StackRule,
     stats::{EntityModifier, ModifierOp},
+    train::Release,
     transport::{PassengerConduct, PassengerFate},
     turret::{TurretDef, TurretFire, TurretMount, TurretStats, WeaponConduct},
     work::{Attachment, BerthStance, CrewLimit, WorkPresence},
@@ -159,6 +160,16 @@ pub fn make_app(slots: Vec<PlayerSlot>) -> App {
 
 /// The same app under rules a test states for itself — a remains cap, say.
 pub fn make_app_under(slots: Vec<PlayerSlot>, rules: Ruleset) -> App {
+    make_app_seated(slots, rules, 0)
+}
+
+/// The same app with `local` the player whose commands the test issues.
+pub fn make_app_as(slots: Vec<PlayerSlot>, local: PlayerId) -> App {
+    make_app_seated(slots, Ruleset::new(RemainsLimit::Unbounded), local)
+}
+
+/// The app [`make_app_under`] builds, seated as `local`.
+fn make_app_seated(slots: Vec<PlayerSlot>, rules: Ruleset, local: PlayerId) -> App {
     let mut registry = ContentRegistry::default();
     assert_eq!(registry.register_layer(GROUND_LAYER), GROUND);
 
@@ -168,7 +179,7 @@ pub fn make_app_under(slots: Vec<PlayerSlot>, rules: Ruleset) -> App {
     let mut app = App::new();
     app.add_plugins(SimulationPlugin::new(
         GameSession::configured(
-            LocalRole::Player(0),
+            LocalRole::Player(local),
             slots,
             "test",
             Authority::Host {
@@ -777,7 +788,7 @@ pub fn morph_app(model: MovementModel) -> App {
                 // Trains the whelp, and its unrooted form does not: the one
                 // role whose live state is pre-paid, so what happens to the
                 // queue across the change is a contract worth pinning.
-                .with_trainer(["whelp"])
+                .with_trainer(["whelp"], Release::Beside)
                 .with_morphs([MorphTransition::new(
                     "golem",
                     MorphCourse::direct(MorphInterrupted::Reverts),
@@ -1169,13 +1180,15 @@ pub fn brood_app(model: MovementModel) -> App {
                 cooldown: 10,
                 caster: SkillCaster::Entity {
                     costs: Vec::new(),
-                    target: EntityCastTarget::Caster,
-                    reach: Reach::Wherever,
                     casting: Casting::Delayed {
                         point: Quantity::Constant(6),
                         period: Quantity::Constant(8),
+                        pays: PaymentPoint::AtLanding,
                     },
-                    effect: EntityCastEffect::Damage(FixedU64::from_num(5)),
+                    effect: EntityCastEffect::Damage {
+                        amount: FixedU64::from_num(5),
+                        on: Recipient::Caster,
+                    },
                 },
                 requires: Vec::new(),
             },
@@ -1449,6 +1462,22 @@ pub fn order_morph(app: &mut App, entity: Entity, type_name: &str) {
         );
 }
 
+/// Pushes a Move order to `(x, y)` onto the entity's queue, behind whatever
+/// it is doing.
+pub fn order_move(app: &mut App, entity: Entity, x: u32, y: u32) {
+    app.world_mut()
+        .get_mut::<OrderQueueComponent>(entity)
+        .expect("a walker takes orders")
+        .push(
+            Order::Move {
+                target: pos(x, y),
+                size: CellSize::ONE,
+                range: 0,
+            },
+            None,
+        );
+}
+
 /// Orders `trainer` to train one settler of [`supply_app`].
 pub fn train_settler(app: &mut App, trainer: SimulationId) {
     push_command(
@@ -1495,6 +1524,20 @@ pub fn bearing_of(world: &World, entity: Entity) -> Facing {
         .expect("a turreted entity carries the bearings its guns are trained at")
         .0[0]
         .bearing
+}
+
+/// Marks `cell` of the ground layer statically held.
+pub fn hold_cell(app: &mut App, cell: CellPos) {
+    app.world_mut()
+        .resource_mut::<Map>()
+        .set_static_occupied(GROUND, cell, true);
+}
+
+/// Frees `cell` of the ground layer, statically held before.
+pub fn free_cell(app: &mut App, cell: CellPos) {
+    app.world_mut()
+        .resource_mut::<Map>()
+        .set_static_occupied(GROUND, cell, false);
 }
 
 /// Marks or clears every cell of the map's ground layer, used to box a worker in.
@@ -1647,6 +1690,24 @@ pub fn apply_buff(world: &mut World, entity: Entity, id: EntityBuffId) {
         Bearing::Borne => {}
         Bearing::Uncarried => panic!("apply_buff is given a buff its target carries"),
     }
+}
+
+/// Switches `entity` off with a `dazed` buff lasting `ticks`, registered for
+/// the purpose.
+pub fn disable_for(app: &mut App, entity: Entity, ticks: u32) {
+    let dazed = app
+        .world_mut()
+        .resource_mut::<ContentRegistry>()
+        .register_entity_buff(
+            "dazed",
+            EntityBuffDef {
+                effects: vec![EntityEffect::Disable],
+                lasting: Lasting::For(ticks),
+                stack_rule: StackRule::Refresh,
+                interrupted_by: Vec::new(),
+            },
+        );
+    apply_buff(app.world_mut(), entity, dazed);
 }
 
 /// Removes `amount` health points directly, standing in for damage taken.
@@ -2297,7 +2358,7 @@ pub fn supply_app() -> App {
                 .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
                 .with_pool(Pool::health(100))
                 .with_dying(2, [])
-                .with_trainer(["settler", "worker"]),
+                .with_trainer(["settler", "worker"], Release::Beside),
         );
         // Works from outside the site, so a camp going up stays observable.
         registry.register(
@@ -2473,7 +2534,10 @@ pub fn research_app_seating(slots: Vec<PlayerSlot>) -> App {
                 .with_build(4, site_initial(&[PoolId::HEALTH]))
                 .with_pool(Pool::health(100))
                 .with_dying(2, [])
-                .with_trainer(["pikeman", "halberdier", "knight", "crossbowman"]),
+                .with_trainer(
+                    ["pikeman", "halberdier", "knight", "crossbowman"],
+                    Release::Beside,
+                ),
         );
     }
     app.world_mut().resource::<ContentRegistry>().validate();
@@ -2550,7 +2614,7 @@ pub fn annex_app() -> App {
                     (CellPos::new(2, 0), Kinds::types(annexes)),
                     (CellPos::new(0, 2), Kinds::types(annexes)),
                 ])
-                .with_trainer(["sentry", "runner"])
+                .with_trainer(["sentry", "runner"], Release::Beside)
                 .with_morphs([MorphTransition::new(
                     "keep_aloft",
                     MorphCourse::direct(MorphInterrupted::Reverts),
@@ -2623,7 +2687,7 @@ pub fn annex_app() -> App {
                     )],
                 )
                 .with_researcher([signals])
-                .with_trainer(["signaler"])
+                .with_trainer(["signaler"], Release::Beside)
                 .with_annex(
                     AloneConduct::Standing {
                         work: AnnexWork::Idles,
@@ -2867,7 +2931,7 @@ pub fn transport_app() -> App {
                 .with_sight_range(8)
                 .with_tags(["infantry"])
                 .with_stat(EntityStatId::CARGO_SIZE, FixedU64::ONE)
-                .with_trainer(["rifleman"])
+                .with_trainer(["rifleman"], Release::Beside)
                 .with_researcher([drill]),
         );
         registry.register(
@@ -3334,12 +3398,24 @@ pub fn run_until_aboard(app: &mut App, holder: Entity, count: usize, limit: u32)
     );
 }
 
-/// Issues an unload command for `transport` as the local player.
-pub fn unload(app: &mut App, transport: SimulationId, at: Option<FixedUVec2>) {
+/// Orders `holder` to take `target` in.
+pub fn load(app: &mut App, holder: SimulationId, target: SimulationId) {
+    push_command(
+        app,
+        PlayerCommand::Load {
+            holder,
+            target,
+            flush: true,
+        },
+    );
+}
+
+/// Issues an unload command for `holder` as the local player.
+pub fn unload(app: &mut App, holder: SimulationId, at: Option<FixedUVec2>) {
     push_command(
         app,
         PlayerCommand::Unload {
-            transport,
+            holder,
             at,
             flush: true,
         },
@@ -3354,6 +3430,45 @@ pub fn send_to(app: &mut App, unit: SimulationId, target: SimulationId) {
         app,
         PlayerCommand::SendToEntity {
             target,
+            flush: true,
+        },
+    );
+}
+
+/// Orders `unit` to board `target`, selecting it first.
+pub fn board(app: &mut App, unit: SimulationId, target: SimulationId) {
+    select(app, unit);
+    push_command(
+        app,
+        PlayerCommand::Board {
+            target,
+            flush: true,
+        },
+    );
+}
+
+/// Orders `builder` to raise `type_name` at `(x, y)`, behind whatever it has
+/// queued.
+pub fn build_entity(app: &mut App, builder: SimulationId, type_name: &str, x: u32, y: u32) {
+    push_command(
+        app,
+        PlayerCommand::BuildEntity {
+            builder,
+            type_name: type_name.into(),
+            position: pos(x, y),
+            flush: false,
+        },
+    );
+}
+
+/// Commands `entity`'s change into `type_name` the way a player does:
+/// selects it and issues the morph command, so the executor judges it.
+pub fn command_morph(app: &mut App, entity: SimulationId, type_name: &str) {
+    select(app, entity);
+    push_command(
+        app,
+        PlayerCommand::Morph {
+            type_name: type_name.to_string(),
             flush: true,
         },
     );
@@ -3386,6 +3501,31 @@ pub fn use_skill(app: &mut App, skill: &str, caster: SkillCasterRef, target: Opt
             caster,
             target,
         },
+    );
+}
+
+/// Casts `skill` from `caster` at nothing but itself, as the local player.
+pub fn cast_self(app: &mut App, caster: SimulationId, skill: &str) {
+    use_skill(app, skill, SkillCasterRef::Entity(caster), None);
+}
+
+/// Casts `skill` from `caster` at the cell `(x, y)`, as the local player.
+pub fn cast_at(app: &mut App, caster: SimulationId, skill: &str, x: u32, y: u32) {
+    use_skill(
+        app,
+        skill,
+        SkillCasterRef::Entity(caster),
+        Some(SkillTarget::Position(pos(x, y))),
+    );
+}
+
+/// Casts `skill` from `caster` at `target`, as the local player.
+pub fn cast_on(app: &mut App, caster: SimulationId, skill: &str, target: SimulationId) {
+    use_skill(
+        app,
+        skill,
+        SkillCasterRef::Entity(caster),
+        Some(SkillTarget::Entity(target)),
     );
 }
 
@@ -3814,7 +3954,7 @@ pub fn register_orders_content(app: &mut App) {
                 .with_dying(2, [])
                 .with_price([("gold", 40)])
                 .with_build(4, site_initial(&[PoolId::HEALTH]))
-                .with_trainer(["soldier"]),
+                .with_trainer(["soldier"], Release::Beside),
         );
         // Twenty ticks to train, where the soldier takes four: long enough that
         // a cancel aimed at the entry in progress lands while it is still under
@@ -3834,7 +3974,7 @@ pub fn register_orders_content(app: &mut App) {
                 .with_dying(2, [])
                 .with_price([("gold", 40)])
                 .with_build(4, site_initial(&[PoolId::HEALTH]))
-                .with_trainer(["recruit"]),
+                .with_trainer(["recruit"], Release::Beside),
         );
         // A plain obstacle, for walling sources off.
         registry.register(

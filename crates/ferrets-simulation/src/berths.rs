@@ -24,6 +24,7 @@ use crate::{
     },
     entity_def,
     entity_index::EntityIndex,
+    events::{EventRecord, SimulationEvent},
     map::Map,
     simulation_id::SimulationId,
 };
@@ -140,24 +141,51 @@ pub fn vacate(world: &mut World, attached: &AttachedComponent) {
     }
 }
 
-/// The point berth `seat` of `group` on `job` is at — where a worker's
-/// middle sits. A point that would lie off the map is held at the middle of
-/// the map's edge cell.
-fn seat_point(world: &World, job: Entity, group: &str, seat: usize) -> FixedUVec2 {
-    let anchor = FixedUVec2::from(body::anchor(entity_def::position(world, job)));
-    let point = unsigned(signed(anchor) + group_points(world, job, group)[seat]);
-    let map = world.resource::<Map>();
-    let half = FixedU64::ONE / 2;
-    FixedUVec2::new(
-        point.x.min(FixedU64::from_num(map.width()) - half),
-        point.y.min(FixedU64::from_num(map.height()) - half),
-    )
+/// Puts every worker seated on `job` back on its berth's point as the job now
+/// stands, announcing each move, and returns the workers moved: a still one
+/// stays there, and one under way picks up from it on the next tick. A job
+/// nobody ever sat on has nobody to put back.
+pub fn reseat(world: &mut World, job: Entity) -> Vec<Entity> {
+    let Some(berths) = world.entity(job).get::<BerthsComponent>() else {
+        return Vec::new();
+    };
+    let seated: Vec<(String, usize, SimulationId)> = berths
+        .seats
+        .iter()
+        .flat_map(|(group, seats)| {
+            seats.iter().enumerate().filter_map(move |(seat, holder)| {
+                holder.map(|worker| (group.clone(), seat, worker))
+            })
+        })
+        .collect();
+    let mut moved = Vec::with_capacity(seated.len());
+    for (group, seat, worker_id) in seated {
+        let worker = world
+            .resource::<EntityIndex>()
+            .any(worker_id)
+            .expect("a berth holds a worker, dying ones included");
+        let point = seat_point(world, job, &group, seat);
+        let to = position_centered_on(world, worker, point);
+        let mut location = world
+            .get_mut::<LocationComponent>(worker)
+            .expect("a seated worker is on the map");
+        let from = location.position;
+        location.position = to;
+        let announced = SimulationEvent::EntityRelocated {
+            entity: worker_id,
+            from,
+            to,
+        };
+        world.resource_mut::<EventRecord>().emit(announced);
+        moved.push(worker);
+    }
+    moved
 }
 
 /// The position that puts `worker`'s middle on `point`: half the worker's
 /// footprint comes off the point, since a position names the corner its
 /// footprint starts at.
-pub fn position_centred_on(world: &World, worker: Entity, point: FixedUVec2) -> FixedUVec2 {
+pub fn position_centered_on(world: &World, worker: Entity, point: FixedUVec2) -> FixedUVec2 {
     let size = entity_def::of(world, worker)
         .location
         .expect("validated content defines a location")
@@ -339,7 +367,7 @@ pub fn advance(world: &mut World) {
             }
         };
 
-        let position = position.map(|point| position_centred_on(world, entity, point));
+        let position = position.map(|point| position_centered_on(world, entity, point));
         let mut entity_mut = world.entity_mut(entity);
         if let Some(position) = position {
             entity_mut
@@ -470,6 +498,20 @@ fn point_between(
     let fraction = (along / stretch).to_num::<FixedI64>();
     let (a, b) = (signed(a), signed(b));
     Some(unsigned(a + (b - a) * fraction))
+}
+
+/// The point berth `seat` of `group` on `job` is at — where a worker's
+/// middle sits. A point that would lie off the map is held at the middle of
+/// the map's edge cell.
+fn seat_point(world: &World, job: Entity, group: &str, seat: usize) -> FixedUVec2 {
+    let anchor = FixedUVec2::from(body::anchor(entity_def::position(world, job)));
+    let point = unsigned(signed(anchor) + group_points(world, job, group)[seat]);
+    let map = world.resource::<Map>();
+    let half = FixedU64::ONE / 2;
+    FixedUVec2::new(
+        point.x.min(FixedU64::from_num(map.width()) - half),
+        point.y.min(FixedU64::from_num(map.height()) - half),
+    )
 }
 
 /// The berths of `group` on `job` open to a newcomer, by index: the points

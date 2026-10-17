@@ -3,18 +3,27 @@
 
 use bevy::prelude::*;
 use ferrets_content::{
+    affiliation::Affiliation,
     attack::Slain,
     cost::Cost,
+    detection::Detection,
     entity_modifiers::EntityModifiers,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
+    field::{FieldAction, FieldDecay, FieldDef, FieldLayer, FieldPlacement, FieldVision},
     kinds::Kinds,
+    landing::Landing,
     location::Solidity,
     player_buffs::PlayerBuffDef,
     pool::Pool,
+    pool_def::PoolId,
+    price,
     quantity::Quantity,
     registry::ContentRegistry,
-    skills::{Casting, EntityCastEffect, EntityCastTarget, Reach, SkillCaster, SkillDef},
+    skills::{
+        Casting, EntityCastEffect, PaymentPoint, Reach, Recipient, Refund, SkillCaster, SkillDef,
+        SummonArrival, SummonAt, Whom,
+    },
     stack_rule::StackRule,
     stats::{EntityModifier, ModifierOp},
 };
@@ -22,17 +31,18 @@ use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::{FixedI64, FixedU64};
 use ferrets_simulation::{
     buffs_store::Term,
-    command::{PlayerCommand, SkillCasterRef, SkillTarget},
-    components::entity_info::EntityInfoComponent,
+    command::{PlayerCommand, SkillTarget},
+    components::{entity_info::EntityInfoComponent, entity_skills::SkillsComponent, pools},
+    cooldown::Cooldown,
     entity_def,
     entity_index::EntityIndex,
     events::{SimulationEvent, SpawnCause},
-    game_loop::damage,
-    map::Map,
+    game_loop::{damage, fields},
     order::Order,
     player_buffs::PlayerBuffs,
     session::{GameSession, player_id::PlayerId, player_slot::PlayerSlot, player_type::PlayerType},
     simulation_id::SimulationId,
+    spawn,
     statistics::Statistics,
 };
 
@@ -67,6 +77,19 @@ fn raise_spends_body_and_sets_down_what_it_makes() {
         owners(&app, "skeleton").all(|owner| owner == Some(0)),
         "what a caster raises is the caster's own"
     );
+}
+
+#[test]
+fn raise_reads_its_count_off_caster() {
+    let mut app = app();
+    let necromancer = caster(&mut app, 5, 5);
+    let body = fallen(&mut app, 6, 5);
+
+    utils::cast_on(&mut app, necromancer, "raise_host", body);
+    utils::run_ticks(&mut app, 5);
+
+    // `host_size` 3.5, truncated: three whole skeletons.
+    assert_eq!(count_of(&app, "skeleton"), 3);
 }
 
 #[test]
@@ -158,7 +181,7 @@ fn summon_with_nowhere_to_stand_pays_nothing() {
 
     // The colossus is wider than the map, so no cell can hold one: the cast is
     // refused before anything is spent.
-    cast(&mut app, necromancer, body, "raise_colossus");
+    utils::cast_on(&mut app, necromancer, "raise_colossus", body);
     utils::run_ticks(&mut app, 5);
 
     assert_eq!(
@@ -181,6 +204,38 @@ fn summon_with_nowhere_to_stand_pays_nothing() {
 }
 
 #[test]
+fn summon_sets_down_only_where_summoned_types_placement_rules_admit() {
+    let mut app = app();
+    let necromancer = caster(&mut app, 5, 5);
+    let body = fallen(&mut app, 6, 5);
+    let blight = app
+        .world()
+        .resource::<ContentRegistry>()
+        .field("blight")
+        .expect("blight is registered");
+    fields::apply_action(
+        app.world_mut(),
+        1,
+        blight,
+        CellPos::new(6, 5),
+        0,
+        FieldAction::Cover,
+    );
+
+    utils::cast_on(&mut app, necromancer, "raise_ghouls", body);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+
+    let mut cells: Vec<CellPos> = utils::owned_of_type(app.world_mut(), "ghoul", 0)
+        .into_iter()
+        .map(|ghoul| utils::cell_of(app.world(), ghoul))
+        .collect();
+    cells.sort_unstable_by_key(|cell| (cell.y, cell.x));
+    // Unblighted, the two would rise at (6, 4) and on the body's own cell,
+    // (6, 5); blight holds (6, 5), so the second takes (7, 5).
+    assert_eq!(cells, vec![CellPos::new(6, 4), CellPos::new(7, 5)]);
+}
+
+#[test]
 fn summon_over_supply_ceiling_pays_nothing() {
     let mut app = app();
     let necromancer = caster(&mut app, 5, 5);
@@ -188,7 +243,7 @@ fn summon_over_supply_ceiling_pays_nothing() {
 
     // Two wardens cost two supply each and the player provides none, so half a
     // summon is not offered: the cast does nothing at all.
-    cast(&mut app, necromancer, body, "raise_wardens");
+    utils::cast_on(&mut app, necromancer, "raise_wardens", body);
     utils::run_ticks(&mut app, 5);
 
     assert_eq!(count_of(&app, "warden"), 0, "half a summon is not offered");
@@ -271,7 +326,7 @@ fn caster_without_reach_casts_where_it_stands() {
     let acolyte = summoner(&mut app, 2, 5);
     let body = fallen(&mut app, 14, 5);
 
-    cast(&mut app, acolyte, body, "raise_where_it_stands");
+    utils::cast_on(&mut app, acolyte, "raise_where_it_stands", body);
     utils::run_ticks(&mut app, 5);
 
     assert_eq!(
@@ -289,7 +344,7 @@ fn body_in_fog_cannot_be_raised() {
     let acolyte = summoner(&mut app, 2, 2);
     let body = fallen(&mut app, 29, 29);
 
-    cast(&mut app, acolyte, body, "raise_where_it_stands");
+    utils::cast_on(&mut app, acolyte, "raise_where_it_stands", body);
     utils::run_ticks(&mut app, 5);
 
     assert_eq!(
@@ -314,7 +369,7 @@ fn summon_with_room_for_only_one_raises_none() {
     // around it finds exactly one place to stand where the raise needs two.
     // A body lies on held ground, so this leaves the aim itself untouched.
     utils::set_all_cells_statically_occupied(app.world_mut(), true);
-    free_cell(&mut app, CellPos::new(7, 5));
+    utils::free_cell(&mut app, CellPos::new(7, 5));
 
     raise(&mut app, necromancer, body);
     utils::run_ticks(&mut app, 5);
@@ -344,7 +399,7 @@ fn worked_cast_lands_on_its_point() {
     let necromancer = caster(&mut app, 5, 5);
     let body = fallen(&mut app, 6, 5);
 
-    cast(&mut app, necromancer, body, "raise_slowly");
+    utils::cast_on(&mut app, necromancer, "raise_slowly", body);
     // The command waits out the input delay (utils::APPLY = 3), and the tick
     // it applies on is the first tick of work: the skeletons rise on the fifth
     // of those, the seventh from here — 3 + 5 - 1.
@@ -375,7 +430,7 @@ fn worked_cast_walks_in_before_its_work_starts() {
 
     // Twelve cells out with a reach of four: the work cannot start until the
     // walk is over, so the cast lands far later than its five-tick point.
-    cast(&mut app, necromancer, body, "raise_slowly");
+    utils::cast_on(&mut app, necromancer, "raise_slowly", body);
     utils::run_ticks(&mut app, 12);
 
     assert_eq!(
@@ -409,7 +464,7 @@ fn caster_stands_through_what_is_left_of_its_cast() {
     let necromancer = caster(&mut app, 5, 5);
     let body = fallen(&mut app, 6, 5);
 
-    cast(&mut app, necromancer, body, "raise_slowly");
+    utils::cast_on(&mut app, necromancer, "raise_slowly", body);
     // Landed on the seventh tick, with a period of eight: three more to stand
     // through before the order is done with it.
     utils::run_ticks(&mut app, 8);
@@ -434,7 +489,7 @@ fn point_pulled_under_work_already_done_lands_at_once() {
     let necromancer = caster(&mut app, 5, 5);
     let body = fallen(&mut app, 6, 5);
 
-    cast(&mut app, necromancer, body, "raise_by_stat");
+    utils::cast_on(&mut app, necromancer, "raise_by_stat", body);
     // Four ticks of work against a point of ten, then a buff pulls the point
     // to two — under the work already done. A cast has no next cycle to fire
     // on, so it lands the very next tick rather than being skipped.
@@ -460,7 +515,7 @@ fn fractional_cast_point_rounds_up() {
     // A point of 10 − 0.75 = 9.25 ticks, read as 10: not landed after the
     // ninth tick of work, landed on the tenth.
     apply_buff(&mut app, "trimmed_rites");
-    cast(&mut app, necromancer, body, "raise_by_stat");
+    utils::cast_on(&mut app, necromancer, "raise_by_stat", body);
     utils::run_ticks(&mut app, utils::APPLY + 8);
     assert_eq!(count_of(&app, "skeleton"), 0);
     utils::run_ticks(&mut app, 1);
@@ -478,7 +533,7 @@ fn cast_landing_past_its_period_frees_caster_at_once() {
     // it. The cast lands on the twentieth tick of work with the period long
     // gone, so the caster is free the same tick it casts.
     apply_buff(&mut app, "drawn_out_rites");
-    cast(&mut app, necromancer, body, "raise_by_stat");
+    utils::cast_on(&mut app, necromancer, "raise_by_stat", body);
     utils::run_ticks(&mut app, utils::APPLY + 19);
 
     assert_eq!(count_of(&app, "skeleton"), 2, "the cast landed");
@@ -497,7 +552,7 @@ fn cast_lands_once_though_its_cooldown_comes_round_first() {
     // Five ticks to the point, eight to the end, and two of cooldown: the
     // skill is ready again while the caster is still standing through its own
     // cast, so only the cast's own stage stops it raising twice.
-    cast(&mut app, necromancer, body, "raise_slowly");
+    utils::cast_on(&mut app, necromancer, "raise_slowly", body);
     utils::run_ticks(&mut app, utils::APPLY + 8);
 
     assert_eq!(
@@ -515,12 +570,7 @@ fn cast_that_kills_its_caster_ends_as_death() {
     // The queue is out of the world while an order runs, so a caster the cast
     // killed would keep a dying phase nothing counts down unless the order
     // itself says it died.
-    utils::use_skill(
-        &mut app,
-        "self_immolate",
-        SkillCasterRef::Entity(necromancer),
-        None,
-    );
+    utils::cast_self(&mut app, necromancer, "self_immolate");
     utils::run_ticks(&mut app, utils::APPLY + 8);
 
     assert!(
@@ -574,7 +624,7 @@ fn cast_cut_short_before_its_point_costs_nothing() {
     let necromancer = caster(&mut app, 5, 5);
     let body = fallen(&mut app, 6, 5);
 
-    cast(&mut app, necromancer, body, "raise_slowly");
+    utils::cast_on(&mut app, necromancer, "raise_slowly", body);
     // Two ticks in: the work has started and has three more to run.
     utils::run_ticks(&mut app, 4);
     // Sent somewhere else mid-cast: the order goes, and the work with it.
@@ -601,6 +651,307 @@ fn cast_cut_short_before_its_point_costs_nothing() {
             .len(),
         1,
         "the body it was working on still lies there"
+    );
+}
+
+//
+// ─── Paying for a cast ──────────────────────────────────────────────────────
+//
+
+#[test]
+fn cast_paid_at_start_pays_on_its_first_tick_of_casting() {
+    let mut app = app();
+    let necromancer = caster(&mut app, 5, 5);
+    let body = fallen(&mut app, 6, 5);
+
+    utils::cast_on(&mut app, necromancer, "raise_committed", body);
+    // The command applies on the third tick (utils::APPLY = 3), which is the
+    // first tick of casting: paid then, four ticks before it lands.
+    utils::run_ticks(&mut app, utils::APPLY);
+
+    assert_eq!(count_of(&app, "skeleton"), 0, "nothing has landed yet");
+    assert_eq!(
+        energy_as_u32(&app, necromancer),
+        60,
+        "100 - 40, paid already"
+    );
+    // On its cooldown from the same tick, which the cooldown pass after the
+    // orders has already counted down once: 10 - 1.
+    assert_eq!(
+        cooldown_of(&app, necromancer, "raise_committed"),
+        Cooldown::Cooling { remaining: 9 }
+    );
+
+    // The fifth tick of casting lands it: 3 + 5 - 1 = 7 ticks in all.
+    utils::run_ticks(&mut app, 4);
+    assert_eq!(count_of(&app, "skeleton"), 2);
+    assert_eq!(energy_as_u32(&app, necromancer), 60, "paid once, not again");
+}
+
+#[test]
+fn cast_paid_at_start_is_announced_as_it_lands() {
+    let mut app = app();
+    let necromancer = caster(&mut app, 5, 5);
+    let body = fallen(&mut app, 6, 5);
+    utils::record_announcements(&mut app);
+
+    utils::cast_on(&mut app, necromancer, "raise_committed", body);
+    utils::run_ticks(&mut app, utils::APPLY);
+    assert!(skill_casts(&app).is_empty(), "paid on tick 3, not yet cast");
+    utils::run_ticks(&mut app, 4);
+
+    assert_eq!(
+        skill_casts(&app),
+        vec![SimulationEvent::SkillCast {
+            caster: necromancer,
+            target: SkillTarget::Position(utils::pos(6, 5)),
+            skill: utils::skill_id(&app, "raise_committed"),
+        }],
+        "announced once, on tick 7 as it lands"
+    );
+}
+
+#[test]
+fn cast_paid_at_start_cut_short_keeps_what_it_paid() {
+    let mut app = app();
+    let necromancer = caster(&mut app, 5, 5);
+    let body = fallen(&mut app, 6, 5);
+
+    utils::cast_on(&mut app, necromancer, "raise_committed", body);
+    utils::run_ticks(&mut app, 4);
+    // Sent somewhere else on its second tick of casting.
+    move_away(&mut app, necromancer);
+    utils::run_ticks(&mut app, utils::APPLY);
+
+    assert_eq!(count_of(&app, "skeleton"), 0, "nothing was raised");
+    assert_eq!(
+        energy_as_u32(&app, necromancer),
+        60,
+        "100 - 40, never given back"
+    );
+    // Paid on tick 3, its cooldown counted down that tick and every tick
+    // since, to tick 7: 10 - (7 - 3 + 1) = 5.
+    assert_eq!(
+        cooldown_of(&app, necromancer, "raise_committed"),
+        Cooldown::Cooling { remaining: 5 }
+    );
+}
+
+#[test]
+fn refundable_cast_cut_short_gives_everything_back() {
+    let mut app = app();
+    utils::grant_gold(&mut app, 50);
+    let necromancer = caster(&mut app, 5, 5);
+    let body = fallen(&mut app, 6, 5);
+
+    utils::cast_on(&mut app, necromancer, "raise_refundable", body);
+    utils::run_ticks(&mut app, 4);
+    assert_eq!(utils::gold(app.world()), 40, "50 - 10, paid at the start");
+    move_away(&mut app, necromancer);
+    utils::run_ticks(&mut app, utils::APPLY);
+
+    assert_eq!(count_of(&app, "skeleton"), 0);
+    assert_eq!(energy_as_u32(&app, necromancer), 100, "the energy is back");
+    assert_eq!(utils::gold(app.world()), 50, "and the gold, to who paid it");
+    assert_eq!(
+        cooldown_of(&app, necromancer, "raise_refundable"),
+        Cooldown::Ready,
+        "and the cooldown is reset"
+    );
+}
+
+#[test]
+fn refundable_cast_that_cannot_land_at_its_point_gives_everything_back() {
+    let mut app = app();
+    utils::grant_gold(&mut app, 50);
+    let necromancer = caster(&mut app, 5, 5);
+    let body = fallen(&mut app, 6, 5);
+    utils::record_announcements(&mut app);
+    // Room for exactly the two skeletons beside the body when casting starts.
+    utils::set_all_cells_statically_occupied(app.world_mut(), true);
+    utils::free_cell(&mut app, CellPos::new(7, 5));
+    utils::free_cell(&mut app, CellPos::new(7, 6));
+
+    utils::cast_on(&mut app, necromancer, "raise_refundable", body);
+    utils::run_ticks(&mut app, utils::APPLY);
+    assert_eq!(
+        energy_as_u32(&app, necromancer),
+        60,
+        "judged and paid at the start"
+    );
+    // One of the two cells is taken before the point: the raise no longer fits.
+    utils::hold_cell(&mut app, CellPos::new(7, 6));
+    utils::run_ticks(&mut app, 4);
+
+    assert_eq!(count_of(&app, "skeleton"), 0, "half a raise is not offered");
+    assert_eq!(
+        energy_as_u32(&app, necromancer),
+        100,
+        "a cast that fizzles gives it back"
+    );
+    assert_eq!(utils::gold(app.world()), 50);
+    assert_eq!(
+        cooldown_of(&app, necromancer, "raise_refundable"),
+        Cooldown::Ready,
+        "and its cooldown"
+    );
+    assert!(skill_casts(&app).is_empty(), "and nothing was cast");
+}
+
+#[test]
+fn refundable_cast_of_caster_disabled_mid_cast_gives_everything_back() {
+    let mut app = app();
+    utils::grant_gold(&mut app, 50);
+    let (necromancer_entity, necromancer) = utils::create_owned(&mut app, "necromancer", 5, 5, 0);
+    let body = fallen(&mut app, 6, 5);
+
+    utils::cast_on(&mut app, necromancer, "raise_refundable", body);
+    utils::run_ticks(&mut app, 4);
+    utils::disable_for(&mut app, necromancer_entity, 20);
+    utils::run_ticks(&mut app, 2);
+
+    assert_eq!(count_of(&app, "skeleton"), 0);
+    assert_eq!(energy_as_u32(&app, necromancer), 100, "the energy is back");
+    assert_eq!(utils::gold(app.world()), 50, "and the gold");
+    assert_eq!(
+        cooldown_of(&app, necromancer, "raise_refundable"),
+        Cooldown::Ready
+    );
+}
+
+#[test]
+fn caster_relocated_out_of_reach_mid_cast_breaks_cast() {
+    let mut app = app();
+    utils::grant_gold(&mut app, 50);
+    let (necromancer_entity, necromancer) = utils::create_owned(&mut app, "necromancer", 5, 5, 0);
+    let body = fallen(&mut app, 6, 5);
+
+    utils::cast_on(&mut app, necromancer, "raise_refundable", body);
+    utils::run_ticks(&mut app, 4);
+    // Six cells from the body, two past the raise's reach of four: a cast
+    // under way does not walk back.
+    spawn::relocate(
+        app.world_mut(),
+        &[(necromancer_entity, CellPos::new(12, 5))],
+    );
+    utils::run_ticks(&mut app, 2);
+
+    assert_eq!(count_of(&app, "skeleton"), 0);
+    assert_eq!(energy_as_u32(&app, necromancer), 100, "refunded");
+    assert!(orders_of(&app, necromancer).is_empty());
+    assert_eq!(
+        entity_def::position(app.world(), necromancer_entity),
+        utils::pos(12, 5)
+    );
+}
+
+#[test]
+fn refunded_health_cost_holds_under_maximum() {
+    let mut app = app();
+    let (necromancer_entity, necromancer) = utils::create_owned(&mut app, "necromancer", 5, 5, 0);
+    let body = fallen(&mut app, 6, 5);
+
+    utils::cast_on(&mut app, necromancer, "blood_rite", body);
+    utils::run_ticks(&mut app, utils::APPLY);
+    assert_eq!(
+        utils::health_as_u32(&app, necromancer_entity),
+        30,
+        "40 - 10"
+    );
+    pools::restore(
+        app.world_mut(),
+        necromancer_entity,
+        PoolId::HEALTH,
+        utils::fixed("5"),
+    );
+    move_away(&mut app, necromancer);
+    utils::run_ticks(&mut app, utils::APPLY);
+
+    // Mended to 35 while it cast, the 10 paid back is held at its 40, not 45.
+    assert_eq!(utils::health_as_u32(&app, necromancer_entity), 40);
+}
+
+#[test]
+fn caster_dying_mid_cast_gets_nothing_back() {
+    let mut app = app();
+    utils::grant_gold(&mut app, 50);
+    let (necromancer_entity, necromancer) = utils::create_owned(&mut app, "necromancer", 5, 5, 0);
+    let body = fallen(&mut app, 6, 5);
+
+    utils::cast_on(&mut app, necromancer, "raise_refundable", body);
+    utils::run_ticks(&mut app, 4);
+    spawn::destroy_entity(app.world_mut(), necromancer_entity);
+    utils::run_ticks(&mut app, 1);
+
+    assert_eq!(
+        utils::gold(app.world()),
+        40,
+        "50 - 10: a caster that died is owed nothing"
+    );
+}
+
+#[test]
+fn cast_without_reach_breaks_when_its_aim_is_gone() {
+    let mut app = app();
+    let acolyte = summoner(&mut app, 5, 5);
+    let necromancer = caster(&mut app, 11, 5);
+    let body = fallen(&mut app, 12, 5);
+
+    // The acolyte starts working on tick 3 and would land on tick 3 + 5 - 1
+    // = 7; the necromancer's instant raise spends the body on tick 4.
+    utils::cast_on(&mut app, acolyte, "raise_from_afar", body);
+    utils::run_ticks(&mut app, 1);
+    raise(&mut app, necromancer, body);
+    utils::run_ticks(&mut app, 4);
+
+    assert_eq!(
+        count_of(&app, "skeleton"),
+        2,
+        "the necromancer's two, and none of the acolyte's"
+    );
+    assert!(
+        orders_of(&app, acolyte).is_empty(),
+        "the acolyte's cast broke the tick its body was gone"
+    );
+    assert_eq!(energy_as_u32(&app, acolyte), 100, "having paid nothing");
+}
+
+#[test]
+fn target_leaving_reach_breaks_cast_under_way() {
+    let mut app = app();
+    let (necromancer_entity, necromancer) = utils::create_owned(&mut app, "necromancer", 5, 5, 0);
+    let (runner_entity, runner) = utils::create_owned(&mut app, "runner", 8, 5, 1);
+
+    utils::cast_on(&mut app, necromancer, "slow_bolt", runner);
+    utils::run_ticks(&mut app, utils::APPLY);
+    assert_eq!(
+        energy_as_u32(&app, necromancer),
+        60,
+        "paid as casting starts"
+    );
+    // The runner walks off at half a cell a tick: out of the bolt's four cells
+    // well before its tenth tick of casting.
+    utils::order_move(&mut app, runner_entity, 20, 5);
+    utils::run_ticks(&mut app, 12);
+
+    assert_eq!(
+        utils::health_as_u32(&app, runner_entity),
+        30,
+        "the bolt never landed"
+    );
+    assert_eq!(
+        energy_as_u32(&app, necromancer),
+        60,
+        "and what it paid stays spent"
+    );
+    assert!(
+        orders_of(&app, necromancer).is_empty(),
+        "the cast broke rather than chasing its target"
+    );
+    assert_eq!(
+        entity_def::position(app.world(), necromancer_entity),
+        utils::pos(5, 5),
+        "the caster stood where it cast"
     );
 }
 
@@ -643,6 +994,21 @@ fn app() -> App {
                 .with_location(utils::GROUND, CellSize::new(40, 40), Solidity::Solid)
                 .with_pool(Pool::health(20)),
         );
+        let blight = registry.register_field(
+            "blight",
+            FieldDef::new(
+                FieldLayer::Passable(utils::GROUND.into()),
+                FieldDecay::Never,
+                FieldVision::Dark,
+                Detection::Blind,
+            ),
+        );
+        registry.register(
+            EntityTypeDef::new("ghoul")
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_pool(Pool::health(20))
+                .with_field_placement([FieldPlacement::Forbids { field: blight }]),
+        );
         registry.register(
             EntityTypeDef::new("warden")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
@@ -659,12 +1025,16 @@ fn app() -> App {
                     cooldown: 10,
                     caster: SkillCaster::Entity {
                         costs: vec![Cost::Energy(FixedU64::from_num(40))],
-                        target: EntityCastTarget::Fallen { kinds: Kinds::Any },
-                        reach,
                         casting: Casting::Instant,
                         effect: EntityCastEffect::Summon {
+                            at: SummonAt::Fallen {
+                                kinds: Kinds::Any,
+                                reach,
+                            },
                             entity_type,
-                            count: 2,
+                            count: Quantity::Constant(2),
+                            landing: Landing::Anywhere,
+                            arrives: SummonArrival::Standing,
                         },
                     },
                     requires: Vec::new(),
@@ -689,6 +1059,12 @@ fn app() -> App {
             "warden",
             Reach::Within(Quantity::Constant(4)),
         );
+        let raise_ghouls = raises(
+            &mut registry,
+            "raise_ghouls",
+            "ghoul",
+            Reach::Within(Quantity::Constant(4)),
+        );
         // A cast that brings its own caster down.
         let self_immolate = registry.register_skill(
             "self_immolate",
@@ -696,10 +1072,11 @@ fn app() -> App {
                 cooldown: 10,
                 caster: SkillCaster::Entity {
                     costs: Vec::new(),
-                    target: EntityCastTarget::Caster,
-                    reach: Reach::Wherever,
                     casting: Casting::Instant,
-                    effect: EntityCastEffect::Damage(FixedU64::from_num(1000)),
+                    effect: EntityCastEffect::Damage {
+                        amount: FixedU64::from_num(1000),
+                        on: Recipient::Caster,
+                    },
                 },
                 requires: Vec::new(),
             },
@@ -718,15 +1095,20 @@ fn app() -> App {
                     cooldown: 2,
                     caster: SkillCaster::Entity {
                         costs: vec![Cost::Energy(FixedU64::from_num(40))],
-                        target: EntityCastTarget::Fallen { kinds: Kinds::Any },
-                        reach: Reach::Within(Quantity::Constant(4)),
                         casting: Casting::Delayed {
                             point: Quantity::Constant(5),
                             period: Quantity::Constant(8),
+                            pays: PaymentPoint::AtLanding,
                         },
                         effect: EntityCastEffect::Summon {
+                            at: SummonAt::Fallen {
+                                kinds: Kinds::Any,
+                                reach: Reach::Within(Quantity::Constant(4)),
+                            },
                             entity_type,
-                            count: 2,
+                            count: Quantity::Constant(2),
+                            landing: Landing::Anywhere,
+                            arrives: SummonArrival::Standing,
                         },
                     },
                     requires: Vec::new(),
@@ -748,15 +1130,20 @@ fn app() -> App {
                     cooldown: 10,
                     caster: SkillCaster::Entity {
                         costs: vec![Cost::Energy(FixedU64::from_num(40))],
-                        target: EntityCastTarget::Fallen { kinds: Kinds::Any },
-                        reach: Reach::Within(Quantity::Constant(4)),
                         casting: Casting::Delayed {
                             point: Quantity::Stat(ritual_time),
                             period: Quantity::Constant(12),
+                            pays: PaymentPoint::AtLanding,
                         },
                         effect: EntityCastEffect::Summon {
+                            at: SummonAt::Fallen {
+                                kinds: Kinds::Any,
+                                reach: Reach::Within(Quantity::Constant(4)),
+                            },
                             entity_type,
-                            count: 2,
+                            count: Quantity::Constant(2),
+                            landing: Landing::Anywhere,
+                            arrives: SummonArrival::Standing,
                         },
                     },
                     requires: Vec::new(),
@@ -802,6 +1189,152 @@ fn app() -> App {
                 stack_rule: StackRule::Ignore,
             },
         );
+        // A raise that calls up as many as the caster's `host_size` says.
+        let host_size = registry.register_entity_stat("host_size", FixedU64::ONE);
+        let raise_host = {
+            let entity_type = registry
+                .type_id("skeleton")
+                .expect("the summoned type is registered");
+            registry.register_skill(
+                "raise_host",
+                SkillDef {
+                    cooldown: 10,
+                    caster: SkillCaster::Entity {
+                        costs: Vec::new(),
+                        casting: Casting::Instant,
+                        effect: EntityCastEffect::Summon {
+                            at: SummonAt::Fallen {
+                                kinds: Kinds::Any,
+                                reach: Reach::Within(Quantity::Constant(4)),
+                            },
+                            entity_type,
+                            count: Quantity::Stat(host_size),
+                            landing: Landing::Anywhere,
+                            arrives: SummonArrival::Standing,
+                        },
+                    },
+                    requires: Vec::new(),
+                },
+            )
+        };
+        // Raises paid when their casting starts: one that keeps what it paid
+        // when cut short, and one that gives it all back, gold included.
+        registry.register_resource("gold");
+        let paid_at_start = |registry: &mut ContentRegistry, name: &str, refund, costs| {
+            let entity_type = registry
+                .type_id("skeleton")
+                .expect("the summoned type is registered");
+            registry.register_skill(
+                name,
+                SkillDef {
+                    cooldown: 10,
+                    caster: SkillCaster::Entity {
+                        costs,
+                        casting: Casting::Delayed {
+                            point: Quantity::Constant(5),
+                            period: Quantity::Constant(8),
+                            pays: PaymentPoint::AtStart(refund),
+                        },
+                        effect: EntityCastEffect::Summon {
+                            at: SummonAt::Fallen {
+                                kinds: Kinds::Any,
+                                reach: Reach::Within(Quantity::Constant(4)),
+                            },
+                            entity_type,
+                            count: Quantity::Constant(2),
+                            landing: Landing::Anywhere,
+                            arrives: SummonArrival::Standing,
+                        },
+                    },
+                    requires: Vec::new(),
+                },
+            )
+        };
+        let raise_committed = paid_at_start(
+            &mut registry,
+            "raise_committed",
+            Refund::None,
+            vec![Cost::Energy(FixedU64::from_num(40))],
+        );
+        let raise_refundable = paid_at_start(
+            &mut registry,
+            "raise_refundable",
+            Refund::Full,
+            vec![
+                Cost::Energy(FixedU64::from_num(40)),
+                Cost::Resources(price::from([("gold", 10)])),
+            ],
+        );
+        let blood_rite = paid_at_start(
+            &mut registry,
+            "blood_rite",
+            Refund::Full,
+            vec![Cost::Health(FixedU64::from_num(10))],
+        );
+        // A bolt worked over ten ticks at an enemy within four cells, paid when
+        // its casting starts and kept when cut short.
+        let slow_bolt = registry.register_skill(
+            "slow_bolt",
+            SkillDef {
+                cooldown: 10,
+                caster: SkillCaster::Entity {
+                    costs: vec![Cost::Energy(FixedU64::from_num(40))],
+                    casting: Casting::Delayed {
+                        point: Quantity::Constant(10),
+                        period: Quantity::Constant(10),
+                        pays: PaymentPoint::AtStart(Refund::None),
+                    },
+                    effect: EntityCastEffect::Damage {
+                        amount: FixedU64::from_num(5),
+                        on: Recipient::Standing {
+                            whom: Whom {
+                                side: Affiliation::Enemy,
+                                kinds: Kinds::Any,
+                            },
+                            reach: Reach::Within(Quantity::Constant(4)),
+                        },
+                    },
+                },
+                requires: Vec::new(),
+            },
+        );
+        registry.register(
+            utils::walker("runner", utils::GROUND)
+                .with_pool(Pool::health(30))
+                .with_sight_range(20),
+        );
+        // A raise worked over five ticks from wherever the caster stands, paid
+        // when it lands.
+        let raise_from_afar = {
+            let entity_type = registry
+                .type_id("skeleton")
+                .expect("the summoned type is registered");
+            registry.register_skill(
+                "raise_from_afar",
+                SkillDef {
+                    cooldown: 10,
+                    caster: SkillCaster::Entity {
+                        costs: vec![Cost::Energy(FixedU64::from_num(40))],
+                        casting: Casting::Delayed {
+                            point: Quantity::Constant(5),
+                            period: Quantity::Constant(8),
+                            pays: PaymentPoint::AtLanding,
+                        },
+                        effect: EntityCastEffect::Summon {
+                            at: SummonAt::Fallen {
+                                kinds: Kinds::Any,
+                                reach: Reach::Wherever,
+                            },
+                            entity_type,
+                            count: Quantity::Constant(2),
+                            landing: Landing::Anywhere,
+                            arrives: SummonArrival::Standing,
+                        },
+                    },
+                    requires: Vec::new(),
+                },
+            )
+        };
         // The same raise, cast from wherever the caster stands.
         let raise_where_it_stands = raises(
             &mut registry,
@@ -815,10 +1348,17 @@ fn app() -> App {
                 .with_sight_range(20)
                 .with_pool(Pool::energy(100))
                 .with_stat(ritual_time, FixedU64::from_num(10))
+                .with_stat(host_size, FixedU64::lit("3.5"))
                 .with_skills([
+                    raise_committed,
+                    raise_refundable,
+                    slow_bolt,
+                    raise_host,
                     raise_dead,
                     raise_colossus,
                     raise_wardens,
+                    raise_ghouls,
+                    blood_rite,
                     raise_slowly,
                     raise_by_stat,
                     self_immolate,
@@ -830,12 +1370,40 @@ fn app() -> App {
                 .with_pool(Pool::health(40))
                 .with_sight_range(20)
                 .with_pool(Pool::energy(100))
-                .with_skills([raise_where_it_stands]),
+                .with_skills([raise_where_it_stands, raise_from_afar]),
         );
     }
     app.world_mut().resource::<ContentRegistry>().validate();
     app.world_mut().resource_mut::<GameSession>().start();
     app
+}
+
+/// Sends `unit` of player 0 off toward the far corner, replacing what it was
+/// doing.
+fn move_away(app: &mut App, unit: SimulationId) {
+    utils::select(app, unit);
+    utils::push_command(
+        app,
+        PlayerCommand::Move {
+            target: utils::pos(12, 12),
+            flush: true,
+        },
+    );
+}
+
+/// Where `caster`'s cooldown for the skill named `skill` stands.
+fn cooldown_of(app: &App, caster: SimulationId, skill: &str) -> Cooldown {
+    let skill = utils::skill_id(app, skill);
+    let caster = app
+        .world()
+        .resource::<EntityIndex>()
+        .alive(caster)
+        .expect("the caster is alive");
+    app.world()
+        .entity(caster)
+        .get::<SkillsComponent>()
+        .expect("a caster has its skills")
+        .cooldown(skill)
 }
 
 /// Puts a player buff on everything player 0 owns, standing and to come.
@@ -851,13 +1419,6 @@ fn apply_buff(app: &mut App, name: &str) {
         StackRule::Ignore,
         Term::Forever,
     );
-}
-
-/// Frees one statically occupied cell, so a test can leave exactly as much
-/// room as it means to.
-fn free_cell(app: &mut App, cell: CellPos) {
-    let mut map = app.world_mut().resource_mut::<Map>();
-    map.set_static_occupied(utils::GROUND, cell, false);
 }
 
 /// A necromancer of player 0 at `(x, y)`.
@@ -891,17 +1452,7 @@ fn fallen(app: &mut App, x: u32, y: u32) -> SimulationId {
 
 /// Commands `caster` to raise `body` with `raise_dead`.
 fn raise(app: &mut App, caster: SimulationId, body: SimulationId) {
-    cast(app, caster, body, "raise_dead");
-}
-
-/// Commands `caster` to cast `skill` on `body`.
-fn cast(app: &mut App, caster: SimulationId, body: SimulationId, skill: &str) {
-    utils::use_skill(
-        app,
-        skill,
-        SkillCasterRef::Entity(caster),
-        Some(SkillTarget::Entity(body)),
-    );
+    utils::cast_on(app, caster, "raise_dead", body);
 }
 
 /// The orders `unit` holds.
@@ -937,6 +1488,17 @@ fn owners_of(app: &App, type_name: &str) -> impl Iterator<Item = Option<u8>> {
                 .is_some_and(|info| info.type_name() == type_name)
         })
         .map(move |(_, entity)| entity_def::owner(world, entity))
+}
+
+/// Every cast announced since announcements were recorded.
+fn skill_casts(app: &App) -> Vec<SimulationEvent> {
+    app.world()
+        .resource::<utils::Announced>()
+        .0
+        .iter()
+        .filter(|event| matches!(event, SimulationEvent::SkillCast { .. }))
+        .cloned()
+        .collect()
 }
 
 /// The caster's current energy as a whole number.

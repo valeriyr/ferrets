@@ -149,23 +149,23 @@ pub enum PlayerCommand {
     /// back to, for when an earlier reading (boarding, repairing) would win.
     /// `flush` cancels existing orders before issuing this one; `false` appends.
     Follow { target: SimulationId, flush: bool },
-    /// Issues a board order to every selected entity: ride inside the `target`
-    /// transporter — the explicit form of the send-to-entity reading, for when
+    /// Issues a board order to every selected entity: go into the `target`
+    /// holder — the explicit form of the send-to-entity reading, for when
     /// an earlier reading (repairing a damaged holder) would win.
     /// `flush` cancels existing orders before issuing this one; `false` appends.
     Board { target: SimulationId, flush: bool },
-    /// Issues a load order to the `transport` entity: fetch `target` aboard.
+    /// Issues a load order to the `holder`: take `target` in.
     /// `flush` cancels existing orders before issuing this one; `false` appends.
     Load {
-        transport: SimulationId,
+        holder: SimulationId,
         target: SimulationId,
         flush: bool,
     },
-    /// Issues an unload order to the `transport` entity: let every passenger out,
+    /// Issues an unload order to the `holder`: let every body out,
     /// walking into unload range of `at` first when one is given.
     /// `flush` cancels existing orders before issuing this one; `false` appends.
     Unload {
-        transport: SimulationId,
+        holder: SimulationId,
         at: Option<FixedUVec2>,
         flush: bool,
     },

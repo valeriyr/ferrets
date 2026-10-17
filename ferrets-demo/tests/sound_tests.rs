@@ -442,6 +442,80 @@ fn self_cast_is_heard_once() {
 }
 
 #[test]
+fn cast_of_unseen_caster_at_cell_in_sight_is_not_heard() {
+    // An observer watching player 1, whose marine sees the aimed cell but not
+    // player 0's caster far off in the fog.
+    let mut app = sound_app_as(LocalRole::Observer);
+    app.insert_resource(FogReveal(false));
+    app.insert_resource(ObserverPerspective(Some(1)));
+    let skill = battle_focus(&app);
+    utils::create_entity(app.world_mut(), "marine", utils::at_cell(11, 8), Some(1))
+        .expect("the demo content defines a marine");
+    let (_, mage) =
+        utils::create_entity(app.world_mut(), "grunt", utils::at_cell(30, 30), Some(0)).unwrap();
+    utils::run_ticks(&mut app, 1);
+    app.world_mut()
+        .resource_mut::<EventRecord>()
+        .emit(SimulationEvent::SkillCast {
+            caster: mage,
+            target: SkillTarget::Position(utils::at_cell(11, 9)),
+            skill,
+        });
+    play(&mut app);
+
+    assert_eq!(cue_count(&mut app), 0);
+}
+
+#[test]
+fn cast_of_concealed_caster_on_cell_in_sight_is_not_heard() {
+    // An observer watching player 1, whose marine sees the cell player 0's
+    // ambushing grunt stands on, but not the grunt, concealed from a side
+    // that cannot detect it.
+    let mut app = sound_app_as(LocalRole::Observer);
+    app.insert_resource(FogReveal(false));
+    app.insert_resource(ObserverPerspective(Some(1)));
+    let skill = battle_focus(&app);
+    utils::create_entity(app.world_mut(), "marine", utils::at_cell(11, 8), Some(1))
+        .expect("the demo content defines a marine");
+    let grunt = ambushing_grunt(&mut app, 11, 10);
+    app.world_mut()
+        .resource_mut::<EventRecord>()
+        .emit(SimulationEvent::SkillCast {
+            caster: grunt,
+            target: SkillTarget::Position(utils::at_cell(11, 10)),
+            skill,
+        });
+    play(&mut app);
+
+    assert_eq!(cue_count(&mut app), 0);
+}
+
+#[test]
+fn cast_on_concealed_target_on_cell_in_sight_is_not_heard() {
+    // As above, the ambushing grunt now the target of a caster far off in the
+    // fog.
+    let mut app = sound_app_as(LocalRole::Observer);
+    app.insert_resource(FogReveal(false));
+    app.insert_resource(ObserverPerspective(Some(1)));
+    let skill = battle_focus(&app);
+    utils::create_entity(app.world_mut(), "marine", utils::at_cell(11, 8), Some(1))
+        .expect("the demo content defines a marine");
+    let (_, mage) =
+        utils::create_entity(app.world_mut(), "grunt", utils::at_cell(30, 30), Some(0)).unwrap();
+    let grunt = ambushing_grunt(&mut app, 11, 10);
+    app.world_mut()
+        .resource_mut::<EventRecord>()
+        .emit(SimulationEvent::SkillCast {
+            caster: mage,
+            target: SkillTarget::Entity(grunt),
+            skill,
+        });
+    play(&mut app);
+
+    assert_eq!(cue_count(&mut app), 0);
+}
+
+#[test]
 fn cue_beyond_two_views_is_not_heard() {
     let width = 40.0 * 32.0;
     assert!(
@@ -479,7 +553,7 @@ fn falloff_widens_as_view_zooms_out() {
 }
 
 #[test]
-fn camera_carries_listener_from_spawn() {
+fn listener_bundle_puts_spatial_listener_on_camera() {
     let mut app = App::new();
     app.add_systems(Startup, spawn_camera_with_listener);
     app.update();
@@ -497,7 +571,7 @@ fn camera_carries_listener_from_spawn() {
 //
 
 #[test]
-fn own_player_milestone_is_heard_flat() {
+fn own_player_skill_cast_is_heard() {
     let mut app = sound_app();
     let skill = battle_focus(&app);
     app.world_mut()
@@ -750,4 +824,23 @@ fn battle_focus(app: &App) -> SkillId {
         .resource::<ContentRegistry>()
         .skill("battle_focus")
         .expect("demo content declares battle_focus")
+}
+
+/// A grunt of player 0's at `(x, y)` under the ambush, a tick run so it is
+/// concealed.
+fn ambushing_grunt(app: &mut App, x: u32, y: u32) -> SimulationId {
+    let (grunt, grunt_id) =
+        utils::create_entity(app.world_mut(), "grunt", utils::at_cell(x, y), Some(0))
+            .expect("the demo content defines a grunt");
+    let ambushing = app
+        .world()
+        .resource::<ContentRegistry>()
+        .entity_buff("ambushing")
+        .expect("the demo content defines the ambush");
+    assert_eq!(
+        game_loop::buffs::apply_entity_buff(app.world_mut(), grunt, ambushing),
+        Bearing::Borne
+    );
+    utils::run_ticks(app, 1);
+    grunt_id
 }

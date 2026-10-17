@@ -144,7 +144,8 @@ pub enum DeathCause {
         /// The carrier it was inside.
         holder: SimulationId,
     },
-    /// Destroyed by the fate of a carrier whose new owner no longer admits it.
+    /// Destroyed by the fate of a carrier that holds it no longer while the
+    /// carrier stands.
     PassengerBarred {
         /// The carrier it was inside.
         holder: SimulationId,
@@ -305,6 +306,15 @@ pub enum SimulationEvent {
         entity: SimulationId,
         /// Where it stood as it went.
         position: FixedUVec2,
+    },
+    /// An entity standing on the map was moved to stand somewhere else at once.
+    EntityRelocated {
+        /// The entity moved.
+        entity: SimulationId,
+        /// Where it stood.
+        from: FixedUVec2,
+        /// Where it stands now.
+        to: FixedUVec2,
     },
     /// An entity that was off the map came back to it.
     EntityRevealed {

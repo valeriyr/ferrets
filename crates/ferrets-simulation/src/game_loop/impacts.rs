@@ -67,8 +67,8 @@ pub(super) fn deliver(
     };
     let target_id = target.and_then(|target| target_id(world, target));
     // A shot at an entity is aimed at the cell of its footprint nearest the
-    // weapon — the edge the range was measured to — not at the corner its
-    // position names; a shot at bare ground goes where it was sent.
+    // weapon, not at the corner its position names; a shot at bare ground goes
+    // where it was sent.
     let impact = target.map_or(aimed_at, |target| aim_cell(world, origin, target));
 
     let delivery = fired_from
@@ -102,9 +102,8 @@ pub(super) fn deliver(
                     .projectile_def(projectile);
                 (def.speed(), def.aim())
             };
-            // Footprint-based like every range check, so the flight covers the same
-            // distance acquisition measured — a shot at a 3x3 building is not treated
-            // as reaching for its origin corner.
+            // Footprint-based, so a shot at a 3x3 building is not treated as
+            // reaching for its origin corner.
             let target_size = target
                 .and_then(|target| entity_def::of(world, target).location)
                 .map(|location| location.size())
@@ -426,8 +425,8 @@ fn flight_ticks(distance: FixedU64, speed: FixedU64) -> u32 {
 }
 
 /// The cell of `target`'s footprint nearest to a shot released from `origin`:
-/// where the shot is aimed, and where a following one lands — the same edge
-/// the range was measured to. Ties go to the first cell in row-major order.
+/// where the shot is aimed, and where a following one lands. Ties go to the
+/// first cell in row-major order.
 fn aim_cell(world: &World, origin: FixedUVec2, target: Entity) -> FixedUVec2 {
     let projection = world.resource::<Map>().projection();
     let from = CellPos::from(origin);

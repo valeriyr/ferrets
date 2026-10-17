@@ -852,6 +852,46 @@ fn step_with_zero_speed_stands_still() {
 }
 
 //
+// ─── nearest_in_range_of_rect ──────────────────────────────────────────────────
+//
+
+#[test]
+fn nearest_in_range_takes_point_itself_when_in_range() {
+    let rect = CellRect::new(CellPos::new(10, 10), CellSize::ONE);
+
+    // Chebyshev 2 from (10, 10).
+    assert_eq!(
+        Projection::Isometric.nearest_in_range_of_rect(rect, 2, CellPos::new(11, 12)),
+        CellPos::new(11, 12)
+    );
+}
+
+#[test]
+fn nearest_in_range_breaks_metric_ties_by_straighter_way() {
+    let rect = CellRect::new(CellPos::new(10, 10), CellSize::ONE);
+
+    // Of the 3×3 block around (10, 10), (11, 10) and (11, 11) both lie
+    // Chebyshev 3 from (14, 13); by octile, 3·14 = 42 and 2·14 + 10 = 38, so
+    // (11, 11), though its row comes later.
+    assert_eq!(
+        Projection::Isometric.nearest_in_range_of_rect(rect, 1, CellPos::new(14, 13)),
+        CellPos::new(11, 11)
+    );
+}
+
+#[test]
+fn nearest_in_range_breaks_remaining_ties_by_row_then_column() {
+    let rect = CellRect::new(CellPos::new(10, 10), CellSize::ONE);
+
+    // Of the plus around (10, 10), (11, 10) and (10, 11) both lie octile
+    // 14 + 10 = 24 from (12, 12); row 10 comes first.
+    assert_eq!(
+        Projection::Orthogonal.nearest_in_range_of_rect(rect, 1, CellPos::new(12, 12)),
+        CellPos::new(11, 10)
+    );
+}
+
+//
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 //
 

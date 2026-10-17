@@ -6,7 +6,7 @@ mod utils;
 
 use bevy::prelude::*;
 use ferrets_content::pool_def::PoolId;
-use ferrets_geometry::cell_pos::CellPos;
+use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_simulation::{
     command::PlayerCommand,
     components::{
@@ -15,6 +15,7 @@ use ferrets_simulation::{
         stance::{Stance, StanceComponent},
     },
     entity_def,
+    order::Order,
     session::GameSession,
 };
 
@@ -135,6 +136,87 @@ fn ground_held_part_way_across_cells_engages_what_its_reach_covers() {
         corner,
         "and it held the ground it fought from"
     );
+}
+
+#[test]
+fn ground_held_unit_engages_target_standing_part_way_into_its_reach() {
+    let mut app = utils::continuous_orders_app();
+    let (sentry, sentry_id) = utils::create_owned(&mut app, "sentry", 10, 10, 0);
+    utils::select(&mut app, sentry_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SetStance {
+            stance: Stance::StandGround,
+        },
+    );
+
+    // Floored into (10, 8), two cells off the sentry's one-cell reach;
+    // rounded to (10, 9), one off.
+    let (ox, _) = utils::create_owned(&mut app, "ox", 10, 4, 1);
+    let corner = utils::part_way("10.4", "8.6");
+    app.world_mut()
+        .get_mut::<OrderQueueComponent>(ox)
+        .expect("a walker takes orders")
+        .push(
+            Order::Move {
+                target: corner,
+                size: CellSize::ONE,
+                range: 0,
+            },
+            None,
+        );
+    for _ in 0..40 {
+        if utils::health(&app, ox) < utils::fixed("60") {
+            break;
+        }
+        utils::run_ticks(&mut app, 1);
+    }
+
+    // One swing landed: 60 - 10.
+    assert_eq!(utils::health(&app, ox), utils::fixed("50"));
+    assert_eq!(
+        utils::position_of(app.world_mut(), sentry),
+        utils::pos(10, 10)
+    );
+}
+
+#[test]
+fn unit_engages_nearer_of_two_by_cells_target_stands_on() {
+    let mut app = utils::continuous_orders_app();
+    // Both rivals in place before the sentry is, so it judges them together.
+    // The whole-cell ox at (12, 10) is two cells off the sentry's (10, 10),
+    // with the lower id; the other, walked to (10.4, 8.6), floors two cells
+    // off too but stands one off, on (10, 9).
+    let (whole, _) = utils::create_owned(&mut app, "ox", 12, 10, 1);
+    let (part_way, _) = utils::create_owned(&mut app, "ox", 10, 4, 1);
+    let corner = utils::part_way("10.4", "8.6");
+    app.world_mut()
+        .get_mut::<OrderQueueComponent>(part_way)
+        .expect("a walker takes orders")
+        .push(
+            Order::Move {
+                target: corner,
+                size: CellSize::ONE,
+                range: 0,
+            },
+            None,
+        );
+    utils::run_ticks(&mut app, 30);
+    assert_eq!(utils::position_of(app.world_mut(), part_way), corner);
+    utils::create_owned(&mut app, "sentry", 10, 10, 0);
+
+    for _ in 0..40 {
+        if utils::health(&app, part_way) < utils::fixed("60")
+            || utils::health(&app, whole) < utils::fixed("60")
+        {
+            break;
+        }
+        utils::run_ticks(&mut app, 1);
+    }
+
+    // The first swing landed on the nearer: 60 - 10.
+    assert_eq!(utils::health(&app, part_way), utils::fixed("50"));
+    assert_eq!(utils::health(&app, whole), utils::fixed("60"));
 }
 
 #[test]

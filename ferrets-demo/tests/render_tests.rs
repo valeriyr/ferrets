@@ -18,7 +18,10 @@ use ferrets_content::{
     turret::{TurretDef, TurretMount, TurretStats, WeaponConduct},
 };
 use ferrets_demo::{
-    render::{self, Directional, DrawnBearings, DrawnFacing, PrevPos, Puffs, Sighted},
+    render::{
+        self, Directional, DrawnBearings, DrawnFacing, FogReveal, ObserverPerspective, PrevPos,
+        Puffs, Sighted, SkillPulses,
+    },
     ruleset,
     time::NOMINAL_TICK_HZ,
 };
@@ -26,7 +29,12 @@ use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSi
 use ferrets_math::{FixedU64, facing::Facing};
 use ferrets_simulation::{
     beside::{Beside, Lean},
-    components::{location::LocationComponent, owner::OwnerComponent, turret::TurretsComponent},
+    command::SkillTarget,
+    components::{
+        entity_info::EntityInfoComponent, hidden::Inside, location::LocationComponent,
+        owner::OwnerComponent, turret::TurretsComponent,
+    },
+    events::{EventRecord, SimulationEvent},
     session::{
         GameSession, ai_hosting::AiHosting, authority::Authority, drop_policy::DropPolicy,
         finish_policy::FinishPolicy, local_role::LocalRole, player_id::PlayerId,
@@ -80,7 +88,7 @@ fn reveal_snaps_interpolation_anchor_to_where_entity_reappeared() {
     // Off the map and set back down one cell over, with no frame in between:
     // the renderer reads nothing of the time spent hidden, only the frame of
     // the set-down, which is what the snap keys on, not the distance.
-    spawn::hide_entity(app.world_mut(), worker);
+    spawn::hide_entity(app.world_mut(), worker, Inside::Nothing);
     assert_eq!(
         spawn::place_back_beside(
             app.world_mut(),
@@ -101,6 +109,28 @@ fn reveal_snaps_interpolation_anchor_to_where_entity_reappeared() {
         entered.x + render::CELL_PX,
         "the anchor must sit on the cell the worker was set down on, not {entered:?}"
     );
+}
+
+#[test]
+fn relocation_snaps_interpolation_anchor_to_where_entity_landed() {
+    let mut app = utils::view_app();
+    app.world_mut().init_resource::<render::Relocated>();
+    let worker = spawn_worker(&mut app, "20");
+    let before = anchor_of(&app, worker);
+
+    // Moved one cell over: nearer than any jump the interpolation snaps on
+    // its own.
+    spawn::relocate(app.world_mut(), &[(worker, CellPos::new(21, 20))]);
+    app.world_mut()
+        .run_system_once(render::collect_relocations)
+        .expect("the relocations are noted");
+    // The tick retires what it announced before the frame draws.
+    app.world_mut().resource_mut::<EventRecord>().clear();
+    app.world_mut()
+        .run_system_once(render::snap_relocated)
+        .expect("the relocation snaps");
+
+    assert_eq!(anchor_of(&app, worker).x, before.x + render::CELL_PX);
 }
 
 #[test]
@@ -135,7 +165,7 @@ fn reveal_snaps_look_to_where_entity_reappeared() {
 
     // Off the map and set back down on the same cell, looking the other way:
     // the set-down is what the snap keys on, not any distance or turn.
-    spawn::hide_entity(app.world_mut(), worker);
+    spawn::hide_entity(app.world_mut(), worker, Inside::Nothing);
     assert_eq!(
         spawn::place_back_beside(
             app.world_mut(),
@@ -182,7 +212,7 @@ fn sprite_leaves_view_when_entity_goes_off_map_and_returns_once_set_down() {
 
     // One frame off the map is as long as any: the sprite is judged by what
     // the entity carries this frame, not by how long it has been gone.
-    spawn::hide_entity(app.world_mut(), worker);
+    spawn::hide_entity(app.world_mut(), worker, Inside::Nothing);
     app.world_mut()
         .run_system_once(render::interpolate_sprites)
         .expect("the interpolation runs");
@@ -480,8 +510,12 @@ fn hiding_marks_cell_entity_went_in_by() {
     let mut app = utils::view_app();
     app.world_mut().init_resource::<Puffs>();
     let worker = spawn_worker(&mut app, "20");
+    // A tick before the hiding notes the worker as made out.
+    app.world_mut()
+        .run_system_once(render::collect_puffs)
+        .expect("the markers are collected");
 
-    spawn::hide_entity(app.world_mut(), worker);
+    spawn::hide_entity(app.world_mut(), worker, Inside::Nothing);
     app.world_mut()
         .run_system_once(render::collect_puffs)
         .expect("the markers are collected");
@@ -503,6 +537,10 @@ fn boarding_marks_cell_passenger_vanished_from_not_holder() {
     let (grunt, _) =
         utils::create_entity(app.world_mut(), "grunt", utils::at_cell(24, 20), Some(0))
             .expect("the demo content defines a grunt");
+    // A tick before the boarding notes the grunt as made out.
+    app.world_mut()
+        .run_system_once(render::collect_puffs)
+        .expect("the markers are collected");
 
     assert_eq!(
         spawn::board(app.world_mut(), grunt, bunker),
@@ -518,6 +556,107 @@ fn boarding_marks_cell_passenger_vanished_from_not_holder() {
         app.world().resource::<Puffs>().marked(),
         vec![(utils::at_cell(24, 20), CellSize::ONE)]
     );
+}
+
+#[test]
+fn hiding_of_body_nobody_made_out_marks_nothing() {
+    let mut app = utils::view_app();
+    app.world_mut().init_resource::<Puffs>();
+    let worker = spawn_worker(&mut app, "20");
+
+    // No tick before the hiding noted the worker as made out.
+    spawn::hide_entity(app.world_mut(), worker, Inside::Nothing);
+    app.world_mut()
+        .run_system_once(render::collect_puffs)
+        .expect("the markers are collected");
+
+    assert!(app.world().resource::<Puffs>().marked().is_empty());
+}
+
+#[test]
+fn changing_view_forgets_marks_and_what_was_made_out() {
+    let mut app = utils::view_app();
+    let mut forget = view_change_clear(&mut app);
+    let second = spawn_worker(&mut app, "24");
+    seed_marks(&mut app);
+
+    app.world_mut().insert_resource(FogReveal(true));
+    forget
+        .run((), app.world_mut())
+        .expect("the view-change clear runs");
+    assert!(app.world().resource::<Puffs>().marked().is_empty());
+    assert!(app.world().resource::<SkillPulses>().pulsed().is_empty());
+
+    // What the old view made out is forgotten too: the second worker, hidden
+    // before any tick of the new view noted it, leaves no marker.
+    spawn::hide_entity(app.world_mut(), second, Inside::Nothing);
+    app.world_mut()
+        .run_system_once(render::collect_puffs)
+        .expect("the markers are collected");
+    assert!(app.world().resource::<Puffs>().marked().is_empty());
+}
+
+#[test]
+fn observer_watching_another_side_forgets_marks() {
+    let mut app = utils::view_app_as(LocalRole::Observer);
+    app.world_mut()
+        .insert_resource(ObserverPerspective(Some(0)));
+    let mut forget = view_change_clear(&mut app);
+    seed_marks(&mut app);
+
+    app.world_mut()
+        .insert_resource(ObserverPerspective(Some(1)));
+    forget
+        .run((), app.world_mut())
+        .expect("the view-change clear runs");
+
+    assert!(app.world().resource::<Puffs>().marked().is_empty());
+    assert!(app.world().resource::<SkillPulses>().pulsed().is_empty());
+}
+
+#[test]
+fn player_pressing_watch_key_keeps_marks() {
+    // A playing node views its own side whatever the watch says.
+    let mut app = utils::view_app();
+    let mut forget = view_change_clear(&mut app);
+    seed_marks(&mut app);
+
+    app.world_mut()
+        .insert_resource(ObserverPerspective(Some(1)));
+    forget
+        .run((), app.world_mut())
+        .expect("the view-change clear runs");
+
+    assert_eq!(app.world().resource::<Puffs>().marked().len(), 1);
+    assert_eq!(app.world().resource::<SkillPulses>().pulsed().len(), 1);
+}
+
+#[test]
+fn rival_caster_in_fog_casting_at_cell_pulses_nothing() {
+    let mut app = utils::view_app();
+    app.world_mut().init_resource::<SkillPulses>();
+    let skill = app
+        .world()
+        .resource::<ContentRegistry>()
+        .skill("battle_focus")
+        .expect("the demo content defines battle focus");
+    let (_, rival) =
+        utils::create_entity(app.world_mut(), "grunt", utils::at_cell(60, 60), Some(1))
+            .expect("the demo content defines a grunt");
+    utils::run_ticks(&mut app, 1);
+    app.world_mut()
+        .resource_mut::<EventRecord>()
+        .emit(SimulationEvent::SkillCast {
+            caster: rival,
+            target: SkillTarget::Position(utils::at_cell(20, 20)),
+            skill,
+        });
+
+    app.world_mut()
+        .run_system_once(render::collect_skill_pulses)
+        .expect("the pulses are collected");
+
+    assert!(app.world().resource::<SkillPulses>().pulsed().is_empty());
 }
 
 //
@@ -854,4 +993,52 @@ fn half_way(from: Facing, to: Facing) -> Facing {
         from.to_bits()
             .wrapping_add((from.difference(to) / 2) as i16 as u16),
     )
+}
+
+/// The view-change clear, run once so it holds the view as it stands, with
+/// the marker stores it clears.
+fn view_change_clear(app: &mut App) -> impl System<In = (), Out = ()> {
+    app.world_mut().init_resource::<Puffs>();
+    app.world_mut().init_resource::<SkillPulses>();
+    let mut forget = IntoSystem::into_system(render::forget_marks_on_view_change);
+    forget.initialize(app.world_mut());
+    forget
+        .run((), app.world_mut())
+        .expect("the view-change clear runs");
+    forget
+}
+
+/// One puff and one pulse for player 0's view: a worker of player 0's made
+/// out, then hidden, and a skill it casts on itself.
+fn seed_marks(app: &mut App) {
+    let worker = spawn_worker(app, "20");
+    let worker_id = app
+        .world()
+        .get::<EntityInfoComponent>(worker)
+        .expect("a spawned worker carries its id")
+        .id();
+    app.world_mut()
+        .run_system_once(render::collect_puffs)
+        .expect("the markers are collected");
+    let skill = app
+        .world()
+        .resource::<ContentRegistry>()
+        .skill("battle_focus")
+        .expect("the demo content defines battle focus");
+    app.world_mut()
+        .resource_mut::<EventRecord>()
+        .emit(SimulationEvent::SkillCast {
+            caster: worker_id,
+            target: SkillTarget::Entity(worker_id),
+            skill,
+        });
+    app.world_mut()
+        .run_system_once(render::collect_skill_pulses)
+        .expect("the pulses are collected");
+    spawn::hide_entity(app.world_mut(), worker, Inside::Nothing);
+    app.world_mut()
+        .run_system_once(render::collect_puffs)
+        .expect("the markers are collected");
+    assert_eq!(app.world().resource::<Puffs>().marked().len(), 1);
+    assert_eq!(app.world().resource::<SkillPulses>().pulsed().len(), 1);
 }

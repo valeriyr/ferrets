@@ -3,12 +3,14 @@
 
 use bevy::prelude::*;
 use ferrets_simulation::{
+    bore_id::BoreIds,
     control_groups::ControlGroups,
     entity_index::EntityIndex,
     events::EventRecord,
     game_loop::movement::MovePlanShare,
     impacts::PendingImpacts,
     input::{InputFrames, PlayerFrame, SYNC_LATENCY},
+    links::LinkPassengers,
     player_buffs::PlayerBuffs,
     player_research::PlayerResearch,
     player_skills::PlayerSkills,
@@ -16,7 +18,7 @@ use ferrets_simulation::{
     resources::PlayerResources,
     selection::Selection,
     session::{GameSession, player_slot::PlayerSlot},
-    simulation_id::SimulationIdGenerator,
+    simulation_id::SimulationIds,
     statistics::Statistics,
 };
 
@@ -40,8 +42,10 @@ pub(crate) fn install_per_game(world: &mut World) {
     world.insert_resource(Statistics::new(player_count));
     world.insert_resource(frames);
     world.insert_resource(EntityIndex::default());
-    world.insert_resource(SimulationIdGenerator::default());
+    world.insert_resource(SimulationIds::default());
     world.insert_resource(PendingImpacts::default());
+    world.insert_resource(LinkPassengers::default());
+    world.insert_resource(BoreIds::default());
     world.insert_resource(EventRecord::default());
     world.insert_resource(PendingInput::default());
     world.insert_resource(MovePlanShare::default());

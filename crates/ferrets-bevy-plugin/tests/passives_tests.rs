@@ -242,7 +242,7 @@ fn passive_held_unless_built_lasts_while_site() {
 }
 
 #[test]
-fn site_keeps_passive_not_held_while_built() {
+fn site_keeps_passive_its_requirement_admits() {
     let (mut app, _) = app();
     let (seedling, _) = utils::create_crewed_site(&mut app, "seedling", 5, 5, 0);
     let hardy = buff_id(&app, "hardy");
@@ -285,7 +285,7 @@ fn ownerless_bearer_meets_no_player_leaf() {
 //
 
 #[test]
-fn cast_applied_while_buff_ends_when_its_requirement_lapses() {
+fn applied_while_buff_ends_when_its_requirement_lapses() {
     let (mut app, on_fire) = app();
     // The lantern names no passive: the fire is put on it from outside, and
     // still goes out the tick the pool clears the line.

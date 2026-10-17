@@ -37,7 +37,7 @@ fn annex_rises_on_its_primarys_dock_and_docks_when_it_stands() {
     utils::grant_gold(&mut app, 10);
 
     // The dock sits two cells along the keep's own footprint.
-    order_annex(&mut app, keep_id, "lookout", 12, 10);
+    utils::build_entity(&mut app, keep_id, "lookout", 12, 10);
     utils::run_ticks(&mut app, utils::APPLY + 1);
     let lookout = utils::single_owned_of_type(app.world_mut(), "lookout", 0);
     assert!(
@@ -82,7 +82,7 @@ fn annex_site_rises_with_its_work() {
     let mut app = utils::annex_app();
     let (_, keep_id) = utils::create_owned(&mut app, "keep", 10, 10, 0);
     utils::grant_gold(&mut app, 10);
-    order_annex(&mut app, keep_id, "lookout", 12, 10);
+    utils::build_entity(&mut app, keep_id, "lookout", 12, 10);
     utils::run_ticks(&mut app, utils::APPLY + 1);
     let lookout = utils::single_owned_of_type(app.world_mut(), "lookout", 0);
     // Founded at a quarter of 40, with its first tick of work in:
@@ -138,7 +138,7 @@ fn annex_rises_nowhere_but_on_dock() {
     // Beside the dock rather than on it: the keep is 2x2 at (10, 10), so this
     // cell is one away from its footprint and well within its build range —
     // the placement rule is the only thing that can refuse it.
-    order_annex(&mut app, keep_id, "lookout", 12, 11);
+    utils::build_entity(&mut app, keep_id, "lookout", 12, 11);
     utils::run_ticks(&mut app, utils::APPLY + 4);
     assert_eq!(utils::count_of_type(app.world_mut(), "lookout"), 0);
     // The price was never drawn, since no site was ever placed.
@@ -150,14 +150,14 @@ fn dying_annex_holds_its_dock_against_another() {
     let mut app = utils::annex_app();
     let (_, keep_id) = utils::create_owned(&mut app, "keep", 10, 10, 0);
     utils::grant_gold(&mut app, 20);
-    order_annex(&mut app, keep_id, "lookout", 12, 10);
+    utils::build_entity(&mut app, keep_id, "lookout", 12, 10);
     utils::run_ticks(&mut app, utils::APPLY + 6);
     let lookout = utils::single_owned_of_type(app.world_mut(), "lookout", 0);
 
     // Shot down, it spends its dying phase on the map — and holds the cells of
     // the dock while it does, so nothing rises in its place.
     ferrets_simulation::spawn::despawn_entity(app.world_mut(), lookout, DeathCause::Depleted);
-    order_annex(&mut app, keep_id, "lookout", 12, 10);
+    utils::build_entity(&mut app, keep_id, "lookout", 12, 10);
     utils::run_ticks(&mut app, utils::APPLY);
     assert_eq!(
         utils::count_of_type(app.world_mut(), "lookout"),
@@ -168,7 +168,7 @@ fn dying_annex_holds_its_dock_against_another() {
     // Once its remains are gone the dock is free, and the next one rises.
     utils::run_ticks(&mut app, 5);
     utils::assert_despawned(app.world_mut(), lookout);
-    order_annex(&mut app, keep_id, "lookout", 12, 10);
+    utils::build_entity(&mut app, keep_id, "lookout", 12, 10);
     utils::run_ticks(&mut app, utils::APPLY + 6);
     let raised = utils::single_owned_of_type(app.world_mut(), "lookout", 0);
     assert_ne!(raised, lookout);
@@ -180,7 +180,7 @@ fn training_waits_behind_raising_annex() {
     let mut app = utils::annex_app();
     let (keep, keep_id) = utils::create_owned(&mut app, "keep", 10, 10, 0);
     utils::grant_gold(&mut app, 20);
-    order_annex(&mut app, keep_id, "watchpost", 12, 10);
+    utils::build_entity(&mut app, keep_id, "watchpost", 12, 10);
     utils::run_ticks(&mut app, utils::APPLY + 1);
     let site = utils::single_owned_of_type(app.world_mut(), "watchpost", 0);
 
@@ -245,7 +245,7 @@ fn primary_between_cells_raises_its_annex_on_whole_cell() {
     let dock = annex::dock_anchor_for(app.world(), keep, lookout).expect("the keep offers one");
     assert_eq!(dock, CellPos::new(13, 10));
 
-    order_annex(&mut app, keep_id, "lookout", dock.x, dock.y);
+    utils::build_entity(&mut app, keep_id, "lookout", dock.x, dock.y);
     utils::run_ticks(&mut app, utils::APPLY + 6);
     let lookout = utils::single_owned_of_type(app.world_mut(), "lookout", 0);
     assert_eq!(
@@ -271,7 +271,7 @@ fn lifting_off_orphans_annex_and_switches_it_off() {
         Operation::Operating
     );
 
-    command_morph(&mut app, keep_id, "keep_aloft");
+    utils::command_morph(&mut app, keep_id, "keep_aloft");
     // Three ticks for the command, four of morph time, and the pass that tick.
     utils::run_ticks(&mut app, utils::APPLY + 5);
     assert_eq!(
@@ -297,13 +297,13 @@ fn landing_beside_orphan_docks_it_again() {
     let (keep, keep_id) = utils::create_owned(&mut app, "keep", 10, 10, 0);
     let lookout = docked_lookout(&mut app, keep_id, 12, 10);
 
-    command_morph(&mut app, keep_id, "keep_aloft");
+    utils::command_morph(&mut app, keep_id, "keep_aloft");
     utils::run_ticks(&mut app, utils::APPLY + 5);
     assert_eq!(primary_of(&app, lookout), Docking::Alone);
 
     // Down again on the same ground: the dock resolves to the lookout's cell
     // once more, so it is the keep's again.
-    command_morph(&mut app, keep_id, "keep");
+    utils::command_morph(&mut app, keep_id, "keep");
     utils::run_ticks(&mut app, utils::APPLY + 5);
     assert_eq!(
         utils::single_owned_of_type(app.world_mut(), "keep", 0),
@@ -346,7 +346,7 @@ fn lift_off_leaves_researching_annex_to_hold_its_work() {
     // business. The work goes on while the change runs — the keep is still on
     // the ground for that — and stops the tick it is orphaned: ten of the
     // twenty ticks are done by then.
-    command_morph(&mut app, keep_id, "keep_aloft");
+    utils::command_morph(&mut app, keep_id, "keep_aloft");
     utils::run_ticks(&mut app, utils::APPLY + 5);
     assert_eq!(
         utils::count_of_type(app.world_mut(), "keep_aloft"),
@@ -377,7 +377,7 @@ fn lift_off_leaves_researching_annex_to_hold_its_work() {
 
     // Landed again, it takes the work up from where it stopped: the ten ticks
     // still owed of the twenty.
-    command_morph(&mut app, keep_id, "keep");
+    utils::command_morph(&mut app, keep_id, "keep");
     utils::run_ticks(&mut app, utils::APPLY + 5 + 10);
     assert!(
         app.world()
@@ -400,7 +400,7 @@ fn orphaned_annex_takes_no_new_research() {
         .expect("the fixture registers signals");
 
     // Orphaned before anything is asked of it.
-    command_morph(&mut app, keep_id, "keep_aloft");
+    utils::command_morph(&mut app, keep_id, "keep_aloft");
     utils::run_ticks(&mut app, utils::APPLY + 5);
     assert_eq!(primary_of(&app, lookout), Docking::Alone);
     assert_eq!(
@@ -437,13 +437,13 @@ fn primary_landing_back_works_annex_it_left_halted() {
     let mut app = utils::annex_app();
     let (keep, keep_id) = utils::create_owned(&mut app, "keep", 10, 10, 0);
     utils::grant_gold(&mut app, 30);
-    order_annex(&mut app, keep_id, "lookout", 12, 10);
+    utils::build_entity(&mut app, keep_id, "lookout", 12, 10);
     utils::run_ticks(&mut app, utils::APPLY + 1);
     let site = utils::single_owned_of_type(app.world_mut(), "lookout", 0);
     // Ten of the thirty gold, taken when the site was raised.
     assert_eq!(utils::gold(app.world()), 20);
 
-    command_morph(&mut app, keep_id, "keep_aloft");
+    utils::command_morph(&mut app, keep_id, "keep_aloft");
     utils::run_ticks(&mut app, utils::APPLY + 5);
     // Halted with work still owed while its primary is away. This is the
     // observation the rest of the test rests on: a site that kept advancing on
@@ -459,7 +459,7 @@ fn primary_landing_back_works_annex_it_left_halted() {
         "it waited for its primary rather than raising itself"
     );
 
-    command_morph(&mut app, keep_id, "keep");
+    utils::command_morph(&mut app, keep_id, "keep");
     utils::run_ticks(&mut app, utils::APPLY + 5);
     assert_eq!(entity_def::of(app.world(), keep).name, "keep", "it landed");
 
@@ -482,13 +482,13 @@ fn annex_site_is_finished_by_primary_that_did_not_found_it() {
     let mut app = utils::annex_app();
     let (_, founder_id) = utils::create_owned(&mut app, "keep", 10, 10, 0);
     utils::grant_gold(&mut app, 10);
-    order_annex(&mut app, founder_id, "watchpost", 12, 10);
+    utils::build_entity(&mut app, founder_id, "watchpost", 12, 10);
     utils::run_ticks(&mut app, utils::APPLY + 1);
     let site = utils::single_owned_of_type(app.world_mut(), "watchpost", 0);
     assert_eq!(utils::gold(app.world()), 0, "ten gold, taken at the raise");
 
     // The keep that founded it leaves for good, freeing the ground it stood on.
-    command_morph(&mut app, founder_id, "keep_aloft");
+    utils::command_morph(&mut app, founder_id, "keep_aloft");
     utils::run_ticks(&mut app, utils::APPLY + 5);
     assert!(
         matches!(
@@ -520,7 +520,7 @@ fn lifting_off_mid_build_leaves_annex_site_halted() {
     let mut app = utils::annex_app();
     let (keep, keep_id) = utils::create_owned(&mut app, "keep", 10, 10, 0);
     utils::grant_gold(&mut app, 10);
-    order_annex(&mut app, keep_id, "lookout", 12, 10);
+    utils::build_entity(&mut app, keep_id, "lookout", 12, 10);
     utils::run_ticks(&mut app, utils::APPLY + 1);
     let site = utils::single_owned_of_type(app.world_mut(), "lookout", 0);
     assert!(
@@ -532,7 +532,7 @@ fn lifting_off_mid_build_leaves_annex_site_halted() {
 
     // Raising an annex is a Build order, and a Build does not stand through a
     // soft cancel: the change of form flushes it and the keep leaves.
-    command_morph(&mut app, keep_id, "keep_aloft");
+    utils::command_morph(&mut app, keep_id, "keep_aloft");
     utils::run_ticks(&mut app, utils::APPLY + 5);
     assert_eq!(
         utils::single_owned_of_type(app.world_mut(), "keep_aloft", 0),
@@ -559,7 +559,7 @@ fn razed_annex_goes_when_its_primary_does() {
     let mut app = utils::annex_app();
     let (keep, keep_id) = utils::create_owned(&mut app, "keep", 10, 10, 0);
     utils::grant_gold(&mut app, 10);
-    order_annex(&mut app, keep_id, "beacon", 12, 10);
+    utils::build_entity(&mut app, keep_id, "beacon", 12, 10);
     utils::run_ticks(&mut app, utils::APPLY + 6);
     let beacon = utils::single_owned_of_type(app.world_mut(), "beacon", 0);
     assert_eq!(primary_of(&app, beacon), Docking::Primary(keep_id));
@@ -592,7 +592,7 @@ fn razed_annex_site_goes_when_its_dock_does() {
     let mut app = utils::annex_app();
     let (keep, keep_id) = utils::create_owned(&mut app, "keep", 10, 10, 0);
     utils::grant_gold(&mut app, 10);
-    order_annex(&mut app, keep_id, "beacon", 12, 10);
+    utils::build_entity(&mut app, keep_id, "beacon", 12, 10);
     utils::run_ticks(&mut app, utils::APPLY + 1);
     let site = utils::single_owned_of_type(app.world_mut(), "beacon", 0);
     assert!(
@@ -617,7 +617,7 @@ fn fading_annex_loses_health_until_it_dies() {
     let mut app = utils::annex_app();
     let (keep, keep_id) = utils::create_owned(&mut app, "keep", 10, 10, 0);
     utils::grant_gold(&mut app, 10);
-    order_annex(&mut app, keep_id, "mast", 12, 10);
+    utils::build_entity(&mut app, keep_id, "mast", 12, 10);
     utils::run_ticks(&mut app, utils::APPLY + 6);
     let mast = utils::single_owned_of_type(app.world_mut(), "mast", 0);
     // Ten health: a site, bonded to nothing until it is built, does not
@@ -732,7 +732,7 @@ fn orphaned_annex_takes_no_new_training() {
     let lookout_id = entity_def::simulation_id(app.world(), lookout);
 
     // Orphaned before anything is asked of it.
-    command_morph(&mut app, keep_id, "keep_aloft");
+    utils::command_morph(&mut app, keep_id, "keep_aloft");
     utils::run_ticks(&mut app, utils::APPLY + 5);
     assert_eq!(primary_of(&app, lookout), Docking::Alone);
 
@@ -871,7 +871,7 @@ fn bound_annex_refuses_rival() {
     let mut app = utils::annex_app();
     let (_, keep_id) = utils::create_owned(&mut app, "keep", 10, 10, 0);
     utils::grant_gold(&mut app, 10);
-    order_annex(&mut app, keep_id, "spire", 12, 10);
+    utils::build_entity(&mut app, keep_id, "spire", 12, 10);
     utils::run_ticks(&mut app, utils::APPLY + 6);
     let spire = utils::single_owned_of_type(app.world_mut(), "spire", 0);
     assert_eq!(primary_of(&app, spire), Docking::Primary(keep_id));
@@ -897,7 +897,7 @@ fn allys_keep_docks_allied_annex_without_taking_it() {
     let mut app = utils::annex_app();
     let (_, keep_id) = utils::create_owned(&mut app, "keep", 10, 10, 0);
     utils::grant_gold(&mut app, 10);
-    order_annex(&mut app, keep_id, "mooring", 12, 10);
+    utils::build_entity(&mut app, keep_id, "mooring", 12, 10);
     utils::run_ticks(&mut app, utils::APPLY + 6);
     let mooring = utils::single_owned_of_type(app.world_mut(), "mooring", 0);
 
@@ -945,7 +945,7 @@ fn lower_id_takes_dock_from_primary_that_held_it() {
 
     // The keep lands over the same cell. A bond that simply stayed put would
     // leave the tower holding it; the id rule hands it to the keep.
-    command_morph(&mut app, keep_id, "keep");
+    utils::command_morph(&mut app, keep_id, "keep");
     utils::run_ticks(&mut app, utils::APPLY + 5);
     assert_eq!(
         primary_of(&app, lookout),
@@ -966,7 +966,7 @@ fn orphaned_lookout_gates_nothing_until_it_docks_again() {
     utils::grant_gold(&mut app, 30);
 
     // The keep leaves, so nothing stands with the lookout at all.
-    command_morph(&mut app, keep_id, "keep_aloft");
+    utils::command_morph(&mut app, keep_id, "keep_aloft");
     utils::run_ticks(&mut app, utils::APPLY + 5);
     assert_eq!(primary_of(&app, lookout), Docking::Alone);
 
@@ -993,7 +993,7 @@ fn orphaned_lookout_gates_nothing_until_it_docks_again() {
     // Landing is docking, so the gate comes back with the bond and no order
     // re-establishes it. There is no state where a landed keep stands beside
     // an orphan of its own: the tick it lands, the lookout is its again.
-    command_morph(&mut app, keep_id, "keep");
+    utils::command_morph(&mut app, keep_id, "keep");
     utils::run_ticks(&mut app, utils::APPLY + 5);
     assert_eq!(primary_of(&app, lookout), Docking::Primary(keep_id));
 
@@ -1026,7 +1026,7 @@ fn sentry_needs_lookout_docked_to_keep_that_trains_it() {
     utils::run_ticks(&mut app, utils::APPLY + 6);
     assert_eq!(utils::count_of_type(app.world_mut(), "sentry"), 0);
 
-    order_annex(&mut app, keep_id, "lookout", 12, 10);
+    utils::build_entity(&mut app, keep_id, "lookout", 12, 10);
     utils::run_ticks(&mut app, utils::APPLY + 6);
     utils::push_command(
         &mut app,
@@ -1071,38 +1071,12 @@ fn sentry_is_refused_by_keep_lookout_does_not_stand_with() {
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 //
 
-/// Orders `primary` to raise `type_name` at `(x, y)`.
-fn order_annex(app: &mut App, primary: SimulationId, type_name: &str, x: u32, y: u32) {
-    utils::push_command(
-        app,
-        PlayerCommand::BuildEntity {
-            builder: primary,
-            type_name: type_name.into(),
-            position: utils::pos(x, y),
-            flush: false,
-        },
-    );
-}
-
 /// Ticks of work the entity has put into its research.
 fn research_progress(app: &App, researcher: Entity) -> u32 {
     app.world()
         .get::<ResearchComponent>(researcher)
         .expect("a researching entity carries the component")
         .progress
-}
-
-/// Selects the entity and commands its change of form, so the executor judges
-/// it the way a player's click would.
-fn command_morph(app: &mut App, entity: SimulationId, type_name: &str) {
-    utils::select(app, entity);
-    utils::push_command(
-        app,
-        PlayerCommand::Morph {
-            type_name: type_name.to_string(),
-            flush: true,
-        },
-    );
 }
 
 /// The primary an annex stands with, by simulation id.
@@ -1115,7 +1089,7 @@ fn primary_of(app: &App, annex: Entity) -> Docking {
 
 fn docked_annex(app: &mut App, primary: SimulationId, type_name: &str, x: u32, y: u32) -> Entity {
     utils::grant_gold(app, 10);
-    order_annex(app, primary, type_name, x, y);
+    utils::build_entity(app, primary, type_name, x, y);
     utils::run_ticks(app, utils::APPLY + 6);
     let owner = entity_def::owner(
         app.world(),
@@ -1131,7 +1105,7 @@ fn docked_annex(app: &mut App, primary: SimulationId, type_name: &str, x: u32, y
 /// Raises a lookout on the keep's dock and runs until it stands.
 fn docked_lookout(app: &mut App, keep_id: SimulationId, x: u32, y: u32) -> Entity {
     utils::grant_gold(app, 10);
-    order_annex(app, keep_id, "lookout", x, y);
+    utils::build_entity(app, keep_id, "lookout", x, y);
     utils::run_ticks(app, utils::APPLY + 6);
     utils::single_owned_of_type(app.world_mut(), "lookout", 0)
 }
@@ -1139,7 +1113,7 @@ fn docked_lookout(app: &mut App, keep_id: SimulationId, x: u32, y: u32) -> Entit
 /// Lifts player 0's keep away from its annex and lands `taker`'s keep on the
 /// dock the annex stands in.
 fn hand_over(app: &mut App, keep_id: SimulationId, taker: PlayerId) -> Entity {
-    command_morph(app, keep_id, "keep_aloft");
+    utils::command_morph(app, keep_id, "keep_aloft");
     utils::run_ticks(app, utils::APPLY + 5);
     // Flying off out of the way, so the ground its dock covered is free.
     let aloft = utils::single_owned_of_type(app.world_mut(), "keep_aloft", 0);

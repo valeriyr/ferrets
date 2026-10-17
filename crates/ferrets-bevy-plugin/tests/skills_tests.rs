@@ -13,16 +13,17 @@ use ferrets_content::{
     pool::{Pool, PoolInitial},
     pool_def::PoolId,
     price::{self, Price},
+    quantity::Quantity,
     registry::ContentRegistry,
     requirement::Requirement,
     research::ResearchDef,
-    skills::{Casting, EntityCastEffect, EntityCastTarget, Reach, SkillCaster, SkillDef},
+    skills::{Casting, EntityCastEffect, Reach, Recipient, SkillCaster, SkillDef, Spot, Whom},
     stats::ModifierOp,
 };
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::FixedU64;
 use ferrets_simulation::{
-    command::{SkillCasterRef, SkillTarget},
+    command::SkillTarget,
     components::entity_skills::SkillsComponent,
     entity_def,
     game_loop::{
@@ -47,12 +48,7 @@ fn using_skill_applies_effect_and_spends_energy() {
         utils::create_entity(app.world_mut(), "mage", utils::pos(5, 5), Some(0)).unwrap();
     let base = utils::effective_damage(&app, mage);
 
-    utils::use_skill(
-        &mut app,
-        "battle_focus",
-        SkillCasterRef::Entity(mage_id),
-        None,
-    );
+    utils::cast_self(&mut app, mage_id, "battle_focus");
     utils::run_ticks(&mut app, 5);
 
     assert_eq!(
@@ -80,7 +76,7 @@ fn skill_with_resource_cost_pays_stockpile() {
         utils::create_entity(app.world_mut(), "mage", utils::pos(5, 5), Some(0)).unwrap();
     utils::grant_gold(&mut app, 30);
     let base = utils::effective_damage(&app, mage);
-    utils::use_skill(&mut app, "rally", SkillCasterRef::Entity(mage_id), None);
+    utils::cast_self(&mut app, mage_id, "rally");
     utils::run_ticks(&mut app, 5);
 
     assert_eq!(
@@ -102,7 +98,7 @@ fn skill_with_unaffordable_resource_cost_is_refused() {
         utils::create_entity(app.world_mut(), "mage", utils::pos(5, 5), Some(0)).unwrap();
     utils::grant_gold(&mut app, 10);
     let base = utils::effective_damage(&app, mage);
-    utils::use_skill(&mut app, "rally", SkillCasterRef::Entity(mage_id), None);
+    utils::cast_self(&mut app, mage_id, "rally");
     utils::run_ticks(&mut app, 5);
 
     assert_eq!(
@@ -123,7 +119,7 @@ fn skill_with_health_cost_pays_health() {
     let (mage, mage_id) =
         utils::create_entity(app.world_mut(), "mage", utils::pos(5, 5), Some(0)).unwrap();
     let base = utils::effective_damage(&app, mage);
-    utils::use_skill(&mut app, "sacrifice", SkillCasterRef::Entity(mage_id), None);
+    utils::cast_self(&mut app, mage_id, "sacrifice");
     utils::run_ticks(&mut app, 5);
 
     assert_eq!(
@@ -147,7 +143,7 @@ fn skill_with_lethal_health_cost_is_refused() {
     // The cost equals the mage's full health: surviving on zero is not
     // surviving, so the cast is refused.
     let base = utils::effective_damage(&app, mage);
-    utils::use_skill(&mut app, "last_rite", SkillCasterRef::Entity(mage_id), None);
+    utils::cast_self(&mut app, mage_id, "last_rite");
     utils::run_ticks(&mut app, 5);
 
     assert_eq!(
@@ -174,12 +170,7 @@ fn skill_requirement_gates_cast() {
     let base = utils::effective_damage(&app, mage);
 
     // Before the research, the cast is refused outright.
-    utils::use_skill(
-        &mut app,
-        "war_secret",
-        SkillCasterRef::Entity(mage_id),
-        None,
-    );
+    utils::cast_self(&mut app, mage_id, "war_secret");
     utils::run_ticks(&mut app, 5);
     assert_eq!(
         utils::effective_damage(&app, mage),
@@ -197,12 +188,7 @@ fn skill_requirement_gates_cast() {
         .resource_mut::<PlayerResearch>()
         .mark_completed(0, arcana);
 
-    utils::use_skill(
-        &mut app,
-        "war_secret",
-        SkillCasterRef::Entity(mage_id),
-        None,
-    );
+    utils::cast_self(&mut app, mage_id, "war_secret");
     utils::run_ticks(&mut app, 5);
     assert_eq!(
         utils::effective_damage(&app, mage),
@@ -225,12 +211,7 @@ fn buff_cast_on_target_lacking_its_stat_is_refused_and_costs_nothing() {
 
     // The totem has no damage for frenzy to move: no buff lands, the 10
     // energy stays in the mage's full 100, and the skill is still ready.
-    utils::use_skill(
-        &mut app,
-        "empower",
-        SkillCasterRef::Entity(mage_id),
-        Some(SkillTarget::Entity(totem_id)),
-    );
+    utils::cast_on(&mut app, mage_id, "empower", totem_id);
     utils::run_ticks(&mut app, utils::APPLY + 2);
     let frenzy = frenzy(&app);
     assert!(!entity_def::bears(app.world(), totem, frenzy));
@@ -245,18 +226,13 @@ fn buff_cast_on_target_lacking_its_stat_is_refused_and_costs_nothing() {
 }
 
 #[test]
-fn buff_cast_on_site_meeting_its_terms_lands() {
+fn buff_cast_on_site_carrying_its_stat_lands() {
     let mut app = app();
     let (_, mage_id) =
         utils::create_entity(app.world_mut(), "mage", utils::pos(5, 5), Some(0)).unwrap();
     let (site, site_id) = utils::create_crewed_site(&mut app, "mage", 7, 5, 0);
 
-    utils::use_skill(
-        &mut app,
-        "empower",
-        SkillCasterRef::Entity(mage_id),
-        Some(SkillTarget::Entity(site_id)),
-    );
+    utils::cast_on(&mut app, mage_id, "empower", site_id);
     utils::run_ticks(&mut app, utils::APPLY + 2);
     assert!(entity_def::bears(app.world(), site, frenzy(&app)));
 }
@@ -269,12 +245,7 @@ fn buff_cast_on_target_carrying_its_stat_lands() {
     let (other, other_id) =
         utils::create_entity(app.world_mut(), "mage", utils::pos(7, 5), Some(0)).unwrap();
 
-    utils::use_skill(
-        &mut app,
-        "empower",
-        SkillCasterRef::Entity(mage_id),
-        Some(SkillTarget::Entity(other_id)),
-    );
+    utils::cast_on(&mut app, mage_id, "empower", other_id);
     utils::run_ticks(&mut app, utils::APPLY + 2);
     assert!(entity_def::bears(app.world(), other, frenzy(&app)));
 }
@@ -313,12 +284,7 @@ fn heal_restores_up_to_maximum() {
     utils::wound(&mut app, totem, "5");
 
     // 45 + 10 = 55, held at the totem's 50.
-    utils::use_skill(
-        &mut app,
-        "mend",
-        SkillCasterRef::Entity(mage_id),
-        Some(SkillTarget::Entity(totem_id)),
-    );
+    utils::cast_on(&mut app, mage_id, "mend", totem_id);
     utils::run_ticks(&mut app, utils::APPLY + 2);
     assert_eq!(utils::health_as_u32(&app, totem), 50);
 }
@@ -488,10 +454,11 @@ fn app() -> App {
             cooldown: 5,
             caster: SkillCaster::Entity {
                 costs,
-                target: EntityCastTarget::Caster,
-                reach: Reach::Wherever,
                 casting: Casting::Instant,
-                effect: EntityCastEffect::ApplyBuff(frenzy),
+                effect: EntityCastEffect::ApplyBuff {
+                    buff: frenzy,
+                    on: Recipient::Caster,
+                },
             },
             requires: Vec::new(),
         };
@@ -521,13 +488,17 @@ fn app() -> App {
                 cooldown: 5,
                 caster: SkillCaster::Entity {
                     costs: vec![Cost::Energy(FixedU64::from_num(10))],
-                    target: EntityCastTarget::Standing {
-                        side: Affiliation::Anyone,
-                        kinds: Kinds::Any,
-                    },
-                    reach: Reach::Wherever,
                     casting: Casting::Instant,
-                    effect: EntityCastEffect::ApplyBuff(frenzy),
+                    effect: EntityCastEffect::ApplyBuff {
+                        buff: frenzy,
+                        on: Recipient::Standing {
+                            whom: Whom {
+                                side: Affiliation::Anyone,
+                                kinds: Kinds::Any,
+                            },
+                            reach: Reach::Wherever,
+                        },
+                    },
                 },
                 requires: Vec::new(),
             },
@@ -538,13 +509,17 @@ fn app() -> App {
                 cooldown: 5,
                 caster: SkillCaster::Entity {
                     costs: Vec::new(),
-                    target: EntityCastTarget::Standing {
-                        side: Affiliation::Own,
-                        kinds: Kinds::only([Kind::Type("mage".to_string())]),
-                    },
-                    reach: Reach::Wherever,
                     casting: Casting::Instant,
-                    effect: EntityCastEffect::ApplyBuff(frenzy),
+                    effect: EntityCastEffect::ApplyBuff {
+                        buff: frenzy,
+                        on: Recipient::Standing {
+                            whom: Whom {
+                                side: Affiliation::Own,
+                                kinds: Kinds::only([Kind::Type("mage".to_string())]),
+                            },
+                            reach: Reach::Wherever,
+                        },
+                    },
                 },
                 requires: Vec::new(),
             },
@@ -555,13 +530,17 @@ fn app() -> App {
                 cooldown: 5,
                 caster: SkillCaster::Entity {
                     costs: Vec::new(),
-                    target: EntityCastTarget::Standing {
-                        side: Affiliation::Anyone,
-                        kinds: Kinds::Any,
-                    },
-                    reach: Reach::Wherever,
                     casting: Casting::Instant,
-                    effect: EntityCastEffect::Heal(FixedU64::from_num(10)),
+                    effect: EntityCastEffect::Heal {
+                        amount: FixedU64::from_num(10),
+                        on: Recipient::Standing {
+                            whom: Whom {
+                                side: Affiliation::Anyone,
+                                kinds: Kinds::Any,
+                            },
+                            reach: Reach::Wherever,
+                        },
+                    },
                 },
                 requires: Vec::new(),
             },
@@ -572,12 +551,13 @@ fn app() -> App {
                 cooldown: 5,
                 caster: SkillCaster::Entity {
                     costs: Vec::new(),
-                    target: EntityCastTarget::Position,
-                    reach: Reach::Wherever,
                     casting: Casting::Instant,
                     effect: EntityCastEffect::Watch {
-                        radius: 2,
-                        duration: 5,
+                        at: Spot::Cell {
+                            reach: Reach::Wherever,
+                        },
+                        radius: Quantity::Constant(2),
+                        duration: Quantity::Constant(5),
                         detection: Detection::Blind,
                     },
                 },

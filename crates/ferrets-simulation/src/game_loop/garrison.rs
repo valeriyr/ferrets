@@ -38,8 +38,7 @@ pub fn process_garrison_attacks(world: &mut World) {
             continue;
         }
         let conduct = entity_def::of(world, holder)
-            .transporter
-            .as_ref()
+            .transporter()
             .map(|transporter| transporter.conduct());
         match conduct {
             Some(PassengerConduct::Fight) => {}

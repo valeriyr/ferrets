@@ -48,7 +48,6 @@ use crate::{
     beside::{Beside, Lean},
     brood,
     components::{
-        concealed::ConcealedComponent,
         entity_info::EntityInfoComponent,
         last_hit::LastHitComponent,
         location::LocationComponent,
@@ -64,6 +63,7 @@ use crate::{
     events::{DeathCause, EventRecord, SimulationEvent, SpendCause},
     fields,
     game_loop::cost,
+    ground,
     map::{Map, OccupancyClass},
     movement_model::{self, MovementModel},
     order::Order,
@@ -307,7 +307,6 @@ fn judge(world: &World, entity: Entity, type_name: &str) -> Result<Start, Refusa
     let own = world
         .entity(entity)
         .get::<LocationComponent>()
-        .copied()
         .filter(|_| step_out.is_none() && on_grid);
     let own_class = OccupancyClass::of(entity_def::of(world, entity));
     let allowed = |worn_id: EntityTypeId, anchor: FixedUVec2| {
@@ -322,17 +321,14 @@ fn judge(world: &World, entity: Entity, type_name: &str) -> Result<Start, Refusa
     let takes = |worn_id: EntityTypeId, worn: LocationDef, anchor: FixedUVec2| {
         let placed = LocationComponent::new(anchor, spawn::DEFAULT_FACING);
         allowed(worn_id, anchor)
-            && spawn::ground_takes(
+            && ground::can_place(
                 world,
                 &placed,
                 worn,
                 OccupancyClass::of(world.resource::<ContentRegistry>().def(worn_id)),
-                own.map(|location| spawn::Own {
-                    entity,
-                    location,
-                    def: from,
-                    class: own_class,
-                }),
+                own.and_then(|location| entity_def::grid_mark_of(location, from, own_class))
+                    .as_slice(),
+                own.map(|_| entity).as_slice(),
             )
     };
 
@@ -667,6 +663,9 @@ fn land(
     // copy, since the world changes under it first.
     let broodlings = brood::broodlings(world, entity).to_vec();
 
+    // A gateway whose new form leaves its link loses it under the old form.
+    spawn::keep_or_leave_link(world, entity, type_id, Lean::Nothing);
+
     // Identity stays; the type is rewritten under it, and the anchor follows.
     let worn = entity_def::type_id(world, entity);
     let base_stats = world
@@ -863,8 +862,7 @@ fn land(
     // to the buffs as they now stand.
     buffs::refit_entity(world, entity);
     stats::recompute_stats_of(world, entity);
-    let concealed = entity_def::concealed(world, entity);
-    spawn::fit_default::<ConcealedComponent>(&mut world.entity_mut(entity), concealed);
+    spawn::fit_concealment(world, entity);
 
     // The plan was made against the old form's layers and clearance, so it means
     // nothing now. The order queue stays: a unit told to go somewhere and then
@@ -945,17 +943,13 @@ fn reoccupy(
             let placed = LocationComponent::new(anchor, facing);
             let fits = allowed(world, anchor)
                 && (unchanged
-                    || spawn::ground_takes(
+                    || ground::can_place(
                         world,
                         &placed,
                         to,
                         new_class,
-                        Some(spawn::Own {
-                            entity,
-                            location: standing,
-                            def: from,
-                            class: old_class,
-                        }),
+                        entity_def::grid_mark_of(&standing, from, old_class).as_slice(),
+                        &[entity],
                     ));
             if !fits {
                 return None;
@@ -1216,7 +1210,7 @@ fn cargo_fits(world: &World, entity: Entity, type_id: EntityTypeId) -> bool {
     }
 
     let def = world.resource::<ContentRegistry>().def(type_id);
-    let Some(transporter) = def.transporter.as_ref() else {
+    let Some(transporter) = def.transporter() else {
         return false;
     };
     let capacity = def

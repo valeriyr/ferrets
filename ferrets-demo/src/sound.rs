@@ -613,11 +613,13 @@ fn cues_for(
                 out.push((Cue::Research, place));
             }
         }
+        // Each cue only where the perspective makes out what it sounds at: the
+        // caster, and the target or, for a cell, the caster again.
         SimulationEvent::SkillCast { caster, target, .. } => {
-            let from = at(*caster);
+            let from = at(*caster).filter(|_| made_out(*caster));
             let onto = match target {
-                SkillTarget::Entity(target) => at(*target),
-                SkillTarget::Position(position) => Some(*position),
+                SkillTarget::Entity(target) => at(*target).filter(|_| made_out(*target)),
+                SkillTarget::Position(position) => Some(*position).filter(|_| made_out(*caster)),
             };
             out.extend(from.map(|place| (Cue::Cast, Some(place))));
             if onto != from {
@@ -642,6 +644,7 @@ fn cues_for(
         | SimulationEvent::EntitySpawned { .. }
         | SimulationEvent::EntityDied { .. }
         | SimulationEvent::EntityHidden { .. }
+        | SimulationEvent::EntityRelocated { .. }
         | SimulationEvent::EntityRevealed { .. }
         | SimulationEvent::ResourcesSpent { .. }
         | SimulationEvent::ResourcesRefunded { .. } => {}

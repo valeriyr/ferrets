@@ -13,14 +13,15 @@ pub struct SimulationId(pub u32);
 
 /// Tracks the next [`SimulationId`] to assign.
 ///
-/// Call [`generate`](SimulationIdGenerator::generate) before spawning each entity and attach the returned
+/// Call [`mint`](SimulationIds::mint) before spawning each entity and attach the returned
 /// [`SimulationId`] to it. The counter must be incremented in the same deterministic order on
 /// every peer to keep IDs consistent across clients and replays.
 #[derive(Resource, Default)]
-pub struct SimulationIdGenerator(u32);
+pub struct SimulationIds(u32);
 
-impl SimulationIdGenerator {
-    pub fn generate(&mut self) -> SimulationId {
+impl SimulationIds {
+    /// Mints the next entity's id.
+    pub fn mint(&mut self) -> SimulationId {
         self.0 += 1;
         SimulationId(self.0)
     }

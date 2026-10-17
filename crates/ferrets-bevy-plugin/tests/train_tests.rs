@@ -233,7 +233,7 @@ fn cancel_train_ignores_rival_trainer() {
 }
 
 #[test]
-fn cancel_train_of_queued_slot_leaves_progress_of_one_in_hand() {
+fn cancel_train_of_waiting_slot_keeps_progress_of_entry_in_work() {
     let mut app = utils::orders_app();
     let (academy, academy_id) = utils::create_owned(&mut app, "academy", 10, 10, 0);
     utils::grant_gold(&mut app, 100);

@@ -34,7 +34,9 @@ use ferrets_content::{
     registry::ContentRegistry,
     requirement::{Bound, Requirement, Threshold},
     resource::Banking,
-    skills::{EntityCastEffect, EntityCastTarget, PlayerCastEffect, Reach, SkillCaster},
+    skills::{
+        EntityCastEffect, EntityCastTarget, PlayerCastEffect, Reach, Recipient, SkillCaster, Whom,
+    },
     stand::StandingAct,
     stats::{EntityModifier, ModifierOp},
     targeting,
@@ -840,29 +842,21 @@ fn grunt_and_shaman_carry_their_abilities() {
     let def = registry
         .skill_def(second_wind)
         .expect("handle came from this registry");
-    assert!(
-        matches!(
-            &def.caster,
-            SkillCaster::Entity {
-                target: EntityCastTarget::Standing {
-                    side: Affiliation::Allied,
-                    ..
-                },
-                reach: Reach::Wherever,
-                ..
-            }
-        ),
-        "second_wind mends a clicked ally, or the shaman can only heal itself"
-    );
-    let SkillCaster::Entity {
-        target: EntityCastTarget::Standing { kinds, .. },
-        ..
-    } = &def.caster
-    else {
-        panic!("second_wind aims at something standing");
+    let SkillCaster::Entity { effect, .. } = &def.caster else {
+        panic!("a shaman casts it, not the player");
     };
-    // It mends the living and refuses the rest: a shaman cannot patch a wall.
-    assert_eq!(kinds, &Kinds::tags(["biological"]));
+    // It mends a clicked ally, or the shaman could only heal itself; and the
+    // living only: a shaman cannot patch a wall.
+    assert_eq!(
+        effect.target(),
+        EntityCastTarget::Standing {
+            whom: &Whom {
+                side: Affiliation::Allied,
+                kinds: Kinds::tags(["biological"]),
+            },
+            reach: Reach::Wherever,
+        }
+    );
 }
 
 #[test]
@@ -964,7 +958,7 @@ fn only_tall_fortress_occupies_air() {
 //
 
 #[test]
-fn only_melee_and_siege_exclude_air() {
+fn only_melee_shells_and_flat_guns_exclude_air() {
     let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
     let air = registry.layer(map::AIR).expect("air layer is registered");
 
@@ -1058,8 +1052,7 @@ fn machines_are_mended_by_workers_and_sheltered_like_soldiers() {
     let bunker = registry.entity("bunker").expect("bunker is registered");
     assert!(
         bunker
-            .transporter
-            .as_ref()
+            .transporter()
             .expect("the bunker shelters")
             .carries()
             .admits(mortar)
@@ -1408,7 +1401,7 @@ fn every_terran_production_building_flies_but_depot() {
 }
 
 #[test]
-fn planted_tank_is_priced_and_paced_like_one_that_rolls() {
+fn planted_tank_carries_rolling_price_and_training_plus_planting_time() {
     let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
     let planted = registry.entity("siege_tank").expect("siege_tank defined");
 
@@ -1617,24 +1610,28 @@ fn raising_dead_names_bodies_it_raises_from() {
     let def = registry
         .skill_def(raise_dead)
         .expect("handle came from this registry");
-    let SkillCaster::Entity { target, effect, .. } = &def.caster else {
+    let SkillCaster::Entity { effect, .. } = &def.caster else {
         panic!("a necromancer casts it, not the player");
     };
 
     // Bodies and bodies only: an unnamed filter would raise skeletons out of
     // whatever else the field came to leave lying.
     assert_eq!(
-        *target,
+        effect.target(),
         EntityCastTarget::Fallen {
-            kinds: Kinds::only([Kind::Type("corpse".to_string())])
+            kinds: &Kinds::only([Kind::Type("corpse".to_string())]),
+            reach: Reach::Within(Quantity::Constant(6)),
         }
     );
-    let EntityCastEffect::Summon { entity_type, count } = effect else {
+    let EntityCastEffect::Summon {
+        entity_type, count, ..
+    } = effect
+    else {
         panic!("what it does with a body is raise something from it");
     };
     assert_eq!(
         (registry.def(*entity_type).name.as_str(), *count),
-        ("skeleton", 2)
+        ("skeleton", Quantity::Constant(2))
     );
 }
 
@@ -1701,7 +1698,7 @@ fn last_hall_is_only_one_that_fights() {
 }
 
 #[test]
-fn undead_price_headroom_and_ghoul_like_other_races() {
+fn ziggurat_and_ghoul_numbers_hold_as_declared() {
     let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
 
     // Ten supply for eighty gold and thirty wood — eight gold a point, where
@@ -1889,9 +1886,21 @@ fn cloak_is_buff_kept_up_from_energy_that_nothing_but_decloak_ends() {
 
     // Two buttons: one puts the buff on for a price, the other takes it off.
     let cloak = skill_effect(&registry, "cloak");
-    assert_eq!(cloak, EntityCastEffect::ApplyBuff(cloaked));
+    assert_eq!(
+        cloak,
+        EntityCastEffect::ApplyBuff {
+            buff: cloaked,
+            on: Recipient::Caster,
+        }
+    );
     let decloak = skill_effect(&registry, "decloak");
-    assert_eq!(decloak, EntityCastEffect::RemoveBuff(cloaked));
+    assert_eq!(
+        decloak,
+        EntityCastEffect::RemoveBuff {
+            buff: cloaked,
+            on: Recipient::Caster,
+        }
+    );
 
     let wraith = registry.entity("wraith").expect("wraith is registered");
     assert!(
@@ -1925,7 +1934,10 @@ fn huntress_ambush_conceals_until_she_strikes_or_is_struck() {
 
     assert_eq!(
         skill_effect(&registry, "ambush"),
-        EntityCastEffect::ApplyBuff(ambushing)
+        EntityCastEffect::ApplyBuff {
+            buff: ambushing,
+            on: Recipient::Caster,
+        }
     );
     let huntress = registry.entity("huntress").expect("huntress is registered");
     assert_eq!(
@@ -2261,7 +2273,7 @@ fn skill_effect(registry: &ContentRegistry, name: &str) -> EntityCastEffect {
     let SkillCaster::Entity { effect, .. } = &def.caster else {
         panic!("'{name}' is cast by an entity");
     };
-    *effect
+    effect.clone()
 }
 
 /// Whether any registered type raises or trains the named one.

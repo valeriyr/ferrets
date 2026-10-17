@@ -39,7 +39,6 @@ use ferrets_simulation::{
     movement_model::MovementModel,
     order::Order,
     session::{GameSession, player_slot::PlayerSlot, player_type::PlayerType},
-    simulation_id::SimulationId,
     spawn,
 };
 
@@ -201,7 +200,7 @@ fn changed_trainer_is_not_sent_to_its_own_rally_point() {
     );
     utils::run_ticks(&mut app, utils::APPLY);
 
-    // The golem can walk, so a rally wrongly owed would carry it off; a
+    // The golem can walk, so a rally wrongly due would carry it off; a
     // change of form sends nobody, and it stands where it unrooted.
     utils::order_morph(&mut app, shrine, "golem");
     utils::run_ticks(&mut app, 11 + 5);
@@ -481,7 +480,7 @@ fn change_refused_while_production_is_queued() {
         },
     );
     utils::run_ticks(&mut app, utils::APPLY + 2);
-    command_morph(&mut app, shrine_id, "golem");
+    utils::command_morph(&mut app, shrine_id, "golem");
 
     // Mid-training the command is dropped: nothing is queued behind the work,
     // and the whelp is built with its trainer unchanged.
@@ -498,7 +497,7 @@ fn change_refused_while_production_is_queued() {
     assert_eq!(utils::count_of_type(app.world_mut(), "whelp"), 1);
 
     // Idle, the same command is taken.
-    command_morph(&mut app, shrine_id, "golem");
+    utils::command_morph(&mut app, shrine_id, "golem");
     utils::run_ticks(&mut app, utils::APPLY + 10);
     assert_eq!(type_name_of(&app, shrine), "golem");
 }
@@ -559,7 +558,7 @@ fn change_refused_while_workers_sit_in_berths() {
     utils::run_ticks(&mut app, utils::APPLY + 4);
     assert!(entity_def::attached(app.world(), sylph));
 
-    command_morph(&mut app, house_id, "walking_shaft");
+    utils::command_morph(&mut app, house_id, "walking_shaft");
     utils::run_ticks(&mut app, utils::APPLY + 6);
     assert_eq!(type_name_of(&app, house), "shaft_house");
     assert!(
@@ -572,7 +571,7 @@ fn change_refused_while_workers_sit_in_berths() {
     // The berth given up, the same command is taken.
     utils::force_cancel_orders(app.world_mut(), sylph);
     utils::run_ticks(&mut app, 1);
-    command_morph(&mut app, house_id, "walking_shaft");
+    utils::command_morph(&mut app, house_id, "walking_shaft");
     utils::run_ticks(&mut app, utils::APPLY + 6);
     assert_eq!(type_name_of(&app, house), "walking_shaft");
 }
@@ -643,7 +642,7 @@ fn rooting_off_lattice_settles_position_onto_its_cells() {
         .unwrap()
         .position = FixedUVec2::new(utils::fixed("10.4"), utils::fixed("10.0"));
 
-    command_morph(&mut app, shaft_id, "shaft_house");
+    utils::command_morph(&mut app, shaft_id, "shaft_house");
     utils::run_ticks(&mut app, utils::APPLY + 5);
     assert_eq!(
         app.world()
@@ -727,12 +726,26 @@ fn burrowed_form_changing_in_place_is_not_refused_by_its_own_footprint() {
     assert_eq!(type_name_of(&app, mole), "vole");
 }
 
+#[test]
+fn burrowed_form_revalidated_in_place_is_not_refused_by_its_own_footprint() {
+    let mut app = underfoot_app();
+    let (mole, _) = utils::create_owned(&mut app, "mole", 10, 10, 0);
+
+    // Judged only as it lands, the 2×2 shrew's ground takes in the cell the
+    // mole itself holds, which is no reason to refuse it.
+    utils::order_morph(&mut app, mole, "shrew");
+    utils::run_ticks(&mut app, 4);
+
+    assert_eq!(type_name_of(&app, mole), "shrew");
+}
+
 //
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 //
 
-/// One human on a cell-model map with a `mole` and a `vole` that stand
-/// underfoot, the mole changing into the vole in place, and a `digger` that
+/// One human on a cell-model map with a `mole`, a `vole` and a 2×2 `shrew`
+/// that stand underfoot, the mole changing in place into the vole, reserving
+/// its ground, and into the shrew, judged as it lands; and a `digger` that
 /// changes into a static `den` on its own cell for 10 gold, reserving the
 /// ground. Session started.
 fn underfoot_app() -> App {
@@ -745,11 +758,19 @@ fn underfoot_app() -> App {
             EntityTypeDef::new("mole")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Underfoot)
                 .with_pool(Pool::health(20))
-                .with_morphs([change("vole", MorphPlacement::Reserve, Vec::new())]),
+                .with_morphs([
+                    change("vole", MorphPlacement::Reserve, Vec::new()),
+                    change("shrew", MorphPlacement::Revalidate, Vec::new()),
+                ]),
         );
         registry.register(
             EntityTypeDef::new("vole")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Underfoot)
+                .with_pool(Pool::health(20)),
+        );
+        registry.register(
+            EntityTypeDef::new("shrew")
+                .with_location(utils::GROUND, CellSize::new(2, 2), Solidity::Underfoot)
                 .with_pool(Pool::health(20)),
         );
         registry.register(
@@ -798,17 +819,4 @@ fn type_name_of(app: &bevy::prelude::App, entity: bevy::prelude::Entity) -> Stri
         .expect("a live entity carries its info")
         .type_name()
         .to_string()
-}
-
-/// Commands a change into `type_name` the way a player does: selects the
-/// entity and issues the morph command, so the executor judges it.
-fn command_morph(app: &mut bevy::prelude::App, entity: SimulationId, type_name: &str) {
-    utils::select(app, entity);
-    utils::push_command(
-        app,
-        PlayerCommand::Morph {
-            type_name: type_name.to_string(),
-            flush: true,
-        },
-    );
 }
