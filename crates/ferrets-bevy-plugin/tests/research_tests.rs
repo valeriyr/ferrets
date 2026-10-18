@@ -9,7 +9,7 @@ mod utils;
 use bevy::prelude::App;
 use ferrets_math::FixedU64;
 use ferrets_simulation::{
-    command::PlayerCommand, components::build, player_research::PlayerResearch,
+    command::PlayerCommand, components::rise, player_research::PlayerResearch,
     resources::PlayerResources, simulation_id::SimulationId, spawn,
 };
 
@@ -283,19 +283,19 @@ fn tag_requirement_follows_standing_provider() {
 }
 
 #[test]
-fn under_construction_provider_satisfies_nothing() {
+fn rising_provider_satisfies_nothing() {
     let mut app = utils::research_app();
-    let (lab, _) = utils::create_crewed_site(&mut app, "lab", 10, 10, 0);
+    let (lab, _) = utils::create_crewed_rising(&mut app, "lab", 10, 10, 0);
     let (_, guardhouse_id) = utils::create_owned(&mut app, "guardhouse", 20, 20, 0);
     utils::grant_gold(&mut app, 100);
 
-    // A workshop still going up unlocks nothing.
+    // A workshop still rising unlocks nothing.
     train(&mut app, guardhouse_id, "knight");
     utils::run_ticks(&mut app, utils::APPLY + 10);
     assert_eq!(utils::count_of_type(app.world_mut(), "knight"), 0);
     assert_eq!(utils::gold(app.world()), 100);
 
-    build::mark_as_built(app.world_mut(), lab);
+    rise::mark_as_risen(app.world_mut(), lab);
     train(&mut app, guardhouse_id, "knight");
     utils::run_ticks(&mut app, utils::APPLY + 10);
     assert_eq!(utils::count_of_type(app.world_mut(), "knight"), 1);

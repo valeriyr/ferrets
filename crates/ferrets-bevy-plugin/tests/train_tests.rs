@@ -8,7 +8,7 @@ use ferrets_content::player_stats::PlayerStatId;
 use ferrets_math::FixedU64;
 use ferrets_simulation::{
     command::PlayerCommand,
-    components::{build, train::TrainQueueComponent},
+    components::{rise, train::TrainQueueComponent},
     player_stats::PlayerStats,
     resources::PlayerResources,
     simulation_id::SimulationId,
@@ -72,9 +72,9 @@ fn train_spawns_units_and_deducts_cost() {
 }
 
 #[test]
-fn building_under_construction_refuses_training() {
+fn rising_building_refuses_training() {
     let mut app = utils::orders_app();
-    let (barracks, barracks_id) = utils::create_crewed_site(&mut app, "barracks", 10, 10, 0);
+    let (barracks, barracks_id) = utils::create_crewed_rising(&mut app, "barracks", 10, 10, 0);
     app.world_mut()
         .resource_mut::<PlayerResources>()
         .add(0, "gold", 30);
@@ -93,8 +93,8 @@ fn building_under_construction_refuses_training() {
     assert_eq!(utils::gold(app.world_mut()), 30);
     assert!(utils::order_queue_is_empty(app.world_mut(), barracks));
 
-    // Construction finishing lifts the restriction.
-    build::mark_as_built(app.world_mut(), barracks);
+    // Having risen lifts the restriction.
+    rise::mark_as_risen(app.world_mut(), barracks);
     utils::push_command(
         &mut app,
         PlayerCommand::TrainEntity {

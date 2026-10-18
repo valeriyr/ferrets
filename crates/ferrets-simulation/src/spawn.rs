@@ -11,7 +11,6 @@ use ferrets_content::{
     attack::Slain,
     base_stats::BaseStats,
     brood::{BreederDef, OrphanFate},
-    build::{RiseStart, SitePool},
     dying::{DeathKind, DyingDef},
     entity_stats::EntityStatId,
     entity_type_def::{EntityTypeDef, EntityTypeId},
@@ -23,6 +22,7 @@ use ferrets_content::{
     pool_def::PoolId,
     registry::ContentRegistry,
     resource::DepletionPolicy,
+    rise::{RisePool, RisePoolInitial},
     skills::SkillId,
     transport::PassengerFate,
     work::Attachment,
@@ -40,7 +40,7 @@ use crate::{
         annex::{AnnexComponent, DocksComponent},
         attached::AttachedComponent,
         brood::{BredComponent, BroodComponent},
-        build::{OverbuiltComponent, SiteWork, UnderConstructionComponent},
+        build::OverbuiltComponent,
         concealed::ConcealedComponent,
         dying::{DiedComponent, DyingComponent, Passing, RemainsComponent},
         entity_info::EntityInfoComponent,
@@ -60,6 +60,7 @@ use crate::{
         rally::RallyPointComponent,
         repair::UnderRepairComponent,
         resource::{ResourceCarrierComponent, ResourceSourceComponent, UnderHarvestComponent},
+        rise::{RiseAttendance, RisingComponent},
         stance::{Stance, StanceComponent},
         stand::{StandComponent, Standing},
         tags::TagsComponent,
@@ -133,8 +134,8 @@ pub enum Arrival<'a> {
         /// The pools started in place of their type's initial.
         starts: &'a [(PoolId, PoolInitial)],
     },
-    /// As a construction site, advanced as the work says.
-    Site(SiteWork),
+    /// Rising, attended as the [`RiseAttendance`] says.
+    Rising(RiseAttendance),
 }
 
 /// Creates an entity of the given type at `position`, owned by `owner`
@@ -149,8 +150,8 @@ pub enum Arrival<'a> {
 /// Returns `(entity, simulation_id)`, or `None` if `type_name` is not registered
 /// or the position is blocked on the nav grid. Panics when a standing
 /// arrival's starts name a pool the type does not declare, name one twice,
-/// or start one where it cannot start, or when a site arrives of a type that
-/// cannot be built.
+/// or start one where it cannot start, or when it arrives rising and its
+/// type never rises.
 pub fn create_entity(
     world: &mut World,
     type_name: &str,
@@ -170,7 +171,7 @@ pub fn create_entity(
         let def = registry.entity(type_name)?;
         match &arrival {
             Arrival::Standing { starts } => check_starts(registry, def, starts),
-            Arrival::Site(_) => {}
+            Arrival::Rising(_) => {}
         }
         (def.location?, OccupancyClass::of(def))
     };
@@ -233,11 +234,11 @@ pub fn spawn_trained(
     )
 }
 
-/// Creates a construction site `builder` placed, advanced as `work` says,
+/// Creates a construction site `builder` placed, attended as `attendance` says,
 /// and announces it as founded.
 ///
 /// Returns `None` if `type_name` is not registered or the position is
-/// blocked on the nav grid. Panics when the type cannot be built.
+/// blocked on the nav grid. Panics when the type never rises.
 pub fn spawn_founded(
     world: &mut World,
     type_name: &str,
@@ -245,7 +246,7 @@ pub fn spawn_founded(
     owner: Option<PlayerId>,
     reach: FieldReach,
     builder: SimulationId,
-    work: SiteWork,
+    attendance: RiseAttendance,
 ) -> Option<(Entity, SimulationId)> {
     spawn(
         world,
@@ -253,7 +254,7 @@ pub fn spawn_founded(
         position,
         owner,
         reach,
-        Arrival::Site(work),
+        Arrival::Rising(attendance),
         SpawnCause::Founded { builder },
     )
 }
@@ -1211,8 +1212,8 @@ fn place_back_at(world: &mut World, entity: Entity, cell: CellPos, location_def:
 /// it onto its berths' new points, and each move is announced.
 ///
 /// Panics for an entity that does not stand on the grid at rest, is dying, is
-/// a site, was raised over a resource source or is changing form: the caller
-/// judged every move, and every cell free with the moved bodies lifted.
+/// still rising, was raised over a resource source or is changing form: the
+/// caller judged every move, and every cell free with the moved bodies lifted.
 pub fn relocate(world: &mut World, moves: &[(Entity, CellPos)]) {
     let mut from = Vec::with_capacity(moves.len());
     for &(entity, _) in moves {
@@ -1822,10 +1823,10 @@ fn settle_workers(world: &mut World, job: Entity, lean: Lean) {
         )
         .chain(
             job_ref
-                .get::<UnderConstructionComponent>()
-                .and_then(|site| match &site.work {
-                    SiteWork::Crew { builders } => Some(builders.clone()),
-                    SiteWork::Unattended { .. } | SiteWork::Halted => None,
+                .get::<RisingComponent>()
+                .and_then(|rising| match &rising.attendance {
+                    RiseAttendance::Crew { workers } => Some(workers.clone()),
+                    RiseAttendance::Unattended { .. } | RiseAttendance::Halted => None,
                 }),
         )
         .flatten()
@@ -2301,7 +2302,7 @@ fn fit_field_sources(
 /// `owner` and arriving as `arrival` says, with everything its type gives an
 /// instance — and no footprint on the grid: the caller stands it on the grid
 /// or seats it. Returns `None` if `type_name` is not registered or has no
-/// location. Panics when it arrives as a site of a type that cannot be built.
+/// location. Panics when it arrives rising and its type never rises.
 fn conjure(
     world: &mut World,
     type_name: &str,
@@ -2317,11 +2318,11 @@ fn conjure(
         let type_id = registry.type_id(type_name)?;
         let type_def = registry.entity(type_name)?;
         type_def.location?;
-        match (&arrival, &type_def.build) {
-            (Arrival::Site(_), None) => {
-                panic!("a site is of a type that can be built: '{type_name}'")
+        match (&arrival, &type_def.rise) {
+            (Arrival::Rising(_), None) => {
+                panic!("a rising entity is of a type that rises: '{type_name}'")
             }
-            (Arrival::Site(_), Some(_)) | (Arrival::Standing { .. }, _) => {}
+            (Arrival::Rising(_), Some(_)) | (Arrival::Standing { .. }, _) => {}
         }
         (type_id, type_def.base_stats.clone())
     };
@@ -2338,10 +2339,11 @@ fn conjure(
     if let Some(player) = owner {
         entity_mut.insert(OwnerComponent::new(player));
     }
-    // A site is one before anything is fitted on it.
+    // A rising entity rises from the moment it is spawned, before anything is
+    // fitted on it.
     match &arrival {
-        Arrival::Site(work) => {
-            entity_mut.insert(UnderConstructionComponent::new(work.clone()));
+        Arrival::Rising(attendance) => {
+            entity_mut.insert(RisingComponent::new(attendance.clone()));
         }
         Arrival::Standing { .. } => {}
     }
@@ -2399,10 +2401,10 @@ fn announce(world: &mut World, id: SimulationId, cause: SpawnCause) {
 
 /// Starts each pool the type `type_id` declares on `entity` as `arrival`
 /// says, against its effective maximum: a standing entity's at its initial,
-/// or where the arrival's starts name it; a site's as its type's build
-/// holds it, a withheld pool left off. The first pass gives the entity its
-/// pools; the pass after the passives starts them again under the maxima
-/// the passives leave.
+/// or where the arrival's starts name it; a rising entity's as its type's
+/// rise holds it, a pool gained on risen left off. The first pass gives the
+/// entity its pools; the pass after the passives starts them again under the
+/// maxima the passives leave.
 fn seed_pools(
     world: &mut World,
     entity: Entity,
@@ -2422,15 +2424,15 @@ fn seed_pools(
                         .find_map(|(named, initial)| (*named == pool.id()).then_some(*initial))
                         .unwrap_or(pool.initial()),
                 ),
-                Arrival::Site(_) => match def
-                    .build
+                Arrival::Rising(_) => match def
+                    .rise
                     .as_ref()
-                    .and_then(|build| build.site(pool.id()))
-                    .expect("a site's type says how its build holds each pool")
+                    .and_then(|rise| rise.pool(pool.id()))
+                    .expect("a rising entity's type says how it holds each pool")
                 {
-                    SitePool::Initial => Start::At(pool.initial()),
-                    SitePool::Rising(start) => Start::Rising(start),
-                    SitePool::Withheld => Start::Withheld,
+                    RisePool::Initial => Start::At(pool.initial()),
+                    RisePool::FollowsWork(initial) => Start::FollowsWork(initial),
+                    RisePool::GainedOnRisen => Start::GainedOnRisen,
                 },
             };
             (pool.id(), start)
@@ -2442,13 +2444,13 @@ fn seed_pools(
             (Start::At(initial), Seeding::AfterPassives) => {
                 pools::reseed(world, entity, pool, initial);
             }
-            (Start::Rising(start), Seeding::First) => {
-                pools::seed_rising(world, entity, pool, start.into());
+            (Start::FollowsWork(initial), Seeding::First) => {
+                pools::seed_following_work(world, entity, pool, initial.into());
             }
-            (Start::Rising(start), Seeding::AfterPassives) => {
-                pools::reseed_rising(world, entity, pool, start.into());
+            (Start::FollowsWork(initial), Seeding::AfterPassives) => {
+                pools::reseed_following_work(world, entity, pool, initial.into());
             }
-            (Start::Withheld, Seeding::First | Seeding::AfterPassives) => {}
+            (Start::GainedOnRisen, Seeding::First | Seeding::AfterPassives) => {}
         }
     }
 }
@@ -2468,10 +2470,10 @@ enum Seeding {
 enum Start {
     /// At this initial, following the pool's maximum.
     At(PoolInitial),
-    /// At this start, rising with a site's work.
-    Rising(RiseStart),
-    /// Not at all: a site leaves the pool off.
-    Withheld,
+    /// At this initial, following a rising entity's work.
+    FollowsWork(RisePoolInitial),
+    /// Not at all: a rising entity gains the pool once it has risen.
+    GainedOnRisen,
 }
 
 /// Checks each pool `starts` names for an entity of `def`: one its type

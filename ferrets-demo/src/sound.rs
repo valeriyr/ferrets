@@ -8,7 +8,7 @@
 //!
 //! Cues come in two classes. Field sounds — hits, explosions, deliveries, casts,
 //! form changes — follow the fog: anyone who can see the cell hears them.
-//! Milestone sounds — research and construction completions, a player's own
+//! Milestone sounds — research completions and rises, a player's own
 //! skills — are progress reports, heard only on their owner's node; a node with
 //! no player of its own (an observer) hears every player's.
 
@@ -79,7 +79,7 @@ enum Cue {
     Effect,
     /// A form change completing.
     Morph,
-    /// A construction site finishing its building.
+    /// An entity finishing its rise.
     Completed,
     /// A research topic finishing.
     Research,
@@ -593,8 +593,8 @@ fn cues_for(
         SimulationEvent::EntityMorphed { entity, .. } => {
             out.extend(at(*entity).map(|place| (Cue::Morph, Some(place))));
         }
-        SimulationEvent::ConstructionCompleted { building, .. } => {
-            if let Some(entity) = world.resource::<EntityIndex>().any(*building)
+        SimulationEvent::EntityRisen { entity, .. } => {
+            if let Some(entity) = world.resource::<EntityIndex>().any(*entity)
                 && own_milestone(local, entity_def::owner(world, entity))
             {
                 out.push((Cue::Completed, Some(entity_def::whereabouts(world, entity))));

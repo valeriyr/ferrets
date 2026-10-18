@@ -12,7 +12,7 @@ use crate::{
     annex::{AloneConduct, AnnexLife},
     attack::{AttackDef, Delivery, Weapon},
     brood::BroodlingDef,
-    build::{BuilderAttendance, SitePool},
+    build::BuilderAttendance,
     cost::Cost,
     detection::Detection,
     entity_buffs::{EntityBuffDef, EntityBuffId, Lasting},
@@ -36,6 +36,7 @@ use crate::{
     repair::RepairCost,
     requirement::{Bound, Requirement, Scope, Threshold},
     research::{ResearchDef, ResearchId},
+    rise::RisePool,
     skills::{
         Casting, Count, EntityCastEffect, EntityCastTarget, FromAimTo, FromCasterTo, Journey,
         PlayerCastEffect, Reach, Recipient, SkillCaster, SkillDef, SkillId, SummonArrival, Whom,
@@ -176,7 +177,7 @@ impl ContentRegistry {
         );
 
         self.check_pools(&def);
-        self.check_build(&def);
+        self.check_rise(&def);
         self.validate_location(&def);
         self.validate_race(&def);
         self.validate_resource_kinds(&def);
@@ -896,8 +897,8 @@ impl ContentRegistry {
                         match arrives {
                             SummonArrival::Standing => {}
                             SummonArrival::Rising => assert!(
-                                summoned.build.is_some(),
-                                "skill '{name}' summons '{}' rising, but it declares no build",
+                                summoned.rise.is_some(),
+                                "skill '{name}' summons '{}' rising, but it declares no rise",
                                 summoned.name
                             ),
                         }
@@ -1677,16 +1678,16 @@ impl ContentRegistry {
                 ),
                 FieldGrowth::Instant => {}
             }
-            match source.while_constructing() {
+            match source.while_rising() {
                 Emission::Full | Emission::Held(_) => assert!(
-                    def.build.is_some(),
-                    "entity type '{}' projects a field while constructing but is never constructed",
+                    def.rise.is_some(),
+                    "entity type '{}' projects a field while rising but never rises",
                     def.name
                 ),
                 Emission::Nothing => {}
             }
             for (emission, when) in [
-                (source.while_constructing(), "constructing"),
+                (source.while_rising(), "rising"),
                 (source.while_disabled(), "disabled"),
             ] {
                 match emission {
@@ -1871,7 +1872,7 @@ impl ContentRegistry {
                     *bound,
                 );
             }
-            Requirement::Built | Requirement::Idle => {}
+            Requirement::Risen | Requirement::Idle => {}
             Requirement::IdleFor(ticks) => assert!(
                 *ticks > 0,
                 "{owner} requires idling for no ticks at all; idle_for is at least one"
@@ -2028,7 +2029,7 @@ impl ContentRegistry {
             Requirement::Health(_)
             | Requirement::Energy(_)
             | Requirement::Stat { .. }
-            | Requirement::Built
+            | Requirement::Risen
             | Requirement::Idle
             | Requirement::IdleFor(_)
             | Requirement::UnhurtFor(_) => unreachable!("a state leaf is taken as met"),
@@ -2075,7 +2076,7 @@ impl ContentRegistry {
             Requirement::Health(_)
             | Requirement::Energy(_)
             | Requirement::Stat { .. }
-            | Requirement::Built
+            | Requirement::Risen
             | Requirement::Idle
             | Requirement::IdleFor(_)
             | Requirement::UnhurtFor(_) => true,
@@ -2742,8 +2743,8 @@ impl ContentRegistry {
                 Release::Beside => {}
                 Release::Warped { .. } => assert!(
                     self.entity(type_name)
-                        .is_some_and(|trained| trained.build.is_some()),
-                    "entity type '{}' warps in '{type_name}', which declares no build",
+                        .is_some_and(|trained| trained.rise.is_some()),
+                    "entity type '{}' warps in '{type_name}', which declares no rise",
                     def.name
                 ),
             }
@@ -3447,16 +3448,12 @@ impl ContentRegistry {
         }
     }
 
-    /// Checks that an annex is a constructible building that holds the cells it
+    /// Checks that an annex is a building that rises and holds the cells it
     /// stands on, carries the stat any fade it declares moves, and fits some
     /// registered dock.
     fn validate_annex(&self, def: &EntityTypeDef) {
         let Some(annex) = def.annex else { return };
-        assert!(
-            def.build.is_some(),
-            "annex '{}' is not constructible",
-            def.name
-        );
+        assert!(def.rise.is_some(), "annex '{}' never rises", def.name);
         // A fade drains the health pool, which carries its drain beside it.
         if let AloneConduct::Standing {
             life: AnnexLife::Fades { .. },
@@ -3496,7 +3493,7 @@ impl ContentRegistry {
 
     /// Checks that a type raised over a resource source names a registered
     /// source of the kind the type itself yields, on the same footprint and the
-    /// same layers, and is constructible.
+    /// same layers, and rises.
     fn validate_overbuilds(&self, def: &EntityTypeDef) {
         let Some(over) = &def.overbuilds else { return };
         let source = self.entity(over).unwrap_or_else(|| {
@@ -3537,24 +3534,24 @@ impl ContentRegistry {
             def.name
         );
         assert!(
-            def.build.is_some(),
-            "entity type '{}' overbuilds '{over}' but is not constructible",
+            def.rise.is_some(),
+            "entity type '{}' overbuilds '{over}' but never rises",
             def.name
         );
     }
 
     /// Checks that every type in the definition's build catalogue is a
-    /// registered constructible type.
+    /// registered type that rises.
     fn validate_builds(&self, def: &EntityTypeDef) {
         let Some(builder) = &def.builder else { return };
 
         for type_name in builder.builds() {
-            let constructible = self
+            let rises = self
                 .entity(type_name)
-                .is_some_and(|built| built.build.is_some());
+                .is_some_and(|built| built.rise.is_some());
             assert!(
-                constructible,
-                "entity type '{}' builds '{type_name}', which is not a registered constructible type",
+                rises,
+                "entity type '{}' builds '{type_name}', which is not a registered type that rises",
                 def.name
             );
         }
@@ -3637,45 +3634,49 @@ impl ContentRegistry {
         }
     }
 
-    /// Checks how a site of `def` holds its pools: each pool the type
-    /// declares named and nothing else, a rising pool starting where the pool
-    /// can start and below its whole maximum, and health never withheld.
-    fn check_build(&self, def: &EntityTypeDef) {
-        let Some(build) = &def.build else {
+    /// Checks how a rising entity of `def` holds its pools: each pool the
+    /// type declares named and nothing else, a pool following the work
+    /// starting where the pool can start and below its whole maximum, and
+    /// health never gained only once risen.
+    fn check_rise(&self, def: &EntityTypeDef) {
+        let Some(rise) = &def.rise else {
             return;
         };
-        for (pool, _) in build.pools() {
+        for (pool, _) in rise.pools() {
             assert!(
                 def.base_stats.pool(pool).is_some(),
-                "entity type '{}' says how a site holds a pool it does not declare",
+                "entity type '{}' says how it holds a pool it does not declare while rising",
                 def.name
             );
         }
         for declaration in def.base_stats.pools() {
             let name = self.pool_name(declaration.id());
-            match build.site(declaration.id()) {
+            match rise.pool(declaration.id()) {
                 None => panic!(
-                    "entity type '{}' does not say how a site holds the {name} pool",
+                    "entity type '{}' does not say how it holds the {name} pool while rising",
                     def.name
                 ),
-                Some(SitePool::Initial) => {}
-                Some(SitePool::Rising(start)) => {
-                    let start = PoolInitial::from(start);
+                Some(RisePool::Initial) => {}
+                Some(RisePool::FollowsWork(initial)) => {
+                    let start = PoolInitial::from(initial);
                     declaration.validate_initial(
                         start,
-                        &format!("entity type '{}' starts the {name} pool's rise", def.name),
+                        &format!(
+                            "entity type '{}' starts the {name} pool following the work",
+                            def.name
+                        ),
                     );
                     assert!(
                         start.under(declaration.maximum()) < declaration.maximum(),
-                        "entity type '{}' rises the {name} pool from its whole maximum; let it start at its initial",
+                        "entity type '{}' has the {name} pool follow the work from its whole maximum; let it start at its initial",
                         def.name
                     );
                 }
-                Some(SitePool::Withheld) if declaration.id() == PoolId::HEALTH => panic!(
-                    "entity type '{}' withholds the health pool on a site",
+                Some(RisePool::GainedOnRisen) if declaration.id() == PoolId::HEALTH => panic!(
+                    "entity type '{}' gains the health pool only once risen",
                     def.name
                 ),
-                Some(SitePool::Withheld) => {}
+                Some(RisePool::GainedOnRisen) => {}
             }
         }
     }
@@ -3839,7 +3840,7 @@ fn judged_stats(
         | Requirement::Tag(_)
         | Requirement::Research(_)
         | Requirement::Annexed(_)
-        | Requirement::Built
+        | Requirement::Risen
         | Requirement::Idle
         | Requirement::IdleFor(_)
         | Requirement::UnhurtFor(_) => {}

@@ -98,7 +98,7 @@ fn entity_table(lua: &Lua, entity: &EntityView) -> mlua::Result<Table> {
         table.set("carrying", carrying)?;
     }
     table.set("train_queue", strings_table(lua, &entity.train_queue)?)?;
-    table.set("under_construction", entity.under_construction)?;
+    table.set("rising", entity.rising)?;
     table.set("disabled", entity.disabled)?;
     table.set("stance", entity.stance.as_deref())?;
     table.set("resource_amount", entity.resource_amount)?;
@@ -167,7 +167,7 @@ fn entity_content_table(lua: &Lua, entity: &EntityContentView) -> mlua::Result<T
     table.set("price", price_table(lua, &entity.price)?)?;
 
     table.set("train_time", entity.train_time)?;
-    table.set("build_time", entity.build_time)?;
+    table.set("rise_time", entity.rise_time)?;
     table.set("trains", optional_strings(lua, entity.trains.as_deref())?)?;
     table.set(
         "researches",
@@ -290,7 +290,7 @@ fn requirement_table(lua: &Lua, entry: &RequirementView) -> mlua::Result<Table> 
             view.set("name", name.as_str())?;
             set_bound(&view, bound)?;
         }
-        RequirementView::Built => view.set("kind", "built")?,
+        RequirementView::Risen => view.set("kind", "risen")?,
         RequirementView::Idle => view.set("kind", "idle")?,
         RequirementView::IdleFor(ticks) => {
             view.set("kind", "idle_for")?;

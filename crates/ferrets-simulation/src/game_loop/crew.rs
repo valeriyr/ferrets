@@ -17,9 +17,9 @@ use ferrets_content::work::Crewing;
 
 use crate::{
     components::{
-        build::{SiteWork, UnderConstructionComponent},
         repair::UnderRepairComponent,
         resource::UnderHarvestComponent,
+        rise::{RiseAttendance, RisingComponent},
     },
     entity_def,
     entity_index::EntityIndex,
@@ -49,18 +49,18 @@ impl Crew for UnderHarvestComponent {
     }
 }
 
-impl Crew for UnderConstructionComponent {
+impl Crew for RisingComponent {
     fn members(&self) -> Option<&BTreeSet<SimulationId>> {
-        match &self.work {
-            SiteWork::Crew { builders } => Some(builders),
-            SiteWork::Unattended { .. } | SiteWork::Halted => None,
+        match &self.attendance {
+            RiseAttendance::Crew { workers } => Some(workers),
+            RiseAttendance::Unattended { .. } | RiseAttendance::Halted => None,
         }
     }
 
     fn members_mut(&mut self) -> Option<&mut BTreeSet<SimulationId>> {
-        match &mut self.work {
-            SiteWork::Crew { builders } => Some(builders),
-            SiteWork::Unattended { .. } | SiteWork::Halted => None,
+        match &mut self.attendance {
+            RiseAttendance::Crew { workers } => Some(workers),
+            RiseAttendance::Unattended { .. } | RiseAttendance::Halted => None,
         }
     }
 }
@@ -97,7 +97,7 @@ pub(super) fn join<C: Crew + Default>(world: &mut World, job: Entity, member: En
 /// Adds `member` to the crew the job already carries.
 ///
 /// For a crew that rides along on a component saying something else as well — a
-/// site's construction progress — where conjuring the component up would claim
+/// rising entity's progress — where conjuring the component up would claim
 /// something about the job that is not this module's to claim.
 ///
 /// Panics if the job carries no component, or takes no crew: a caller joins

@@ -76,7 +76,7 @@ fn load_mission() -> Box<dyn ferrets_script::scenario::ScenarioRuntime> {
         .expect("mission loads")
 }
 
-fn entity(type_name: &str, under_construction: bool) -> EntityView {
+fn entity(type_name: &str, rising: bool) -> EntityView {
     EntityView {
         id: 1,
         type_name: type_name.to_string(),
@@ -92,7 +92,7 @@ fn entity(type_name: &str, under_construction: bool) -> EntityView {
         buffs: Vec::new(),
         carrying: None,
         train_queue: Vec::new(),
-        under_construction,
+        rising,
         disabled: false,
         stance: None,
         resource_amount: None,

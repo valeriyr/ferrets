@@ -66,30 +66,30 @@ fn entity_without_regeneration_stays_wounded() {
 }
 
 #[test]
-fn site_regenerates_by_its_own_rate() {
+fn rising_entity_regenerates_by_its_own_rate() {
     let mut app = app();
-    let (troll, _) = utils::create_crewed_site(&mut app, "troll", 5, 5, 0);
+    let (troll, _) = utils::create_crewed_rising(&mut app, "troll", 5, 5, 0);
     utils::wound(&mut app, troll, "10");
 
-    // The troll's own rate holds on a site: four ticks at 0.5 restore two
+    // The troll's own rate holds while rising: four ticks at 0.5 restore two
     // points.
     utils::run_ticks(&mut app, 4);
     assert_eq!(utils::health_as_u32(&app, troll), 32);
 }
 
 #[test]
-fn site_does_not_regenerate_by_rate_held_while_built() {
+fn rising_entity_does_not_regenerate_by_rate_held_while_risen() {
     let mut app = app();
-    let (site, _) = utils::create_crewed_site(&mut app, "hut", 5, 5, 0);
-    let (built, _) = utils::create_owned(&mut app, "hut", 7, 5, 0);
-    utils::wound(&mut app, site, "10");
-    utils::wound(&mut app, built, "10");
+    let (rising, _) = utils::create_crewed_rising(&mut app, "hut", 5, 5, 0);
+    let (risen, _) = utils::create_owned(&mut app, "hut", 7, 5, 0);
+    utils::wound(&mut app, rising, "10");
+    utils::wound(&mut app, risen, "10");
 
-    // `knitting` holds once built: the built hut mends 0.5 a tick, 30 → 32
-    // in four ticks; the site holds at 30.
+    // `knitting` holds once risen: the risen hut mends 0.5 a tick, 30 → 32
+    // in four ticks; the rising one holds at 30.
     utils::run_ticks(&mut app, 4);
-    assert_eq!(utils::health_as_u32(&app, site), 30);
-    assert_eq!(utils::health_as_u32(&app, built), 32);
+    assert_eq!(utils::health_as_u32(&app, rising), 30);
+    assert_eq!(utils::health_as_u32(&app, risen), 32);
 }
 
 //
@@ -245,7 +245,7 @@ fn balanced_flow_holds_full_pool() {
 /// One human player, a `troll` that regenerates half a point per tick toward its
 /// 40, a `dummy` of the same size that regenerates nothing, a `lamp` whose
 /// 20 energy drains three a tick, and a `hut` (40 health) whose passive
-/// `knitting` regenerates half a point per tick once it is built.
+/// `knitting` regenerates half a point per tick once it has risen.
 fn app() -> App {
     let mut app = utils::make_app(vec![PlayerSlot::occupied(0, PlayerType::Human, None, None)]);
     {
@@ -253,7 +253,7 @@ fn app() -> App {
         registry.register(
             EntityTypeDef::new("troll")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_build(4, utils::site_initial(&[PoolId::HEALTH]))
+                .with_rise(4, utils::rise_initial_pools(&[PoolId::HEALTH]))
                 .with_pool(Pool::builtin(
                     PoolId::HEALTH,
                     FixedU64::from_num(40),
@@ -274,7 +274,7 @@ fn app() -> App {
                 effects: vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![
                     utils::flat(EntityStatId::HEALTH_REGEN, "0.5"),
                 ]))],
-                lasting: Lasting::While(Requirement::Built),
+                lasting: Lasting::While(Requirement::Risen),
                 stack_rule: StackRule::Ignore,
                 interrupted_by: Vec::new(),
             },
@@ -282,7 +282,7 @@ fn app() -> App {
         registry.register(
             EntityTypeDef::new("hut")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_build(4, utils::site_initial(&[PoolId::HEALTH]))
+                .with_rise(4, utils::rise_initial_pools(&[PoolId::HEALTH]))
                 .with_pool(Pool::health(40))
                 .with_passives([knitting]),
         );

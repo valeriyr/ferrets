@@ -261,7 +261,7 @@ fn game_view_classifies_and_snapshots_entities() {
     assert_eq!((worker.x, worker.y), (5, 5));
     assert_eq!(worker.type_name, "worker");
     assert_eq!(worker.health, Some(20));
-    assert!(worker.idle && !worker.hidden && !worker.under_construction);
+    assert!(worker.idle && !worker.hidden && !worker.rising);
     assert!(worker.carrying.is_none() && worker.resource_amount.is_none());
     // The hidden one is listed where it went in.
     assert!(view.my_entities[1].hidden);

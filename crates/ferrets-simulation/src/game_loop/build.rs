@@ -20,7 +20,7 @@ use crate::{
     annex, berths,
     beside::Beside,
     components::{
-        build::{self, BuildComponent, SiteWork, UnderConstructionComponent},
+        build::BuildComponent,
         dying::DyingComponent,
         entity_info::EntityInfoComponent,
         hidden::{self, Inside},
@@ -28,6 +28,7 @@ use crate::{
         order_queue::{CancelPolicy, OrderState},
         owner::OwnerComponent,
         resource::ResourceSourceComponent,
+        rise::{self, RiseAttendance, RisingComponent},
     },
     entity_def,
     entity_index::EntityIndex,
@@ -48,9 +49,9 @@ use ferrets_content::{
 };
 
 /// Whether `entity` may start this Build: its type raises the ordered type,
-/// that type is constructible, it operates, and attending the site would not
-/// take it off the map from under others seated on it. Whether the ground
-/// admits the site is decided on arrival.
+/// that type rises, it operates, and attending the site would not take it off
+/// the map from under others seated on it. Whether the ground admits the site
+/// is decided on arrival.
 pub fn can_start(world: &World, entity: Entity, order: &Order) -> Result<(), Refusal> {
     let (type_name, _) = order.build_params().expect("Build order must have params");
     if !entity_def::of(world, entity)
@@ -60,15 +61,15 @@ pub fn can_start(world: &World, entity: Entity, order: &Order) -> Result<(), Ref
     {
         return Err(Refusal::Incapable);
     }
-    let Some(constructible) = world
+    let Some(raised) = world
         .resource::<ContentRegistry>()
         .entity(type_name)
-        .filter(|def| def.build.is_some())
+        .filter(|def| def.rise.is_some())
     else {
         return Err(Refusal::Incapable);
     };
     // A bound tunnel end has its other end already.
-    if tunnels::refuses_raising(world, entity, constructible) {
+    if tunnels::refuses_raising(world, entity, raised) {
         return Err(Refusal::Incapable);
     }
     orders::requires_operating(world, entity)?;
@@ -163,7 +164,7 @@ pub fn survives_soft_cancel() -> bool {
 /// attendance could take it off the map from under them.
 ///
 /// After that: every builder on the site advances the same progress counter by one
-/// tick's work. When the build time is reached the construction marker is removed,
+/// tick's work. When the rise time is reached the rising marker is removed,
 /// and a builder that raised the site from inside comes back out beside it.
 ///
 /// A builder that leaves the site unattended is done the moment the site
@@ -178,11 +179,11 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
         return Processing::state(OrderState::Finished);
     };
 
-    let (build_time, building_location_def, price) = {
+    let (rise_time, building_location_def, price) = {
         let registry = world.resource::<ContentRegistry>();
         let type_def = registry.entity(type_name).expect("type checked in prepare");
         (
-            type_def.build_time().expect("type checked in prepare"),
+            type_def.rise_time().expect("type checked in prepare"),
             type_def
                 .location
                 .expect("validated content defines a location"),
@@ -320,7 +321,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
         }
 
         let builder = entity_def::simulation_id(world, entity);
-        let work = founding_work(world, entity, builder);
+        let rise_attendance = founding_attendance(world, entity, builder);
         // The source's footprint comes off the grid so the site can take its
         // cells; a site refused anyway puts it straight back.
         if let Some(source) = overbuilt {
@@ -333,7 +334,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
             owner,
             FieldReach::Initial,
             builder,
-            work.clone(),
+            rise_attendance.clone(),
         );
         let Some((building, building_sim_id)) = placed else {
             // Site blocked — give up, and bring back a builder that had already
@@ -371,12 +372,12 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
             );
         }
 
-        match work {
-            SiteWork::Crew { .. } => {}
-            SiteWork::Unattended { .. } => {
+        match rise_attendance {
+            RiseAttendance::Crew { .. } => {}
+            RiseAttendance::Unattended { .. } => {
                 return Processing::state(OrderState::Finished);
             }
-            SiteWork::Halted => unreachable!("a site is never raised halted"),
+            RiseAttendance::Halted => unreachable!("a site is never raised halted"),
         }
         build_component.building = Some(building_sim_id);
         world.entity_mut(entity).insert(build_component);
@@ -393,12 +394,12 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
     };
 
     // Another builder on the same site may have finished it first.
-    if !entity_def::under_construction(world, building) {
+    if !entity_def::rising(world, building) {
         return leave_finished_site(world, entity, building_id);
     }
     let builder = entity_def::simulation_id(world, entity);
-    match put_in_work(world, building, build_time, builder) {
-        Worked::Completed => return leave_finished_site(world, entity, building_id),
+    match put_in_work(world, building, rise_time, builder) {
+        Worked::Risen => return leave_finished_site(world, entity, building_id),
         Worked::Going => {}
     }
 
@@ -406,45 +407,45 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
     Processing::state(OrderState::InProcessing)
 }
 
-/// Advances every unattended site by one tick, completing the ones that reach
-/// their build time. A site a crew works is left to its crew, and a halted one
-/// waits.
+/// Advances every unattended rising entity by one tick, marking risen the
+/// ones that reach their rise time. One a crew works is left to its crew,
+/// and a halted one waits.
 ///
-/// Sites are visited in ascending simulation-id order.
+/// Rising entities are visited in ascending simulation-id order.
 pub fn advance_sites_without_builder(world: &mut World) {
     let mut unattended: Vec<(SimulationId, Entity, SimulationId)> = world
-        .query_filtered::<(Entity, &EntityInfoComponent, &UnderConstructionComponent), Without<DyingComponent>>()
+        .query_filtered::<(Entity, &EntityInfoComponent, &RisingComponent), Without<DyingComponent>>()
         .iter(world)
-        .filter_map(|(building, info, site)| match site.work {
-            SiteWork::Crew { .. } | SiteWork::Halted => None,
-            SiteWork::Unattended { founder } => Some((info.id(), building, founder)),
+        .filter_map(|(entity, info, rising)| match rising.attendance {
+            RiseAttendance::Crew { .. } | RiseAttendance::Halted => None,
+            RiseAttendance::Unattended { founder } => Some((info.id(), entity, founder)),
         })
         .collect();
     unattended.sort_unstable_by_key(|&(id, _, _)| id);
-    for (_, building, founder) in unattended {
-        let build_time = entity_def::of(world, building)
-            .build_time()
-            .expect("a site's type is constructible");
+    for (_, entity, founder) in unattended {
+        let rise_time = entity_def::of(world, entity)
+            .rise_time()
+            .expect("an unattended rising entity is of a type that rises");
 
-        match put_in_work(world, building, build_time, founder) {
-            Worked::Going | Worked::Completed => {}
+        match put_in_work(world, entity, rise_time, founder) {
+            Worked::Going | Worked::Risen => {}
         }
     }
 }
 
-/// Lines up each pool every site raises with its work under the maxima just
-/// folded — see [`build::rise`] — and settles the pools still following
-/// work on each building completed since the last fold — see
-/// [`build::settle_built`].
+/// Lines up each pool of every rising entity that follows its work under the
+/// maxima just folded — see [`rise::rise`] — and settles the pools still
+/// following work on each entity risen since the last fold — see
+/// [`rise::settle_risen`].
 pub fn rise_sites(world: &mut World) {
     for (_, entity) in world.resource::<EntityIndex>().alive_entries() {
         if !entity_def::follows_work(world, entity) {
             continue;
         }
-        if entity_def::under_construction(world, entity) {
-            build::rise(world, entity);
+        if entity_def::rising(world, entity) {
+            rise::rise(world, entity);
         } else {
-            build::settle_built(world, entity);
+            rise::settle_risen(world, entity);
         }
     }
 }
@@ -454,14 +455,14 @@ pub(super) fn tear_down_site(world: &mut World, building: Entity) {
     spawn::despawn_entity(world, building, DeathCause::Canceled);
 }
 
-/// Marks `building` as built — see [`build::mark_as_built`] — and announces
-/// the completion, naming `builder`: whoever worked the completing tick, or
-/// the founder of a site that raised itself.
-fn complete_site(world: &mut World, building: Entity, builder: SimulationId) {
-    build::mark_as_built(world, building);
-    let announced = SimulationEvent::ConstructionCompleted {
-        building: entity_def::simulation_id(world, building),
-        builder,
+/// Marks `entity` as risen — see [`rise::mark_as_risen`] — and announces it,
+/// naming `by`: whoever worked the last tick, or the founder of an entity
+/// that rose unattended.
+fn complete_site(world: &mut World, entity: Entity, by: SimulationId) {
+    rise::mark_as_risen(world, entity);
+    let announced = SimulationEvent::EntityRisen {
+        entity: entity_def::simulation_id(world, entity),
+        by,
     };
     world.resource_mut::<EventRecord>().emit(announced);
 }
@@ -475,8 +476,8 @@ fn abandon_site(world: &mut World, entity: Entity, site: SimulationId) {
         .alive(site)
         .expect("the last builder leaves a site that still stands");
     assert!(
-        entity_def::under_construction(world, building),
-        "the last builder leaves a site still under construction"
+        entity_def::rising(world, building),
+        "the last builder leaves a site still rising"
     );
     debug_assert_eq!(
         entity_def::owner(world, building),
@@ -496,14 +497,14 @@ fn halt_site(world: &mut World, site: SimulationId) {
         .expect("the last builder leaves a site that still stands");
     let mut building_mut = world.entity_mut(building);
     let mut marker = building_mut
-        .get_mut::<UnderConstructionComponent>()
-        .expect("the last builder leaves a site still under construction");
-    match &marker.work {
-        SiteWork::Crew { builders } => {
-            debug_assert!(builders.is_empty(), "the last builder out leaves no crew");
-            marker.work = SiteWork::Halted;
+        .get_mut::<RisingComponent>()
+        .expect("the last builder leaves a site still rising");
+    match &marker.attendance {
+        RiseAttendance::Crew { workers } => {
+            debug_assert!(workers.is_empty(), "the last builder out leaves no crew");
+            marker.attendance = RiseAttendance::Halted;
         }
-        SiteWork::Unattended { .. } | SiteWork::Halted => {
+        RiseAttendance::Unattended { .. } | RiseAttendance::Halted => {
             unreachable!("only a crewed site is left halted")
         }
     }
@@ -524,7 +525,7 @@ fn site_under_way_at(
         &EntityInfoComponent,
         &LocationComponent,
         Option<&OwnerComponent>,
-    ), (With<UnderConstructionComponent>, Without<DyingComponent>)>();
+    ), (With<RisingComponent>, Without<DyingComponent>)>();
 
     // The lowest id wins rather than whichever the query happens to visit first:
     // a footprint that claims no cells can sit on top of another, so more than one
@@ -548,18 +549,15 @@ fn site_excludes(world: &World, site: SimulationId, entity: Entity) -> bool {
     let Some(building) = world.resource::<EntityIndex>().alive(site) else {
         return false;
     };
-    let Some(marker) = world.entity(building).get::<UnderConstructionComponent>() else {
+    let Some(marker) = world.entity(building).get::<RisingComponent>() else {
         return false;
     };
-    let crewed_out = match &marker.work {
-        SiteWork::Halted => false,
-        SiteWork::Crew { .. } | SiteWork::Unattended { .. } => {
-            crew::excludes::<UnderConstructionComponent>(
-                world,
-                building,
-                entity,
-                |world, builder| attendance(world, builder).crewing(),
-            )
+    let crewed_out = match &marker.attendance {
+        RiseAttendance::Halted => false,
+        RiseAttendance::Crew { .. } | RiseAttendance::Unattended { .. } => {
+            crew::excludes::<RisingComponent>(world, building, entity, |world, builder| {
+                attendance(world, builder).crewing()
+            })
         }
     };
     crewed_out
@@ -568,10 +566,6 @@ fn site_excludes(world: &World, site: SimulationId, entity: Entity) -> bool {
             .is_some_and(|presence| berths::shut(world, building, &presence))
 }
 
-/// Takes up `site`: joins the crew on it, or becomes the crew of a halted one.
-///
-/// The site's marker is the construction itself, raised with the first builder — so a
-/// newcomer joins what is there and never marks anything.
 /// Whether a builder that has taken a site up stays with it.
 enum Taken {
     /// It is on the site's crew, and its order carries on.
@@ -580,40 +574,43 @@ enum Taken {
     LeftToItself,
 }
 
+/// Takes up `site`: joins the crew on it, or becomes the crew of a halted one.
+/// The site's rising marker was put on with the first builder; a newcomer
+/// joins what is there and marks nothing.
 fn join_site(world: &mut World, site: SimulationId, entity: Entity) -> Taken {
     let building = world
         .resource::<EntityIndex>()
         .alive(site)
         .expect("a site is taken up only when found standing this tick");
-    let work = world
+    let rise_attendance = world
         .entity(building)
-        .get::<UnderConstructionComponent>()
+        .get::<RisingComponent>()
         .expect("a site is taken up only when found under way this tick")
-        .work
+        .attendance
         .clone();
-    match work {
-        SiteWork::Crew { .. } => {
-            crew::join_existing::<UnderConstructionComponent>(world, building, entity);
+    match rise_attendance {
+        RiseAttendance::Crew { .. } => {
+            crew::join_existing::<RisingComponent>(world, building, entity);
             Taken::OnCrew
         }
         // A halted site is taken up on the taker's own terms, the same terms it
         // would have been raised on: a builder that stays joins its crew, and
         // one that leaves a site to itself leaves this one to itself too.
-        SiteWork::Halted => {
+        RiseAttendance::Halted => {
             let builder = entity_def::simulation_id(world, entity);
-            let taken = founding_work(world, entity, builder);
-            let on_crew = matches!(taken, SiteWork::Crew { .. });
+            let taken = founding_attendance(world, entity, builder);
+            let on_crew = matches!(taken, RiseAttendance::Crew { .. });
             world
                 .entity_mut(building)
-                .get_mut::<UnderConstructionComponent>()
+                .get_mut::<RisingComponent>()
                 .expect("checked above")
-                .work = taken;
+                .attendance = taken;
             match on_crew {
                 true => Taken::OnCrew,
                 false => Taken::LeftToItself,
             }
         }
-        SiteWork::Unattended { .. } => {
+        RiseAttendance::Unattended { .. } => {
             unreachable!("an unattended site shuts every builder out")
         }
     }
@@ -622,12 +619,12 @@ fn join_site(world: &mut World, site: SimulationId, entity: Entity) -> Taken {
 /// What a site becomes when a builder of `entity`'s attendance raises or takes
 /// it up: a crew of one for a builder that stays with it, and unattended for
 /// one that leaves it to itself.
-fn founding_work(world: &World, entity: Entity, builder: SimulationId) -> SiteWork {
+fn founding_attendance(world: &World, entity: Entity, builder: SimulationId) -> RiseAttendance {
     match attendance(world, entity) {
-        BuilderAttendance::Crew(_) | BuilderAttendance::Consumed => SiteWork::Crew {
-            builders: BTreeSet::from([builder]),
+        BuilderAttendance::Crew(_) | BuilderAttendance::Consumed => RiseAttendance::Crew {
+            workers: BTreeSet::from([builder]),
         },
-        BuilderAttendance::Unattended => SiteWork::Unattended { founder: builder },
+        BuilderAttendance::Unattended => RiseAttendance::Unattended { founder: builder },
     }
 }
 
@@ -639,7 +636,7 @@ fn founding_work(world: &World, entity: Entity, builder: SimulationId) -> SiteWo
 /// gone as a job and is nobody's to tear down.
 fn leave_crew(world: &mut World, site: SimulationId, entity: Entity) -> Departure {
     match world.resource::<EntityIndex>().alive(site) {
-        Some(building) => crew::leave::<UnderConstructionComponent>(world, building, entity),
+        Some(building) => crew::leave::<RisingComponent>(world, building, entity),
         None => Departure::JobGone,
     }
 }
@@ -710,37 +707,32 @@ fn attendance(world: &World, entity: Entity) -> BuilderAttendance {
         .clone()
 }
 
-/// What a tick of work did to a site.
+/// What a tick of work did to a rising entity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Worked {
-    /// The site goes on rising.
+    /// The entity goes on rising.
     Going,
-    /// The work reached the build time and the site completed.
-    Completed,
+    /// The work reached the rise time and the entity has risen.
+    Risen,
 }
 
-/// Puts one tick of work into the site `building`: each pool it raises moves
-/// along its line with the work, and once the work reaches `build_time` the
-/// site completes, named for `builder`.
-fn put_in_work(
-    world: &mut World,
-    building: Entity,
-    build_time: u32,
-    builder: SimulationId,
-) -> Worked {
+/// Puts one tick of work into the rising `entity`: each pool following its
+/// work moves along its line, and once the work reaches `rise_time` the
+/// entity has risen, named for `by`.
+fn put_in_work(world: &mut World, entity: Entity, rise_time: u32, by: SimulationId) -> Worked {
     let progress = {
-        let mut site = world
-            .get_mut::<UnderConstructionComponent>(building)
-            .expect("work is put into a site under construction");
-        site.progress += 1;
-        site.progress
+        let mut rising = world
+            .get_mut::<RisingComponent>(entity)
+            .expect("work is put into an entity still rising");
+        rising.progress += 1;
+        rising.progress
     };
-    if entity_def::follows_work(world, building) {
-        build::rise(world, building);
+    if entity_def::follows_work(world, entity) {
+        rise::rise(world, entity);
     }
-    if progress >= build_time {
-        complete_site(world, building, builder);
-        Worked::Completed
+    if progress >= rise_time {
+        complete_site(world, entity, by);
+        Worked::Risen
     } else {
         Worked::Going
     }

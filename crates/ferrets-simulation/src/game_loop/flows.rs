@@ -34,8 +34,8 @@ pub fn process_energy_flow(world: &mut World) {
 /// Moves each health pool by one tick by `health_regen` net of
 /// `health_drain`, held under `max_health`.
 ///
-/// Runs over the alive index, so the dying are already excluded; a site under
-/// construction flows like anything else. A pool also settles back under a
+/// Runs over the alive index, so the dying are already excluded; an entity
+/// still rising flows like anything else. A pool also settles back under a
 /// ceiling a debuff has lowered, and one the drain empties dies of it.
 pub fn process_health_flow(world: &mut World) {
     let health_pool = *world.resource::<ContentRegistry>().pool_def(PoolId::HEALTH);

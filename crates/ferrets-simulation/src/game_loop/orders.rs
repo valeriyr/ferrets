@@ -50,8 +50,8 @@ use crate::{
 pub enum Refusal {
     /// The type cannot do this at all.
     Incapable,
-    /// The entity is still being raised.
-    UnderConstruction,
+    /// The entity is still rising into the world.
+    Rising,
     /// The entity is switched off: a field it needs is gone, or it is an
     /// annex standing with no primary on terms that stop it working.
     Disabled,
@@ -209,7 +209,7 @@ fn survives_soft_cancel(order: &Order) -> bool {
 }
 
 /// The refusal an entity's state hands work that queues and waits: busy while
-/// a change of form is under way, refused while still being raised or standing
+/// a change of form is under way, refused while still rising or standing
 /// as an annex with no primary, and admitted when a field or a buff switched it
 /// off — the work waits for the outage to pass.
 pub(super) fn admits_queued_work(world: &World, entity: Entity) -> Result<(), Refusal> {
@@ -225,7 +225,7 @@ pub(super) fn admits_queued_work(world: &World, entity: Entity) -> Result<(), Re
         // pass.
         Operation::Disabled(Outage::Orphaned) => Err(Refusal::Disabled),
         Operation::Disabled(Outage::Field | Outage::Buff) => Ok(()),
-        Operation::UnderConstruction => Err(Refusal::UnderConstruction),
+        Operation::Rising => Err(Refusal::Rising),
         // Off the map waiting on a cell, it takes no new work.
         Operation::Stranded => Err(Refusal::Stranded),
     }
@@ -236,7 +236,7 @@ pub(super) fn admits_queued_work(world: &World, entity: Entity) -> Result<(), Re
 pub(super) fn requires_operating(world: &World, entity: Entity) -> Result<(), Refusal> {
     match entity_def::operation(world, entity) {
         Operation::Operating => Ok(()),
-        Operation::UnderConstruction => Err(Refusal::UnderConstruction),
+        Operation::Rising => Err(Refusal::Rising),
         Operation::Disabled(_) => Err(Refusal::Disabled),
         Operation::Stranded => Err(Refusal::Stranded),
     }
@@ -247,7 +247,7 @@ pub(super) fn requires_operating(world: &World, entity: Entity) -> Result<(), Re
 pub(super) fn target_operating(world: &World, target: Entity) -> Result<(), Refusal> {
     match entity_def::operation(world, target) {
         Operation::Operating => Ok(()),
-        Operation::UnderConstruction | Operation::Disabled(_) | Operation::Stranded => {
+        Operation::Rising | Operation::Disabled(_) | Operation::Stranded => {
             Err(Refusal::TargetUnfit)
         }
     }
@@ -287,7 +287,7 @@ fn conduct(
         }
     }
     match operation {
-        Operation::Operating | Operation::UnderConstruction => Conduct::Completes,
+        Operation::Operating | Operation::Rising => Conduct::Completes,
         // Off the map waiting on a cell: the work that stranded the body waits
         // for it to stand, a death does not.
         Operation::Stranded => match order {
@@ -510,7 +510,7 @@ fn dispatch_watch(
 pub fn prepare_tick(entity: Entity, queue: &mut OrderQueueComponent, world: &mut World) {
     let operation = entity_def::operation(world, entity);
     match operation {
-        Operation::Operating | Operation::UnderConstruction => {}
+        Operation::Operating | Operation::Rising => {}
         Operation::Disabled(_) | Operation::Stranded => {
             for entry in &mut queue.0 {
                 match conduct(world, entity, operation, &entry.order, entry.state) {

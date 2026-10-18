@@ -328,7 +328,7 @@ fn joined_key(world: &World, gateway: Entity) -> LinkKey {
 fn open_as_door(world: &World, gateway: Entity) -> bool {
     let operating = match entity_def::operation(world, gateway) {
         Operation::Operating => true,
-        Operation::UnderConstruction | Operation::Disabled(_) | Operation::Stranded => false,
+        Operation::Rising | Operation::Disabled(_) | Operation::Stranded => false,
     };
     operating
         && !entity_def::hidden(world, gateway)

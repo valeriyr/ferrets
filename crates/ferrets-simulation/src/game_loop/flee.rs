@@ -49,7 +49,7 @@ pub fn tick(world: &mut World) {
         }
         match entity_def::operation(world, entity) {
             Operation::Operating => {}
-            Operation::UnderConstruction | Operation::Disabled(_) => continue,
+            Operation::Rising | Operation::Disabled(_) => continue,
             Operation::Stranded => unreachable!("a stranded body is hidden"),
         }
         // Commanded entities stay commanded: only an empty queue flees.

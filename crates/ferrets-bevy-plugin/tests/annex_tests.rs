@@ -14,9 +14,9 @@ use ferrets_simulation::{
     command::PlayerCommand,
     components::{
         annex::{AnnexComponent, Docking, DocksComponent},
-        build::{SiteWork, UnderConstructionComponent},
         location::LocationComponent,
         research::ResearchComponent,
+        rise::{RiseAttendance, RisingComponent},
     },
     entity_def::{self, Operation, Outage},
     events::{DeathCause, SimulationEvent},
@@ -41,9 +41,7 @@ fn annex_rises_on_its_primarys_dock_and_docks_when_it_stands() {
     utils::run_ticks(&mut app, utils::APPLY + 1);
     let lookout = utils::single_owned_of_type(app.world_mut(), "lookout", 0);
     assert!(
-        app.world()
-            .get::<UnderConstructionComponent>(lookout)
-            .is_some(),
+        app.world().get::<RisingComponent>(lookout).is_some(),
         "the site is up but unfinished"
     );
     // An unfinished annex is nobody's annex yet.
@@ -57,12 +55,10 @@ fn annex_rises_on_its_primarys_dock_and_docks_when_it_stands() {
         "its dock is empty until the annex stands"
     );
 
-    // Four ticks of build time, and the tick after it stands the pass docks it.
+    // Four ticks of rise time, and the tick after it stands the pass docks it.
     utils::run_ticks(&mut app, 5);
     assert!(
-        app.world()
-            .get::<UnderConstructionComponent>(lookout)
-            .is_none(),
+        app.world().get::<RisingComponent>(lookout).is_none(),
         "the annex is finished"
     );
     assert_eq!(primary_of(&app, lookout), Docking::Primary(keep_id));
@@ -89,13 +85,9 @@ fn annex_site_rises_with_its_work() {
     // 10 + (40 − 10) / 4 = 17.5.
     assert_eq!(utils::health(&app, lookout), utils::fixed("17.5"));
 
-    // Four ticks of build time, and the line reaches the whole 40.
+    // Four ticks of rise time, and the line reaches the whole 40.
     utils::run_ticks(&mut app, 5);
-    assert!(
-        app.world()
-            .get::<UnderConstructionComponent>(lookout)
-            .is_none()
-    );
+    assert!(app.world().get::<RisingComponent>(lookout).is_none());
     assert_eq!(utils::health_as_u32(&app, lookout), 40);
 }
 
@@ -206,14 +198,12 @@ fn training_waits_behind_raising_annex() {
         assert_eq!(
             utils::count_of_type(app.world_mut(), "runner"),
             0,
-            "no unit comes out while the annex goes up"
+            "no unit comes out while the annex rises"
         );
         utils::run_ticks(&mut app, 1);
     }
     assert!(
-        app.world()
-            .get::<UnderConstructionComponent>(site)
-            .is_none(),
+        app.world().get::<RisingComponent>(site).is_none(),
         "the annex stands"
     );
 
@@ -452,9 +442,9 @@ fn primary_landing_back_works_annex_it_left_halted() {
     assert!(
         matches!(
             app.world()
-                .get::<UnderConstructionComponent>(site)
-                .map(|site| &site.work),
-            Some(SiteWork::Halted)
+                .get::<RisingComponent>(site)
+                .map(|rising| &rising.attendance),
+            Some(RiseAttendance::Halted)
         ),
         "it waited for its primary rather than raising itself"
     );
@@ -467,9 +457,7 @@ fn primary_landing_back_works_annex_it_left_halted() {
     // building it belongs to, so nobody has to order the work a second time.
     utils::run_ticks(&mut app, 12);
     assert!(
-        app.world()
-            .get::<UnderConstructionComponent>(site)
-            .is_none(),
+        app.world().get::<RisingComponent>(site).is_none(),
         "the annex it walked out on is finished"
     );
     assert_eq!(utils::count_of_type(app.world_mut(), "lookout"), 1);
@@ -493,9 +481,9 @@ fn annex_site_is_finished_by_primary_that_did_not_found_it() {
     assert!(
         matches!(
             app.world()
-                .get::<UnderConstructionComponent>(site)
-                .map(|site| &site.work),
-            Some(SiteWork::Halted)
+                .get::<RisingComponent>(site)
+                .map(|rising| &rising.attendance),
+            Some(RiseAttendance::Halted)
         ),
         "the site stands halted with nobody offering its dock"
     );
@@ -506,9 +494,7 @@ fn annex_site_is_finished_by_primary_that_did_not_found_it() {
     let (_, heir_id) = utils::create_owned(&mut app, "keep", 10, 10, 0);
     utils::run_ticks(&mut app, 12);
     assert!(
-        app.world()
-            .get::<UnderConstructionComponent>(site)
-            .is_none(),
+        app.world().get::<RisingComponent>(site).is_none(),
         "the keep that never ordered it raised it"
     );
     assert_eq!(primary_of(&app, site), Docking::Primary(heir_id));
@@ -524,9 +510,7 @@ fn lifting_off_mid_build_leaves_annex_site_halted() {
     utils::run_ticks(&mut app, utils::APPLY + 1);
     let site = utils::single_owned_of_type(app.world_mut(), "lookout", 0);
     assert!(
-        app.world()
-            .get::<UnderConstructionComponent>(site)
-            .is_some(),
+        app.world().get::<RisingComponent>(site).is_some(),
         "the site is up and unfinished"
     );
 
@@ -542,9 +526,9 @@ fn lifting_off_mid_build_leaves_annex_site_halted() {
     assert!(
         matches!(
             app.world()
-                .get::<UnderConstructionComponent>(site)
-                .map(|site| &site.work),
-            Some(SiteWork::Halted)
+                .get::<RisingComponent>(site)
+                .map(|rising| &rising.attendance),
+            Some(RiseAttendance::Halted)
         ),
         "its half-raised annex stands halted, for any builder to take up"
     );
@@ -596,9 +580,7 @@ fn razed_annex_site_goes_when_its_dock_does() {
     utils::run_ticks(&mut app, utils::APPLY + 1);
     let site = utils::single_owned_of_type(app.world_mut(), "beacon", 0);
     assert!(
-        app.world()
-            .get::<UnderConstructionComponent>(site)
-            .is_some(),
+        app.world().get::<RisingComponent>(site).is_some(),
         "one of the beacon's four ticks is in, so the site still stands unfinished"
     );
 
@@ -620,7 +602,7 @@ fn fading_annex_loses_health_until_it_dies() {
     utils::build_entity(&mut app, keep_id, "mast", 12, 10);
     utils::run_ticks(&mut app, utils::APPLY + 6);
     let mast = utils::single_owned_of_type(app.world_mut(), "mast", 0);
-    // Ten health: a site, bonded to nothing until it is built, does not
+    // Ten health: a site, bonded to nothing until it has risen, does not
     // fade, and the tick it finishes it docks.
     assert_eq!(utils::health_as_u32(&app, mast), 10);
     let docked = utils::health(&app, mast);

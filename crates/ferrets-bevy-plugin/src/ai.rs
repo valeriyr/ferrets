@@ -24,7 +24,6 @@ use ferrets_script::ai::{
 use ferrets_simulation::{
     components::{
         brood::{BredComponent, BroodComponent},
-        build::UnderConstructionComponent,
         concealed::ConcealedComponent,
         dying::RemainsComponent,
         entity_buffs::BuffsComponent,
@@ -37,6 +36,7 @@ use ferrets_simulation::{
         owner,
         pools::{self, PoolsComponent},
         resource::{ResourceCarrierComponent, ResourceSourceComponent},
+        rise::RisingComponent,
         stance::StanceComponent,
         train::TrainQueueComponent,
         transport::{BoardedComponent, TransporterComponent},
@@ -529,10 +529,10 @@ fn entity_view(
         train_queue: entity
             .get::<TrainQueueComponent>()
             .map_or_else(Vec::new, |queue| queue.0.iter().cloned().collect()),
-        under_construction: entity.contains::<UnderConstructionComponent>(),
+        rising: entity.contains::<RisingComponent>(),
         disabled: match operation {
             Operation::Disabled(_) => true,
-            Operation::Operating | Operation::UnderConstruction | Operation::Stranded => false,
+            Operation::Operating | Operation::Rising | Operation::Stranded => false,
         },
         stance: entity
             .get::<StanceComponent>()

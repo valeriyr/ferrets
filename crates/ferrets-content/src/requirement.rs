@@ -102,8 +102,8 @@ pub enum Requirement {
         /// The side asked for.
         bound: Bound,
     },
-    /// The acting entity is not under construction.
-    Built,
+    /// The acting entity has risen: it is not rising any more.
+    Risen,
     /// The acting entity takes orders and runs none.
     Idle,
     /// The acting entity takes orders, runs none, and has run none for at
@@ -134,7 +134,7 @@ impl Requirement {
             | Requirement::Health(_)
             | Requirement::Energy(_)
             | Requirement::Stat { .. }
-            | Requirement::Built
+            | Requirement::Risen
             | Requirement::Idle
             | Requirement::IdleFor(_)
             | Requirement::UnhurtFor(_) => Scope::Actor,
@@ -163,7 +163,7 @@ impl Requirement {
             | Requirement::Health(_)
             | Requirement::Energy(_)
             | Requirement::Stat { .. }
-            | Requirement::Built
+            | Requirement::Risen
             | Requirement::Idle
             | Requirement::IdleFor(_)
             | Requirement::UnhurtFor(_) => out.push(self),

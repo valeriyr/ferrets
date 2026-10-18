@@ -101,7 +101,7 @@ fn seeding_pool_entity_has_panics() {
 #[should_panic(expected = "a pool inserted is one the entity lacks: PoolId(0)")]
 fn seeding_rising_pool_entity_has_panics() {
     let (mut world, unit) = unit_with([Pool::health(100)]);
-    pools::seed_rising(&mut world, unit, PoolId::HEALTH, PoolInitial::Full);
+    pools::seed_following_work(&mut world, unit, PoolId::HEALTH, PoolInitial::Full);
 }
 
 #[test]
@@ -112,10 +112,10 @@ fn following_maximum_again_panics() {
 }
 
 #[test]
-#[should_panic(expected = "reseed_rising is given a pool following work: PoolId(0)")]
+#[should_panic(expected = "reseed_following_work is given a pool following work: PoolId(0)")]
 fn reseeding_rising_pool_following_maximum_panics() {
     let (mut world, unit) = unit_with([Pool::health(100)]);
-    pools::reseed_rising(&mut world, unit, PoolId::HEALTH, PoolInitial::Full);
+    pools::reseed_following_work(&mut world, unit, PoolId::HEALTH, PoolInitial::Full);
 }
 
 #[test]
@@ -139,7 +139,7 @@ fn stepping_pool_following_maximum_with_work_panics() {
 fn stepping_with_work_past_maximum_panics() {
     let (mut world, unit) = unit_with([Pool::health(100)]);
     pools::remove(&mut world, unit, PoolId::HEALTH);
-    pools::seed_rising(
+    pools::seed_following_work(
         &mut world,
         unit,
         PoolId::HEALTH,

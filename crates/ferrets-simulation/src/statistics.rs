@@ -22,9 +22,9 @@ use crate::session::player_id::PlayerId;
 /// What one player has done.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PlayerTally {
-    /// Entities that finished, by what they were — trained, or completed on a
-    /// construction site. Never merely placed at game start, a founded site not
-    /// before its completion, and a change of form not at all.
+    /// Entities that finished, by what they were — trained, or risen. Never
+    /// merely placed at game start, a rising entity not before it has risen,
+    /// and a change of form not at all.
     produced: BTreeMap<EntityTypeId, u32>,
     /// Entities of this player's brought down by fire — an enemy's, an ally's,
     /// or their own — by what they were.

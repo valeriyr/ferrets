@@ -187,8 +187,8 @@ pub struct FieldSourceDef {
     radius: u32,
     /// How the reach comes to cover the radius.
     growth: FieldGrowth,
-    /// What it projects while the entity is still under construction.
-    while_constructing: Emission,
+    /// What it projects while the entity is still rising.
+    while_rising: Emission,
     /// What it projects while the entity is disabled.
     while_disabled: Emission,
 }
@@ -201,7 +201,7 @@ impl FieldSourceDef {
         field: FieldId,
         radius: u32,
         growth: FieldGrowth,
-        while_constructing: Emission,
+        while_rising: Emission,
         while_disabled: Emission,
     ) -> Self {
         match growth {
@@ -214,7 +214,7 @@ impl FieldSourceDef {
             field,
             radius,
             growth,
-            while_constructing,
+            while_rising,
             while_disabled,
         }
     }
@@ -237,10 +237,10 @@ impl FieldSourceDef {
         self.growth
     }
 
-    /// What it projects while the entity is under construction.
+    /// What it projects while the entity is rising.
     #[inline]
-    pub fn while_constructing(&self) -> Emission {
-        self.while_constructing
+    pub fn while_rising(&self) -> Emission {
+        self.while_rising
     }
 
     /// What it projects while the entity is disabled.

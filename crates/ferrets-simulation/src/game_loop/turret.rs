@@ -49,11 +49,11 @@ pub fn process_turrets(world: &mut World) {
         if entity_def::hidden(world, entity) {
             continue;
         }
-        // A body's guns work only while it operates: a site still going up
-        // and a disabled body stand idle.
+        // A body's guns work only while it operates: a body still rising and
+        // a disabled one stand idle.
         match entity_def::operation(world, entity) {
             Operation::Operating => {}
-            Operation::UnderConstruction | Operation::Disabled(_) => continue,
+            Operation::Rising | Operation::Disabled(_) => continue,
             Operation::Stranded => unreachable!("a stranded body is hidden"),
         }
         work_body(world, entity, id);

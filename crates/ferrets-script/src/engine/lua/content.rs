@@ -9,7 +9,7 @@ use ferrets_content::{
     attack::{Delivery, Slain, Weapon},
     berths::BerthGroup,
     brood::{Lingering, OrphanFate},
-    build::{BuilderAttendance, RiseStart, SitePool},
+    build::BuilderAttendance,
     cost::Cost,
     detection::Detection,
     dying::{Bequest, LeftBy},
@@ -38,6 +38,7 @@ use ferrets_content::{
     requirement::{Bound, Requirement, Threshold},
     research::{ResearchDef, ResearchId},
     resource::{Banking, HarvestData},
+    rise::{RisePool, RisePoolInitial},
     skills::{
         AimParty, Away, CasterParty, Casting, Count, EntityCastEffect, FromAimTo, FromCasterTo,
         Gathering, Journey, PaymentPoint, PlayerCastEffect, Reach, Recipient, SkillCaster,
@@ -315,9 +316,9 @@ fn build_entity(
     if let Some(train_time) = optional::<u32>(table, "train_time")? {
         def = def.with_train_time(train_time);
     }
-    if let Some(build) = optional::<Table>(table, "build")? {
-        let (time, pools) = parse_build(&build, registry)?;
-        def = def.with_build(time, pools);
+    if let Some(rise) = optional::<Table>(table, "rise")? {
+        let (time, pools) = parse_rise(&rise, registry)?;
+        def = def.with_rise(time, pools);
     }
     if let Some(trainer) = optional::<Table>(table, "trainer")? {
         def = def.with_trainer(
@@ -488,7 +489,7 @@ fn build_entity(
 /// `"production"` or `"per_tick"` with a `health` amount.
 ///
 /// Required, because the two pace the work so differently that inferring one would
-/// hide the choice: a structure mended against its build time and a casualty patched
+/// hide the choice: a structure mended against its rise time and a casualty patched
 /// up at a flat rate are both ordinary content.
 fn parse_repair_rate(repairer: &Table) -> crate::Result<RepairRate> {
     let rate = required::<Table>(repairer, "rate")?;
@@ -923,49 +924,50 @@ fn parse_pools(pools: &Table, registry: &ContentRegistry) -> crate::Result<Vec<P
     Ok(out)
 }
 
-/// Reads `build = { time = ..., pools = { name = site } }`: the ticks of
-/// work a site takes, and how it holds each named pool — `"initial"`,
-/// `"withheld"`, or `{ rises_from = ... }` for a pool rising with the work
-/// (see [`parse_rise_start`]). An unknown pool name is rejected.
-fn parse_build(
-    build: &Table,
+/// Reads `rise = { time = ..., pools = { name = held } }`: the ticks of
+/// work rising takes, and how a rising entity holds each named pool —
+/// `"initial"`, `"gained_on_risen"`, or `{ follows_work_from = ... }` for a
+/// pool following the work (see [`parse_rise_pool_initial`]). An unknown pool
+/// name is rejected.
+fn parse_rise(
+    rise: &Table,
     registry: &ContentRegistry,
-) -> crate::Result<(u32, Vec<(PoolId, SitePool)>)> {
+) -> crate::Result<(u32, Vec<(PoolId, RisePool)>)> {
     let mut pools = Vec::new();
-    for pair in required::<Table>(build, "pools")?.pairs::<String, Value>() {
-        let (name, value) = pair.map_err(|error| field_error("build pools", error))?;
+    for pair in required::<Table>(rise, "pools")?.pairs::<String, Value>() {
+        let (name, value) = pair.map_err(|error| field_error("rise pools", error))?;
         let pool = registry
             .pool(&name)
             .ok_or_else(|| ScriptError::ContentError(format!("pool '{name}' is not defined")))?;
-        let site = keyword_or_table(
-            &format!("build pool '{name}'"),
+        let holding = keyword_or_table(
+            &format!("rise pool '{name}'"),
             &value,
             &[
-                ("initial", SitePool::Initial),
-                ("withheld", SitePool::Withheld),
+                ("initial", RisePool::Initial),
+                ("gained_on_risen", RisePool::GainedOnRisen),
             ],
-            &["a { rises_from = ... } table"],
-            |site| {
-                Ok(SitePool::Rising(parse_rise_start(
-                    &format!("build pool '{name}' rises_from"),
-                    &required::<Value>(site, "rises_from")?,
+            &["a { follows_work_from = ... } table"],
+            |table| {
+                Ok(RisePool::FollowsWork(parse_rise_pool_initial(
+                    &format!("rise pool '{name}' follows_work_from"),
+                    &required::<Value>(table, "follows_work_from")?,
                 )?))
             },
         )?;
-        pools.push((pool, site));
+        pools.push((pool, holding));
     }
-    Ok((required::<u32>(build, "time")?, pools))
+    Ok((required::<u32>(rise, "time")?, pools))
 }
 
-/// Reads where a pool a site raises starts: `{ share = "0.1" }`, or an
+/// Reads where a pool following the work starts: `{ share = "0.1" }`, or an
 /// amount — a non-negative integer or a decimal string.
-fn parse_rise_start(what: &str, value: &Value) -> crate::Result<RiseStart> {
+fn parse_rise_pool_initial(what: &str, value: &Value) -> crate::Result<RisePoolInitial> {
     match value {
-        Value::Table(table) => Ok(RiseStart::Share(fixed_value(
+        Value::Table(table) => Ok(RisePoolInitial::Share(fixed_value(
             &format!("{what} share"),
             &required::<Value>(table, "share")?,
         )?)),
-        other => Ok(RiseStart::Amount(fixed_value(what, other)?)),
+        other => Ok(RisePoolInitial::Amount(fixed_value(what, other)?)),
     }
 }
 
@@ -2186,7 +2188,7 @@ fn field_by_name(name: &str, registry: &ContentRegistry) -> crate::Result<FieldI
 
 /// Reads the `field_sources` list: each entry names a `field`, a `radius`, a
 /// `growth` — `"instant"` or `{ cycle = ticks, initial_radius = cells }` — and
-/// what it projects `while_constructing` and `while_disabled`: `"full"`,
+/// what it projects `while_rising` and `while_disabled`: `"full"`,
 /// `"nothing"`, or `{ held = cells }`.
 fn parse_field_sources(
     sources: &[Table],
@@ -2200,10 +2202,7 @@ fn parse_field_sources(
                 field_id(entry, registry)?,
                 required::<u32>(entry, "radius")?,
                 growth,
-                parse_emission(
-                    "while_constructing",
-                    required::<Value>(entry, "while_constructing")?,
-                )?,
+                parse_emission("while_rising", required::<Value>(entry, "while_rising")?)?,
                 parse_emission(
                     "while_disabled",
                     required::<Value>(entry, "while_disabled")?,
@@ -2336,7 +2335,7 @@ fn names_requirement_key(table: &Table) -> crate::Result<bool> {
     Ok(false)
 }
 
-/// Reads one requirement: `"built"`, `"idle"`, an `{ all = { ... } }` or `{ any = { ... } }`
+/// Reads one requirement: `"risen"`, `"idle"`, an `{ all = { ... } }` or `{ any = { ... } }`
 /// node, an `{ unless = <requirement> }` negation, or a table naming exactly one leaf — `{ entity_type = }`, `{ tag = }`,
 /// `{ research = }`, `{ annexed = }`, `{ health = <bound> }`,
 /// `{ energy = <bound> }`, `{ stat = "name", <bound keys> }`,
@@ -2344,14 +2343,14 @@ fn names_requirement_key(table: &Table) -> crate::Result<bool> {
 /// exactly one of `under`, `at_least`, `under_share` or `at_least_share`.
 fn parse_requirement(value: &Value, registry: &ContentRegistry) -> crate::Result<Requirement> {
     let entry = match value {
-        Value::String(name) if name == "built" => return Ok(Requirement::Built),
+        Value::String(name) if name == "risen" => return Ok(Requirement::Risen),
         Value::String(name) if name == "idle" => return Ok(Requirement::Idle),
         Value::Table(entry) => entry,
         other => {
             return Err(content::unexpected(
                 "a requirement",
                 &[
-                    "'built'",
+                    "'risen'",
                     "'idle'",
                     "an { all = ... } or { any = ... } table",
                     "a table naming one of unless, entity_type, tag, research, annexed, health, energy, stat, idle_for, or unhurt_for",

@@ -7,7 +7,7 @@ use ferrets_content::{entity_stats::EntityStatId, player_stats::PlayerStatId, st
 use ferrets_math::FixedU64;
 use ferrets_simulation::{
     command::PlayerCommand,
-    components::build::UnderConstructionComponent,
+    components::rise::RisingComponent,
     player_stats::PlayerStats,
     spawn,
     supply::{self, DisplayedSupply},
@@ -136,7 +136,7 @@ fn queued_unit_finishes_after_provider_dies() {
 }
 
 #[test]
-fn under_construction_provider_feeds_nobody() {
+fn rising_provider_feeds_nobody() {
     let mut app = utils::supply_app();
     let (_, pioneer_id) = utils::create_owned(&mut app, "pioneer", 9, 10, 0);
     utils::grant_gold(&mut app, 50);
@@ -152,24 +152,18 @@ fn under_construction_provider_feeds_nobody() {
     );
     utils::run_ticks(&mut app, utils::APPLY + 3);
 
-    // The site stands and is being raised, but provides nothing yet.
+    // The site stands and is still rising, but provides nothing yet.
     assert_eq!(utils::count_of_type(app.world_mut(), "camp"), 1);
     let camp = utils::single_owned_of_type(app.world_mut(), "camp", 0);
     assert!(
-        app.world()
-            .get::<UnderConstructionComponent>(camp)
-            .is_some(),
-        "camp is still going up"
+        app.world().get::<RisingComponent>(camp).is_some(),
+        "camp is still rising"
     );
     assert_eq!(supply::provided(app.world(), 0), FixedU64::ZERO);
 
     // Completion turns the site into a provider.
     utils::run_ticks(&mut app, 20);
-    assert!(
-        app.world()
-            .get::<UnderConstructionComponent>(camp)
-            .is_none()
-    );
+    assert!(app.world().get::<RisingComponent>(camp).is_none());
     assert_eq!(supply::provided(app.world(), 0), FixedU64::from_num(8));
 }
 

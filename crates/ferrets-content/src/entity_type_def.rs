@@ -13,7 +13,7 @@ use crate::{
     base_stats::BaseStats,
     berths::{BerthGroup, BerthsDef},
     brood::{BreederDef, BroodlingDef, OrphanFate},
-    build::{BuildDef, BuilderAttendance, BuilderDef, SitePool},
+    build::{BuilderAttendance, BuilderDef},
     concealment::Concealment,
     dying::{Bequest, DyingDef},
     entity_buffs::EntityBuffId,
@@ -34,6 +34,7 @@ use crate::{
     resource::{
         DepletionPolicy, HarvestData, ResourceCarrierDef, ResourceSourceDef, ResourceStorageDef,
     },
+    rise::{RiseDef, RisePool},
     selection::SelectionDef,
     skills::SkillId,
     splash::SplashDef,
@@ -147,8 +148,9 @@ pub struct EntityTypeDef {
     pub price: Price,
     /// Ticks to train one instance. `None` means the type cannot be trained.
     pub train_time: Option<u32>,
-    /// How an instance is built. `None` means the type cannot be built.
-    pub build: Option<BuildDef>,
+    /// How an instance rises into the world. `None` means the type never
+    /// rises: it stands finished from the moment it appears.
+    pub rise: Option<RiseDef>,
     /// The entity types instances can train. `None` means instances cannot train.
     pub trainer: Option<TrainerDef>,
     /// What instances hold others as. `None` means instances hold nobody.
@@ -223,7 +225,7 @@ impl EntityTypeDef {
             selection: SelectionDef::default(),
             price: Price::new(),
             train_time: None,
-            build: None,
+            rise: None,
             trainer: None,
             holder: None,
             researcher: None,
@@ -333,12 +335,13 @@ impl EntityTypeDef {
     /// Ticks to produce one instance, however it is produced. `None` means nothing
     /// produces the type, which also leaves repair no rate to work from.
     pub fn production_time(&self) -> Option<u32> {
-        self.build_time().or(self.train_time)
+        self.rise_time().or(self.train_time)
     }
 
-    /// Ticks to construct one instance. `None` means the type cannot be built.
-    pub fn build_time(&self) -> Option<u32> {
-        self.build.as_ref().map(BuildDef::time)
+    /// Ticks of work one instance takes to rise. `None` means the type never
+    /// rises.
+    pub fn rise_time(&self) -> Option<u32> {
+        self.rise.as_ref().map(RiseDef::time)
     }
 
     /// Whether instances can be mended at a rate paced against production. A type
@@ -666,16 +669,16 @@ impl EntityTypeDef {
         self
     }
 
-    /// Makes this type constructible, a site taking `time` ticks of work
-    /// and holding each of `pools` as it says.
+    /// Makes instances of this type rise, taking `time` ticks of work and
+    /// holding each of `pools` as it says.
     ///
     /// Panics if `time` is `0` or `pools` names a pool twice.
-    pub fn with_build(
+    pub fn with_rise(
         mut self,
         time: u32,
-        pools: impl IntoIterator<Item = (PoolId, SitePool)>,
+        pools: impl IntoIterator<Item = (PoolId, RisePool)>,
     ) -> Self {
-        self.build = Some(BuildDef::new(time, pools));
+        self.rise = Some(RiseDef::new(time, pools));
         self
     }
 

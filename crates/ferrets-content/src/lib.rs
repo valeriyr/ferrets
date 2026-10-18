@@ -38,6 +38,7 @@ pub mod repair;
 pub mod requirement;
 pub mod research;
 pub mod resource;
+pub mod rise;
 pub mod selection;
 pub mod skills;
 pub mod splash;

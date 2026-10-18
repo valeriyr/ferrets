@@ -20,7 +20,6 @@ use ferrets_simulation::{
     annex,
     command::{PlayerCommand, SelectMode, SkillCasterRef},
     components::{
-        build::UnderConstructionComponent,
         concealed::ConcealedComponent,
         entity_buffs::BuffsComponent,
         entity_info::EntityInfoComponent,
@@ -32,6 +31,7 @@ use ferrets_simulation::{
         owner::OwnerComponent,
         pools::{self, PoolsComponent},
         resource::{ResourceCarrierComponent, ResourceSourceComponent},
+        rise::RisingComponent,
         stance::StanceComponent,
         train::TrainQueueComponent,
     },
@@ -812,7 +812,7 @@ pub fn update_selection(world: &mut World) {
                     }
                     // Not operating, as the simulation judges it.
                     match entity_def::operation(world_ref, entity) {
-                        Operation::UnderConstruction => {
+                        Operation::Rising => {
                             parts.push("under construction".to_string());
                         }
                         Operation::Disabled(_) => parts.push("disabled".to_string()),
@@ -1076,8 +1076,8 @@ fn card_button(label: &str, base: Color) -> impl Bundle {
 }
 
 /// Rebuilds the command card whenever what it would show changes: the leading
-/// selection, the leading entity's own type, a site of its finishing, or the
-/// first and last broodling the player has.
+/// selection, the leading entity's own type, the leading entity having risen,
+/// or the first and last broodling the player has.
 pub fn update_command_card(
     session: Res<GameSession>,
     leading: Res<Leading>,
@@ -1088,11 +1088,11 @@ pub fn update_command_card(
         Option<&MorphComponent>,
         Option<&OwnerComponent>,
     )>,
-    sites: Query<(&EntityInfoComponent, &OwnerComponent), With<UnderConstructionComponent>>,
+    rising: Query<(&EntityInfoComponent, &OwnerComponent), With<RisingComponent>>,
     broodlings: Broodlings,
     brood_button: Query<(), With<SelectBroodButton>>,
     morph_button: Query<(), With<CancelMorphButton>>,
-    mut finished: RemovedComponents<UnderConstructionComponent>,
+    mut finished: RemovedComponents<RisingComponent>,
     card: Query<Entity, With<CommandCard>>,
     buttons: Query<
         Entity,
@@ -1124,7 +1124,7 @@ pub fn update_command_card(
     let leading_type_changed = leading
         .0
         .is_some_and(|id| changed.iter().any(|info| info.id() == id));
-    let leading_site_finished = leading.0.is_some_and(|id| {
+    let leading_risen = leading.0.is_some_and(|id| {
         finished
             .read()
             .any(|entity| entities.get(entity).is_ok_and(|(info, ..)| info.id() == id))
@@ -1161,7 +1161,7 @@ pub fn update_command_card(
     let morph_button_stale = changing == morph_button.is_empty();
     if !leading.is_changed()
         && !leading_type_changed
-        && !leading_site_finished
+        && !leading_risen
         && !brood_button_stale
         && !morph_button_stale
     {
@@ -1233,8 +1233,8 @@ pub fn update_command_card(
     let lets_out = def.gateway().is_some_and(|gateway| {
         gateway.doors().admits_exit() && registry.joins_hold(gateway.joins())
     });
-    let own_site = session.local_player().is_some_and(|local| {
-        sites
+    let own_rising = session.local_player().is_some_and(|local| {
+        rising
             .iter()
             .any(|(info, owner)| info.id() == id && owner.player() == local)
     });
@@ -1285,7 +1285,7 @@ pub fn update_command_card(
                 card_button("Cancel Research", BUTTON_NORMAL),
             ));
         }
-        if own_site {
+        if own_rising {
             parent.spawn((CancelBuildButton, card_button("Cancel", BUTTON_NORMAL)));
         }
         if changing {
@@ -1927,7 +1927,7 @@ fn price_words(world: &World, action: &CardAction) -> String {
             let def = registry
                 .entity(type_name)
                 .expect("a card button names a registered type");
-            priced(&def.price, def.build_time())
+            priced(&def.price, def.rise_time())
         }
         CardAction::Research(research) => {
             let def = registry
@@ -2088,7 +2088,7 @@ fn card_hint(
                 }
                 (None, None) => "Nothing selected can cast it".to_string(),
                 (None, Some(entity)) => match entity_def::operation(world, entity) {
-                    Operation::UnderConstruction => "Still under construction".to_string(),
+                    Operation::Rising => "Still under construction".to_string(),
                     Operation::Disabled(_) => "Switched off".to_string(),
                     Operation::Stranded => "Waiting for room to come back".to_string(),
                     Operation::Operating => match world.entity(entity).get::<SkillsComponent>() {
@@ -2139,7 +2139,7 @@ fn card_hint(
             .map(|refusal| match refusal {
                 Refusal::NothingToDo => "Nobody inside".to_string(),
                 Refusal::Incapable
-                | Refusal::UnderConstruction
+                | Refusal::Rising
                 | Refusal::Disabled
                 | Refusal::Stranded
                 | Refusal::TargetGone
@@ -2185,7 +2185,7 @@ fn summon_refused(world: &World, leading: Option<Entity>, skill: SkillId) -> boo
 fn operation_words(operation: Operation) -> String {
     match operation {
         Operation::Operating => String::new(),
-        Operation::UnderConstruction => "Still under construction".to_string(),
+        Operation::Rising => "Still under construction".to_string(),
         Operation::Disabled(_) => "Switched off".to_string(),
         Operation::Stranded => "Waiting for room to come back".to_string(),
     }
@@ -2229,7 +2229,7 @@ fn unmet_words(
         | Requirement::Health(_)
         | Requirement::Energy(_)
         | Requirement::Stat { .. }
-        | Requirement::Built
+        | Requirement::Risen
         | Requirement::Idle
         | Requirement::IdleFor(_)
         | Requirement::UnhurtFor(_) => {
@@ -2264,7 +2264,7 @@ fn requirement_words(world: &World, entry: &Requirement) -> String {
         | Requirement::Health(_)
         | Requirement::Energy(_)
         | Requirement::Stat { .. }
-        | Requirement::Built
+        | Requirement::Risen
         | Requirement::Idle
         | Requirement::IdleFor(_)
         | Requirement::UnhurtFor(_) => leaf_words(world, entry),
@@ -2297,7 +2297,7 @@ fn leaf_words(world: &World, entry: &Requirement) -> String {
             ),
             bound_words(*bound)
         ),
-        Requirement::Built => "finished building".to_string(),
+        Requirement::Risen => "finished building".to_string(),
         Requirement::Idle => "standing idle".to_string(),
         Requirement::IdleFor(ticks) => {
             format!("{} idle", time::seconds_text(time::seconds(*ticks)))
@@ -2327,7 +2327,7 @@ fn bound_words(bound: Bound) -> String {
 fn refusal_words(refusal: Refusal) -> String {
     match refusal {
         Refusal::Incapable => "It cannot do this",
-        Refusal::UnderConstruction => "Still under construction",
+        Refusal::Rising => "Still under construction",
         Refusal::Disabled => "Switched off",
         Refusal::Stranded => "Waiting for room to come back",
         Refusal::NothingToDo => "Nothing to do",

@@ -25,7 +25,7 @@ const BUILD_ARMY: &str = r#"
         check = function(state, view)
             local barracks, archers = 0, 0
             for _, entity in ipairs(view.my_entities) do
-                if entity.type_name == "barracks" and not entity.under_construction then
+                if entity.type_name == "barracks" and not entity.rising then
                     barracks = barracks + 1
                 elseif entity.type_name == "archer" then
                     archers = archers + 1
@@ -125,14 +125,14 @@ fn evaluate_reports_defeat_when_no_entities_remain() {
 }
 
 #[test]
-fn unbuilt_barracks_does_not_count() {
+fn rising_barracks_does_not_count() {
     let mut runtime = load_scenario(BUILD_ARMY, &empty_content()).expect("load scenario");
 
     let status = runtime
         .evaluate(&view_with(vec![entity(1, "barracks", true)]))
         .expect("evaluate");
 
-    assert!(!status.objectives[0].done, "under-construction barracks");
+    assert!(!status.objectives[0].done, "barracks still rising");
     assert_eq!(status.outcome, Outcome::Ongoing);
 }
 
@@ -314,7 +314,7 @@ fn empty_content() -> ContentView {
     }
 }
 
-fn entity(id: u32, type_name: &str, under_construction: bool) -> EntityView {
+fn entity(id: u32, type_name: &str, rising: bool) -> EntityView {
     EntityView {
         id,
         type_name: type_name.to_string(),
@@ -330,7 +330,7 @@ fn entity(id: u32, type_name: &str, under_construction: bool) -> EntityView {
         buffs: Vec::new(),
         carrying: None,
         train_queue: Vec::new(),
-        under_construction,
+        rising,
         disabled: false,
         stance: None,
         resource_amount: None,

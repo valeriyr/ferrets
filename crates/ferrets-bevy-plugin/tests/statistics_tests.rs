@@ -1217,7 +1217,7 @@ fn repair_app() -> App {
                 .with_location(utils::GROUND, CellSize::new(2, 2), Solidity::Solid)
                 .with_pool(Pool::health(100))
                 .with_price([("gold", 50)])
-                .with_build(10, utils::site_initial(&[PoolId::HEALTH]))
+                .with_rise(10, utils::rise_initial_pools(&[PoolId::HEALTH]))
                 .with_tags(["building"]),
         );
         registry.register(
@@ -1317,12 +1317,12 @@ impl Announced {
             .collect()
     }
 
-    /// The builder named by every finished construction.
+    /// Whoever every rise was finished by.
     fn completed(&self) -> Vec<SimulationId> {
         self.0
             .iter()
             .filter_map(|event| match event {
-                SimulationEvent::ConstructionCompleted { builder, .. } => Some(*builder),
+                SimulationEvent::EntityRisen { by, .. } => Some(*by),
                 _ => None,
             })
             .collect()

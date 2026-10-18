@@ -173,7 +173,7 @@ fn creep_recedes_from_edge_inward_after_its_source_dies() {
 }
 
 #[test]
-fn source_under_construction_projects_only_what_it_declares() {
+fn rising_source_projects_only_what_it_declares() {
     let mut app = field_app();
     let Fields { creep, power } = fields(&app);
     let builder = utils::create_owned(&mut app, "worker", 12, 13, 0).1;
@@ -564,15 +564,15 @@ fn outside_effect_drains_health_each_tick() {
 }
 
 #[test]
-fn effect_held_while_built_spares_site() {
+fn effect_held_while_risen_spares_rising_entity() {
     let mut app = field_app();
-    let site = utils::create_crewed_site(&mut app, "burrow", 20, 20, 0).0;
-    let built = utils::create_owned(&mut app, "burrow", 22, 22, 0).0;
+    let rising = utils::create_crewed_rising(&mut app, "burrow", 20, 20, 0).0;
+    let risen = utils::create_owned(&mut app, "burrow", 22, 22, 0).0;
 
-    // Off the creep, one a tick for three ticks on the built burrow alone.
+    // Off the creep, one a tick for three ticks on the risen burrow alone.
     utils::run_ticks(&mut app, 3);
-    assert_eq!(utils::health_as_u32(&app, site), 20);
-    assert_eq!(utils::health_as_u32(&app, built), 17);
+    assert_eq!(utils::health_as_u32(&app, rising), 20);
+    assert_eq!(utils::health_as_u32(&app, risen), 17);
 }
 
 #[test]
@@ -1233,7 +1233,7 @@ fn building_probe_losing_power_finishes_its_site() {
             None,
             &[Requirement::EntityType("gateway".to_string())],
         ),
-        "the site is still going up"
+        "the site is still rising"
     );
 
     utils::deplete(&mut app, pylon);
@@ -1807,13 +1807,13 @@ fn fields(app: &App) -> Fields {
     }
 }
 
-/// A square structure of `side` cells that takes `build_time` ticks to raise.
-fn building(name: &str, side: u32, build_time: u32) -> EntityTypeDef {
+/// A square structure of `side` cells that takes `rise_time` ticks to rise.
+fn building(name: &str, side: u32, rise_time: u32) -> EntityTypeDef {
     EntityTypeDef::new(name)
         .with_location(utils::GROUND, CellSize::new(side, side), Solidity::Solid)
         .with_pool(Pool::health(100))
         .with_dying(1, [])
-        .with_build(build_time, utils::site_initial(&[PoolId::HEALTH]))
+        .with_rise(rise_time, utils::rise_initial_pools(&[PoolId::HEALTH]))
 }
 
 /// One stat modifier, its magnitude as a decimal string.
@@ -1857,7 +1857,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
         );
 
         // Creep sources: a hive that grows from one ring outward and a nest
-        // that shows a patch while still going up.
+        // that shows a patch while still rising.
         registry.register(
             building("hive", 2, 4).with_field_sources([FieldSourceDef::new(
                 creep,
@@ -2115,7 +2115,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
             [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
         )]));
         // Creep effects: a zergling twice as fast on anyone's creep, a larva
-        // that withers off it, and a burrow that withers off it once built.
+        // that withers off it, and a burrow that withers off it once risen.
         registry.register(
             utils::walker("zergling", utils::GROUND).with_field_effects([FieldEffect::new(
                 creep,
@@ -2164,7 +2164,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
         registry.register(
             EntityTypeDef::new("burrow")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_build(4, utils::site_initial(&[PoolId::HEALTH]))
+                .with_rise(4, utils::rise_initial_pools(&[PoolId::HEALTH]))
                 .with_pool(Pool::health(20))
                 .with_dying(1, [])
                 .with_field_effects([FieldEffect::new(
@@ -2175,7 +2175,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                     vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![
                         modifier(EntityStatId::HEALTH_DRAIN, ModifierOp::FlatAdd, "1"),
                     ]))],
-                    Some(Requirement::Built),
+                    Some(Requirement::Risen),
                 )]),
         );
 

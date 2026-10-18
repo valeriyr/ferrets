@@ -993,7 +993,7 @@ fn home(
             !not_home.contains(&entity)
                 && entity_def::owner(world, entity) == Some(player)
                 && entity_def::stands(world, entity)
-                && !entity_def::under_construction(world, entity)
+                && !entity_def::rising(world, entity)
                 && names(world, entity, kinds)
         })
         .min_by_key(|&(id, entity)| {

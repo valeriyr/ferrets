@@ -9,10 +9,11 @@ use ferrets_geometry::cell_pos::CellPos;
 use ferrets_simulation::{
     command::PlayerCommand,
     components::{
-        build::{OverbuiltComponent, UnderConstructionComponent},
+        build::OverbuiltComponent,
         entity_info::EntityInfoComponent,
         order_queue::{CancelPolicy, OrderQueueComponent},
         resource::ResourceSourceComponent,
+        rise::RisingComponent,
     },
     entity_def,
     order::Order,
@@ -118,11 +119,7 @@ fn finished_site_is_mined_directly_and_leaves_nothing_when_drained() {
     // Placed on the fifth tick, and twenty ticks of its own work finish it.
     utils::run_ticks(&mut app, utils::APPLY + 4 + 20);
     let house = utils::single_owned_of_type(app.world_mut(), "shaft_house", 0);
-    assert!(
-        app.world()
-            .get::<UnderConstructionComponent>(house)
-            .is_none()
-    );
+    assert!(app.world().get::<RisingComponent>(house).is_none());
     let house_id = entity_def::simulation_id(app.world(), house);
 
     utils::select(&mut app, sylph_id);
@@ -166,7 +163,7 @@ fn relocating_finished_house_over_mine_breaks_contract() {
     // Placed on the fifth tick, and twenty ticks of its own work finish it.
     utils::run_ticks(&mut app, utils::APPLY + 4 + 20);
     let house = utils::single_owned_of_type(app.world_mut(), "shaft_house", 0);
-    assert!(!entity_def::under_construction(app.world(), house));
+    assert!(!entity_def::rising(app.world(), house));
 
     spawn::relocate(app.world_mut(), &[(house, CellPos::new(20, 20))]);
 }
@@ -197,11 +194,7 @@ fn drained_site_over_persistent_source_gives_it_back_empty() {
     );
     utils::run_ticks(&mut app, utils::APPLY + 4 + 20);
     let house = utils::single_owned_of_type(app.world_mut(), "pump_house", 0);
-    assert!(
-        app.world()
-            .get::<UnderConstructionComponent>(house)
-            .is_none()
-    );
+    assert!(app.world().get::<RisingComponent>(house).is_none());
     let house_id = entity_def::simulation_id(app.world(), house);
 
     // Two loads of five drain it; the house falls, and the geyser stands
@@ -257,7 +250,7 @@ fn owned_source_refuses_rival_and_unfinished_site_refuses_its_owner() {
     let house = utils::single_owned_of_type(app.world_mut(), "shaft_house", 0);
     let house_id = entity_def::simulation_id(app.world(), house);
 
-    // Still going up: its own owner's carrier is refused. The order is pushed
+    // Still rising: its own owner's carrier is refused. The order is pushed
     // straight onto the queue, so the refusal is the harvest's own and not a
     // smart send reading the site some other way.
     app.world_mut()
@@ -274,11 +267,7 @@ fn owned_source_refuses_rival_and_unfinished_site_refuses_its_owner() {
     // Finished, it is player 0's source: player 1's carrier has no business
     // there, and its order ends on its first tick.
     utils::run_ticks(&mut app, 18);
-    assert!(
-        app.world()
-            .get::<UnderConstructionComponent>(house)
-            .is_none()
-    );
+    assert!(app.world().get::<RisingComponent>(house).is_none());
     app.world_mut()
         .get_mut::<OrderQueueComponent>(rival)
         .unwrap()
@@ -319,10 +308,8 @@ fn unfinished_site_is_never_taken_up_as_replacement_source() {
     utils::run_ticks(&mut app, utils::APPLY + 6);
     let house = utils::single_owned_of_type(app.world_mut(), "shaft_house", 0);
     assert!(
-        app.world()
-            .get::<UnderConstructionComponent>(house)
-            .is_some(),
-        "the site is still going up"
+        app.world().get::<RisingComponent>(house).is_some(),
+        "the site is still rising"
     );
 
     // The carrier draws its geyser dry and looks around: the unfinished site
@@ -340,10 +327,8 @@ fn unfinished_site_is_never_taken_up_as_replacement_source() {
     // nothing it may work.
     utils::run_ticks(&mut app, utils::APPLY + 4);
     assert!(
-        app.world()
-            .get::<UnderConstructionComponent>(house)
-            .is_some(),
-        "the site is still going up"
+        app.world().get::<RisingComponent>(house).is_some(),
+        "the site is still rising"
     );
     assert!(!entity_def::attached(app.world(), carrier));
     assert!(utils::order_queue_is_empty(app.world_mut(), carrier));
@@ -378,11 +363,7 @@ fn uncovered_source_comes_back_where_it_was_covered() {
     // raise it — the sylph founds the site and the site finishes on its own.
     utils::run_ticks(&mut app, utils::APPLY + 2 + 20);
     let house = utils::single_owned_of_type(app.world_mut(), "pump_house", 0);
-    assert!(
-        app.world()
-            .get::<UnderConstructionComponent>(house)
-            .is_none()
-    );
+    assert!(app.world().get::<RisingComponent>(house).is_none());
 
     // The builder is sent well clear: the walking form spreads over every cell
     // around the house, so anything standing beside it would refuse the change.

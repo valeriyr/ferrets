@@ -84,8 +84,8 @@ fn fold(
                 statistics.record_produced(player, entity_def::type_id(world, spawned));
             }
         }
-        SimulationEvent::ConstructionCompleted { building, .. } => {
-            let Some(finished) = world.resource::<EntityIndex>().any(*building) else {
+        SimulationEvent::EntityRisen { entity, .. } => {
+            let Some(finished) = world.resource::<EntityIndex>().any(*entity) else {
                 return;
             };
             if let Some(player) = entity_def::owner(world, finished) {

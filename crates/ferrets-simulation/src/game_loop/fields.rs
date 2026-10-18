@@ -39,13 +39,13 @@ struct Patch {
 /// Recomputes every field for the current tick.
 ///
 /// Sources are read from the alive index, so a dying source stops projecting
-/// the tick it dies. Under construction a source projects its
-/// `while_constructing` emission and disabled its `while_disabled` one — one
-/// of: all it would project operating, a held patch, or nothing; its growth
-/// stands where it was, and never below a patch it held. A field outage is
-/// read from the grid as it stands before this pass rewrites it, so a source
-/// switched off by losing a field follows one tick after the field does; a
-/// buff or construction outage is read as it is. Operating, a gradual source
+/// the tick it dies. While rising a source projects its `while_rising`
+/// emission and disabled its `while_disabled` one — one of: all it would
+/// project operating, a held patch, or nothing; its growth stands where it
+/// was, and never below a patch it held. A field outage is read from the grid
+/// as it stands before this pass rewrites it, so a source switched off by
+/// losing a field follows one tick after the field does; a buff outage, or
+/// the rise, is read as it is. Operating, a gradual source
 /// grows one cell per cycle up to its radius. Sustained cells are
 /// re-derived from scratch, covered cells absorb them, and the rest decays per
 /// field: at once, from the edge inward every cycle, or never.
@@ -78,7 +78,7 @@ pub fn recompute_fields(world: &mut World) {
         for (source, state) in sources.iter().zip(component.0.iter_mut()) {
             let emission = match operation {
                 Operation::Operating => Emission::Full,
-                Operation::UnderConstruction => source.while_constructing(),
+                Operation::Rising => source.while_rising(),
                 Operation::Disabled(_) => source.while_disabled(),
                 // Off the map, a source stands on no cell to emit from.
                 Operation::Stranded => unreachable!("a stranded body is hidden"),

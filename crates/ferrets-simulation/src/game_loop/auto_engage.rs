@@ -52,11 +52,11 @@ pub fn tick(world: &mut World) {
         if entity_def::hidden(world, entity) {
             continue;
         }
-        // Only an operating body takes the initiative: a site still going
-        // up and a disabled one stand idle.
+        // Only an operating body takes the initiative: a body still rising
+        // and a disabled one stand idle.
         match entity_def::operation(world, entity) {
             Operation::Operating => {}
-            Operation::UnderConstruction | Operation::Disabled(_) => continue,
+            Operation::Rising | Operation::Disabled(_) => continue,
             Operation::Stranded => unreachable!("a stranded body is hidden"),
         }
         if !entity_def::idle(world, entity) {

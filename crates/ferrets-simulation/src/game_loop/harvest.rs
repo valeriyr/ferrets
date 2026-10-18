@@ -623,7 +623,7 @@ fn resolve_source(
     )
 }
 
-/// Whether `id` is a live, raised source of `kind`, with anything left in it,
+/// Whether `id` is a live, risen source of `kind`, with anything left in it,
 /// that admits `carrier` and that it can carry from.
 fn source_matches(
     world: &World,
@@ -638,14 +638,14 @@ fn source_matches(
     let Some(source_def) = entity_def::of(world, source).resource_source.as_ref() else {
         return false;
     };
-    let raised = match entity_def::operation(world, source) {
-        // A site still going up already holds the amount of the source it
-        // covers; it becomes a source of its own only once it stands.
-        Operation::UnderConstruction => false,
+    let risen = match entity_def::operation(world, source) {
+        // One still rising already holds the amount of the source it covers;
+        // it becomes a source of its own only once it has risen.
+        Operation::Rising => false,
         Operation::Operating | Operation::Disabled(_) => true,
         Operation::Stranded => unreachable!("a stranded body is hidden"),
     };
-    raised
+    risen
         && world
             .entity(source)
             .get::<ResourceSourceComponent>()

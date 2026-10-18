@@ -58,9 +58,9 @@
 //! recompute_entity_stats — exclusive system; fold each entity's buffs and its owner's
 //!                      player-level buffs and modifiers into effective stats, the
 //!                      once-per-tick snapshot consumers read
-//! rise_sites         — exclusive system; line up each pool a site raises with
-//!                      its work under the maxima just folded, and settle the
-//!                      pools of each building completed since the last fold
+//! rise_sites         — exclusive system; line up each pool of every rising
+//!                      entity with its work under the maxima just folded, and
+//!                      settle the pools of each entity risen since the last fold
 //! recompute_player_stats — exclusive system; refold player stats from applied
 //!                      modifiers and what the player's active buffs grant
 //! flee               — exclusive system; fleeing-stance entities run from fresh hits
@@ -78,8 +78,8 @@
 //!                          components on finish, push chase sub-orders on suspend
 //! dispatch_rallies   — exclusive system; give every unit an order released this
 //!                      tick its holder's rally order
-//! advance_sites_without_builder — exclusive system; put in a tick on each site
-//!                      no builder attends
+//! advance_sites_without_builder — exclusive system; put in a tick on each
+//!                      unattended rising entity
 //! advance_berths     — exclusive system; move seated workers between the berths
 //!                      their stance walks them round
 //! advance_brood      — exclusive system; take lingering broodlings into each
@@ -483,8 +483,8 @@ impl Plugin for SimulationPlugin {
                     // Fold active buffs into effective stats before consumers
                     // read them, so a buff applied by a command this tick is in
                     // this tick's snapshot.
-                    // A site's pools are lined up with its work, and a building
-                    // completed last tick has its pools settled, under the
+                    // A rising entity's pools are lined up with its work, and
+                    // one risen last tick has its pools settled, under the
                     // maxima just folded, before any order heals or spends
                     // from them; a tick of work moves the line as it is put in.
                     (systems::recompute_entity_stats, systems::rise_sites).chain(),
@@ -505,9 +505,9 @@ impl Plugin for SimulationPlugin {
                     // Units released by this tick's orders — trained, unloaded,
                     // hatched — are sent to their holder's rally point once
                     // every order has run and their queues are back in place.
-                    // Sites no builder works put in their tick right after
-                    // the crews put in theirs, so every construction completes
-                    // at the same point of the tick.
+                    // Unattended rising entities put in their tick right
+                    // after the crews put in theirs, so every rise finishes at
+                    // the same point of the tick.
                     // Attached workers move about their berths once the orders
                     // that seat them have run.
                     // Breeders bear their broodlings once the orders that use

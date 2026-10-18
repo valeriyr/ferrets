@@ -385,7 +385,7 @@ pub const CONTENT: &str = r#"
             pools = { health = { maximum = 800 } },
             dying = { time = 2 },
             price = { gold = 400 },
-            build = { time = 200, pools = { health = "initial" } },
+            rise = { time = 200, pools = { health = "initial" } },
             trainer = { trains = { trains }, release = "beside" },
             resource_storage = { "gold", "wood" },
             tags = { "building" },
@@ -403,7 +403,7 @@ pub const CONTENT: &str = r#"
             pools = { health = { maximum = 200 } },
             dying = { time = 2 },
             price = { gold = 40, wood = 20 },
-            build = { time = 60, pools = { health = "initial" } },
+            rise = { time = 60, pools = { health = "initial" } },
             tags = { "building" },
         })
     end
@@ -416,7 +416,7 @@ pub const CONTENT: &str = r#"
             pools = { health = { maximum = 500 } },
             dying = { time = 2 },
             price = { gold = 200, wood = 100 },
-            build = { time = 120, pools = { health = "initial" } },
+            rise = { time = 120, pools = { health = "initial" } },
             -- Mends in half the time it took to raise: a camp is quicker to
             -- patch up than to put up.
             repair_ratio = "0.5",
@@ -457,7 +457,7 @@ pub const CONTENT: &str = r#"
         -- Stone and earthworks: no call on the wood line, which the demo
         -- economy keeps stretched over the upgrades.
         price = { gold = 100 },
-        build = { time = 80, pools = { health = "initial" } },
+        rise = { time = 80, pools = { health = "initial" } },
         transporter = {
             -- Soldiers and the siege tube alike: what shelters here is
             -- whatever can be carried through a door.
@@ -470,7 +470,7 @@ pub const CONTENT: &str = r#"
         -- The garrison keeps watch for what hides, a little short of how far
         -- it sees.
         field_sources = {
-            { field = "true_sight", radius = 6, growth = "instant", while_constructing = "nothing", while_disabled = "nothing" },
+            { field = "true_sight", radius = 6, growth = "instant", while_rising = "nothing", while_disabled = "nothing" },
         },
     })
 
@@ -483,7 +483,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 350 } },
         dying = { time = 2 },
         price = { gold = 150, wood = 80 },
-        build = { time = 100, pools = { health = "initial" } },
+        rise = { time = 100, pools = { health = "initial" } },
         researcher = { "iron_weapons", "vitality_drill" },
         tags = { "building" },
     })
@@ -754,7 +754,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 2000 } },
         dying = { time = 2 },
         price = { gold = 50 },
-        build = { time = 1200, pools = { health = "initial" } },
+        rise = { time = 1200, pools = { health = "initial" } },
         tags = { "building" },
         berths = { rim = { points = rim(4, 4) } },
     })
@@ -776,7 +776,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 200 } },
         dying = { time = 2 },
         price = { gold = 40, wood = 20 },
-        build = { time = 60, pools = { health = "initial" } },
+        rise = { time = 60, pools = { health = "initial" } },
         transporter = {
             carries = { types = { "peon" } },
             boarding = "own",
@@ -807,11 +807,11 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 250 } },
         dying = { time = 2 },
         price = { gold = 120, wood = 40 },
-        build = { time = 70, pools = { health = "initial" } },
+        rise = { time = 70, pools = { health = "initial" } },
         tags = { "building" },
         berths = { rim = { points = rim(2, 2) } },
         field_sources = {
-            { field = "true_sight", radius = 8, growth = "instant", while_constructing = "nothing", while_disabled = "nothing" },
+            { field = "true_sight", radius = 8, growth = "instant", while_rising = "nothing", while_disabled = "nothing" },
         },
         -- The demo's building upgrade: a paid, refundable change in place. The
         -- money is committed up front and comes back in full if the upgrade is
@@ -842,7 +842,7 @@ pub const CONTENT: &str = r#"
         -- The watch tower's price and the upgrade's on top of it, over the
         -- raising and the upgrading together: what the tower cost to have.
         price = { gold = 200, wood = 60 },
-        build = { time = 130, pools = { health = "initial" } },
+        rise = { time = 130, pools = { health = "initial" } },
     })
     camp("war_camp", "orc", { "grunt", "shaman", "zeppelin" }, { "frenzy_ritual" }, { rim = { points = rim(3, 3) } })
 
@@ -857,7 +857,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 400 } },
         dying = { time = 2 },
         price = { gold = 180, wood = 120 },
-        build = { time = 130, pools = { health = "initial" } },
+        rise = { time = 130, pools = { health = "initial" } },
         repair_ratio = "0.5",
         trainer = { trains = { "war_wagon" }, release = "beside" },
         tags = { "building" },
@@ -1007,7 +1007,7 @@ pub const CONTENT: &str = r#"
     -- third faster on anyone's creep.
     local ON_CREEP = { requires = "creep", of = "anyone", coverage = "every" }
     local WITHERS_OFF_CREEP = { field = "creep", of = "anyone", coverage = "any",
-        holds_while = "built",
+        holds_while = "risen",
         outside = { {
             stats = { { entity_stat = "health_drain", op = "flat", value = "0.2" } },
         } } }
@@ -1062,7 +1062,7 @@ pub const CONTENT: &str = r#"
     local RESEATS_NEARBY = { linger = { reseat = { distance = 4 } } }
     local CREEP_RADIUS = 10
     local CREEP_GROWTH = { cycle = 6, initial_radius = 3 }
-    local CREEP_SPREAD = { { field = "creep", radius = CREEP_RADIUS, growth = CREEP_GROWTH, while_constructing = "nothing", while_disabled = "full" } }
+    local CREEP_SPREAD = { { field = "creep", radius = CREEP_RADIUS, growth = CREEP_GROWTH, while_rising = "nothing", while_disabled = "full" } }
 
     -- Burrowing, researched at the hall: a swarmling digs in where it stands
     -- and lies unseen until a detector passes over it.
@@ -1078,14 +1078,14 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 800 } },
         dying = { time = 2, leaves = BURSTS },
         price = { gold = 400 },
-        build = { time = 200, pools = { health = "initial" } },
+        rise = { time = 200, pools = { health = "initial" } },
         resource_storage = { "gold", "wood" },
         tags = { "building" },
         berths = BROOD_BERTHS,
         breeder = { breeds = "larva", period = 220, limit = 3, initial = 1, orphans = RESEATS_NEARBY },
         researcher = { "burrow" },
         field_sources = {
-            { field = "creep", radius = CREEP_RADIUS, growth = CREEP_GROWTH, while_constructing = { held = 1 }, while_disabled = "full" },
+            { field = "creep", radius = CREEP_RADIUS, growth = CREEP_GROWTH, while_rising = { held = 1 }, while_disabled = "full" },
         },
         morphs = {
             { into = "hive", land_pool_carry = { health = "full" },
@@ -1120,7 +1120,7 @@ pub const CONTENT: &str = r#"
         -- Nothing builds a hive: it carries the hatchery's price and the
         -- growth's on top of it, over the raising and the growing together.
         price = { gold = 550, wood = 100 },
-        build = { time = 400, pools = { health = "initial" } },
+        rise = { time = 400, pools = { health = "initial" } },
         resource_storage = { "gold", "wood" },
         tags = { "building" },
         berths = BROOD_BERTHS,
@@ -1172,7 +1172,7 @@ pub const CONTENT: &str = r#"
         dying = { time = 2 },
         tags = { "biological" },
         field_sources = {
-            { field = "true_sight", radius = 8, growth = "instant", while_constructing = "nothing", while_disabled = "nothing" },
+            { field = "true_sight", radius = 8, growth = "instant", while_rising = "nothing", while_disabled = "nothing" },
         },
     })
 
@@ -1226,11 +1226,11 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 50 } },
         dying = { time = 2 },
         price = { gold = 25 },
-        build = { time = 40, pools = { health = "initial" } },
+        rise = { time = 40, pools = { health = "initial" } },
         tags = { "building" },
         field_placement = { ON_CREEP },
         field_sources = {
-            { field = "creep", radius = 6, growth = { cycle = 8, initial_radius = 1 }, while_constructing = "nothing", while_disabled = "full" },
+            { field = "creep", radius = 6, growth = { cycle = 8, initial_radius = 1 }, while_rising = "nothing", while_disabled = "full" },
         },
     })
 
@@ -1241,7 +1241,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 500 } },
         dying = { time = 2, leaves = BURSTS },
         price = { gold = 200, wood = 100 },
-        build = { time = 120, pools = { health = "initial" } },
+        rise = { time = 120, pools = { health = "initial" } },
         tags = { "building" },
         field_placement = { ON_CREEP },
         field_effects = { WITHERS_OFF_CREEP },
@@ -1265,7 +1265,7 @@ pub const CONTENT: &str = r#"
         tags = { "building" },
         gateway = { network = "warren", doors = "both" },
         field_sources = {
-            { field = "creep", radius = 3, growth = "instant", while_constructing = "nothing", while_disabled = "full" },
+            { field = "creep", radius = 3, growth = "instant", while_rising = "nothing", while_disabled = "full" },
         },
         -- Uprooting takes two seconds and cannot be called off; the burrow
         -- stops being a way out of the warren, and if it was the last one,
@@ -1316,7 +1316,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 600 } },
         dying = { time = 2, leaves = BURSTS },
         price = { gold = 150, wood = 150 },
-        build = { time = 100, pools = { health = "initial" } },
+        rise = { time = 100, pools = { health = "initial" } },
         tags = { "building" },
         field_placement = { ON_CREEP },
         field_effects = { WITHERS_OFF_CREEP },
@@ -1338,7 +1338,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 250 } },
         dying = { time = 2 },
         price = { gold = 100, wood = 50 },
-        build = { time = 80, pools = { health = "initial" } },
+        rise = { time = 80, pools = { health = "initial" } },
         tags = { "building" },
         field_placement = { ON_CREEP },
         field_effects = { WITHERS_OFF_CREEP },
@@ -1476,13 +1476,13 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 800 } },
         dying = { time = 2 },
         price = { gold = 400 },
-        build = { time = 200, pools = { health = "initial" } },
+        rise = { time = 200, pools = { health = "initial" } },
         trainer = { trains = { "probe" }, release = "beside" },
         resource_storage = { "gold", "wood" },
         tags = { "building" },
         field_placement = { NOT_ON_CREEP },
         field_sources = {
-            { field = "power", radius = 7, growth = "instant", while_constructing = "nothing", while_disabled = "nothing" },
+            { field = "power", radius = 7, growth = "instant", while_rising = "nothing", while_disabled = "nothing" },
         },
     })
 
@@ -1523,11 +1523,11 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 200 } },
         dying = { time = 2 },
         price = { gold = 60 },
-        build = { time = 50, pools = { health = "initial" } },
+        rise = { time = 50, pools = { health = "initial" } },
         tags = { "building" },
         field_placement = { NOT_ON_CREEP },
         field_sources = {
-            { field = "power", radius = 6, growth = "instant", while_constructing = "nothing", while_disabled = "nothing" },
+            { field = "power", radius = 6, growth = "instant", while_rising = "nothing", while_disabled = "nothing" },
         },
         on_stand = {
             { field = { field = "creep", radius = 6, action = "clear" } },
@@ -1541,7 +1541,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 500 } },
         dying = { time = 2 },
         price = { gold = 200, wood = 100 },
-        build = { time = 120, pools = { health = "initial" } },
+        rise = { time = 120, pools = { health = "initial" } },
         repair_ratio = "0.5",
         trainer = { trains = { "zealot", "stalker", "dark_templar", "observer", "arbiter" }, release = "beside" },
         tags = { "building" },
@@ -1559,7 +1559,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 300 } },
         dying = { time = 2 },
         price = { gold = 120 },
-        build = { time = 80, pools = { health = "initial" } },
+        rise = { time = 80, pools = { health = "initial" } },
         tags = { "building" },
         attack = { targets = GROUND | WATER | AIR, projectile = "arrow" },
         field_placement = { POWERED, NOT_ON_CREEP },
@@ -1567,7 +1567,7 @@ pub const CONTENT: &str = r#"
         -- The cannon is the conclave's standing detector: a shorter reach
         -- than its eyes, as a turret's is.
         field_sources = {
-            { field = "true_sight", radius = 7, growth = "instant", while_constructing = "nothing", while_disabled = "nothing" },
+            { field = "true_sight", radius = 7, growth = "instant", while_rising = "nothing", while_disabled = "nothing" },
         },
     })
 
@@ -1679,7 +1679,7 @@ pub const CONTENT: &str = r#"
         train_time = 50,
         selection = { priority = 5 },
         field_sources = {
-            { field = "true_sight", radius = 9, growth = "instant", while_constructing = "nothing", while_disabled = "nothing" },
+            { field = "true_sight", radius = 9, growth = "instant", while_rising = "nothing", while_disabled = "nothing" },
         },
         field_effects = { VEILED },
     })
@@ -1743,7 +1743,7 @@ pub const CONTENT: &str = r#"
         selection = { priority = 5 },
         skills = { "recall", "drag_in" },
         field_sources = {
-            { field = "veil", radius = 4, growth = "instant", while_constructing = "nothing", while_disabled = "nothing" },
+            { field = "veil", radius = 4, growth = "instant", while_rising = "nothing", while_disabled = "nothing" },
         },
     })
 
@@ -1805,7 +1805,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 600 } },
         dying = { time = 2 },
         price = { gold = 100 },
-        build = { time = 100, pools = { health = "initial" } },
+        rise = { time = 100, pools = { health = "initial" } },
         tags = { "building" },
         resource_source = { kind = "gold", depletion = "destroy" },
         overbuilds = "gold_mine",
@@ -1829,7 +1829,7 @@ pub const CONTENT: &str = r#"
             pools = rooted.pools,
             dying = { time = 2 },
             price = rooted.price,
-            build = rooted.build,
+            rise = rooted.rise,
             trainer = rooted.trainer,
             attack = rooted.attack,
             tags = { "building" },
@@ -1859,7 +1859,7 @@ pub const CONTENT: &str = r#"
         stats = { sight_range = 9, supply_provided = 10 },
         pools = { health = { maximum = 800 } },
         price = { gold = 400 },
-        build = { time = 200, pools = { health = "initial" } },
+        rise = { time = 200, pools = { health = "initial" } },
         trainer = { trains = { "wisp" }, release = "beside" },
     }, {
         stats = {
@@ -1877,7 +1877,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 200 } },
         dying = { time = 2 },
         price = { gold = 40, wood = 20 },
-        build = { time = 60, pools = { health = "initial" } },
+        rise = { time = 60, pools = { health = "initial" } },
         tags = { "building" },
         field_placement = { NOT_ON_CREEP, NOT_ON_BLIGHT },
     })
@@ -1886,7 +1886,7 @@ pub const CONTENT: &str = r#"
         stats = { sight_range = 6 },
         pools = { health = { maximum = 500 } },
         price = { gold = 200, wood = 100 },
-        build = { time = 120, pools = { health = "initial" } },
+        rise = { time = 120, pools = { health = "initial" } },
         trainer = { trains = { "huntress" }, release = "beside" },
     }, {
         stats = {
@@ -1904,10 +1904,10 @@ pub const CONTENT: &str = r#"
         },
         pools = { health = { maximum = 300 } },
         price = { gold = 120, wood = 40 },
-        build = { time = 80, pools = { health = "initial" } },
+        rise = { time = 80, pools = { health = "initial" } },
         attack = { targets = GROUND | WATER | AIR, projectile = "arrow" },
         field_sources = {
-            { field = "true_sight", radius = 7, growth = "instant", while_constructing = "nothing", while_disabled = "nothing" },
+            { field = "true_sight", radius = 7, growth = "instant", while_rising = "nothing", while_disabled = "nothing" },
         },
     }, {
         stats = {
@@ -1967,14 +1967,14 @@ pub const CONTENT: &str = r#"
     -- burn. The drain lands on `health_drain`, which a health pool carries
     -- beside it.
     define_entity_buff("on_fire", {
-        lasting = { as_long_as = { all = { "built", { health = { under_share = "0.34" } } } } },
+        lasting = { as_long_as = { all = { "risen", { health = { under_share = "0.34" } } } } },
         stack = "ignore",
         effects = { { stats = { { entity_stat = "health_drain", op = "flat", value = "0.15" } } } },
     })
     -- A command center going up stands in scaffolding, which hides half
     -- of what it would see.
     define_entity_buff("scaffolding", {
-        lasting = { as_long_as = { unless = "built" } },
+        lasting = { as_long_as = { unless = "risen" } },
         stack = "ignore",
         effects = { { stats = { { entity_stat = "sight_range", op = "percent", value = "-0.5" } } } },
     })
@@ -2092,7 +2092,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 800 } },
         dying = { time = 2 },
         price = { gold = 400 },
-        build = { time = 200, pools = { health = { rises_from = { share = "0.1" } } } },
+        rise = { time = 200, pools = { health = { follows_work_from = { share = "0.1" } } } },
         trainer = { trains = { "scv" }, release = "beside" },
         resource_storage = { "gold", "wood" },
         -- It raises its own annex, standing where it stands while the work is
@@ -2134,7 +2134,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 500 } },
         dying = { time = 2 },
         price = { gold = 150 },
-        build = { time = 100, pools = { health = { rises_from = { share = "0.1" } } } },
+        rise = { time = 100, pools = { health = { follows_work_from = { share = "0.1" } } } },
         repair_ratio = "0.5",
         trainer = { trains = { "marine" }, release = "beside" },
         berths = { rim = { points = rim(3, 3), slots = 1 } },
@@ -2167,7 +2167,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 500 } },
         dying = { time = 2 },
         price = { gold = 200, wood = 100 },
-        build = { time = 120, pools = { health = { rises_from = { share = "0.1" } } } },
+        rise = { time = 120, pools = { health = { follows_work_from = { share = "0.1" } } } },
         repair_ratio = "0.5",
         trainer = { trains = { "tank", "wraith" }, release = "beside" },
         builder = { builds = { "tech_lab" }, attendance = { present = { crew = 1 } } },
@@ -2213,7 +2213,7 @@ pub const CONTENT: &str = r#"
         },
         dying = { time = 2 },
         price = { gold = 50, wood = 50 },
-        build = { time = 80, pools = { health = { rises_from = { share = "0.1" } }, energy = "withheld" } },
+        rise = { time = 80, pools = { health = { follows_work_from = { share = "0.1" } }, energy = "gained_on_risen" } },
         skills = { "scanner_sweep" },
         tags = { "building" },
         passives = { "on_fire" },
@@ -2260,7 +2260,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 200 } },
         dying = { time = 2 },
         price = { gold = 75, wood = 25 },
-        build = { time = 60, pools = { health = { rises_from = { share = "0.1" } } } },
+        rise = { time = 60, pools = { health = { follows_work_from = { share = "0.1" } } } },
         berths = { rim = { points = rim(1, 1), slots = 1 } },
         tags = { "building" },
         passives = { "on_fire" },
@@ -2268,7 +2268,7 @@ pub const CONTENT: &str = r#"
             { turret = "missile_rack" },
         },
         field_sources = {
-            { field = "true_sight", radius = 7, growth = "instant", while_constructing = "nothing", while_disabled = "nothing" },
+            { field = "true_sight", radius = 7, growth = "instant", while_rising = "nothing", while_disabled = "nothing" },
         },
     })
 
@@ -2282,7 +2282,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 300 } },
         dying = { time = 2 },
         price = { gold = 50, wood = 25 },
-        build = { time = 80, pools = { health = { rises_from = { share = "0.1" } } } },
+        rise = { time = 80, pools = { health = { follows_work_from = { share = "0.1" } } } },
         researcher = { "siege_tech" },
         tags = { "building" },
         passives = { "on_fire" },
@@ -2296,7 +2296,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 200 } },
         dying = { time = 2 },
         price = { gold = 40, wood = 20 },
-        build = { time = 60, pools = { health = { rises_from = { share = "0.1" } } } },
+        rise = { time = 60, pools = { health = { follows_work_from = { share = "0.1" } } } },
         tags = { "building" },
         passives = { "on_fire" },
         berths = { rim = { points = rim(2, 2), slots = 1 } },
@@ -2312,7 +2312,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 500 } },
         dying = { time = 2 },
         price = { gold = 75 },
-        build = { time = 90, pools = { health = { rises_from = { share = "0.1" } } } },
+        rise = { time = 90, pools = { health = { follows_work_from = { share = "0.1" } } } },
         tags = { "building" },
         passives = { "on_fire" },
         resource_source = { kind = "gold", depletion = "persist" },
@@ -2442,7 +2442,7 @@ pub const CONTENT: &str = r#"
     -- exceptions: they make blight where there is none.
     local ON_BLIGHT = { requires = "blight", of = "anyone", coverage = "every" }
     local function blights(radius)
-        return { { field = "blight", radius = radius, growth = "instant", while_constructing = "nothing", while_disabled = "full" } }
+        return { { field = "blight", radius = radius, growth = "instant", while_rising = "nothing", while_disabled = "full" } }
     end
     -- The dead mend only on their own ground: off blight nothing knits.
     local MENDS = { stats = { { entity_stat = "health_regen", op = "flat", value = "0.1" } } }
@@ -2668,20 +2668,20 @@ pub const CONTENT: &str = r#"
     end
     hall("necropolis", "halls_of_the_dead", 700,
         { sight_range = 9, supply_provided = 10 },
-        { cost = { gold = 350 }, build = { time = 180, pools = { health = "initial" } } })
+        { cost = { gold = 350 }, rise = { time = 180, pools = { health = "initial" } } })
     -- A grown hall is never built, so it carries the necropolis's price and
     -- every growth paid since, over the raising and the growing together.
     hall("halls_of_the_dead", "black_citadel", 900,
         { sight_range = 10, supply_provided = 10 },
         { tags = { "building", "grown_hall" },
-          price = { gold = 500 }, build = { time = 300, pools = { health = "initial" } } })
+          price = { gold = 500 }, rise = { time = 300, pools = { health = "initial" } } })
     -- The citadel is the one hall that answers for itself: bolts at whatever
     -- comes into its reach, in the air as readily as on the ground.
     hall("black_citadel", nil, 1100,
         { sight_range = 11, supply_provided = 10,
           damage = 18, attack_range = 8, acquire_range = 9, attack_period = 22, damage_point = 9 },
         { tags = { "building", "grown_hall" },
-          price = { gold = 650 }, build = { time = 420, pools = { health = "initial" } },
+          price = { gold = 650 }, rise = { time = 420, pools = { health = "initial" } },
           attack = { targets = GROUND | WATER | AIR, projectile = "arrow" } })
 
     -- Raised over a gold seam, the haunted mine is the mine from then on: it
@@ -2695,7 +2695,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 600 } },
         dying = { time = 2 },
         price = { gold = 100 },
-        build = { time = 100, pools = { health = "initial" } },
+        rise = { time = 100, pools = { health = "initial" } },
         tags = { "building" },
         resource_source = { kind = "gold", depletion = "destroy" },
         overbuilds = "gold_mine",
@@ -2718,7 +2718,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 300 } },
         dying = { time = 2 },
         price = { gold = 80, wood = 30 },
-        build = { time = 100, pools = { health = "initial" } },
+        rise = { time = 100, pools = { health = "initial" } },
         tags = { "building" },
         field_placement = { ON_BLIGHT },
         field_sources = blights(4),
@@ -2734,7 +2734,7 @@ pub const CONTENT: &str = r#"
     -- A tower is only ever reached by hardening a ziggurat, so it carries the
     -- ziggurat's price and the hardening's on top of it, over the raising and
     -- the hardening together.
-    local function tower(name, health, stats, attack, price, build_time, field_sources)
+    local function tower(name, health, stats, attack, price, rise_time, field_sources)
         define_entity(name, {
             race = "undead",
             location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
@@ -2744,7 +2744,7 @@ pub const CONTENT: &str = r#"
             tags = { "building" },
             attack = attack,
             price = price,
-            build = { time = build_time, pools = { health = "initial" } },
+            rise = { time = rise_time, pools = { health = "initial" } },
             field_placement = { ON_BLIGHT },
             field_sources = field_sources,
         })
@@ -2756,8 +2756,8 @@ pub const CONTENT: &str = r#"
           damage = 14, attack_range = 7, acquire_range = 8, attack_period = 18, damage_point = 7 },
         { targets = GROUND | WATER | AIR, projectile = "arrow" },
         { gold = 180, wood = 30 }, 170,
-        { { field = "blight", radius = 4, growth = "instant", while_constructing = "nothing", while_disabled = "full" },
-          { field = "true_sight", radius = 7, growth = "instant", while_constructing = "nothing", while_disabled = "nothing" } })
+        { { field = "blight", radius = 4, growth = "instant", while_rising = "nothing", while_disabled = "full" },
+          { field = "true_sight", radius = 7, growth = "instant", while_rising = "nothing", while_disabled = "nothing" } })
     tower("nerubian_tower", 500,
         { sight_range = 8, supply_provided = 10,
           damage = 22, attack_range = 6, acquire_range = 7, attack_period = 24, damage_point = 10 },
@@ -2772,7 +2772,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 500 } },
         dying = { time = 2 },
         price = { gold = 200, wood = 50 },
-        build = { time = 120, pools = { health = "initial" } },
+        rise = { time = 120, pools = { health = "initial" } },
         tags = { "building" },
         trainer = { trains = { "ghoul" }, release = "beside" },
         field_placement = { ON_BLIGHT },
@@ -2788,7 +2788,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 300 } },
         dying = { time = 2 },
         price = { gold = 120, wood = 40 },
-        build = { time = 90, pools = { health = "initial" } },
+        rise = { time = 90, pools = { health = "initial" } },
         tags = { "building" },
         field_placement = { ON_BLIGHT },
         field_sources = blights(4),
@@ -2801,7 +2801,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 450 } },
         dying = { time = 2 },
         price = { gold = 250, wood = 100 },
-        build = { time = 140, pools = { health = "initial" } },
+        rise = { time = 140, pools = { health = "initial" } },
         tags = { "building" },
         trainer = { trains = { "necromancer" }, release = "beside" },
         researcher = { "skeletal_longevity" },

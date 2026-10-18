@@ -2,7 +2,7 @@
 //!
 //! Nothing here is stored. Provided and used are summed on demand from what
 //! stands on the map and what sits in training queues, so every lifecycle edge —
-//! death, cancellation, a site still going up — is settled by the predicates
+//! death, cancellation, an entity still rising — is settled by the predicates
 //! that already govern it, and effective stats are read at their current value
 //! rather than cached against modifier changes.
 
@@ -11,10 +11,8 @@ use ferrets_math::FixedU64;
 
 use crate::{
     components::{
-        build::{BuildComponent, UnderConstructionComponent},
-        entity_stats::StatsComponent,
-        morph::MorphComponent,
-        train::TrainQueueComponent,
+        build::BuildComponent, entity_stats::StatsComponent, morph::MorphComponent,
+        rise::RisingComponent, train::TrainQueueComponent,
     },
     entity_def,
     entity_index::EntityIndex,
@@ -29,7 +27,7 @@ use ferrets_content::{
 /// The supply available to `player`: everything its standing entities provide,
 /// held under the player's `max_supply` ceiling when it has one.
 ///
-/// An entity still under construction provides nothing yet.
+/// An entity still rising provides nothing yet.
 pub fn provided(world: &World, player: PlayerId) -> FixedU64 {
     totals(world, player).0
 }
@@ -135,9 +133,9 @@ fn totals(world: &World, player: PlayerId) -> (FixedU64, FixedU64) {
         if entity_def::owner(world, entity) != Some(player) {
             continue;
         }
-        // A site still going up neither feeds nor eats: it provides nothing
-        // until it stands, and costs nothing until then either.
-        if entity_ref.contains::<UnderConstructionComponent>() {
+        // An entity still rising neither feeds nor eats: it provides nothing
+        // until it has risen, and costs nothing until then either.
+        if entity_ref.contains::<RisingComponent>() {
             continue;
         }
         // A builder inside the site that will consume it has given its supply

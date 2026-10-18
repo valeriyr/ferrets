@@ -35,11 +35,11 @@ use ferrets_math::FixedU64;
 use ferrets_simulation::{
     command::{PlayerCommand, SelectMode, SkillTarget},
     components::{
-        build::{self, SiteWork},
         entity_skills::SkillsComponent,
         hidden::Inside,
         last_hit,
         order_queue::OrderQueueComponent,
+        rise::{self, RiseAttendance},
         train::TrainQueueComponent,
     },
     game_loop::{self, buffs::Bearing},
@@ -95,11 +95,11 @@ fn panel_reports_energy_against_its_maximum() {
 }
 
 #[test]
-fn panel_names_site_and_buff_outage_as_simulation_judges_them() {
+fn panel_names_rising_entity_and_buff_outage_as_simulation_judges_them() {
     let mut app = utils::demo_map_app(MovementModel::Cell);
     spawn_panel(&mut app);
     let (farm, farm_id) =
-        utils::create_site(app.world_mut(), "farm", utils::at_cell(20, 20), Some(0))
+        utils::create_rising(app.world_mut(), "farm", utils::at_cell(20, 20), Some(0))
             .expect("the demo content defines a farm");
     utils::select(&mut app, farm_id, SelectMode::Replace);
     utils::run_ticks(&mut app, utils::APPLY + 1);
@@ -107,10 +107,10 @@ fn panel_names_site_and_buff_outage_as_simulation_judges_them() {
     let shown = panel_text(&mut app);
     assert!(
         shown.contains("under construction"),
-        "a site reads under construction: {shown:?}"
+        "a rising entity reads under construction: {shown:?}"
     );
 
-    build::mark_as_built(app.world_mut(), farm);
+    rise::mark_as_risen(app.world_mut(), farm);
     let stunned = {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
         registry.register_entity_buff(
@@ -611,9 +611,10 @@ fn hovered_skill_names_its_cost_or_why_it_cannot_cast() {
         .get_mut::<SkillsComponent>(archer)
         .unwrap()
         .reset_cooldown(battle_focus);
-    // Led by a site: whatever the skill, the site cannot cast yet.
-    let (_, farm_id) = utils::create_site(app.world_mut(), "farm", utils::at_cell(28, 20), Some(0))
-        .expect("the demo content defines a farm");
+    // Led by a rising entity: whatever the skill, it cannot cast yet.
+    let (_, farm_id) =
+        utils::create_rising(app.world_mut(), "farm", utils::at_cell(28, 20), Some(0))
+            .expect("the demo content defines a farm");
     app.world_mut().insert_resource(Leading(Some(farm_id)));
     recolor_card(&mut app);
     assert_eq!(hint_text(&mut app), "Still under construction");
@@ -842,7 +843,7 @@ fn bound_tunnel_grays_its_build_button_naming_its_other_end() {
         Some(0),
         FieldReach::Initial,
         tunnel,
-        SiteWork::Unattended { founder: tunnel },
+        RiseAttendance::Unattended { founder: tunnel },
     )
     .expect("the other end fits at (30, 20)");
     utils::select(&mut app, tunnel, SelectMode::Replace);

@@ -36,7 +36,7 @@ use ferrets_simulation::{
         annex::{AnnexComponent, Docking},
         attached::AttachedComponent,
         brood::{BredComponent, BroodComponent},
-        build::{BuildComponent, SiteWork, UnderConstructionComponent},
+        build::BuildComponent,
         cast::{CastComponent, CastStage},
         concealed::ConcealedComponent,
         dying::{DyingComponent, RemainsComponent},
@@ -55,6 +55,7 @@ use ferrets_simulation::{
         repair::{RepairComponent, UnderRepairComponent},
         research::ResearchComponent,
         resource::{HarvestComponent, UnderHarvestComponent},
+        rise::{RiseAttendance, RisingComponent},
         tags::TagsComponent,
         train::{TrainComponent, TrainQueueComponent},
         transport::TransporterComponent,
@@ -2122,7 +2123,7 @@ pub fn draw_selection(
         // A selected source of the viewed side shows how far each field it
         // projects reaches now: what it put on the grid, from the footprint's
         // edge, in the field's own color, on the ground — a flier's field lies
-        // under it, not at its altitude. A halted or unbuilt source shows no
+        // under it, not at its altitude. A halted or still-rising source shows no
         // ring, and another side's reach is its own to know, as on the
         // overlay; an observer watching the whole map sees every side's.
         let side_of_view = match viewed {
@@ -3138,13 +3139,13 @@ fn ghost_shape(type_name: &str, size: CellSize) -> GhostShape {
 }
 
 // Colors of the always-on work visualization, one hue per verb — shared by the
-// worker links, the job markers, and the construction progress bar so the same
+// worker links, the job markers, and the rise progress bar so the same
 // work reads the same everywhere.
 const BUILD_WORK_COLOR: Color = Color::srgb(0.35, 0.55, 1.0);
 const HARVEST_WORK_COLOR: Color = Color::srgb(0.85, 0.7, 0.2);
 const REPAIR_WORK_COLOR: Color = Color::srgb(0.9, 0.5, 0.9);
-/// The ring around a site its crew left standing, waiting for a builder.
-const HALTED_SITE_COLOR: Color = Color::srgb(0.6, 0.6, 0.65);
+/// The ring around a rising entity its crew left, waiting for a worker.
+const HALTED_RISE_COLOR: Color = Color::srgb(0.6, 0.6, 0.65);
 const TRAIN_WORK_COLOR: Color = Color::srgb(0.3, 0.9, 0.9);
 // Matches the HUD's research-button teal, so the bar and the button that
 // started it read as the same work.
@@ -3350,8 +3351,8 @@ pub fn draw_brood_ties(
 /// The two states read apart at a glance in one vocabulary: a lab bound to its
 /// factory is tied to it, and one a lift-off left behind is unplugged and
 /// ringed. A coupling needs both ends on screen, so an annex whose primary is
-/// under fog draws its plug alone. An annex still going up draws neither: the
-/// site's own markers have it until it stands.
+/// under fog draws its plug alone. An annex still rising draws neither: its
+/// own rising markers have it until it stands.
 pub fn draw_annex_bonds(
     mut gizmos: Gizmos,
     registry: Res<ContentRegistry>,
@@ -3365,10 +3366,7 @@ pub fn draw_annex_bonds(
             &Visibility,
             Option<&Sighted>,
         ),
-        (
-            Without<HiddenComponent>,
-            Without<UnderConstructionComponent>,
-        ),
+        (Without<HiddenComponent>, Without<RisingComponent>),
     >,
     primaries: Query<
         (
@@ -3402,8 +3400,8 @@ pub fn draw_annex_bonds(
             Docking::Alone => {
                 let size = registry.def(info.type_id()).location.unwrap().size();
                 let radius = size.width.max(size.height) as f32 * CELL_PX * 0.55;
-                gizmos.circle_2d(start, plug, HALTED_SITE_COLOR);
-                gizmos.circle_2d(start, radius + 4.0, HALTED_SITE_COLOR);
+                gizmos.circle_2d(start, plug, HALTED_RISE_COLOR);
+                gizmos.circle_2d(start, radius + 4.0, HALTED_RISE_COLOR);
             }
         }
     }
@@ -3411,7 +3409,7 @@ pub fn draw_annex_bonds(
 
 /// Marks the jobs themselves: a ring in the verb's color around a source being
 /// worked or an entity being mended, and a dot per counted crew member above
-/// it (run in `Update`). An unfinished site shows its crew dots too, and a
+/// it (run in `Update`). A rising entity shows its crew dots too, and a
 /// gray ring while it stands halted; its own state is the translucent shape
 /// (see [`shade_sprites`]) and the progress bar (see [`draw_status_bars`]).
 pub fn draw_work_markers(
@@ -3429,7 +3427,7 @@ pub fn draw_work_markers(
             &Visibility,
             Option<&UnderHarvestComponent>,
             Option<&UnderRepairComponent>,
-            Option<&UnderConstructionComponent>,
+            Option<&RisingComponent>,
             Option<&Sighted>,
         ),
         Without<HiddenComponent>,
@@ -3454,11 +3452,11 @@ pub fn draw_work_markers(
             })
             .count()
     };
-    for (info, transform, visibility, harvest, repair, construction, sighted) in &jobs {
+    for (info, transform, visibility, harvest, repair, rising, sighted) in &jobs {
         if !made_out(visibility, sighted) {
             continue;
         }
-        if harvest.is_none() && repair.is_none() && construction.is_none() {
+        if harvest.is_none() && repair.is_none() && rising.is_none() {
             continue;
         }
         let size = registry.def(info.type_id()).location.unwrap().size();
@@ -3474,15 +3472,15 @@ pub fn draw_work_markers(
             gizmos.circle_2d(center, radius + 2.0, REPAIR_WORK_COLOR);
             counted += counted_of(&repair.repairers);
         }
-        if let Some(construction) = construction {
-            match &construction.work {
-                SiteWork::Crew { builders } => {
-                    counted += counted_of(builders);
+        if let Some(rising) = rising {
+            match &rising.attendance {
+                RiseAttendance::Crew { workers } => {
+                    counted += counted_of(workers);
                 }
-                SiteWork::Halted => {
-                    gizmos.circle_2d(center, radius + 4.0, HALTED_SITE_COLOR);
+                RiseAttendance::Halted => {
+                    gizmos.circle_2d(center, radius + 4.0, HALTED_RISE_COLOR);
                 }
-                SiteWork::Unattended { .. } => {}
+                RiseAttendance::Unattended { .. } => {}
             }
         }
 
@@ -3543,12 +3541,11 @@ pub fn crew_counts(
 }
 
 /// Draws slim bars over entities — energy, then health, then what is left of a
-/// timed life, then construction
-/// progress while a site goes up, then training progress with a dot per queued
-/// unit, then research progress, then a running form change's progress, then
-/// a breeder's progress toward its next birth — for whichever of those the
-/// entity has (run in `Update`). Whatever fog or hiding
-/// keeps off screen stays bare.
+/// timed life, then rise progress while an entity rises, then training
+/// progress with a dot per queued unit, then research progress, then a running
+/// form change's progress, then a breeder's progress toward its next birth —
+/// for whichever of those the entity has (run in `Update`). Whatever fog or
+/// hiding keeps off screen stays bare.
 #[allow(clippy::too_many_arguments)]
 pub fn draw_status_bars(
     mut gizmos: Gizmos,
@@ -3568,7 +3565,7 @@ pub fn draw_status_bars(
             &PoolsComponent,
             Option<&StatsComponent>,
             Option<&LifetimeComponent>,
-            Option<&UnderConstructionComponent>,
+            Option<&RisingComponent>,
             Option<&TrainQueueComponent>,
             Option<&TrainComponent>,
             Option<&ResearchComponent>,
@@ -3596,7 +3593,7 @@ pub fn draw_status_bars(
         pools,
         stats,
         lifetime,
-        construction,
+        rising,
         queue,
         train,
         research,
@@ -3689,9 +3686,9 @@ pub fn draw_status_bars(
             y += 4.0;
         }
 
-        if let Some(construction) = construction {
-            let time = def.build_time().unwrap_or(1).max(1);
-            let fraction = construction.progress as f32 / time as f32;
+        if let Some(rising) = rising {
+            let time = def.rise_time().unwrap_or(1).max(1);
+            let fraction = rising.progress as f32 / time as f32;
             bar(&mut gizmos, fraction, BUILD_WORK_COLOR, y);
             y += 4.0;
         }
@@ -3803,16 +3800,15 @@ pub fn draw_status_bars(
 }
 
 /// Shades each drawn entity by its state (run in `Update`): part way through
-/// while under construction, barely there when concealed and made out, and
-/// solid otherwise. The parts a silhouette is
-/// drawn from shade with it. Bodies on the ground fade on their own
-/// ([`fade_remains`]) and are left alone here.
+/// while rising, barely there when concealed and made out, and solid
+/// otherwise. The parts a silhouette is drawn from shade with it. Bodies on
+/// the ground fade on their own ([`fade_remains`]) and are left alone here.
 pub fn shade_sprites(
     mut materials: ResMut<Assets<ColorMaterial>>,
     query: Query<
         (
             &MeshMaterial2d<ColorMaterial>,
-            Has<UnderConstructionComponent>,
+            Has<RisingComponent>,
             Has<ConcealedComponent>,
             Option<&Sighted>,
             Option<&Children>,
@@ -3821,12 +3817,12 @@ pub fn shade_sprites(
     >,
     parts: Query<&MeshMaterial2d<ColorMaterial>, Without<RemainsComponent>>,
 ) {
-    /// How strongly a site going up is drawn.
-    const UNDER_CONSTRUCTION: f32 = 0.45;
+    /// How strongly an entity still rising is drawn.
+    const RISING: f32 = 0.45;
 
-    for (material, under_construction, concealed, sighted, children) in &query {
-        let alpha = if under_construction {
-            UNDER_CONSTRUCTION
+    for (material, rising, concealed, sighted, children) in &query {
+        let alpha = if rising {
+            RISING
         } else {
             presence_alpha(sighted, concealed)
         };

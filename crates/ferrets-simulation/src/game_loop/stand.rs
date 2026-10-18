@@ -4,8 +4,8 @@ use bevy_ecs::world::World;
 
 use crate::{
     components::{
-        build::UnderConstructionComponent,
         hidden::HiddenComponent,
+        rise::RisingComponent,
         stand::{StandComponent, Standing},
     },
     entity_def,
@@ -17,9 +17,9 @@ use ferrets_content::stand::StandingAct;
 /// Performs the standing acts of every entity that has come to stand finished
 /// since it last acted, and marks them done.
 ///
-/// Standing means alive, on the map, and not under construction. Entities are
-/// visited in ascending simulation-id order, so acts on a shared field land in
-/// the same sequence on every peer.
+/// Standing means alive, on the map, and risen. Entities are visited in
+/// ascending simulation-id order, so acts on a shared field land in the same
+/// sequence on every peer.
 pub fn perform_standing_acts(world: &mut World) {
     let standing: Vec<_> = world
         .resource::<EntityIndex>()
@@ -29,9 +29,7 @@ pub fn perform_standing_acts(world: &mut World) {
         .collect();
     for entity in standing {
         let entity_ref = world.entity(entity);
-        if entity_ref.contains::<HiddenComponent>()
-            || entity_ref.contains::<UnderConstructionComponent>()
-        {
+        if entity_ref.contains::<HiddenComponent>() || entity_ref.contains::<RisingComponent>() {
             continue;
         }
         match entity_ref.get::<StandComponent>() {

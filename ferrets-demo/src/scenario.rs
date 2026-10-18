@@ -46,7 +46,7 @@ const SCRIPT: &str = r#"
         check = function(state, view)
             local camps, archers = 0, 0
             for _, entity in ipairs(view.my_entities) do
-                if entity.type_name == "training_camp" and not entity.under_construction then
+                if entity.type_name == "training_camp" and not entity.rising then
                     camps = camps + 1
                 elseif entity.type_name == "archer" then
                     archers = archers + 1

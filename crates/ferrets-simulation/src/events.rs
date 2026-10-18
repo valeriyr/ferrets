@@ -31,10 +31,10 @@ pub enum SpawnCause {
         trainer: SimulationId,
     },
     /// Founded as a construction site — announced when the site is raised,
-    /// standing but unfinished. [`SimulationEvent::ConstructionCompleted`]
-    /// announces the other end of the work. A site raised over a resource
-    /// source is founded like any other; the source it covers dies as
-    /// [`DeathCause::Overbuilt`] in the same tick.
+    /// still rising. [`SimulationEvent::EntityRisen`] announces the other end
+    /// of the work. A site raised over a resource source is founded like any
+    /// other; the source it covers dies as [`DeathCause::Overbuilt`] in the
+    /// same tick.
     Founded {
         /// Whoever placed the site.
         builder: SimulationId,
@@ -201,15 +201,16 @@ pub enum SimulationEvent {
         /// How it got there.
         cause: SpawnCause,
     },
-    /// A construction site finished its work and stands as a working building.
+    /// An entity finished rising and stands whole.
     ///
-    /// The building itself entered the world when its site was founded (a spawn
-    /// with [`SpawnCause::Founded`]); this announces the moment it became whole.
-    ConstructionCompleted {
-        /// The building that finished.
-        building: SimulationId,
-        /// Whoever completed the last of the work.
-        builder: SimulationId,
+    /// The entity itself entered the world when it began rising (a spawn);
+    /// this announces the moment it became whole.
+    EntityRisen {
+        /// The entity that rose.
+        entity: SimulationId,
+        /// Whoever put in the last of the work: a builder, or the founder of
+        /// an entity that rose unattended.
+        by: SimulationId,
     },
     /// An entity stopped existing.
     EntityDied {

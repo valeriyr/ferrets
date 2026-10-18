@@ -322,7 +322,7 @@ fn scripts_read_requirement_nodes_and_state_leaves() {
             if both.items[5].kind ~= "unhurt_for" or both.items[5].ticks ~= 200 then error("wrong unhurt_for") end
             if both.items[6].kind ~= "energy" or both.items[6].under ~= "20" then error("wrong energy") end
             if both.items[7].kind ~= "stat" or both.items[7].at_least_share ~= "1.5" then error("wrong stat share") end
-            if both.items[8].kind ~= "built" then error("wrong built") end
+            if both.items[8].kind ~= "risen" then error("wrong risen") end
             if both.items[9].kind ~= "unless" or both.items[9].item.kind ~= "idle" then error("wrong unless") end
             return {}
         end"#,
@@ -831,7 +831,7 @@ fn scripts_read_view_and_content_tables() {
             if hall.type_name ~= "town_hall" then error("type_name") end
             if hall.health ~= 800 then error("health") end
             if hall.train_queue[1] ~= "peasant" then error("train_queue") end
-            if hall.under_construction then error("under_construction") end
+            if hall.rising then error("rising") end
             if hall.stance ~= nil then error("hall stance") end
             if view.my_entities[2].stance ~= "flee" then error("worker stance") end
             if not view.my_entities[2].concealed then error("worker concealed") end
@@ -1045,7 +1045,7 @@ fn research_content() -> (ContentView, ResearchId) {
             .with_location(LayerId::new(1), CellSize::ONE, Solidity::Solid)
             .with_pool(Pool::health(10))
             .with_price([("gold", 10)])
-            .with_build(4, utils::site_initial(&[PoolId::HEALTH]))
+            .with_rise(4, utils::rise_initial_pools(&[PoolId::HEALTH]))
             .with_annex(
                 AloneConduct::Standing {
                     work: AnnexWork::Idles,
@@ -1093,7 +1093,7 @@ fn research_content() -> (ContentView, ResearchId) {
                         stat: EntityStatId::SPEED,
                         bound: Bound::Share(Threshold::AtLeast(utils::fixed("1.5"))),
                     },
-                    Requirement::Built,
+                    Requirement::Risen,
                     Requirement::Unless(Box::new(Requirement::Idle)),
                 ]),
             ])]),
@@ -1120,7 +1120,7 @@ fn demo_like_content() -> ContentView {
                 name: "peasant".to_string(),
                 price: vec![("gold".to_string(), 50)],
                 train_time: Some(40),
-                build_time: None,
+                rise_time: None,
                 trains: None,
                 builds: Some(vec!["town_hall".to_string()]),
                 size: (1, 1),
@@ -1143,7 +1143,7 @@ fn demo_like_content() -> ContentView {
                 name: "soldier".to_string(),
                 price: vec![("gold".to_string(), 100)],
                 train_time: Some(20),
-                build_time: None,
+                rise_time: None,
                 trains: None,
                 builds: None,
                 size: (1, 1),
@@ -1221,7 +1221,7 @@ fn populated_view(tick: u32) -> GameView {
                 buffs: Vec::new(),
                 carrying: None,
                 train_queue: vec!["peasant".to_string()],
-                under_construction: false,
+                rising: false,
                 disabled: false,
                 stance: None,
                 resource_amount: None,
@@ -1246,7 +1246,7 @@ fn populated_view(tick: u32) -> GameView {
                 buffs: vec!["shadowmeld".to_string(), "on_fire".to_string()],
                 carrying: Some(("gold".to_string(), 3)),
                 train_queue: Vec::new(),
-                under_construction: false,
+                rising: false,
                 disabled: false,
                 stance: Some("flee".to_string()),
                 resource_amount: None,
@@ -1274,7 +1274,7 @@ fn populated_view(tick: u32) -> GameView {
             buffs: Vec::new(),
             carrying: None,
             train_queue: Vec::new(),
-            under_construction: false,
+            rising: false,
             disabled: false,
             stance: None,
             resource_amount: Some(900),

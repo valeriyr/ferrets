@@ -21,7 +21,7 @@ use crate::{
 use ferrets_content::registry::ContentRegistry;
 
 /// Whether `entity` may start this Research: its type hosts the topic and it
-/// stands raised. A disabled researcher is admitted and waits.
+/// has risen. A disabled researcher is admitted and waits.
 pub fn can_start(world: &World, entity: Entity, order: &Order) -> Result<(), Refusal> {
     let Order::Research { research } = order else {
         unreachable!("can_start called with a non-Research order");

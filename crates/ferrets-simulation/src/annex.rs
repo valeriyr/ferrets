@@ -2,7 +2,7 @@
 //! does with no primary, and who may take one.
 //!
 //! Nothing here is ordered. The bond is re-derived from what stands where every
-//! tick, so a primary that is built, lands, lifts off or dies changes it by
+//! tick, so a primary that rises, lands, lifts off or dies changes it by
 //! standing or ceasing to.
 
 use bevy_ecs::{prelude::*, world::World};
@@ -19,10 +19,10 @@ use crate::{
     beside::Lean,
     components::{
         annex::{AnnexComponent, Docking, DocksComponent},
-        build::UnderConstructionComponent,
         dying::DyingComponent,
         entity_info::EntityInfoComponent,
         location::LocationComponent,
+        rise::RisingComponent,
     },
     entity_def,
     entity_index::EntityIndex,
@@ -45,7 +45,7 @@ pub(crate) fn primary_of(world: &World, annex: Entity) -> Docking {
 }
 
 /// Whether an annex of `type_name` stands docked with `primary` — standing
-/// meaning alive and no longer under construction, as a requirement reads it.
+/// meaning alive and risen, as a requirement reads it.
 pub fn has_standing_annex(world: &World, primary: Entity, type_name: &str) -> bool {
     let Some(docked) = world.entity(primary).get::<DocksComponent>() else {
         return false;
@@ -53,8 +53,7 @@ pub fn has_standing_annex(world: &World, primary: Entity, type_name: &str) -> bo
     let index = world.resource::<EntityIndex>();
     docked.annexes.values().any(|&id| {
         index.alive(id).is_some_and(|annex| {
-            entity_def::of(world, annex).name == type_name
-                && !entity_def::under_construction(world, annex)
+            entity_def::of(world, annex).name == type_name && !entity_def::rising(world, annex)
         })
     })
 }
@@ -209,7 +208,7 @@ fn tend_sites(world: &mut World, offers: &[Offer]) {
     let mut sites: Vec<(SimulationId, Entity)> = world
         .query_filtered::<(Entity, &EntityInfoComponent), (
             With<AnnexComponent>,
-            With<UnderConstructionComponent>,
+            With<RisingComponent>,
             Without<DyingComponent>,
         )>()
         .iter(world)
@@ -246,14 +245,14 @@ fn tend_sites(world: &mut World, offers: &[Offer]) {
             // Nothing offers the dock it stands on, and its type cannot stand
             // without a primary: the site is razed as its finished form would
             // be, with nothing refunded. A type that stands alone and fades
-            // does not fade while a site — see [`modifiers`].
+            // does not fade while still rising — see [`modifiers`].
             (true, AloneConduct::Razed) => {
                 spawn::despawn_entity(world, site, DeathCause::Decayed);
             }
             (true, AloneConduct::Standing { .. }) | (false, _) => {
                 world
                     .entity_mut(site)
-                    .get_mut::<UnderConstructionComponent>()
+                    .get_mut::<RisingComponent>()
                     .expect("the sites were gathered by the marker they carry")
                     .tend(tender);
             }
@@ -268,7 +267,7 @@ fn docks_on_offer(world: &mut World) -> Vec<Offer> {
             With<DocksComponent>,
             With<LocationComponent>,
             Without<DyingComponent>,
-            Without<UnderConstructionComponent>,
+            Without<RisingComponent>,
         )>()
         .iter(world)
         .map(|(entity, info)| (entity, info.id()))
@@ -301,7 +300,7 @@ fn standing_annexes(world: &mut World) -> Vec<Entity> {
             With<AnnexComponent>,
             With<LocationComponent>,
             Without<DyingComponent>,
-            Without<UnderConstructionComponent>,
+            Without<RisingComponent>,
         )>()
         .iter(world)
         .map(|(entity, info)| (info.id(), entity))
@@ -399,13 +398,13 @@ fn stand_alone(world: &mut World, annex: Entity) {
 
 /// The modifiers `entity` carries for standing with no primary: a fading annex
 /// drains health for as long as it stands alone, the way a structure outside
-/// the field that sustains it does. A site, bonded to no primary until it is
-/// built, does not fade.
+/// the field that sustains it does. An annex still rising, bonded to no
+/// primary until it has risen, does not fade.
 pub fn modifiers(world: &World, entity: Entity) -> Vec<EntityModifier> {
     let Some(annex) = entity_def::annex_def(world, entity) else {
         return Vec::new();
     };
-    if entity_def::under_construction(world, entity) {
+    if entity_def::rising(world, entity) {
         return Vec::new();
     }
     match (primary_of(world, entity), annex.alone()) {

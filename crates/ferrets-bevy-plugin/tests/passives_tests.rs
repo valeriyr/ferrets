@@ -29,10 +29,10 @@ use ferrets_math::{FixedI64, FixedU64};
 use ferrets_simulation::{
     command::PlayerCommand,
     components::{
-        build,
         concealed::ConcealedComponent,
         entity_buffs::BuffsComponent,
         pools::{self, Spending},
+        rise,
     },
     entity_def,
     events::{DeathCause, SimulationEvent},
@@ -197,13 +197,13 @@ fn regeneration_nets_against_burn() {
 //
 
 #[test]
-fn site_burns_like_any_entity() {
+fn rising_entity_burns_like_any_other() {
     let (mut app, on_fire) = app();
-    let (shed, _) = utils::create_crewed_site(&mut app, "shed", 5, 5, 0);
+    let (shed, _) = utils::create_crewed_rising(&mut app, "shed", 5, 5, 0);
     utils::run_ticks(&mut app, 1);
 
-    // A site bears the passive its requirement meets and flows like anything
-    // else: 40 under the line, then 38 and 36.
+    // A rising entity bears the passive its requirement meets and flows like
+    // anything else: 40 under the line, then 38 and 36.
     utils::wound(&mut app, shed, "60");
     assert_eq!(utils::health_as_u32(&app, shed), 40);
     utils::run_ticks(&mut app, 1);
@@ -214,37 +214,37 @@ fn site_burns_like_any_entity() {
 }
 
 #[test]
-fn passive_held_while_built_waits_for_completion() {
+fn passive_held_while_risen_waits_until_risen() {
     let (mut app, _) = app();
-    let (beacon, _) = utils::create_crewed_site(&mut app, "beacon", 5, 5, 0);
+    let (beacon, _) = utils::create_crewed_rising(&mut app, "beacon", 5, 5, 0);
     let finished = buff_id(&app, "finished");
     assert!(!entity_def::bears(app.world(), beacon, finished));
     utils::run_ticks(&mut app, 1);
     assert!(!entity_def::bears(app.world(), beacon, finished));
 
-    build::mark_as_built(app.world_mut(), beacon);
+    rise::mark_as_risen(app.world_mut(), beacon);
     utils::run_ticks(&mut app, 1);
     assert!(entity_def::bears(app.world(), beacon, finished));
 }
 
 #[test]
-fn passive_held_unless_built_lasts_while_site() {
+fn passive_held_unless_risen_lasts_while_rising() {
     let (mut app, _) = app();
-    let (beacon, _) = utils::create_crewed_site(&mut app, "beacon", 5, 5, 0);
+    let (beacon, _) = utils::create_crewed_rising(&mut app, "beacon", 5, 5, 0);
     let scaffold = buff_id(&app, "scaffold");
     assert!(entity_def::bears(app.world(), beacon, scaffold));
     utils::run_ticks(&mut app, 1);
     assert!(entity_def::bears(app.world(), beacon, scaffold));
 
-    build::mark_as_built(app.world_mut(), beacon);
+    rise::mark_as_risen(app.world_mut(), beacon);
     utils::run_ticks(&mut app, 1);
     assert!(!entity_def::bears(app.world(), beacon, scaffold));
 }
 
 #[test]
-fn site_keeps_passive_its_requirement_admits() {
+fn rising_entity_keeps_passive_its_requirement_admits() {
     let (mut app, _) = app();
-    let (seedling, _) = utils::create_crewed_site(&mut app, "seedling", 5, 5, 0);
+    let (seedling, _) = utils::create_crewed_rising(&mut app, "seedling", 5, 5, 0);
     let hardy = buff_id(&app, "hardy");
     utils::run_ticks(&mut app, 1);
     assert!(entity_def::bears(app.world(), seedling, hardy));
@@ -693,12 +693,12 @@ fn canceled_change_of_form_refits_origin_passives() {
 }
 
 #[test]
-fn site_lapses_applied_while_buff() {
+fn rising_entity_lapses_applied_while_buff() {
     let (mut app, on_fire) = app();
-    let (shed, _) = utils::create_crewed_site(&mut app, "shed", 5, 5, 0);
+    let (shed, _) = utils::create_crewed_rising(&mut app, "shed", 5, 5, 0);
 
-    // Alight at full health: its requirement fails, and a site is refitted
-    // for what lapses though it is fitted no passive.
+    // Alight at full health: its requirement fails, and a rising entity is
+    // refitted for what lapses though it is fitted no passive.
     utils::apply_buff(app.world_mut(), shed, on_fire);
     utils::run_ticks(&mut app, 1);
     assert!(!entity_def::bears(app.world(), shed, on_fire));
@@ -746,7 +746,7 @@ const GROVE_LANDS: u32 = 1 + 8;
 /// (health at least 1 → conceal), `sapped` (health at least 1 →
 /// `max_energy −100%`), `bark` (forever, `sight_range +2`), `grown` (forever,
 /// `max_health +100%`, the pool clamped), `stunned` (forever, disables), `shadowmeld` (idle →
-/// conceal), `finished` (built → `sight_range +1`), `scaffold` (unless built
+/// conceal), `finished` (risen → `sight_range +1`), `scaffold` (unless risen
 /// → `sight_range +1`). Types: `shed` (100 health, bears `on_fire`), `troll` (100 health
 /// regenerating 0.5, 40 energy, bears `on_fire` and `spent`), `lantern` (100
 /// health, sight 8, bears `lit`), `kiln` (100 health, bears `embers`),
@@ -912,7 +912,7 @@ fn app() -> (App, EntityBuffId) {
         registry.register(
             EntityTypeDef::new("shed")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_build(4, utils::site_initial(&[PoolId::HEALTH]))
+                .with_rise(4, utils::rise_initial_pools(&[PoolId::HEALTH]))
                 .with_pool(Pool::health(100))
                 .with_dying(2, [])
                 .with_passives([on_fire]),
@@ -990,7 +990,10 @@ fn app() -> (App, EntityBuffId) {
         registry.register(
             EntityTypeDef::new("seedling")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_build(4, utils::site_initial(&[PoolId::HEALTH, PoolId::ENERGY]))
+                .with_rise(
+                    4,
+                    utils::rise_initial_pools(&[PoolId::HEALTH, PoolId::ENERGY]),
+                )
                 .with_pool(Pool::health(100))
                 .with_stat(EntityStatId::ARMOR, FixedU64::ZERO)
                 .with_pool(Pool::energy(40))
@@ -1000,7 +1003,7 @@ fn app() -> (App, EntityBuffId) {
         let finished = registry.register_entity_buff(
             "finished",
             while_buff(
-                Requirement::Built,
+                Requirement::Risen,
                 vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![
                     utils::flat(EntityStatId::SIGHT_RANGE, "1"),
                 ]))],
@@ -1009,7 +1012,7 @@ fn app() -> (App, EntityBuffId) {
         let scaffold = registry.register_entity_buff(
             "scaffold",
             while_buff(
-                Requirement::Unless(Box::new(Requirement::Built)),
+                Requirement::Unless(Box::new(Requirement::Risen)),
                 vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![
                     utils::flat(EntityStatId::SIGHT_RANGE, "1"),
                 ]))],
@@ -1018,7 +1021,7 @@ fn app() -> (App, EntityBuffId) {
         registry.register(
             EntityTypeDef::new("beacon")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_build(4, utils::site_initial(&[PoolId::HEALTH]))
+                .with_rise(4, utils::rise_initial_pools(&[PoolId::HEALTH]))
                 .with_pool(Pool::health(100))
                 .with_stat(EntityStatId::SIGHT_RANGE, FixedU64::ONE)
                 .with_dying(2, [])

@@ -58,8 +58,8 @@ pub enum RequirementView {
         /// The side asked for.
         bound: BoundView,
     },
-    /// The actor is not under construction.
-    Built,
+    /// The actor has risen: it is not rising any more.
+    Risen,
     /// The actor takes orders and runs none.
     Idle,
     /// The actor takes orders, runs none, and has run none for at least this
@@ -179,8 +179,11 @@ pub struct EntityContentView {
     pub name: String,
     /// Price per resource kind, in ascending kind order. Empty means free.
     pub price: Vec<(String, u32)>,
+    /// Ticks to train one instance. `None` when the type cannot be trained.
     pub train_time: Option<u32>,
-    pub build_time: Option<u32>,
+    /// Ticks of work one instance takes to rise. `None` when the type never
+    /// rises.
+    pub rise_time: Option<u32>,
     /// Trainable types. `None` when instances cannot train.
     pub trains: Option<Vec<String>>,
     /// Hostable researches by name. `None` when instances cannot research.
@@ -189,7 +192,7 @@ pub struct EntityContentView {
     pub skills: Option<Vec<String>>,
     /// What must hold to produce one. `None` when nothing must.
     pub requires: Option<Vec<RequirementView>>,
-    /// Constructible types. `None` when instances cannot build.
+    /// Types instances build. `None` when instances cannot build.
     pub builds: Option<Vec<String>>,
     /// Footprint width and height in cells.
     pub size: (u32, u32),
@@ -248,7 +251,7 @@ impl EntityContentView {
                 .map(|(kind, amount)| (kind.clone(), *amount))
                 .collect(),
             train_time: def.train_time,
-            build_time: def.build_time(),
+            rise_time: def.rise_time(),
             trains: def
                 .trainer
                 .as_ref()
@@ -383,7 +386,7 @@ fn requirement(entry: &Requirement, registry: &ContentRegistry) -> RequirementVi
                 .to_string(),
             bound: bound_view(*bound),
         },
-        Requirement::Built => RequirementView::Built,
+        Requirement::Risen => RequirementView::Risen,
         Requirement::Idle => RequirementView::Idle,
         Requirement::IdleFor(ticks) => RequirementView::IdleFor(*ticks),
         Requirement::UnhurtFor(ticks) => RequirementView::UnhurtFor(*ticks),

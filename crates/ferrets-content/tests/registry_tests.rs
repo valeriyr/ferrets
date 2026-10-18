@@ -13,7 +13,7 @@ use ferrets_content::{
     attack::{Delivery, Slain, Weapon},
     berths::BerthGroup,
     brood::OrphanFate,
-    build::{BuilderAttendance, RiseStart, SitePool},
+    build::BuilderAttendance,
     concealment::Concealment,
     cost::Cost,
     detection::Detection,
@@ -48,6 +48,7 @@ use ferrets_content::{
     requirement::{Bound, Requirement, Threshold},
     research::{ResearchDef, ResearcherDef},
     resource::{Banking, DepletionPolicy, HarvestData},
+    rise::{RisePool, RisePoolInitial},
     skills::{
         AimParty, Away, CasterParty, Casting, Count, EntityCastEffect, FromAimTo, FromCasterTo,
         GatherSight, Gathering, Journey, PaymentPoint, PlayerCastEffect, Reach, Recipient,
@@ -247,7 +248,7 @@ fn validate_accepts_registered_production_catalogues() {
     let mut registry = utils::ground_registry();
 
     registry.register(utils::standing("soldier", GROUND).with_train_time(4));
-    registry.register(utils::sized("depot", GROUND, CellSize::new(2, 2)).with_build(6, []));
+    registry.register(utils::sized("depot", GROUND, CellSize::new(2, 2)).with_rise(6, []));
     registry.register(
         utils::sized("barracks", GROUND, CellSize::new(2, 2))
             .with_trainer(["soldier"], Release::Beside),
@@ -276,7 +277,7 @@ fn validate_accepts_attachments_offered_by_their_jobs() {
     registry.register_resource("gold");
     registry.register(
         utils::sized("depot", GROUND, CellSize::new(2, 2))
-            .with_build(6, [])
+            .with_rise(6, [])
             .with_berths([(
                 "rim",
                 BerthGroup::new([point("0.5", "0.5"), point("1.5", "1.5")], 2),
@@ -326,7 +327,7 @@ fn validate_accepts_attachments_offered_by_their_jobs() {
 )]
 fn validate_rejects_builder_attaching_to_group_its_site_lacks() {
     let mut registry = utils::ground_registry();
-    registry.register(utils::sized("depot", GROUND, CellSize::new(2, 2)).with_build(6, []));
+    registry.register(utils::sized("depot", GROUND, CellSize::new(2, 2)).with_rise(6, []));
     registry.register(
         utils::standing("sprite", GROUND)
             .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
@@ -379,7 +380,7 @@ fn validate_accepts_overbuilding_of_matching_source() {
     );
     registry.register(
         utils::sized("shaft_house", GROUND, CellSize::new(2, 2))
-            .with_build(6, [])
+            .with_rise(6, [])
             .with_resource_source("gold", DepletionPolicy::Destroy)
             .with_overbuilds("mine"),
     );
@@ -398,7 +399,7 @@ fn validate_rejects_overbuilding_source_of_another_size() {
     );
     registry.register(
         utils::sized("shaft_house", GROUND, CellSize::new(2, 2))
-            .with_build(6, [])
+            .with_rise(6, [])
             .with_resource_source("gold", DepletionPolicy::Destroy)
             .with_overbuilds("mine"),
     );
@@ -417,7 +418,7 @@ fn validate_rejects_overbuilding_by_type_that_is_not_source_itself() {
     );
     registry.register(
         utils::standing("shaft_house", GROUND)
-            .with_build(6, [])
+            .with_rise(6, [])
             .with_overbuilds("mine"),
     );
     registry.validate();
@@ -430,7 +431,7 @@ fn validate_rejects_overbuilding_unregistered_type() {
     registry.register_resource("gold");
     registry.register(
         utils::standing("shaft_house", GROUND)
-            .with_build(6, [])
+            .with_rise(6, [])
             .with_resource_source("gold", DepletionPolicy::Destroy)
             .with_overbuilds("seam"),
     );
@@ -447,7 +448,7 @@ fn validate_rejects_overbuilding_type_that_is_no_source() {
     registry.register(utils::standing("boulder", GROUND));
     registry.register(
         utils::standing("shaft_house", GROUND)
-            .with_build(6, [])
+            .with_rise(6, [])
             .with_resource_source("gold", DepletionPolicy::Destroy)
             .with_overbuilds("boulder"),
     );
@@ -467,7 +468,7 @@ fn validate_rejects_overbuilding_source_of_another_kind() {
     );
     registry.register(
         utils::standing("shaft_house", GROUND)
-            .with_build(6, [])
+            .with_rise(6, [])
             .with_resource_source("wood", DepletionPolicy::Destroy)
             .with_overbuilds("mine"),
     );
@@ -487,7 +488,7 @@ fn validate_rejects_overbuilding_source_on_other_layers() {
     );
     registry.register(
         utils::standing("shaft_house", air)
-            .with_build(6, [])
+            .with_rise(6, [])
             .with_resource_source("gold", DepletionPolicy::Destroy)
             .with_overbuilds("mine"),
     );
@@ -495,7 +496,7 @@ fn validate_rejects_overbuilding_source_on_other_layers() {
 }
 
 #[test]
-#[should_panic(expected = "entity type 'shaft_house' overbuilds 'mine' but is not constructible")]
+#[should_panic(expected = "entity type 'shaft_house' overbuilds 'mine' but never rises")]
 fn validate_rejects_overbuilding_by_type_nothing_builds() {
     let mut registry = utils::ground_registry();
     registry.register_resource("gold");
@@ -518,7 +519,7 @@ fn validate_accepts_production_cycle() {
     let mut registry = utils::ground_registry();
     registry.register(
         utils::sized("town_hall", GROUND, CellSize::new(2, 2))
-            .with_build(6, [])
+            .with_rise(6, [])
             .with_trainer(["worker"], Release::Beside),
     );
     registry.register(
@@ -550,8 +551,8 @@ fn validate_rejects_unknown_trained_type() {
 }
 
 #[test]
-#[should_panic(expected = "entity type 'relay' warps in 'recruit', which declares no build")]
-fn validate_rejects_warped_trainee_declaring_no_build() {
+#[should_panic(expected = "entity type 'relay' warps in 'recruit', which declares no rise")]
+fn validate_rejects_warped_trainee_that_never_rises() {
     let mut registry = utils::ground_registry();
     registry.register(utils::standing("recruit", GROUND).with_train_time(10));
     registry.register(utils::standing("relay", GROUND).with_trainer(
@@ -565,12 +566,12 @@ fn validate_rejects_warped_trainee_declaring_no_build() {
 }
 
 #[test]
-fn validate_accepts_warped_trainee_declaring_build() {
+fn validate_accepts_warped_trainee_that_rises() {
     let mut registry = utils::ground_registry();
     registry.register(
         utils::standing("recruit", GROUND)
             .with_train_time(10)
-            .with_build(10, Vec::new()),
+            .with_rise(10, Vec::new()),
     );
     registry.register(utils::standing("relay", GROUND).with_trainer(
         ["recruit"],
@@ -583,8 +584,8 @@ fn validate_accepts_warped_trainee_declaring_build() {
 }
 
 #[test]
-#[should_panic(expected = "skill 'raise_mound' summons 'mound' rising, but it declares no build")]
-fn register_rejects_rising_summon_of_type_declaring_no_build() {
+#[should_panic(expected = "skill 'raise_mound' summons 'mound' rising, but it declares no rise")]
+fn register_rejects_rising_summon_of_type_that_never_rises() {
     let mut registry = utils::ground_registry();
     registry.register(utils::standing("mound", GROUND));
     let mound = registry.type_id("mound").expect("just registered");
@@ -626,7 +627,7 @@ fn validate_rejects_untrainable_trained_type() {
 
 #[test]
 #[should_panic(
-    expected = "entity type 'worker' builds 'nexus', which is not a registered constructible type"
+    expected = "entity type 'worker' builds 'nexus', which is not a registered type that rises"
 )]
 fn validate_rejects_unknown_built_type() {
     let mut registry = utils::ground_registry();
@@ -644,8 +645,8 @@ fn validate_rejects_unknown_built_type() {
 }
 
 #[test]
-#[should_panic(expected = "builds 'statue', which is not a registered constructible type")]
-fn validate_rejects_unconstructible_built_type() {
+#[should_panic(expected = "builds 'statue', which is not a registered type that rises")]
+fn validate_rejects_built_type_that_never_rises() {
     let mut registry = utils::ground_registry();
     registry.register(EntityTypeDef::new("statue").with_location(
         GROUND,
@@ -1353,59 +1354,66 @@ fn register_rejects_health_starting_empty() {
 }
 
 #[test]
-#[should_panic(expected = "entity type 'wall' starts the health pool's rise at 0")]
-fn register_rejects_health_site_starting_empty() {
+#[should_panic(expected = "entity type 'wall' starts the health pool following the work at 0")]
+fn register_rejects_health_following_work_from_empty() {
     let mut registry = utils::ground_registry();
     registry.register(
         utils::standing("wall", GROUND)
             .with_pool(Pool::health(100))
-            .with_build(
+            .with_rise(
                 4,
                 vec![(
                     PoolId::HEALTH,
-                    SitePool::Rising(RiseStart::Share(FixedU64::ZERO)),
+                    RisePool::FollowsWork(RisePoolInitial::Share(FixedU64::ZERO)),
                 )],
             ),
     );
 }
 
 #[test]
-#[should_panic(expected = "entity type 'wall' says how a site holds a pool it does not declare")]
-fn register_rejects_build_naming_undeclared_pool() {
+#[should_panic(
+    expected = "entity type 'wall' says how it holds a pool it does not declare while rising"
+)]
+fn register_rejects_rise_naming_undeclared_pool() {
     let mut registry = utils::ground_registry();
     registry.register(
         utils::standing("wall", GROUND)
             .with_pool(Pool::health(100))
-            .with_build(4, utils::site_initial(&[PoolId::HEALTH, PoolId::ENERGY])),
-    );
-}
-
-#[test]
-#[should_panic(expected = "entity type 'wall' does not say how a site holds the energy pool")]
-fn register_rejects_build_leaving_pool_unsaid() {
-    let mut registry = utils::ground_registry();
-    registry.register(
-        utils::standing("wall", GROUND)
-            .with_pool(Pool::health(100))
-            .with_pool(Pool::energy(50))
-            .with_build(4, utils::site_initial(&[PoolId::HEALTH])),
+            .with_rise(
+                4,
+                utils::rise_initial_pools(&[PoolId::HEALTH, PoolId::ENERGY]),
+            ),
     );
 }
 
 #[test]
 #[should_panic(
-    expected = "entity type 'wall' starts the health pool's rise at a share of 1.5, above 1"
+    expected = "entity type 'wall' does not say how it holds the energy pool while rising"
+)]
+fn register_rejects_rise_leaving_pool_unsaid() {
+    let mut registry = utils::ground_registry();
+    registry.register(
+        utils::standing("wall", GROUND)
+            .with_pool(Pool::health(100))
+            .with_pool(Pool::energy(50))
+            .with_rise(4, utils::rise_initial_pools(&[PoolId::HEALTH])),
+    );
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'wall' starts the health pool following the work at a share of 1.5, above 1"
 )]
 fn register_rejects_rise_share_above_whole() {
     let mut registry = utils::ground_registry();
     registry.register(
         utils::standing("wall", GROUND)
             .with_pool(Pool::health(100))
-            .with_build(
+            .with_rise(
                 4,
                 [(
                     PoolId::HEALTH,
-                    SitePool::Rising(RiseStart::Share(utils::fixed("1.5"))),
+                    RisePool::FollowsWork(RisePoolInitial::Share(utils::fixed("1.5"))),
                 )],
             ),
     );
@@ -1413,18 +1421,18 @@ fn register_rejects_rise_share_above_whole() {
 
 #[test]
 #[should_panic(
-    expected = "entity type 'wall' starts the health pool's rise at 150, above its maximum of 100"
+    expected = "entity type 'wall' starts the health pool following the work at 150, above its maximum of 100"
 )]
 fn register_rejects_rise_amount_above_maximum() {
     let mut registry = utils::ground_registry();
     registry.register(
         utils::standing("wall", GROUND)
             .with_pool(Pool::health(100))
-            .with_build(
+            .with_rise(
                 4,
                 [(
                     PoolId::HEALTH,
-                    SitePool::Rising(RiseStart::Amount(FixedU64::from_num(150))),
+                    RisePool::FollowsWork(RisePoolInitial::Amount(FixedU64::from_num(150))),
                 )],
             ),
     );
@@ -1432,18 +1440,18 @@ fn register_rejects_rise_amount_above_maximum() {
 
 #[test]
 #[should_panic(
-    expected = "entity type 'wall' rises the health pool from its whole maximum; let it start at its initial"
+    expected = "entity type 'wall' has the health pool follow the work from its whole maximum; let it start at its initial"
 )]
 fn register_rejects_rise_from_whole_share() {
     let mut registry = utils::ground_registry();
     registry.register(
         utils::standing("wall", GROUND)
             .with_pool(Pool::health(100))
-            .with_build(
+            .with_rise(
                 4,
                 [(
                     PoolId::HEALTH,
-                    SitePool::Rising(RiseStart::Share(FixedU64::ONE)),
+                    RisePool::FollowsWork(RisePoolInitial::Share(FixedU64::ONE)),
                 )],
             ),
     );
@@ -1451,53 +1459,53 @@ fn register_rejects_rise_from_whole_share() {
 
 #[test]
 #[should_panic(
-    expected = "entity type 'wall' rises the health pool from its whole maximum; let it start at its initial"
+    expected = "entity type 'wall' has the health pool follow the work from its whole maximum; let it start at its initial"
 )]
 fn register_rejects_rise_from_whole_amount() {
     let mut registry = utils::ground_registry();
     registry.register(
         utils::standing("wall", GROUND)
             .with_pool(Pool::health(100))
-            .with_build(
+            .with_rise(
                 4,
                 [(
                     PoolId::HEALTH,
-                    SitePool::Rising(RiseStart::Amount(FixedU64::from_num(100))),
+                    RisePool::FollowsWork(RisePoolInitial::Amount(FixedU64::from_num(100))),
                 )],
             ),
     );
 }
 
 #[test]
-#[should_panic(expected = "entity type 'wall' withholds the health pool on a site")]
-fn register_rejects_health_withheld_on_site() {
+#[should_panic(expected = "entity type 'wall' gains the health pool only once risen")]
+fn register_rejects_health_gained_on_risen() {
     let mut registry = utils::ground_registry();
     registry.register(
         utils::standing("wall", GROUND)
             .with_pool(Pool::health(100))
-            .with_build(4, [(PoolId::HEALTH, SitePool::Withheld)]),
+            .with_rise(4, [(PoolId::HEALTH, RisePool::GainedOnRisen)]),
     );
 }
 
 #[test]
-fn register_accepts_energy_withheld_on_site() {
+fn register_accepts_energy_gained_on_risen() {
     let mut registry = utils::ground_registry();
     registry.register(
         utils::standing("wall", GROUND)
             .with_pool(Pool::health(100))
             .with_pool(Pool::energy(50))
-            .with_build(
+            .with_rise(
                 4,
                 [
-                    (PoolId::HEALTH, SitePool::Initial),
-                    (PoolId::ENERGY, SitePool::Withheld),
+                    (PoolId::HEALTH, RisePool::Initial),
+                    (PoolId::ENERGY, RisePool::GainedOnRisen),
                 ],
             ),
     );
-    let wall = registry.entity("wall").and_then(|def| def.build.as_ref());
+    let wall = registry.entity("wall").and_then(|def| def.rise.as_ref());
     assert_eq!(
-        wall.and_then(|build| build.site(PoolId::ENERGY)),
-        Some(SitePool::Withheld)
+        wall.and_then(|rise| rise.pool(PoolId::ENERGY)),
+        Some(RisePool::GainedOnRisen)
     );
 }
 
@@ -2037,7 +2045,7 @@ fn validate_accepts_tunnel_end_raised_by_build_summon_or_training() {
     registry.register(
         entering(gateway("exit", Joins::Tunnel(tunnel), Doors::Both))
             .with_pool(Pool::health(100))
-            .with_build(10, utils::site_initial(&[PoolId::HEALTH]))
+            .with_rise(10, utils::rise_initial_pools(&[PoolId::HEALTH]))
             .with_train_time(10),
     );
     let exit = registry.type_id("exit").expect("just registered");
@@ -2621,7 +2629,7 @@ fn validate_rejects_primary_that_goes_inside_its_annex_site() {
         EntityTypeDef::new("lookout")
             .with_location(GROUND, CellSize::ONE, Solidity::Solid)
             .with_pool(Pool::health(10))
-            .with_build(4, utils::site_initial(&[PoolId::HEALTH]))
+            .with_rise(4, utils::rise_initial_pools(&[PoolId::HEALTH]))
             .with_annex(
                 AloneConduct::Standing {
                     work: AnnexWork::Works,
@@ -2654,7 +2662,7 @@ fn validate_rejects_fading_annex_without_health_pool() {
     registry.register(
         EntityTypeDef::new("mast")
             .with_location(GROUND, CellSize::ONE, Solidity::Solid)
-            .with_build(4, [])
+            .with_rise(4, [])
             .with_annex(
                 AloneConduct::Standing {
                     work: AnnexWork::Works,
@@ -2874,7 +2882,7 @@ fn validate_rejects_dock_that_takes_type_that_is_no_annex() {
     registry.register(
         utils::standing("runner", GROUND)
             .with_pool(Pool::health(10))
-            .with_build(4, utils::site_initial(&[PoolId::HEALTH])),
+            .with_rise(4, utils::rise_initial_pools(&[PoolId::HEALTH])),
     );
     registry.validate();
 }
@@ -2972,7 +2980,7 @@ fn validate_rejects_annex_that_does_not_claim_its_cells() {
         EntityTypeDef::new("lookout")
             .with_location(GROUND, CellSize::ONE, Solidity::Passable)
             .with_pool(Pool::health(10))
-            .with_build(4, utils::site_initial(&[PoolId::HEALTH]))
+            .with_rise(4, utils::rise_initial_pools(&[PoolId::HEALTH]))
             .with_annex(standing_annex(), AnnexClaim::Bound),
     );
     registry.validate();
@@ -2985,17 +2993,17 @@ fn validate_rejects_annex_without_health() {
     registry.register(primary(["lookout"]));
     registry.register(
         utils::standing("lookout", GROUND)
-            .with_build(4, [])
+            .with_rise(4, [])
             .with_annex(standing_annex(), AnnexClaim::Bound),
     );
     registry.validate();
 }
 
 #[test]
-#[should_panic(expected = "annex 'lookout' is not constructible")]
-fn validate_rejects_annex_that_cannot_be_built() {
+#[should_panic(expected = "annex 'lookout' never rises")]
+fn validate_rejects_annex_that_never_rises() {
     let mut registry = utils::ground_registry();
-    // No primary: one that raises it would have to declare it constructible,
+    // No primary: one that raises it would have to declare that it rises,
     // and registered ahead of the annex it would be `validate_builds` that
     // spoke first.
     registry.register(
@@ -3042,7 +3050,7 @@ fn validate_rejects_docks_on_type_that_moves() {
         EntityTypeDef::new("lookout")
             .with_location(GROUND, CellSize::ONE, Solidity::Solid)
             .with_pool(Pool::health(10))
-            .with_build(4, utils::site_initial(&[PoolId::HEALTH]))
+            .with_rise(4, utils::rise_initial_pools(&[PoolId::HEALTH]))
             .with_annex(
                 AloneConduct::Standing {
                     work: AnnexWork::Works,
@@ -4302,7 +4310,7 @@ fn validate_rejects_annex_requirement_that_can_never_be_unlocked() {
         EntityTypeDef::new("lookout")
             .with_location(GROUND, CellSize::ONE, Solidity::Solid)
             .with_pool(Pool::health(10))
-            .with_build(4, utils::site_initial(&[PoolId::HEALTH]))
+            .with_rise(4, utils::rise_initial_pools(&[PoolId::HEALTH]))
             .with_annex(
                 AloneConduct::Standing {
                     work: AnnexWork::Works,
@@ -5218,15 +5226,13 @@ fn register_rejects_source_starting_beyond_radius() {
 }
 
 #[test]
-#[should_panic(
-    expected = "entity type 'hive' projects a field beyond its radius while constructing"
-)]
-fn register_rejects_source_constructing_beyond_radius() {
+#[should_panic(expected = "entity type 'hive' projects a field beyond its radius while rising")]
+fn register_rejects_source_rising_beyond_radius() {
     let mut registry = utils::ground_registry();
     let creep = creep_field(&mut registry);
     registry.register(
         utils::standing("hive", GROUND)
-            .with_build(4, [])
+            .with_rise(4, [])
             .with_field_sources([FieldSourceDef::new(
                 creep,
                 3,
@@ -5238,10 +5244,8 @@ fn register_rejects_source_constructing_beyond_radius() {
 }
 
 #[test]
-#[should_panic(
-    expected = "entity type 'hive' projects a field while constructing but is never constructed"
-)]
-fn register_rejects_source_constructing_on_type_never_built() {
+#[should_panic(expected = "entity type 'hive' projects a field while rising but never rises")]
+fn register_rejects_source_rising_on_type_that_never_rises() {
     let mut registry = utils::ground_registry();
     let creep = creep_field(&mut registry);
     registry.register(
@@ -6752,11 +6756,11 @@ fn primary(annexes: [&str; 1]) -> EntityTypeDef {
         .with_docks([(CellPos::new(2, 0), Kinds::types(annexes))])
 }
 
-/// A constructible annex of `size` that endures alone and is bound to its owner.
+/// An annex of `size` that rises, endures alone and is bound to its owner.
 fn annex(name: &str, size: CellSize) -> EntityTypeDef {
     utils::sized(name, GROUND, size)
         .with_pool(Pool::health(10))
-        .with_build(4, utils::site_initial(&[PoolId::HEALTH]))
+        .with_rise(4, utils::rise_initial_pools(&[PoolId::HEALTH]))
         .with_annex(standing_annex(), AnnexClaim::Bound)
 }
 

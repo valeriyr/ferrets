@@ -34,7 +34,7 @@ use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::{FixedU64, facing::Facing};
 use ferrets_simulation::{
     command::{PlayerCommand, SkillTarget},
-    components::{build::SiteWork, hidden::Inside, location::LocationComponent},
+    components::{hidden::Inside, location::LocationComponent, rise::RiseAttendance},
     entity_def,
     events::{EventRecord, SimulationEvent},
     game_loop::{
@@ -391,18 +391,18 @@ fn gathering_at_most_two_takes_nearest_then_lowest_id() {
 }
 
 #[test]
-fn gathering_never_takes_site() {
+fn gathering_never_takes_rising_entity() {
     let mut app = app();
     let (_, mage_id) = utils::create_owned(&mut app, "mage", 5, 5, 0);
-    let (site, _) = utils::create_site(&mut app, "hall", 20, 5, 0, SiteWork::Halted);
+    let (rising, _) = utils::create_rising(&mut app, "hall", 20, 5, 0, RiseAttendance::Halted);
 
     utils::cast_at(&mut app, mage_id, "recall_leave", 20, 5);
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
     assert_eq!(
-        utils::cell_of(app.world(), site),
+        utils::cell_of(app.world(), rising),
         CellPos::new(20, 5),
-        "a site under construction stays where it was raised"
+        "a rising entity stays where it stands"
     );
 }
 
@@ -714,8 +714,8 @@ fn portal_takes_caster_and_those_around_it_to_aimed_hall() {
 fn homeward_goes_to_nearest_finished_hall() {
     let mut app = app();
     let (mage, mage_id) = utils::create_owned(&mut app, "mage", 5, 5, 0);
-    // A site nearer than either finished hall is no home yet.
-    utils::create_site(&mut app, "hall", 8, 5, 0, SiteWork::Halted);
+    // A hall still rising, nearer than either risen hall, is no home yet.
+    utils::create_rising(&mut app, "hall", 8, 5, 0, RiseAttendance::Halted);
     utils::create_owned(&mut app, "hall", 14, 5, 0);
     utils::create_owned(&mut app, "hall", 25, 25, 0);
 
@@ -921,7 +921,7 @@ fn seated_app(slots: Vec<PlayerSlot>, local: PlayerId) -> App {
             EntityTypeDef::new("hall")
                 .with_location(utils::GROUND, CellSize::new(2, 2), Solidity::Solid)
                 .with_pool(Pool::health(100))
-                .with_build(10, utils::site_initial(&[PoolId::HEALTH]))
+                .with_rise(10, utils::rise_initial_pools(&[PoolId::HEALTH]))
                 .with_tags(["hall"]),
         );
         for name in ["footman", "veteran"] {

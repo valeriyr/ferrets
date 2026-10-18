@@ -11,9 +11,8 @@ use ferrets_math::FixedU64;
 use crate::{
     annex,
     components::{
-        build::UnderConstructionComponent, entity_info::EntityInfoComponent,
-        entity_stats::StatsComponent, last_hit::LastHitComponent, order_queue::IdlenessComponent,
-        tags::TagsComponent,
+        entity_info::EntityInfoComponent, entity_stats::StatsComponent, last_hit::LastHitComponent,
+        order_queue::IdlenessComponent, rise::RisingComponent, tags::TagsComponent,
     },
     entity_def,
     entity_index::EntityIndex,
@@ -97,9 +96,7 @@ fn holds(
                 (None, _) | (_, None) => false,
             }
         }),
-        Requirement::Built => {
-            actor.is_some_and(|actor| !entity_def::under_construction(world, actor))
-        }
+        Requirement::Risen => actor.is_some_and(|actor| !entity_def::rising(world, actor)),
         Requirement::Idle => actor.is_some_and(|actor| entity_def::idle(world, actor)),
         Requirement::IdleFor(ticks) => actor.is_some_and(|actor| {
             entity_def::idle(world, actor)
@@ -131,9 +128,9 @@ fn holds(
     }
 }
 
-/// Whether `player` has a standing entity — alive and not under construction —
-/// that `matches` its type name and tags. A site still going up unlocks
-/// nothing until it stands.
+/// Whether `player` has a standing entity — alive and risen — that `matches`
+/// its type name and tags. An entity still rising unlocks nothing until it
+/// has risen.
 fn standing(
     world: &World,
     player: PlayerId,
@@ -145,7 +142,7 @@ fn standing(
         .any(|(_, &entity)| {
             let entity_ref = world.entity(entity);
             if entity_def::owner(world, entity) != Some(player)
-                || entity_ref.contains::<UnderConstructionComponent>()
+                || entity_ref.contains::<RisingComponent>()
             {
                 return false;
             }

@@ -437,7 +437,7 @@ pub(crate) fn field_action(value: &str) -> crate::Result<FieldAction> {
 }
 
 /// Maps a summon arrival name to its enum: whether summoned bodies stand at
-/// once or rise as sites.
+/// once or rise.
 pub(crate) fn summon_arrival(value: &str) -> crate::Result<SummonArrival> {
     keyword(
         "summon arrival",

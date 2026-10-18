@@ -10,7 +10,7 @@ use crate::{bore_id::BoreId, simulation_id::SimulationId};
 pub enum OtherEnd {
     /// It has none, and may raise one.
     Unbound,
-    /// It is bound to this one, standing or still a site.
+    /// It is bound to this one, standing or still rising.
     Bound(SimulationId),
 }
 

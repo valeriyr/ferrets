@@ -7,7 +7,7 @@ use ferrets_content::{
 };
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_simulation::{
-    components::build::SiteWork,
+    components::rise::RiseAttendance,
     entity_def,
     simulation_id::SimulationId,
     spawn::{self, Arrival, FieldReach},
@@ -20,8 +20,8 @@ mod utils;
 //
 
 #[test]
-#[should_panic(expected = "a site is of a type that can be built: 'unit'")]
-fn site_of_type_that_cannot_be_built_panics() {
+#[should_panic(expected = "a rising entity is of a type that rises: 'unit'")]
+fn rising_arrival_of_type_that_never_rises_panics() {
     let mut world = utils::world([Pool::health(100)]);
     spawn::create_entity(
         &mut world,
@@ -29,7 +29,7 @@ fn site_of_type_that_cannot_be_built_panics() {
         cell(5, 5),
         None,
         FieldReach::Initial,
-        Arrival::Site(SiteWork::Halted),
+        Arrival::Rising(RiseAttendance::Halted),
     );
 }
 

@@ -49,7 +49,7 @@ pub fn can_start(world: &World, entity: Entity, order: &Order) -> Result<(), Ref
         // busy where it stands, is a target this order does not take.
         Err(Refusal::Incapable | Refusal::Busy | Refusal::TargetUnfit) => Err(Refusal::TargetUnfit),
         Err(
-            refusal @ (Refusal::UnderConstruction
+            refusal @ (Refusal::Rising
             | Refusal::Disabled
             | Refusal::Stranded
             | Refusal::NothingToDo

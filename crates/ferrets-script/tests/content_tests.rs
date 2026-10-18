@@ -10,7 +10,7 @@ use ferrets_content::{
     annex::{AloneConduct, AnnexClaim, AnnexLife, AnnexWork},
     attack::{AttackDef, Delivery, Slain, Weapon},
     brood::{BroodlingDef, Lingering, OrphanFate},
-    build::{BuilderAttendance, RiseStart, SitePool},
+    build::BuilderAttendance,
     concealment::Concealment,
     cost::Cost,
     detection::Detection,
@@ -44,6 +44,7 @@ use ferrets_content::{
     requirement::{Bound, Requirement, Threshold},
     research::ResearchDef,
     resource::Banking,
+    rise::{RisePool, RisePoolInitial},
     skills::{
         AimParty, Away, CasterParty, Casting, Count, EntityCastEffect, EntityCastTarget, FromAimTo,
         FromCasterTo, GatherSight, Gathering, Journey, PaymentPoint, PlayerCastEffect, Reach,
@@ -323,7 +324,7 @@ fn pool_reads_initial() {
 }
 
 #[test]
-fn build_reads_time_and_how_site_holds_each_pool() {
+fn rise_reads_time_and_how_each_pool_is_held() {
     let source = r#"
         local GROUND = define_layer("ground")
         define_entity("tower", {
@@ -332,43 +333,43 @@ fn build_reads_time_and_how_site_holds_each_pool() {
                 health = { maximum = 400 },
                 energy = { maximum = 200, initial = 50 },
             },
-            build = { time = 10, pools = { health = { rises_from = { share = "0.1" } }, energy = "withheld" } },
+            rise = { time = 10, pools = { health = { follows_work_from = { share = "0.1" } }, energy = "gained_on_risen" } },
         })
         define_entity("hut", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
             pools = { health = { maximum = 100 } },
-            build = { time = 4, pools = { health = "initial" } },
+            rise = { time = 4, pools = { health = "initial" } },
         })
     "#;
     let registry = content::load(&engine(), source).expect("load content");
     let tower = registry
         .entity("tower")
-        .and_then(|def| def.build.as_ref())
-        .expect("the tower is built");
+        .and_then(|def| def.rise.as_ref())
+        .expect("the tower rises");
     assert_eq!(tower.time(), 10);
     assert_eq!(
-        tower.site(PoolId::HEALTH),
-        Some(SitePool::Rising(RiseStart::Share(
+        tower.pool(PoolId::HEALTH),
+        Some(RisePool::FollowsWork(RisePoolInitial::Share(
             FixedU64::from_str("0.1").unwrap()
         )))
     );
-    assert_eq!(tower.site(PoolId::ENERGY), Some(SitePool::Withheld));
+    assert_eq!(tower.pool(PoolId::ENERGY), Some(RisePool::GainedOnRisen));
     let hut = registry
         .entity("hut")
-        .and_then(|def| def.build.as_ref())
-        .expect("the hut is built");
+        .and_then(|def| def.rise.as_ref())
+        .expect("the hut rises");
     assert_eq!(hut.time(), 4);
-    assert_eq!(hut.site(PoolId::HEALTH), Some(SitePool::Initial));
+    assert_eq!(hut.pool(PoolId::HEALTH), Some(RisePool::Initial));
 }
 
 #[test]
-fn build_pool_of_unknown_word_is_rejected() {
+fn rise_pool_of_unknown_word_is_rejected() {
     let source = r#"
         local GROUND = define_layer("ground")
         define_entity("hut", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
             pools = { health = { maximum = 100 } },
-            build = { time = 4, pools = { health = "rising" } },
+            rise = { time = 4, pools = { health = "rising" } },
         })
     "#;
     let Err(error) = content::load(&engine(), source) else {
@@ -376,37 +377,37 @@ fn build_pool_of_unknown_word_is_rejected() {
     };
     assert_eq!(
         error.to_string(),
-        "content error: build pool 'health' must be 'initial', 'withheld', or a { rises_from = ... } table, found 'rising'"
+        "content error: rise pool 'health' must be 'initial', 'gained_on_risen', or a { follows_work_from = ... } table, found 'rising'"
     );
 }
 
 #[test]
-fn build_pool_rising_without_start_is_rejected() {
+fn rise_pool_following_work_without_initial_is_rejected() {
     let source = r#"
         local GROUND = define_layer("ground")
         define_entity("hut", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
             pools = { health = { maximum = 100 } },
-            build = { time = 4, pools = { health = {} } },
+            rise = { time = 4, pools = { health = {} } },
         })
     "#;
     let Err(error) = content::load(&engine(), source) else {
-        panic!("a rising pool names where it rises from");
+        panic!("a pool following the work names where it starts");
     };
     assert_eq!(
         error.to_string(),
-        "content error: build pool 'health' rises_from must be a non-negative integer or a decimal string, got nil"
+        "content error: rise pool 'health' follows_work_from must be a non-negative integer or a decimal string, got nil"
     );
 }
 
 #[test]
-fn build_pool_rising_from_full_is_rejected() {
+fn rise_pool_following_work_from_full_is_rejected() {
     let source = r#"
         local GROUND = define_layer("ground")
         define_entity("hut", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
             pools = { health = { maximum = 100 } },
-            build = { time = 4, pools = { health = { rises_from = "full" } } },
+            rise = { time = 4, pools = { health = { follows_work_from = "full" } } },
         })
     "#;
     let Err(error) = content::load(&engine(), source) else {
@@ -419,13 +420,13 @@ fn build_pool_rising_from_full_is_rejected() {
 }
 
 #[test]
-fn build_pool_of_unknown_name_is_rejected() {
+fn rise_pool_of_unknown_name_is_rejected() {
     let source = r#"
         local GROUND = define_layer("ground")
         define_entity("hut", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
             pools = { health = { maximum = 100 } },
-            build = { time = 4, pools = { health = "initial", mana = "initial" } },
+            rise = { time = 4, pools = { health = "initial", mana = "initial" } },
         })
     "#;
     let Err(error) = content::load(&engine(), source) else {
@@ -438,13 +439,13 @@ fn build_pool_of_unknown_name_is_rejected() {
 }
 
 #[test]
-fn build_pool_rising_from_table_without_share_is_rejected() {
+fn rise_pool_following_work_from_table_without_share_is_rejected() {
     let source = r#"
         local GROUND = define_layer("ground")
         define_entity("hut", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
             pools = { health = { maximum = 100 } },
-            build = { time = 4, pools = { health = { rises_from = { shar = "0.1" } } } },
+            rise = { time = 4, pools = { health = { follows_work_from = { shar = "0.1" } } } },
         })
     "#;
     let Err(error) = content::load(&engine(), source) else {
@@ -452,18 +453,18 @@ fn build_pool_rising_from_table_without_share_is_rejected() {
     };
     assert_eq!(
         error.to_string(),
-        "content error: build pool 'health' rises_from share must be a non-negative integer or a decimal string, got nil"
+        "content error: rise pool 'health' follows_work_from share must be a non-negative integer or a decimal string, got nil"
     );
 }
 
 #[test]
-fn build_without_time_is_rejected() {
+fn rise_without_time_is_rejected() {
     let source = r#"
         local GROUND = define_layer("ground")
         define_entity("hut", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
             pools = { health = { maximum = 100 } },
-            build = { pools = { health = "initial" } },
+            rise = { pools = { health = "initial" } },
         })
     "#;
     let Err(error) = content::load(&engine(), source) else {
@@ -476,13 +477,13 @@ fn build_without_time_is_rejected() {
 }
 
 #[test]
-fn build_without_pools_is_rejected() {
+fn rise_without_pools_is_rejected() {
     let source = r#"
         local GROUND = define_layer("ground")
         define_entity("hut", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
             pools = { health = { maximum = 100 } },
-            build = { time = 4 },
+            rise = { time = 4 },
         })
     "#;
     let Err(error) = content::load(&engine(), source) else {
@@ -523,7 +524,7 @@ fn parses_repairer_and_repair_ratio() {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
             pools = { health = { maximum = 100 } },
             price = { gold = 200 },
-            build = { time = 20, pools = { health = "initial" } },
+            rise = { time = 20, pools = { health = "initial" } },
             repair_ratio = "0.5",
             tags = { "building" },
         })
@@ -1922,7 +1923,7 @@ fn as_long_as_list_with_stray_key_errors() {
 }
 
 #[test]
-fn requirement_string_other_than_built_or_idle_errors() {
+fn requirement_string_other_than_risen_or_idle_errors() {
     let source = r#"
         local ground = define_layer("ground")
         define_entity("knight", {
@@ -1934,16 +1935,16 @@ fn requirement_string_other_than_built_or_idle_errors() {
         panic!("must reject a requirement string that is not 'idle'");
     };
     assert!(
-        matches!(&error, ScriptError::ContentError(m) if m.contains("a requirement must be 'built', 'idle', an { all = ... } or { any = ... } table, or a table naming one of unless, entity_type, tag, research, annexed, health, energy, stat, idle_for, or unhurt_for, found 'resting'")),
+        matches!(&error, ScriptError::ContentError(m) if m.contains("a requirement must be 'risen', 'idle', an { all = ... } or { any = ... } table, or a table naming one of unless, entity_type, tag, research, annexed, health, energy, stat, idle_for, or unhurt_for, found 'resting'")),
         "unexpected error: {error:?}"
     );
 }
 
 #[test]
-fn as_long_as_reads_built() {
+fn as_long_as_reads_risen() {
     let source = r#"
         define_entity_buff("finished", {
-            lasting = { as_long_as = { "built", "idle" } },
+            lasting = { as_long_as = { "risen", "idle" } },
             stack = "ignore",
             effects = { "conceal" },
         })
@@ -1955,7 +1956,7 @@ fn as_long_as_reads_built() {
     assert_eq!(
         registry.entity_buff_def(finished).lasting,
         Lasting::While(Requirement::All(vec![
-            Requirement::Built,
+            Requirement::Risen,
             Requirement::Idle
         ]))
     );
@@ -1965,7 +1966,7 @@ fn as_long_as_reads_built() {
 fn as_long_as_reads_unless() {
     let source = r#"
         define_entity_buff("scaffolding", {
-            lasting = { as_long_as = { unless = "built" } },
+            lasting = { as_long_as = { unless = "risen" } },
             stack = "ignore",
             effects = { "conceal" },
         })
@@ -1976,7 +1977,7 @@ fn as_long_as_reads_unless() {
         .expect("scaffolding registered");
     assert_eq!(
         registry.entity_buff_def(scaffolding).lasting,
-        Lasting::While(Requirement::Unless(Box::new(Requirement::Built)))
+        Lasting::While(Requirement::Unless(Box::new(Requirement::Risen)))
     );
 }
 
@@ -2316,7 +2317,7 @@ fn reports_unknown_enum_as_content_error() {
 
 #[test]
 fn repairer_without_rate_errors() {
-    // No default: mending a structure against its build time and patching up a
+    // No default: mending a structure against its rise time and patching up a
     // casualty at a flat rate are both ordinary, so content states which it is.
     let source = r#"
         local GROUND = define_layer("ground")
@@ -2439,7 +2440,7 @@ fn docks_and_annex_read_their_terms() {
             pools = { health = { maximum = 40, drain = "2" } },
             tags = { "building" },
             price = { gold = 25 },
-            build = { time = 10, pools = { health = "initial" } },
+            rise = { time = 10, pools = { health = "initial" } },
             annex = { alone = { work = "idles", life = { fades = "2" } }, claim = "seized" },
         })
     "#;
@@ -2782,7 +2783,7 @@ fn summon_effect_reads_its_landing_and_arrival() {
         define_entity("mound", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
             pools = { health = { maximum = 20 } },
-            build = { time = 30, pools = { health = "initial" } },
+            rise = { time = 30, pools = { health = "initial" } },
         })
         define_skill("raise_mound", {
             cooldown = 10,
@@ -2879,7 +2880,7 @@ fn trainer_reads_its_warp_release() {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
             pools = { health = { maximum = 20 } },
             train_time = 10,
-            build = { time = 30, pools = { health = "initial" } },
+            rise = { time = 30, pools = { health = "initial" } },
         })
         define_entity("relay", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
@@ -3323,7 +3324,7 @@ fn attached_presence_reads_berths_and_stance() {
             location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
             pools = { health = { maximum = 100 } },
             price = { gold = 10 },
-            build = { time = 4, pools = { health = "initial" } },
+            rise = { time = 4, pools = { health = "initial" } },
             berths = {
                 rim = { points = { { 1, 0 }, { "1.8", "1.0" }, { 1, "1.8" }, { "0.2", 1 } }, slots = 2 },
                 ledge = { points = { { 0, 0 }, { 1, 1 }, { 0, 1 } } },
@@ -3415,7 +3416,7 @@ fn overbuilding_type_reads_its_source() {
             location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
             pools = { health = { maximum = 100 } },
             price = { gold = 10 },
-            build = { time = 4, pools = { health = "initial" } },
+            rise = { time = 4, pools = { health = "initial" } },
             resource_source = { kind = "gold", depletion = "destroy" },
             overbuilds = "mine",
             tags = { "building" },
@@ -3797,7 +3798,7 @@ fn unknown_field_name_errors() {
         local GROUND = define_layer("ground")
         define_entity("hive", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
-            field_sources = { { field = "creep", radius = 3, growth = "instant", while_constructing = "nothing", while_disabled = "full" } },
+            field_sources = { { field = "creep", radius = 3, growth = "instant", while_rising = "nothing", while_disabled = "full" } },
         })
     "#;
     let error = content::load(&engine(), source)
@@ -4641,7 +4642,7 @@ fn unknown_while_disabled_errors() {
         define_entity("pylon", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
             field_sources = {
-                { field = "power", radius = 6, growth = "instant", while_constructing = "nothing", while_disabled = "dims" },
+                { field = "power", radius = 6, growth = "instant", while_rising = "nothing", while_disabled = "dims" },
             },
         })
     "#;
@@ -4857,7 +4858,7 @@ fn field_effect_reads_holds_while() {
         define_entity("pit", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
             pools = { health = { maximum = 100 } },
-            field_effects = { { field = "creep", of = "anyone", coverage = "every", holds_while = "built",
+            field_effects = { { field = "creep", of = "anyone", coverage = "every", holds_while = "risen",
                 outside = { { stats = { { entity_stat = "health_drain", op = "flat", value = "0.2" } } } } } },
         })
     "#;
@@ -4865,7 +4866,7 @@ fn field_effect_reads_holds_while() {
     let [effect] = registry.entity("pit").unwrap().field_effects.as_slice() else {
         panic!("the pit declares one field effect");
     };
-    assert_eq!(effect.holds_while(), Some(&Requirement::Built));
+    assert_eq!(effect.holds_while(), Some(&Requirement::Risen));
 }
 
 #[test]
@@ -5401,7 +5402,7 @@ const BASE: &str = r#"
         pools = { health = { maximum = 800 } },
         dying = { time = 2 },
         price = { gold = 400 },
-        build = { time = 200, pools = { health = "initial" } },
+        rise = { time = 200, pools = { health = "initial" } },
         trainer = { trains = { "peasant" }, release = "beside" },
         resource_storage = { "gold", "wood" },
     })
@@ -5417,9 +5418,9 @@ const FIELDS: &str = r#"
     define_entity("hive", {
         location = { occupation = GROUND, size = 2, solidity = "solid" },
         pools = { health = { maximum = 100 } },
-        build = { time = 20, pools = { health = "initial" } },
+        rise = { time = 20, pools = { health = "initial" } },
         field_sources = {
-            { field = "creep", radius = 10, growth = { cycle = 9, initial_radius = 1 }, while_constructing = { held = 1 }, while_disabled = "full" },
+            { field = "creep", radius = 10, growth = { cycle = 9, initial_radius = 1 }, while_rising = { held = 1 }, while_disabled = "full" },
         },
     })
 
@@ -5427,7 +5428,7 @@ const FIELDS: &str = r#"
         location = { occupation = GROUND, size = 1, solidity = "solid" },
         pools = { health = { maximum = 100 } },
         field_sources = {
-            { field = "power", radius = 6, growth = "instant", while_constructing = "nothing", while_disabled = "nothing" },
+            { field = "power", radius = 6, growth = "instant", while_rising = "nothing", while_disabled = "nothing" },
         },
         on_stand = {
             { field = { field = "creep", radius = 6, action = "clear" } },

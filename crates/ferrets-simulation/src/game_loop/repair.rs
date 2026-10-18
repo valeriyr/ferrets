@@ -146,9 +146,9 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
     else {
         return finish(world, entity, target_id);
     };
-    // Construction has its own order, so a site that went back to being built is no
+    // A rise has its own work, so a target that went back to rising is no
     // longer this order's business.
-    if entity_def::under_construction(world, target) {
+    if entity_def::rising(world, target) {
         return finish(world, entity, target_id);
     }
 
@@ -238,7 +238,7 @@ fn accepts(world: &World, entity: Entity, target: Entity) -> bool {
     if entity == target && !repairer.self_repair() {
         return false;
     }
-    if entity_def::under_construction(world, target) {
+    if entity_def::rising(world, target) {
         return false;
     }
     let target_def = entity_def::of(world, target);

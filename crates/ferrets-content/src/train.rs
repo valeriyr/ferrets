@@ -7,8 +7,8 @@ use crate::{field::FieldPlacement, landing::Landing};
 pub enum Release {
     /// Beside the trainer, once the queue's train time has run.
     Beside,
-    /// On a cell the player picks, at once, rising as a site over the unit's
-    /// own `build`; the trainer cools down for the unit's train time.
+    /// On a cell the player picks, at once, rising over the unit's own
+    /// `rise`; the trainer cools down for the unit's train time.
     Warped {
         /// The field rules the picked cells must meet for the trainer's owner.
         within: Vec<FieldPlacement>,

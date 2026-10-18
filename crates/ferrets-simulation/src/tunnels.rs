@@ -68,8 +68,9 @@ pub(crate) enum EndLoss {
 
 /// Unbinds the tunnel end `lost`, lost to its tunnel as `loss` says, from its
 /// other end, which then fares as the tunnel's `other_end_lost` says: razed,
-/// or standing unbound with the bore. A captured end and a site lost always
-/// leave the other end standing. An unbound end has no other end to fare.
+/// or standing unbound with the bore. A captured end and an end lost while
+/// rising always leave the other end standing. An unbound end has no other
+/// end to fare.
 ///
 /// Panics for an entity that is no tunnel end.
 pub(crate) fn end_lost(world: &mut World, lost: Entity, loss: EndLoss) {
@@ -84,7 +85,7 @@ pub(crate) fn end_lost(world: &mut World, lost: Entity, loss: EndLoss) {
         .expect("a bound end's other end is alive");
     end_state_mut(world, lost).other = OtherEnd::Unbound;
     end_state_mut(world, other).other = OtherEnd::Unbound;
-    let fares = match (loss, entity_def::under_construction(world, lost)) {
+    let fares = match (loss, entity_def::rising(world, lost)) {
         (EndLoss::Captured, _) | (EndLoss::Gone, true) => OtherEndLost::Stands,
         (EndLoss::Gone, false) => world
             .resource::<ContentRegistry>()

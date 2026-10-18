@@ -55,7 +55,7 @@ fn repair_restores_health_at_target_production_rate() {
     utils::grant_gold(&mut app, 500);
 
     repair(&mut app, worker_id, depot_id);
-    // A 100-point pool over a build time of 20 at speed 1 mends 5 points a tick, so
+    // A 100-point pool over a rise time of 20 at speed 1 mends 5 points a tick, so
     // the 40 points lost need eight ticks of work once the two-tick walk is done.
     utils::run_ticks(&mut app, utils::APPLY + 2 + 4);
     assert_eq!(
@@ -80,7 +80,7 @@ fn repair_restores_health_at_target_production_rate() {
 #[test]
 fn repair_ratio_scales_work_against_production_time() {
     let mut app = app();
-    // Same pool and build time as the depot, but declared to mend in half the time.
+    // Same pool and rise time as the depot, but declared to mend in half the time.
     let (hall, hall_id) = utils::create_owned(&mut app, "hall", 10, 10, 0);
     let (_, worker_id) = utils::create_owned(&mut app, "worker", 8, 10, 0);
     utils::wound(&mut app, hall, "50");
@@ -124,7 +124,7 @@ fn several_workers_mend_faster_than_one() {
 
 #[test]
 fn flat_rate_ignores_what_target_cost_to_produce() {
-    // The depot is built in 20 ticks, the hall mends in 10, and a flat-rate mender
+    // The depot rises in 20 ticks, the hall mends in 10, and a flat-rate mender
     // must not care about either: both take the same eight ticks for 40 points.
     let mut app = app();
     let (depot, depot_id) = utils::create_owned(&mut app, "depot", 10, 10, 0);
@@ -459,7 +459,7 @@ fn repairer_refuses_target_without_tag_it_mends() {
 #[test]
 fn repairer_refuses_target_nothing_produces() {
     let mut app = app();
-    // Tagged as a building, but with no build time to pace the work against.
+    // Tagged as a building, but with no rise time to pace the work against.
     let (monolith, monolith_id) = utils::create_owned(&mut app, "monolith", 10, 10, 0);
     let (_, worker_id) = utils::create_owned(&mut app, "worker", 8, 10, 0);
     utils::wound(&mut app, monolith, "40");
@@ -494,9 +494,9 @@ fn repairer_refuses_enemy_target() {
 }
 
 #[test]
-fn repairer_refuses_target_still_under_construction() {
+fn repairer_refuses_target_still_rising() {
     let mut app = app();
-    let (depot, depot_id) = utils::create_crewed_site(&mut app, "depot", 10, 10, 0);
+    let (depot, depot_id) = utils::create_crewed_rising(&mut app, "depot", 10, 10, 0);
     let (_, worker_id) = utils::create_owned(&mut app, "worker", 8, 10, 0);
     utils::wound(&mut app, depot, "40");
     utils::grant_gold(&mut app, 500);
@@ -507,7 +507,7 @@ fn repairer_refuses_target_still_under_construction() {
     assert_eq!(
         utils::health_as_u32(&app, depot),
         60,
-        "an unfinished site is the build order's business, not repair's"
+        "a rising entity is its rise's business, not repair's"
     );
 }
 
@@ -883,8 +883,8 @@ fn attached_mender_gives_up_job_that_loses_its_berths() {
 // ─── Helpers ────────────────────────────────────────────────────────────────
 //
 
-/// One human player plus an enemy, a 100-point `depot` built in 20 ticks for 200
-/// gold, a `hall` that mends in half its build time, a `monolith` nothing produces,
+/// One human player plus an enemy, a 100-point `depot` rising in 20 ticks for 200
+/// gold, a `hall` that mends in half its rise time, a `monolith` nothing produces,
 /// an untagged `soldier`, and four repairers differing only in their terms.
 fn app() -> App {
     let mut app = utils::make_app(vec![
@@ -958,7 +958,7 @@ fn app() -> App {
             EntityTypeDef::new("free_shed")
                 .with_location(utils::GROUND, CellSize::new(2, 2), Solidity::Solid)
                 .with_pool(Pool::health(100))
-                .with_build(20, utils::site_initial(&[PoolId::HEALTH]))
+                .with_rise(20, utils::rise_initial_pools(&[PoolId::HEALTH]))
                 .with_tags(["building"]),
         );
         registry.register(repairer(
@@ -1035,14 +1035,14 @@ fn app() -> App {
     app
 }
 
-/// A 2×2, 100-point structure costing 200 gold and built in 20 ticks, optionally
+/// A 2×2, 100-point structure costing 200 gold and rising in 20 ticks, optionally
 /// declaring how its repair time relates to that.
 fn building(name: &str, repair_ratio: Option<FixedU64>) -> EntityTypeDef {
     let def = EntityTypeDef::new(name)
         .with_location(utils::GROUND, CellSize::new(2, 2), Solidity::Solid)
         .with_pool(Pool::health(100))
         .with_price([("gold", 200)])
-        .with_build(20, utils::site_initial(&[PoolId::HEALTH]))
+        .with_rise(20, utils::rise_initial_pools(&[PoolId::HEALTH]))
         .with_tags(["building"]);
     match repair_ratio {
         Some(ratio) => def.with_repair_ratio(ratio),
@@ -1072,7 +1072,7 @@ fn per_tick_spend(crew: &[&str]) -> u32 {
     500 - utils::gold(app.world())
 }
 
-/// A worker that mends buildings at the rate they are built, on the given terms.
+/// A worker that mends buildings at the rate they rise, on the given terms.
 fn repairer(
     name: &str,
     presence: WorkPresence,

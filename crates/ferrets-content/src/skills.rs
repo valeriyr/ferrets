@@ -225,8 +225,7 @@ impl Spot {
 pub enum SummonArrival {
     /// Standing, at once.
     Standing,
-    /// As a site rising unattended over its type's `build`, the caster its
-    /// founder.
+    /// Rising unattended over its type's `rise`, the caster its founder.
     Rising,
 }
 
@@ -359,7 +358,7 @@ pub enum EntityCastEffect {
         count: Quantity,
         /// Which cells the casting side must know of to set them down on.
         landing: Landing,
-        /// Whether they stand at once or rise as sites.
+        /// Whether they stand at once or rise.
         arrives: SummonArrival,
     },
     /// Covers or clears a field around a spot.

@@ -169,43 +169,41 @@ fn cue_out_of_earshot_leaves_slot_for_near_one() {
 }
 
 #[test]
-fn construction_completion_is_heard_at_building() {
+fn rise_is_heard_at_risen_entity() {
     let mut app = sound_app();
     let world = app.world_mut();
-    let (_, building) =
-        utils::create_entity(world, "grunt", utils::at_cell(7, 7), Some(0)).unwrap();
+    let (_, risen) = utils::create_entity(world, "grunt", utils::at_cell(7, 7), Some(0)).unwrap();
     world
         .resource_mut::<EventRecord>()
-        .emit(SimulationEvent::ConstructionCompleted {
-            building,
-            builder: SimulationId(0),
+        .emit(SimulationEvent::EntityRisen {
+            entity: risen,
+            by: SimulationId(0),
         });
     play(&mut app);
 
     assert_eq!(
         cue_cells(&mut app),
         vec![CellPos::new(7, 7)],
-        "finishing a building sounds from the building"
+        "a rise sounds from where the entity stands"
     );
 }
 
 #[test]
-fn enemy_construction_completion_is_not_heard() {
+fn enemy_rise_is_not_heard() {
     let mut app = sound_app();
     let world = app.world_mut();
-    let (_, building) =
-        utils::create_entity(world, "grunt", utils::at_cell(7, 7), Some(1)).unwrap();
+    let (_, risen) = utils::create_entity(world, "grunt", utils::at_cell(7, 7), Some(1)).unwrap();
     world
         .resource_mut::<EventRecord>()
-        .emit(SimulationEvent::ConstructionCompleted {
-            building,
-            builder: SimulationId(0),
+        .emit(SimulationEvent::EntityRisen {
+            entity: risen,
+            by: SimulationId(0),
         });
     play(&mut app);
 
     assert!(
         cue_cells(&mut app).is_empty(),
-        "an enemy finishing a building is its milestone, not ours — even in plain sight"
+        "an enemy's rise is its milestone, not ours — even in plain sight"
     );
 }
 

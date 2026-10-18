@@ -10,7 +10,7 @@ use crate::{
     beside::Beside,
     components::{
         attached::AttachedComponent,
-        build::{OverbuiltComponent, UnderConstructionComponent},
+        build::OverbuiltComponent,
         dying::DyingComponent,
         entity_buffs::BuffsComponent,
         entity_info::EntityInfoComponent,
@@ -23,6 +23,7 @@ use crate::{
         owner::OwnerComponent,
         pools::PoolsComponent,
         resource::{HarvestingComponent, UnderHarvestComponent},
+        rise::RisingComponent,
         transport::BoardedComponent,
     },
     entity_index::EntityIndex,
@@ -158,7 +159,7 @@ pub fn stands(world: &World, entity: Entity) -> bool {
 /// raised over no resource source, and not changing form.
 pub fn relocatable(world: &World, entity: Entity) -> bool {
     stands(world, entity)
-        && !under_construction(world, entity)
+        && !rising(world, entity)
         && !overbuilt(world, entity)
         && !changing(world, entity)
 }
@@ -198,11 +199,9 @@ pub fn under_harvest(world: &World, entity: Entity) -> bool {
     world.entity(entity).contains::<UnderHarvestComponent>()
 }
 
-/// Whether `entity` is a site still being raised.
-pub fn under_construction(world: &World, entity: Entity) -> bool {
-    world
-        .entity(entity)
-        .contains::<UnderConstructionComponent>()
+/// Whether `entity` is still rising into the world.
+pub fn rising(world: &World, entity: Entity) -> bool {
+    world.entity(entity).contains::<RisingComponent>()
 }
 
 /// Whether `entity`'s return to the grid is deferred, waiting on a free cell.
@@ -233,8 +232,8 @@ pub enum Outage {
 pub enum Operation {
     /// Stands finished and undisturbed.
     Operating,
-    /// Still being raised.
-    UnderConstruction,
+    /// Still rising into the world.
+    Rising,
     /// Standing, but switched off.
     Disabled(Outage),
     /// Off the map, waiting on a free cell to come back to.
@@ -325,14 +324,14 @@ pub fn changing_in_origin(world: &World, entity: Entity) -> bool {
 }
 
 /// Returns the [`Operation`] `entity` is in. One off the map waiting on a cell
-/// is [`Operation::Stranded`] before anything else is asked; a site still
-/// being raised is [`Operation::UnderConstruction`] whatever the fields say
-/// about it or the dock it stands in.
+/// is [`Operation::Stranded`] before anything else is asked; one still rising
+/// is [`Operation::Rising`] whatever the fields say about it or the dock it
+/// stands in.
 pub fn operation(world: &World, entity: Entity) -> Operation {
     if pending_reveal(world, entity) {
         Operation::Stranded
-    } else if under_construction(world, entity) {
-        Operation::UnderConstruction
+    } else if rising(world, entity) {
+        Operation::Rising
     } else if fields::disabled(world, entity) {
         Operation::Disabled(Outage::Field)
     } else if buff_effect_applies(world, entity, |effect| {
@@ -647,7 +646,7 @@ pub fn has_pool(world: &World, entity: Entity, pool: PoolId) -> bool {
     pool_value(world, entity, pool).is_some()
 }
 
-/// Whether some pool of `entity` follows a site's work.
+/// Whether some pool of `entity` follows the work of its rise.
 pub fn follows_work(world: &World, entity: Entity) -> bool {
     world
         .get::<PoolsComponent>(entity)

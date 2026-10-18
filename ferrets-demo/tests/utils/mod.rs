@@ -10,7 +10,7 @@ use ferrets_math::{FixedI64, FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_script::{content, engine::lua::LuaEngine};
 use ferrets_simulation::{
     command::{PlayerCommand, SelectMode},
-    components::{build::SiteWork, location::LocationComponent},
+    components::{location::LocationComponent, rise::RiseAttendance},
     input::{InputFrames, PlayerFrame},
     map::Map,
     movement_model::MovementModel,
@@ -41,9 +41,9 @@ pub fn create_entity(
     )
 }
 
-/// Founds a construction site of `type_name` at `position` for `owner`,
-/// worked by a crew nobody has joined yet, announcing nothing.
-pub fn create_site(
+/// Spawns `type_name` still rising at `position` for `owner`, worked by a
+/// crew nobody has joined yet, announcing nothing.
+pub fn create_rising(
     world: &mut World,
     type_name: &str,
     position: FixedUVec2,
@@ -55,8 +55,8 @@ pub fn create_site(
         position,
         owner,
         FieldReach::Initial,
-        Arrival::Site(SiteWork::Crew {
-            builders: Default::default(),
+        Arrival::Rising(RiseAttendance::Crew {
+            workers: Default::default(),
         }),
     )
 }

@@ -152,7 +152,7 @@ pub fn passengers_of(world: &World, gateway: Entity) -> impl Iterator<Item = Sim
 }
 
 /// Whether a gateway other than `lost` keeps the link `key`: one alive and
-/// not dying whose link it is, standing, a site or carried.
+/// not dying whose link it is, standing, rising or carried.
 pub fn kept_by_others(world: &World, key: LinkKey, lost: Entity) -> bool {
     world
         .resource::<EntityIndex>()

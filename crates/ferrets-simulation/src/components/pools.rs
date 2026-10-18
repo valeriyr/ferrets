@@ -22,12 +22,12 @@ pub struct PoolEntry {
     follows: Follows,
 }
 
-/// What a pool's value follows when its maximum or a site's work moves.
+/// What a pool's value follows when its maximum or the work of a rise moves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Follows {
     /// Its maximum, by the shift of each part that comes or goes.
     Maximum,
-    /// A construction site's work, up to the fold after the site is built,
+    /// The work of a rise, up to the fold after the entity has risen,
     /// which settles the pool from the line it last stood at.
     Work {
         /// Where the work's line stood when last read.
@@ -66,7 +66,7 @@ impl PoolsComponent {
         self.entry(pool).map(PoolEntry::follows)
     }
 
-    /// Whether some pool of the entity follows a site's work.
+    /// Whether some pool of the entity follows the work of a rise.
     pub fn follows_work(&self) -> bool {
         self.0.iter().any(|entry| match entry.follows {
             Follows::Work { .. } => true,
@@ -183,10 +183,10 @@ pub fn seed(world: &mut World, entity: Entity, pool: PoolId, initial: PoolInitia
 }
 
 /// Gives `entity` the `pool`, started at `initial` against its effective
-/// maximum and following a site's work from there, its line standing at that
-/// start. Panics when the entity already has the pool or carries no maximum
-/// for it.
-pub fn seed_rising(world: &mut World, entity: Entity, pool: PoolId, initial: PoolInitial) {
+/// maximum and following the work of a rise from there, its line standing at
+/// that start. Panics when the entity already has the pool or carries no
+/// maximum for it.
+pub fn seed_following_work(world: &mut World, entity: Entity, pool: PoolId, initial: PoolInitial) {
     let line = start(world, entity, pool, initial);
     pools_of(world, entity).insert(pool, line, Follows::Work { line });
 }
@@ -204,14 +204,19 @@ pub fn reseed(world: &mut World, entity: Entity, pool: PoolId, initial: PoolInit
     pools_of(world, entity).set(pool, value);
 }
 
-/// Starts `entity`'s `pool`, which follows a site's work, at `initial`
+/// Starts `entity`'s `pool`, which follows the work of a rise, at `initial`
 /// against its effective maximum again, its line with it. Panics when the
 /// pool does not follow work.
-pub fn reseed_rising(world: &mut World, entity: Entity, pool: PoolId, initial: PoolInitial) {
+pub fn reseed_following_work(
+    world: &mut World,
+    entity: Entity,
+    pool: PoolId,
+    initial: PoolInitial,
+) {
     match follows(world, entity, pool) {
         Some(Follows::Work { .. }) => {}
         Some(Follows::Maximum) | None => {
-            panic!("reseed_rising is given a pool following work: {pool:?}")
+            panic!("reseed_following_work is given a pool following work: {pool:?}")
         }
     }
     let line = start(world, entity, pool, initial);
@@ -220,8 +225,8 @@ pub fn reseed_rising(world: &mut World, entity: Entity, pool: PoolId, initial: P
     pools.follow(pool, Follows::Work { line });
 }
 
-/// Sets `entity`'s `pool`, which follows a site's work, to `value`, its line
-/// now standing at `line`. Panics when the pool does not follow work, or
+/// Sets `entity`'s `pool`, which follows the work of a rise, to `value`, its
+/// line now standing at `line`. Panics when the pool does not follow work, or
 /// `value` is above its effective maximum.
 pub fn step_with_work(
     world: &mut World,
@@ -247,7 +252,7 @@ pub fn step_with_work(
     pools.follow(pool, Follows::Work { line });
 }
 
-/// Puts `entity`'s `pool`, which follows a site's work, back to following
+/// Puts `entity`'s `pool`, which follows the work of a rise, back to following
 /// its maximum. Panics when the pool does not follow work.
 pub fn follow_maximum(world: &mut World, entity: Entity, pool: PoolId) {
     let mut pools = pools_of(world, entity);

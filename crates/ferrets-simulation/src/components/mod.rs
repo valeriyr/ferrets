@@ -37,6 +37,7 @@ pub mod rally;
 pub mod repair;
 pub mod research;
 pub mod resource;
+pub mod rise;
 pub mod stance;
 pub mod stand;
 pub mod tags;

@@ -226,15 +226,15 @@ fn buff_cast_on_target_lacking_its_stat_is_refused_and_costs_nothing() {
 }
 
 #[test]
-fn buff_cast_on_site_carrying_its_stat_lands() {
+fn buff_cast_on_rising_entity_carrying_its_stat_lands() {
     let mut app = app();
     let (_, mage_id) =
         utils::create_entity(app.world_mut(), "mage", utils::pos(5, 5), Some(0)).unwrap();
-    let (site, site_id) = utils::create_crewed_site(&mut app, "mage", 7, 5, 0);
+    let (rising, rising_id) = utils::create_crewed_rising(&mut app, "mage", 7, 5, 0);
 
-    utils::cast_on(&mut app, mage_id, "empower", site_id);
+    utils::cast_on(&mut app, mage_id, "empower", rising_id);
     utils::run_ticks(&mut app, utils::APPLY + 2);
-    assert!(entity_def::bears(app.world(), site, frenzy(&app)));
+    assert!(entity_def::bears(app.world(), rising, frenzy(&app)));
 }
 
 #[test]
@@ -574,7 +574,10 @@ fn app() -> App {
         registry.register(
             EntityTypeDef::new("mage")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-                .with_build(4, utils::site_initial(&[PoolId::HEALTH, PoolId::ENERGY]))
+                .with_rise(
+                    4,
+                    utils::rise_initial_pools(&[PoolId::HEALTH, PoolId::ENERGY]),
+                )
                 .with_pool(Pool::health(50))
                 .with_attack(utils::weapon(utils::GROUND), 10, 1, 1, 4, 2)
                 .with_stat(EntityStatId::SIGHT_RANGE, FixedU64::from_num(4))

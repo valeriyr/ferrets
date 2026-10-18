@@ -84,13 +84,10 @@ fn standing_act_waits_for_site_to_finish() {
         },
     );
     // Once the command lands the site is raised at once and takes four ticks
-    // of work to finish; going up, it acts on nothing.
+    // of work to finish; rising, it acts on nothing.
     utils::run_ticks(&mut app, utils::APPLY);
     assert_eq!(utils::count_of_type(app.world_mut(), "cleanser"), 1);
-    assert!(
-        utils::covered_by(&app, blight, 24, 20, 0),
-        "still under construction"
-    );
+    assert!(utils::covered_by(&app, blight, 24, 20, 0), "still rising");
 
     // The last tick of work completes the site, and the act follows on the
     // first tick it stands finished.
@@ -180,12 +177,12 @@ fn blight(app: &App) -> FieldId {
         .unwrap()
 }
 
-fn building(name: &str, side: u32, build_time: u32) -> EntityTypeDef {
+fn building(name: &str, side: u32, rise_time: u32) -> EntityTypeDef {
     EntityTypeDef::new(name)
         .with_location(utils::GROUND, CellSize::new(side, side), Solidity::Solid)
         .with_pool(Pool::health(100))
         .with_dying(1, [])
-        .with_build(build_time, utils::site_initial(&[PoolId::HEALTH]))
+        .with_rise(rise_time, utils::rise_initial_pools(&[PoolId::HEALTH]))
 }
 
 /// App with two rival players over a blight field that never recedes on its

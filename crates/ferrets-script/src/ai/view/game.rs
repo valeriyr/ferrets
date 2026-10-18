@@ -73,7 +73,8 @@ pub struct EntityView {
     /// `None` when the type has no health.
     pub health: Option<u32>,
     /// The current energy pool, floored to whole points. `None` when the
-    /// entity has none: its type declares none, or a site withholds it.
+    /// entity has none: its type declares none, or it is gained only once
+    /// risen.
     pub energy: Option<u32>,
     /// Effective attack damage, `None` when the entity cannot attack.
     pub damage: Option<u32>,
@@ -94,7 +95,8 @@ pub struct EntityView {
     pub carrying: Option<(String, u32)>,
     /// In-flight production, front first. Empty when nothing is queued.
     pub train_queue: Vec<String>,
-    pub under_construction: bool,
+    /// `true` while the entity is still rising into the world.
+    pub rising: bool,
     /// `true` while a field effect switches the entity off: it stands but
     /// starts no order but Train and Research, which wait, and neither fights,
     /// hunts, casts nor moves.

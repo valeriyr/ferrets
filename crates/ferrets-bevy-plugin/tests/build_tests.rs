@@ -5,7 +5,7 @@ mod utils;
 
 use bevy::prelude::*;
 use ferrets_content::{
-    build::{BuilderAttendance, RiseStart, SitePool},
+    build::BuilderAttendance,
     entity_buffs::{EntityBuffDef, EntityBuffId, Lasting},
     entity_effect::EntityEffect,
     entity_modifiers::EntityModifiers,
@@ -17,6 +17,7 @@ use ferrets_content::{
     pool_shift::PoolShift,
     registry::ContentRegistry,
     requirement::Requirement,
+    rise::{RisePool, RisePoolInitial},
     stack_rule::StackRule,
     work::{CrewLimit, WorkPresence},
 };
@@ -28,12 +29,13 @@ use ferrets_pathfinder::{mover_shape::MoverShape, nav_grid::NavGrid};
 use ferrets_simulation::{
     command::PlayerCommand,
     components::{
-        build::{self, BuildComponent, SiteWork, UnderConstructionComponent},
+        build::BuildComponent,
         entity_info::EntityInfoComponent,
         hidden::Inside,
         location::LocationComponent,
         order_queue::{CancelPolicy, OrderQueueComponent},
         pools,
+        rise::{self, RiseAttendance, RisingComponent},
     },
     entity_def::{self, Operation},
     entity_index::EntityIndex,
@@ -47,7 +49,7 @@ use ferrets_simulation::{
 };
 
 #[test]
-fn site_never_bears_built_passive_tick_it_is_founded() {
+fn site_never_bears_risen_passive_tick_it_is_founded() {
     let mut app = utils::orders_app();
     let (_, worker_id) = utils::create_owned(&mut app, "worker", 5, 5, 0);
     utils::grant_gold(&mut app, 10);
@@ -62,7 +64,7 @@ fn site_never_bears_built_passive_tick_it_is_founded() {
     );
 
     // Tick by tick until the site stands: founded a site, it is never fitted
-    // `opened`, which holds only once built.
+    // `opened`, which holds only once risen.
     let site = (0..30)
         .find_map(|_| {
             utils::run_ticks(&mut app, 1);
@@ -79,9 +81,9 @@ fn site_never_bears_built_passive_tick_it_is_founded() {
 }
 
 #[test]
-fn rising_site_gains_health_with_work() {
+fn rising_entity_gains_health_with_work() {
     let mut app = utils::orders_app();
-    let (rampart, _) = utils::create_unattended_site(&mut app, "rampart", 8, 8, 0);
+    let (rampart, _) = utils::create_unattended_rising(&mut app, "rampart", 8, 8, 0);
     // A quarter of 400 at founding.
     assert_eq!(utils::health_as_u32(&app, rampart), 100);
 
@@ -92,18 +94,14 @@ fn rising_site_gains_health_with_work() {
 
     // The tenth tick completes it, full.
     utils::run_ticks(&mut app, 5);
-    assert!(
-        app.world()
-            .get::<UnderConstructionComponent>(rampart)
-            .is_none()
-    );
+    assert!(app.world().get::<RisingComponent>(rampart).is_none());
     assert_eq!(utils::health_as_u32(&app, rampart), 400);
 }
 
 #[test]
 fn damage_taken_while_rising_stays_as_deficit() {
     let mut app = utils::orders_app();
-    let (rampart, _) = utils::create_unattended_site(&mut app, "rampart", 8, 8, 0);
+    let (rampart, _) = utils::create_unattended_rising(&mut app, "rampart", 8, 8, 0);
     utils::run_ticks(&mut app, 5);
     // 250, wounded by 100 to 150; the line goes on to 400: 400 − 100 = 300.
     utils::wound(&mut app, rampart, "100");
@@ -112,10 +110,10 @@ fn damage_taken_while_rising_stays_as_deficit() {
 }
 
 #[test]
-fn site_raised_maximum_mid_build_still_finishes_full() {
-    // Whatever shift the raise names, the line moves the site, not the shift.
-    // The clamp arm reads the same with the shift applied, since a clamp
-    // leaves a value under a raised maximum where it is.
+fn maximum_raised_mid_rise_still_finishes_full() {
+    // Whatever shift the raise names, the line moves the rising entity, not
+    // the shift. The clamp arm reads the same with the shift applied, since a
+    // clamp leaves a value under a raised maximum where it is.
     for (name, pool_shift) in [
         ("fortified_by_clamp", PoolShift::Clamp),
         ("fortified_by_difference", PoolShift::Difference),
@@ -123,7 +121,7 @@ fn site_raised_maximum_mid_build_still_finishes_full() {
     ] {
         let mut app = utils::orders_app();
         let fortified = register_health_shift(&mut app, name, "100", pool_shift);
-        let (rampart, _) = utils::create_unattended_site(&mut app, "rampart", 8, 8, 0);
+        let (rampart, _) = utils::create_unattended_rising(&mut app, "rampart", 8, 8, 0);
         // Five ticks of work: 100 + 5 × 30 = 250.
         utils::run_ticks(&mut app, 5);
         assert_eq!(utils::health_as_u32(&app, rampart), 250, "{name}");
@@ -139,14 +137,14 @@ fn site_raised_maximum_mid_build_still_finishes_full() {
 }
 
 #[test]
-fn finished_site_gives_its_pool_back_to_fold() {
+fn risen_entity_gives_its_pool_back_to_fold() {
     let mut app = utils::orders_app();
     let fortified = register_health_shift(&mut app, "fortified", "100", PoolShift::Difference);
-    let (rampart, _) = utils::create_unattended_site(&mut app, "rampart", 8, 8, 0);
+    let (rampart, _) = utils::create_unattended_rising(&mut app, "rampart", 8, 8, 0);
     utils::run_ticks(&mut app, 10);
     assert_eq!(utils::health_as_u32(&app, rampart), 400);
 
-    // Built, its health follows its maximum by the raise's own shift again:
+    // Risen, its health follows its maximum by the raise's own shift again:
     // 400 + 100 = 500.
     utils::apply_buff(app.world_mut(), rampart, fortified);
     utils::run_ticks(&mut app, 1);
@@ -154,9 +152,9 @@ fn finished_site_gives_its_pool_back_to_fold() {
 }
 
 #[test]
-fn halted_site_does_not_rise() {
+fn halted_rise_does_not_advance() {
     let mut app = utils::orders_app();
-    let (rampart, _) = utils::create_unattended_site(&mut app, "rampart", 8, 8, 0);
+    let (rampart, _) = utils::create_unattended_rising(&mut app, "rampart", 8, 8, 0);
     // Five ticks of work: 100 + 5 × 30 = 250.
     utils::run_ticks(&mut app, 5);
     assert_eq!(utils::health_as_u32(&app, rampart), 250);
@@ -168,8 +166,9 @@ fn halted_site_does_not_rise() {
 }
 
 #[test]
-fn site_lowered_maximum_mid_build_still_finishes_full() {
-    // Whatever shift the cut names, the line moves the site, not the shift.
+fn maximum_lowered_mid_rise_still_finishes_full() {
+    // Whatever shift the cut names, the line moves the rising entity, not
+    // the shift.
     for (name, pool_shift) in [
         ("weakened_by_clamp", PoolShift::Clamp),
         ("weakened_by_difference", PoolShift::Difference),
@@ -177,7 +176,7 @@ fn site_lowered_maximum_mid_build_still_finishes_full() {
     ] {
         let mut app = utils::orders_app();
         let weakened = register_health_shift(&mut app, name, "-200", pool_shift);
-        let (rampart, _) = utils::create_unattended_site(&mut app, "rampart", 8, 8, 0);
+        let (rampart, _) = utils::create_unattended_rising(&mut app, "rampart", 8, 8, 0);
         // Five ticks of work: 100 + 5 × 30 = 250.
         utils::run_ticks(&mut app, 5);
         assert_eq!(utils::health_as_u32(&app, rampart), 250, "{name}");
@@ -193,15 +192,15 @@ fn site_lowered_maximum_mid_build_still_finishes_full() {
 }
 
 #[test]
-fn falling_line_leaves_live_site_its_last_sliver() {
+fn falling_line_leaves_live_rising_entity_its_last_sliver() {
     let mut app = utils::orders_app();
     let weakened = register_health_shift(&mut app, "weakened", "-200", PoolShift::Clamp);
-    let (rampart, _) = utils::create_unattended_site(&mut app, "rampart", 8, 8, 0);
+    let (rampart, _) = utils::create_unattended_rising(&mut app, "rampart", 8, 8, 0);
     utils::run_ticks(&mut app, 5);
     halt(&mut app, rampart);
     // 250 wounded by 200 to 50; under the lowered maximum the line falls from
     // 250 to 50 + 150 × 5 / 10 = 125, 75 more than the 50 left, which leaves
-    // the live site the smallest value.
+    // the live rising entity the smallest value.
     utils::wound(&mut app, rampart, "200");
     utils::apply_buff(app.world_mut(), rampart, weakened);
     utils::run_ticks(&mut app, 1);
@@ -210,9 +209,9 @@ fn falling_line_leaves_live_site_its_last_sliver() {
 }
 
 #[test]
-fn withheld_pool_comes_with_finished_building_at_its_initial() {
+fn pool_gained_on_risen_comes_at_its_initial_once_risen() {
     let mut app = utils::orders_app();
-    let (tower, _) = utils::create_unattended_site(&mut app, "flare_tower", 8, 8, 0);
+    let (tower, _) = utils::create_unattended_rising(&mut app, "flare_tower", 8, 8, 0);
     assert_eq!(
         entity_def::pool_value(app.world(), tower, PoolId::ENERGY),
         None
@@ -220,11 +219,7 @@ fn withheld_pool_comes_with_finished_building_at_its_initial() {
     // The fourth tick completes it, gaining its energy at a quarter of 60,
     // 15, which the next fold settles where it stands.
     utils::run_ticks(&mut app, 4);
-    assert!(
-        app.world()
-            .get::<UnderConstructionComponent>(tower)
-            .is_none()
-    );
+    assert!(app.world().get::<RisingComponent>(tower).is_none());
     assert_eq!(utils::energy_as_u32(&app, tower), 15);
     utils::run_ticks(&mut app, 1);
     assert_eq!(utils::energy_as_u32(&app, tower), 15);
@@ -233,7 +228,7 @@ fn withheld_pool_comes_with_finished_building_at_its_initial() {
 #[test]
 fn rising_pool_keeps_what_it_regenerates_besides() {
     let mut app = utils::orders_app();
-    let (cistern, _) = utils::create_unattended_site(&mut app, "cistern", 8, 8, 0);
+    let (cistern, _) = utils::create_unattended_rising(&mut app, "cistern", 8, 8, 0);
     // Half of 80 at founding.
     assert_eq!(utils::energy_as_u32(&app, cistern), 40);
 
@@ -274,7 +269,7 @@ fn site_founded_by_build_order_rises_to_full() {
         utils::run_ticks(&mut app, 1);
     }
     // Founded at a quarter of 400, then 30 a tick of work as it is put in:
-    // 100 + 30 × progress, full once built.
+    // 100 + 30 × progress, full once risen.
     let mut expected: Vec<(Option<u32>, u32)> = (0..10)
         .map(|progress| (Some(progress), 100 + 30 * progress))
         .collect();
@@ -283,11 +278,11 @@ fn site_founded_by_build_order_rises_to_full() {
 }
 
 #[test]
-fn rising_site_starts_under_maximum_its_passives_leave() {
+fn rising_entity_starts_under_maximum_its_passives_leave() {
     let mut app = utils::orders_app();
     {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
-        // While it is a site, a braced rampart's maximum is 200 higher.
+        // While it rises, a braced rampart's maximum is 200 higher.
         let braced = registry.register_entity_buff(
             "braced",
             EntityBuffDef {
@@ -295,7 +290,7 @@ fn rising_site_starts_under_maximum_its_passives_leave() {
                     modifiers: vec![utils::flat(EntityStatId::MAX_HEALTH, "200")],
                     pool_shift: PoolShift::Clamp,
                 })],
-                lasting: Lasting::While(Requirement::Unless(Box::new(Requirement::Built))),
+                lasting: Lasting::While(Requirement::Unless(Box::new(Requirement::Risen))),
                 stack_rule: StackRule::Ignore,
                 interrupted_by: Vec::new(),
             },
@@ -306,16 +301,16 @@ fn rising_site_starts_under_maximum_its_passives_leave() {
                 .with_pool(Pool::health(400))
                 .with_dying(2, [])
                 .with_passives([braced])
-                .with_build(
+                .with_rise(
                     10,
                     [(
                         PoolId::HEALTH,
-                        SitePool::Rising(RiseStart::Share(utils::fixed("0.25"))),
+                        RisePool::FollowsWork(RisePoolInitial::Share(utils::fixed("0.25"))),
                     )],
                 ),
         );
     }
-    let (rampart, _) = utils::create_unattended_site(&mut app, "braced_rampart", 8, 8, 0);
+    let (rampart, _) = utils::create_unattended_rising(&mut app, "braced_rampart", 8, 8, 0);
     // A quarter of 400 + 200, before any tick.
     assert_eq!(utils::health_as_u32(&app, rampart), 150);
 
@@ -325,7 +320,7 @@ fn rising_site_starts_under_maximum_its_passives_leave() {
 }
 
 #[test]
-fn site_holds_pool_from_its_own_initial() {
+fn rising_entity_holds_pool_from_its_own_initial() {
     let mut app = utils::orders_app();
     app.world_mut().resource_mut::<ContentRegistry>().register(
         EntityTypeDef::new("lamp_post")
@@ -339,19 +334,22 @@ fn site_holds_pool_from_its_own_initial() {
                 PoolInitial::Share(utils::fixed("0.25")),
             ))
             .with_dying(2, [])
-            .with_build(4, utils::site_initial(&[PoolId::HEALTH, PoolId::ENERGY])),
+            .with_rise(
+                4,
+                utils::rise_initial_pools(&[PoolId::HEALTH, PoolId::ENERGY]),
+            ),
     );
-    let (post, _) = utils::create_crewed_site(&mut app, "lamp_post", 8, 8, 0);
+    let (post, _) = utils::create_crewed_rising(&mut app, "lamp_post", 8, 8, 0);
     // A quarter of 60.
     assert_eq!(utils::energy_as_u32(&app, post), 15);
 }
 
 #[test]
-fn built_pools_settle_under_built_passives_at_next_fold() {
+fn risen_pools_settle_under_risen_passives_at_next_fold() {
     let mut app = utils::orders_app();
     {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
-        // Once built, a keep's health and energy maxima are higher.
+        // Once risen, a keep's health and energy maxima are higher.
         let finished = registry.register_entity_buff(
             "finished",
             EntityBuffDef {
@@ -362,7 +360,7 @@ fn built_pools_settle_under_built_passives_at_next_fold() {
                     ],
                     pool_shift: PoolShift::Clamp,
                 })],
-                lasting: Lasting::While(Requirement::Built),
+                lasting: Lasting::While(Requirement::Risen),
                 stack_rule: StackRule::Ignore,
                 interrupted_by: Vec::new(),
             },
@@ -380,26 +378,22 @@ fn built_pools_settle_under_built_passives_at_next_fold() {
                 ))
                 .with_dying(2, [])
                 .with_passives([finished])
-                .with_build(
+                .with_rise(
                     10,
                     [
                         (
                             PoolId::HEALTH,
-                            SitePool::Rising(RiseStart::Share(utils::fixed("0.25"))),
+                            RisePool::FollowsWork(RisePoolInitial::Share(utils::fixed("0.25"))),
                         ),
-                        (PoolId::ENERGY, SitePool::Withheld),
+                        (PoolId::ENERGY, RisePool::GainedOnRisen),
                     ],
                 ),
         );
     }
-    let (keep, _) = utils::create_unattended_site(&mut app, "keep_wall", 8, 8, 0);
+    let (keep, _) = utils::create_unattended_rising(&mut app, "keep_wall", 8, 8, 0);
     utils::run_ticks(&mut app, 10);
-    assert!(
-        app.world()
-            .get::<UnderConstructionComponent>(keep)
-            .is_none()
-    );
-    // Completed: its line reached the site's 400, and its energy stands at a
+    assert!(app.world().get::<RisingComponent>(keep).is_none());
+    // Risen: its line reached the rise's 400, and its energy stands at a
     // quarter of 60, 15, until the next fold settles it.
     assert_eq!(utils::health_as_u32(&app, keep), 400);
     assert_eq!(utils::energy_as_u32(&app, keep), 15);
@@ -415,9 +409,9 @@ fn built_pools_settle_under_built_passives_at_next_fold() {
 }
 
 #[test]
-fn settling_keeps_what_withheld_pool_lost_since_completion() {
+fn settling_keeps_what_pool_gained_on_risen_lost_since_completion() {
     let mut app = utils::orders_app();
-    let (tower, _) = utils::create_unattended_site(&mut app, "flare_tower", 8, 8, 0);
+    let (tower, _) = utils::create_unattended_rising(&mut app, "flare_tower", 8, 8, 0);
     utils::run_ticks(&mut app, 4);
     // Completed at a quarter of 60, 15, then 5 spent before the settle.
     pools::drain(app.world_mut(), tower, PoolId::ENERGY, utils::fixed("5"));
@@ -485,10 +479,10 @@ fn two_builders_raise_line_with_each_tick_of_work() {
 }
 
 #[test]
-fn halted_site_lines_up_under_raised_maximum() {
+fn halted_rise_lines_up_under_raised_maximum() {
     let mut app = utils::orders_app();
     let fortified = register_health_shift(&mut app, "fortified", "100", PoolShift::Difference);
-    let (rampart, _) = utils::create_unattended_site(&mut app, "rampart", 8, 8, 0);
+    let (rampart, _) = utils::create_unattended_rising(&mut app, "rampart", 8, 8, 0);
     utils::run_ticks(&mut app, 5);
     assert_eq!(utils::health_as_u32(&app, rampart), 250);
     halt(&mut app, rampart);
@@ -503,22 +497,22 @@ fn halted_site_lines_up_under_raised_maximum() {
 }
 
 #[test]
-#[should_panic(expected = "a site's work stops at its build time: 11 > 10")]
-fn rising_past_build_time_panics() {
+#[should_panic(expected = "a rise's work stops at its rise time: 11 > 10")]
+fn rising_past_rise_time_panics() {
     let mut app = utils::orders_app();
-    let (rampart, _) = utils::create_unattended_site(&mut app, "rampart", 8, 8, 0);
+    let (rampart, _) = utils::create_unattended_rising(&mut app, "rampart", 8, 8, 0);
     app.world_mut()
-        .get_mut::<UnderConstructionComponent>(rampart)
-        .expect("a site carries its construction state")
+        .get_mut::<RisingComponent>(rampart)
+        .expect("a rising entity carries its rising state")
         .progress = 11;
-    build::rise(app.world_mut(), rampart);
+    rise::rise(app.world_mut(), rampart);
 }
 
 #[test]
 fn buff_on_completing_tick_moves_rising_pool_by_its_line() {
     let mut app = utils::orders_app();
     let fortified = register_health_shift(&mut app, "fortified", "100", PoolShift::Clamp);
-    let (rampart, _) = utils::create_unattended_site(&mut app, "rampart", 8, 8, 0);
+    let (rampart, _) = utils::create_unattended_rising(&mut app, "rampart", 8, 8, 0);
     // The tenth tick completes it at 400; wounded to 350 and buffed before
     // the next fold, its pool still follows the line.
     utils::run_ticks(&mut app, 10);
@@ -526,7 +520,7 @@ fn buff_on_completing_tick_moves_rising_pool_by_its_line() {
     utils::apply_buff(app.world_mut(), rampart, fortified);
     utils::run_ticks(&mut app, 1);
     // Settled by the line, 400 → 500, keeping the 50 deficit: 450 of 500,
-    // where the clamp alone would leave a finished building at 350 of 500.
+    // where the clamp alone would leave a risen entity at 350 of 500.
     assert_eq!(utils::health_as_u32(&app, rampart), 450);
 }
 
@@ -547,14 +541,14 @@ fn build_constructs_building() {
     );
 
     // The worker walks to the site, pays, hides inside, and the building appears
-    // under construction.
+    // rising.
     utils::run_ticks(&mut app, 12);
     assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
     {
         let world = app.world_mut();
         assert_eq!(utils::gold(world), 30);
         assert!(entity_def::hidden(world, worker));
-        assert_eq!(under_construction(world), 1);
+        assert_eq!(rising(world), 1);
     }
 
     // Construction completes: the marker is gone and the worker reappears next to
@@ -562,7 +556,7 @@ fn build_constructs_building() {
     utils::run_ticks(&mut app, 6);
     assert!(!entity_def::hidden(app.world(), worker));
     let world = app.world_mut();
-    assert_eq!(under_construction(world), 0);
+    assert_eq!(rising(world), 0);
 
     let worker_cell = utils::cell_of(world, worker);
     let site = CellRect::new(CellPos::new(10, 10), CellSize::new(2, 2));
@@ -761,11 +755,7 @@ fn builder_working_in_open_stays_on_map() {
     // Still exposed for the whole job, then finishes normally.
     utils::run_ticks(&mut app, 6);
     assert!(!entity_def::hidden(app.world(), mason));
-    assert_eq!(
-        under_construction(app.world_mut()),
-        0,
-        "construction completed"
-    );
+    assert_eq!(rising(app.world_mut()), 0, "construction completed");
 }
 
 #[test]
@@ -898,7 +888,7 @@ fn builder_that_works_hidden_raises_site_it_stands_on() {
 
     // Six ticks of work later it is back out beside what it raised.
     utils::run_ticks(&mut app, 6);
-    assert_eq!(under_construction(app.world_mut()), 0);
+    assert_eq!(rising(app.world_mut()), 0);
     assert!(!entity_def::hidden(app.world(), worker));
 }
 
@@ -927,11 +917,7 @@ fn boxed_in_builder_finishes_site_and_waits_to_reappear() {
     // The walls are up regardless: the building is not held back by having nowhere
     // to put the builder. The builder waits off the map with a queued reveal, and
     // comes back onto the one cell that frees.
-    assert_eq!(
-        under_construction(app.world_mut()),
-        0,
-        "the site finished on time"
-    );
+    assert_eq!(rising(app.world_mut()), 0, "the site finished on time");
     utils::assert_reveal_deferred_then_lands_on(&mut app, worker, CellPos::new(9, 9));
 }
 
@@ -1109,14 +1095,14 @@ fn crew_shares_one_site_and_each_member_adds_own_work() {
     assert!(!entity_def::hidden(app.world(), second));
 
     // Two builders on the site, two ticks of work a tick.
-    let before = site_progress(app.world_mut());
+    let before = rising_progress(app.world_mut());
     utils::run_ticks(&mut app, 1);
-    assert_eq!(site_progress(app.world_mut()), before + 2);
+    assert_eq!(rising_progress(app.world_mut()), before + 2);
 
-    // A build time of six is served by a pair in three ticks of work.
+    // A rise time of six is served by a pair in three ticks of work.
     utils::run_ticks(&mut app, 2);
     assert_eq!(
-        under_construction(app.world_mut()),
+        rising(app.world_mut()),
         0,
         "the crew finished the site between them"
     );
@@ -1134,7 +1120,7 @@ fn sending_builder_to_unfinished_site_puts_it_to_work() {
 
     order_depot(&mut app, first_id);
     utils::run_ticks(&mut app, utils::APPLY);
-    assert_eq!(under_construction(app.world_mut()), 1);
+    assert_eq!(rising(app.world_mut()), 1);
 
     let site = utils::single_owned_of_type(app.world_mut(), "depot", 0);
     let site_id = app
@@ -1184,9 +1170,9 @@ fn builder_that_works_alone_turns_away_from_site_another_holds() {
     );
 
     // One builder, one tick of work a tick.
-    let before = site_progress(app.world_mut());
+    let before = rising_progress(app.world_mut());
     utils::run_ticks(&mut app, 1);
-    assert_eq!(site_progress(app.world_mut()), before + 1);
+    assert_eq!(rising_progress(app.world_mut()), before + 1);
 }
 
 #[test]
@@ -1199,13 +1185,13 @@ fn canceling_one_of_crew_leaves_site_standing() {
     order_depot(&mut app, first_id);
     order_depot(&mut app, second_id);
     utils::run_ticks(&mut app, utils::APPLY);
-    assert_eq!(under_construction(app.world_mut()), 1);
+    assert_eq!(rising(app.world_mut()), 1);
 
     utils::force_cancel_orders(app.world_mut(), first);
     utils::run_ticks(&mut app, 1);
 
     assert_eq!(
-        under_construction(app.world_mut()),
+        rising(app.world_mut()),
         1,
         "the builder left behind carries on with what they had raised together"
     );
@@ -1227,7 +1213,7 @@ fn raised_site_records_crew_until_last_builder_leaves() {
     order_depot(&mut app, second_id);
     utils::run_ticks(&mut app, utils::APPLY);
     assert_eq!(
-        crew_of_site(app.world_mut()),
+        crew_of_rising(app.world_mut()),
         vec![first_id, second_id],
         "both carpenters show up in the site's crew"
     );
@@ -1236,7 +1222,7 @@ fn raised_site_records_crew_until_last_builder_leaves() {
     utils::force_cancel_orders(app.world_mut(), first);
     utils::run_ticks(&mut app, 1);
     assert_eq!(
-        crew_of_site(app.world_mut()),
+        crew_of_rising(app.world_mut()),
         vec![second_id],
         "one builder leaving does not empty the site"
     );
@@ -1245,8 +1231,11 @@ fn raised_site_records_crew_until_last_builder_leaves() {
     // the site standing halted rather than tearing it down.
     utils::force_cancel_orders(app.world_mut(), second);
     utils::run_ticks(&mut app, 1);
-    assert!(crew_of_site(app.world_mut()).is_empty());
-    assert_eq!(site_work(app.world_mut()), Some(SiteWork::Halted));
+    assert!(crew_of_rising(app.world_mut()).is_empty());
+    assert_eq!(
+        rising_attendance(app.world_mut()),
+        Some(RiseAttendance::Halted)
+    );
     utils::run_ticks(&mut app, 3);
     assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
 }
@@ -1267,15 +1256,18 @@ fn open_builder_ordered_away_leaves_site_halted_with_its_progress() {
     order_depot(&mut app, mason_id);
     // The order lands on tick 3 and the site goes up; two more ticks of work follow.
     utils::run_ticks(&mut app, utils::APPLY + 2);
-    assert_eq!(site_progress(app.world_mut()), 2);
+    assert_eq!(rising_progress(app.world_mut()), 2);
     assert_eq!(utils::gold(app.world_mut()), 30);
 
     utils::force_cancel_orders(app.world_mut(), mason);
     utils::run_ticks(&mut app, 4);
     assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
-    assert_eq!(site_work(app.world_mut()), Some(SiteWork::Halted));
     assert_eq!(
-        site_progress(app.world_mut()),
+        rising_attendance(app.world_mut()),
+        Some(RiseAttendance::Halted)
+    );
+    assert_eq!(
+        rising_progress(app.world_mut()),
         2,
         "a halted site keeps its work"
     );
@@ -1298,16 +1290,19 @@ fn halted_site_is_taken_up_by_next_builder_and_finished() {
     utils::run_ticks(&mut app, utils::APPLY + 2);
     utils::force_cancel_orders(app.world_mut(), mason);
     utils::run_ticks(&mut app, 1);
-    assert_eq!(site_work(app.world_mut()), Some(SiteWork::Halted));
+    assert_eq!(
+        rising_attendance(app.world_mut()),
+        Some(RiseAttendance::Halted)
+    );
 
     // The carpenter takes the halted site up as a crew of one — nobody is paid
     // again — and its four remaining ticks of work finish it.
     order_depot(&mut app, carpenter_id);
     utils::run_ticks(&mut app, utils::APPLY);
-    assert_eq!(crew_of_site(app.world_mut()), vec![carpenter_id]);
+    assert_eq!(crew_of_rising(app.world_mut()), vec![carpenter_id]);
     assert_eq!(utils::gold(app.world_mut()), 30);
     utils::run_ticks(&mut app, 4);
-    assert_eq!(under_construction(app.world_mut()), 0);
+    assert_eq!(rising(app.world_mut()), 0);
     assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
 }
 
@@ -1322,7 +1317,10 @@ fn builder_that_leaves_sites_to_themselves_takes_up_halted_one_on_its_own_terms(
     utils::run_ticks(&mut app, utils::APPLY + 2);
     utils::force_cancel_orders(app.world_mut(), mason);
     utils::run_ticks(&mut app, 1);
-    assert_eq!(site_work(app.world_mut()), Some(SiteWork::Halted));
+    assert_eq!(
+        rising_attendance(app.world_mut()),
+        Some(RiseAttendance::Halted)
+    );
 
     // The architect leaves a site it raises to itself, so it leaves this one to
     // itself too rather than joining a crew it is not built to be on — and its
@@ -1330,15 +1328,15 @@ fn builder_that_leaves_sites_to_themselves_takes_up_halted_one_on_its_own_terms(
     order_depot(&mut app, architect_id);
     utils::run_ticks(&mut app, utils::APPLY);
     assert!(matches!(
-        site_work(app.world_mut()),
-        Some(SiteWork::Unattended { .. })
+        rising_attendance(app.world_mut()),
+        Some(RiseAttendance::Unattended { .. })
     ));
     assert!(utils::order_queue_is_empty(app.world_mut(), architect));
     assert_eq!(utils::gold(app.world_mut()), 30, "nobody paid twice");
 
     // It advances itself from there: four ticks were still owed.
     utils::run_ticks(&mut app, 4);
-    assert_eq!(under_construction(app.world_mut()), 0);
+    assert_eq!(rising(app.world_mut()), 0);
     assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
 }
 
@@ -1370,7 +1368,7 @@ fn attached_builder_stands_on_site_holding_no_cells() {
 
     // Six ticks of work later it steps back out onto a free cell beside the depot.
     utils::run_ticks(&mut app, 6);
-    assert_eq!(under_construction(app.world_mut()), 0);
+    assert_eq!(rising(app.world_mut()), 0);
     assert!(!entity_def::attached(app.world(), roofer));
     let depot = depot(app.world_mut());
     utils::assert_adjacent_to_footprint(app.world_mut(), roofer, depot);
@@ -1392,7 +1390,7 @@ fn attached_builders_take_distinct_berths_of_site() {
     order_depot(&mut app, first_id);
     order_depot(&mut app, second_id);
     utils::run_ticks(&mut app, utils::APPLY + 2);
-    assert_eq!(crew_of_site(app.world_mut()), vec![first_id, second_id]);
+    assert_eq!(crew_of_rising(app.world_mut()), vec![first_id, second_id]);
     // Each in the rim berth nearest to where it arrived: the north-west cell
     // for the first, the south-east one for the second.
     assert_eq!(utils::cell_of(app.world(), first), CellPos::new(10, 10));
@@ -1441,8 +1439,11 @@ fn attached_builder_shot_dead_on_its_site_leaves_it_halted() {
     utils::run_ticks(&mut app, 3);
     utils::assert_despawned(app.world_mut(), roofer);
     assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
-    assert_eq!(site_work(app.world_mut()), Some(SiteWork::Halted));
-    assert_eq!(site_progress(app.world_mut()), 4);
+    assert_eq!(
+        rising_attendance(app.world_mut()),
+        Some(RiseAttendance::Halted)
+    );
+    assert_eq!(rising_progress(app.world_mut()), 4);
 }
 
 #[test]
@@ -1453,14 +1454,17 @@ fn attached_builder_destroyed_at_work_leaves_site_halted() {
 
     order_depot(&mut app, roofer_id);
     utils::run_ticks(&mut app, utils::APPLY + 2);
-    assert_eq!(site_progress(app.world_mut()), 2);
+    assert_eq!(rising_progress(app.world_mut()), 2);
 
     spawn::destroy_entity(app.world_mut(), roofer);
     utils::run_ticks(&mut app, 4);
     utils::assert_despawned(app.world_mut(), roofer);
     assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
-    assert_eq!(site_work(app.world_mut()), Some(SiteWork::Halted));
-    assert_eq!(site_progress(app.world_mut()), 2);
+    assert_eq!(
+        rising_attendance(app.world_mut()),
+        Some(RiseAttendance::Halted)
+    );
+    assert_eq!(rising_progress(app.world_mut()), 2);
 }
 
 //
@@ -1514,11 +1518,11 @@ fn cancel_build_brings_hidden_builder_back_out() {
 fn cancel_build_ignores_rival_site() {
     let mut app = utils::orders_app();
     // A site of the other player's, raised straight onto the map.
-    let (depot, site) = utils::create_site(&mut app, "depot", 14, 14, 1, SiteWork::Halted);
+    let (depot, site) = utils::create_rising(&mut app, "depot", 14, 14, 1, RiseAttendance::Halted);
     app.world_mut()
         .entity_mut(depot)
-        .get_mut::<UnderConstructionComponent>()
-        .expect("the depot was just founded a site")
+        .get_mut::<RisingComponent>()
+        .expect("the depot was just created rising")
         .progress = 4;
 
     utils::push_command(&mut app, PlayerCommand::CancelBuild { site });
@@ -1526,8 +1530,8 @@ fn cancel_build_ignores_rival_site() {
     assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
     assert_eq!(
         app.world()
-            .get::<UnderConstructionComponent>(depot)
-            .map(|site| site.progress),
+            .get::<RisingComponent>(depot)
+            .map(|rising| rising.progress),
         Some(4),
         "a player cancels only its own sites"
     );
@@ -1541,7 +1545,7 @@ fn cancel_build_ignores_finished_building() {
 
     order_depot(&mut app, mason_id);
     utils::run_ticks(&mut app, utils::APPLY + 6);
-    assert_eq!(under_construction(app.world_mut()), 0);
+    assert_eq!(rising(app.world_mut()), 0);
     let depot = depot(app.world_mut());
     let site = entity_def::simulation_id(app.world(), depot);
 
@@ -1570,9 +1574,9 @@ fn unattended_builder_places_site_and_leaves_it_to_advance_itself() {
         let world = app.world_mut();
         assert_eq!(utils::count_of_type(world, "depot"), 1);
         assert_eq!(utils::gold(world), 30);
-        assert_eq!(under_construction(world), 1);
-        assert!(crew_of_site(world).is_empty());
-        assert_eq!(founder_of_site(world), Some(architect_id));
+        assert_eq!(rising(world), 1);
+        assert!(crew_of_rising(world).is_empty());
+        assert_eq!(founder_of_rising(world), Some(architect_id));
         assert!(!entity_def::hidden(world, architect));
         assert!(utils::order_queue_is_empty(world, architect));
     }
@@ -1580,7 +1584,7 @@ fn unattended_builder_places_site_and_leaves_it_to_advance_itself() {
     // The work goes on without it, one tick at a time, and the completion is
     // announced with the founder as its builder.
     utils::run_ticks(&mut app, 8);
-    assert_eq!(under_construction(app.world_mut()), 0);
+    assert_eq!(rising(app.world_mut()), 0);
     assert_eq!(completed_by(&app), vec![architect_id]);
 }
 
@@ -1592,13 +1596,13 @@ fn unattended_site_outlives_its_founder() {
 
     order_depot(&mut app, architect_id);
     utils::run_ticks(&mut app, 12);
-    assert_eq!(under_construction(app.world_mut()), 1);
+    assert_eq!(rising(app.world_mut()), 1);
 
     spawn::destroy_entity(app.world_mut(), architect);
 
     // The founder is gone; the site finishes regardless and still names it.
     utils::run_ticks(&mut app, 10);
-    assert_eq!(under_construction(app.world_mut()), 0);
+    assert_eq!(rising(app.world_mut()), 0);
     assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
     assert_eq!(completed_by(&app), vec![architect_id]);
 }
@@ -1613,7 +1617,7 @@ fn nobody_joins_unattended_site() {
 
     order_depot(&mut app, architect_id);
     utils::run_ticks(&mut app, 12);
-    let progress_before = site_progress(app.world_mut());
+    let progress_before = rising_progress(app.world_mut());
     // The architect walks four cells at half a cell per tick once the command
     // lands after the three-tick delay, so the site is raised on the eleventh
     // tick and has one tick of progress by the twelfth.
@@ -1624,8 +1628,8 @@ fn nobody_joins_unattended_site() {
     order_depot(&mut app, mason_id);
     utils::run_ticks(&mut app, 3);
     let world = app.world_mut();
-    assert!(crew_of_site(world).is_empty());
-    assert_eq!(site_progress(world), progress_before + 3);
+    assert!(crew_of_rising(world).is_empty());
+    assert_eq!(rising_progress(world), progress_before + 3);
     assert!(utils::order_queue_is_empty(world, mason));
 }
 
@@ -1644,10 +1648,10 @@ fn consumed_builder_works_site_hidden_and_is_consumed_when_it_completes() {
         let world = app.world_mut();
         assert_eq!(utils::count_of_type(world, "depot"), 1);
         assert_eq!(utils::gold(world), 30);
-        assert_eq!(under_construction(world), 1);
+        assert_eq!(rising(world), 1);
         assert!(entity_def::hidden(world, larva));
         assert!(!utils::order_queue_is_empty(world, larva));
-        assert_eq!(crew_of_site(world), vec![larva_id]);
+        assert_eq!(crew_of_rising(world), vec![larva_id]);
         assert_eq!(supply::used(world, 0), FixedU64::ZERO);
     }
     assert!(deaths(&app).is_empty());
@@ -1655,7 +1659,7 @@ fn consumed_builder_works_site_hidden_and_is_consumed_when_it_completes() {
     // The site completes and consumes the larva: its death is announced as
     // consumed rather than as a loss, and the completion names it.
     utils::run_ticks(&mut app, 6);
-    assert_eq!(under_construction(app.world_mut()), 0);
+    assert_eq!(rising(app.world_mut()), 0);
     assert_eq!(completed_by(&app), vec![larva_id]);
     assert_eq!(deaths(&app), vec![(larva_id, DeathCause::Consumed)]);
     utils::run_ticks(&mut app, 4);
@@ -1670,7 +1674,7 @@ fn force_cancel_brings_consumed_builder_back_and_keeps_price_spent() {
 
     order_depot(&mut app, larva_id);
     utils::run_ticks(&mut app, 12);
-    assert_eq!(under_construction(app.world_mut()), 1);
+    assert_eq!(rising(app.world_mut()), 1);
     assert_eq!(supply::used(app.world(), 0), FixedU64::ZERO);
 
     let site = utils::single_owned_of_type(app.world_mut(), "depot", 0);
@@ -1879,33 +1883,33 @@ fn surveyor_app() -> App {
     app
 }
 
-/// Ticks of work put into the sites on the map.
-fn site_progress(world: &mut World) -> u32 {
+/// Ticks of work put into the rising entities on the map.
+fn rising_progress(world: &mut World) -> u32 {
     world
-        .query::<&UnderConstructionComponent>()
+        .query::<&RisingComponent>()
         .iter(world)
-        .map(|site| site.progress)
+        .map(|rising| rising.progress)
         .sum()
 }
 
-/// The crew on the one site the sharing suite raises, in [`SimulationId`] order.
-fn crew_of_site(world: &mut World) -> Vec<SimulationId> {
+/// The crew on the one rising entity the sharing suite raises, in [`SimulationId`] order.
+fn crew_of_rising(world: &mut World) -> Vec<SimulationId> {
     world
-        .query::<&UnderConstructionComponent>()
+        .query::<&RisingComponent>()
         .iter(world)
-        .flat_map(|site| match &site.work {
-            SiteWork::Crew { builders } => builders.iter().copied().collect::<Vec<_>>(),
-            SiteWork::Unattended { .. } | SiteWork::Halted => Vec::new(),
+        .flat_map(|rising| match &rising.attendance {
+            RiseAttendance::Crew { workers } => workers.iter().copied().collect::<Vec<_>>(),
+            RiseAttendance::Unattended { .. } | RiseAttendance::Halted => Vec::new(),
         })
         .collect()
 }
 
-/// How the one site on the map is worked, if the map holds one.
-fn site_work(world: &mut World) -> Option<SiteWork> {
+/// How the one rising entity on the map is attended, if the map holds one.
+fn rising_attendance(world: &mut World) -> Option<RiseAttendance> {
     world
-        .query::<&UnderConstructionComponent>()
+        .query::<&RisingComponent>()
         .iter(world)
-        .map(|site| site.work.clone())
+        .map(|rising| rising.attendance.clone())
         .next()
 }
 
@@ -1914,14 +1918,14 @@ fn depot(world: &mut World) -> Entity {
     utils::single_owned_of_type(world, "depot", 0)
 }
 
-/// The founder of the one unattended site, if the map holds one.
-fn founder_of_site(world: &mut World) -> Option<SimulationId> {
+/// The founder of the one unattended rising entity, if the map holds one.
+fn founder_of_rising(world: &mut World) -> Option<SimulationId> {
     world
-        .query::<&UnderConstructionComponent>()
+        .query::<&RisingComponent>()
         .iter(world)
-        .find_map(|site| match site.work {
-            SiteWork::Crew { .. } | SiteWork::Halted => None,
-            SiteWork::Unattended { founder } => Some(founder),
+        .find_map(|rising| match rising.attendance {
+            RiseAttendance::Crew { .. } | RiseAttendance::Halted => None,
+            RiseAttendance::Unattended { founder } => Some(founder),
         })
 }
 
@@ -1946,23 +1950,23 @@ fn deaths(app: &App) -> Vec<(SimulationId, DeathCause)> {
         .collect()
 }
 
-/// The builder named by every construction completed so far.
+/// Whoever finished every rise so far.
 fn completed_by(app: &App) -> Vec<SimulationId> {
     app.world()
         .resource::<utils::Announced>()
         .0
         .iter()
         .filter_map(|event| match event {
-            SimulationEvent::ConstructionCompleted { builder, .. } => Some(*builder),
+            SimulationEvent::EntityRisen { by, .. } => Some(*by),
             _ => None,
         })
         .collect()
 }
 
-/// How many sites are still going up.
-fn under_construction(world: &mut World) -> usize {
+/// How many entities are still rising.
+fn rising(world: &mut World) -> usize {
     world
-        .query_filtered::<&EntityInfoComponent, With<UnderConstructionComponent>>()
+        .query_filtered::<&EntityInfoComponent, With<RisingComponent>>()
         .iter(world)
         .count()
 }
@@ -1991,17 +1995,17 @@ fn register_health_shift(
         )
 }
 
-/// Halts the site `site`: no work goes in until a builder takes it up.
-fn halt(app: &mut App, site: Entity) {
+/// Halts the rising `entity`: no work goes in until a worker takes it up.
+fn halt(app: &mut App, entity: Entity) {
     app.world_mut()
-        .get_mut::<UnderConstructionComponent>(site)
-        .expect("a site carries its construction state")
-        .work = SiteWork::Halted;
+        .get_mut::<RisingComponent>(entity)
+        .expect("a rising entity carries its rising state")
+        .attendance = RiseAttendance::Halted;
 }
 
-/// The work put into the site `site`, or `None` once it is built.
-fn progress_of(app: &App, site: Entity) -> Option<u32> {
+/// The work put into the rising `entity`, or `None` once it has risen.
+fn progress_of(app: &App, entity: Entity) -> Option<u32> {
     app.world()
-        .get::<UnderConstructionComponent>(site)
-        .map(|site| site.progress)
+        .get::<RisingComponent>(entity)
+        .map(|rising| rising.progress)
 }

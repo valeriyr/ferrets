@@ -12,11 +12,11 @@ use super::{build, cast, morph, orders};
 use crate::{
     command::{PlayerCommand, SelectMode, SkillCasterRef, SkillTarget},
     components::{
-        build::UnderConstructionComponent,
         entity_info::EntityInfoComponent,
         order_queue::{CancelPolicy, OrderQueueComponent},
         owner,
         rally::{RallyPointComponent, RallyTarget},
+        rise::RisingComponent,
         stance::StanceComponent,
         tags::TagsComponent,
         train::{TrainComponent, TrainQueueComponent},
@@ -404,9 +404,9 @@ pub(super) fn resolve_send_to_entity(
         .interactable(world, target_id)?;
 
     let mut candidates = vec![Order::Harvest { target: target_id }];
-    // A site still going up is a call for help, read before a delivery: a
-    // half-built storage is not a drop-off yet however much its type says it
-    // accepts the load — and Harvest refuses it for that reason.
+    // An own entity still rising is a call for help, read before a delivery:
+    // a storage still rising is not a drop-off yet however much its type says
+    // it accepts the load — and Harvest refuses it for that reason.
     candidates.extend(assist_construction(world, entity, target));
     candidates.push(Order::Repair { target: target_id });
     // Boarding comes after repair, so a worker sent to a damaged transport
@@ -442,7 +442,7 @@ pub(super) fn resolve_send_to_entity(
 /// Only the owner's own sites qualify.
 fn assist_construction(world: &World, entity: Entity, target: Entity) -> Option<Order> {
     let target_ref = world.entity(target);
-    if !target_ref.contains::<UnderConstructionComponent>() {
+    if !target_ref.contains::<RisingComponent>() {
         return None;
     }
     if !entity_def::same_owner(world, entity, target) {
@@ -685,7 +685,7 @@ fn cancel_build(world: &mut World, player: PlayerId, site: SimulationId) {
     let Some(building) = find_owned_interactable(world, player, site) else {
         return;
     };
-    if !entity_def::under_construction(world, building) {
+    if !entity_def::rising(world, building) {
         return;
     }
     let price = entity_def::of(world, building).price.clone();

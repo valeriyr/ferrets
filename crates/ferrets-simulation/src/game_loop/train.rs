@@ -19,7 +19,7 @@ use crate::{
 };
 use ferrets_content::{registry::ContentRegistry, train::Release};
 
-/// Whether `entity` may start a Train: its type trains and it stands raised.
+/// Whether `entity` may start a Train: its type trains and it has risen.
 /// A disabled trainer is admitted and waits; an orphaned annex is not.
 pub fn can_start(world: &World, entity: Entity, _order: &Order) -> Result<(), Refusal> {
     match entity_def::of(world, entity)

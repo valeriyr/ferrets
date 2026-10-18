@@ -205,8 +205,8 @@ fn fold(world: &mut World, folds: Vec<(Entity, Vec<EntityModifiers>, &[EntityMod
 /// Moves each of `entity`'s pools that follows its maximum as the parts of
 /// that maximum came and went since the last fold, and remembers the parts
 /// folded now for every pool its type declares. A pool the entity does not
-/// have is left to whoever seeds it, and one following a site's work to the
-/// work's line.
+/// have is left to whoever seeds it, and one following the work of a rise to
+/// the work's line.
 fn follow_pools(
     world: &mut World,
     registry: &ContentRegistry,
@@ -243,8 +243,8 @@ fn follow_pools(
         let held = entity_ref
             .get::<PoolsComponent>()
             .expect("a simulation entity carries a pool store");
-        // A pool following a site's work is moved by the work's line, not
-        // stepped.
+        // A pool following the work of a rise is moved by the work's line,
+        // not stepped.
         let current = match held.follows(pool) {
             Some(Follows::Maximum) => held
                 .current(pool)

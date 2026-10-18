@@ -94,12 +94,12 @@ fn tunnel_end_founds_its_other_end_where_ordered_bound_to_it() {
     let (raiser, raiser_id) = utils::create_owned(&mut app, "tunnel", 5, 5, 0);
 
     utils::build_entity(&mut app, raiser_id, "tunnel", 20, 20);
-    utils::run_ticks(&mut app, utils::APPLY + BUILD_TIME + 1);
+    utils::run_ticks(&mut app, utils::APPLY + RISE_TIME + 1);
 
     let raised = other_of(&mut app, "tunnel", raiser);
     let raised_id = entity_def::simulation_id(app.world(), raised);
     assert_eq!(utils::cell_of(app.world(), raised), CellPos::new(20, 20));
-    assert!(!entity_def::under_construction(app.world(), raised));
+    assert!(!entity_def::rising(app.world(), raised));
     // The raiser minted bore 1 at birth; the site's own, 2, gave way.
     assert_eq!(
         end_of(&app, raiser),
@@ -175,7 +175,7 @@ fn bound_tunnel_end_refuses_to_found_another() {
     let ((_, raiser_id), _) = tunnel_pair(&mut app, (5, 5), (20, 20));
 
     utils::build_entity(&mut app, raiser_id, "tunnel", 25, 25);
-    utils::run_ticks(&mut app, utils::APPLY + BUILD_TIME + 1);
+    utils::run_ticks(&mut app, utils::APPLY + RISE_TIME + 1);
 
     assert_eq!(utils::owned_of_type(app.world_mut(), "tunnel", 0).len(), 2);
 }
@@ -210,7 +210,7 @@ fn trench_site_lost_leaves_its_other_end_standing() {
     utils::build_entity(&mut app, raiser_id, "trench", 20, 20);
     utils::run_ticks(&mut app, utils::APPLY + 1);
     let site = other_of(&mut app, "trench", raiser);
-    assert!(entity_def::under_construction(app.world(), site));
+    assert!(entity_def::rising(app.world(), site));
 
     spawn::destroy_entity(app.world_mut(), site);
 
@@ -1734,8 +1734,8 @@ fn thicket_lists_own_and_allied_passengers_to_brain_but_not_enemys() {
 /// Ticks a `tunnel` end takes to train another.
 const TRAIN_TIME: u32 = 5;
 
-/// Ticks of work a `tunnel` end's site takes.
-const BUILD_TIME: u32 = 5;
+/// Ticks of work a `tunnel` end takes to rise.
+const RISE_TIME: u32 = 5;
 
 /// Ticks every change of form in the fixture takes.
 const CHANGE_TIME: u32 = 10;
@@ -1951,7 +1951,7 @@ fn register(app: &mut App) {
             .with_stat(EntityStatId::BUILD_RANGE, FixedU64::from_num(40))
             .with_train_time(TRAIN_TIME)
             .with_trainer(["tunnel"], Release::Beside)
-            .with_build(BUILD_TIME, utils::site_initial(&[PoolId::HEALTH]))
+            .with_rise(RISE_TIME, utils::rise_initial_pools(&[PoolId::HEALTH]))
             .with_builder(["tunnel"], BuilderAttendance::Unattended)
             .with_morphs([change("trench"), change("shaft")]),
     );
@@ -2002,7 +2002,7 @@ fn register(app: &mut App) {
             .with_stat(EntityStatId::BUILD_RANGE, FixedU64::from_num(40))
             .with_train_time(TRAIN_TIME)
             .with_trainer(["trench"], Release::Beside)
-            .with_build(BUILD_TIME, utils::site_initial(&[PoolId::HEALTH]))
+            .with_rise(RISE_TIME, utils::rise_initial_pools(&[PoolId::HEALTH]))
             .with_builder(["trench"], BuilderAttendance::Unattended),
     );
     registry.register(
@@ -2162,7 +2162,7 @@ fn tunnel_pair(
 ) -> ((Entity, SimulationId), Entity) {
     let (raiser, raiser_id) = utils::create_owned(app, "tunnel", at.0, at.1, 0);
     utils::build_entity(app, raiser_id, "tunnel", other_at.0, other_at.1);
-    utils::run_ticks(app, utils::APPLY + BUILD_TIME + 1);
+    utils::run_ticks(app, utils::APPLY + RISE_TIME + 1);
     ((raiser, raiser_id), other_of(app, "tunnel", raiser))
 }
 

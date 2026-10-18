@@ -106,7 +106,7 @@ const COMMON_AI: &str = r#"
 
     local function any_standing(list)
         for _, e in ipairs(list) do
-            if not e.under_construction then return true end
+            if not e.rising then return true end
         end
         return false
     end
@@ -121,7 +121,7 @@ const COMMON_AI: &str = r#"
 
     -- Keeps the worker line going from the hall.
     local function keep_workers(commands, budget, hall, halls, workers, worker_type)
-        if hall ~= nil and not hall.under_construction
+        if hall ~= nil and not hall.rising
             and #workers + count_queued(halls, worker_type) < MAX_WORKERS
             and #hall.train_queue < MAX_QUEUE
             and budget.supply >= 1
@@ -168,7 +168,7 @@ const COMMON_AI: &str = r#"
     -- Returns the chosen builder's id.
     local function build_next(commands, state, view, workers, hall, wanted, budget, annex)
         for _, e in ipairs(view.my_entities) do
-            if e.under_construction then return nil end
+            if e.rising then return nil end
         end
         if state.build_deadline ~= nil and view.tick < state.build_deadline then
             return nil
@@ -277,7 +277,7 @@ const COMMON_AI: &str = r#"
     -- Queues one `type_name` on `building` when the budget allows. Returns
     -- whether the order was placed.
     local function train_from(commands, budget, building, type_name)
-        if not building.under_construction and not building.disabled
+        if not building.rising and not building.disabled
             and #building.train_queue < MAX_QUEUE
             and budget.supply >= 1
             and afford(budget, type_name) then
@@ -305,7 +305,7 @@ const COMMON_AI: &str = r#"
         local gold, wood = price.gold or 0, price.wood or 0
         if budget.gold >= gold and budget.wood >= wood then
             for _, host in ipairs(hosts) do
-                if not host.under_construction then
+                if not host.rising then
                     commands[#commands + 1] =
                         { kind = "research", researcher = host.id, research = research }
                     break
@@ -472,7 +472,7 @@ const HUMAN_AI: &str = r#"
             -- stands; the rest form the wave. Boarded explicitly — a smart
             -- send onto a damaged bunker would read as a repair intent.
             local bunker = bunkers[1]
-            if bunker ~= nil and not bunker.under_construction and #archers > 2 then
+            if bunker ~= nil and not bunker.rising and #archers > 2 then
                 local manned = #bunker.passengers
                 for _, a in ipairs(archers) do
                     if manned >= 2 then break end
@@ -564,7 +564,7 @@ const ORC_AI: &str = r#"
             -- keeps one watcher.
             if #watch_towers >= 2 and #guard_towers == 0 then
                 for _, t in ipairs(watch_towers) do
-                    if not t.under_construction and morph_one(commands, budget, t, "guard_tower") then
+                    if not t.rising and morph_one(commands, budget, t, "guard_tower") then
                         break
                     end
                 end
@@ -617,7 +617,7 @@ const ORC_AI: &str = r#"
                     local threat = nearest(w, view.enemy_entities)
                     if threat ~= nil and within(w, threat, 6) then
                         local shelter = nearest(w, farms, function(f)
-                            return not f.under_construction and #f.passengers < 4
+                            return not f.rising and #f.passengers < 4
                         end)
                         if shelter ~= nil then
                             commands[#commands + 1] = { kind = "select", id = w.id }
@@ -899,7 +899,7 @@ const ELVES_AI: &str = r#"
                 end)
                 local in_flight = false
                 for _, e in ipairs(view.my_entities) do
-                    if e.under_construction then in_flight = true end
+                    if e.rising then in_flight = true end
                 end
                 if seam ~= nil and not in_flight
                     and (state.build_deadline == nil or view.tick >= state.build_deadline)
@@ -948,7 +948,7 @@ const ELVES_AI: &str = r#"
                     end
                     if target == nil then
                         target = nearest(w, mines, function(m)
-                            return not m.under_construction and (m.resource_amount or 0) > 0
+                            return not m.rising and (m.resource_amount or 0) > 0
                         end)
                     end
                     if target ~= nil then
@@ -1016,7 +1016,7 @@ const TERRAN_AI: &str = r#"
             -- the command names that building as the builder and the dock's
             -- own cell as the spot.
             local function dock(commands, primary, annex)
-                if primary == nil or primary.under_construction then return false end
+                if primary == nil or primary.rising then return false end
                 if not afford(budget, annex.type_name) then return false end
                 commands[#commands + 1] = {
                     kind = "build", builder = primary.id,
@@ -1039,7 +1039,7 @@ const TERRAN_AI: &str = r#"
                 end)
                 local in_flight = false
                 for _, e in ipairs(view.my_entities) do
-                    if e.under_construction then in_flight = true end
+                    if e.rising then in_flight = true end
                 end
                 if seam ~= nil and not in_flight
                     and (state.build_deadline == nil or view.tick >= state.build_deadline)
@@ -1114,7 +1114,7 @@ const TERRAN_AI: &str = r#"
                     end
                     if target == nil then
                         target = nearest(w, refineries, function(r)
-                            return not r.under_construction and (r.resource_amount or 0) > 0
+                            return not r.rising and (r.resource_amount or 0) > 0
                         end)
                     end
                     if target ~= nil then
@@ -1193,7 +1193,7 @@ const UNDEAD_AI: &str = r#"
             -- growth is worth more than another ghoul in the meantime.
             if any_standing(crypts) and #grown_halls == 0 and #citadels == 0 then
                 for _, n in ipairs(necropolises) do
-                    if not n.under_construction
+                    if not n.rising
                         and morph_one(commands, budget, n, "halls_of_the_dead") then
                         break
                     end
@@ -1204,7 +1204,7 @@ const UNDEAD_AI: &str = r#"
             -- through cloaks, once a second stands to keep the headroom.
             if #spirit_towers == 0 and #ziggurats >= 2 then
                 for _, z in ipairs(ziggurats) do
-                    if not z.under_construction
+                    if not z.rising
                         and morph_one(commands, budget, z, "spirit_tower") then
                         break
                     end
@@ -1222,7 +1222,7 @@ const UNDEAD_AI: &str = r#"
                 end)
                 local in_flight = false
                 for _, e in ipairs(view.my_entities) do
-                    if e.under_construction then in_flight = true end
+                    if e.rising then in_flight = true end
                 end
                 if seam ~= nil and not in_flight
                     and (state.build_deadline == nil or view.tick >= state.build_deadline)
@@ -1263,7 +1263,7 @@ const UNDEAD_AI: &str = r#"
             for _, w in ipairs(acolytes) do
                 if w.idle and not w.hidden and w.id ~= builder_id then
                     local target = nearest(w, mines, function(m)
-                        return not m.under_construction and (m.resource_amount or 0) > 0
+                        return not m.rising and (m.resource_amount or 0) > 0
                     end)
                     if target ~= nil then
                         commands[#commands + 1] = { kind = "select", id = w.id }
@@ -1445,7 +1445,7 @@ pub const BOSS_AI_SCRIPT: &str = r#"
             local queued = 0
             for _, f in ipairs(fortresses) do queued = queued + #f.train_queue end
             for _, f in ipairs(fortresses) do
-                if not f.under_construction and #ships + queued < MAX_SHIPS
+                if not f.rising and #ships + queued < MAX_SHIPS
                     and #f.train_queue < MAX_QUEUE then
                     commands[#commands + 1] =
                         { kind = "train", trainer = f.id, type_name = "ship" }

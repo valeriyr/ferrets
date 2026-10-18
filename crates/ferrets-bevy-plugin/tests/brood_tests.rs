@@ -124,7 +124,7 @@ fn births_stop_at_limit_below_slot_count() {
 }
 
 #[test]
-fn breeder_under_construction_counts_no_time() {
+fn rising_breeder_counts_no_time() {
     let mut app = utils::brood_app(MovementModel::Cell);
     let (_, digger) = utils::create_owned(&mut app, "digger", 5, 5, 0);
     utils::push_command(
@@ -137,14 +137,14 @@ fn breeder_under_construction_counts_no_time() {
         },
     );
 
-    // Nothing is born while the site goes up; the two owed grubs are born the
+    // Nothing is born while the site rises; the two owed grubs are born the
     // tick it stands, the third one period later.
     let mut completed_at = None;
     for tick in 1..=80 {
         utils::run_ticks(&mut app, 1);
         let standing = alive_of_type(&mut app, "ready_hatch")
             .into_iter()
-            .any(|hatch| !entity_def::under_construction(app.world(), hatch));
+            .any(|hatch| !entity_def::rising(app.world(), hatch));
         if standing {
             completed_at = Some(tick);
             break;
