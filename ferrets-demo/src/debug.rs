@@ -204,6 +204,7 @@ pub fn debug_readout(
     let mode_str = match &*mode {
         InputMode::Normal => "normal",
         InputMode::PlacingBuild(_) => "placing",
+        InputMode::PlacingWarp(_) => "warping",
         InputMode::Targeting(_) => "targeting",
     };
 
@@ -285,7 +286,7 @@ pub fn draw_grid(
             for x in 0..map.width() {
                 let cell = CellPos::new(x, y);
                 if nav_grid.is_occupied(layer, cell)
-                    && (reveal.0 || render::sees(&session, &watch, &fog, x, y))
+                    && (reveal.reveals() || render::sees(&session, &watch, &fog, x, y))
                     && !hidden_footprints
                         .iter()
                         .any(|footprint| footprint.contains(cell))
@@ -355,7 +356,7 @@ pub fn draw_bodies(
             continue;
         }
         let cell = body::anchor(location.position);
-        if !(reveal.0 || render::sees(&session, &watch, &fog, cell.x, cell.y)) {
+        if !(reveal.reveals() || render::sees(&session, &watch, &fog, cell.x, cell.y)) {
             continue;
         }
         let Some(radius) = stats.effective(EntityStatId::RADIUS) else {

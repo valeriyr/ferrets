@@ -24,6 +24,7 @@ ferrets-content.workspace = true
 ferrets-geometry.workspace = true
 ferrets-math.workspace = true
 ferrets-network.workspace = true
+ferrets-pathfinder.workspace = true
 ferrets-physics.workspace = true
 ferrets-replay.workspace = true
 ferrets-script.workspace = true

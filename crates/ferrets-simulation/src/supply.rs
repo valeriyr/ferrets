@@ -133,9 +133,11 @@ fn totals(world: &World, player: PlayerId) -> (FixedU64, FixedU64) {
         if entity_def::owner(world, entity) != Some(player) {
             continue;
         }
-        // An entity still rising neither feeds nor eats: it provides nothing
-        // until it has risen, and costs nothing until then either.
+        // An entity still rising provides nothing until it has risen, and
+        // costs what it will cost from the start: a unit warping in holds its
+        // supply as a queued one does.
         if entity_ref.contains::<RisingComponent>() {
+            used = used.saturating_add(holding_cost(world, entity));
             continue;
         }
         // A builder inside the site that will consume it has given its supply

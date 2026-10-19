@@ -66,6 +66,8 @@ pub fn run() {
         .init_resource::<view::WorldView>()
         .init_resource::<input::DragStart>()
         .init_resource::<input::InputMode>()
+        .init_resource::<input::WarpClick>()
+        .init_resource::<input::WarpsSent>()
         .init_resource::<input::AimHover>()
         .init_resource::<input::AimVerdict>()
         .init_resource::<input::Leading>()
@@ -177,7 +179,8 @@ pub fn run() {
                 // belong to the live-input phase and are silenced during replay
                 // (unlike the display-only HUD systems in the viewing group).
                 (
-                    hud::command_card_input,
+                    hud::train_card_input,
+                    hud::warp_card_input,
                     hud::build_card_input,
                     hud::research_card_input,
                     hud::morph_card_input,
@@ -198,6 +201,8 @@ pub fn run() {
                 input::judge_aim,
                 input::targeting_input.in_set(render::ReadsSightings),
                 input::placement_input.in_set(render::ReadsSightings),
+                input::warp_placement_input.in_set(render::ReadsSightings),
+                input::issue_warp,
                 // F2 sandbox spawn issues a Spawn command, so it counts as input too.
                 debug::spawn_debug,
             )

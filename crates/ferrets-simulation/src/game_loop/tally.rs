@@ -8,6 +8,7 @@ use bevy_ecs::{change_detection::Mut, world::World};
 use ferrets_content::{morph::MorphReason, registry::ContentRegistry};
 
 use crate::{
+    components::rise::RiseOrigin,
     entity_def,
     entity_index::EntityIndex,
     events::{DeathCause, EventRecord, SimulationEvent, SpawnCause},
@@ -58,12 +59,13 @@ fn fold(
         SimulationEvent::EntitySpawned { entity, cause } => {
             // Only what a player finished counts as production: a map placement
             // or a sandbox conjuring was not their doing, what a death handed
-            // on nobody made, and a founded site is counted by its completion
-            // instead.
+            // on nobody made, and a founded site or a unit warped in is
+            // counted once it has risen instead.
             let produced = match cause {
                 SpawnCause::Trained { .. } => true,
                 SpawnCause::Placed
                 | SpawnCause::Founded { .. }
+                | SpawnCause::Warped { .. }
                 | SpawnCause::Sandbox
                 | SpawnCause::Bred { .. }
                 | SpawnCause::Bequeathed { .. }
@@ -84,7 +86,12 @@ fn fold(
                 statistics.record_produced(player, entity_def::type_id(world, spawned));
             }
         }
-        SimulationEvent::EntityRisen { entity, .. } => {
+        SimulationEvent::EntityRisen { entity, origin, .. } => {
+            // A summon rising is the cast's doing, as one arriving standing is.
+            match origin {
+                RiseOrigin::Founded { .. } | RiseOrigin::Warped { .. } => {}
+                RiseOrigin::Summoned { .. } => return,
+            }
             let Some(finished) = world.resource::<EntityIndex>().any(*entity) else {
                 return;
             };

@@ -74,7 +74,9 @@ pub fn resolve(world: &mut World) {
     // the other.
     let pushes = contact::separations(&bodies);
     for ((&entity, body), push) in entities.iter().zip(&bodies).zip(pushes) {
-        if push == FixedVec2::ZERO {
+        // A mover still rising pushes the others but stands where it was set
+        // down, as a structure does, until it has risen.
+        if push == FixedVec2::ZERO || entity_def::rising(world, entity) {
             continue;
         }
         let desired = terrain::displaced(body.position, push.x, push.y);

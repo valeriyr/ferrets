@@ -6,11 +6,13 @@ use bevy::{prelude::*, window::PrimaryWindow};
 use ferrets_bevy_plugin::{NetworkActive, PauseIntent, PendingInput, SpeedIntent, tick};
 use ferrets_content::{
     entity_type_def::EntityTypeDef,
+    field::FieldPlacement,
     registry::ContentRegistry,
     skills::{EntityCastTarget, SkillCaster, SkillId},
 };
 use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
 use ferrets_math::{FixedU64, fixed_urect::FixedURect, fixed_uvec2::FixedUVec2};
+use ferrets_pathfinder::layer_mask::LayerMask;
 use ferrets_physics::body;
 use ferrets_simulation::{
     command::{PlayerCommand, SelectMode, SkillCasterRef, SkillTarget},
@@ -21,22 +23,31 @@ use ferrets_simulation::{
         location::LocationComponent,
         owner::OwnerComponent,
         rally::{RallyPointComponent, RallyTarget},
+        rise::RisingComponent,
         stance::{Stance, StanceComponent},
+        warp::WarpComponent,
     },
     control_groups::ControlGroups,
+    entity_def,
     entity_index::EntityIndex,
     fields::{self, FieldGrid},
-    game_loop::cast::{self, AimRefusal},
+    game_loop::{
+        cast::{self, AimRefusal},
+        warp,
+    },
+    input::SYNC_LATENCY,
+    landing,
     map::Map,
     order::AttackTarget,
     selection::Selection,
     session::{GameSession, player_id::PlayerId},
     simulation_id::SimulationId,
+    visibility::VisibilityGrid,
 };
 
 use crate::{
     camera,
-    render::{self, CELL_PX},
+    render::{self, CELL_PX, FogReveal},
     time::{self, SpeedStep},
 };
 
@@ -145,6 +156,9 @@ pub enum InputMode {
     Normal,
     /// Left-click places the named building (started from the build menu).
     PlacingBuild(String),
+    /// Left-click warps the named unit in by the first of the leading
+    /// warper's candidates that may (started from its card).
+    PlacingWarp(String),
     /// Left-click issues the armed combat order (started from a hotkey).
     Targeting(TargetedOrder),
 }
@@ -482,11 +496,12 @@ pub fn selection_input(
 
 /// Right click sends the selection to the entity under the cursor, or moves it
 /// to the clicked cell. Holding Shift appends instead of replacing orders.
-/// When nothing selected can move, the click re-targets the rally points of
-/// the own stationary producers among the selection instead — whatever else
-/// stands still beside them, a larva say, takes neither an order nor a rally —
-/// and clicking anything in the selection clears them. Anything that can move
-/// outranks rally: a mobile rally-holder answers a right click by moving.
+/// When nothing selected can move yet, the click re-targets the rally points
+/// of the own stationary producers and rising movers among the selection
+/// instead — whatever else stands still beside them, a larva say, takes
+/// neither an order nor a rally — and clicking anything in the selection
+/// clears them. Anything that can move outranks rally: a risen mobile
+/// rally-holder answers a right click by moving.
 pub fn order_input(
     mode: Res<InputMode>,
     mouse: Res<ButtonInput<MouseButton>>,
@@ -509,6 +524,7 @@ pub fn order_input(
         &EntityInfoComponent,
         &OwnerComponent,
         Option<&RallyPointComponent>,
+        Has<RisingComponent>,
     )>,
 ) {
     if !mouse.just_pressed(MouseButton::Right) || !matches!(*mode, InputMode::Normal) {
@@ -540,9 +556,9 @@ pub fn order_input(
 }
 
 /// Issues the orders a right click on `world` asks for: re-targeting the rally
-/// points of the own stationary producers among the selection when nothing
-/// selected can move, sending the selection to `target` when the click named
-/// one, and moving it to the point otherwise.
+/// points of the own stationary producers and rising movers among the
+/// selection when nothing selected can move yet, sending the selection to
+/// `target` when the click named one, and moving it to the point otherwise.
 ///
 /// Shared by the cursor and the minimap, so a click means the same thing
 /// wherever it lands. A caller with no way to aim at an entity passes no
@@ -558,38 +574,42 @@ pub fn issue_orders_at(
         &EntityInfoComponent,
         &OwnerComponent,
         Option<&RallyPointComponent>,
+        Has<RisingComponent>,
     )>,
     pending: &mut PendingInput,
 ) {
     // The click sets rally points only when nothing selected can move — a
     // mixed selection keeps ordering its units around normally, movement
-    // outranking rally — and then only on the own stationary producers in
-    // it: a stationary thing with no rally point takes nothing either way.
+    // outranking rally — and then only on the own entities in it that hold a
+    // rally point: stationary producers, and movers still rising, which move
+    // only once they have risen. A stationary thing with no rally point takes
+    // nothing either way.
     let Some(local) = session.local_player() else {
         return;
     };
     let selected = selection.get(local);
-    let mut producers = Vec::new();
+    let mut rally_holders = Vec::new();
     let mut any_moves = false;
     for &id in selected {
-        let Some((info, owner, rally)) = holders.iter().find(|(info, _, _)| info.id() == id) else {
+        let Some((info, owner, rally, rising)) = holders.iter().find(|(info, ..)| info.id() == id)
+        else {
             continue;
         };
-        if registry.def(info.type_id()).can_move() {
+        if registry.def(info.type_id()).can_move() && !rising {
             any_moves = true;
         } else if rally.is_some() && owner.player() == local {
-            producers.push(id);
+            rally_holders.push(id);
         }
     }
-    if !any_moves && !producers.is_empty() {
+    if !any_moves && !rally_holders.is_empty() {
         let target = match target {
             Some(id) if selected.contains(&id) => None,
             Some(id) => Some(RallyTarget::Entity(id)),
             None => Some(RallyTarget::Position(world_to_pos(world))),
         };
-        for producer in producers {
+        for holder in rally_holders {
             pending.push(PlayerCommand::SetRallyPoint {
-                entity: producer,
+                entity: holder,
                 target,
             });
         }
@@ -757,9 +777,12 @@ pub fn order_mode_input(
     selection: Res<Selection>,
     mut mode: ResMut<InputMode>,
 ) {
-    // Arm from Normal, or re-arm a different order; never steal an
-    // in-progress building placement.
-    if matches!(*mode, InputMode::PlacingBuild(_)) {
+    // Arm from Normal, or re-arm a different order; never steal a building
+    // or warp placement in progress.
+    if matches!(
+        *mode,
+        InputMode::PlacingBuild(_) | InputMode::PlacingWarp(_)
+    ) {
         return;
     }
     let Some(local) = session.local_player() else {
@@ -828,6 +851,7 @@ pub fn hover_aim(
         }
         InputMode::Normal
         | InputMode::PlacingBuild(_)
+        | InputMode::PlacingWarp(_)
         | InputMode::Targeting(
             TargetedOrder::Attack
             | TargetedOrder::Patrol
@@ -867,6 +891,7 @@ pub fn judge_aim(world: &mut World) {
         }
         InputMode::Normal
         | InputMode::PlacingBuild(_)
+        | InputMode::PlacingWarp(_)
         | InputMode::Targeting(
             TargetedOrder::Attack
             | TargetedOrder::Patrol
@@ -1152,9 +1177,9 @@ fn center_on_group(
 
 /// While placing, draw a footprint ghost and place on left-click (Esc/RMB cancel).
 ///
-/// The ghost is judged by what the perspective knows of the ground: the grid
-/// and the fields the type reads. What stands underfoot unseen refuses the
-/// raise when it starts, never the ghost.
+/// The ghost is judged by what the perspective knows — see [`GhostView`] —
+/// against the type's field rules. What stands there unseen refuses the raise
+/// when it starts, never the ghost.
 pub fn placement_input(
     mouse: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
@@ -1165,7 +1190,7 @@ pub fn placement_input(
     map: Res<Map>,
     registry: Res<ContentRegistry>,
     session: Res<GameSession>,
-    fields: Res<FieldGrid>,
+    (fields, fog, ghosts): (Res<FieldGrid>, Res<VisibilityGrid>, Res<render::Ghosts>),
     interactions: Query<&Interaction>,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
@@ -1213,33 +1238,35 @@ pub fn placement_input(
     let size = location_def.size();
 
     // What the perspective knows of the ground, and the fields the type
-    // reads. A type raised over a resource source is placed on the source
-    // itself — the ghost snaps to the footprint of a source of that type under
-    // the cursor, and that footprint is the ground, so the grid is not asked
-    // about it. Only a source the perspective sees snaps, judged by its stamp
-    // like every other pick.
+    // reads; a type raised over a source snaps to one under the cursor.
     let cursor = CellPos::new(cx, cy);
-    let (anchor, passable) = match def.overbuilds.as_deref() {
-        Some(over) => {
-            let under = sources
-                .iter()
-                .find_map(|(info, location, visibility, sighted, _, _)| {
-                    let standing = registry.def(info.type_id());
-                    snaps_to(over, cursor, info, location, standing, visibility, sighted)
-                });
-            match under {
-                Some(origin) => (
-                    origin,
-                    fields::allows_placement_in(&fields, &session, Some(local), def, origin),
-                ),
-                None => (cursor, false),
-            }
-        }
-        None => (
-            cursor,
-            ghost_fits(&map, &fields, &session, local, def, cursor),
-        ),
+    let mut made_out = made_out_footprints(
+        &registry,
+        sources
+            .iter()
+            .map(|(info, location, visibility, sighted, _, _)| {
+                (info, location, visibility, sighted)
+            }),
+    );
+    made_out.extend(ghosts.remembered_footprints());
+    let ghost = GhostView {
+        map: &map,
+        registry: &registry,
+        fields: &fields,
+        fog: &fog,
+        session: &session,
+        player: local,
+        made_out: &made_out,
     };
+    let (anchor, passable) = ghost.placed(
+        def,
+        cursor,
+        sources
+            .iter()
+            .map(|(info, location, visibility, sighted, _, _)| {
+                (info, location, visibility, sighted)
+            }),
+    );
     let (cx, cy) = (anchor.x, anchor.y);
 
     // The area each field the type projects would cover, and the areas the
@@ -1312,22 +1339,382 @@ pub fn placement_input(
     }
 }
 
-/// Whether the placement ghost of `def` anchored at `anchor` shows as fitting
-/// for `player`: every cell of the footprint free on the grid, and the fields
-/// the type reads allowing it. What stands underfoot is not asked; the raise
-/// refuses it when it starts.
-pub fn ghost_fits(
-    map: &Map,
-    fields: &FieldGrid,
-    session: &GameSession,
-    player: PlayerId,
-    def: &EntityTypeDef,
-    anchor: CellPos,
-) -> bool {
-    let location_def = def.location.expect("validated content defines a location");
-    map.nav_grid()
-        .is_footprint_passable_by(location_def.occupation(), anchor, location_def.size())
-        && fields::allows_placement_in(fields, session, Some(player), def, anchor)
+/// While warping a unit in, draw its footprint ghost and record a left-click
+/// as the warp-in to give a warper (Esc/RMB cancel).
+///
+/// The ghost is judged by what the perspective knows — see [`GhostView`] —
+/// against the leading warper's field rules and the unit's own, and the
+/// landing word. What stands there unseen refuses the warp, never the ghost.
+#[allow(clippy::too_many_arguments)]
+pub fn warp_placement_input(
+    mouse: Res<ButtonInput<MouseButton>>,
+    keys: Res<ButtonInput<KeyCode>>,
+    mut mode: ResMut<InputMode>,
+    mut click: ResMut<WarpClick>,
+    mut gizmos: Gizmos,
+    leading: Res<Leading>,
+    (map, registry, session, fields, visibility, index): (
+        Res<Map>,
+        Res<ContentRegistry>,
+        Res<GameSession>,
+        Res<FieldGrid>,
+        Res<VisibilityGrid>,
+        Res<EntityIndex>,
+    ),
+    infos: Query<&EntityInfoComponent>,
+    seen: Query<(
+        &EntityInfoComponent,
+        &LocationComponent,
+        &Visibility,
+        Option<&render::Sighted>,
+    )>,
+    ghosts: Res<render::Ghosts>,
+    interactions: Query<&Interaction>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    cameras: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
+) {
+    let InputMode::PlacingWarp(type_name) = &*mode else {
+        return;
+    };
+    let type_name = type_name.clone();
+    let Some(local) = session.local_player() else {
+        return;
+    };
+    if keys.just_pressed(KeyCode::Escape) || mouse.just_pressed(MouseButton::Right) {
+        *mode = InputMode::Normal;
+        return;
+    }
+    // Neither ghost nor warp under the cursor while it is over a HUD button —
+    // in particular, the card button's own click that just entered this mode.
+    if pointer_over_ui(&interactions) {
+        return;
+    }
+    let warper_def = leading
+        .0
+        .and_then(|id| index.alive(id))
+        .and_then(|entity| infos.get(entity).ok())
+        .and_then(|info| registry.def(info.type_id()).warper.as_ref());
+    let (Some(warper), Some(warper_def), Some(def)) =
+        (leading.0, warper_def, registry.entity(&type_name))
+    else {
+        *mode = InputMode::Normal;
+        return;
+    };
+    let (Ok(window), Ok((camera, camera_transform))) = (windows.single(), cameras.single()) else {
+        return;
+    };
+    let Some(cursor) = cursor_world(window, camera, camera_transform) else {
+        return;
+    };
+    let Some((cx, cy)) = world_to_cell(cursor) else {
+        return;
+    };
+    let size = def
+        .location
+        .expect("validated content defines a location")
+        .size();
+    let mut made_out = made_out_footprints(&registry, seen.iter());
+    made_out.extend(ghosts.remembered_footprints());
+    let ghost = GhostView {
+        map: &map,
+        registry: &registry,
+        fields: &fields,
+        fog: &visibility,
+        session: &session,
+        player: local,
+        made_out: &made_out,
+    };
+    // A type raised over a source snaps to one under the cursor, as a build
+    // ghost does.
+    let (anchor, placed) = ghost.placed(def, CellPos::new(cx, cy), seen.iter());
+    let (cx, cy) = (anchor.x, anchor.y);
+    let footprint = CellRect::new(anchor, size);
+    let fits = placed
+        && ghost.allows(warper_def.within(), footprint)
+        && landing::sees_in(
+            &visibility,
+            &session,
+            local,
+            warper_def.landing(),
+            footprint,
+        );
+
+    let center = Vec2::new(
+        (cx as f32 + size.width as f32 / 2.0) * CELL_PX,
+        -(cy as f32 + size.height as f32 / 2.0) * CELL_PX,
+    );
+    let extent = Vec2::new(size.width as f32, size.height as f32) * CELL_PX;
+    let color = if fits {
+        Color::srgb(0.3, 1.0, 0.4)
+    } else {
+        Color::srgb(1.0, 0.3, 0.3)
+    };
+    gizmos.rect_2d(Isometry2d::from_translation(center), extent, color);
+
+    if mouse.just_pressed(MouseButton::Left) {
+        click.0 = Some(Warp {
+            leading: warper,
+            type_name,
+            at: FixedUVec2::from(anchor),
+        });
+        *mode = InputMode::Normal;
+    }
+}
+
+/// A warp-in clicked this frame, not yet given to a warper.
+#[derive(Resource, Default)]
+pub struct WarpClick(pub Option<Warp>);
+
+/// A warp-in the player clicked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Warp {
+    /// The leading warper the ghost was judged by.
+    pub leading: SimulationId,
+    /// The unit's type, by name.
+    pub type_name: String,
+    /// Where it was clicked.
+    pub at: FixedUVec2,
+}
+
+/// Warp-ins given to warpers whose commands may not have landed yet.
+#[derive(Resource, Default)]
+pub struct WarpsSent(pub Vec<SentWarp>);
+
+/// A warp-in given to a warper.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SentWarp {
+    /// The warper given the warp-in.
+    pub warper: SimulationId,
+    /// The tick it was given it.
+    pub tick: u32,
+    /// The cooldown end the warper held then.
+    pub cooldown_end: u32,
+}
+
+impl SentWarp {
+    /// Whether its command may still be on its way at `tick`: the tick it
+    /// was given for has not surely run yet.
+    pub fn in_flight(&self, tick: u32) -> bool {
+        tick <= self.tick + SYNC_LATENCY + 1
+    }
+}
+
+/// Gives the warp-in clicked this frame to the first of its candidates that
+/// may warp the type in now — see [`warp_candidates`] — else to the leading
+/// warper, whose refusal the simulation answers.
+pub fn issue_warp(world: &mut World) {
+    let Some(warp) = world.resource_mut::<WarpClick>().0.take() else {
+        return;
+    };
+    let Some(local) = world.resource::<GameSession>().local_player() else {
+        return;
+    };
+    let ready = warp_candidates(world, local, warp.leading)
+        .into_iter()
+        .find(|&entity| warp::judge_warper(world, local, entity, &warp.type_name).is_ok());
+    let warper = ready
+        .map(|entity| entity_def::simulation_id(world, entity))
+        .unwrap_or(warp.leading);
+    // Kept while the command may still be on its way, until its tick has
+    // surely run; one whose warper's cooldown has moved is passed over by
+    // `warp_candidates`.
+    let tick = world.resource::<GameSession>().tick();
+    let mut sent = std::mem::take(&mut world.resource_mut::<WarpsSent>().0);
+    sent.retain(|sent_warp| sent_warp.in_flight(tick));
+    if let Some(entity) = ready {
+        sent.push(SentWarp {
+            warper,
+            tick,
+            cooldown_end: cooldown_end(world, entity),
+        });
+    }
+    world.resource_mut::<WarpsSent>().0 = sent;
+    world
+        .resource_mut::<PendingInput>()
+        .push(PlayerCommand::WarpIn {
+            warper,
+            type_name: warp.type_name,
+            at: warp.at,
+        });
+}
+
+/// The local player's warpers a warp-in led by `leading` may go to, in the
+/// order they are offered it: the leading warper, then the other selected own
+/// warpers of its type in selection order — the ghost's rules are theirs —
+/// leaving out any given a warp-in whose command has not landed yet.
+pub fn warp_candidates(world: &World, local: PlayerId, leading: SimulationId) -> Vec<Entity> {
+    let index = world.resource::<EntityIndex>();
+    let Some(leader) = index.interactable(world, leading) else {
+        return Vec::new();
+    };
+    let warper_type = entity_def::type_id(world, leader);
+    let tick = world.resource::<GameSession>().tick();
+    let still_sent = |id: SimulationId, entity: Entity| {
+        world.get_resource::<WarpsSent>().is_some_and(|sent| {
+            sent.0.iter().any(|sent_warp| {
+                sent_warp.warper == id
+                    && sent_warp.in_flight(tick)
+                    && cooldown_end(world, entity) == sent_warp.cooldown_end
+            })
+        })
+    };
+    std::iter::once(leading)
+        .chain(
+            world
+                .resource::<Selection>()
+                .get(local)
+                .iter()
+                .copied()
+                .filter(|&id| id != leading),
+        )
+        .filter_map(|id| index.interactable(world, id).map(|entity| (id, entity)))
+        .filter(|&(id, entity)| {
+            entity_def::owner(world, entity) == Some(local)
+                && entity_def::type_id(world, entity) == warper_type
+                && entity_def::warper_def(world, entity).is_some()
+                && !still_sent(id, entity)
+        })
+        .map(|(_, entity)| entity)
+        .collect()
+}
+
+/// The tick `warper`'s cooldown runs out at.
+fn cooldown_end(world: &World, warper: Entity) -> u32 {
+    world
+        .get::<WarpComponent>(warper)
+        .expect("a warper keeps its cooldown")
+        .ready_at
+}
+
+/// What a placement ghost is judged against: what `player`'s side knows of
+/// the ground and the fields.
+pub struct GhostView<'a> {
+    /// The map whose terrain the ghost stands on.
+    pub map: &'a Map,
+    /// The content the rules are read from.
+    pub registry: &'a ContentRegistry,
+    /// The fields, read as far as the overlay shows them.
+    pub fields: &'a FieldGrid,
+    /// The fog the player sees the fields through.
+    pub fog: &'a VisibilityGrid,
+    /// The session the player sits in.
+    pub session: &'a GameSession,
+    /// The player placing.
+    pub player: PlayerId,
+    /// The footprints, with the layers they claim, of the entities the
+    /// player makes out or remembers.
+    pub made_out: &'a [(LayerMask, CellRect)],
+}
+
+impl GhostView<'_> {
+    /// Whether the ghost of `def` anchored at `anchor` shows as fitting:
+    /// terrain that takes its footprint, clear of every footprint made out on
+    /// a layer it claims, and its type's field rules met.
+    pub fn fits(&self, def: &EntityTypeDef, anchor: CellPos) -> bool {
+        let location_def = def.location.expect("validated content defines a location");
+        let occupation = location_def.occupation();
+        let footprint = CellRect::new(anchor, location_def.size());
+        self.map.nav_grid().is_footprint_terrain_passable_by(
+            occupation,
+            anchor,
+            location_def.size(),
+        ) && !self.made_out.iter().any(|&(layers, standing)| {
+            layers & occupation != LayerMask::EMPTY && standing.intersects(footprint)
+        }) && self.allows(&def.field_placement, footprint)
+    }
+
+    /// Where the ghost of `def` stands with the cursor on `cursor`, and whether
+    /// it shows as fitting there. A type raised over a resource source snaps
+    /// to the footprint of a source of that type among `sources` the
+    /// perspective makes out under the cursor — that footprint is its ground —
+    /// and fits as its field rules say; with none under the cursor it stays
+    /// there and does not fit. Any other type stands on `cursor` and fits as
+    /// [`fits`](Self::fits) says.
+    pub fn placed<'a>(
+        &self,
+        def: &EntityTypeDef,
+        cursor: CellPos,
+        sources: impl IntoIterator<
+            Item = (
+                &'a EntityInfoComponent,
+                &'a LocationComponent,
+                &'a Visibility,
+                Option<&'a render::Sighted>,
+            ),
+        >,
+    ) -> (CellPos, bool) {
+        let Some(over) = def.overbuilds.as_deref() else {
+            return (cursor, self.fits(def, cursor));
+        };
+        let size = def
+            .location
+            .expect("validated content defines a location")
+            .size();
+        let under = sources
+            .into_iter()
+            .find_map(|(info, location, visibility, sighted)| {
+                let standing = self.registry.def(info.type_id());
+                snaps_to(over, cursor, info, location, standing, visibility, sighted)
+            });
+        match under {
+            Some(anchor) => (
+                anchor,
+                self.allows(&def.field_placement, CellRect::new(anchor, size)),
+            ),
+            None => (cursor, false),
+        }
+    }
+
+    /// Whether `rules` admit a footprint at `rect` on the field coverage the
+    /// overlay shows the player — see [`render::shown_coverage`].
+    pub fn allows(&self, rules: &[FieldPlacement], rect: CellRect) -> bool {
+        let layers = render::shown_fields(self.registry);
+        let sight = render::CoverageSight {
+            session: self.session,
+            viewed: Some(self.player),
+            fields: self.fields,
+            fog: self.fog,
+            reveal: FogReveal::Fogged,
+        };
+        fields::rules_allow_by(
+            self.session,
+            Some(self.player),
+            rules,
+            rect,
+            |field, cell| {
+                self.fields
+                    .contains(cell)
+                    .then(|| render::shown_coverage(&sight, &layers, field, cell))
+            },
+        )
+    }
+}
+
+/// The footprints, with the layers they claim, of every entity the
+/// perspective makes out whose footprint claims cells.
+pub fn made_out_footprints<'a>(
+    registry: &ContentRegistry,
+    entities: impl Iterator<
+        Item = (
+            &'a EntityInfoComponent,
+            &'a LocationComponent,
+            &'a Visibility,
+            Option<&'a render::Sighted>,
+        ),
+    >,
+) -> Vec<(LayerMask, CellRect)> {
+    entities
+        .filter(|&(_, _, visibility, sighted)| render::made_out(visibility, sighted))
+        .filter_map(|(info, location, _, _)| {
+            let location_def = registry.def(info.type_id()).location?;
+            location_def.solidity().claims_cells().then(|| {
+                (
+                    location_def.occupation(),
+                    CellRect::new(body::anchor(location.position), location_def.size()),
+                )
+            })
+        })
+        .collect()
 }
 
 /// The footprint origin a raise over `over` snaps to when `cursor` is on a

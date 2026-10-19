@@ -42,7 +42,6 @@ use ferrets_content::{
     skills::{Casting, EntityCastEffect, Reach, Recipient, SkillCaster, SkillDef, Spot, Whom},
     stack_rule::StackRule,
     stats::{EntityModifier, ModifierOp},
-    train::Release,
     transport::{PassengerConduct, PassengerFate},
     turret::{TurretDef, TurretMount, TurretStats, WeaponConduct},
     work::{CrewLimit, WorkPresence},
@@ -2324,7 +2323,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
         registry.register(
             building("gateway", 2, 4)
                 .with_tags(["structure"])
-                .with_trainer(["zealot"], Release::Beside)
+                .with_trainer(["zealot"])
                 .with_field_placement([FieldPlacement::Requires {
                     field: power,
                     of: Affiliation::Own,

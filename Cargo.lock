@@ -2376,6 +2376,7 @@ dependencies = [
  "ferrets-geometry",
  "ferrets-math",
  "ferrets-network",
+ "ferrets-pathfinder",
  "ferrets-physics",
  "ferrets-replay",
  "ferrets-script",

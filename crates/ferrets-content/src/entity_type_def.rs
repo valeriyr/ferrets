@@ -22,6 +22,7 @@ use crate::{
     gateway::{Doors, GatewayDef, Joins},
     holder::Holder,
     kinds::Kinds,
+    landing::Landing,
     location::{LocationDef, Solidity},
     morph::{MorphReason, MorphTransition},
     pool::Pool,
@@ -40,9 +41,10 @@ use crate::{
     splash::SplashDef,
     stand::StandingAct,
     tags,
-    train::{Release, TrainerDef},
+    train::TrainerDef,
     transport::{PassengerConduct, PassengerFate, TransporterDef},
     turret::{TurretFire, TurretMount},
+    warp::WarperDef,
     work::{Attachment, WorkPresence},
 };
 
@@ -153,6 +155,9 @@ pub struct EntityTypeDef {
     pub rise: Option<RiseDef>,
     /// The entity types instances can train. `None` means instances cannot train.
     pub trainer: Option<TrainerDef>,
+    /// The entity types instances can warp in. `None` means instances cannot
+    /// warp anything in.
+    pub warper: Option<WarperDef>,
     /// What instances hold others as. `None` means instances hold nobody.
     pub holder: Option<Holder>,
     /// The researches instances can host. `None` means instances cannot research.
@@ -176,8 +181,9 @@ pub struct EntityTypeDef {
     /// The berths attached workers sit in on instances. `None` means no worker
     /// attaches to instances.
     pub berths: Option<BerthsDef>,
-    /// The resource source type a site of this type is raised over, by
-    /// registered name. `None` means instances are placed on open ground.
+    /// The resource source type instances are set down over when built,
+    /// warped in or summoned, by registered name. `None` means instances are
+    /// placed on open ground.
     pub overbuilds: Option<String>,
     /// The docks instances offer annexes, each naming where an annex stands
     /// and which annexes it takes. Empty means instances take no annex.
@@ -227,6 +233,7 @@ impl EntityTypeDef {
             train_time: None,
             rise: None,
             trainer: None,
+            warper: None,
             holder: None,
             researcher: None,
             builder: None,
@@ -332,10 +339,10 @@ impl EntityTypeDef {
             })
     }
 
-    /// Ticks to produce one instance, however it is produced. `None` means nothing
-    /// produces the type, which also leaves repair no rate to work from.
+    /// Ticks to produce one instance: its train time when it trains, else its
+    /// rise time. `None` means nothing produces the type.
     pub fn production_time(&self) -> Option<u32> {
-        self.rise_time().or(self.train_time)
+        self.train_time.or(self.rise_time())
     }
 
     /// Ticks of work one instance takes to rise. `None` means the type never
@@ -683,15 +690,26 @@ impl EntityTypeDef {
     }
 
     /// Allows instances of this type to train units of the `trains` types,
-    /// released into the world as `release` says.
+    /// released beside the trainer.
     ///
     /// Panics if `trains` is empty or any entry is empty.
-    pub fn with_trainer(
+    pub fn with_trainer(mut self, trains: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.trainer = Some(TrainerDef::new(trains));
+        self
+    }
+
+    /// Allows instances of this type to warp units of the `warps` types in,
+    /// onto cells meeting the `within` field rules that its side knows of as
+    /// `landing` says.
+    ///
+    /// Panics if `warps` is empty or any entry is empty.
+    pub fn with_warper(
         mut self,
-        trains: impl IntoIterator<Item = impl Into<String>>,
-        release: Release,
+        warps: impl IntoIterator<Item = impl Into<String>>,
+        within: Vec<FieldPlacement>,
+        landing: Landing,
     ) -> Self {
-        self.trainer = Some(TrainerDef::new(trains, release));
+        self.warper = Some(WarperDef::new(warps, within, landing));
         self
     }
 
@@ -821,8 +839,8 @@ impl EntityTypeDef {
         self
     }
 
-    /// Makes sites of this type rise over a resource source of `type_name`,
-    /// taking its remaining amount.
+    /// Makes instances of this type built, warped in or summoned over a
+    /// resource source of `type_name`, taking its remaining amount.
     ///
     /// Panics if `type_name` is empty.
     pub fn with_overbuilds(mut self, type_name: impl Into<String>) -> Self {

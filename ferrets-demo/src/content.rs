@@ -283,7 +283,7 @@ pub const CONTENT: &str = r#"
             { turret = "keep_gun", at = { 3, 3 }, size = { 2, 2 } },
         },
         turret_fire = "spread",
-        trainer = { trains = { "ship" }, release = "beside" },
+        trainer = { trains = { "ship" } },
         tags = { "building" },
     })
 
@@ -386,7 +386,7 @@ pub const CONTENT: &str = r#"
             dying = { time = 2 },
             price = { gold = 400 },
             rise = { time = 200, pools = { health = "initial" } },
-            trainer = { trains = { trains }, release = "beside" },
+            trainer = { trains = { trains } },
             resource_storage = { "gold", "wood" },
             tags = { "building" },
             berths = berths,
@@ -420,7 +420,7 @@ pub const CONTENT: &str = r#"
             -- Mends in half the time it took to raise: a camp is quicker to
             -- patch up than to put up.
             repair_ratio = "0.5",
-            trainer = trains and { trains = trains, release = "beside" },
+            trainer = trains and { trains = trains },
             researcher = researches,
             tags = { "building" },
             berths = berths,
@@ -859,7 +859,7 @@ pub const CONTENT: &str = r#"
         price = { gold = 180, wood = 120 },
         rise = { time = 130, pools = { health = "initial" } },
         repair_ratio = "0.5",
-        trainer = { trains = { "war_wagon" }, release = "beside" },
+        trainer = { trains = { "war_wagon" } },
         tags = { "building" },
         berths = { rim = { points = rim(3, 3) } },
         requires = { { entity_type = "war_camp" } },
@@ -1254,14 +1254,16 @@ pub const CONTENT: &str = r#"
         carries = { tags = { "biological" } }, boarding = "own", capacity = 40, fate = "destroy",
     })
 
-    -- A burrow breaks ground anywhere the warren reaches, creep or not, and
-    -- spreads a little of its own.
+    -- A burrow breaks ground on creep, and spreads a little of its own.
     define_entity("burrow", {
         race = "swarm",
         location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
         stats = { sight_range = 6, load_range = 1, load_period = 2, unload_range = 1, unload_period = 4 },
         pools = { health = { maximum = 300 } },
         dying = { time = 2 },
+        -- Raised by the warren, it breaks ground over three seconds, from a
+        -- quarter of its health, and is no way out until it has.
+        rise = { time = 60, pools = { health = { follows_work_from = { share = "0.25" } } } },
         tags = { "building" },
         gateway = { network = "warren", doors = "both" },
         field_sources = {
@@ -1306,7 +1308,9 @@ pub const CONTENT: &str = r#"
         caster = "entity",
         cooldown = 280,
         cost = { resources = { gold = 75, wood = 75 } },
-        effect = { summon = { at = { kind = "position", range = 30 }, entity = "burrow", count = 1, landing = "anywhere", arrives = "standing" } },
+        -- A burrow breaks ground only on creep, and is lost if the creep under
+        -- it withers before it has risen.
+        effect = { summon = { at = { kind = "position", range = 30 }, entity = "burrow", count = 1, landing = "sighted", within = { ON_CREEP }, arrives = "rising" } },
     })
 
     define_entity("warren", {
@@ -1477,7 +1481,7 @@ pub const CONTENT: &str = r#"
         dying = { time = 2 },
         price = { gold = 400 },
         rise = { time = 200, pools = { health = "initial" } },
-        trainer = { trains = { "probe" }, release = "beside" },
+        trainer = { trains = { "probe" } },
         resource_storage = { "gold", "wood" },
         tags = { "building" },
         field_placement = { NOT_ON_CREEP },
@@ -1543,10 +1547,54 @@ pub const CONTENT: &str = r#"
         price = { gold = 200, wood = 100 },
         rise = { time = 120, pools = { health = "initial" } },
         repair_ratio = "0.5",
-        trainer = { trains = { "zealot", "stalker", "dark_templar", "observer", "arbiter" }, release = "beside" },
+        trainer = { trains = { "zealot", "stalker", "dark_templar", "observer", "arbiter" } },
         tags = { "building" },
         field_placement = { POWERED, NOT_ON_CREEP },
         field_effects = { UNPOWERED_IDLES },
+        -- Turning into a warp gate takes five seconds and gives up the
+        -- queue; the gate warps its units in instead.
+        morphs = {
+            { into = "warp_gate", land_pool_carry = { health = "clamp" },
+              time = 100,
+              placement = "reserve",
+              cancel = "refundable",
+              reason = "change" },
+        },
+    })
+
+    -- A warp gate warps its units in rather than training them: the player
+    -- picks a powered cell the side sees, the unit rises there at once over
+    -- its own rise time, and the gate cools down for the unit's train time.
+    -- It turns back into a gateway the same way it became one.
+    define_entity("warp_gate", {
+        race = "conclave",
+        location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
+        stats = { sight_range = 6 },
+        pools = { health = { maximum = 500 } },
+        dying = { time = 2 },
+        warper = {
+            warps = { "zealot", "stalker" },
+            within = { POWERED },
+            landing = "sighted",
+        },
+        tags = { "building" },
+        field_placement = { POWERED, NOT_ON_CREEP },
+        field_effects = { UNPOWERED_IDLES },
+        morphs = {
+            { into = "gateway", land_pool_carry = { health = "clamp" },
+              time = 100,
+              placement = "reserve",
+              cancel = "refundable",
+              reason = "change" },
+        },
+    })
+
+    -- A unit warping in stands in the open with no armor at all until it
+    -- has finished arriving.
+    define_entity_buff("warping_in", {
+        lasting = { as_long_as = { unless = "risen" } },
+        stack = "ignore",
+        effects = { { stats = { { entity_stat = "armor", op = "percent", value = "-1" } } } },
     })
 
     define_entity("photon_cannon", {
@@ -1588,6 +1636,9 @@ pub const CONTENT: &str = r#"
         attack = { targets = GROUND | WATER },
         price = { gold = 100 },
         train_time = 60,
+        -- Warped in, it rises from a quarter of its health over four seconds.
+        rise = { time = 80, pools = { health = { follows_work_from = { share = "0.25" } } } },
+        passives = { "warping_in" },
         selection = { priority = 10 },
         field_effects = { VEILED },
     })
@@ -1619,6 +1670,8 @@ pub const CONTENT: &str = r#"
         attack = { targets = GROUND | WATER | AIR, projectile = "arrow" },
         price = { gold = 125, wood = 50 },
         train_time = 70,
+        rise = { time = 80, pools = { health = { follows_work_from = { share = "0.25" } } } },
+        passives = { "warping_in" },
         selection = { priority = 10 },
         skills = { "blink" },
         field_effects = { VEILED },
@@ -1860,7 +1913,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 800 } },
         price = { gold = 400 },
         rise = { time = 200, pools = { health = "initial" } },
-        trainer = { trains = { "wisp" }, release = "beside" },
+        trainer = { trains = { "wisp" } },
     }, {
         stats = {
             speed = "0.1", turn_rate = 6, pivot_rate = 6, pivot_angle = 90, radius = "1.5", weight = 12, sight_range = 9, supply_provided = 10,
@@ -1887,7 +1940,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 500 } },
         price = { gold = 200, wood = 100 },
         rise = { time = 120, pools = { health = "initial" } },
-        trainer = { trains = { "huntress" }, release = "beside" },
+        trainer = { trains = { "huntress" } },
     }, {
         stats = {
             speed = "0.15", turn_rate = 8, pivot_rate = 8, pivot_angle = 90, radius = "1.5", weight = 10, sight_range = 6,
@@ -2093,7 +2146,7 @@ pub const CONTENT: &str = r#"
         dying = { time = 2 },
         price = { gold = 400 },
         rise = { time = 200, pools = { health = { follows_work_from = { share = "0.1" } } } },
-        trainer = { trains = { "scv" }, release = "beside" },
+        trainer = { trains = { "scv" } },
         resource_storage = { "gold", "wood" },
         -- It raises its own annex, standing where it stands while the work is
         -- done: the dock is the next cell over, so there is nowhere to walk.
@@ -2136,7 +2189,7 @@ pub const CONTENT: &str = r#"
         price = { gold = 150 },
         rise = { time = 100, pools = { health = { follows_work_from = { share = "0.1" } } } },
         repair_ratio = "0.5",
-        trainer = { trains = { "marine" }, release = "beside" },
+        trainer = { trains = { "marine" } },
         berths = { rim = { points = rim(3, 3), slots = 1 } },
         tags = { "building" },
         passives = { "on_fire" },
@@ -2169,7 +2222,7 @@ pub const CONTENT: &str = r#"
         price = { gold = 200, wood = 100 },
         rise = { time = 120, pools = { health = { follows_work_from = { share = "0.1" } } } },
         repair_ratio = "0.5",
-        trainer = { trains = { "tank", "wraith" }, release = "beside" },
+        trainer = { trains = { "tank", "wraith" } },
         builder = { builds = { "tech_lab" }, attendance = { present = { crew = 1 } } },
         docks = { { at = { 3, 0 }, accepts = { types = { "tech_lab" } } } },
         berths = { rim = { points = rim(3, 3), slots = 1 } },
@@ -2637,7 +2690,7 @@ pub const CONTENT: &str = r#"
             pools = pools,
             dying = { time = 2 },
             tags = { "building" },
-            trainer = { trains = { "acolyte" }, release = "beside" },
+            trainer = { trains = { "acolyte" } },
             resource_storage = { "wood" },
             field_sources = blights(6),
         }
@@ -2774,7 +2827,7 @@ pub const CONTENT: &str = r#"
         price = { gold = 200, wood = 50 },
         rise = { time = 120, pools = { health = "initial" } },
         tags = { "building" },
-        trainer = { trains = { "ghoul" }, release = "beside" },
+        trainer = { trains = { "ghoul" } },
         field_placement = { ON_BLIGHT },
         field_sources = blights(4),
     })
@@ -2803,7 +2856,7 @@ pub const CONTENT: &str = r#"
         price = { gold = 250, wood = 100 },
         rise = { time = 140, pools = { health = "initial" } },
         tags = { "building" },
-        trainer = { trains = { "necromancer" }, release = "beside" },
+        trainer = { trains = { "necromancer" } },
         researcher = { "skeletal_longevity" },
         requires = { { tag = "grown_hall" } },
         field_placement = { ON_BLIGHT },

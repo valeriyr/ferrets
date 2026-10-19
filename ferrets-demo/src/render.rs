@@ -17,6 +17,7 @@ use ferrets_content::{
     entity_type_def::EntityTypeDef,
     field::FieldId,
     holder::Holder,
+    location::Solidity,
     pool_def::PoolId,
     registry::ContentRegistry,
     resource::ResourceSourceDef,
@@ -24,12 +25,13 @@ use ferrets_content::{
     tags,
     turret::TurretMount,
 };
-use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
+use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
 use ferrets_math::{
     FixedU64,
     facing::{self, Facing},
     fixed_uvec2::FixedUVec2,
 };
+use ferrets_pathfinder::layer_mask::LayerMask;
 use ferrets_simulation::{
     command::SkillTarget,
     components::{
@@ -244,6 +246,10 @@ struct GhostSprite {
     /// The footprint remembered under the outline, for consumers that draw the
     /// remembered building as cells rather than as a shape.
     size: CellSize,
+    /// The layers the remembered building stood on.
+    occupation: LayerMask,
+    /// How the remembered building held the cells under it.
+    solidity: Solidity,
     shape: GhostShape,
 }
 
@@ -256,18 +262,51 @@ impl Ghosts {
     pub(crate) fn remembered(&self) -> impl Iterator<Item = ((u32, u32), CellSize)> {
         self.0.values().map(|ghost| (ghost.origin, ghost.size))
     }
+
+    /// The footprint each remembered building that claimed its cells covered,
+    /// with the layers it stood on.
+    pub(crate) fn remembered_footprints(&self) -> impl Iterator<Item = (LayerMask, CellRect)> + '_ {
+        self.0
+            .values()
+            .filter(|ghost| ghost.solidity.claims_cells())
+            .map(|ghost| {
+                (
+                    ghost.occupation,
+                    CellRect::new(CellPos::new(ghost.origin.0, ghost.origin.1), ghost.size),
+                )
+            })
+    }
 }
 
-/// When set, the local view reveals the whole map — the fog overlay clears and
-/// fogged entities draw — for inspecting the game. A presentation-only toggle;
-/// the simulation and AI still respect fog, so it cannot cause a desync.
-#[derive(Resource, Default)]
-pub struct FogReveal(pub bool);
+/// Whether the local view reveals the whole map, for inspecting the game: a
+/// presentation-only toggle, under which the simulation and AI still respect
+/// fog.
+#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FogReveal {
+    /// The view shows what its perspective sees.
+    #[default]
+    Fogged,
+    /// The fog overlay clears and fogged entities draw.
+    Revealed,
+}
+
+impl FogReveal {
+    /// Whether the whole map shows.
+    pub fn reveals(self) -> bool {
+        match self {
+            FogReveal::Fogged => false,
+            FogReveal::Revealed => true,
+        }
+    }
+}
 
 /// Toggles the map-reveal view (see [`FogReveal`]) on the `V` key.
 pub fn toggle_fog_reveal(keys: Res<ButtonInput<KeyCode>>, mut reveal: ResMut<FogReveal>) {
     if keys.just_pressed(KeyCode::KeyV) {
-        reveal.0 = !reveal.0;
+        *reveal = match *reveal {
+            FogReveal::Fogged => FogReveal::Revealed,
+            FogReveal::Revealed => FogReveal::Fogged,
+        };
     }
 }
 
@@ -1880,8 +1919,8 @@ pub struct SightingsKey {
     tick: u32,
     /// The player whose side was viewed, or none for the whole map.
     viewed: Option<PlayerId>,
-    /// Whether the fog reveal was on.
-    reveal: bool,
+    /// The fog reveal.
+    reveal: FogReveal,
 }
 
 /// Stamps every drawn entity with what this node's perspective makes of it
@@ -1898,7 +1937,7 @@ pub fn refresh_sightings(world: &mut World, mut last: Local<Option<SightingsKey>
         world.resource::<GameSession>(),
         world.resource::<ObserverPerspective>(),
     );
-    let reveal = world.resource::<FogReveal>().0;
+    let reveal = *world.resource::<FogReveal>();
     let tick = world.resource::<GameSession>().tick();
     let key = SightingsKey {
         tick,
@@ -1935,9 +1974,9 @@ pub(crate) fn sighting_judge(world: &World) -> SightingJudge {
         world.resource::<GameSession>(),
         world.resource::<ObserverPerspective>(),
     );
-    match (world.resource::<FogReveal>().0, viewed) {
-        (true, _) | (false, None) => SightingJudge::Everything,
-        (false, Some(player)) => {
+    match (*world.resource::<FogReveal>(), viewed) {
+        (FogReveal::Revealed, _) | (FogReveal::Fogged, None) => SightingJudge::Everything,
+        (FogReveal::Fogged, Some(player)) => {
             let declared = world
                 .resource::<GameSession>()
                 .slot(player)
@@ -1991,7 +2030,7 @@ pub fn draw_detected(
         ),
     >,
 ) {
-    if reveal.0 {
+    if reveal.reveals() {
         return;
     }
     let Some(viewed) = viewed_player(&session, &watch) else {
@@ -2342,9 +2381,9 @@ pub fn forget_marks_on_view_change(
     reveal: Res<FogReveal>,
     mut pulses: ResMut<SkillPulses>,
     mut puffs: ResMut<Puffs>,
-    mut last: Local<Option<(Option<PlayerId>, bool)>>,
+    mut last: Local<Option<(Option<PlayerId>, FogReveal)>>,
 ) {
-    let view = (viewed_player(&session, &watch), reveal.0);
+    let view = (viewed_player(&session, &watch), *reveal);
     match *last {
         Some(seen) if seen == view => {}
         Some(_) => {
@@ -2376,7 +2415,7 @@ pub fn draw_puffs(
 
     for &(position, size, kind, started) in &puffs.active {
         let cell = CellPos::from(position);
-        if !reveal.0 && !sees(&session, &watch, &grid, cell.x, cell.y) {
+        if !reveal.reveals() && !sees(&session, &watch, &grid, cell.x, cell.y) {
             continue;
         }
         let Some(progress) = pulse_progress(now, started) else {
@@ -2437,7 +2476,7 @@ pub fn draw_skill_pulses(
                 .map(|(_, transform, _, _)| transform.translation),
             SkillTarget::Position(position) => {
                 let cell = CellPos::from(position);
-                (reveal.0 || sees(&session, &watch, &grid, cell.x, cell.y))
+                (reveal.reveals() || sees(&session, &watch, &grid, cell.x, cell.y))
                     .then(|| world_center(position, CellSize::ONE))
             }
         };
@@ -2566,7 +2605,7 @@ pub fn draw_shots(
             (at.x / CELL_PX).max(0.0) as u32,
             (-at.y / CELL_PX).max(0.0) as u32,
         );
-        if !reveal.0 && !sees(&session, &watch, &grid, cell.x, cell.y) {
+        if !reveal.reveals() && !sees(&session, &watch, &grid, cell.x, cell.y) {
             continue;
         }
         // Shapes tell the kinds apart; the colour is shared so every shot in the air
@@ -2626,8 +2665,8 @@ fn shot_shape(name: Option<&str>) -> ShotShape {
     }
 }
 
-/// Draws the rally point of each selected own producer: a line from the
-/// building to the target and a circle marking it (run in `Update`).
+/// Draws the rally point of each selected own producer or mover still rising:
+/// a line from it to the target and a circle marking it (run in `Update`).
 pub fn draw_rally(
     mut gizmos: Gizmos,
     session: Res<GameSession>,
@@ -2908,31 +2947,30 @@ pub fn update_field_overlay(
     session: Res<GameSession>,
     registry: Res<ContentRegistry>,
     fields: Res<FieldGrid>,
+    fog: Res<VisibilityGrid>,
+    reveal: Res<FogReveal>,
     watch: Res<ObserverPerspective>,
     mut tiles: Query<(&FieldTile, &mut Sprite)>,
-    mut last: Local<Option<(u32, Option<PlayerId>)>>,
+    mut last: Local<Option<(u32, Option<PlayerId>, FogReveal)>>,
 ) {
     let viewed = viewed_player(&session, &watch);
-    if *last == Some((session.tick(), viewed)) {
+    if *last == Some((session.tick(), viewed, *reveal)) {
         return;
     }
-    *last = Some((session.tick(), viewed));
-    let layers: Vec<(FieldId, Color, Shown)> = [
-        ("creep", CREEP_TINT, Shown::Anyone),
-        ("blight", BLIGHT_TINT, Shown::Anyone),
-        ("power", POWER_TINT, Shown::Own),
-        ("true_sight", TRUE_SIGHT_TINT, Shown::Allied),
-        ("veil", VEIL_TINT, Shown::Allied),
-    ]
-    .into_iter()
-    .filter_map(|(name, tint, shown)| registry.field(name).map(|field| (field, tint, shown)))
-    .collect();
+    *last = Some((session.tick(), viewed, *reveal));
+    let layers = shown_fields(&registry);
+    let sight = CoverageSight {
+        session: &session,
+        viewed,
+        fields: &fields,
+        fog: &fog,
+        reveal: *reveal,
+    };
     for (tile, mut sprite) in &mut tiles {
         let cell = CellPos::new(tile.x, tile.y);
         let mut color = Color::NONE;
-        for (field, tint, shown) in &layers {
-            let covering = fields.covered(*field, cell);
-            if shown.admits(&session, viewed, &covering) {
+        for (field, tint, _) in &layers {
+            if !shown_coverage(&sight, &layers, *field, cell).is_empty() {
                 color = over(color, *tint);
             }
         }
@@ -2941,6 +2979,78 @@ pub fn update_field_overlay(
             sprite.color = color;
         }
     }
+}
+
+/// The fields the overlay draws, each with its tint and whose coverage of it
+/// it shows, in the order they are layered.
+pub(crate) fn shown_fields(registry: &ContentRegistry) -> Vec<(FieldId, Color, Shown)> {
+    [
+        ("creep", CREEP_TINT, Shown::Anyone),
+        ("blight", BLIGHT_TINT, Shown::Anyone),
+        ("power", POWER_TINT, Shown::Own),
+        ("true_sight", TRUE_SIGHT_TINT, Shown::Allied),
+        ("veil", VEIL_TINT, Shown::Allied),
+    ]
+    .into_iter()
+    .filter_map(|(name, tint, shown)| registry.field(name).map(|field| (field, tint, shown)))
+    .collect()
+}
+
+/// Who covers `field` at `cell` as far as the overlay shows the viewer: the
+/// coverers its rule for the field admits — a field it does not name shows
+/// the viewed player's own coverage alone — and, in a cell the viewed side
+/// does not see now, only its own and its allies'. An observer watching the
+/// whole map, or a node revealing it, is shown every coverer the rule admits.
+pub(crate) fn shown_coverage(
+    sight: &CoverageSight,
+    layers: &[(FieldId, Color, Shown)],
+    field: FieldId,
+    cell: CellPos,
+) -> PlayerMask {
+    let shown = match layers
+        .iter()
+        .find(|(shown_field, ..)| *shown_field == field)
+    {
+        Some(&(_, _, shown)) => shown,
+        None => Shown::Own,
+    };
+    let in_sight = sight.reveal.reveals()
+        || sight.viewed.is_none_or(|player| {
+            match sight
+                .fog
+                .visibility_to(sight.session, player, cell.x, cell.y)
+            {
+                CellVisibility::Visible => true,
+                CellVisibility::Explored | CellVisibility::Unexplored => false,
+            }
+        });
+    sight
+        .fields
+        .covered(field, cell)
+        .players()
+        .filter(|&player| {
+            let coverer = PlayerMask::of(player);
+            shown.admits(sight.session, sight.viewed, &coverer)
+                && (in_sight || Shown::Allied.admits(sight.session, sight.viewed, &coverer))
+        })
+        .fold(PlayerMask::EMPTY, |mask, player| {
+            mask | PlayerMask::of(player)
+        })
+}
+
+/// What field coverage is read against: the grids, and whose view.
+pub(crate) struct CoverageSight<'a> {
+    /// The session the viewer sits in.
+    pub session: &'a GameSession,
+    /// The player whose view it is; `None` for an observer watching the whole
+    /// map.
+    pub viewed: Option<PlayerId>,
+    /// The field coverage.
+    pub fields: &'a FieldGrid,
+    /// The fog the viewer sees through.
+    pub fog: &'a VisibilityGrid,
+    /// Whether the node reveals the whole map.
+    pub reveal: FogReveal,
 }
 
 /// `tint` laid over `under`, both straight-alpha sRGB.
@@ -2970,7 +3080,7 @@ pub fn update_fog_overlay(
     mut tiles: Query<(&FogTile, &mut Sprite)>,
 ) {
     for (tile, mut sprite) in &mut tiles {
-        let alpha = if reveal.0 {
+        let alpha = if reveal.reveals() {
             0.0
         } else {
             match perspective(&session, &watch, &fog, tile.x, tile.y) {
@@ -3008,7 +3118,6 @@ pub fn draw_ghosts(
     )>,
 ) {
     let viewed = viewed_player(&session, &watch);
-    let mut alive = HashSet::new();
     let mut seen = HashSet::new();
     for (info, location, tags, owner, sighted) in &buildings {
         // The whole-map view has no rival to remember.
@@ -3019,7 +3128,6 @@ pub fn draw_ghosts(
         if own_side || !tags.contains(tags::BUILDING) {
             continue;
         }
-        alive.insert(info.id());
         let (x, y) = (
             location.position.x.to_num::<u32>(),
             location.position.y.to_num::<u32>(),
@@ -3030,13 +3138,16 @@ pub fn draw_ghosts(
         // snapshotted though its origin cell is not.
         if stamped(sighted).is_seen() {
             seen.insert(info.id());
-            let size = registry.def(info.type_id()).location.unwrap().size();
+            let location_def = registry.def(info.type_id()).location.unwrap();
+            let size = location_def.size();
             ghosts.0.insert(
                 info.id(),
                 GhostSprite {
                     origin: (x, y),
                     center: world_center(location.position, size).truncate(),
                     size,
+                    occupation: location_def.occupation(),
+                    solidity: location_def.solidity(),
                     shape: ghost_shape(info.type_name(), size),
                 },
             );
@@ -3045,14 +3156,15 @@ pub fn draw_ghosts(
 
     ghosts.0.retain(|id, ghost| {
         match perspective(&session, &watch, &fog, ghost.origin.0, ghost.origin.1) {
-            // Seen again: keep only if the building is still there (else it was
-            // destroyed while we were away, so drop the stale ghost).
-            CellVisibility::Visible => alive.contains(id),
+            // Seen again: keep only if the building is seen there still (else
+            // it was destroyed or moved away while we were gone, so drop the
+            // stale ghost).
+            CellVisibility::Visible => seen.contains(id),
             // Remembered but unseen: draw the ghost in its last-known place,
             // unless the whole map is revealed or the building is seen by
             // another cell of its footprint, when the real entity shows.
             CellVisibility::Explored => {
-                if !reveal.0 && !seen.contains(id) {
+                if !reveal.reveals() && !seen.contains(id) {
                     let iso = Isometry2d::from_translation(ghost.center);
                     let color = Color::srgba(0.55, 0.55, 0.62, 0.6);
                     match &ghost.shape {

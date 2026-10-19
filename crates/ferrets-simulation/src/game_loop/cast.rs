@@ -15,6 +15,7 @@ use ferrets_content::{
     attack::Slain,
     entity_buffs::Interruption,
     entity_type_def::EntityTypeId,
+    field::FieldPlacement,
     kinds::Kinds,
     landing::Landing,
     pool_def::PoolId,
@@ -43,6 +44,7 @@ use crate::{
         entity_skills::{self, SkillsComponent},
         order_queue::{CancelPolicy, OrderState},
         owner, pools,
+        rise::{RiseAttendance, RiseOrigin},
     },
     entity_def,
     entity_index::EntityIndex,
@@ -51,12 +53,13 @@ use crate::{
     landing::{self, Landings},
     map::Map,
     order::Order,
+    overbuild::{self, Cover},
     player_skills::{self, PlayerSkills},
     requirements,
     resources::{self, PlayerResources},
     session::{GameSession, player_id::PlayerId},
     simulation_id::SimulationId,
-    spawn::{self, FieldReach},
+    spawn::{self, Arrival, FieldReach},
     supply, tunnels,
     visibility::{self, Senses},
     watches,
@@ -303,10 +306,14 @@ pub enum CastAim {
 enum CastPlan {
     /// Act on what the cast was aimed at.
     Act,
-    /// Set units of the given type down on the given cells, one each.
+    /// Set summoned units down, one on each cell.
     Summon {
+        /// The type summoned.
         entity_type: EntityTypeId,
-        cells: Vec<CellPos>,
+        /// The anchor each unit lands on, and what it covers there.
+        cells: Vec<(CellPos, Cover)>,
+        /// Whether they stand at once or rise.
+        arrives: SummonArrival,
     },
     /// Move each body to stand anchored at its cell.
     Relocate { moves: Vec<(Entity, CellPos)> },
@@ -437,24 +444,25 @@ fn land(
                 return CastLanding::Refused;
             }
             cost::pay(world, caster, player, costs, SpendCause::Skill { skill });
-            let landed_on = carry_out(world, player, caster, aim, effect, plan);
+            let landed_on = carry_out(world, player, caster, skill, aim, effect, plan);
             entity_skills::start_cooldown(world, caster, skill, def.cooldown);
             entity_skills::announce_cast(world, caster, landed_on, skill);
         }
         Paid::AtStart { .. } => {
-            let landed_on = carry_out(world, player, caster, aim, effect, plan);
+            let landed_on = carry_out(world, player, caster, skill, aim, effect, plan);
             entity_skills::announce_cast(world, caster, landed_on, skill);
         }
     }
     CastLanding::Landed
 }
 
-/// Carries out a judged and paid cast at `aim`, returning what the cast is
-/// announced against.
+/// Carries out a judged and paid cast of `skill` at `aim`, returning what the
+/// cast is announced against.
 fn carry_out(
     world: &mut World,
     player: PlayerId,
     caster: Entity,
+    skill: SkillId,
     aim: CastAim,
     effect: &EntityCastEffect,
     plan: CastPlan,
@@ -477,7 +485,7 @@ fn carry_out(
         }
         CastAim::Cell(cell) => (SkillTarget::Position(FixedUVec2::from(cell)), None),
     };
-    perform(world, player, caster, aim, effect, plan, spent);
+    perform(world, player, caster, skill, aim, effect, plan, spent);
     landed_on
 }
 
@@ -709,17 +717,20 @@ fn judge(
             entity_type,
             count,
             landing,
+            within,
             arrives,
             ..
-        } => {
-            match (landing, arrives) {
-                (Landing::Anywhere, SummonArrival::Standing) => {}
-                (Landing::Explored | Landing::Sighted, _) | (_, SummonArrival::Rising) => {
-                    unimplemented!("a summon's landing and rising arrival come with warp-in")
-                }
-            }
-            summoning(world, player, caster, *entity_type, *count, aim)
-        }
+        } => summoning(
+            world,
+            player,
+            caster,
+            *entity_type,
+            *count,
+            *landing,
+            within,
+            *arrives,
+            aim,
+        ),
         EntityCastEffect::Relocate { journey, landing } => {
             relocation(world, player, caster, journey, *landing, aim)
         }
@@ -737,13 +748,19 @@ fn judge(
 /// owner's supply, or not ground enough around the aim.
 ///
 /// The units stand where they may, nearest the aim: the same ground, placement
-/// rules and order a relocation lands by, with fog no bar.
+/// rules, landing and order a relocation lands by, inside the summon's
+/// `within` field rules; a type raised over a source lands only over a
+/// source of its type, which it covers.
+#[allow(clippy::too_many_arguments)]
 fn summoning(
     world: &World,
     player: PlayerId,
     caster: Entity,
     entity_type: EntityTypeId,
     count: Quantity,
+    landing: Landing,
+    within: &[FieldPlacement],
+    arrives: SummonArrival,
     aim: CastAim,
 ) -> Option<CastPlan> {
     let count = entity_def::quantity_count(world, caster, count);
@@ -756,11 +773,21 @@ fn summoning(
         return None;
     }
     let around = aimed_rect(world, aim);
-    let mut landings = Landings::new(player, Landing::Anywhere, &[], &[]);
+    let mut landings = Landings::new(player, landing, within, &[], &[]);
+    // A type raised over a source lands on one of that type, which it covers.
     let cells = (0..count)
-        .map(|_| landing::land(world, &mut landings, def, Some(player), around, around))
-        .collect::<Option<Vec<CellPos>>>()?;
-    Some(CastPlan::Summon { entity_type, cells })
+        .map(|_| match def.overbuilds.as_deref() {
+            Some(over) => landing::land_over(world, &mut landings, def, over, Some(player), around)
+                .map(|(cell, source)| (cell, Cover::Source(source))),
+            None => landing::land(world, &mut landings, def, Some(player), around, around)
+                .map(|cell| (cell, Cover::Nothing)),
+        })
+        .collect::<Option<Vec<(CellPos, Cover)>>>()?;
+    Some(CastPlan::Summon {
+        entity_type,
+        cells,
+        arrives,
+    })
 }
 
 /// Settles where a relocation on `journey` sets each body down, or `None` when
@@ -891,7 +918,7 @@ fn relocation(
         .iter()
         .filter_map(|&entity| entity_def::grid_mark(world, entity))
         .collect();
-    let mut landings = Landings::new(player, landing, &lifted, &bodies);
+    let mut landings = Landings::new(player, landing, &[], &lifted, &bodies);
     // Each lands nearest where it goes, leaning toward the ground it stood on.
     let mut land = |entity: Entity, around: CellRect| {
         landing::land(
@@ -1050,11 +1077,13 @@ fn spend_remains(
     (id, position)
 }
 
-/// Carries out a judged cast at `aim`.
+/// Carries out a judged cast of `skill` at `aim`.
+#[allow(clippy::too_many_arguments)]
 fn perform(
     world: &mut World,
     player: PlayerId,
     caster: Entity,
+    skill: SkillId,
     aim: CastAim,
     effect: &EntityCastEffect,
     plan: CastPlan,
@@ -1062,7 +1091,11 @@ fn perform(
 ) {
     let caster_id = entity_def::simulation_id(world, caster);
     match plan {
-        CastPlan::Summon { entity_type, cells } => {
+        CastPlan::Summon {
+            entity_type,
+            cells,
+            arrives,
+        } => {
             let type_name = world
                 .resource::<ContentRegistry>()
                 .def(entity_type)
@@ -1070,18 +1103,30 @@ fn perform(
                 .clone();
             // What comes out of a body remembers the body it came from; what is
             // called up out of nothing names only its caster.
-            for cell in cells {
+            for (cell, cover) in cells {
                 let position = FixedUVec2::from(cell);
                 // What a cast calls up is as new as anything trained: its
                 // field sources start at their initial reach.
                 let reach = FieldReach::Initial;
-                match from_remains {
+                // A rising one rises on its own, for its caster.
+                let arrival = match arrives {
+                    SummonArrival::Standing => Arrival::Standing { starts: &[] },
+                    SummonArrival::Rising => Arrival::Rising {
+                        attendance: RiseAttendance::Unattended { founder: caster_id },
+                        origin: RiseOrigin::Summoned { skill },
+                    },
+                };
+                // A source the summon is raised over comes off the grid so
+                // the summon takes its cells, and is covered once it stands.
+                overbuild::lift(world, cover);
+                let summoned = match from_remains {
                     Some(from) => spawn::spawn_raised(
                         world,
                         &type_name,
                         position,
                         Some(player),
                         reach,
+                        arrival,
                         caster_id,
                         from,
                     ),
@@ -1091,9 +1136,11 @@ fn perform(
                         position,
                         Some(player),
                         reach,
+                        arrival,
                         caster_id,
                     ),
                 };
+                overbuild::settle(world, cover, summoned.map(|(unit, _)| unit));
             }
         }
         CastPlan::Relocate { moves } => {

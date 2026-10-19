@@ -27,6 +27,7 @@ use crate::{
 pub(crate) fn bind_at_birth(world: &mut World, born: Entity, cause: SpawnCause) {
     let producer = match cause {
         SpawnCause::Trained { trainer } => trainer,
+        SpawnCause::Warped { warper } => warper,
         SpawnCause::Founded { builder } => builder,
         SpawnCause::Summoned { by } | SpawnCause::Raised { by, .. } => by,
         SpawnCause::Placed

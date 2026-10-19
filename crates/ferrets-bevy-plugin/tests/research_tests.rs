@@ -215,7 +215,7 @@ fn research_requirement_gates_training() {
     utils::grant_gold(&mut app, 100);
 
     // The halberdier waits on smithing: refused, nothing queued, nothing paid.
-    train(&mut app, guardhouse_id, "halberdier");
+    utils::train_entity(&mut app, guardhouse_id, "halberdier");
     utils::run_ticks(&mut app, utils::APPLY + 10);
     assert_eq!(utils::count_of_type(app.world_mut(), "halberdier"), 0);
     assert_eq!(utils::train_queue_len(app.world(), guardhouse), 0);
@@ -225,7 +225,7 @@ fn research_requirement_gates_training() {
     utils::run_ticks(&mut app, utils::APPLY + 15);
     assert!(completed(&app, "smithing"));
 
-    train(&mut app, guardhouse_id, "halberdier");
+    utils::train_entity(&mut app, guardhouse_id, "halberdier");
     utils::run_ticks(&mut app, utils::APPLY + 10);
     assert_eq!(utils::count_of_type(app.world_mut(), "halberdier"), 1);
 }
@@ -238,7 +238,7 @@ fn any_requirement_admits_either_research() {
     utils::grant_gold(&mut app, 100);
 
     // Neither tactics nor masonry: refused, nothing queued, nothing paid.
-    train(&mut app, guardhouse_id, "crossbowman");
+    utils::train_entity(&mut app, guardhouse_id, "crossbowman");
     utils::run_ticks(&mut app, utils::APPLY + 10);
     assert_eq!(utils::count_of_type(app.world_mut(), "crossbowman"), 0);
     assert_eq!(utils::train_queue_len(app.world(), guardhouse), 0);
@@ -250,7 +250,7 @@ fn any_requirement_admits_either_research() {
     assert!(completed(&app, "masonry"));
     assert!(!completed(&app, "tactics"));
 
-    train(&mut app, guardhouse_id, "crossbowman");
+    utils::train_entity(&mut app, guardhouse_id, "crossbowman");
     utils::run_ticks(&mut app, utils::APPLY + 10);
     assert_eq!(utils::count_of_type(app.world_mut(), "crossbowman"), 1);
 }
@@ -262,21 +262,21 @@ fn tag_requirement_follows_standing_provider() {
     utils::grant_gold(&mut app, 100);
 
     // The knight needs a "workshop" tag on something standing: nothing does.
-    train(&mut app, guardhouse_id, "knight");
+    utils::train_entity(&mut app, guardhouse_id, "knight");
     utils::run_ticks(&mut app, utils::APPLY + 10);
     assert_eq!(utils::count_of_type(app.world_mut(), "knight"), 0);
     assert_eq!(utils::gold(app.world()), 100);
 
     // A tagged building satisfies it...
     let (lab, _) = utils::create_owned(&mut app, "lab", 10, 10, 0);
-    train(&mut app, guardhouse_id, "knight");
+    utils::train_entity(&mut app, guardhouse_id, "knight");
     utils::run_ticks(&mut app, utils::APPLY + 10);
     assert_eq!(utils::count_of_type(app.world_mut(), "knight"), 1);
     assert_eq!(utils::gold(app.world()), 90);
 
     // ...and its loss re-derives to refused, with no bookkeeping in between.
     spawn::destroy_entity(app.world_mut(), lab);
-    train(&mut app, guardhouse_id, "knight");
+    utils::train_entity(&mut app, guardhouse_id, "knight");
     utils::run_ticks(&mut app, utils::APPLY + 10);
     assert_eq!(utils::count_of_type(app.world_mut(), "knight"), 1);
     assert_eq!(utils::gold(app.world()), 90);
@@ -290,13 +290,13 @@ fn rising_provider_satisfies_nothing() {
     utils::grant_gold(&mut app, 100);
 
     // A workshop still rising unlocks nothing.
-    train(&mut app, guardhouse_id, "knight");
+    utils::train_entity(&mut app, guardhouse_id, "knight");
     utils::run_ticks(&mut app, utils::APPLY + 10);
     assert_eq!(utils::count_of_type(app.world_mut(), "knight"), 0);
     assert_eq!(utils::gold(app.world()), 100);
 
     rise::mark_as_risen(app.world_mut(), lab);
-    train(&mut app, guardhouse_id, "knight");
+    utils::train_entity(&mut app, guardhouse_id, "knight");
     utils::run_ticks(&mut app, utils::APPLY + 10);
     assert_eq!(utils::count_of_type(app.world_mut(), "knight"), 1);
 }
@@ -309,7 +309,7 @@ fn requirement_loss_keeps_queued_production() {
     utils::grant_gold(&mut app, 100);
 
     // Queued while the workshop stood; the requirement gates only the command.
-    train(&mut app, guardhouse_id, "knight");
+    utils::train_entity(&mut app, guardhouse_id, "knight");
     utils::run_ticks(&mut app, utils::APPLY + 1);
     assert_eq!(utils::train_queue_len(app.world(), guardhouse), 1);
 
@@ -505,17 +505,6 @@ fn start_research(app: &mut App, researcher: SimulationId, name: &str) {
         PlayerCommand::StartResearch {
             researcher,
             research,
-        },
-    );
-}
-
-/// Orders `trainer` to train one unit of `type_name`.
-fn train(app: &mut App, trainer: SimulationId, type_name: &str) {
-    utils::push_command(
-        app,
-        PlayerCommand::TrainEntity {
-            trainer,
-            type_name: type_name.into(),
         },
     );
 }

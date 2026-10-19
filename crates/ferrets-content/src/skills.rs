@@ -14,7 +14,7 @@ use crate::{
     detection::Detection,
     entity_buffs::EntityBuffId,
     entity_type_def::EntityTypeId,
-    field::{FieldAction, FieldId},
+    field::{FieldAction, FieldId, FieldPlacement},
     kinds::Kinds,
     landing::Landing,
     player_buffs::PlayerBuffId,
@@ -358,6 +358,10 @@ pub enum EntityCastEffect {
         count: Quantity,
         /// Which cells the casting side must know of to set them down on.
         landing: Landing,
+        /// The field rules their cells must meet for their owner, where they
+        /// are set down and, for those that rise, until they have risen.
+        /// Empty means fields never gate where they land.
+        within: Vec<FieldPlacement>,
         /// Whether they stand at once or rise.
         arrives: SummonArrival,
     },

@@ -1,4 +1,5 @@
-//! Rally point state for entities that release units.
+//! Rally point state for entities that release units, and for movers still
+//! rising, which go to theirs once risen.
 
 use bevy_ecs::prelude::*;
 use ferrets_math::fixed_uvec2::FixedUVec2;
@@ -6,7 +7,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::simulation_id::SimulationId;
 
-/// Where an entity's rally point sends the units it releases.
+/// Where an entity's rally point sends the units it releases, or the mover
+/// itself once it has risen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RallyTarget {
     /// Walk to a world position.
@@ -17,12 +19,13 @@ pub enum RallyTarget {
     Entity(SimulationId),
 }
 
-/// The entity's rally point; `None` leaves released units where they stand.
+/// The entity's rally point; `None` leaves released or risen units where they
+/// stand.
 #[derive(Component, Debug, Default)]
 pub struct RallyPointComponent(pub Option<RallyTarget>);
 
-/// A unit just released by a holder with a rally point set, due the dispatch
-/// to its target.
+/// A unit just released by a holder with a rally point set, or a mover just
+/// risen with one, due the dispatch to its target.
 #[derive(Component, Debug, Clone, PartialEq, Eq)]
 pub struct RallyDueComponent {
     /// Where the unit is sent.

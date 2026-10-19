@@ -47,7 +47,6 @@ use ferrets_content::{
     splash::SplashDef,
     stand::StandingAct,
     stats::{EntityModifier, ModifierOp, PlayerModifier},
-    train::Release,
     transport::TransporterDef,
     tunnel::{Passage, TunnelDef},
     turret::{TurretDef, TurretMount, TurretStats, WeaponConduct},
@@ -321,9 +320,13 @@ fn build_entity(
         def = def.with_rise(time, pools);
     }
     if let Some(trainer) = optional::<Table>(table, "trainer")? {
-        def = def.with_trainer(
-            required::<Vec<String>>(&trainer, "trains")?,
-            parse_release(&trainer, registry)?,
+        def = def.with_trainer(required::<Vec<String>>(&trainer, "trains")?);
+    }
+    if let Some(warper) = optional::<Table>(table, "warper")? {
+        def = def.with_warper(
+            required::<Vec<String>>(&warper, "warps")?,
+            parse_field_placement(&required::<Vec<Table>>(&warper, "within")?, registry)?,
+            content::landing(&required::<String>(&warper, "landing")?)?,
         );
     }
     def.holder = parse_holder(table, registry)?;
@@ -1738,6 +1741,10 @@ fn parse_entity_effect(
                 registry,
             )?,
             landing: content::landing(&required::<String>(&summon, "landing")?)?,
+            within: match optional::<Vec<Table>>(&summon, "within")? {
+                Some(rules) => parse_field_placement(&rules, registry)?,
+                None => Vec::new(),
+            },
             arrives: content::summon_arrival(&required::<String>(&summon, "arrives")?)?,
         })
     } else if let Some(relocate) = optional::<Table>(table, "relocate")? {
@@ -2515,27 +2522,6 @@ fn research_by_name(name: &str, registry: &ContentRegistry) -> crate::Result<Res
     registry
         .research(name)
         .ok_or_else(|| ScriptError::ContentError(format!("research '{name}' is not defined")))
-}
-
-/// Reads how a trainer's units come into the world: `release = "beside"`, or
-/// `release = { warp = { within, landing } }`, the field rules a picked cell
-/// must meet and the landing word.
-fn parse_release(trainer: &Table, registry: &ContentRegistry) -> crate::Result<Release> {
-    match optional::<Value>(trainer, "release")? {
-        Some(Value::String(word)) if word.to_str().is_ok_and(|word| word == "beside") => {
-            Ok(Release::Beside)
-        }
-        Some(Value::Table(release)) => {
-            let warp = required::<Table>(&release, "warp")?;
-            Ok(Release::Warped {
-                within: parse_field_placement(&required::<Vec<Table>>(&warp, "within")?, registry)?,
-                landing: content::landing(&required::<String>(&warp, "landing")?)?,
-            })
-        }
-        Some(_) | None => Err(ScriptError::ContentError(
-            "a trainer's release must be 'beside' or a { warp = ... } table".to_string(),
-        )),
-    }
 }
 
 /// Reads the `field_placement` list: each entry either `requires` a field

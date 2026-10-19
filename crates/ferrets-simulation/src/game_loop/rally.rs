@@ -1,5 +1,5 @@
-//! Dispatching a unit per its holder's rally point, once the tick's orders
-//! have run. The marking side lives in [`crate::rally`].
+//! Dispatching a unit to its rally — its holder's, or its own once risen —
+//! once the tick's orders have run. The marking side lives in [`crate::rally`].
 
 use bevy_ecs::{entity::Entity, world::World};
 use ferrets_geometry::cell_size::CellSize;

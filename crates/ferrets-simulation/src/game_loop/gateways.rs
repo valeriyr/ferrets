@@ -294,7 +294,7 @@ fn beside_other_end(world: &World, entity: Entity, other: Entity) -> Option<Cell
     let owner = entity_def::owner(world, entity).expect("a body that enters a gateway is owned");
     let lifted: Vec<_> = entity_def::grid_mark(world, entity).into_iter().collect();
     let ignored = [entity];
-    let mut landings = Landings::new(owner, Landing::Anywhere, &lifted, &ignored);
+    let mut landings = Landings::new(owner, Landing::Anywhere, &[], &lifted, &ignored);
     landing::land(
         world,
         &mut landings,

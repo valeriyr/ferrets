@@ -580,7 +580,7 @@ fn changing_view_forgets_marks_and_what_was_made_out() {
     let second = spawn_worker(&mut app, "24");
     seed_marks(&mut app);
 
-    app.world_mut().insert_resource(FogReveal(true));
+    app.world_mut().insert_resource(FogReveal::Revealed);
     forget
         .run((), app.world_mut())
         .expect("the view-change clear runs");

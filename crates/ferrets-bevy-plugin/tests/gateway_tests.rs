@@ -28,7 +28,6 @@ use ferrets_content::{
     quantity::Quantity,
     registry::ContentRegistry,
     skills::{Casting, EntityCastEffect, Reach, SkillCaster, SkillDef, SummonArrival, SummonAt},
-    train::Release,
     transport::{PassengerConduct, PassengerFate},
     tunnel::{OtherEndLost, Passage, TunnelDef},
     work::{Attachment, BerthStance},
@@ -47,7 +46,10 @@ use ferrets_simulation::{
     entity_def,
     entity_index::EntityIndex,
     events::SimulationEvent,
-    game_loop::fields,
+    game_loop::{
+        fields,
+        warp::{self, WarpRefusal},
+    },
     links::{self, LinkKey, LinkPassengers, Membership},
     map::Map,
     movement_model::MovementModel,
@@ -70,7 +72,7 @@ fn tunnel_end_trained_by_unbound_end_is_bound_to_it_sharing_its_bore() {
     let mut app = app();
     let (raiser, raiser_id) = utils::create_owned(&mut app, "tunnel", 5, 5, 0);
 
-    train(&mut app, raiser_id, "tunnel");
+    utils::train_entity(&mut app, raiser_id, "tunnel");
     utils::run_ticks(&mut app, utils::APPLY + TRAIN_TIME + 1);
 
     let raised = other_of(&mut app, "tunnel", raiser);
@@ -115,14 +117,43 @@ fn tunnel_end_founds_its_other_end_where_ordered_bound_to_it() {
 fn bound_tunnel_end_refuses_to_train_another() {
     let mut app = app();
     let (raiser, raiser_id) = utils::create_owned(&mut app, "tunnel", 5, 5, 0);
-    train(&mut app, raiser_id, "tunnel");
+    utils::train_entity(&mut app, raiser_id, "tunnel");
     utils::run_ticks(&mut app, utils::APPLY + TRAIN_TIME + 1);
 
-    train(&mut app, raiser_id, "tunnel");
+    utils::train_entity(&mut app, raiser_id, "tunnel");
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
     assert_eq!(utils::train_queue_len(app.world(), raiser), 0);
     assert_eq!(utils::owned_of_type(app.world_mut(), "tunnel", 0).len(), 2);
+}
+
+#[test]
+fn tunnel_end_warped_in_by_unbound_end_is_bound_to_it_sharing_its_bore() {
+    let mut app = app();
+    let (rift, rift_id) = utils::create_owned(&mut app, "rift", 5, 5, 0);
+
+    utils::warp_in(&mut app, rift_id, "tunnel", 20, 20);
+    utils::run_ticks(&mut app, utils::APPLY);
+
+    let warped = utils::single_owned_of_type(app.world_mut(), "tunnel", 0);
+    let warped_id = entity_def::simulation_id(app.world(), warped);
+    // The rift minted bore 1 at birth; the warped end's own, 2, gave way.
+    assert_eq!(end_of(&app, rift), (OtherEnd::Bound(warped_id), BoreId(1)));
+    assert_eq!(end_of(&app, warped), (OtherEnd::Bound(rift_id), BoreId(1)));
+}
+
+#[test]
+fn bound_tunnel_end_refuses_to_warp_in_another() {
+    let mut app = app();
+    let (rift, rift_id) = utils::create_owned(&mut app, "rift", 5, 5, 0);
+    utils::warp_in(&mut app, rift_id, "tunnel", 20, 20);
+    // Past the rift's cooldown, so only its binding refuses.
+    utils::run_ticks(&mut app, utils::APPLY + TRAIN_TIME + 1);
+
+    assert_eq!(
+        warp::judge(app.world(), 0, rift, "tunnel", utils::pos(25, 25)).map(|_| ()),
+        Err(WarpRefusal::Bound)
+    );
 }
 
 #[test]
@@ -185,8 +216,8 @@ fn second_tunnel_end_queued_while_unbound_is_born_unbound() {
     let mut app = app();
     let (raiser, raiser_id) = utils::create_owned(&mut app, "tunnel", 5, 5, 0);
 
-    train(&mut app, raiser_id, "tunnel");
-    train(&mut app, raiser_id, "tunnel");
+    utils::train_entity(&mut app, raiser_id, "tunnel");
+    utils::train_entity(&mut app, raiser_id, "tunnel");
     utils::run_ticks(&mut app, utils::APPLY + 2 * TRAIN_TIME + 2);
 
     let mut ends: Vec<(SimulationId, Entity)> = utils::owned_of_type(app.world_mut(), "tunnel", 0)
@@ -222,7 +253,7 @@ fn trench_site_lost_leaves_its_other_end_standing() {
 fn tunnel_end_changing_into_shaft_keeps_its_binding_and_bore() {
     let mut app = app();
     let (raiser, raiser_id) = utils::create_owned(&mut app, "tunnel", 5, 5, 0);
-    train(&mut app, raiser_id, "tunnel");
+    utils::train_entity(&mut app, raiser_id, "tunnel");
     utils::run_ticks(&mut app, utils::APPLY + TRAIN_TIME + 1);
     let raised = other_of(&mut app, "tunnel", raiser);
     let raised_id = entity_def::simulation_id(app.world(), raised);
@@ -831,7 +862,7 @@ fn grove_sends_no_allys_beast_to_its_rally() {
     utils::board(&mut app, beast_id, grove_id);
     utils::run_ticks(&mut app, utils::APPLY + 1);
     spawn::change_owner(app.world_mut(), beast, 1, grove_id, Lean::Nothing);
-    set_rally(
+    utils::set_rally_to(
         &mut app,
         grove_id,
         RallyTarget::Position(utils::pos(20, 10)),
@@ -1055,7 +1086,7 @@ fn captured_neutral_burrow_lets_out_everyone_in_captors_warren() {
 fn tunnel_end_lost_leaves_its_other_end_standing_unbound_on_same_bore() {
     let mut app = app();
     let (raiser, raiser_id) = utils::create_owned(&mut app, "tunnel", 5, 5, 0);
-    train(&mut app, raiser_id, "tunnel");
+    utils::train_entity(&mut app, raiser_id, "tunnel");
     utils::run_ticks(&mut app, utils::APPLY + TRAIN_TIME + 1);
     let raised = other_of(&mut app, "tunnel", raiser);
 
@@ -1069,7 +1100,7 @@ fn tunnel_end_lost_leaves_its_other_end_standing_unbound_on_same_bore() {
 fn captured_tunnel_end_starts_on_newly_minted_bore() {
     let mut app = app();
     let (raiser, raiser_id) = utils::create_owned(&mut app, "tunnel", 5, 5, 0);
-    train(&mut app, raiser_id, "tunnel");
+    utils::train_entity(&mut app, raiser_id, "tunnel");
     utils::run_ticks(&mut app, utils::APPLY + TRAIN_TIME + 1);
     let raised = other_of(&mut app, "tunnel", raiser);
 
@@ -1084,7 +1115,7 @@ fn captured_tunnel_end_starts_on_newly_minted_bore() {
 fn trench_end_lost_razes_its_other_end() {
     let mut app = app();
     let (raiser, raiser_id) = utils::create_owned(&mut app, "trench", 5, 5, 0);
-    train(&mut app, raiser_id, "trench");
+    utils::train_entity(&mut app, raiser_id, "trench");
     utils::run_ticks(&mut app, utils::APPLY + TRAIN_TIME + 1);
     let raised = other_of(&mut app, "trench", raiser);
 
@@ -1400,7 +1431,7 @@ fn last_grove_captured_within_team_keeps_everyone() {
 fn captured_trench_end_leaves_its_other_end_standing() {
     let mut app = app();
     let (raiser, raiser_id) = utils::create_owned(&mut app, "trench", 5, 5, 0);
-    train(&mut app, raiser_id, "trench");
+    utils::train_entity(&mut app, raiser_id, "trench");
     utils::run_ticks(&mut app, utils::APPLY + TRAIN_TIME + 1);
     let raised = other_of(&mut app, "trench", raiser);
 
@@ -1542,7 +1573,7 @@ fn tunnel_turns_beast_away_while_its_other_end_changes_straight_into_trench_end(
 fn tunnel_end_changing_into_trench_end_leaves_its_other_end_and_starts_on_newly_minted_bore() {
     let mut app = app();
     let (raiser, raiser_id) = utils::create_owned(&mut app, "tunnel", 5, 5, 0);
-    train(&mut app, raiser_id, "tunnel");
+    utils::train_entity(&mut app, raiser_id, "tunnel");
     utils::run_ticks(&mut app, utils::APPLY + TRAIN_TIME + 1);
     let raised = other_of(&mut app, "tunnel", raiser);
 
@@ -1583,7 +1614,7 @@ fn beast_crossing_tunnel_is_sent_on_to_other_ends_rally() {
     let ((_, raiser_id), raised) = tunnel_pair(&mut app, (5, 5), (20, 20));
     let raised_id = entity_def::simulation_id(app.world(), raised);
     let (beast, beast_id) = utils::create_owned(&mut app, "beast", 4, 5, 0);
-    set_rally(
+    utils::set_rally_to(
         &mut app,
         raised_id,
         RallyTarget::Position(utils::pos(25, 20)),
@@ -1601,7 +1632,7 @@ fn beast_crossing_tunnel_follows_walk_queued_behind_its_board_over_other_ends_ra
     let ((_, raiser_id), raised) = tunnel_pair(&mut app, (5, 5), (20, 20));
     let raised_id = entity_def::simulation_id(app.world(), raised);
     let (beast, beast_id) = utils::create_owned(&mut app, "beast", 4, 5, 0);
-    set_rally(
+    utils::set_rally_to(
         &mut app,
         raised_id,
         RallyTarget::Position(utils::pos(25, 20)),
@@ -1640,7 +1671,7 @@ fn rally_naming_either_end_of_crossed_tunnel_sends_nobody() {
             Named::Raiser => entity_def::simulation_id(app.world(), raiser),
             Named::Raised => raised_id,
         };
-        set_rally(&mut app, raised_id, RallyTarget::Entity(target));
+        utils::set_rally_to(&mut app, raised_id, RallyTarget::Entity(target));
 
         utils::board(&mut app, beast_id, raiser_id);
         utils::run_ticks(&mut app, utils::APPLY + 30);
@@ -1879,7 +1910,7 @@ fn register(app: &mut App) {
     for name in ["burrow", "great_burrow", "burrow_deepening", "deep_burrow"] {
         registry.register(
             leaving(entering(
-                building(name).with_gateway(Joins::Network(warren), Doors::Both),
+                utils::building(name).with_gateway(Joins::Network(warren), Doors::Both),
             ))
             .with_morphs(match name {
                 "burrow" => vec![
@@ -1892,13 +1923,13 @@ fn register(app: &mut App) {
         );
     }
     registry.register(entering(
-        building("entrance_burrow").with_gateway(Joins::Network(warren), Doors::Entrance),
+        utils::building("entrance_burrow").with_gateway(Joins::Network(warren), Doors::Entrance),
     ));
     registry.register(leaving(
-        building("exit_burrow").with_gateway(Joins::Network(warren), Doors::Exit),
+        utils::building("exit_burrow").with_gateway(Joins::Network(warren), Doors::Exit),
     ));
     registry.register(
-        building("slow_burrow")
+        utils::building("slow_burrow")
             .with_gateway(Joins::Network(warren), Doors::Both)
             .with_stat(EntityStatId::LOAD_RANGE, FixedU64::ONE)
             .with_stat(EntityStatId::LOAD_PERIOD, FixedU64::from_num(SLOW_PERIOD))
@@ -1935,25 +1966,30 @@ fn register(app: &mut App) {
                 PassengerConduct::Shelter,
             ),
     );
-    registry.register(building("rock").with_morphs([change("burrow")]));
+    registry.register(utils::building("rock").with_morphs([change("burrow")]));
     for (name, joins) in [
         ("hollow", Joins::Network(hollow)),
         ("grove", Joins::Network(grove)),
         ("thicket", Joins::Network(thicket)),
     ] {
         registry.register(leaving(entering(
-            building(name).with_gateway(joins, Doors::Both),
+            utils::building(name).with_gateway(joins, Doors::Both),
         )));
     }
 
     registry.register(
-        entering(building("tunnel").with_gateway(Joins::Tunnel(tunnel), Doors::Both))
+        entering(utils::building("tunnel").with_gateway(Joins::Tunnel(tunnel), Doors::Both))
             .with_stat(EntityStatId::BUILD_RANGE, FixedU64::from_num(40))
             .with_train_time(TRAIN_TIME)
-            .with_trainer(["tunnel"], Release::Beside)
+            .with_trainer(["tunnel"])
             .with_rise(RISE_TIME, utils::rise_initial_pools(&[PoolId::HEALTH]))
             .with_builder(["tunnel"], BuilderAttendance::Unattended)
             .with_morphs([change("trench"), change("shaft")]),
+    );
+    // A tunnel end that warps its other end in, anywhere.
+    registry.register(
+        entering(utils::building("rift").with_gateway(Joins::Tunnel(tunnel), Doors::Both))
+            .with_warper(["tunnel"], Vec::new(), Landing::Anywhere),
     );
     registry.register(
         EntityTypeDef::new("corpse")
@@ -1974,6 +2010,7 @@ fn register(app: &mut App) {
                 entity_type: raised,
                 count: Quantity::Constant(1),
                 landing: Landing::Anywhere,
+                within: Vec::new(),
                 arrives: SummonArrival::Standing,
             },
         },
@@ -1993,33 +2030,33 @@ fn register(app: &mut App) {
         }),
     );
     registry.register(
-        entering(building("shaft").with_gateway(Joins::Tunnel(tunnel), Doors::Both))
+        entering(utils::building("shaft").with_gateway(Joins::Tunnel(tunnel), Doors::Both))
             .with_stat(EntityStatId::SIGHT_RANGE, FixedU64::from_num(5))
             .with_skills([dig, exhume]),
     );
     registry.register(
-        entering(building("trench").with_gateway(Joins::Tunnel(trench), Doors::Both))
+        entering(utils::building("trench").with_gateway(Joins::Tunnel(trench), Doors::Both))
             .with_stat(EntityStatId::BUILD_RANGE, FixedU64::from_num(40))
             .with_train_time(TRAIN_TIME)
-            .with_trainer(["trench"], Release::Beside)
+            .with_trainer(["trench"])
             .with_rise(RISE_TIME, utils::rise_initial_pools(&[PoolId::HEALTH]))
             .with_builder(["trench"], BuilderAttendance::Unattended),
     );
     registry.register(
-        entering(building("chute_head").with_gateway(Joins::Tunnel(chute), Doors::Both))
+        entering(utils::building("chute_head").with_gateway(Joins::Tunnel(chute), Doors::Both))
             .with_train_time(TRAIN_TIME)
-            .with_trainer(["chute_foot"], Release::Beside),
+            .with_trainer(["chute_foot"]),
     );
     registry.register(
-        entering(building("chute_foot").with_gateway(Joins::Tunnel(chute), Doors::Entrance))
+        entering(utils::building("chute_foot").with_gateway(Joins::Tunnel(chute), Doors::Entrance))
             .with_train_time(TRAIN_TIME),
     );
     registry.register(
         leaving(entering(
-            building("den").with_gateway(Joins::Tunnel(den), Doors::Both),
+            utils::building("den").with_gateway(Joins::Tunnel(den), Doors::Both),
         ))
         .with_train_time(TRAIN_TIME)
-        .with_trainer(["den"], Release::Beside),
+        .with_trainer(["den"]),
     );
 
     registry.register(
@@ -2084,14 +2121,6 @@ fn leaving(def: EntityTypeDef) -> EntityTypeDef {
         .with_stat(EntityStatId::UNLOAD_PERIOD, FixedU64::ZERO)
 }
 
-/// A one-cell solid building named `name` with 100 health.
-fn building(name: &str) -> EntityTypeDef {
-    EntityTypeDef::new(name)
-        .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
-        .with_pool(Pool::health(100))
-        .with_dying(1, [])
-}
-
 /// A `CHANGE_TIME`-tick change of form into `into`, costing nothing.
 fn change(into: &str) -> MorphTransition {
     MorphTransition::new(
@@ -2130,17 +2159,6 @@ fn change_through(via: &str, into: &str) -> MorphTransition {
     )
 }
 
-/// Orders `trainer` to train a `type_name`.
-fn train(app: &mut App, trainer: SimulationId, type_name: &str) {
-    utils::push_command(
-        app,
-        PlayerCommand::TrainEntity {
-            trainer,
-            type_name: type_name.into(),
-        },
-    );
-}
-
 /// The one `type_name` of player 0's other than `end`.
 fn other_of(app: &mut App, type_name: &str, end: Entity) -> Entity {
     let others: Vec<Entity> = utils::owned_of_type(app.world_mut(), type_name, 0)
@@ -2169,7 +2187,7 @@ fn tunnel_pair(
 /// Player 0's `chute_head` at (5, 5) and the `chute_foot` it trained.
 fn chute(app: &mut App) -> ((Entity, SimulationId), Entity) {
     let (head, head_id) = utils::create_owned(app, "chute_head", 5, 5, 0);
-    train(app, head_id, "chute_foot");
+    utils::train_entity(app, head_id, "chute_foot");
     utils::run_ticks(app, utils::APPLY + TRAIN_TIME + 1);
     let foot = utils::single_owned_of_type(app.world_mut(), "chute_foot", 0);
     ((head, head_id), foot)
@@ -2178,7 +2196,7 @@ fn chute(app: &mut App) -> ((Entity, SimulationId), Entity) {
 /// Player 0's `den` end at (5, 5) and the other end it trained.
 fn den_pair(app: &mut App) -> ((Entity, SimulationId), Entity) {
     let (raiser, raiser_id) = utils::create_owned(app, "den", 5, 5, 0);
-    train(app, raiser_id, "den");
+    utils::train_entity(app, raiser_id, "den");
     utils::run_ticks(app, utils::APPLY + TRAIN_TIME + 1);
     ((raiser, raiser_id), other_of(app, "den", raiser))
 }
@@ -2208,17 +2226,6 @@ fn corpse_at(app: &mut App, x: u32, y: u32) -> SimulationId {
         .last()
         .expect("the beast left a corpse")
         .0
-}
-
-/// Sets `entity`'s rally point to `target`.
-fn set_rally(app: &mut App, entity: SimulationId, target: RallyTarget) {
-    utils::push_command(
-        app,
-        PlayerCommand::SetRallyPoint {
-            entity,
-            target: Some(target),
-        },
-    );
 }
 
 /// Queues a walk to `(x, y)` behind what the selection is doing.

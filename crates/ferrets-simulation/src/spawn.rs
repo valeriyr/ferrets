@@ -21,7 +21,6 @@ use ferrets_content::{
     pool::PoolInitial,
     pool_def::PoolId,
     registry::ContentRegistry,
-    resource::DepletionPolicy,
     rise::{RisePool, RisePoolInitial},
     skills::SkillId,
     transport::PassengerFate,
@@ -40,7 +39,6 @@ use crate::{
         annex::{AnnexComponent, DocksComponent},
         attached::AttachedComponent,
         brood::{BredComponent, BroodComponent},
-        build::OverbuiltComponent,
         concealed::ConcealedComponent,
         dying::{DiedComponent, DyingComponent, Passing, RemainsComponent},
         entity_info::EntityInfoComponent,
@@ -60,7 +58,7 @@ use crate::{
         rally::RallyPointComponent,
         repair::UnderRepairComponent,
         resource::{ResourceCarrierComponent, ResourceSourceComponent, UnderHarvestComponent},
-        rise::{RiseAttendance, RisingComponent},
+        rise::{RiseAttendance, RiseOrigin, RisingComponent},
         stance::{Stance, StanceComponent},
         stand::{StandComponent, Standing},
         tags::TagsComponent,
@@ -68,6 +66,7 @@ use crate::{
         transport::{BoardedComponent, GarrisonFireComponent, TransporterComponent},
         tunnel::TunnelEndComponent,
         turret::{TurretState, TurretsComponent},
+        warp::WarpComponent,
     },
     control_groups::ControlGroups,
     entity_def::{self, Operation},
@@ -85,6 +84,7 @@ use crate::{
     map::{Map, OccupancyClass},
     movement_model::{self, MovementModel},
     order::Order,
+    rally,
     ruleset::RemainsLimit,
     selection::Selection,
     session::{GameSession, player_id::PlayerId},
@@ -134,8 +134,13 @@ pub enum Arrival<'a> {
         /// The pools started in place of their type's initial.
         starts: &'a [(PoolId, PoolInitial)],
     },
-    /// Rising, attended as the [`RiseAttendance`] says.
-    Rising(RiseAttendance),
+    /// Rising into the world.
+    Rising {
+        /// How the rise is advanced, and on whose behalf.
+        attendance: RiseAttendance,
+        /// What brought the entity in.
+        origin: RiseOrigin,
+    },
 }
 
 /// Creates an entity of the given type at `position`, owned by `owner`
@@ -171,7 +176,7 @@ pub fn create_entity(
         let def = registry.entity(type_name)?;
         match &arrival {
             Arrival::Standing { starts } => check_starts(registry, def, starts),
-            Arrival::Rising(_) => {}
+            Arrival::Rising { .. } => {}
         }
         (def.location?, OccupancyClass::of(def))
     };
@@ -234,6 +239,47 @@ pub fn spawn_trained(
     )
 }
 
+/// Creates a unit `warper` warped in for `payer`, who owns it, rising
+/// unattended over its own rise time, the warper cooling down until
+/// `ready_at` for it, and announces it as warped in.
+///
+/// Returns `None` if `type_name` is not registered or the position is
+/// blocked on the nav grid. Panics when the type does not rise, or the
+/// warper is not alive.
+pub fn spawn_warped(
+    world: &mut World,
+    type_name: &str,
+    position: FixedUVec2,
+    payer: PlayerId,
+    reach: FieldReach,
+    warper: SimulationId,
+    ready_at: u32,
+) -> Option<(Entity, SimulationId)> {
+    let warper_type = entity_def::type_id(
+        world,
+        world
+            .resource::<EntityIndex>()
+            .alive(warper)
+            .expect("a warper is alive at the warp"),
+    );
+    spawn(
+        world,
+        type_name,
+        position,
+        Some(payer),
+        reach,
+        Arrival::Rising {
+            attendance: RiseAttendance::Unattended { founder: warper },
+            origin: RiseOrigin::Warped {
+                warper_type,
+                payer,
+                ready_at,
+            },
+        },
+        SpawnCause::Warped { warper },
+    )
+}
+
 /// Creates a construction site `builder` placed, attended as `attendance` says,
 /// and announces it as founded.
 ///
@@ -254,7 +300,10 @@ pub fn spawn_founded(
         position,
         owner,
         reach,
-        Arrival::Rising(attendance),
+        Arrival::Rising {
+            attendance,
+            origin: RiseOrigin::Founded { payer: owner },
+        },
         SpawnCause::Founded { builder },
     )
 }
@@ -316,17 +365,19 @@ pub fn spawn_bequeathed(
     )
 }
 
-/// Creates an entity the caster `by` raised from the remains `from`, and
-/// announces it as raised.
+/// Creates an entity the caster `by` raised from the remains `from`, arriving
+/// as `arrival` says, and announces it as raised.
 ///
 /// Returns `None` if `type_name` is not registered or the position is
 /// blocked on the nav grid.
+#[allow(clippy::too_many_arguments)]
 pub fn spawn_raised(
     world: &mut World,
     type_name: &str,
     position: FixedUVec2,
     owner: Option<PlayerId>,
     reach: FieldReach,
+    arrival: Arrival,
     by: SimulationId,
     from: SimulationId,
 ) -> Option<(Entity, SimulationId)> {
@@ -336,13 +387,13 @@ pub fn spawn_raised(
         position,
         owner,
         reach,
-        Arrival::Standing { starts: &[] },
+        arrival,
         SpawnCause::Raised { by, from },
     )
 }
 
-/// Creates an entity the caster `by` called up from nothing, and announces
-/// it as summoned.
+/// Creates an entity the caster `by` called up from nothing, arriving as
+/// `arrival` says, and announces it as summoned.
 ///
 /// Returns `None` if `type_name` is not registered or the position is
 /// blocked on the nav grid.
@@ -352,6 +403,7 @@ pub fn spawn_summoned(
     position: FixedUVec2,
     owner: Option<PlayerId>,
     reach: FieldReach,
+    arrival: Arrival,
     by: SimulationId,
 ) -> Option<(Entity, SimulationId)> {
     spawn(
@@ -360,7 +412,7 @@ pub fn spawn_summoned(
         position,
         owner,
         reach,
-        Arrival::Standing { starts: &[] },
+        arrival,
         SpawnCause::Summoned { by },
     )
 }
@@ -755,7 +807,7 @@ fn take_off_map(world: &mut World, entity: Entity, inside: Inside) {
 /// `inside`, taking its location into the marker; every shot following it
 /// loses it and lands where it went in. Panics for one that is already
 /// hidden: there is nothing to take.
-fn mark_hidden(world: &mut World, entity: Entity, inside: Inside) {
+pub(crate) fn mark_hidden(world: &mut World, entity: Entity, inside: Inside) {
     let id = entity_def::simulation_id(world, entity);
     let mut entity_mut = world.entity_mut(entity);
     let went_in = entity_mut
@@ -1279,83 +1331,6 @@ fn stand_at(
     });
 }
 
-/// Takes `source` off the map under the `site` raised over it, handing the
-/// site what the source had left: the source's footprint is already the
-/// site's, so it leaves without freeing anything, and the site remembers what
-/// to put back. The source dies as overbuilt. [`uncover_source`] is the other
-/// half.
-pub(crate) fn cover_source(world: &mut World, source: Entity, site: Entity) {
-    let amount = world
-        .entity(source)
-        .get::<ResourceSourceComponent>()
-        .expect("a source under a site is a resource source")
-        .amount;
-    let uncovers = entity_def::type_id(world, source);
-    let anchor = body::anchor(entity_def::position(world, source));
-    mark_hidden(world, source, Inside::Nothing);
-    despawn_entity(world, source, DeathCause::Overbuilt);
-
-    let mut site_mut = world.entity_mut(site);
-    site_mut
-        .get_mut::<ResourceSourceComponent>()
-        .expect("a type raised over a source is a resource source")
-        .amount = amount;
-    site_mut.insert(OverbuiltComponent { uncovers, anchor });
-}
-
-/// Puts back the resource source `entity` was raised over, on the cells it was
-/// covered on and with what it had left, announcing the return; nothing for an
-/// entity raised on open ground. One drained dry comes back empty or not at
-/// all, as the source type's own depletion says.
-///
-/// A caller uncovers once the entity's own footprint is off the grid. When
-/// those cells are no longer free even so — something walked onto ground the
-/// cover never claimed — the source does not come back at all, the way blocked
-/// ground leaves no rubble (see [`spawn_remains`]).
-///
-/// A cover that wears a form which is no resource source holds nothing, so what
-/// it gives back is an empty source or none at all, as if it had been drained.
-pub(crate) fn uncover_source(world: &mut World, entity: Entity) {
-    let Some(overbuilt) = world.entity(entity).get::<OverbuiltComponent>().copied() else {
-        return;
-    };
-    let amount = world
-        .entity(entity)
-        .get::<ResourceSourceComponent>()
-        .map_or(0, |source| source.amount);
-    let (type_name, depletion) = {
-        let def = world.resource::<ContentRegistry>().def(overbuilt.uncovers);
-        (
-            def.name.clone(),
-            def.resource_source
-                .as_ref()
-                .expect("an overbuilt type is a resource source")
-                .depletion(),
-        )
-    };
-    if amount == 0 {
-        match depletion {
-            DepletionPolicy::Persist => {}
-            DepletionPolicy::Destroy => return,
-        }
-    }
-    let by = entity_def::simulation_id(world, entity);
-    if let Some((source, _)) = spawn_uncovered(
-        world,
-        &type_name,
-        FixedUVec2::from(overbuilt.anchor),
-        None,
-        FieldReach::Full,
-        by,
-    ) {
-        world
-            .entity_mut(source)
-            .get_mut::<ResourceSourceComponent>()
-            .expect("an overbuilt type is a resource source")
-            .amount = amount;
-    }
-}
-
 /// Starts the dying phase for an alive entity.
 ///
 /// The entity immediately leaves the alive set: it is removed from every
@@ -1572,6 +1547,13 @@ pub fn change_owner(world: &mut World, entity: Entity, to: PlayerId, by: Simulat
     settle_gateway(world, entity, GatewayLoss::Captured { to }, lean);
     settle_unadmitted_passengers(world, entity, to, lean);
 
+    // A rally set on an entity still rising was the old owner's choice of
+    // where it goes, or where what it releases goes.
+    if entity_def::rising(world, entity)
+        && let Some(mut rally) = world.get_mut::<RallyPointComponent>(entity)
+    {
+        rally.0 = None;
+    }
     world.entity_mut(entity).insert(OwnerComponent::new(to));
 }
 
@@ -2047,6 +2029,7 @@ pub(crate) fn fit_components(
         can_move,
         has_health,
         trainer,
+        warper,
         transporter,
         gateway,
         source,
@@ -2058,7 +2041,7 @@ pub(crate) fn fit_components(
         field_sources,
         acts_on_standing,
         breeds,
-        breeds_producers,
+        releases_units,
         timed_life,
     ) = {
         let registry = world.resource::<ContentRegistry>();
@@ -2069,6 +2052,7 @@ pub(crate) fn fit_components(
             def.can_move(),
             def.has_pool(PoolId::HEALTH),
             def.trainer.is_some(),
+            def.warper.is_some(),
             def.can_transport(),
             def.gateway().map(GatewayDef::joins),
             def.resource_source.is_some(),
@@ -2080,12 +2064,7 @@ pub(crate) fn fit_components(
             def.field_sources.clone(),
             !def.on_stand.is_empty(),
             def.breeder.is_some(),
-            def.breeder.as_ref().is_some_and(|breeder| {
-                registry
-                    .entity(breeder.breeds())
-                    .expect("validated content breeds registered types")
-                    .produces_by_morph()
-            }),
+            rally::releases_units(registry, def),
             def.base_stat(EntityStatId::LIFETIME).is_some(),
         )
     };
@@ -2093,9 +2072,9 @@ pub(crate) fn fit_components(
     // and the fields as they are now, by the same reads the tick's refit
     // makes.
     let concealed = entity_def::concealed(world, entity);
-    // A rally point serves whatever releases units: the trainer, the holder,
-    // the breeder whose broodlings make units by a change of form, and the
-    // form making one that way now.
+    // A rally point serves whatever releases units, the form making one by a
+    // change of form now, and a mover still rising, for where it goes once it
+    // has risen.
     let producing = match wearing {
         Wearing::Interim => world
             .entity(entity)
@@ -2107,7 +2086,8 @@ pub(crate) fn fit_components(
             }),
         Wearing::Own => false,
     };
-    let wants_rally = trainer || transporter || gateway.is_some() || breeds_producers || producing;
+    let rising_mover = can_move && world.entity(entity).contains::<RisingComponent>();
+    let wants_rally = releases_units || producing || rising_mover;
     let mut entity_mut = world.entity_mut(entity);
 
     fit_stance(&mut entity_mut, can_attack, can_move && has_health);
@@ -2133,6 +2113,7 @@ pub(crate) fn fit_components(
     fit_default::<LifetimeComponent>(&mut entity_mut, timed_life);
     fit_default::<ConcealedComponent>(&mut entity_mut, concealed);
     fit_default::<TrainQueueComponent>(&mut entity_mut, trainer);
+    fit_default::<WarpComponent>(&mut entity_mut, warper);
     fit_default::<TransporterComponent>(&mut entity_mut, transporter);
     fit_default::<GatewayComponent>(&mut entity_mut, gateway.is_some());
     // An end is born unbound on a bore of its own; the birth that raised it
@@ -2319,10 +2300,10 @@ fn conjure(
         let type_def = registry.entity(type_name)?;
         type_def.location?;
         match (&arrival, &type_def.rise) {
-            (Arrival::Rising(_), None) => {
+            (Arrival::Rising { .. }, None) => {
                 panic!("a rising entity is of a type that rises: '{type_name}'")
             }
-            (Arrival::Rising(_), Some(_)) | (Arrival::Standing { .. }, _) => {}
+            (Arrival::Rising { .. }, Some(_)) | (Arrival::Standing { .. }, _) => {}
         }
         (type_id, type_def.base_stats.clone())
     };
@@ -2342,8 +2323,8 @@ fn conjure(
     // A rising entity rises from the moment it is spawned, before anything is
     // fitted on it.
     match &arrival {
-        Arrival::Rising(attendance) => {
-            entity_mut.insert(RisingComponent::new(attendance.clone()));
+        Arrival::Rising { attendance, origin } => {
+            entity_mut.insert(RisingComponent::new(attendance.clone(), *origin));
         }
         Arrival::Standing { .. } => {}
     }
@@ -2424,7 +2405,7 @@ fn seed_pools(
                         .find_map(|(named, initial)| (*named == pool.id()).then_some(*initial))
                         .unwrap_or(pool.initial()),
                 ),
-                Arrival::Rising(_) => match def
+                Arrival::Rising { .. } => match def
                     .rise
                     .as_ref()
                     .and_then(|rise| rise.pool(pool.id()))

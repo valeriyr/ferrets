@@ -56,6 +56,25 @@ fn site_rises_over_mine_and_takes_its_gold() {
 }
 
 #[test]
+fn site_over_spring_another_body_stands_on_is_not_raised() {
+    let mut app = utils::orders_app();
+    let (_, sylph_id) = utils::create_owned(&mut app, "sylph", 8, 10, 0);
+    let (spring, _) = utils::create_entity(app.world_mut(), "spring", utils::pos(10, 10), None)
+        .expect("the spring is registered");
+    // The spring holds no ground of its own, so another sylph stands on it.
+    utils::create_owned(&mut app, "sylph", 10, 10, 1);
+    utils::grant_gold(&mut app, 30);
+
+    utils::build_entity(&mut app, sylph_id, "well_house", 10, 10);
+    // In reach on the fifth tick, as a shaft house is.
+    utils::run_ticks(&mut app, utils::APPLY + 4);
+    assert_eq!(utils::count_of_type(app.world_mut(), "well_house"), 0);
+    // The 30 granted, nothing paid.
+    assert_eq!(utils::gold(app.world()), 30);
+    assert!(entity_def::stands_on_grid(app.world(), spring));
+}
+
+#[test]
 fn site_needs_source_under_it() {
     let mut app = utils::orders_app();
     let (sylph, sylph_id) = utils::create_owned(&mut app, "sylph", 8, 10, 0);

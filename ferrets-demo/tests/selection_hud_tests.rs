@@ -39,15 +39,19 @@ use ferrets_simulation::{
         hidden::Inside,
         last_hit,
         order_queue::OrderQueueComponent,
-        rise::{self, RiseAttendance},
+        rise::{self, RiseAttendance, RiseOrigin, RisingComponent},
         train::TrainQueueComponent,
+        warp::WarpComponent,
     },
+    entity_index::EntityIndex,
     game_loop::{self, buffs::Bearing},
     movement_model::MovementModel,
     order::Order,
     player_research::PlayerResearch,
     resources::PlayerResources,
+    selection::Selection,
     session::GameSession,
+    simulation_id::SimulationId,
     spawn::{self, FieldReach},
     supply,
     visibility::Sighting,
@@ -92,6 +96,53 @@ fn panel_reports_energy_against_its_maximum() {
         shown.contains("energy 15/60"),
         "the energy reads against its maximum: {shown:?}"
     );
+}
+
+#[test]
+fn panel_names_rising_entity_by_what_brought_it_in() {
+    let mut app = utils::demo_map_app(MovementModel::Cell);
+    spawn_panel(&mut app);
+    let (farm, farm_id) =
+        utils::create_rising(app.world_mut(), "farm", utils::at_cell(20, 20), Some(0))
+            .expect("the demo content defines a farm");
+    let warp_gate = app
+        .world()
+        .resource::<ContentRegistry>()
+        .type_id("warp_gate")
+        .expect("the demo content defines a warp gate");
+    let raise_burrow = app
+        .world()
+        .resource::<ContentRegistry>()
+        .skill("raise_burrow")
+        .expect("the demo content defines raise_burrow");
+    utils::select(&mut app, farm_id, SelectMode::Replace);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    // The panel read straight after each origin is set, with no tick between
+    // to judge the farm by it.
+    for (origin, words) in [
+        (
+            RiseOrigin::Warped {
+                warper_type: warp_gate,
+                payer: 0,
+                ready_at: 0,
+            },
+            "warping in",
+        ),
+        (
+            RiseOrigin::Summoned {
+                skill: raise_burrow,
+            },
+            "summoning",
+        ),
+    ] {
+        app.world_mut()
+            .get_mut::<RisingComponent>(farm)
+            .expect("a rising entity carries its rising state")
+            .origin = origin;
+
+        let shown = panel_text(&mut app);
+        assert!(shown.contains(words), "{origin:?} reads {words}: {shown:?}");
+    }
 }
 
 #[test]
@@ -456,6 +507,60 @@ fn pressing_cancel_research_names_topic_from_researcher_own_queue() {
             research: iron,
         }],
     );
+}
+
+#[test]
+fn rising_card_offers_cancel_unless_it_is_summon() {
+    let mut app = card_app();
+    app.world_mut().spawn((hud::CommandCard, Node::default()));
+    let (farm, farm_id) =
+        utils::create_rising(app.world_mut(), "farm", utils::at_cell(20, 20), Some(0))
+            .expect("the demo content defines a farm");
+    let raise_burrow = app
+        .world()
+        .resource::<ContentRegistry>()
+        .skill("raise_burrow")
+        .expect("the demo content defines raise_burrow");
+    app.world_mut().insert_resource(Leading(Some(farm_id)));
+
+    let warp_gate = app
+        .world()
+        .resource::<ContentRegistry>()
+        .type_id("warp_gate")
+        .expect("the demo content defines a warp gate");
+    // A founded site or a unit warping in can be called off; a summon is a
+    // cast that has landed.
+    for (origin, buttons) in [
+        (RiseOrigin::Founded { payer: Some(0) }, 1),
+        (
+            RiseOrigin::Warped {
+                warper_type: warp_gate,
+                payer: 0,
+                ready_at: 0,
+            },
+            1,
+        ),
+        (
+            RiseOrigin::Summoned {
+                skill: raise_burrow,
+            },
+            0,
+        ),
+    ] {
+        app.world_mut()
+            .get_mut::<RisingComponent>(farm)
+            .expect("a rising entity carries its rising state")
+            .origin = origin;
+        app.world_mut().resource_mut::<Leading>().set_changed();
+        app.world_mut()
+            .run_system_once(hud::update_command_card)
+            .expect("the command card system runs");
+        assert_eq!(
+            count::<hud::CancelBuildButton>(&mut app),
+            buttons,
+            "{origin:?}"
+        );
+    }
 }
 
 #[test]
@@ -893,6 +998,121 @@ fn pressing_grayed_unload_on_empty_burrow_sends_nothing() {
 }
 
 #[test]
+fn warp_button_stands_while_another_selected_gate_may_warp() {
+    let mut app = card_app();
+    let (cooling_id, ready_id) = warp_card(&mut app);
+
+    // Led by a cooling gate alone, no warp button stands; with a ready gate of
+    // its type selected beside it, the zealot's does.
+    app.world_mut()
+        .resource_mut::<Selection>()
+        .set(0, vec![cooling_id]);
+    recolor_card(&mut app);
+    let alone = open_warp_buttons(&mut app);
+    app.world_mut()
+        .resource_mut::<Selection>()
+        .set(0, vec![cooling_id, ready_id]);
+    recolor_card(&mut app);
+    let beside = open_warp_buttons(&mut app);
+    assert_eq!((alone, beside), (0, 1));
+}
+
+#[test]
+fn warp_hint_names_leaders_refusal_only_while_no_gate_may_warp() {
+    let mut app = card_app();
+    app.world_mut().spawn((hud::CardHint, Text::new("")));
+    let (leader_id, ready_id) = warp_card(&mut app);
+    let leader = app
+        .world()
+        .resource::<EntityIndex>()
+        .alive(leader_id)
+        .expect("the leading gate stands");
+
+    // Led by a cooling gate alone: its refusal.
+    app.world_mut()
+        .resource_mut::<Selection>()
+        .set(0, vec![leader_id]);
+    let alone = hover_each::<hud::WarpButton>(&mut app);
+    // With a ready gate beside it: what the warp-in costs.
+    app.world_mut()
+        .resource_mut::<Selection>()
+        .set(0, vec![leader_id, ready_id]);
+    let beside = hover_each::<hud::WarpButton>(&mut app);
+    // Led by a ready gate whose own warp-in is on its way, alone.
+    let tick = app.world().resource::<GameSession>().tick();
+    app.world_mut()
+        .get_mut::<WarpComponent>(leader)
+        .expect("a warp gate keeps its cooldown")
+        .ready_at = 0;
+    app.world_mut()
+        .resource_mut::<input::WarpsSent>()
+        .0
+        .push(input::SentWarp {
+            warper: leader_id,
+            tick,
+            cooldown_end: 0,
+        });
+    app.world_mut()
+        .resource_mut::<Selection>()
+        .set(0, vec![leader_id]);
+    let sent = hover_each::<hud::WarpButton>(&mut app);
+    // The zealot's and the stalker's, sorted; the stalker's 50 wood is more
+    // than the player holds. The cooling leader's refusal for both; beside a
+    // ready gate the zealot's price, 100 gold and 60 ticks, 3.0 s, and the
+    // leader's refusal for the stalker no gate may warp; alone again and
+    // ready, the zealot's warp-in on its way and the stalker's price unmet.
+    assert_eq!(
+        (alone, beside, sent),
+        (
+            vec!["Cooling down".to_string(), "Cooling down".to_string()],
+            vec!["100 gold, 3.0 s".to_string(), "Cooling down".to_string()],
+            vec![
+                "Not enough resources".to_string(),
+                "Warp-in on its way".to_string()
+            ],
+        )
+    );
+}
+
+#[test]
+fn pressing_warp_gates_warp_button_arms_warp_placement() {
+    let mut app = card_app();
+    app.world_mut().spawn((hud::CommandCard, Node::default()));
+    let (_, gate) = utils::create_entity(
+        app.world_mut(),
+        "warp_gate",
+        utils::at_cell(20, 20),
+        Some(0),
+    )
+    .expect("the demo content defines a warp gate");
+    utils::select(&mut app, gate, SelectMode::Replace);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    app.world_mut().insert_resource(Leading(Some(gate)));
+    app.world_mut()
+        .run_system_once(hud::update_command_card)
+        .expect("the command card system runs");
+
+    // A warp gate trains nothing: its card lists warp buttons alone, the
+    // zealot first.
+    assert_eq!(count::<hud::TrainButton>(&mut app), 0);
+    let mut buttons = app
+        .world_mut()
+        .query_filtered::<&mut Interaction, With<hud::WarpButton>>();
+    let mut first = buttons
+        .iter_mut(app.world_mut())
+        .next()
+        .expect("a warp gate's card lists what it warps in");
+    *first = Interaction::Pressed;
+    app.world_mut()
+        .run_system_once(hud::warp_card_input)
+        .expect("the input system runs");
+
+    assert!(app.world().resource::<PendingInput>().queued().is_empty());
+    let mode = app.world().resource::<InputMode>();
+    assert!(matches!(mode, InputMode::PlacingWarp(unit) if unit == "zealot"));
+}
+
+#[test]
 fn grayed_button_names_unmet_part_of_requirement_tree() {
     let mut app = card_app();
     app.world_mut().spawn((hud::CommandCard, Node::default()));
@@ -1143,4 +1363,51 @@ fn skill_button_labels(app: &mut App) -> Vec<String> {
         .into_iter()
         .filter_map(|child| world.get::<Text>(child).map(|text| text.0.clone()))
         .collect()
+}
+
+/// How many warp buttons on the card stand lit.
+fn open_warp_buttons(app: &mut App) -> usize {
+    app.world_mut()
+        .query_filtered::<&hud::CardGate, With<hud::WarpButton>>()
+        .iter(app.world())
+        .filter(|gate| **gate == hud::CardGate::Open)
+        .count()
+}
+
+/// A command card led by a warp gate of player 0 at (20, 20) that cools down
+/// for good, beside a ready one at (26, 20), both powered, with 500 gold to
+/// spend: the cooling gate's id, then the ready one's.
+fn warp_card(app: &mut App) -> (SimulationId, SimulationId) {
+    app.world_mut().spawn((hud::CommandCard, Node::default()));
+    app.world_mut().init_resource::<input::WarpsSent>();
+    let (cooling, cooling_id) = utils::create_entity(
+        app.world_mut(),
+        "warp_gate",
+        utils::at_cell(20, 20),
+        Some(0),
+    )
+    .expect("the demo content defines a warp gate");
+    let (_, ready_id) = utils::create_entity(
+        app.world_mut(),
+        "warp_gate",
+        utils::at_cell(26, 20),
+        Some(0),
+    )
+    .expect("the demo content defines a warp gate");
+    // A pylon powers both gates, which stand idle unpowered.
+    utils::create_entity(app.world_mut(), "pylon", utils::at_cell(24, 23), Some(0))
+        .expect("the demo content defines a pylon");
+    app.world_mut()
+        .resource_mut::<PlayerResources>()
+        .add(0, "gold", 500);
+    utils::run_ticks(app, 1);
+    app.world_mut()
+        .get_mut::<WarpComponent>(cooling)
+        .expect("a warp gate keeps its cooldown")
+        .ready_at = u32::MAX;
+    app.world_mut().insert_resource(Leading(Some(cooling_id)));
+    app.world_mut()
+        .run_system_once(hud::update_command_card)
+        .expect("the command card system runs");
+    (cooling_id, ready_id)
 }

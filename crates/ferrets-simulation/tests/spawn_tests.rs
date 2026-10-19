@@ -7,7 +7,7 @@ use ferrets_content::{
 };
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_simulation::{
-    components::rise::RiseAttendance,
+    components::rise::{RiseAttendance, RiseOrigin},
     entity_def,
     simulation_id::SimulationId,
     spawn::{self, Arrival, FieldReach},
@@ -29,7 +29,10 @@ fn rising_arrival_of_type_that_never_rises_panics() {
         cell(5, 5),
         None,
         FieldReach::Initial,
-        Arrival::Rising(RiseAttendance::Halted),
+        Arrival::Rising {
+            attendance: RiseAttendance::Halted,
+            origin: RiseOrigin::Founded { payer: None },
+        },
     );
 }
 

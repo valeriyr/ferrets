@@ -8,7 +8,7 @@ use bevy_ecs::{entity::Entity, world::World};
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::{fixed_urect::FixedURect, fixed_uvec2::FixedUVec2};
 
-use super::{build, cast, morph, orders};
+use super::{build, cast, morph, orders, warp};
 use crate::{
     command::{PlayerCommand, SelectMode, SkillCasterRef, SkillTarget},
     components::{
@@ -16,7 +16,7 @@ use crate::{
         order_queue::{CancelPolicy, OrderQueueComponent},
         owner,
         rally::{RallyPointComponent, RallyTarget},
-        rise::RisingComponent,
+        rise::RiseOrigin,
         stance::StanceComponent,
         tags::TagsComponent,
         train::{TrainComponent, TrainQueueComponent},
@@ -227,6 +227,18 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
         PlayerCommand::TrainEntity { trainer, type_name } => {
             train_entity(world, player, *trainer, type_name);
         }
+        PlayerCommand::WarpIn {
+            warper,
+            type_name,
+            at,
+        } => {
+            let Some(entity) = find_owned_interactable(world, player, *warper) else {
+                return;
+            };
+            if let Ok(plan) = warp::judge(world, player, entity, type_name, *at) {
+                warp::begin(world, player, plan);
+            }
+        }
         PlayerCommand::StartResearch {
             researcher,
             research,
@@ -434,21 +446,23 @@ pub(super) fn resolve_send_to_entity(
 }
 
 /// The Build order that puts `entity` to work on the unfinished site `target`, or
-/// `None` if `target` is not an own site.
+/// `None` if `target` is not an own site: an entity a builder founded, still
+/// rising.
 ///
 /// The order names the site's own type and cell, which is what
 /// [`game_loop::build`](super::build) matches an existing site on — so the builder
 /// takes up the work already under way rather than trying to place a second one.
 /// Only the owner's own sites qualify.
 fn assist_construction(world: &World, entity: Entity, target: Entity) -> Option<Order> {
-    let target_ref = world.entity(target);
-    if !target_ref.contains::<RisingComponent>() {
-        return None;
+    match entity_def::rise_origin(world, target) {
+        Some(RiseOrigin::Founded { .. }) => {}
+        Some(RiseOrigin::Warped { .. } | RiseOrigin::Summoned { .. }) | None => return None,
     }
     if !entity_def::same_owner(world, entity, target) {
         return None;
     }
-    let type_name = target_ref
+    let type_name = world
+        .entity(target)
         .get::<EntityInfoComponent>()
         .expect("simulation entity must have EntityInfoComponent")
         .type_name();
@@ -675,22 +689,34 @@ fn cancel_research(
     resources::refund(world, player, price, SpendCause::Research { research });
 }
 
-/// Validates and executes a cancel-build command: tears down the unfinished
-/// `site` and refunds what it cost. Whoever is working it finds the site gone
-/// on its next tick and steps off.
+/// Validates and executes a cancel-build command: tears down the rising
+/// `site` and refunds what it cost — a founded site as construction, whoever
+/// is working it finding it gone on its next tick and stepping off; a unit
+/// warping in as a canceled warp (see [`warp::call_off`]).
 ///
-/// Nothing happens for a site that is not the player's, is finished, or is
-/// already gone.
+/// Nothing happens for an entity that is not the player's, is not rising, is
+/// a rising summon, or is already gone.
 fn cancel_build(world: &mut World, player: PlayerId, site: SimulationId) {
-    let Some(building) = find_owned_interactable(world, player, site) else {
+    let Some(rising) = find_owned_interactable(world, player, site) else {
         return;
     };
-    if !entity_def::rising(world, building) {
+    let Some(origin) = entity_def::rise_origin(world, rising) else {
         return;
+    };
+    match origin {
+        RiseOrigin::Founded { payer } => {
+            let price = entity_def::of(world, rising).price.clone();
+            build::tear_down_site(world, rising);
+            // The price goes back to whoever paid it, which a site handed to
+            // another player is not; a site nobody paid for refunds nothing.
+            if let Some(payer) = payer {
+                resources::refund(world, payer, price, SpendCause::Construction { site });
+            }
+        }
+        RiseOrigin::Warped { .. } => warp::call_off(world, rising),
+        // A summon is a cast that has landed already.
+        RiseOrigin::Summoned { .. } => {}
     }
-    let price = entity_def::of(world, building).price.clone();
-    build::tear_down_site(world, building);
-    resources::refund(world, player, price, SpendCause::Construction { site });
 }
 
 /// Validates and executes a cancel-morph command: calls off the change of form

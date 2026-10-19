@@ -11,12 +11,13 @@ use ferrets_content::{
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     kinds::Kinds,
+    landing::Landing,
     location::Solidity,
     pool::Pool,
     pool_def::PoolId,
     quantity::Quantity,
     resource::{Banking, DepletionPolicy, HarvestData},
-    train::Release,
+    rise::RisePool,
     work::{Attachment, BerthStance, CrewLimit, WorkPresence},
 };
 use ferrets_geometry::cell_size::CellSize;
@@ -44,7 +45,8 @@ fn fully_loaded_definition_is_valid() {
         .with_price([("gold", 30), ("wood", 10)])
         .with_train_time(4)
         .with_rise(6, utils::rise_initial_pools(&[PoolId::HEALTH]))
-        .with_trainer(["footman"], Release::Beside)
+        .with_trainer(["footman"])
+        .with_warper(["footman"], Vec::new(), Landing::Sighted)
         .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
         .with_builder(
             ["depot"],
@@ -252,13 +254,25 @@ fn rise_naming_pool_twice_panics() {
 #[test]
 #[should_panic(expected = "trains must not be empty")]
 fn empty_trains_list_panics() {
-    footman().with_trainer(Vec::<String>::new(), Release::Beside);
+    footman().with_trainer(Vec::<String>::new());
 }
 
 #[test]
 #[should_panic(expected = "trained type names must not be empty")]
 fn empty_trains_entry_panics() {
-    footman().with_trainer(["footman", ""], Release::Beside);
+    footman().with_trainer(["footman", ""]);
+}
+
+#[test]
+#[should_panic(expected = "warps must not be empty")]
+fn empty_warps_list_panics() {
+    footman().with_warper(Vec::<String>::new(), Vec::new(), Landing::Sighted);
+}
+
+#[test]
+#[should_panic(expected = "warped type names must not be empty")]
+fn empty_warps_entry_panics() {
+    footman().with_warper(["footman", ""], Vec::new(), Landing::Sighted);
 }
 
 #[test]
@@ -281,6 +295,17 @@ fn empty_builds_entry_panics() {
             crew: CrewLimit::ONE,
         }),
     );
+}
+
+#[test]
+fn type_that_trains_and_rises_is_produced_over_its_train_time() {
+    let def = rising_blade().with_train_time(30);
+    assert_eq!(def.production_time(), Some(30));
+}
+
+#[test]
+fn type_that_only_rises_is_produced_over_its_rise_time() {
+    assert_eq!(rising_blade().production_time(), Some(10));
 }
 
 //
@@ -507,4 +532,13 @@ fn middle() -> FixedVec2 {
 
 fn footman() -> EntityTypeDef {
     utils::standing("footman", GROUND)
+}
+
+/// A one-cell `blade` with 20 health that rises over ten ticks, its health
+/// at its initial.
+fn rising_blade() -> EntityTypeDef {
+    EntityTypeDef::new("blade")
+        .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+        .with_pool(Pool::health(20))
+        .with_rise(10, [(PoolId::HEALTH, RisePool::Initial)])
 }

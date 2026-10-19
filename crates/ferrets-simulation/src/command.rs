@@ -110,10 +110,18 @@ pub enum PlayerCommand {
         research: ResearchId,
     },
     /// Sets or clears the rally point of the `entity`: units it emits take an
-    /// order toward the target when they spawn. `None` clears.
+    /// order toward the target when they spawn, and a mover still rising takes
+    /// one once it has risen. `None` clears.
     SetRallyPoint {
         entity: SimulationId,
         target: Option<RallyTarget>,
+    },
+    /// Warps a unit of `type_name` in by the `warper`: it rises at once
+    /// anchored on the cell at `at`.
+    WarpIn {
+        warper: SimulationId,
+        type_name: String,
+        at: FixedUVec2,
     },
     /// Issues a build order to the `builder` entity: construct a building of
     /// `type_name` at `position`.
@@ -134,8 +142,10 @@ pub enum PlayerCommand {
         researcher: SimulationId,
         research: ResearchId,
     },
-    /// Tears down the unfinished `site` the issuing player owns, refunding its
-    /// price; whoever was working it is released.
+    /// Tears down the rising entity `site` names, which the issuing player
+    /// owns, refunding its price to whoever paid it, unless it is a rising
+    /// summon: a founded site releases whoever was working it, and a unit
+    /// warping in resets its warper's cooldown.
     CancelBuild { site: SimulationId },
     /// Calls off the change of form `entity` is under, on that change's own
     /// terms: a refundable one gives what it cost back, a committed one holds.

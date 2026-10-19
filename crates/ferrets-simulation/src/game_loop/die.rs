@@ -20,6 +20,7 @@ use crate::{
     entity_index::EntityIndex,
     map::{Map, OccupancyClass},
     order::Order,
+    overbuild,
     spawn::{self, Fallen},
 };
 
@@ -97,7 +98,7 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
     // The berth the entity held through its dying phase — a seated worker
     // dies in its seat — goes back to the job.
     spawn::unseat(world, entity);
-    spawn::uncover_source(world, entity);
+    overbuild::uncover_source(world, entity);
     leave_bequests(world, entity, passing);
     Processing::state(OrderState::Finished)
 }

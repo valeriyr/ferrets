@@ -9,8 +9,11 @@ use ferrets_content::{
     detection::Detection,
     entity_modifiers::EntityModifiers,
     entity_stats::EntityStatId,
-    entity_type_def::EntityTypeDef,
-    field::{FieldAction, FieldDecay, FieldDef, FieldLayer, FieldPlacement, FieldVision},
+    entity_type_def::{EntityTypeDef, EntityTypeId},
+    field::{
+        Emission, FieldAction, FieldCoverage, FieldDecay, FieldDef, FieldGrowth, FieldLayer,
+        FieldPlacement, FieldSourceDef, FieldVision,
+    },
     kinds::Kinds,
     landing::Landing,
     location::Solidity,
@@ -20,6 +23,7 @@ use ferrets_content::{
     price,
     quantity::Quantity,
     registry::ContentRegistry,
+    resource::DepletionPolicy,
     skills::{
         Casting, EntityCastEffect, PaymentPoint, Reach, Recipient, Refund, SkillCaster, SkillDef,
         SummonArrival, SummonAt, Whom,
@@ -32,18 +36,20 @@ use ferrets_math::{FixedI64, FixedU64};
 use ferrets_simulation::{
     buffs_store::Term,
     command::{PlayerCommand, SkillTarget},
-    components::{entity_info::EntityInfoComponent, entity_skills::SkillsComponent, pools},
+    components::{
+        entity_info::EntityInfoComponent, entity_skills::SkillsComponent, pools,
+        resource::ResourceSourceComponent, rise::RiseOrigin,
+    },
     cooldown::Cooldown,
     entity_def,
     entity_index::EntityIndex,
-    events::{SimulationEvent, SpawnCause},
+    events::{DeathCause, SimulationEvent, SpawnCause},
     game_loop::{damage, fields},
     order::Order,
     player_buffs::PlayerBuffs,
     session::{GameSession, player_id::PlayerId, player_slot::PlayerSlot, player_type::PlayerType},
     simulation_id::SimulationId,
     spawn,
-    statistics::Statistics,
 };
 
 mod utils;
@@ -143,10 +149,7 @@ fn raising_is_not_production() {
         .type_id("skeleton")
         .expect("the type is registered");
     assert_eq!(
-        app.world()
-            .resource::<Statistics>()
-            .player(0)
-            .produced(skeleton),
+        utils::produced(&app, skeleton),
         0,
         "a spell that lasts a while is not a unit anyone produced"
     );
@@ -357,6 +360,176 @@ fn body_in_fog_cannot_be_raised() {
         100,
         "and it paid nothing for it"
     );
+}
+
+#[test]
+fn rising_summon_arrives_rising_on_its_own() {
+    let mut app = app();
+    let acolyte = summoner(&mut app, 5, 5);
+
+    utils::cast_self(&mut app, acolyte, "raise_mound");
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+
+    let mound = utils::single_owned_of_type(app.world_mut(), "mound", 0);
+    let raise_mound = utils::skill_id(&app, "raise_mound");
+    assert_eq!(
+        entity_def::rise_origin(app.world(), mound),
+        Some(RiseOrigin::Summoned { skill: raise_mound })
+    );
+    utils::run_ticks(&mut app, MOUND_RISE_TIME);
+    assert!(!entity_def::rising(app.world(), mound));
+}
+
+#[test]
+fn rising_summon_is_not_canceled() {
+    let mut app = app();
+    let acolyte = summoner(&mut app, 5, 5);
+    utils::cast_self(&mut app, acolyte, "raise_mound");
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    let mound = utils::single_owned_of_type(app.world_mut(), "mound", 0);
+    let mound_id = entity_def::simulation_id(app.world(), mound);
+
+    // A summon is a cast that has landed already: nothing calls it off.
+    utils::push_command(&mut app, PlayerCommand::CancelBuild { site: mound_id });
+    utils::run_ticks(&mut app, utils::APPLY);
+    assert!(utils::alive(&app, mound_id));
+    assert!(entity_def::rising(app.world(), mound));
+}
+
+#[test]
+fn rising_summon_counts_toward_no_production() {
+    let mut app = app();
+    let acolyte = summoner(&mut app, 5, 5);
+    utils::cast_self(&mut app, acolyte, "raise_mound");
+    utils::run_ticks(&mut app, utils::APPLY + 1 + MOUND_RISE_TIME);
+
+    let mound = utils::single_owned_of_type(app.world_mut(), "mound", 0);
+    assert!(!entity_def::rising(app.world(), mound));
+    let mound_type = entity_def::type_id(app.world(), mound);
+    assert_eq!(utils::produced(&app, mound_type), 0);
+}
+
+#[test]
+fn summon_lands_only_inside_its_field_rules() {
+    let mut app = app();
+    utils::create_owned(&mut app, "lantern", 10, 10, 0);
+    let acolyte = summoner(&mut app, 2, 2);
+    utils::run_ticks(&mut app, 1);
+
+    // (20, 20) lies outside the lantern's glow of two cells; (10, 12) inside.
+    utils::cast_at(&mut app, acolyte, "glow_mound", 20, 20);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    assert_eq!(count_of(&app, "mound"), 0);
+
+    utils::cast_at(&mut app, acolyte, "glow_mound", 10, 12);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    assert_eq!(count_of(&app, "mound"), 1);
+}
+
+#[test]
+fn rising_summon_losing_its_field_is_lost_unrefunded() {
+    let mut app = app();
+    let (lantern, _) = utils::create_owned(&mut app, "lantern", 10, 10, 0);
+    let acolyte = summoner(&mut app, 2, 2);
+    utils::run_ticks(&mut app, 1);
+    utils::cast_at(&mut app, acolyte, "glow_mound", 10, 12);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    let mound = utils::single_owned_of_type(app.world_mut(), "mound", 0);
+    let mound_id = entity_def::simulation_id(app.world(), mound);
+    assert!(entity_def::rising(app.world(), mound));
+
+    utils::record_announcements(&mut app);
+    spawn::despawn_entity(app.world_mut(), lantern, DeathCause::Decayed);
+    utils::run_ticks(&mut app, 1);
+
+    // Ended before it had risen: neither a loss nor a kill.
+    let announced = &app.world().resource::<utils::Announced>().0;
+    assert!(announced.iter().any(|event| matches!(
+        event,
+        SimulationEvent::EntityDied { entity, cause: DeathCause::Canceled, .. } if *entity == mound_id
+    )));
+
+    assert!(!utils::alive(&app, mound_id));
+    // Paid 30 of 100 and given nothing back.
+    assert_eq!(energy_as_u32(&app, acolyte), 70);
+}
+
+#[test]
+fn summon_raised_over_source_covers_it_and_finds_none_far_off() {
+    let mut app = app();
+    let (seam, seam_id) = utils::create_entity(app.world_mut(), "seam", utils::pos(10, 10), None)
+        .expect("the seam is registered");
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(seam)
+        .expect("a seam is a resource source")
+        .amount = 40;
+    let acolyte = summoner(&mut app, 2, 2);
+    utils::run_ticks(&mut app, 1);
+
+    // No seam within the placement search of (28, 28): nothing is summoned.
+    utils::cast_at(&mut app, acolyte, "raise_spire", 28, 28);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    assert_eq!(count_of(&app, "spire"), 0);
+
+    utils::record_announcements(&mut app);
+    utils::cast_at(&mut app, acolyte, "raise_spire", 10, 10);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    let spire = utils::single_owned_of_type(app.world_mut(), "spire", 0);
+    assert_eq!(utils::cell_of(app.world(), spire), CellPos::new(10, 10));
+    assert!(entity_def::rising(app.world(), spire));
+    // The seam is covered, not merely gone: it dies as overbuilt and the spire
+    // holds the 40 it had left.
+    let announced = &app.world().resource::<utils::Announced>().0;
+    assert!(announced.iter().any(|event| matches!(
+        event,
+        SimulationEvent::EntityDied { entity, cause: DeathCause::Overbuilt, .. }
+            if *entity == seam_id
+    )));
+    assert_eq!(
+        app.world()
+            .get::<ResourceSourceComponent>(spire)
+            .expect("a spire is a resource source")
+            .amount,
+        40
+    );
+}
+
+#[test]
+fn summon_over_spring_walker_stands_on_raises_nothing_until_walker_dies() {
+    let mut app = app();
+    utils::create_entity(app.world_mut(), "spring", utils::pos(10, 10), None)
+        .expect("the spring is registered");
+    // The spring holds no ground of its own, so a soldier stands on it.
+    let (soldier, _) = utils::create_owned(&mut app, "soldier", 10, 10, 1);
+    let acolyte = summoner(&mut app, 2, 2);
+    utils::run_ticks(&mut app, 1);
+
+    utils::cast_at(&mut app, acolyte, "raise_well", 10, 10);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    assert_eq!(count_of(&app, "well"), 0);
+    assert_eq!(count_of(&app, "spring"), 1);
+
+    spawn::despawn_entity(app.world_mut(), soldier, DeathCause::Decayed);
+    utils::cast_at(&mut app, acolyte, "raise_well", 10, 10);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    let well = utils::single_owned_of_type(app.world_mut(), "well", 0);
+    assert_eq!(utils::cell_of(app.world(), well), CellPos::new(10, 10));
+    assert_eq!(count_of(&app, "spring"), 0);
+}
+
+#[test]
+fn sighted_summon_lands_only_where_its_side_sees() {
+    let mut app = app();
+    // The acolyte sees twenty cells: (10, 2) lies in sight, (29, 29) in fog.
+    let acolyte = summoner(&mut app, 2, 2);
+
+    utils::cast_at(&mut app, acolyte, "sight_mound", 29, 29);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    assert_eq!(count_of(&app, "mound"), 0);
+
+    utils::cast_at(&mut app, acolyte, "sight_mound", 10, 2);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    assert_eq!(count_of(&app, "mound"), 1);
 }
 
 #[test]
@@ -1034,6 +1207,7 @@ fn app() -> App {
                             entity_type,
                             count: Quantity::Constant(2),
                             landing: Landing::Anywhere,
+                            within: Vec::new(),
                             arrives: SummonArrival::Standing,
                         },
                     },
@@ -1108,6 +1282,7 @@ fn app() -> App {
                             entity_type,
                             count: Quantity::Constant(2),
                             landing: Landing::Anywhere,
+                            within: Vec::new(),
                             arrives: SummonArrival::Standing,
                         },
                     },
@@ -1143,6 +1318,7 @@ fn app() -> App {
                             entity_type,
                             count: Quantity::Constant(2),
                             landing: Landing::Anywhere,
+                            within: Vec::new(),
                             arrives: SummonArrival::Standing,
                         },
                     },
@@ -1210,6 +1386,7 @@ fn app() -> App {
                             entity_type,
                             count: Quantity::Stat(host_size),
                             landing: Landing::Anywhere,
+                            within: Vec::new(),
                             arrives: SummonArrival::Standing,
                         },
                     },
@@ -1243,6 +1420,7 @@ fn app() -> App {
                             entity_type,
                             count: Quantity::Constant(2),
                             landing: Landing::Anywhere,
+                            within: Vec::new(),
                             arrives: SummonArrival::Standing,
                         },
                     },
@@ -1328,6 +1506,7 @@ fn app() -> App {
                             entity_type,
                             count: Quantity::Constant(2),
                             landing: Landing::Anywhere,
+                            within: Vec::new(),
                             arrives: SummonArrival::Standing,
                         },
                     },
@@ -1364,13 +1543,165 @@ fn app() -> App {
                     self_immolate,
                 ]),
         );
+        // A mound rises over ten ticks of its own work.
+        registry.register(
+            EntityTypeDef::new("mound")
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_pool(Pool::health(20))
+                .with_dying(1, [])
+                .with_rise(
+                    MOUND_RISE_TIME,
+                    utils::rise_initial_pools(&[PoolId::HEALTH]),
+                ),
+        );
+        let mound = registry.type_id("mound").expect("just registered");
+        // A mound summoned rising beside the caster, and one set down
+        // standing on an aimed cell the caster's side must see.
+        let raise_mound = registry.register_skill(
+            "raise_mound",
+            summon_skill(
+                mound,
+                SummonAt::Caster,
+                Landing::Anywhere,
+                Vec::new(),
+                SummonArrival::Rising,
+                Vec::new(),
+            ),
+        );
+        let sight_mound = registry.register_skill(
+            "sight_mound",
+            summon_skill(
+                mound,
+                SummonAt::Cell {
+                    reach: Reach::Wherever,
+                },
+                Landing::Sighted,
+                Vec::new(),
+                SummonArrival::Standing,
+                Vec::new(),
+            ),
+        );
+        // A lantern lights its owner's glow two cells about itself; a mound
+        // summoned rising inside its owner's glow, held to it until risen,
+        // for 30 energy.
+        let glow = registry.register_field(
+            "glow",
+            FieldDef::new(
+                FieldLayer::Passable(utils::GROUND.into()),
+                FieldDecay::Instant,
+                FieldVision::Dark,
+                Detection::Blind,
+            ),
+        );
+        registry.register(
+            EntityTypeDef::new("lantern")
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_pool(Pool::health(20))
+                .with_dying(1, [])
+                .with_field_sources([FieldSourceDef::new(
+                    glow,
+                    2,
+                    FieldGrowth::Instant,
+                    Emission::Nothing,
+                    Emission::Nothing,
+                )]),
+        );
+        // A spire rises over a seam of gold, which it covers.
+        registry.register(
+            EntityTypeDef::new("seam")
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_resource_source("gold", DepletionPolicy::Destroy),
+        );
+        registry.register(
+            EntityTypeDef::new("spire")
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_pool(Pool::health(20))
+                .with_dying(1, [])
+                .with_rise(
+                    MOUND_RISE_TIME,
+                    utils::rise_initial_pools(&[PoolId::HEALTH]),
+                )
+                .with_resource_source("gold", DepletionPolicy::Destroy)
+                .with_overbuilds("seam"),
+        );
+        let spire = registry.type_id("spire").expect("just registered");
+        let raise_spire = registry.register_skill(
+            "raise_spire",
+            summon_skill(
+                spire,
+                SummonAt::Cell {
+                    reach: Reach::Wherever,
+                },
+                Landing::Anywhere,
+                Vec::new(),
+                SummonArrival::Rising,
+                Vec::new(),
+            ),
+        );
+        // A well rises over a spring, which holds no ground of its own.
+        registry.register(
+            EntityTypeDef::new("spring")
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Passable)
+                .with_resource_source("gold", DepletionPolicy::Destroy),
+        );
+        registry.register(
+            EntityTypeDef::new("well")
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_pool(Pool::health(20))
+                .with_dying(1, [])
+                .with_rise(
+                    MOUND_RISE_TIME,
+                    utils::rise_initial_pools(&[PoolId::HEALTH]),
+                )
+                .with_resource_source("gold", DepletionPolicy::Destroy)
+                .with_overbuilds("spring"),
+        );
+        let well = registry.type_id("well").expect("just registered");
+        let raise_well = registry.register_skill(
+            "raise_well",
+            summon_skill(
+                well,
+                SummonAt::Cell {
+                    reach: Reach::Wherever,
+                },
+                Landing::Anywhere,
+                Vec::new(),
+                SummonArrival::Rising,
+                Vec::new(),
+            ),
+        );
+        let glow_mound = registry.register_skill(
+            "glow_mound",
+            summon_skill(
+                mound,
+                SummonAt::Cell {
+                    reach: Reach::Wherever,
+                },
+                Landing::Anywhere,
+                vec![FieldPlacement::Requires {
+                    field: glow,
+                    of: Affiliation::Own,
+                    coverage: FieldCoverage::Every,
+                }],
+                SummonArrival::Rising,
+                vec![Cost::Energy(FixedU64::from_num(30))],
+            ),
+        );
         registry.register(
             EntityTypeDef::new("acolyte")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
                 .with_pool(Pool::health(40))
                 .with_sight_range(20)
                 .with_pool(Pool::energy(100))
-                .with_skills([raise_where_it_stands, raise_from_afar]),
+                .with_skills([
+                    raise_where_it_stands,
+                    raise_from_afar,
+                    raise_mound,
+                    sight_mound,
+                    glow_mound,
+                    raise_spire,
+                    raise_well,
+                ]),
         );
     }
     app.world_mut().resource::<ContentRegistry>().validate();
@@ -1450,6 +1781,9 @@ fn fallen(app: &mut App, x: u32, y: u32) -> SimulationId {
         .0
 }
 
+/// Ticks a `mound` rises over.
+const MOUND_RISE_TIME: u32 = 10;
+
 /// Commands `caster` to raise `body` with `raise_dead`.
 fn raise(app: &mut App, caster: SimulationId, body: SimulationId) {
     utils::cast_on(app, caster, "raise_dead", body);
@@ -1509,4 +1843,32 @@ fn energy_as_u32(app: &App, caster: SimulationId) -> u32 {
         .alive(caster)
         .expect("the caster is standing");
     utils::energy_as_u32(app, entity)
+}
+
+/// A skill summoning one `entity_type` at `at`, landing as `landing` asks
+/// inside the field rules `within`, arriving as `arrives` says, for `costs`.
+fn summon_skill(
+    entity_type: EntityTypeId,
+    at: SummonAt,
+    landing: Landing,
+    within: Vec<FieldPlacement>,
+    arrives: SummonArrival,
+    costs: Vec<Cost>,
+) -> SkillDef {
+    SkillDef {
+        cooldown: 10,
+        caster: SkillCaster::Entity {
+            costs,
+            casting: Casting::Instant,
+            effect: EntityCastEffect::Summon {
+                at,
+                entity_type,
+                count: Quantity::Constant(1),
+                landing,
+                within,
+                arrives,
+            },
+        },
+        requires: Vec::new(),
+    }
 }

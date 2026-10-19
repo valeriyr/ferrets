@@ -351,7 +351,7 @@ fn composition_reads_terrain_per_cell() {
     // it must not come out the same color, or the terrain layer is not being
     // read per cell.
     let mut app = utils::view_app();
-    app.world_mut().resource_mut::<FogReveal>().0 = true;
+    *app.world_mut().resource_mut::<FogReveal>() = FogReveal::Revealed;
     utils::compose_minimap(&mut app);
 
     assert_ne!(painted(&app, 48, 48), painted(&app, 5, 5));
@@ -382,7 +382,7 @@ fn glimpsed_entity_paints_no_blip() {
     // The map revealed, so the ground under the blip is the terrain itself and
     // the stamp alone decides whether anything is painted over it.
     let mut app = utils::view_app();
-    app.world_mut().resource_mut::<FogReveal>().0 = true;
+    *app.world_mut().resource_mut::<FogReveal>() = FogReveal::Revealed;
     utils::compose_minimap(&mut app);
     let ground = painted(&app, 5, 5);
 
@@ -403,6 +403,34 @@ fn glimpsed_entity_paints_no_blip() {
         .insert(Sighted(Sighting::Seen));
     recompose(&mut app);
     assert_ne!(painted(&app, 5, 5), ground, "made out, it is painted");
+}
+
+#[test]
+fn power_tints_only_viewers_own_coverage() {
+    // The map revealed, so the ground under each cell is the terrain itself.
+    let mut app = utils::view_app();
+    *app.world_mut().resource_mut::<FogReveal>() = FogReveal::Revealed;
+    utils::compose_minimap(&mut app);
+    let (rival_ground, own_ground) = (painted(&app, 13, 10), painted(&app, 33, 30));
+
+    // A rival's pylon and player 0's own, each powering six cells about it.
+    utils::create_entity(app.world_mut(), "pylon", utils::at_cell(10, 10), Some(1))
+        .expect("the demo content defines a pylon");
+    utils::create_entity(app.world_mut(), "pylon", utils::at_cell(30, 30), Some(0))
+        .expect("the demo content defines a pylon");
+    utils::run_ticks(&mut app, 1);
+    recompose(&mut app);
+
+    assert_eq!(
+        painted(&app, 13, 10),
+        rival_ground,
+        "a rival's power is its own"
+    );
+    assert_ne!(
+        painted(&app, 33, 30),
+        own_ground,
+        "the viewer's own power tints"
+    );
 }
 
 //

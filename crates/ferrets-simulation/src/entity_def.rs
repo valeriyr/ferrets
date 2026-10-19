@@ -23,7 +23,7 @@ use crate::{
         owner::OwnerComponent,
         pools::PoolsComponent,
         resource::{HarvestingComponent, UnderHarvestComponent},
-        rise::RisingComponent,
+        rise::{RiseOrigin, RisingComponent},
         transport::BoardedComponent,
     },
     entity_index::EntityIndex,
@@ -51,6 +51,7 @@ use ferrets_content::{
     resource::HarvestData,
     targeting,
     turret::TurretStats,
+    warp::WarperDef,
 };
 use ferrets_pathfinder::layer_mask::LayerMask;
 
@@ -121,6 +122,12 @@ pub fn builder_attendance(world: &World, entity: Entity) -> Option<&BuilderAtten
         .builder
         .as_ref()
         .map(|builder| builder.attendance())
+}
+
+/// What `entity`'s type warps in, and onto which cells, or `None` when it
+/// warps nothing in.
+pub fn warper_def(world: &World, entity: Entity) -> Option<&WarperDef> {
+    of(world, entity).warper.as_ref()
 }
 
 /// The annex terms `entity`'s type declares, or `None` when it is no annex.
@@ -202,6 +209,14 @@ pub fn under_harvest(world: &World, entity: Entity) -> bool {
 /// Whether `entity` is still rising into the world.
 pub fn rising(world: &World, entity: Entity) -> bool {
     world.entity(entity).contains::<RisingComponent>()
+}
+
+/// What brought `entity` into the world, or `None` once it has risen or when
+/// it never rose.
+pub fn rise_origin(world: &World, entity: Entity) -> Option<RiseOrigin> {
+    world
+        .get::<RisingComponent>(entity)
+        .map(|rising| rising.origin)
 }
 
 /// Whether `entity`'s return to the grid is deferred, waiting on a free cell.

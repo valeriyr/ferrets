@@ -31,7 +31,7 @@ use ferrets_simulation::{
         owner::OwnerComponent,
         pools::{self, PoolsComponent},
         resource::{ResourceCarrierComponent, ResourceSourceComponent},
-        rise::RisingComponent,
+        rise::{RiseOrigin, RisingComponent},
         stance::StanceComponent,
         train::TrainQueueComponent,
     },
@@ -43,6 +43,7 @@ use ferrets_simulation::{
         cast::AimRefusal,
         morph,
         orders::{self, Refusal},
+        warp::{self, WarpRefusal},
     },
     order::Order,
     player_research::PlayerResearch,
@@ -60,7 +61,7 @@ use ferrets_simulation::{
 };
 
 use crate::{
-    input::{AimVerdict, InputMode, Inspected, Leading, TargetedOrder},
+    input::{self, AimVerdict, InputMode, Inspected, Leading, TargetedOrder},
     render::{self, Sighted},
     states::{GameState, InGameUi},
     time::{self, SpeedStep},
@@ -133,10 +134,18 @@ pub struct CommandCard;
 #[derive(Component)]
 pub struct CardHint;
 
-/// A command-card button that queues an entity type on the leading producer.
+/// A command-card button that trains an entity type on the leading producer.
 #[derive(Component)]
 pub struct TrainButton {
-    /// The entity type this button queues.
+    /// The entity type this button trains.
+    type_name: String,
+}
+
+/// A command-card button that arms placing a unit the leading warper, or
+/// another selected warper of its type, warps in.
+#[derive(Component)]
+pub struct WarpButton {
+    /// The entity type this button warps in.
     type_name: String,
 }
 
@@ -162,7 +171,8 @@ pub struct MorphButton {
     type_name: String,
 }
 
-/// A command-card button that tears down the leading entity's unfinished site.
+/// A command-card button that tears down the leading entity while it rises: a
+/// founded site, or a unit warping in.
 #[derive(Component)]
 pub struct CancelBuildButton;
 
@@ -813,7 +823,7 @@ pub fn update_selection(world: &mut World) {
                     // Not operating, as the simulation judges it.
                     match entity_def::operation(world_ref, entity) {
                         Operation::Rising => {
-                            parts.push("under construction".to_string());
+                            parts.push(rising_words(world_ref, entity).to_string());
                         }
                         Operation::Disabled(_) => parts.push("disabled".to_string()),
                         Operation::Stranded => parts.push("waiting for room".to_string()),
@@ -1088,7 +1098,7 @@ pub fn update_command_card(
         Option<&MorphComponent>,
         Option<&OwnerComponent>,
     )>,
-    rising: Query<(&EntityInfoComponent, &OwnerComponent), With<RisingComponent>>,
+    rising: Query<(&EntityInfoComponent, &OwnerComponent, &RisingComponent)>,
     broodlings: Broodlings,
     brood_button: Query<(), With<SelectBroodButton>>,
     morph_button: Query<(), With<CancelMorphButton>>,
@@ -1098,6 +1108,7 @@ pub fn update_command_card(
         Entity,
         Or<(
             With<TrainButton>,
+            With<WarpButton>,
             With<BuildButton>,
             With<ResearchButton>,
             With<SkillButton>,
@@ -1197,6 +1208,11 @@ pub fn update_command_card(
         .as_ref()
         .map(|trainer| trainer.trains().map(String::from).collect::<Vec<_>>())
         .unwrap_or_default();
+    let warps = def
+        .warper
+        .as_ref()
+        .map(|warper| warper.warps().map(String::from).collect::<Vec<_>>())
+        .unwrap_or_default();
     let builds = def
         .builder
         .as_ref()
@@ -1233,10 +1249,15 @@ pub fn update_command_card(
     let lets_out = def.gateway().is_some_and(|gateway| {
         gateway.doors().admits_exit() && registry.joins_hold(gateway.joins())
     });
-    let own_rising = session.local_player().is_some_and(|local| {
-        rising
-            .iter()
-            .any(|(info, owner)| info.id() == id && owner.player() == local)
+    // A summon rising is a cast landed already, and has nothing to cancel.
+    let own_cancelable_rise = session.local_player().is_some_and(|local| {
+        rising.iter().any(|(info, owner, rising)| {
+            let cancelable = match rising.origin {
+                RiseOrigin::Founded { .. } | RiseOrigin::Warped { .. } => true,
+                RiseOrigin::Summoned { .. } => false,
+            };
+            cancelable && info.id() == id && owner.player() == local
+        })
     });
     let morphs: Vec<String> = def
         .morphs
@@ -1248,6 +1269,14 @@ pub fn update_command_card(
         for name in trains {
             parent.spawn((
                 TrainButton {
+                    type_name: name.clone(),
+                },
+                card_button(&pretty_name(&name), BUTTON_NORMAL),
+            ));
+        }
+        for name in warps {
+            parent.spawn((
+                WarpButton {
                     type_name: name.clone(),
                 },
                 card_button(&pretty_name(&name), BUTTON_NORMAL),
@@ -1285,7 +1314,7 @@ pub fn update_command_card(
                 card_button("Cancel Research", BUTTON_NORMAL),
             ));
         }
-        if own_rising {
+        if own_cancelable_rise {
             parent.spawn((CancelBuildButton, card_button("Cancel", BUTTON_NORMAL)));
         }
         if changing {
@@ -1311,7 +1340,7 @@ pub fn update_command_card(
 }
 
 /// Trains the button's unit on the leading producer when a train button is clicked.
-pub fn command_card_input(
+pub fn train_card_input(
     mut buttons: Query<
         (
             &Interaction,
@@ -1335,6 +1364,29 @@ pub fn command_card_input(
                     });
                 }
             }
+            Interaction::Hovered => *color = BackgroundColor(BUTTON_HOVERED),
+            Interaction::None => *color = BackgroundColor(BUTTON_NORMAL),
+        }
+    }
+}
+
+/// Arms placing the unit a warp button names when it is clicked.
+pub fn warp_card_input(
+    mut buttons: Query<
+        (
+            &Interaction,
+            &WarpButton,
+            &mut BackgroundColor,
+            Option<&CardGate>,
+        ),
+        Changed<Interaction>,
+    >,
+    mut mode: ResMut<InputMode>,
+) {
+    for (interaction, button, mut color, gate) in &mut buttons {
+        match interaction {
+            Interaction::Pressed if shut(gate) => {}
+            Interaction::Pressed => *mode = InputMode::PlacingWarp(button.type_name.clone()),
             Interaction::Hovered => *color = BackgroundColor(BUTTON_HOVERED),
             Interaction::None => *color = BackgroundColor(BUTTON_NORMAL),
         }
@@ -1477,8 +1529,9 @@ pub fn select_brood_card_input(
     }
 }
 
-/// Tears down the leading entity's own unfinished site when the cancel button is clicked;
-/// the executor refunds the price and releases whoever was working it.
+/// Tears down the leading entity, the player's own and still rising, when the
+/// cancel button is clicked; the executor refunds its price to whoever paid
+/// it.
 pub fn cancel_build_card_input(
     mut buttons: Query<
         (&Interaction, &mut BackgroundColor),
@@ -1599,6 +1652,8 @@ pub fn research_card_input(
 enum CardAction {
     /// Trains a unit of the type.
     Train(String),
+    /// Arms placing a unit of the type the leading warper's candidates warp in.
+    Warp(String),
     /// Places a building of the type.
     Build(String),
     /// Starts the research.
@@ -1644,7 +1699,7 @@ pub fn update_card_availability(world: &mut World) {
         let entity = leading?;
         orders::can_start(world, entity, &order)
             .err()
-            .map(refusal_words)
+            .map(|refusal| refusal_words(world, entity, refusal))
     };
     // A change of form is commanded for the whole selection — the player's own
     // entities in it, as the executor reads it — so the button stands as long
@@ -1705,6 +1760,7 @@ pub fn update_card_availability(world: &mut World) {
         Entity,
         &Interaction,
         Option<&TrainButton>,
+        Option<&WarpButton>,
         Option<&BuildButton>,
         Option<&ResearchButton>,
         Option<&SkillButton>,
@@ -1720,12 +1776,13 @@ pub fn update_card_availability(world: &mut World) {
         entity,
         interaction,
         train,
+        warp,
         build,
         research,
         skill,
         player_skill,
-        morph_button,
-        cancel,
+        morph,
+        cancel_morph,
         cancel_train,
         cancel_research,
         load,
@@ -1734,6 +1791,8 @@ pub fn update_card_availability(world: &mut World) {
     {
         let action = if let Some(button) = train {
             CardAction::Train(button.type_name.clone())
+        } else if let Some(button) = warp {
+            CardAction::Warp(button.type_name.clone())
         } else if let Some(button) = build {
             CardAction::Build(button.type_name.clone())
         } else if let Some(button) = research {
@@ -1742,9 +1801,9 @@ pub fn update_card_availability(world: &mut World) {
             CardAction::Skill(button.skill)
         } else if let Some(button) = player_skill {
             CardAction::PlayerSkill(button.skill)
-        } else if let Some(button) = morph_button {
+        } else if let Some(button) = morph {
             CardAction::Morph(button.type_name.clone())
-        } else if cancel.is_some() {
+        } else if cancel_morph.is_some() {
             CardAction::CancelMorph
         } else if cancel_train.is_some() {
             CardAction::CancelTrain
@@ -1779,6 +1838,19 @@ pub fn update_card_availability(world: &mut World) {
                 type_requirements_met(world, type_name)
                     && !raising_refused(world, leading, type_name)
                     && starts(world, Order::Train),
+                BUTTON_NORMAL,
+                BUTTON_HOVERED,
+            ),
+            // A warp button stands while a warp-in by one of the click's
+            // candidates would.
+            CardAction::Warp(type_name) => (
+                leading.is_some_and(|warper| {
+                    input::warp_candidates(world, player, entity_def::simulation_id(world, warper))
+                        .into_iter()
+                        .any(|candidate| {
+                            warp::judge_warper(world, player, candidate, type_name).is_ok()
+                        })
+                }),
                 BUTTON_NORMAL,
                 BUTTON_HOVERED,
             ),
@@ -1875,9 +1947,10 @@ pub fn update_card_availability(world: &mut World) {
     // the cast would refuse it.
     let aiming = match world.resource::<InputMode>() {
         InputMode::Targeting(TargetedOrder::Skill(_)) => *world.resource::<AimVerdict>(),
-        InputMode::Normal | InputMode::PlacingBuild(_) | InputMode::Targeting(_) => {
-            AimVerdict::Idle
-        }
+        InputMode::Normal
+        | InputMode::PlacingBuild(_)
+        | InputMode::PlacingWarp(_)
+        | InputMode::Targeting(_) => AimVerdict::Idle,
     };
     let hint = match aiming {
         AimVerdict::Refuses(refusal) => aim_refusal_words(refusal).to_string(),
@@ -1917,7 +1990,7 @@ fn price_words(world: &World, action: &CardAction) -> String {
         parts.join(", ")
     };
     match action {
-        CardAction::Train(type_name) => {
+        CardAction::Train(type_name) | CardAction::Warp(type_name) => {
             let def = registry
                 .entity(type_name)
                 .expect("a card button names a registered type");
@@ -2008,6 +2081,7 @@ fn card_hint(
     let under_way = match action {
         CardAction::Research(research) => research_under_way(world, player, *research),
         CardAction::Train(_)
+        | CardAction::Warp(_)
         | CardAction::Build(_)
         | CardAction::Skill(_)
         | CardAction::PlayerSkill(_)
@@ -2041,6 +2115,16 @@ fn card_hint(
         CardAction::Train(type_name) => of_type(type_name)
             .or_else(|| bound(type_name))
             .or_else(|| refused(world, Order::Train))
+            .unwrap_or_default(),
+        // The leading warper's refusal, or, when it may warp the type in, that
+        // its own warp-in is on its way.
+        CardAction::Warp(type_name) => leading
+            .map(
+                |warper| match warp::judge_warper(world, player, warper, type_name) {
+                    Ok(()) => "Warp-in on its way".to_string(),
+                    Err(refusal) => warp_refusal_words(world, warper, refusal),
+                },
+            )
             .unwrap_or_default(),
         CardAction::Build(type_name) => of_type(type_name)
             .or_else(|| bound(type_name))
@@ -2088,7 +2172,7 @@ fn card_hint(
                 }
                 (None, None) => "Nothing selected can cast it".to_string(),
                 (None, Some(entity)) => match entity_def::operation(world, entity) {
-                    Operation::Rising => "Still under construction".to_string(),
+                    Operation::Rising => still_rising_words(world, entity),
                     Operation::Disabled(_) => "Switched off".to_string(),
                     Operation::Stranded => "Waiting for room to come back".to_string(),
                     Operation::Operating => match world.entity(entity).get::<SkillsComponent>() {
@@ -2132,11 +2216,15 @@ fn card_hint(
         CardAction::CancelTrain => "Nothing is being trained".to_string(),
         CardAction::CancelResearch => "Nothing is being researched".to_string(),
         CardAction::Load => leading
-            .map(|entity| operation_words(entity_def::operation(world, entity)))
+            .map(|entity| operation_words(world, entity, entity_def::operation(world, entity)))
             .unwrap_or_default(),
         CardAction::Unload => leading
-            .and_then(|entity| orders::can_start(world, entity, &Order::Unload { at: None }).err())
-            .map(|refusal| match refusal {
+            .and_then(|entity| {
+                orders::can_start(world, entity, &Order::Unload { at: None })
+                    .err()
+                    .map(|refusal| (entity, refusal))
+            })
+            .map(|(entity, refusal)| match refusal {
                 Refusal::NothingToDo => "Nobody inside".to_string(),
                 Refusal::Incapable
                 | Refusal::Rising
@@ -2146,9 +2234,27 @@ fn card_hint(
                 | Refusal::TargetUnfit
                 | Refusal::Busy
                 | Refusal::NoRoom
-                | Refusal::NoSupply => refusal_words(refusal),
+                | Refusal::NoSupply => refusal_words(world, entity, refusal),
             })
             .unwrap_or_default(),
+    }
+}
+
+/// Why `warper` may not warp a unit in anywhere now, in words: the refusals
+/// [`warp::judge_warper`] gives, which read no cell.
+fn warp_refusal_words(world: &World, warper: Entity, refusal: WarpRefusal) -> String {
+    match refusal {
+        WarpRefusal::Incapable => "It cannot warp this in".to_string(),
+        WarpRefusal::Warper(refusal) => refusal_words(world, warper, refusal),
+        WarpRefusal::Busy => "Busy".to_string(),
+        WarpRefusal::CoolingDown => "Cooling down".to_string(),
+        WarpRefusal::Bound => "Already bound to its other end".to_string(),
+        WarpRefusal::Unmet => "Its requirements are unmet".to_string(),
+        WarpRefusal::NoSupply => "Not enough supply".to_string(),
+        WarpRefusal::Unaffordable => "Not enough resources".to_string(),
+        WarpRefusal::Blocked | WarpRefusal::Unseen | WarpRefusal::OutsideField => {
+            unreachable!("the card judges the warper, never a cell")
+        }
     }
 }
 
@@ -2180,12 +2286,12 @@ fn summon_refused(world: &World, leading: Option<Entity>, skill: SkillId) -> boo
     }
 }
 
-/// Why an entity in `operation` does not act, in words; empty when it
+/// Why `entity`, in `operation`, does not act, in words; empty when it
 /// operates.
-fn operation_words(operation: Operation) -> String {
+fn operation_words(world: &World, entity: Entity, operation: Operation) -> String {
     match operation {
         Operation::Operating => String::new(),
-        Operation::Rising => "Still under construction".to_string(),
+        Operation::Rising => still_rising_words(world, entity),
         Operation::Disabled(_) => "Switched off".to_string(),
         Operation::Stranded => "Waiting for room to come back".to_string(),
     }
@@ -2323,11 +2429,26 @@ fn bound_words(bound: Bound) -> String {
     }
 }
 
-/// What the start check refused, in words.
-fn refusal_words(refusal: Refusal) -> String {
+/// What the rising `entity` is doing, in words, by what brought it in.
+fn rising_words(world: &World, entity: Entity) -> &'static str {
+    match entity_def::rise_origin(world, entity) {
+        Some(RiseOrigin::Founded { .. }) => "under construction",
+        Some(RiseOrigin::Warped { .. }) => "warping in",
+        Some(RiseOrigin::Summoned { .. }) => "summoning",
+        None => unreachable!("only a rising entity is worded as rising"),
+    }
+}
+
+/// Why the rising `entity` does not act yet, in words.
+fn still_rising_words(world: &World, entity: Entity) -> String {
+    format!("Still {}", rising_words(world, entity))
+}
+
+/// What the start check refused `entity`, in words.
+fn refusal_words(world: &World, entity: Entity, refusal: Refusal) -> String {
     match refusal {
         Refusal::Incapable => "It cannot do this",
-        Refusal::Rising => "Still under construction",
+        Refusal::Rising => return still_rising_words(world, entity),
         Refusal::Disabled => "Switched off",
         Refusal::Stranded => "Waiting for room to come back",
         Refusal::NothingToDo => "Nothing to do",

@@ -18,7 +18,10 @@ use ferrets_content::{
     research::ResearchId, skills::SkillId,
 };
 
-use crate::{command::SkillTarget, session::player_id::PlayerId, simulation_id::SimulationId};
+use crate::{
+    command::SkillTarget, components::rise::RiseOrigin, session::player_id::PlayerId,
+    simulation_id::SimulationId,
+};
 
 /// How an entity came to be.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,6 +32,12 @@ pub enum SpawnCause {
     Trained {
         /// The producer it came out of.
         trainer: SimulationId,
+    },
+    /// Warped in by a warper — announced when it is set down, still rising.
+    /// [`SimulationEvent::EntityRisen`] announces the other end of the rise.
+    Warped {
+        /// The warper that warped it in.
+        warper: SimulationId,
     },
     /// Founded as a construction site — announced when the site is raised,
     /// still rising. [`SimulationEvent::EntityRisen`] announces the other end
@@ -66,7 +75,7 @@ pub enum SpawnCause {
     },
     /// A resource source put back where the entity raised over it died, with
     /// what that entity had left of it. Paired with [`DeathCause::Overbuilt`],
-    /// which took the source off the map when the site was raised.
+    /// which took the source off the map when the entity was set down.
     Uncovered {
         /// The entity that stood over it.
         by: SimulationId,
@@ -87,6 +96,11 @@ pub enum SpendCause {
     Training {
         /// The producer it was queued at.
         trainer: SimulationId,
+    },
+    /// A unit warped in.
+    Warp {
+        /// The warper that warped it in.
+        warper: SimulationId,
     },
     /// A research topic.
     Research {
@@ -135,8 +149,8 @@ pub enum DeathCause {
     Canceled,
     /// Consumed by the construction site it founded.
     Consumed,
-    /// A resource source taken off the map by the site raised over it, which
-    /// takes its remaining amount. Paired with [`SpawnCause::Uncovered`],
+    /// A resource source taken off the map by the entity set down over it,
+    /// which takes its remaining amount. Paired with [`SpawnCause::Uncovered`],
     /// which puts the source back when that entity dies with anything left.
     Overbuilt,
     /// Went down with the carrier holding it.
@@ -211,6 +225,8 @@ pub enum SimulationEvent {
         /// Whoever put in the last of the work: a builder, or the founder of
         /// an entity that rose unattended.
         by: SimulationId,
+        /// What brought the entity in.
+        origin: RiseOrigin,
     },
     /// An entity stopped existing.
     EntityDied {

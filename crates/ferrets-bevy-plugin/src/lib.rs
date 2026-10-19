@@ -58,7 +58,7 @@
 //! recompute_entity_stats — exclusive system; fold each entity's buffs and its owner's
 //!                      player-level buffs and modifiers into effective stats, the
 //!                      once-per-tick snapshot consumers read
-//! rise_sites         — exclusive system; line up each pool of every rising
+//! follow_work        — exclusive system; line up each pool of every rising
 //!                      entity with its work under the maxima just folded, and
 //!                      settle the pools of each entity risen since the last fold
 //! recompute_player_stats — exclusive system; refold player stats from applied
@@ -76,10 +76,12 @@
 //!                          sub-order (attack-move/guard scanning mid-walk)
 //!                        process phase: advance InProcessing front order, remove driver
 //!                          components on finish, push chase sub-orders on suspend
-//! dispatch_rallies   — exclusive system; give every unit an order released this
-//!                      tick its holder's rally order
-//! advance_sites_without_builder — exclusive system; put in a tick on each
-//!                      unattended rising entity
+//! lose_rises_outside_fields — exclusive system; end each rise bound to field
+//!                      rules whose footprint left them
+//! advance_unattended — exclusive system; put in a tick on each unattended
+//!                      rising entity
+//! dispatch_rallies   — exclusive system; give every unit an order released or
+//!                      risen this tick its rally order
 //! advance_berths     — exclusive system; move seated workers between the berths
 //!                      their stance walks them round
 //! advance_brood      — exclusive system; take lingering broodlings into each
@@ -487,7 +489,7 @@ impl Plugin for SimulationPlugin {
                     // one risen last tick has its pools settled, under the
                     // maxima just folded, before any order heals or spends
                     // from them; a tick of work moves the line as it is put in.
-                    (systems::recompute_entity_stats, systems::rise_sites).chain(),
+                    (systems::recompute_entity_stats, systems::follow_work).chain(),
                     systems::recompute_player_stats,
                     // Stance-driven initiative first, so a fresh engagement or
                     // flee response executes on the same tick it was decided.
@@ -502,12 +504,14 @@ impl Plugin for SimulationPlugin {
                     // changes before orders path against it, never lazily at
                     // query time.
                     systems::refresh_nav_hierarchy,
-                    // Units released by this tick's orders — trained, unloaded,
-                    // hatched — are sent to their holder's rally point once
-                    // every order has run and their queues are back in place.
-                    // Unattended rising entities put in their tick right
-                    // after the crews put in theirs, so every rise finishes at
-                    // the same point of the tick.
+                    // A rise bound to field rules whose field left it this
+                    // tick ends before its tick of rise goes in. Unattended
+                    // rising entities put in their tick right after the crews
+                    // put in theirs, so every rise finishes at the same point
+                    // of the tick. Units released by this tick's orders —
+                    // trained, unloaded, hatched — and movers risen this tick
+                    // are then sent to their rally point, once every order has
+                    // run and their queues are back in place.
                     // Attached workers move about their berths once the orders
                     // that seat them have run.
                     // Breeders bear their broodlings once the orders that use
@@ -518,8 +522,9 @@ impl Plugin for SimulationPlugin {
                     // in the tick it did so.
                     (
                         systems::tick_orders,
+                        systems::lose_rises_outside_fields,
+                        systems::advance_unattended,
                         systems::dispatch_rallies,
-                        systems::advance_sites_without_builder,
                         systems::advance_berths,
                         systems::advance_brood,
                         systems::advance_annexes,

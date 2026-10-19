@@ -26,7 +26,7 @@ use ferrets_geometry::cell_pos::CellPos;
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_simulation::{
     command::SkillTarget,
-    components::pools,
+    components::{pools, rise::RiseOrigin},
     entity_def,
     events::{DeathCause, EventRecord, SimulationEvent},
     game_loop::{self, buffs::Bearing},
@@ -56,7 +56,7 @@ fn kill_is_heard_where_it_happened() {
 fn hit_on_cargo_inside_holder_makes_no_sound() {
     let mut app = sound_app();
     // Under a seat's own sight, not the fog reveal, so the subject is judged.
-    app.world_mut().insert_resource(FogReveal(false));
+    app.world_mut().insert_resource(FogReveal::Fogged);
     let world = app.world_mut();
     let (bunker, _) = utils::create_entity(world, "bunker", utils::at_cell(6, 6), Some(0)).unwrap();
     let (cargo, cargo_id) =
@@ -85,7 +85,7 @@ fn hit_on_cargo_inside_holder_makes_no_sound() {
 #[test]
 fn kill_of_cargo_inside_holder_makes_no_sound() {
     let mut app = sound_app();
-    app.world_mut().insert_resource(FogReveal(false));
+    app.world_mut().insert_resource(FogReveal::Fogged);
     let world = app.world_mut();
     let (bunker, _) = utils::create_entity(world, "bunker", utils::at_cell(6, 6), Some(0)).unwrap();
     let (cargo, _) = utils::create_entity(world, "grunt", utils::at_cell(6, 8), Some(0)).unwrap();
@@ -178,6 +178,7 @@ fn rise_is_heard_at_risen_entity() {
         .emit(SimulationEvent::EntityRisen {
             entity: risen,
             by: SimulationId(0),
+            origin: RiseOrigin::Founded { payer: Some(0) },
         });
     play(&mut app);
 
@@ -185,6 +186,35 @@ fn rise_is_heard_at_risen_entity() {
         cue_cells(&mut app),
         vec![CellPos::new(7, 7)],
         "a rise sounds from where the entity stands"
+    );
+}
+
+#[test]
+fn warped_rise_is_heard_at_risen_entity() {
+    let mut app = sound_app();
+    let world = app.world_mut();
+    let (_, risen) = utils::create_entity(world, "grunt", utils::at_cell(7, 7), Some(0)).unwrap();
+    let warp_gate = world
+        .resource::<ContentRegistry>()
+        .type_id("warp_gate")
+        .expect("the demo content defines a warp gate");
+    world
+        .resource_mut::<EventRecord>()
+        .emit(SimulationEvent::EntityRisen {
+            entity: risen,
+            by: SimulationId(0),
+            origin: RiseOrigin::Warped {
+                warper_type: warp_gate,
+                payer: 0,
+                ready_at: 0,
+            },
+        });
+    play(&mut app);
+
+    assert_eq!(
+        cue_cells(&mut app),
+        vec![CellPos::new(7, 7)],
+        "a unit that has warped in is heard where it stands"
     );
 }
 
@@ -198,12 +228,37 @@ fn enemy_rise_is_not_heard() {
         .emit(SimulationEvent::EntityRisen {
             entity: risen,
             by: SimulationId(0),
+            origin: RiseOrigin::Founded { payer: Some(0) },
         });
     play(&mut app);
 
     assert!(
         cue_cells(&mut app).is_empty(),
         "an enemy's rise is its milestone, not ours — even in plain sight"
+    );
+}
+
+#[test]
+fn summon_rising_is_not_heard_as_completion() {
+    let mut app = sound_app();
+    let world = app.world_mut();
+    let (_, risen) = utils::create_entity(world, "grunt", utils::at_cell(7, 7), Some(0)).unwrap();
+    let skill = world
+        .resource::<ContentRegistry>()
+        .skill("raise_burrow")
+        .expect("the demo content defines raise_burrow");
+    world
+        .resource_mut::<EventRecord>()
+        .emit(SimulationEvent::EntityRisen {
+            entity: risen,
+            by: SimulationId(0),
+            origin: RiseOrigin::Summoned { skill },
+        });
+    play(&mut app);
+
+    assert!(
+        cue_cells(&mut app).is_empty(),
+        "a summon is the cast's milestone, sounded where the cast lands"
     );
 }
 
@@ -281,7 +336,7 @@ fn enemy_fire_is_not_heard_by_player() {
 fn fire_caught_out_of_sight_is_not_heard_later() {
     // An observer watching player 1, who sees nothing of player 0's depot.
     let mut app = sound_app_as(LocalRole::Observer);
-    app.insert_resource(FogReveal(false));
+    app.insert_resource(FogReveal::Fogged);
     app.insert_resource(ObserverPerspective(Some(1)));
     burning_depot(&mut app, 0);
     utils::run_ticks(&mut app, 1);
@@ -313,7 +368,7 @@ fn fire_in_sight_of_watched_side_is_heard() {
     // An observer watching player 1, whose marine stands beside player 0's
     // depot.
     let mut app = sound_app_as(LocalRole::Observer);
-    app.insert_resource(FogReveal(false));
+    app.insert_resource(FogReveal::Fogged);
     app.insert_resource(ObserverPerspective(Some(1)));
     utils::create_entity(app.world_mut(), "marine", utils::at_cell(11, 8), Some(1))
         .expect("the demo content defines a marine");
@@ -329,7 +384,7 @@ fn concealed_fire_in_sight_of_watched_side_is_not_heard() {
     // As above, but the depot is concealed from a side that cannot detect
     // it: its cell is in sight, yet the depot is only glimpsed.
     let mut app = sound_app_as(LocalRole::Observer);
-    app.insert_resource(FogReveal(false));
+    app.insert_resource(FogReveal::Fogged);
     app.insert_resource(ObserverPerspective(Some(1)));
     utils::create_entity(app.world_mut(), "marine", utils::at_cell(11, 8), Some(1))
         .expect("the demo content defines a marine");
@@ -444,7 +499,7 @@ fn cast_of_unseen_caster_at_cell_in_sight_is_not_heard() {
     // An observer watching player 1, whose marine sees the aimed cell but not
     // player 0's caster far off in the fog.
     let mut app = sound_app_as(LocalRole::Observer);
-    app.insert_resource(FogReveal(false));
+    app.insert_resource(FogReveal::Fogged);
     app.insert_resource(ObserverPerspective(Some(1)));
     let skill = battle_focus(&app);
     utils::create_entity(app.world_mut(), "marine", utils::at_cell(11, 8), Some(1))
@@ -470,7 +525,7 @@ fn cast_of_concealed_caster_on_cell_in_sight_is_not_heard() {
     // ambushing grunt stands on, but not the grunt, concealed from a side
     // that cannot detect it.
     let mut app = sound_app_as(LocalRole::Observer);
-    app.insert_resource(FogReveal(false));
+    app.insert_resource(FogReveal::Fogged);
     app.insert_resource(ObserverPerspective(Some(1)));
     let skill = battle_focus(&app);
     utils::create_entity(app.world_mut(), "marine", utils::at_cell(11, 8), Some(1))
@@ -493,7 +548,7 @@ fn cast_on_concealed_target_on_cell_in_sight_is_not_heard() {
     // As above, the ambushing grunt now the target of a caster far off in the
     // fog.
     let mut app = sound_app_as(LocalRole::Observer);
-    app.insert_resource(FogReveal(false));
+    app.insert_resource(FogReveal::Fogged);
     app.insert_resource(ObserverPerspective(Some(1)));
     let skill = battle_focus(&app);
     utils::create_entity(app.world_mut(), "marine", utils::at_cell(11, 8), Some(1))
@@ -685,7 +740,7 @@ fn sound_app_as(role: LocalRole) -> App {
     app.add_plugins((TaskPoolPlugin::default(), AssetPlugin::default()));
     app.init_asset::<sound::GeneratedCue>()
         .init_resource::<ObserverPerspective>()
-        .insert_resource(FogReveal(true));
+        .insert_resource(FogReveal::Revealed);
     app.world_mut()
         .run_system_once(sound::build_cues)
         .expect("the waveforms are built");

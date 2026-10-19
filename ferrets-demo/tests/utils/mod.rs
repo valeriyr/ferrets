@@ -10,7 +10,10 @@ use ferrets_math::{FixedI64, FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_script::{content, engine::lua::LuaEngine};
 use ferrets_simulation::{
     command::{PlayerCommand, SelectMode},
-    components::{location::LocationComponent, rise::RiseAttendance},
+    components::{
+        location::LocationComponent,
+        rise::{RiseAttendance, RiseOrigin},
+    },
     input::{InputFrames, PlayerFrame},
     map::Map,
     movement_model::MovementModel,
@@ -41,8 +44,9 @@ pub fn create_entity(
     )
 }
 
-/// Spawns `type_name` still rising at `position` for `owner`, worked by a
-/// crew nobody has joined yet, announcing nothing.
+/// Spawns `type_name` still rising at `position` for `owner` as a founded
+/// site `owner` paid for, worked by a crew nobody has joined yet, announcing
+/// nothing.
 pub fn create_rising(
     world: &mut World,
     type_name: &str,
@@ -55,9 +59,12 @@ pub fn create_rising(
         position,
         owner,
         FieldReach::Initial,
-        Arrival::Rising(RiseAttendance::Crew {
-            workers: Default::default(),
-        }),
+        Arrival::Rising {
+            attendance: RiseAttendance::Crew {
+                workers: Default::default(),
+            },
+            origin: RiseOrigin::Founded { payer: owner },
+        },
     )
 }
 

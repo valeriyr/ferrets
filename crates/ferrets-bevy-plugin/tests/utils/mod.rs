@@ -20,7 +20,7 @@ use ferrets_content::{
     entity_effect::EntityEffect,
     entity_modifiers::EntityModifiers,
     entity_stats::EntityStatId,
-    entity_type_def::EntityTypeDef,
+    entity_type_def::{EntityTypeDef, EntityTypeId},
     field::FieldId,
     kinds::Kinds,
     location::Solidity,
@@ -48,7 +48,6 @@ use ferrets_content::{
     splash::{SplashDef, SplashShape},
     stack_rule::StackRule,
     stats::{EntityModifier, ModifierOp},
-    train::Release,
     transport::{PassengerConduct, PassengerFate},
     turret::{TurretDef, TurretFire, TurretMount, TurretStats, WeaponConduct},
     work::{Attachment, BerthStance, CrewLimit, WorkPresence},
@@ -85,12 +84,14 @@ use ferrets_simulation::{
         order_queue::{CancelPolicy, OrderQueueComponent},
         owner::OwnerComponent,
         pools,
-        rise::{RiseAttendance, RisingComponent},
+        rally::RallyTarget,
+        rise::{RiseAttendance, RiseOrigin, RisingComponent},
         train::TrainQueueComponent,
         transport::TransporterComponent,
         turret::TurretsComponent,
     },
     entity_def,
+    entity_index::EntityIndex,
     events::{DeathCause, EventRecord, SimulationEvent},
     fields::FieldGrid,
     game_loop::buffs::{self, Bearing},
@@ -109,6 +110,7 @@ use ferrets_simulation::{
     simulation_id::SimulationId,
     skirmish::Skirmish,
     spawn::{self, Arrival, FieldReach},
+    statistics::Statistics,
     visibility::{self, Senses, Sighting},
 };
 
@@ -377,8 +379,8 @@ pub fn create_owned(
 }
 
 /// A fixture entity of `type_name` at `(x, y)` owned by `player`, still
-/// rising, spawned without announcing it, with no work put in and attended
-/// as `attendance` says.
+/// rising as a founded site, spawned without announcing it, with no work put
+/// in and attended as `attendance` says.
 /// Panics when the position cannot host the type.
 pub fn create_rising(
     app: &mut App,
@@ -394,7 +396,12 @@ pub fn create_rising(
         pos(x, y),
         Some(player),
         FieldReach::Initial,
-        Arrival::Rising(attendance),
+        Arrival::Rising {
+            attendance,
+            origin: RiseOrigin::Founded {
+                payer: Some(player),
+            },
+        },
     )
     .unwrap_or_else(|| panic!("{type_name} fits at ({x}, {y})"))
 }
@@ -790,7 +797,7 @@ pub fn morph_app(model: MovementModel) -> App {
                 // Trains the whelp, and its unrooted form does not: the one
                 // role whose live state is pre-paid, so what happens to the
                 // queue across the change is a contract worth pinning.
-                .with_trainer(["whelp"], Release::Beside)
+                .with_trainer(["whelp"])
                 .with_morphs([MorphTransition::new(
                     "golem",
                     MorphCourse::direct(MorphInterrupted::Reverts),
@@ -2360,7 +2367,7 @@ pub fn supply_app() -> App {
                 .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
                 .with_pool(Pool::health(100))
                 .with_dying(2, [])
-                .with_trainer(["settler", "worker"], Release::Beside),
+                .with_trainer(["settler", "worker"]),
         );
         // Works from outside the site, so a camp still rising stays observable.
         registry.register(
@@ -2536,10 +2543,7 @@ pub fn research_app_seating(slots: Vec<PlayerSlot>) -> App {
                 .with_rise(4, rise_initial_pools(&[PoolId::HEALTH]))
                 .with_pool(Pool::health(100))
                 .with_dying(2, [])
-                .with_trainer(
-                    ["pikeman", "halberdier", "knight", "crossbowman"],
-                    Release::Beside,
-                ),
+                .with_trainer(["pikeman", "halberdier", "knight", "crossbowman"]),
         );
     }
     app.world_mut().resource::<ContentRegistry>().validate();
@@ -2616,7 +2620,7 @@ pub fn annex_app() -> App {
                     (CellPos::new(2, 0), Kinds::types(annexes)),
                     (CellPos::new(0, 2), Kinds::types(annexes)),
                 ])
-                .with_trainer(["sentry", "runner"], Release::Beside)
+                .with_trainer(["sentry", "runner"])
                 .with_morphs([MorphTransition::new(
                     "keep_aloft",
                     MorphCourse::direct(MorphInterrupted::Reverts),
@@ -2689,7 +2693,7 @@ pub fn annex_app() -> App {
                     )],
                 )
                 .with_researcher([signals])
-                .with_trainer(["signaler"], Release::Beside)
+                .with_trainer(["signaler"])
                 .with_annex(
                     AloneConduct::Standing {
                         work: AnnexWork::Idles,
@@ -2933,7 +2937,7 @@ pub fn transport_app() -> App {
                 .with_sight_range(8)
                 .with_tags(["infantry"])
                 .with_stat(EntityStatId::CARGO_SIZE, FixedU64::ONE)
-                .with_trainer(["rifleman"], Release::Beside)
+                .with_trainer(["rifleman"])
                 .with_researcher([drill]),
         );
         registry.register(
@@ -3424,6 +3428,32 @@ pub fn unload(app: &mut App, holder: SimulationId, at: Option<FixedUVec2>) {
     );
 }
 
+/// Sets `entity`'s rally point to `(x, y)` for player 0, and lets the command
+/// land.
+pub fn set_rally(app: &mut App, entity: SimulationId, x: u32, y: u32) {
+    set_rally_to(app, entity, RallyTarget::Position(pos(x, y)));
+    run_ticks(app, APPLY);
+}
+
+/// Orders `entity`'s rally point set to `target` for player 0.
+pub fn set_rally_to(app: &mut App, entity: SimulationId, target: RallyTarget) {
+    push_command(
+        app,
+        PlayerCommand::SetRallyPoint {
+            entity,
+            target: Some(target),
+        },
+    );
+}
+
+/// Where the last order `entity` holds moves it, if that order is a move.
+pub fn move_target(app: &App, entity: Entity) -> Option<FixedUVec2> {
+    match entity_def::orders(app.world(), entity).last() {
+        Some(Order::Move { target, .. }) => Some(*target),
+        Some(_) | None => None,
+    }
+}
+
 /// Selects `unit` and right-clicks `target` — the send-to-entity intent that
 /// resolves to boarding when the target is a transporter with room.
 pub fn send_to(app: &mut App, unit: SimulationId, target: SimulationId) {
@@ -3445,6 +3475,57 @@ pub fn board(app: &mut App, unit: SimulationId, target: SimulationId) {
         PlayerCommand::Board {
             target,
             flush: true,
+        },
+    );
+}
+
+/// A one-cell solid building named `name` with 100 health.
+pub fn building(name: &str) -> EntityTypeDef {
+    EntityTypeDef::new(name)
+        .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+        .with_pool(Pool::health(100))
+        .with_dying(1, [])
+}
+
+/// How many of `entity_type` player 0 has produced.
+pub fn produced(app: &App, entity_type: EntityTypeId) -> u32 {
+    app.world()
+        .resource::<Statistics>()
+        .player(0)
+        .produced(entity_type)
+}
+
+/// Whether the entity `id` is alive: neither dying nor gone.
+pub fn alive(app: &App, id: SimulationId) -> bool {
+    app.world().resource::<EntityIndex>().alive(id).is_some()
+}
+
+/// The work put into the rising `entity`, or `None` once it has risen.
+pub fn rise_progress(app: &App, entity: Entity) -> Option<u32> {
+    app.world()
+        .get::<RisingComponent>(entity)
+        .map(|rising| rising.progress)
+}
+
+/// Orders `trainer` to train one unit of `type_name`.
+pub fn train_entity(app: &mut App, trainer: SimulationId, type_name: &str) {
+    push_command(
+        app,
+        PlayerCommand::TrainEntity {
+            trainer,
+            type_name: type_name.into(),
+        },
+    );
+}
+
+/// Orders `warper` to warp a `type_name` in anchored at `(x, y)`.
+pub fn warp_in(app: &mut App, warper: SimulationId, type_name: &str, x: u32, y: u32) {
+    push_command(
+        app,
+        PlayerCommand::WarpIn {
+            warper,
+            type_name: type_name.into(),
+            at: pos(x, y),
         },
     );
 }
@@ -3956,7 +4037,7 @@ pub fn register_orders_content(app: &mut App) {
                 .with_dying(2, [])
                 .with_price([("gold", 40)])
                 .with_rise(4, rise_initial_pools(&[PoolId::HEALTH]))
-                .with_trainer(["soldier"], Release::Beside),
+                .with_trainer(["soldier"]),
         );
         // Twenty ticks to train, where the soldier takes four: long enough that
         // a cancel aimed at the entry in progress lands while it is still under
@@ -3976,7 +4057,7 @@ pub fn register_orders_content(app: &mut App) {
                 .with_dying(2, [])
                 .with_price([("gold", 40)])
                 .with_rise(4, rise_initial_pools(&[PoolId::HEALTH]))
-                .with_trainer(["recruit"], Release::Beside),
+                .with_trainer(["recruit"]),
         );
         // A plain obstacle, for walling sources off.
         registry.register(
@@ -4046,7 +4127,10 @@ pub fn register_orders_content(app: &mut App) {
                 .with_dying(2, [])
                 .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
                 .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
-                .with_builder(["shaft_house", "pump_house"], BuilderAttendance::Unattended)
+                .with_builder(
+                    ["shaft_house", "pump_house", "well_house"],
+                    BuilderAttendance::Unattended,
+                )
                 .with_resource_carrier([
                     (
                         "wood",
@@ -4328,6 +4412,23 @@ pub fn register_orders_content(app: &mut App) {
             EntityTypeDef::new("mine")
                 .with_location(GROUND, CellSize::ONE, Solidity::Solid)
                 .with_resource_source("gold", DepletionPolicy::Destroy),
+        );
+        // A spring holds no ground of its own; a well house is raised over one.
+        registry.register(
+            EntityTypeDef::new("spring")
+                .with_location(GROUND, CellSize::ONE, Solidity::Passable)
+                .with_resource_source("gold", DepletionPolicy::Destroy),
+        );
+        registry.register(
+            EntityTypeDef::new("well_house")
+                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_pool(Pool::health(100))
+                .with_dying(2, [])
+                .with_price([("gold", 20)])
+                .with_rise(20, rise_initial_pools(&[PoolId::HEALTH]))
+                .with_tags(["building"])
+                .with_resource_source("gold", DepletionPolicy::Destroy)
+                .with_overbuilds("spring"),
         );
         // A seam that walks, for a carrier inside a source that moves on.
         registry.register(

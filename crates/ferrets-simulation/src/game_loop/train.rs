@@ -17,19 +17,13 @@ use crate::{
     rally,
     spawn::{self, FieldReach},
 };
-use ferrets_content::{registry::ContentRegistry, train::Release};
+use ferrets_content::registry::ContentRegistry;
 
 /// Whether `entity` may start a Train: its type trains and it has risen.
 /// A disabled trainer is admitted and waits; an orphaned annex is not.
 pub fn can_start(world: &World, entity: Entity, _order: &Order) -> Result<(), Refusal> {
-    match entity_def::of(world, entity)
-        .trainer
-        .as_ref()
-        .map(|trainer| trainer.release())
-    {
-        Some(Release::Beside) => {}
-        Some(Release::Warped { .. }) => unimplemented!("a warp release comes with warp-in"),
-        None => return Err(Refusal::Incapable),
+    if entity_def::of(world, entity).trainer.is_none() {
+        return Err(Refusal::Incapable);
     }
     orders::admits_queued_work(world, entity)
 }

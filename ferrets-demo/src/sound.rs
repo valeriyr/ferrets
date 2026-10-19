@@ -27,7 +27,7 @@ use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::fixed_uvec2::FixedUVec2;
 use ferrets_simulation::{
     command::SkillTarget,
-    components::{entity_buffs::BuffsComponent, hidden::HiddenComponent},
+    components::{entity_buffs::BuffsComponent, hidden::HiddenComponent, rise::RiseOrigin},
     entity_def,
     entity_index::EntityIndex,
     events::{DeathCause, EventRecord, SimulationEvent},
@@ -495,7 +495,7 @@ fn play_at(
     zoom: f32,
 ) -> Placed {
     let cell = CellPos::from(position);
-    let visible = world.resource::<FogReveal>().0
+    let visible = world.resource::<FogReveal>().reveals()
         || render::sees(
             world.resource::<GameSession>(),
             world.resource::<ObserverPerspective>(),
@@ -593,7 +593,11 @@ fn cues_for(
         SimulationEvent::EntityMorphed { entity, .. } => {
             out.extend(at(*entity).map(|place| (Cue::Morph, Some(place))));
         }
-        SimulationEvent::EntityRisen { entity, .. } => {
+        SimulationEvent::EntityRisen {
+            entity,
+            origin: RiseOrigin::Founded { .. } | RiseOrigin::Warped { .. },
+            ..
+        } => {
             if let Some(entity) = world.resource::<EntityIndex>().any(*entity)
                 && own_milestone(local, entity_def::owner(world, entity))
             {
@@ -639,8 +643,12 @@ fn cues_for(
             }
         }
         // A body spent is the cast landing, which the effect cue already
-        // sounds where it lands.
+        // sounds where it lands, as it does a summon that has risen.
         SimulationEvent::RemainsSpent { .. }
+        | SimulationEvent::EntityRisen {
+            origin: RiseOrigin::Summoned { .. },
+            ..
+        }
         | SimulationEvent::EntitySpawned { .. }
         | SimulationEvent::EntityDied { .. }
         | SimulationEvent::EntityHidden { .. }

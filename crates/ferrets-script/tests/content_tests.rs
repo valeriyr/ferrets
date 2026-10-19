@@ -54,10 +54,10 @@ use ferrets_content::{
     stack_rule::StackRule,
     stand::StandingAct,
     stats::{EntityModifier, ModifierOp, PlayerModifier},
-    train::Release,
     transport::{PassengerConduct, PassengerFate},
     tunnel::{OtherEndLost, Passage, TunnelDef},
     turret::{TurretDef, TurretMount, TurretStats, WeaponConduct},
+    warp::WarperDef,
     work::{Attachment, BerthStance, CrewLimit, WorkPresence},
 };
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
@@ -2770,6 +2770,7 @@ fn summon_effect_reads_its_type_and_count() {
             entity_type: skeleton,
             count: Quantity::Constant(2),
             landing: Landing::Anywhere,
+            within: Vec::new(),
             arrives: SummonArrival::Standing,
         }
     );
@@ -2852,6 +2853,47 @@ fn summon_without_arrival_errors() {
 }
 
 #[test]
+fn summon_reads_its_field_rules() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_field("power", { layer = "anywhere", decay = "instant" })
+        define_entity("mound", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            pools = { health = { maximum = 20 } },
+            rise = { time = 30, pools = { health = "initial" } },
+        })
+        define_skill("raise_mound", {
+            cooldown = 10,
+            caster = "entity",
+            effect = { summon = {
+                at = "caster", entity = "mound", count = 1, landing = "anywhere", arrives = "rising",
+                within = { { requires = "power", of = "own", coverage = "every" } },
+            } },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("content loads");
+    let power = registry.field("power").expect("power defined");
+    let skill = registry
+        .skill("raise_mound")
+        .and_then(|id| registry.skill_def(id))
+        .expect("raise_mound defined");
+    let SkillCaster::Entity { effect, .. } = &skill.caster else {
+        panic!("raise_mound is cast by an entity");
+    };
+    let EntityCastEffect::Summon { within, .. } = effect else {
+        panic!("raise_mound summons");
+    };
+    assert_eq!(
+        within,
+        &vec![FieldPlacement::Requires {
+            field: power,
+            of: Affiliation::Own,
+            coverage: FieldCoverage::Every,
+        }]
+    );
+}
+
+#[test]
 fn summon_naming_unknown_arrival_errors() {
     let source = r#"
         local GROUND = define_layer("ground")
@@ -2872,7 +2914,7 @@ fn summon_naming_unknown_arrival_errors() {
 }
 
 #[test]
-fn trainer_reads_its_warp_release() {
+fn warper_reads_its_catalogue_field_rules_and_landing() {
     let source = r#"
         local GROUND = define_layer("ground")
         define_field("power", { layer = "anywhere", decay = "instant" })
@@ -2885,53 +2927,62 @@ fn trainer_reads_its_warp_release() {
         define_entity("relay", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
             pools = { health = { maximum = 20 } },
-            trainer = {
-                trains = { "recruit" },
-                release = { warp = {
-                    within = { { requires = "power", of = "own", coverage = "every" } },
-                    landing = "sighted",
-                } },
+            warper = {
+                warps = { "recruit" },
+                within = { { requires = "power", of = "own", coverage = "every" } },
+                landing = "sighted",
             },
         })
     "#;
     let registry = content::load(&engine(), source).expect("content loads");
     let power = registry.field("power").expect("power defined");
-    let release = registry
+    let warper = registry
         .entity("relay")
-        .and_then(|def| def.trainer.as_ref())
-        .map(|trainer| trainer.release().clone())
-        .expect("relay trains");
+        .and_then(|def| def.warper.clone())
+        .expect("relay warps");
     assert_eq!(
-        release,
-        Release::Warped {
-            within: vec![FieldPlacement::Requires {
+        warper,
+        WarperDef::new(
+            ["recruit"],
+            vec![FieldPlacement::Requires {
                 field: power,
                 of: Affiliation::Own,
                 coverage: FieldCoverage::Every,
             }],
-            landing: Landing::Sighted,
-        }
+            Landing::Sighted,
+        )
     );
 }
 
 #[test]
-fn trainer_without_release_errors() {
+fn warper_without_warps_errors() {
     let source = r#"
         local GROUND = define_layer("ground")
-        define_entity("recruit", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
-            pools = { health = { maximum = 20 } },
-            train_time = 10,
-        })
         define_entity("relay", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
             pools = { health = { maximum = 20 } },
-            trainer = { trains = { "recruit" } },
+            warper = { within = {}, landing = "sighted" },
         })
     "#;
     assert_content_error(
         source,
-        "a trainer's release must be 'beside' or a { warp = ... } table",
+        "field 'warps': error converting Lua nil to Vec<String> (expected table)",
+    );
+}
+
+#[test]
+fn warper_without_landing_errors() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_entity("relay", {
+            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            pools = { health = { maximum = 20 } },
+            warper = { warps = { "recruit" }, within = {} },
+        })
+    "#;
+    assert_content_error(
+        source,
+        "field 'landing': error converting Lua nil to String (expected string or number)",
     );
 }
 
@@ -2942,7 +2993,7 @@ fn trainer_without_trains_errors() {
         define_entity("relay", {
             location = { occupation = GROUND, size = 1, solidity = "solid" },
             pools = { health = { maximum = 20 } },
-            trainer = { release = "beside" },
+            trainer = {},
         })
     "#;
     assert_content_error(
@@ -5403,7 +5454,7 @@ const BASE: &str = r#"
         dying = { time = 2 },
         price = { gold = 400 },
         rise = { time = 200, pools = { health = "initial" } },
-        trainer = { trains = { "peasant" }, release = "beside" },
+        trainer = { trains = { "peasant" } },
         resource_storage = { "gold", "wood" },
     })
 "#;
@@ -5882,7 +5933,7 @@ fn gateway_content(tunnel: &str, gateway: &str, stats: &str) -> String {
             stats = {{ {stats} }},
             pools = {{ health = {{ maximum = 100 }} }},
             train_time = 10,
-            trainer = {{ trains = {{ "burrow" }}, release = "beside" }},
+            trainer = {{ trains = {{ "burrow" }} }},
             gateway = {{ {gateway} }},
         }})
     "#

@@ -9,7 +9,6 @@ use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 
 use ferrets_content::{
     entity_type_def::EntityTypeDef, location::Solidity, pool::Pool, registry::ContentRegistry,
-    train::Release,
 };
 use ferrets_simulation::{
     command::PlayerCommand,
@@ -290,7 +289,7 @@ fn rally_app() -> App {
                 .with_sight_range(8)
                 .with_pool(Pool::health(100))
                 .with_dying(2, [])
-                .with_trainer(["worker"], Release::Beside),
+                .with_trainer(["worker"]),
         );
     }
     utils::register_orders_content(&mut app);

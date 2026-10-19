@@ -246,41 +246,68 @@ pub fn allows_placement(
     def: &EntityTypeDef,
     anchor: CellPos,
 ) -> bool {
-    allows_placement_in(
-        world.resource::<FieldGrid>(),
-        world.resource::<GameSession>(),
-        player,
-        def,
-        anchor,
-    )
-}
-
-/// [`allows_placement`] against the given grid and session.
-pub fn allows_placement_in(
-    grid: &FieldGrid,
-    session: &GameSession,
-    player: Option<PlayerId>,
-    def: &EntityTypeDef,
-    anchor: CellPos,
-) -> bool {
-    if def.field_placement.is_empty() {
-        return true;
-    }
     let size = def
         .location
         .expect("validated content defines a location")
         .size();
-    let rect = CellRect::new(anchor, size);
-    def.field_placement.iter().all(|rule| match *rule {
+    rules_allow(
+        world,
+        player,
+        &def.field_placement,
+        CellRect::new(anchor, size),
+    )
+}
+
+/// Whether every one of `rules` admits a footprint at `rect` for `player`.
+/// No rules admit anything.
+pub fn rules_allow(
+    world: &World,
+    player: Option<PlayerId>,
+    rules: &[FieldPlacement],
+    rect: CellRect,
+) -> bool {
+    rules_allow_in(
+        world.resource::<FieldGrid>(),
+        world.resource::<GameSession>(),
+        player,
+        rules,
+        rect,
+    )
+}
+
+/// [`rules_allow`] against the given grid and session.
+pub fn rules_allow_in(
+    grid: &FieldGrid,
+    session: &GameSession,
+    player: Option<PlayerId>,
+    rules: &[FieldPlacement],
+    rect: CellRect,
+) -> bool {
+    rules_allow_by(session, player, rules, rect, |field, cell| {
+        grid.contains(cell).then(|| grid.covered(field, cell))
+    })
+}
+
+/// [`rules_allow`] over the coverage `covered` reads: who covers a field at a
+/// cell, or `None` for a cell off the grid, which no field covers and every
+/// requirement refuses.
+pub fn rules_allow_by(
+    session: &GameSession,
+    player: Option<PlayerId>,
+    rules: &[FieldPlacement],
+    rect: CellRect,
+    covered: impl Fn(FieldId, CellPos) -> Option<PlayerMask>,
+) -> bool {
+    rules.iter().all(|rule| match *rule {
         FieldPlacement::Requires {
             field,
             of,
             coverage,
         } => covers_enough(rect, coverage, |cell| {
-            grid.contains(cell) && grid.covers(session, field, cell, of, player)
+            covered(field, cell).is_some_and(|mask| mask.satisfies(session, of, player))
         }),
         FieldPlacement::Forbids { field } => covers_enough(rect, FieldCoverage::Every, |cell| {
-            !grid.contains(cell) || grid.covered(field, cell).is_empty()
+            covered(field, cell).is_none_or(PlayerMask::is_empty)
         }),
     })
 }

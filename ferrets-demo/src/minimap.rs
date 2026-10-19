@@ -22,7 +22,7 @@ use ferrets_content::registry::ContentRegistry;
 use ferrets_simulation::{
     components::{
         entity_info::EntityInfoComponent, last_hit::LastHitComponent, location::LocationComponent,
-        owner::OwnerComponent, rally::RallyPointComponent,
+        owner::OwnerComponent, rally::RallyPointComponent, rise::RisingComponent,
     },
     fields::FieldGrid,
     map::Map,
@@ -33,7 +33,7 @@ use ferrets_simulation::{
 
 use crate::{
     camera, input, map,
-    render::{self, CELL_PX, FogReveal, Ghosts, Shown},
+    render::{self, CELL_PX, FogReveal, Ghosts},
     scenario::CurrentScenario,
     states::InGameUi,
     view::WorldView,
@@ -589,20 +589,23 @@ pub fn refresh_minimap(
             }
         }
     }
-    // The same rule the world overlay reads, off the same enum, so the two
-    // surfaces cannot drift: power to the viewed player, true sight and the
-    // veil to its whole side. Creep and blight are shown to anyone and paint
-    // solid rather than tinting, which is why they keep their own loops above.
-    for (name, toward, shown) in [
-        ("power", POWER, Shown::Own),
-        ("true_sight", TRUE_SIGHT, Shown::Allied),
-        ("veil", VEIL, Shown::Allied),
-    ] {
+    // Power, true sight and the veil tint the cells whose coverage the world
+    // overlay shows the viewer. Creep and blight paint solid rather than
+    // tinting, which is why they keep their own loops above.
+    let layers = render::shown_fields(&registry);
+    let sight = render::CoverageSight {
+        session: &session,
+        viewed,
+        fields: &fields,
+        fog: &fog,
+        reveal: *reveal,
+    };
+    for (name, toward) in [("power", POWER), ("true_sight", TRUE_SIGHT), ("veil", VEIL)] {
         let Some(field) = registry.field(name) else {
             continue;
         };
-        for (cell, mask) in fields.cells(field) {
-            if shown.admits(&session, viewed, &mask)
+        for (cell, _) in fields.cells(field) {
+            if !render::shown_coverage(&sight, &layers, field, cell).is_empty()
                 && let Some(color) = canvas.get(cell.x, cell.y)
             {
                 canvas.put(cell.x, cell.y, mix(color, toward, 0.45));
@@ -612,7 +615,7 @@ pub fn refresh_minimap(
 
     // Fog. Unexplored cells fall back to the void rather than to dimmed
     // terrain: what has never been seen is not known to be there at all.
-    if !reveal.0 {
+    if !reveal.reveals() {
         for y in 0..height {
             for x in 0..width {
                 match render::perspective(&session, &watch, &fog, x, y) {
@@ -631,7 +634,7 @@ pub fn refresh_minimap(
     // Remembered enemy buildings, under the live blips so a rediscovered
     // building's real blip wins. A revealed map shows the real entities, so the
     // memory steps aside exactly as it does in the world view.
-    if !reveal.0 {
+    if !reveal.reveals() {
         for (origin, size) in ghosts.remembered() {
             canvas.fill(origin.0, origin.1, size.width, size.height, GHOST);
         }
@@ -802,6 +805,7 @@ pub fn order_input(
         &EntityInfoComponent,
         &OwnerComponent,
         Option<&RallyPointComponent>,
+        Has<RisingComponent>,
     )>,
 ) {
     // An armed order or placement wants a cell the player can actually see;

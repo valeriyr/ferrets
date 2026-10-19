@@ -14,7 +14,6 @@ use ferrets_content::{
     quantity::Quantity,
     registry::ContentRegistry,
     skills::{Casting, EntityCastEffect, Reach, SkillCaster, SkillDef, Spot},
-    train::Release,
 };
 use ferrets_geometry::cell_size::CellSize;
 use ferrets_math::FixedU64;
@@ -658,7 +657,7 @@ fn fog_app(slots: Vec<PlayerSlot>) -> App {
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
                 .with_pool(Pool::health(50))
                 .with_dying(1, [])
-                .with_trainer(["scout"], Release::Beside),
+                .with_trainer(["scout"]),
         );
         // A station that watches a patch of map from afar: the sight it leaves
         // behind belongs to no entity, so it lasts its stated ticks whatever

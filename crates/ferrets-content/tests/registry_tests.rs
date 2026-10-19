@@ -58,7 +58,6 @@ use ferrets_content::{
     stand::StandingAct,
     stats::{EntityModifier, ModifierOp},
     tags,
-    train::Release,
     transport::{PassengerConduct, PassengerFate},
     tunnel::{OtherEndLost, Passage, TunnelDef},
     turret::{TurretDef, TurretMount, TurretStats, WeaponConduct},
@@ -249,10 +248,8 @@ fn validate_accepts_registered_production_catalogues() {
 
     registry.register(utils::standing("soldier", GROUND).with_train_time(4));
     registry.register(utils::sized("depot", GROUND, CellSize::new(2, 2)).with_rise(6, []));
-    registry.register(
-        utils::sized("barracks", GROUND, CellSize::new(2, 2))
-            .with_trainer(["soldier"], Release::Beside),
-    );
+    registry
+        .register(utils::sized("barracks", GROUND, CellSize::new(2, 2)).with_trainer(["soldier"]));
     registry.register(
         utils::standing("worker", GROUND)
             .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
@@ -496,8 +493,26 @@ fn validate_rejects_overbuilding_source_on_other_layers() {
 }
 
 #[test]
-#[should_panic(expected = "entity type 'shaft_house' overbuilds 'mine' but never rises")]
-fn validate_rejects_overbuilding_by_type_nothing_builds() {
+#[should_panic(expected = "entity type 'shaft_house' overbuilds 'mine', which stands underfoot")]
+fn validate_rejects_overbuilding_source_standing_underfoot() {
+    let mut registry = utils::ground_registry();
+    registry.register_resource("gold");
+    registry.register(
+        EntityTypeDef::new("mine")
+            .with_location(GROUND, CellSize::ONE, Solidity::Underfoot)
+            .with_resource_source("gold", DepletionPolicy::Destroy),
+    );
+    registry.register(
+        utils::standing("shaft_house", GROUND)
+            .with_rise(6, [])
+            .with_resource_source("gold", DepletionPolicy::Destroy)
+            .with_overbuilds("mine"),
+    );
+    registry.validate();
+}
+
+#[test]
+fn validate_accepts_overbuilding_type_that_never_rises() {
     let mut registry = utils::ground_registry();
     registry.register_resource("gold");
     registry.register(
@@ -520,7 +535,7 @@ fn validate_accepts_production_cycle() {
     registry.register(
         utils::sized("town_hall", GROUND, CellSize::new(2, 2))
             .with_rise(6, [])
-            .with_trainer(["worker"], Release::Beside),
+            .with_trainer(["worker"]),
     );
     registry.register(
         utils::standing("worker", GROUND)
@@ -543,43 +558,254 @@ fn validate_accepts_production_cycle() {
 )]
 fn validate_rejects_unknown_trained_type() {
     let mut registry = utils::ground_registry();
-    registry.register(
-        utils::sized("barracks", GROUND, CellSize::new(2, 2))
-            .with_trainer(["ghost"], Release::Beside),
-    );
+    registry
+        .register(utils::sized("barracks", GROUND, CellSize::new(2, 2)).with_trainer(["ghost"]));
     registry.validate();
 }
 
 #[test]
 #[should_panic(expected = "entity type 'relay' warps in 'recruit', which declares no rise")]
-fn validate_rejects_warped_trainee_that_never_rises() {
+fn validate_rejects_warped_unit_that_never_rises() {
     let mut registry = utils::ground_registry();
     registry.register(utils::standing("recruit", GROUND).with_train_time(10));
-    registry.register(utils::standing("relay", GROUND).with_trainer(
+    registry.register(utils::standing("relay", GROUND).with_warper(
         ["recruit"],
-        Release::Warped {
-            within: Vec::new(),
-            landing: Landing::Sighted,
-        },
+        Vec::new(),
+        Landing::Sighted,
     ));
     registry.validate();
 }
 
 #[test]
-fn validate_accepts_warped_trainee_that_rises() {
+#[should_panic(
+    expected = "entity type 'relay' warps in 'recruit', which is not a registered type with a train time"
+)]
+fn validate_rejects_warped_unit_without_train_time() {
+    let mut registry = utils::ground_registry();
+    registry.register(utils::standing("recruit", GROUND).with_rise(10, Vec::new()));
+    registry.register(utils::standing("relay", GROUND).with_warper(
+        ["recruit"],
+        Vec::new(),
+        Landing::Sighted,
+    ));
+    registry.validate();
+}
+
+#[test]
+fn validate_accepts_warped_unit_that_rises() {
     let mut registry = utils::ground_registry();
     registry.register(
         utils::standing("recruit", GROUND)
             .with_train_time(10)
             .with_rise(10, Vec::new()),
     );
-    registry.register(utils::standing("relay", GROUND).with_trainer(
+    registry.register(utils::standing("relay", GROUND).with_warper(
         ["recruit"],
-        Release::Warped {
-            within: Vec::new(),
-            landing: Landing::Sighted,
-        },
+        Vec::new(),
+        Landing::Sighted,
     ));
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'relay' warps in 'recruit' only where 'power' covers it, but 'recruit' may not be placed on it"
+)]
+fn validate_rejects_warp_into_field_warped_unit_may_not_stand_on() {
+    let mut registry = utils::ground_registry();
+    let power = register_power(&mut registry);
+    registry.register(
+        rising_recruit().with_field_placement([FieldPlacement::Forbids { field: power }]),
+    );
+    registry.register(utils::standing("relay", GROUND).with_warper(
+        ["recruit"],
+        vec![powered(power)],
+        Landing::Sighted,
+    ));
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'relay' warps in 'recruit' only where 'power' does not cover it, but 'recruit' may be placed only on it"
+)]
+fn validate_rejects_warp_outside_field_warped_unit_must_stand_on() {
+    let mut registry = utils::ground_registry();
+    let power = register_power(&mut registry);
+    registry.register(rising_recruit().with_field_placement([powered(power)]));
+    registry.register(utils::standing("relay", GROUND).with_warper(
+        ["recruit"],
+        vec![FieldPlacement::Forbids { field: power }],
+        Landing::Sighted,
+    ));
+    registry.validate();
+}
+
+#[test]
+fn validate_accepts_warp_into_field_warped_unit_must_stand_on() {
+    let mut registry = utils::ground_registry();
+    let power = register_power(&mut registry);
+    registry.register(rising_recruit().with_field_placement([powered(power)]));
+    registry.register(utils::standing("relay", GROUND).with_warper(
+        ["recruit"],
+        vec![powered(power)],
+        Landing::Sighted,
+    ));
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'recruit' is placed only where 'power' covers it and only where it does not"
+)]
+fn register_rejects_placement_both_requiring_and_forbidding_field() {
+    let mut registry = utils::ground_registry();
+    let power = register_power(&mut registry);
+    registry.register(
+        rising_recruit()
+            .with_field_placement([powered(power), FieldPlacement::Forbids { field: power }]),
+    );
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'relay' warps in only where 'power' covers it and only where it does not"
+)]
+fn register_rejects_warp_both_requiring_and_forbidding_field() {
+    let mut registry = utils::ground_registry();
+    let power = register_power(&mut registry);
+    registry.register(rising_recruit());
+    registry.register(utils::standing("relay", GROUND).with_warper(
+        ["recruit"],
+        vec![powered(power), FieldPlacement::Forbids { field: power }],
+        Landing::Sighted,
+    ));
+}
+
+#[test]
+#[should_panic(expected = "entity type 'relay' warps in 'lookout', which is an annex")]
+fn validate_rejects_warped_annex() {
+    let mut registry = utils::ground_registry();
+    registry.register(primary(["lookout"]));
+    registry.register(
+        utils::standing("lookout", GROUND)
+            .with_pool(Pool::health(10))
+            .with_train_time(10)
+            .with_rise(4, utils::rise_initial_pools(&[PoolId::HEALTH]))
+            .with_annex(standing_annex(), AnnexClaim::Bound),
+    );
+    registry.register(utils::standing("relay", GROUND).with_warper(
+        ["lookout"],
+        Vec::new(),
+        Landing::Sighted,
+    ));
+    registry.validate();
+}
+
+#[test]
+#[should_panic(expected = "entity type 'relay' warps in within an unregistered field")]
+fn register_rejects_warp_within_foreign_field() {
+    let mut registry = utils::ground_registry();
+    // A handle minted by another registry, which this one never registered.
+    let foreign = register_power(&mut utils::ground_registry());
+    registry.register(rising_recruit());
+    registry.register(utils::standing("relay", GROUND).with_warper(
+        ["recruit"],
+        vec![powered(foreign)],
+        Landing::Sighted,
+    ));
+}
+
+#[test]
+#[should_panic(expected = "skill 'raise_lookout' summons 'lookout' rising, but it is an annex")]
+fn register_rejects_rising_summon_of_annex() {
+    let mut registry = utils::ground_registry();
+    registry.register(
+        utils::standing("lookout", GROUND)
+            .with_pool(Pool::health(10))
+            .with_rise(4, utils::rise_initial_pools(&[PoolId::HEALTH]))
+            .with_annex(standing_annex(), AnnexClaim::Bound),
+    );
+    register_summon(&mut registry, "raise_lookout", "lookout", Vec::new());
+}
+
+#[test]
+#[should_panic(expected = "skill 'raise_recruit' summons within an unregistered field")]
+fn register_rejects_summon_within_foreign_field() {
+    let mut registry = utils::ground_registry();
+    let foreign = register_power(&mut utils::ground_registry());
+    registry.register(rising_recruit());
+    register_summon(
+        &mut registry,
+        "raise_recruit",
+        "recruit",
+        vec![powered(foreign)],
+    );
+}
+
+#[test]
+#[should_panic(
+    expected = "skill 'raise_recruit' summons only where 'power' covers it and only where it does not"
+)]
+fn register_rejects_summon_both_requiring_and_forbidding_field() {
+    let mut registry = utils::ground_registry();
+    let power = register_power(&mut registry);
+    registry.register(rising_recruit());
+    register_summon(
+        &mut registry,
+        "raise_recruit",
+        "recruit",
+        vec![powered(power), FieldPlacement::Forbids { field: power }],
+    );
+}
+
+#[test]
+#[should_panic(
+    expected = "skill 'raise_recruit' summons 'recruit' only where 'power' covers it, but 'recruit' may not be placed on it"
+)]
+fn register_rejects_summon_into_field_summoned_type_may_not_stand_on() {
+    let mut registry = utils::ground_registry();
+    let power = register_power(&mut registry);
+    registry.register(
+        rising_recruit().with_field_placement([FieldPlacement::Forbids { field: power }]),
+    );
+    register_summon(
+        &mut registry,
+        "raise_recruit",
+        "recruit",
+        vec![powered(power)],
+    );
+}
+
+#[test]
+#[should_panic(
+    expected = "skill 'raise_recruit' summons 'recruit' only where 'power' does not cover it, but 'recruit' may be placed only on it"
+)]
+fn register_rejects_summon_outside_field_summoned_type_must_stand_on() {
+    let mut registry = utils::ground_registry();
+    let power = register_power(&mut registry);
+    registry.register(rising_recruit().with_field_placement([powered(power)]));
+    register_summon(
+        &mut registry,
+        "raise_recruit",
+        "recruit",
+        vec![FieldPlacement::Forbids { field: power }],
+    );
+}
+
+#[test]
+fn validate_accepts_type_that_both_trains_and_warps() {
+    let mut registry = utils::ground_registry();
+    registry.register(
+        utils::standing("recruit", GROUND)
+            .with_train_time(10)
+            .with_rise(10, Vec::new()),
+    );
+    registry.register(
+        utils::standing("relay", GROUND)
+            .with_trainer(["recruit"])
+            .with_warper(["recruit"], Vec::new(), Landing::Sighted),
+    );
     registry.validate();
 }
 
@@ -601,6 +827,7 @@ fn register_rejects_rising_summon_of_type_that_never_rises() {
                     entity_type: mound,
                     count: Quantity::Constant(1),
                     landing: Landing::Anywhere,
+                    within: Vec::new(),
                     arrives: SummonArrival::Rising,
                 },
             },
@@ -618,10 +845,8 @@ fn validate_rejects_untrainable_trained_type() {
         CellSize::ONE,
         Solidity::Solid,
     ));
-    registry.register(
-        utils::sized("barracks", GROUND, CellSize::new(2, 2))
-            .with_trainer(["statue"], Release::Beside),
-    );
+    registry
+        .register(utils::sized("barracks", GROUND, CellSize::new(2, 2)).with_trainer(["statue"]));
     registry.validate();
 }
 
@@ -2059,8 +2284,27 @@ fn validate_accepts_tunnel_end_raised_by_build_summon_or_training() {
         entering(gateway("summoned", Joins::Tunnel(tunnel), Doors::Both)).with_skills([dig]),
     );
     registry.register(
-        entering(gateway("trained", Joins::Tunnel(tunnel), Doors::Both))
-            .with_trainer(["exit"], Release::Beside),
+        entering(gateway("trained", Joins::Tunnel(tunnel), Doors::Both)).with_trainer(["exit"]),
+    );
+    registry.validate();
+}
+
+#[test]
+fn validate_accepts_tunnel_end_raised_by_warp() {
+    let mut registry = utils::ground_registry();
+    let tunnel = registry.register_tunnel("tunnel", tunnel_def(Passage::Crosses));
+    registry.register(
+        entering(gateway("exit", Joins::Tunnel(tunnel), Doors::Both))
+            .with_pool(Pool::health(100))
+            .with_rise(10, utils::rise_initial_pools(&[PoolId::HEALTH]))
+            .with_train_time(10),
+    );
+    registry.register(
+        entering(gateway("warped", Joins::Tunnel(tunnel), Doors::Both)).with_warper(
+            ["exit"],
+            Vec::new(),
+            Landing::Sighted,
+        ),
     );
     registry.validate();
 }
@@ -2079,7 +2323,9 @@ fn validate_accepts_one_way_tunnel() {
 }
 
 #[test]
-#[should_panic(expected = "tunnel 'tunnel' has ends, but none builds, summons or trains another")]
+#[should_panic(
+    expected = "tunnel 'tunnel' has ends, but none builds, summons, trains or warps in another"
+)]
 fn validate_rejects_tunnel_whose_ends_never_raise_another() {
     let mut registry = utils::ground_registry();
     let tunnel = registry.register_tunnel("tunnel", tunnel_def(Passage::Crosses));
@@ -5495,6 +5741,7 @@ fn register_rejects_summon_of_remains() {
                     entity_type: corpse,
                     count: Quantity::Constant(2),
                     landing: Landing::Anywhere,
+                    within: Vec::new(),
                     arrives: SummonArrival::Standing,
                 },
             },
@@ -5523,6 +5770,7 @@ fn register_accepts_remains_cast_with_summon_effect() {
                     entity_type: skeleton,
                     count: Quantity::Constant(2),
                     landing: Landing::Anywhere,
+                    within: Vec::new(),
                     arrives: SummonArrival::Standing,
                 },
             },
@@ -5611,6 +5859,7 @@ fn register_accepts_summon_aimed_at_caster_and_at_cell() {
                 entity_type: skeleton,
                 count: Quantity::Constant(1),
                 landing: Landing::Anywhere,
+                within: Vec::new(),
                 arrives: SummonArrival::Standing,
             },
         },
@@ -5646,6 +5895,7 @@ fn register_rejects_summon_of_foreign_type() {
                     entity_type: skeleton,
                     count: Quantity::Constant(1),
                     landing: Landing::Anywhere,
+                    within: Vec::new(),
                     arrives: SummonArrival::Standing,
                 },
             },
@@ -5675,6 +5925,7 @@ fn register_rejects_summon_of_nobody() {
                     entity_type: skeleton,
                     count: Quantity::Constant(0),
                     landing: Landing::Anywhere,
+                    within: Vec::new(),
                     arrives: SummonArrival::Standing,
                 },
             },
@@ -7054,6 +7305,7 @@ fn summoning(registry: &mut ContentRegistry, count: EntityStatId) -> SkillDef {
                 entity_type: skeleton,
                 count: Quantity::Stat(count),
                 landing: Landing::Anywhere,
+                within: Vec::new(),
                 arrives: SummonArrival::Standing,
             },
         },
@@ -7161,6 +7413,7 @@ fn summoning_end(entity_type: EntityTypeId, count: u32) -> SkillDef {
                 entity_type,
                 count: Quantity::Constant(count),
                 landing: Landing::Anywhere,
+                within: Vec::new(),
                 arrives: SummonArrival::Standing,
             },
         },
@@ -7178,4 +7431,65 @@ fn entering(def: EntityTypeDef) -> EntityTypeDef {
 fn leaving(def: EntityTypeDef) -> EntityTypeDef {
     def.with_stat(EntityStatId::UNLOAD_RANGE, FixedU64::ONE)
         .with_stat(EntityStatId::UNLOAD_PERIOD, FixedU64::ZERO)
+}
+
+/// Registers a `power` field on the ground layer.
+fn register_power(registry: &mut ContentRegistry) -> FieldId {
+    registry.register_field(
+        "power",
+        FieldDef::new(
+            FieldLayer::Passable(GROUND.into()),
+            FieldDecay::Instant,
+            FieldVision::Dark,
+            Detection::Blind,
+        ),
+    )
+}
+
+/// A rule that every footprint cell be covered by its owner's `power`.
+fn powered(power: FieldId) -> FieldPlacement {
+    FieldPlacement::Requires {
+        field: power,
+        of: Affiliation::Own,
+        coverage: FieldCoverage::Every,
+    }
+}
+
+/// A one-cell `recruit` that trains in ten ticks and rises in ten.
+fn rising_recruit() -> EntityTypeDef {
+    utils::standing("recruit", GROUND)
+        .with_train_time(10)
+        .with_rise(10, Vec::new())
+}
+
+/// Registers a skill named `name` summoning one `type_name` rising beside the
+/// caster, inside the `within` field rules.
+fn register_summon(
+    registry: &mut ContentRegistry,
+    name: &str,
+    type_name: &str,
+    within: Vec<FieldPlacement>,
+) {
+    let entity_type = registry
+        .type_id(type_name)
+        .expect("the summoned type is registered");
+    registry.register_skill(
+        name,
+        SkillDef {
+            cooldown: 1,
+            caster: SkillCaster::Entity {
+                costs: Vec::new(),
+                casting: Casting::Instant,
+                effect: EntityCastEffect::Summon {
+                    at: SummonAt::Caster,
+                    entity_type,
+                    count: Quantity::Constant(1),
+                    landing: Landing::Anywhere,
+                    within,
+                    arrives: SummonArrival::Rising,
+                },
+            },
+            requires: Vec::new(),
+        },
+    );
 }

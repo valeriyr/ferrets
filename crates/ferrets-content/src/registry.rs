@@ -20,10 +20,11 @@ use crate::{
     entity_modifiers::EntityModifiers,
     entity_stats::{ENTITY_BUILTIN_STATS, EntityStatDef, EntityStatId},
     entity_type_def::{EntityTypeDef, EntityTypeId},
-    field::{Emission, FieldDef, FieldGrowth, FieldId, FieldLayer},
+    field::{Emission, FieldDef, FieldGrowth, FieldId, FieldLayer, FieldPlacement},
     gateway::{Doors, GatewayDef, Joins},
     holder::Holder,
     kinds::{Kind, Kinds},
+    location::Solidity,
     morph::{MorphCourse, MorphPlacement, ViaInterrupted},
     network::{NetworkDef, NetworkId},
     player_buffs::{PlayerBuffDef, PlayerBuffId},
@@ -44,7 +45,6 @@ use crate::{
     stand::StandingAct,
     stats::EntityModifier,
     tags,
-    train::Release,
     tunnel::{Passage, TunnelDef, TunnelId},
     turret::{TurretDef, TurretId, WeaponConduct},
     work::{Crewing, WorkPresence},
@@ -218,6 +218,7 @@ impl ContentRegistry {
         self.validate_pools();
         for def in &self.defs {
             self.validate_trains(def);
+            self.validate_warps(def);
             self.validate_builds(def);
             self.validate_carries(def);
             self.validate_repairs(def);
@@ -862,6 +863,7 @@ impl ContentRegistry {
                     EntityCastEffect::Summon {
                         entity_type,
                         count,
+                        within,
                         arrives,
                         ..
                     } => {
@@ -896,11 +898,50 @@ impl ContentRegistry {
                         }
                         match arrives {
                             SummonArrival::Standing => {}
-                            SummonArrival::Rising => assert!(
-                                summoned.rise.is_some(),
-                                "skill '{name}' summons '{}' rising, but it declares no rise",
+                            SummonArrival::Rising => {
+                                assert!(
+                                    summoned.rise.is_some(),
+                                    "skill '{name}' summons '{}' rising, but it declares no rise",
+                                    summoned.name
+                                );
+                                assert!(
+                                    summoned.annex.is_none(),
+                                    "skill '{name}' summons '{}' rising, but it is an annex",
+                                    summoned.name
+                                );
+                            }
+                        }
+                        for rule in within {
+                            assert!(
+                                self.field_name(rule.field()).is_some(),
+                                "skill '{name}' summons within an unregistered field"
+                            );
+                        }
+                        let field_name = |field| {
+                            self.field_name(field)
+                                .expect("a placement rule reads a registered field")
+                        };
+                        if let Some(field) = contradicted_field(within, within) {
+                            panic!(
+                                "skill '{name}' summons only where '{}' covers it and only where it does not",
+                                field_name(field)
+                            );
+                        }
+                        if let Some(field) = contradicted_field(within, &summoned.field_placement) {
+                            panic!(
+                                "skill '{name}' summons '{}' only where '{}' covers it, but '{}' may not be placed on it",
+                                summoned.name,
+                                field_name(field),
                                 summoned.name
-                            ),
+                            );
+                        }
+                        if let Some(field) = contradicted_field(&summoned.field_placement, within) {
+                            panic!(
+                                "skill '{name}' summons '{}' only where '{}' does not cover it, but '{}' may be placed only on it",
+                                summoned.name,
+                                field_name(field),
+                                summoned.name
+                            );
                         }
                     }
                     EntityCastEffect::Relocate { journey, .. } => {
@@ -1659,9 +1700,10 @@ impl ContentRegistry {
         }
     }
 
-    /// Checks that every field the type projects, reads for placement, or
-    /// answers to was minted by this registry, and that every field-effect
-    /// modifier targets a registered entity stat.
+    /// Checks that every field the type projects, reads for placement or
+    /// warp-in, or answers to was minted by this registry, that neither its
+    /// placement nor its warp-in rules both require and forbid a field, and
+    /// that every field-effect modifier targets a registered entity stat.
     fn validate_fields(&self, def: &EntityTypeDef) {
         let known = |field: FieldId| field.index() < self.field_defs.len();
         for source in &def.field_sources {
@@ -1705,6 +1747,32 @@ impl ContentRegistry {
                 known(rule.field()),
                 "entity type '{}' reads an unregistered field for placement",
                 def.name
+            );
+        }
+        if let Some(field) = contradicted_field(&def.field_placement, &def.field_placement) {
+            panic!(
+                "entity type '{}' is placed only where '{}' covers it and only where it does not",
+                def.name,
+                self.field_name(field).expect("checked above")
+            );
+        }
+        for rule in def.warper.iter().flat_map(|warper| warper.within()) {
+            assert!(
+                known(rule.field()),
+                "entity type '{}' warps in within an unregistered field",
+                def.name
+            );
+        }
+        if let Some(field) = def
+            .warper
+            .as_ref()
+            .and_then(|warper| contradicted_field(warper.within(), warper.within()))
+        {
+            panic!(
+                "entity type '{}' warps in only where '{}' covers it and only where it does not",
+                def.name,
+                self.field_name(field)
+                    .expect("a warp rule reads a registered field")
             );
         }
         for act in &def.on_stand {
@@ -2739,14 +2807,51 @@ impl ContentRegistry {
                 "entity type '{}' trains '{type_name}', which is not a registered trainable type",
                 def.name
             );
-            match trainer.release() {
-                Release::Beside => {}
-                Release::Warped { .. } => assert!(
-                    self.entity(type_name)
-                        .is_some_and(|trained| trained.rise.is_some()),
-                    "entity type '{}' warps in '{type_name}', which declares no rise",
-                    def.name
-                ),
+        }
+    }
+
+    /// Checks that every type in the definition's warp-in catalogue is a
+    /// registered type with a train time to cool down for and a rise, no annex,
+    /// whose own field placement neither forbids a field the warper requires
+    /// nor requires one the warper forbids — see [`contradicted_field`].
+    fn validate_warps(&self, def: &EntityTypeDef) {
+        let Some(warper) = &def.warper else { return };
+
+        for type_name in warper.warps() {
+            let warped = self.entity(type_name);
+            assert!(
+                warped.is_some_and(|warped| warped.train_time.is_some()),
+                "entity type '{}' warps in '{type_name}', which is not a registered type with a train time",
+                def.name
+            );
+            assert!(
+                warped.is_some_and(|warped| warped.rise.is_some()),
+                "entity type '{}' warps in '{type_name}', which declares no rise",
+                def.name
+            );
+            let warped = warped.expect("checked above");
+            assert!(
+                warped.annex.is_none(),
+                "entity type '{}' warps in '{type_name}', which is an annex",
+                def.name
+            );
+            let name = |field| {
+                self.field_name(field)
+                    .expect("a placement rule reads a registered field")
+            };
+            if let Some(field) = contradicted_field(warper.within(), &warped.field_placement) {
+                panic!(
+                    "entity type '{}' warps in '{type_name}' only where '{}' covers it, but '{type_name}' may not be placed on it",
+                    def.name,
+                    name(field)
+                );
+            }
+            if let Some(field) = contradicted_field(&warped.field_placement, warper.within()) {
+                panic!(
+                    "entity type '{}' warps in '{type_name}' only where '{}' does not cover it, but '{type_name}' may be placed only on it",
+                    def.name,
+                    name(field)
+                );
             }
         }
     }
@@ -2993,7 +3098,7 @@ impl ContentRegistry {
             }
             assert!(
                 bound,
-                "tunnel '{name}' has ends, but none builds, summons or trains another"
+                "tunnel '{name}' has ends, but none builds, summons, trains or warps in another"
             );
         }
     }
@@ -3011,8 +3116,8 @@ impl ContentRegistry {
         }
     }
 
-    /// Whether `def` builds, summons (by a skill of its own) or trains the
-    /// type named `other`.
+    /// Whether `def` builds, summons (by a skill of its own), trains or warps
+    /// in the type named `other`.
     fn raises(&self, def: &EntityTypeDef, other: &str) -> bool {
         let builds = def
             .builder
@@ -3022,6 +3127,10 @@ impl ContentRegistry {
             .trainer
             .as_ref()
             .is_some_and(|trainer| trainer.can_train(other));
+        let warps = def
+            .warper
+            .as_ref()
+            .is_some_and(|warper| warper.can_warp(other));
         let summons = def
             .skills
             .iter()
@@ -3035,7 +3144,7 @@ impl ContentRegistry {
                     } if self.def(*entity_type).name == other
                 )
             });
-        builds || trains || summons
+        builds || trains || warps || summons
     }
 
     /// Every registered type a filter names — one it lists, or one wearing a
@@ -3493,7 +3602,7 @@ impl ContentRegistry {
 
     /// Checks that a type raised over a resource source names a registered
     /// source of the kind the type itself yields, on the same footprint and the
-    /// same layers, and rises.
+    /// same layers, that does not stand underfoot.
     fn validate_overbuilds(&self, def: &EntityTypeDef) {
         let Some(over) = &def.overbuilds else { return };
         let source = self.entity(over).unwrap_or_else(|| {
@@ -3533,11 +3642,13 @@ impl ContentRegistry {
             "entity type '{}' overbuilds '{over}', which occupies other layers",
             def.name
         );
-        assert!(
-            def.rise.is_some(),
-            "entity type '{}' overbuilds '{over}' but never rises",
-            def.name
-        );
+        match source.location.map(|location| location.solidity()) {
+            Some(Solidity::Underfoot) => panic!(
+                "entity type '{}' overbuilds '{over}', which stands underfoot",
+                def.name
+            ),
+            Some(Solidity::Solid | Solidity::Passable) | None => {}
+        }
     }
 
     /// Checks that every type in the definition's build catalogue is a
@@ -3918,4 +4029,22 @@ struct RequirementHolder {
     judged: Vec<(EntityStatId, Judged)>,
     /// What it does while it holds.
     effects: Vec<EntityEffect>,
+}
+
+/// A field `required` requires and `forbidden` forbids, if any: such a pair
+/// admits no footprint.
+fn contradicted_field(
+    required: &[FieldPlacement],
+    forbidden: &[FieldPlacement],
+) -> Option<FieldId> {
+    required.iter().find_map(|wanted| match *wanted {
+        FieldPlacement::Requires { field, .. } => forbidden
+            .iter()
+            .any(|banned| match *banned {
+                FieldPlacement::Forbids { field: barred } => barred == field,
+                FieldPlacement::Requires { .. } => false,
+            })
+            .then_some(field),
+        FieldPlacement::Forbids { .. } => None,
+    })
 }

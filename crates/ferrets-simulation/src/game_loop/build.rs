@@ -14,6 +14,7 @@ use super::{
     chase::{self, Destination},
     crew::{self, Departure},
     orders::{self, Processing, Refusal},
+    rise::{self, Worked},
     work,
 };
 use crate::{
@@ -27,15 +28,15 @@ use crate::{
         location::LocationComponent,
         order_queue::{CancelPolicy, OrderState},
         owner::OwnerComponent,
-        resource::ResourceSourceComponent,
-        rise::{self, RiseAttendance, RisingComponent},
+        rise::{RiseAttendance, RisingComponent},
     },
     entity_def,
     entity_index::EntityIndex,
-    events::{DeathCause, EventRecord, SimulationEvent, SpendCause},
-    fields,
-    map::Map,
+    events::{DeathCause, SpendCause},
+    fields, ground,
+    map::{Map, OccupancyClass},
     order::Order,
+    overbuild::{self, Cover},
     requirements,
     resources::{self, PlayerResources},
     session::player_id::PlayerId,
@@ -169,7 +170,7 @@ pub fn survives_soft_cancel() -> bool {
 ///
 /// A builder that leaves the site unattended is done the moment the site
 /// stands: the site advances itself from there (see
-/// [`advance_sites_without_builder`]). One consumed by its work is despawned
+/// [`rise::advance_unattended`]). One consumed by its work is despawned
 /// as the site completes instead of stepping back out. A site whose crew left
 /// it halted is taken up again by the next builder sent to it.
 pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
@@ -288,16 +289,54 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
         // A site raised over a resource source needs one of the type under it,
         // on exactly its footprint; the source's cells then count as the
         // site's own.
-        let overbuilt = match overbuilds {
+        let cover = match overbuilds {
             Some(over) => {
-                let Some(source) = source_under(world, &over, CellRect::new(site_anchor, size))
+                let Some(source) =
+                    overbuild::source_under(world, &over, CellRect::new(site_anchor, size))
                 else {
                     return Processing::state(OrderState::Finished);
                 };
-                Some(source)
+                Cover::Source(source)
             }
-            None => None,
+            None => Cover::Nothing,
         };
+
+        // Over a source, the site needs ground that takes it once the source
+        // is off it, a builder about to step inside standing in nobody's way.
+        match cover {
+            Cover::Source(_) => {
+                let (mut lifted, mut ignored) = overbuild::set_aside(world, cover);
+                match attendance(world, entity) {
+                    BuilderAttendance::Crew(WorkPresence::Hidden { .. })
+                    | BuilderAttendance::Consumed => {
+                        lifted.extend(entity_def::grid_mark(world, entity));
+                        ignored.push(entity);
+                    }
+                    BuilderAttendance::Crew(
+                        WorkPresence::Present { .. } | WorkPresence::Attached(_),
+                    )
+                    | BuilderAttendance::Unattended => {}
+                }
+                let class = OccupancyClass::of(
+                    world
+                        .resource::<ContentRegistry>()
+                        .entity(type_name)
+                        .expect("type checked in prepare"),
+                );
+                let placed = LocationComponent::new(position, spawn::DEFAULT_FACING);
+                if !ground::can_place(
+                    world,
+                    &placed,
+                    building_location_def,
+                    class,
+                    &lifted,
+                    &ignored,
+                ) {
+                    return Processing::state(OrderState::Finished);
+                }
+            }
+            Cover::Nothing => {}
+        }
 
         // A builder others sat down on since the order started gives the
         // order up before raising anything.
@@ -323,10 +362,8 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
         let builder = entity_def::simulation_id(world, entity);
         let rise_attendance = founding_attendance(world, entity, builder);
         // The source's footprint comes off the grid so the site can take its
-        // cells; a site refused anyway puts it straight back.
-        if let Some(source) = overbuilt {
-            spawn::lift_footprint(world, source);
-        }
+        // cells.
+        overbuild::lift(world, cover);
         let placed = spawn::spawn_founded(
             world,
             type_name,
@@ -339,15 +376,11 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
         let Some((building, building_sim_id)) = placed else {
             // Site blocked — give up, and bring back a builder that had already
             // stepped inside.
-            if let Some(source) = overbuilt {
-                spawn::restore_footprint(world, source);
-            }
+            overbuild::settle(world, cover, None);
             work::leave(world, entity, Beside::WentIn);
             return Processing::state(OrderState::Finished);
         };
-        if let Some(source) = overbuilt {
-            spawn::cover_source(world, source, building);
-        }
+        overbuild::settle(world, cover, Some(building));
 
         // A builder hidden before the site was raised is inside it now; one in
         // the open or in a berth takes it up as it would one under way; one
@@ -398,7 +431,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
         return leave_finished_site(world, entity, building_id);
     }
     let builder = entity_def::simulation_id(world, entity);
-    match put_in_work(world, building, rise_time, builder) {
+    match rise::put_in_work(world, building, rise_time, builder) {
         Worked::Risen => return leave_finished_site(world, entity, building_id),
         Worked::Going => {}
     }
@@ -407,64 +440,9 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
     Processing::state(OrderState::InProcessing)
 }
 
-/// Advances every unattended rising entity by one tick, marking risen the
-/// ones that reach their rise time. One a crew works is left to its crew,
-/// and a halted one waits.
-///
-/// Rising entities are visited in ascending simulation-id order.
-pub fn advance_sites_without_builder(world: &mut World) {
-    let mut unattended: Vec<(SimulationId, Entity, SimulationId)> = world
-        .query_filtered::<(Entity, &EntityInfoComponent, &RisingComponent), Without<DyingComponent>>()
-        .iter(world)
-        .filter_map(|(entity, info, rising)| match rising.attendance {
-            RiseAttendance::Crew { .. } | RiseAttendance::Halted => None,
-            RiseAttendance::Unattended { founder } => Some((info.id(), entity, founder)),
-        })
-        .collect();
-    unattended.sort_unstable_by_key(|&(id, _, _)| id);
-    for (_, entity, founder) in unattended {
-        let rise_time = entity_def::of(world, entity)
-            .rise_time()
-            .expect("an unattended rising entity is of a type that rises");
-
-        match put_in_work(world, entity, rise_time, founder) {
-            Worked::Going | Worked::Risen => {}
-        }
-    }
-}
-
-/// Lines up each pool of every rising entity that follows its work under the
-/// maxima just folded — see [`rise::rise`] — and settles the pools still
-/// following work on each entity risen since the last fold — see
-/// [`rise::settle_risen`].
-pub fn rise_sites(world: &mut World) {
-    for (_, entity) in world.resource::<EntityIndex>().alive_entries() {
-        if !entity_def::follows_work(world, entity) {
-            continue;
-        }
-        if entity_def::rising(world, entity) {
-            rise::rise(world, entity);
-        } else {
-            rise::settle_risen(world, entity);
-        }
-    }
-}
-
 /// Removes the unfinished `building` from the map, paying nothing back.
 pub(super) fn tear_down_site(world: &mut World, building: Entity) {
     spawn::despawn_entity(world, building, DeathCause::Canceled);
-}
-
-/// Marks `entity` as risen — see [`rise::mark_as_risen`] — and announces it,
-/// naming `by`: whoever worked the last tick, or the founder of an entity
-/// that rose unattended.
-fn complete_site(world: &mut World, entity: Entity, by: SimulationId) {
-    rise::mark_as_risen(world, entity);
-    let announced = SimulationEvent::EntityRisen {
-        entity: entity_def::simulation_id(world, entity),
-        by,
-    };
-    world.resource_mut::<EventRecord>().emit(announced);
 }
 
 /// Destroys an unfinished site, called by the last builder to walk away from a
@@ -650,26 +628,6 @@ fn enter_site(world: &mut World, entity: Entity, site: Entity) {
     }
 }
 
-/// The resource source of type `over` standing exactly on `footprint`, if one
-/// does.
-fn source_under(world: &mut World, over: &str, footprint: CellRect) -> Option<Entity> {
-    let mut query = world.query_filtered::<(Entity, &EntityInfoComponent), (
-        With<ResourceSourceComponent>,
-        With<LocationComponent>,
-        Without<DyingComponent>,
-    )>();
-    // The lowest id wins, so a shared outcome never rests on query order.
-    query
-        .iter(world)
-        .filter(|(entity, info)| {
-            info.type_name() == over
-                && entity_def::stands_on_grid(world, *entity)
-                && entity_def::footprint_rect(world, *entity) == footprint
-        })
-        .min_by_key(|(_, info)| info.id())
-        .map(|(entity, _)| entity)
-}
-
 /// Ends a crew builder's order on `site`, which has completed: one that attends
 /// steps back out beside it, or stays where it stands;
 /// one consumed by its work is despawned as consumed, and its order finishes
@@ -705,35 +663,4 @@ fn attendance(world: &World, entity: Entity) -> BuilderAttendance {
     entity_def::builder_attendance(world, entity)
         .expect("a build order only starts on an entity that can build")
         .clone()
-}
-
-/// What a tick of work did to a rising entity.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Worked {
-    /// The entity goes on rising.
-    Going,
-    /// The work reached the rise time and the entity has risen.
-    Risen,
-}
-
-/// Puts one tick of work into the rising `entity`: each pool following its
-/// work moves along its line, and once the work reaches `rise_time` the
-/// entity has risen, named for `by`.
-fn put_in_work(world: &mut World, entity: Entity, rise_time: u32, by: SimulationId) -> Worked {
-    let progress = {
-        let mut rising = world
-            .get_mut::<RisingComponent>(entity)
-            .expect("work is put into an entity still rising");
-        rising.progress += 1;
-        rising.progress
-    };
-    if entity_def::follows_work(world, entity) {
-        rise::rise(world, entity);
-    }
-    if progress >= rise_time {
-        complete_site(world, entity, by);
-        Worked::Risen
-    } else {
-        Worked::Going
-    }
 }

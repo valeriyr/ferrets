@@ -9,13 +9,16 @@ use ferrets_math::FixedU64;
 use crate::{
     components::pools::{self, Follows, PoolsComponent},
     entity_def,
+    session::player_id::PlayerId,
     simulation_id::SimulationId,
 };
 use ferrets_content::{
+    entity_type_def::EntityTypeId,
     pool::{Pool, PoolInitial},
     pool_def::PoolId,
     registry::ContentRegistry,
     rise::RisePool,
+    skills::SkillId,
 };
 
 /// How a rising entity's progress is advanced: by the orders of the workers
@@ -44,6 +47,34 @@ pub enum RiseAttendance {
     Halted,
 }
 
+/// What brought a rising entity into the world.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RiseOrigin {
+    /// A builder founded it: a site its builders raise, or one left to rise
+    /// on its own.
+    Founded {
+        /// The player that paid its price; `None` when nobody did, the site of
+        /// a builder no player owns.
+        payer: Option<PlayerId>,
+    },
+    /// A warper warped it in, held to the field rules of the warper's type
+    /// until it has risen.
+    Warped {
+        /// The type of the warper that warped it in.
+        warper_type: EntityTypeId,
+        /// The player that paid its price.
+        payer: PlayerId,
+        /// The tick the warper's cooldown from this warp-in runs out at.
+        ready_at: u32,
+    },
+    /// A cast summoned it, held to the field rules of the summoning skill
+    /// until it has risen.
+    Summoned {
+        /// The skill that summoned it.
+        skill: SkillId,
+    },
+}
+
 /// Marks an entity still rising into the world, holding the progress of its
 /// rise: several workers advance the same work, and what they have put in
 /// outlives the one that started it.
@@ -53,14 +84,18 @@ pub struct RisingComponent {
     pub progress: u32,
     /// How the progress is advanced, and on whose behalf.
     pub attendance: RiseAttendance,
+    /// What brought the entity in.
+    pub origin: RiseOrigin,
 }
 
 impl RisingComponent {
-    /// A rise with no work put in yet, attended as `attendance` says.
-    pub fn new(attendance: RiseAttendance) -> Self {
+    /// A rise with no work put in yet, attended as `attendance` says, brought
+    /// in as `origin` says.
+    pub fn new(attendance: RiseAttendance, origin: RiseOrigin) -> Self {
         Self {
             progress: 0,
             attendance,
+            origin,
         }
     }
 
