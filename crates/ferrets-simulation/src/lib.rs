@@ -25,6 +25,7 @@ pub mod map;
 pub mod map_data;
 pub mod movement_model;
 pub mod networks;
+pub mod occupancy;
 pub mod order;
 mod overbuild;
 pub mod player_buffs;

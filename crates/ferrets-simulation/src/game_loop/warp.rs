@@ -18,7 +18,7 @@ use crate::{
     entity_index::EntityIndex,
     events::{DeathCause, SpendCause},
     fields, ground, landing,
-    map::OccupancyClass,
+    occupancy::OccupancyClass,
     overbuild::{self, Cover},
     requirements,
     resources::{self, PlayerResources},

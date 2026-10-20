@@ -11,7 +11,7 @@ use crate::{
     entity_def,
     entity_index::EntityIndex,
     events::DeathCause,
-    map::GridMark,
+    occupancy::GridMark,
     spawn::{self, FieldReach},
 };
 

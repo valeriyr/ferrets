@@ -11,7 +11,8 @@ use crate::{
     components::location::LocationComponent,
     entity_def,
     entity_index::EntityIndex,
-    map::{GridMark, Map, OccupancyClass},
+    map::Map,
+    occupancy::{GridMark, OccupancyClass},
 };
 
 /// A body standing on the map that holds its ground without claiming its

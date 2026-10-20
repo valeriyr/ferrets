@@ -19,9 +19,10 @@ use ferrets_pathfinder::{
 };
 use ferrets_simulation::{
     components::location::LocationComponent,
-    map::{Map, OccupancyClass},
+    map::Map,
     map_data::{MapData, Placement},
     movement_model::MovementModel,
+    occupancy::OccupancyClass,
 };
 
 //
