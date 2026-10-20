@@ -774,10 +774,10 @@ fn process_cell(entity: Entity, order: &Order, world: &mut World) -> OrderState 
     OrderState::InProcessing
 }
 
-/// The next run of cells to walk: the continuation of the current plan, or a
-/// fresh one — hierarchical when the map serves the mover's mask, flat
-/// otherwise. `None` and an empty segment both mean the entity is as close
-/// as it can get.
+/// The next run of cells to walk: the continuation of the current plan, a
+/// fresh hierarchical one, or — after a blocked crossing asked for it — a flat
+/// claim-aware route. `None` and an empty segment both mean the entity is as
+/// close as it can get.
 #[allow(clippy::too_many_arguments)]
 fn next_segment(
     world: &mut World,
@@ -826,52 +826,16 @@ fn next_segment(
         }
     }
 
-    // A blocked crossing asked for a claim-aware route around the blocker;
-    // the flat search is also all a map without an abstraction for this
-    // mask offers.
-    let (projection, serves, region) = {
-        let map = world.resource::<Map>();
-        let region = if map.hierarchy().serves(shape) {
-            map.hierarchy().region_of(from, shape)
-        } else {
-            None
-        };
-        (map.projection(), map.hierarchy().serves(shape), region)
-    };
-    if move_component.avoid_claims || !serves {
+    // A blocked crossing asked for a claim-aware route around the blocker.
+    let projection = world.resource::<Map>().projection();
+    if move_component.avoid_claims {
         move_component.avoid_claims = false;
-        // The mover's own footprint claim would wall this claim-honoring
-        // search in at its start — a wide mover overlaps its own claim from
-        // every neighboring anchor — so it is lifted for exactly this query
-        // and put straight back. A passable mover claims nothing, so there
-        // is nothing to lift; cells under its body may be someone else's
-        // claim, and lifting those would route it through ground others hold.
-        let own = if solidity.claims_cells() {
-            world
-                .resource_mut::<Map>()
-                .take_claim(shape.mask, from, shape.size)
-        } else {
-            Vec::new()
-        };
-        let path = {
-            let map = world.resource::<Map>();
-            astar::find_path(
-                map.nav_grid(),
-                projection,
-                position,
-                shape,
-                target,
-                size,
-                range,
-            )
-        };
-        world.resource_mut::<Map>().restore_claim(shape.mask, &own);
-        return path.map(|path| path.into_iter().map(CellPos::from).collect());
+        return claim_aware_route(world, shape, solidity, position, target, size, range);
     }
 
     // A fresh plan: reuse the tick's shared corridor for this goal and start
     // locality, planning it once for the whole fanned group.
-    let region = region?;
+    let region = world.resource::<Map>().hierarchy().region_of(from, shape)?;
     let tick = world.resource::<GameSession>().tick();
     let key = ShareKey {
         shape,
@@ -946,6 +910,47 @@ fn next_segment(
     )
 }
 
+/// A flat route to the goal that treats every unit claim as a wall.
+fn claim_aware_route(
+    world: &mut World,
+    shape: MoverShape,
+    solidity: Solidity,
+    position: FixedUVec2,
+    target: FixedUVec2,
+    size: CellSize,
+    range: u32,
+) -> Option<Vec<CellPos>> {
+    let from = body::anchor(position);
+    let projection = world.resource::<Map>().projection();
+    // The mover's own footprint claim would wall this claim-honoring search in
+    // at its start — a wide mover overlaps its own claim from every
+    // neighboring anchor — so it is lifted for exactly this query and put
+    // straight back. A passable mover claims nothing, so there is nothing to
+    // lift; cells under its body may be someone else's claim, and lifting
+    // those would route it through ground others hold.
+    let own = if solidity.claims_cells() {
+        world
+            .resource_mut::<Map>()
+            .take_claim(shape.mask, from, shape.size)
+    } else {
+        Vec::new()
+    };
+    let path = {
+        let map = world.resource::<Map>();
+        astar::find_path(
+            map.nav_grid(),
+            projection,
+            position,
+            shape,
+            target,
+            size,
+            range,
+        )
+    };
+    world.resource_mut::<Map>().restore_claim(shape.mask, &own);
+    path.map(|path| path.into_iter().map(CellPos::from).collect())
+}
+
 /// The range a walk accepts right now: point moves grow with frustration so
 /// crowds settle into a ring; ranged walks keep their exact contract.
 fn acceptance(range: u32, frustration: u32) -> u32 {
@@ -1003,9 +1008,12 @@ fn cell_arrived(
 
 /// Works down the crowd ladder when the next cell of a crossing is held:
 /// swap with a head-on counterpart, arrive beside a settled ally, skip a
-/// waypoint an idle ally sits on, ask an idle ally to step aside, wait
-/// briefly, splice a local detour, and finally throw the plan away for a
-/// claim-aware repath — bounded by a give-up budget.
+/// waypoint an idle ally sits on, ask an idle ally to step aside, route at
+/// once to another goal cell when a body that is not walking holds this one,
+/// wait briefly, splice a local detour, and finally throw the plan away for a
+/// claim-aware repath. The give-up budget bounds the waits, detours and
+/// repaths; the immediate route repeats only when another body settles first
+/// on each newly chosen cell.
 #[allow(clippy::too_many_arguments)]
 fn resolve_blocked_crossing(
     entity: Entity,
@@ -1023,7 +1031,7 @@ fn resolve_blocked_crossing(
     let next_cell = *move_component.path.last().unwrap();
     let projection = world.resource::<Map>().projection();
 
-    if let Some(blocker) = claimant_at(world, shape.mask, next_cell) {
+    if let Some(blocker) = claimant_at(world, shape, current_cell, next_cell) {
         let blocker_position = entity_def::position(world, blocker);
         let blocker_at_rest = !movement_model::is_mid_crossing(blocker_position);
 
@@ -1123,6 +1131,36 @@ fn resolve_blocked_crossing(
                 let operation = entity_def::operation(world, blocker);
                 super::orders::prepare_front(blocker, operation, &mut queue, world);
                 world.entity_mut(blocker).insert(queue);
+            }
+        } else if blocker_at_rest
+            && !entity_def::walking(world, blocker)
+            && cell_arrived(
+                projection,
+                next_cell,
+                shape,
+                target,
+                size,
+                range,
+                move_component.frustration,
+            )
+        {
+            // Taken goal: the step would end the walk, and the cell is held by
+            // a body that is not walking and will not be asked aside — one at
+            // work, one that cannot move, or one not allied. Detouring back
+            // onto that same cell only stalls: a claim-aware route to another
+            // cell that serves the goal is taken at once. With none, the walk
+            // waits as on any held step.
+            let solidity = entity_def::of(world, entity)
+                .location
+                .expect("walkers have a location")
+                .solidity();
+            if let Some(route) =
+                claim_aware_route(world, shape, solidity, position, target, size, range)
+                && !route.is_empty()
+            {
+                move_component.take_route(route);
+                world.entity_mut(entity).insert(move_component);
+                return OrderState::InProcessing;
             }
         }
     }
@@ -1256,10 +1294,16 @@ fn swap_crossings(
     OrderState::InProcessing
 }
 
-/// The entity holding `cell` against movers of `mask`: a resting or crossing
-/// claimant, or a standing footprint covering it. Deterministic — the lowest
-/// simulation id wins.
-fn claimant_at(world: &mut World, mask: LayerMask, cell: CellPos) -> Option<Entity> {
+/// The entity holding a cell that a step of `shape` from `from` to `to`
+/// enters: a resting or crossing claimant, or a standing footprint covering
+/// it. Deterministic — the lowest simulation id wins.
+fn claimant_at(world: &mut World, shape: MoverShape, from: CellPos, to: CellPos) -> Option<Entity> {
+    let mask = shape.mask;
+    let left = CellRect::new(from, shape.size);
+    let entered: Vec<CellPos> = CellRect::new(to, shape.size)
+        .cells()
+        .filter(|&cell| !left.contains(cell))
+        .collect();
     for (_, candidate) in world.resource::<EntityIndex>().alive_entries() {
         // An entity off the grid holds no cells.
         if !entity_def::stands_on_grid(world, candidate) {
@@ -1286,10 +1330,12 @@ fn claimant_at(world: &mut World, mask: LayerMask, cell: CellPos) -> Option<Enti
                 .get::<MoveComponent>()
                 .and_then(|movement| movement.path.last().copied())
                 .is_some_and(|destination| {
-                    CellRect::new(destination, location_def.size()).contains(cell)
+                    let held = CellRect::new(destination, location_def.size());
+                    entered.iter().any(|&cell| held.contains(cell))
                 })
         } else {
-            CellRect::new(CellPos::from(candidate_position), location_def.size()).contains(cell)
+            let held = CellRect::new(CellPos::from(candidate_position), location_def.size());
+            entered.iter().any(|&cell| held.contains(cell))
         };
         if holds {
             return Some(candidate);
@@ -1327,7 +1373,7 @@ fn resting_ally_within(
         if !def.can_move()
             || !location_def.solidity().claims_cells()
             || location_def.occupation() & mask == LayerMask::EMPTY
-            || world.entity(candidate).contains::<MoveComponent>()
+            || entity_def::walking(world, candidate)
             || !allied(world, entity, candidate)
         {
             continue;

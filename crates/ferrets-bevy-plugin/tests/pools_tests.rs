@@ -31,7 +31,7 @@ use ferrets_simulation::{
     command::PlayerCommand,
     components::pools::{self, Spending},
     entity_def, game_loop,
-    session::{GameSession, player_slot::PlayerSlot, player_type::PlayerType},
+    session::{player_slot::PlayerSlot, player_type::PlayerType},
 };
 
 //
@@ -1722,7 +1722,7 @@ fn app() -> App {
         ]));
     }
     app.world_mut().resource::<ContentRegistry>().validate();
-    app.world_mut().resource_mut::<GameSession>().start();
+    utils::start_game(&mut app);
     app
 }
 
@@ -1891,6 +1891,6 @@ fn carry_initial_app() -> App {
         );
     }
     app.world_mut().resource::<ContentRegistry>().validate();
-    app.world_mut().resource_mut::<GameSession>().start();
+    utils::start_game(&mut app);
     app
 }

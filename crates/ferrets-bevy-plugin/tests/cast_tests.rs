@@ -47,7 +47,7 @@ use ferrets_simulation::{
     game_loop::{damage, fields},
     order::Order,
     player_buffs::PlayerBuffs,
-    session::{GameSession, player_id::PlayerId, player_slot::PlayerSlot, player_type::PlayerType},
+    session::{player_id::PlayerId, player_slot::PlayerSlot, player_type::PlayerType},
     simulation_id::SimulationId,
     spawn,
 };
@@ -1705,7 +1705,7 @@ fn app() -> App {
         );
     }
     app.world_mut().resource::<ContentRegistry>().validate();
-    app.world_mut().resource_mut::<GameSession>().start();
+    utils::start_game(&mut app);
     app
 }
 

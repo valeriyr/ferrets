@@ -2528,7 +2528,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
         );
     }
     app.world_mut().resource::<ContentRegistry>().validate();
-    app.world_mut().resource_mut::<GameSession>().start();
+    utils::start_game(&mut app);
     app
 }
 

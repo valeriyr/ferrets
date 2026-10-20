@@ -296,6 +296,15 @@ pub fn install_game_resources(world: &mut World) {
     tick::install_per_game(world);
 }
 
+/// Starts the game on the installed map and content: refuses a map that cannot
+/// plan for one of the content's movers, then starts the session.
+pub fn start_game(world: &mut World) {
+    world
+        .resource::<Map>()
+        .assert_serves_movers(world.resource::<ContentRegistry>());
+    world.resource_mut::<GameSession>().start();
+}
+
 /// Tears the per-game state down when leaving a game: despawns every simulation
 /// entity, resets the simulation stores to their pre-game state, and removes
 /// what the game's entry path installed — the network session, a recorder or

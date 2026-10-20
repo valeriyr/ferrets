@@ -469,7 +469,7 @@ fn bases_app(teams: &[Option<TeamId>]) -> (App, Vec<Entity>) {
             })
             .collect()
     };
-    app.world_mut().resource_mut::<GameSession>().start();
+    utils::start_game(&mut app);
     (app, bases)
 }
 
@@ -515,7 +515,7 @@ fn bases_app_with_environment(teams: &[Option<TeamId>]) -> (App, Vec<Entity>, En
         utils::create_entity(world, "base", utils::pos(2, 8), Some(environment))
             .expect("environment base placement");
 
-    app.world_mut().resource_mut::<GameSession>().start();
+    utils::start_game(&mut app);
     (app, bases, environment_base)
 }
 

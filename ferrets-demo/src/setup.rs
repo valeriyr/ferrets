@@ -84,7 +84,7 @@ pub fn spawn_demo_scene(world: &mut World) {
 
     seed_player_stats(world);
 
-    world.resource_mut::<GameSession>().start();
+    ferrets_bevy_plugin::start_game(world);
 }
 
 /// Seeds the demo's baseline player stats for every occupied slot: a hard

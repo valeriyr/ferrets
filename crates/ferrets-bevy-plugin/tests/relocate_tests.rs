@@ -44,7 +44,7 @@ use ferrets_simulation::{
     map::Map,
     movement_model::MovementModel,
     session::{
-        GameSession, ai_detection::AiDetection, ai_vision::AiVision, player_id::PlayerId,
+        ai_detection::AiDetection, ai_vision::AiVision, player_id::PlayerId,
         player_slot::PlayerSlot, player_type::PlayerType,
     },
     spawn::{self, Boarding},
@@ -1202,7 +1202,7 @@ fn seated_app(slots: Vec<PlayerSlot>, local: PlayerId) -> App {
         );
     }
     app.world_mut().resource::<ContentRegistry>().validate();
-    app.world_mut().resource_mut::<GameSession>().start();
+    utils::start_game(&mut app);
     app
 }
 

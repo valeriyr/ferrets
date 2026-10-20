@@ -67,7 +67,6 @@ use ferrets_network::{
 };
 use ferrets_pathfinder::{
     layer_mask::LayerMask,
-    mover_shape::MoverShape,
     nav_grid::{LayerId, NavGrid},
 };
 use ferrets_replay::{
@@ -198,7 +197,6 @@ fn make_app_seated(slots: Vec<PlayerSlot>, rules: Ruleset, local: PlayerId) -> A
             MovementModel::Cell,
             nav_grid,
             vec![],
-            &[],
         ),
     ));
     app.insert_resource(registry);
@@ -539,31 +537,14 @@ pub fn selection_app() -> App {
         );
     }
     app.world_mut().resource::<ContentRegistry>().validate();
-    app.world_mut().resource_mut::<GameSession>().start();
+    start_game(&mut app);
     app
 }
 
-/// App on the cell model with hierarchy abstractions for both a walking 1×1
-/// `soldier` and a parked 2×2 `wagon` — the blocked-crossing rungs only fire
-/// when the plan was made claim-blind, which takes the hierarchy. One human
-/// player, session started.
+/// App on the cell model with a walking 1×1 `soldier` and a parked 2×2
+/// `wagon`. One human player, session started.
 pub fn cell_crowd_app() -> App {
     let mut app = make_app(vec![PlayerSlot::occupied(0, PlayerType::Human, None, None)]);
-    {
-        let mut grid = NavGrid::new(32, 32);
-        grid.add_layer(GROUND);
-        app.world_mut().insert_resource(Map::new(
-            "test",
-            Projection::Isometric,
-            MovementModel::Cell,
-            grid,
-            vec![],
-            &[
-                MoverShape::point(GROUND),
-                MoverShape::new(GROUND, CellSize::new(2, 2)),
-            ],
-        ));
-    }
     {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
         registry.register(
@@ -594,7 +575,7 @@ pub fn cell_crowd_app() -> App {
         );
     }
     app.world_mut().resource::<ContentRegistry>().validate();
-    app.world_mut().resource_mut::<GameSession>().start();
+    start_game(&mut app);
     app
 }
 
@@ -836,7 +817,7 @@ pub fn morph_app(model: MovementModel) -> App {
         );
     }
     app.world_mut().resource::<ContentRegistry>().validate();
-    app.world_mut().resource_mut::<GameSession>().start();
+    start_game(&mut app);
     app
 }
 
@@ -1338,7 +1319,7 @@ pub fn brood_app(model: MovementModel) -> App {
         );
     }
     app.world_mut().resource::<ContentRegistry>().validate();
-    app.world_mut().resource_mut::<GameSession>().start();
+    start_game(&mut app);
     app
 }
 
@@ -1786,22 +1767,24 @@ pub fn effective_damage(app: &App, entity: Entity) -> FixedU64 {
         .unwrap()
 }
 
-/// Swaps the harness map for a 32×32 one with the given projection and
-/// movement model, a ground hierarchy included. Call before any spawns.
+/// Starts the game on the test's content: builds the map's hierarchy for the
+/// movers it registered, as a game's map is built, then starts the session.
+pub fn start_game(app: &mut App) {
+    serve_movers(app);
+    ferrets_bevy_plugin::start_game(app.world_mut());
+}
+
+/// Swaps the harness map for a fresh 32×32 one with the given projection and
+/// movement model, its hierarchy built for the registered movers. The fresh
+/// grid holds none of the marks of bodies spawned before it.
 pub fn install_map(app: &mut App, projection: Projection, model: MovementModel) {
     let mut grid = NavGrid::new(32, 32);
     grid.add_layer(GROUND);
     map::install_map(
         app.world_mut(),
-        Map::new(
-            "test",
-            projection,
-            model,
-            grid,
-            vec![],
-            &[MoverShape::point(GROUND)],
-        ),
+        Map::new("test", projection, model, grid, vec![]),
     );
+    serve_movers(app);
 }
 
 /// Side of [`install_chokepoint_map`]'s map. Several clusters across, so a walk
@@ -1832,9 +1815,9 @@ pub fn install_chokepoint_map(app: &mut App) {
             MovementModel::Cell,
             grid,
             vec![],
-            &[MoverShape::point(GROUND)],
         ),
     );
+    serve_movers(app);
 }
 
 /// App with the combat content roster — an attacking soldier (50 hp, 3-tick
@@ -2289,7 +2272,7 @@ pub fn combat_app() -> App {
     }
     app.world_mut().resource::<ContentRegistry>().validate();
 
-    app.world_mut().resource_mut::<GameSession>().start();
+    start_game(&mut app);
     app
 }
 
@@ -2303,7 +2286,7 @@ pub fn orders_app() -> App {
         PlayerSlot::occupied(1, PlayerType::Human, None, None),
     ]);
     register_orders_content(&mut app);
-    app.world_mut().resource_mut::<GameSession>().start();
+    start_game(&mut app);
     app
 }
 
@@ -2317,7 +2300,7 @@ pub fn continuous_orders_app() -> App {
     ]);
     install_map(&mut app, Projection::Isometric, MovementModel::Continuous);
     register_orders_content(&mut app);
-    app.world_mut().resource_mut::<GameSession>().start();
+    start_game(&mut app);
     app
 }
 
@@ -2392,7 +2375,7 @@ pub fn supply_app() -> App {
         );
     }
     app.world_mut().resource::<ContentRegistry>().validate();
-    app.world_mut().resource_mut::<GameSession>().start();
+    start_game(&mut app);
     app
 }
 
@@ -2446,7 +2429,7 @@ pub fn player_effects_app() -> App {
         );
     }
     app.world_mut().resource::<ContentRegistry>().validate();
-    app.world_mut().resource_mut::<GameSession>().start();
+    start_game(&mut app);
     app
 }
 
@@ -2547,7 +2530,7 @@ pub fn research_app_seating(slots: Vec<PlayerSlot>) -> App {
         );
     }
     app.world_mut().resource::<ContentRegistry>().validate();
-    app.world_mut().resource_mut::<GameSession>().start();
+    start_game(&mut app);
     app
 }
 
@@ -2579,7 +2562,6 @@ pub fn annex_app() -> App {
                 MovementModel::Cell,
                 grid,
                 vec![],
-                &[MoverShape::point(GROUND), MoverShape::point(AIR)],
             ),
         );
     }
@@ -2877,7 +2859,7 @@ pub fn annex_app() -> App {
         );
     }
     app.world_mut().resource::<ContentRegistry>().validate();
-    app.world_mut().resource_mut::<GameSession>().start();
+    start_game(&mut app);
     app
 }
 
@@ -3297,7 +3279,7 @@ pub fn transport_app() -> App {
         );
     }
     app.world_mut().resource::<ContentRegistry>().validate();
-    app.world_mut().resource_mut::<GameSession>().start();
+    start_game(&mut app);
     app
 }
 
@@ -3327,7 +3309,7 @@ pub fn corner_app() -> App {
         );
     }
     app.world_mut().resource::<ContentRegistry>().validate();
-    app.world_mut().resource_mut::<GameSession>().start();
+    start_game(&mut app);
     app
 }
 
@@ -3369,7 +3351,7 @@ pub fn turning_app() -> App {
         );
     }
     app.world_mut().resource::<ContentRegistry>().validate();
-    app.world_mut().resource_mut::<GameSession>().start();
+    start_game(&mut app);
     app
 }
 
@@ -4722,7 +4704,6 @@ pub fn net_app_with_slots(
             MovementModel::Cell,
             nav_grid,
             vec![],
-            &[],
         ),
     ));
     app.add_plugins(NetworkPlugin);
@@ -4738,7 +4719,7 @@ pub fn net_app_with_slots(
         registry.register(harness_base());
         registry.validate();
     }
-    app.world_mut().resource_mut::<GameSession>().start();
+    start_game(&mut app);
     app
 }
 
@@ -4768,4 +4749,12 @@ pub fn harness_base() -> EntityTypeDef {
         .with_pool(Pool::health(30))
         .with_dying(2, [])
         .with_tags(["building"])
+}
+
+/// Builds the map's hierarchy for every mover shape the registry declares, as a
+/// game's map is built from its content.
+fn serve_movers(app: &mut App) {
+    app.world_mut().resource_scope(|world, mut map: Mut<Map>| {
+        map.serve_movers(world.resource::<ContentRegistry>())
+    });
 }

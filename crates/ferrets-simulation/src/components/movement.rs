@@ -181,8 +181,16 @@ impl MoveComponent {
         }
     }
 
-    /// Throws the whole plan away and asks the next one to honor unit claims
-    /// — the last rung of the blockage ladder.
+    /// Throws the whole plan away for `route`, a claim-aware route walked front
+    /// to back.
+    pub fn take_route(&mut self, route: Vec<CellPos>) {
+        self.corridor.clear();
+        self.plan = None;
+        self.detoured = false;
+        self.pursue_segment(route);
+    }
+
+    /// Throws the whole plan away and asks the next one to honor unit claims.
     pub fn repath_avoiding_claims(&mut self) {
         self.path.clear();
         self.corridor.clear();

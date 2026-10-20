@@ -26,7 +26,7 @@ use ferrets_simulation::{
     map::Map,
     movement_model::MovementModel,
     order::AttackTarget,
-    session::{GameSession, player_slot::PlayerSlot, player_type::PlayerType},
+    session::{player_slot::PlayerSlot, player_type::PlayerType},
     simulation_id::SimulationId,
 };
 
@@ -99,11 +99,11 @@ fn wide_attacker_stops_at_its_edge_reach() {
     utils::run_ticks(&mut app, 60);
     utils::assert_despawned(app.world_mut(), target);
 
-    // Anchored at (7,5) the footprint's east edge sits at x=8, two cells
-    // from the target — exactly the weapon's range.
+    // Anchored at (7,4) the footprint covers rows 4 and 5 and its east edge
+    // sits at x=8, two cells from the target — exactly the weapon's range.
     assert_eq!(
         utils::cell_of(app.world_mut(), ballista),
-        CellPos::new(7, 5)
+        CellPos::new(7, 4)
     );
 }
 
@@ -133,7 +133,7 @@ fn wide_attacker_stops_at_its_edge_reach_continuous() {
     // A continuous body rests at a fractional position; the cell it stands
     // on for every judgement is its body anchor.
     let position = utils::position_of(app.world_mut(), ballista);
-    assert_eq!(body::anchor(position), CellPos::new(7, 5));
+    assert_eq!(body::anchor(position), CellPos::new(7, 4));
 }
 
 #[test]
@@ -158,10 +158,11 @@ fn attack_chases_target_out_of_range() {
     utils::run_ticks(&mut app, 21);
     utils::assert_despawned(app.world_mut(), target);
 
-    // The attacker stopped within attack range of the target's cell.
+    // The attacker stopped within attack range of the target's cell, on the
+    // diagonal neighbor its lane took.
     assert_eq!(
         utils::cell_of(app.world_mut(), attacker),
-        CellPos::new(9, 5)
+        CellPos::new(9, 4)
     );
 
     utils::run_ticks(&mut app, 1);
@@ -222,7 +223,7 @@ fn send_to_entity_does_not_attack_ally() {
         );
         registry.validate();
     }
-    app.world_mut().resource_mut::<GameSession>().start();
+    utils::start_game(&mut app);
 
     let world = app.world_mut();
     let (_, actor_id) = utils::create_entity(world, "soldier", utils::pos(5, 5), Some(0)).unwrap();
@@ -968,13 +969,11 @@ fn ground_attack_reaches_point_at_cell_it_lies_in() {
             flush: true,
         },
     );
-    // Half a cell a tick: two ticks for the one cell it closes.
+    // Half a cell a tick: two ticks for the one cell it closes, onto the
+    // diagonal neighbor (12,9), six cells from (6,10) as (12,10) would be.
     utils::run_ticks(&mut app, utils::APPLY + 4);
 
-    assert_eq!(
-        utils::cell_of(app.world_mut(), mortar),
-        CellPos::new(12, 10)
-    );
+    assert_eq!(utils::cell_of(app.world_mut(), mortar), CellPos::new(12, 9));
 }
 
 /// The same gun on the same wheels, authored to halt for its fights, rolls past

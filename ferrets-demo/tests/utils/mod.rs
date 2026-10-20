@@ -148,7 +148,7 @@ pub fn demo_map_app_as(role: LocalRole, model: MovementModel) -> App {
     {
         let world = app.world_mut();
         *world.resource_mut::<ContentRegistry>() = registry;
-        world.resource_mut::<GameSession>().start();
+        ferrets_bevy_plugin::start_game(world);
     }
     app
 }

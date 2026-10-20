@@ -51,7 +51,7 @@ fn ai_slots_without_runtimes_get_idle_frames_and_free_slots_get_none() {
         PlayerSlot::free(2),
     ]);
     app.add_plugins(AiPlugin);
-    app.world_mut().resource_mut::<GameSession>().start();
+    utils::start_game(&mut app);
 
     utils::run_steps(&mut app, 10);
 
@@ -90,7 +90,7 @@ fn ai_commands_land_only_on_staggered_think_ticks() {
     ]);
     app.add_plugins(AiPlugin);
     install_ai(&mut app, &[(1, STOPPER), (2, STOPPER)]);
-    app.world_mut().resource_mut::<GameSession>().start();
+    utils::start_game(&mut app);
 
     utils::run_steps(&mut app, 12);
 
@@ -135,7 +135,7 @@ fn blocked_ticks_do_not_rethink() {
     ]);
     app.add_plugins(AiPlugin);
     install_ai(&mut app, &[(2, COUNTER)]);
-    app.world_mut().resource_mut::<GameSession>().start();
+    utils::start_game(&mut app);
 
     utils::run_steps(&mut app, 12);
 
@@ -186,7 +186,7 @@ fn replay_playback_gates_ai_sources_off() {
     app.add_plugins(AiPlugin);
     install_ai(&mut app, &[(1, COUNTER)]);
     ferrets_bevy_plugin::replay::playback::install_per_game(app.world_mut(), empty_replay());
-    app.world_mut().resource_mut::<GameSession>().start();
+    utils::start_game(&mut app);
 
     utils::run_steps(&mut app, 1);
 
@@ -693,7 +693,7 @@ fn run_ai_session() -> Vec<u64> {
         utils::create_entity(world, "worker", utils::pos(20, 20), Some(2)).unwrap();
     }
     install_ai(&mut app, &[(1, PATROL), (2, PATROL)]);
-    app.world_mut().resource_mut::<GameSession>().start();
+    utils::start_game(&mut app);
 
     let mut checksums = Vec::new();
     for _ in 0..200 {

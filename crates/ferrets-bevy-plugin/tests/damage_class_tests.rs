@@ -6,7 +6,7 @@ use ferrets_content::{
     entity_type_def::EntityTypeDef, location::Solidity, pool::Pool, registry::ContentRegistry,
 };
 use ferrets_geometry::cell_size::CellSize;
-use ferrets_simulation::session::{GameSession, player_slot::PlayerSlot, player_type::PlayerType};
+use ferrets_simulation::session::{player_slot::PlayerSlot, player_type::PlayerType};
 
 mod utils;
 
@@ -106,6 +106,6 @@ fn app() -> App {
         );
     }
     app.world_mut().resource::<ContentRegistry>().validate();
-    app.world_mut().resource_mut::<GameSession>().start();
+    utils::start_game(&mut app);
     app
 }

@@ -421,7 +421,7 @@ fn ai_builds_economy_and_army() {
     assert_eq!(count_owned(world, 1, "blacksmith"), 1);
     // The one bunker the human brain raises: its detector.
     assert_eq!(count_owned(world, 1, "bunker"), 1);
-    assert_eq!(count_owned(world, 1, "archer"), 8);
+    assert_eq!(count_owned(world, 1, "archer"), 7);
     assert_eq!(count_owned(world, 1, "mortar"), 2);
     // Two watch towers and one hardening come out of the same gold as the
     // grunts, so the army is five.

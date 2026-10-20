@@ -177,9 +177,9 @@ fn hidden_carrier_holds_no_location_and_returns_beside_its_source() {
     // The second tick of a two-tick gather runs inside, with nothing to chase
     // from a body that stands nowhere, and ends the trip: the worker comes
     // back out beside the geyser, on the free cell nearest where it went in —
-    // that cell itself, (8, 5) — carrying the full load of five.
+    // that cell itself, (8, 4) — carrying the full load of five.
     utils::run_ticks(&mut app, 1);
-    assert_eq!(utils::position_of(app.world(), worker), utils::pos(8, 5));
+    assert_eq!(utils::position_of(app.world(), worker), utils::pos(8, 4));
     assert_eq!(
         app.world()
             .get::<ResourceCarrierComponent>(worker)

@@ -141,30 +141,15 @@ impl Map {
             }
         }
 
-        // The hierarchy serves one abstraction per distinct mover *shape* the
-        // content declares — layers and footprint size together, because a wider
-        // mover's map genuinely has fewer ways through it and its regions are
-        // coarser. The registry iterates deterministically.
-        let mut shapes: Vec<MoverShape> = Vec::new();
-        for def in registry.entities() {
-            if let Some(location) = def.location
-                && def.can_move()
-            {
-                let shape = MoverShape::new(location.occupation(), location.size());
-                if !shapes.contains(&shape) {
-                    shapes.push(shape);
-                }
-            }
-        }
-
-        Self::new(
+        let mut map = Self::new(
             data.name(),
             data.projection(),
             data.movement_model(),
             nav_grid,
             start_points,
-            &shapes,
-        )
+        );
+        map.serve_movers(registry);
+        map
     }
 
     /// Writes the grid's terrain plane: each cell blocked on the layers its
@@ -202,17 +187,15 @@ impl Map {
         }
     }
 
-    /// Creates a map over `nav_grid`, building one hierarchy abstraction per
-    /// mover shape in `shapes`.
+    /// Creates a map over `nav_grid` whose hierarchy serves no mover yet.
     pub fn new(
         name: impl Into<String>,
         projection: Projection,
         movement_model: MovementModel,
         nav_grid: NavGrid,
         start_points: Vec<Option<CellPos>>,
-        shapes: &[MoverShape],
     ) -> Self {
-        let hierarchy = NavHierarchy::build(&nav_grid, DEFAULT_CLUSTER_SIZE, shapes);
+        let hierarchy = NavHierarchy::build(&nav_grid, DEFAULT_CLUSTER_SIZE, &[]);
         Self {
             name: name.into(),
             projection,
@@ -223,10 +206,38 @@ impl Map {
         }
     }
 
+    /// Rebuilds the hierarchy over the grid as it stands, one abstraction per
+    /// mover shape `registry` declares.
+    pub fn serve_movers(&mut self, registry: &ContentRegistry) {
+        self.hierarchy = NavHierarchy::build(
+            &self.nav_grid,
+            DEFAULT_CLUSTER_SIZE,
+            &Self::mover_shapes(registry),
+        );
+    }
+
     /// Returns a reference to the hierarchical view of the grid's static
     /// plane.
     pub fn hierarchy(&self) -> &NavHierarchy {
         &self.hierarchy
+    }
+
+    /// Panics naming the first mover type `registry` declares whose shape the
+    /// hierarchy does not serve.
+    pub fn assert_serves_movers(&self, registry: &ContentRegistry) {
+        for def in registry.entities() {
+            if let Some(shape) = Self::mover_shape(def) {
+                assert!(
+                    self.hierarchy.serves(shape),
+                    "map '{}' serves no hierarchy for mover '{}' ({} at {}x{})",
+                    self.name,
+                    def.name,
+                    shape.mask,
+                    shape.size.width,
+                    shape.size.height
+                );
+            }
+        }
     }
 
     /// Folds every static occupancy change since the last call into the
@@ -730,6 +741,25 @@ impl Map {
                 }
             }
         }
+    }
+
+    /// Every distinct mover shape the content declares, in name order:
+    /// the abstractions a map must serve for each of its movers to plan.
+    fn mover_shapes(registry: &ContentRegistry) -> Vec<MoverShape> {
+        let mut shapes: Vec<MoverShape> = Vec::new();
+        for shape in registry.entities().filter_map(Self::mover_shape) {
+            if !shapes.contains(&shape) {
+                shapes.push(shape);
+            }
+        }
+        shapes
+    }
+
+    /// The shape a type plans with, or `None` for a type that does not move.
+    fn mover_shape(def: &EntityTypeDef) -> Option<MoverShape> {
+        def.location
+            .filter(|_| def.can_move())
+            .map(|location| MoverShape::new(location.occupation(), location.size()))
     }
 }
 

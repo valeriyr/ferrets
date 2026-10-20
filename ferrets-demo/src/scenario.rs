@@ -193,7 +193,7 @@ pub fn spawn_scenario_scene(world: &mut World) {
     let scenario = world.resource::<CurrentScenario>().0.clone();
     instantiate_scenario(world, &scenario);
     setup::seed_player_stats(world);
-    world.resource_mut::<GameSession>().start();
+    ferrets_bevy_plugin::start_game(world);
 }
 
 fn place(

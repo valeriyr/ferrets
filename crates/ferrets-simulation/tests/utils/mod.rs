@@ -68,7 +68,6 @@ pub fn world(pools: impl IntoIterator<Item = Pool>) -> World {
         MovementModel::Cell,
         nav_grid,
         vec![],
-        &[],
     ));
     world.insert_resource(Selection::new(PLAYERS));
     world.insert_resource(ControlGroups::new(PLAYERS));

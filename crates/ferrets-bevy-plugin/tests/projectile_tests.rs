@@ -18,7 +18,7 @@ use ferrets_simulation::{
     components::location::LocationComponent,
     impacts::PendingImpacts,
     order::AttackTarget,
-    session::{GameSession, player_slot::PlayerSlot, player_type::PlayerType},
+    session::{player_slot::PlayerSlot, player_type::PlayerType},
     spawn,
 };
 
@@ -427,6 +427,6 @@ fn app() -> App {
         );
     }
     app.world_mut().resource::<ContentRegistry>().validate();
-    app.world_mut().resource_mut::<GameSession>().start();
+    utils::start_game(&mut app);
     app
 }

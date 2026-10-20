@@ -39,7 +39,7 @@ use ferrets_simulation::{
     game_loop,
     player_stats::PlayerStats,
     requirements,
-    session::{GameSession, player_slot::PlayerSlot, player_type::PlayerType},
+    session::{player_slot::PlayerSlot, player_type::PlayerType},
     spawn,
     statistics::Statistics,
     visibility::Sighting,
@@ -1061,7 +1061,7 @@ fn app() -> (App, EntityBuffId) {
         );
     }
     app.world_mut().resource::<ContentRegistry>().validate();
-    app.world_mut().resource_mut::<GameSession>().start();
+    utils::start_game(&mut app);
     (app, on_fire)
 }
 

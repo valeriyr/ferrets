@@ -45,7 +45,7 @@ use ferrets_geometry::{
     cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize, projection::Projection,
 };
 use ferrets_math::FixedU64;
-use ferrets_pathfinder::{layer_mask::LayerMask, mover_shape::MoverShape, nav_grid::NavGrid};
+use ferrets_pathfinder::{layer_mask::LayerMask, nav_grid::NavGrid};
 use ferrets_script::ai::view::game::Glimpse;
 use ferrets_simulation::{
     beside::{Beside, Lean},
@@ -60,7 +60,7 @@ use ferrets_simulation::{
     movement_model::MovementModel,
     order::AttackTarget,
     session::{
-        GameSession, ai_detection::AiDetection, ai_vision::AiVision, player_slot::PlayerSlot,
+        ai_detection::AiDetection, ai_vision::AiVision, player_slot::PlayerSlot,
         player_type::PlayerType,
     },
     spawn::{self, SetDown},
@@ -1583,10 +1583,6 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
                 MovementModel::Cell,
                 grid,
                 vec![],
-                &[
-                    MoverShape::point(utils::GROUND),
-                    MoverShape::point(utils::AIR),
-                ],
             ),
         );
     }
@@ -2072,6 +2068,6 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
         );
         registry.validate();
     }
-    app.world_mut().resource_mut::<GameSession>().start();
+    utils::start_game(&mut app);
     app
 }

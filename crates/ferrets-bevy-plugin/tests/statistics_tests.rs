@@ -36,7 +36,7 @@ use ferrets_simulation::{
     game_loop::damage,
     movement_model::MovementModel,
     resources::PlayerResources,
-    session::{GameSession, player_slot::PlayerSlot, player_type::PlayerType},
+    session::{player_slot::PlayerSlot, player_type::PlayerType},
     simulation_id::SimulationId,
     spawn::{self, FieldReach},
     statistics::Statistics,
@@ -1150,7 +1150,7 @@ fn enemy_skill_app() -> (App, ferrets_content::skills::SkillId) {
     app.world_mut()
         .resource::<ferrets_content::registry::ContentRegistry>()
         .validate();
-    app.world_mut().resource_mut::<GameSession>().start();
+    utils::start_game(&mut app);
     (app, smite)
 }
 
@@ -1198,7 +1198,7 @@ fn ground_skill_app() -> (App, ferrets_content::skills::SkillId) {
     app.world_mut()
         .resource::<ferrets_content::registry::ContentRegistry>()
         .validate();
-    app.world_mut().resource_mut::<GameSession>().start();
+    utils::start_game(&mut app);
     (app, sweep)
 }
 
@@ -1241,7 +1241,7 @@ fn repair_app() -> App {
     app.world_mut()
         .resource::<ferrets_content::registry::ContentRegistry>()
         .validate();
-    app.world_mut().resource_mut::<GameSession>().start();
+    utils::start_game(&mut app);
     app
 }
 

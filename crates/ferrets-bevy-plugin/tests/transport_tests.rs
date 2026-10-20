@@ -1584,10 +1584,10 @@ fn garrison_of_holder_inside_job_holds_its_fire() {
     assert_eq!(utils::health_as_u32(&app, grunt), 20);
 
     // Once the bunker is whole the ambulance stands again beside it, on the
-    // side it went in from, (12, 10) — three cells from the grunt — and its
+    // side it went in from, (12, 9) — three cells from the grunt — and its
     // rifleman fires from it.
     utils::run_ticks(&mut app, 5);
-    assert_eq!(utils::cell_of(app.world(), ambulance), CellPos::new(12, 10));
+    assert_eq!(utils::cell_of(app.world(), ambulance), CellPos::new(12, 9));
     utils::run_ticks(&mut app, 40);
     // 20 − 10: one shot lands, then the unarmed grunt flees past the
     // rifleman's range of 3.

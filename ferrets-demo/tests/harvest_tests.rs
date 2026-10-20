@@ -52,7 +52,6 @@ fn worker_harvests_wood_on_demo_map() {
         *world.resource_mut::<ContentRegistry>() =
             content::load(&LuaEngine, CONTENT).expect("demo content");
         setup::spawn_demo_scene(world);
-        world.resource_mut::<GameSession>().start();
     }
 
     // A worker beside player 0's grove at (8..10, 16..17).

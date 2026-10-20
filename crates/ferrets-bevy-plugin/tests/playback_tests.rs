@@ -481,7 +481,7 @@ fn lone_base_app() -> App {
             elimination: EliminationScope::Player,
         });
     utils::create_owned(&mut app, "base", 5, 5, 0);
-    app.world_mut().resource_mut::<GameSession>().start();
+    utils::start_game(&mut app);
     app
 }
 
@@ -494,6 +494,6 @@ fn base_app() -> App {
         registry.register(utils::walker("soldier", GROUND).with_pool(Pool::health(30)));
         registry.validate();
     }
-    app.world_mut().resource_mut::<GameSession>().start();
+    utils::start_game(&mut app);
     app
 }

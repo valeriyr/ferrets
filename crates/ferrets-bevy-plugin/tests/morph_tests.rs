@@ -20,7 +20,7 @@ use ferrets_content::{
     quantity::Quantity,
     registry::ContentRegistry,
 };
-use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize, projection::Projection};
+use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_simulation::{
     command::PlayerCommand,
@@ -38,7 +38,7 @@ use ferrets_simulation::{
     map::Map,
     movement_model::MovementModel,
     order::Order,
-    session::{GameSession, player_slot::PlayerSlot, player_type::PlayerType},
+    session::{player_slot::PlayerSlot, player_type::PlayerType},
     spawn,
 };
 
@@ -750,7 +750,6 @@ fn burrowed_form_revalidated_in_place_is_not_refused_by_its_own_footprint() {
 /// ground. Session started.
 fn underfoot_app() -> App {
     let mut app = utils::make_app(vec![PlayerSlot::occupied(0, PlayerType::Human, None, None)]);
-    utils::install_map(&mut app, Projection::Isometric, MovementModel::Cell);
     {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
         registry.register_resource("gold");
@@ -791,7 +790,7 @@ fn underfoot_app() -> App {
         );
         registry.validate();
     }
-    app.world_mut().resource_mut::<GameSession>().start();
+    utils::start_game(&mut app);
     app
 }
 

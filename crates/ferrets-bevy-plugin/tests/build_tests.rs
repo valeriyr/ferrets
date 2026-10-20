@@ -17,7 +17,7 @@ use ferrets_geometry::{
     cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize, projection::Projection,
 };
 use ferrets_math::{FixedU64, facing::Facing};
-use ferrets_pathfinder::{mover_shape::MoverShape, nav_grid::NavGrid};
+use ferrets_pathfinder::nav_grid::NavGrid;
 use ferrets_simulation::{
     beside::Lean,
     command::PlayerCommand,
@@ -36,7 +36,7 @@ use ferrets_simulation::{
     movement_model::MovementModel,
     order::{AttackTarget, Order},
     resources::PlayerResources,
-    session::{GameSession, player_slot::PlayerSlot, player_type::PlayerType},
+    session::{player_slot::PlayerSlot, player_type::PlayerType},
     simulation_id::SimulationId,
     spawn, supply,
 };
@@ -1367,7 +1367,6 @@ fn solidity_app() -> App {
                 MovementModel::Cell,
                 grid,
                 vec![],
-                &[MoverShape::point(utils::GROUND)],
             ),
         );
     }
@@ -1393,7 +1392,7 @@ fn solidity_app() -> App {
         );
     }
     utils::register_orders_content(&mut app);
-    app.world_mut().resource_mut::<GameSession>().start();
+    utils::start_game(&mut app);
     app
 }
 
@@ -1419,7 +1418,7 @@ fn surveyor_app() -> App {
         );
     }
     utils::register_orders_content(&mut app);
-    app.world_mut().resource_mut::<GameSession>().start();
+    utils::start_game(&mut app);
     app
 }
 

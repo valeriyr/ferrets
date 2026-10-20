@@ -20,7 +20,7 @@ use ferrets_simulation::{
     entity_index::EntityIndex,
     events::{DeathCause, SimulationEvent},
     player_buffs::PlayerBuffs,
-    session::{GameSession, player_id::PlayerId, player_slot::PlayerSlot, player_type::PlayerType},
+    session::{player_id::PlayerId, player_slot::PlayerSlot, player_type::PlayerType},
     statistics::Statistics,
 };
 
@@ -275,6 +275,6 @@ fn app() -> App {
         );
     }
     app.world_mut().resource::<ContentRegistry>().validate();
-    app.world_mut().resource_mut::<GameSession>().start();
+    utils::start_game(&mut app);
     app
 }

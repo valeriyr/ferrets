@@ -7,14 +7,14 @@
 mod utils;
 
 use bevy::prelude::*;
-use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize, projection::Projection};
+use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::{FixedU64, facing::Facing, fixed_uvec2::FixedUVec2};
 use ferrets_simulation::{
     command::PlayerCommand,
     components::{location::LocationComponent, order_queue::OrderQueueComponent},
     map::Map,
-    movement_model::MovementModel,
     order::Order,
+    session::{player_slot::PlayerSlot, player_type::PlayerType},
 };
 
 //
@@ -322,7 +322,6 @@ fn stop_ends_cell_walk_after_its_current_step() {
     // one plans the whole journey again and carries on to the destination the
     // player just canceled.
     let mut app = utils::orders_app();
-    utils::install_map(&mut app, Projection::Isometric, MovementModel::Cell);
     let (soldier, id) = utils::create_owned(&mut app, "soldier", 2, 2, 0);
 
     utils::select(&mut app, id);
@@ -469,6 +468,20 @@ fn cell_walk_comes_round_before_it_claims() {
         start,
         "then it crosses"
     );
+}
+
+//
+// ─── Served movers ──────────────────────────────────────────────────────────────
+//
+
+#[test]
+#[should_panic(expected = "map 'test' serves no hierarchy for mover 'archer'")]
+fn game_whose_map_serves_no_mover_does_not_start() {
+    let mut app = utils::make_app(vec![PlayerSlot::occupied(0, PlayerType::Human, None, None)]);
+    utils::register_orders_content(&mut app);
+    // A map built before its content and never served it: starting the game
+    // refuses it, before anything has run.
+    ferrets_bevy_plugin::start_game(app.world_mut());
 }
 
 //

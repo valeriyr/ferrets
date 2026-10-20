@@ -17,7 +17,7 @@ fn commands_issued_while_blocked_flush_once_tick_resumes() {
         // A remote human with no frame source: the loop blocks at tick 2.
         PlayerSlot::occupied(1, PlayerType::Human, None, None),
     ]);
-    app.world_mut().resource_mut::<GameSession>().start();
+    utils::start_game(&mut app);
     utils::run_steps(&mut app, 3);
     assert!(app.world().resource::<GameSession>().is_blocked());
 

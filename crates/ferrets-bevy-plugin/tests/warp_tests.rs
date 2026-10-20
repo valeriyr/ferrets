@@ -875,7 +875,7 @@ fn app() -> App {
         );
     }
     app.world_mut().resource::<ContentRegistry>().validate();
-    app.world_mut().resource_mut::<GameSession>().start();
+    utils::start_game(&mut app);
     utils::grant_gold(&mut app, 100);
     app
 }

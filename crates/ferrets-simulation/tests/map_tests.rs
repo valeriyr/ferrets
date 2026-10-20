@@ -37,7 +37,6 @@ fn start_point_indexes_by_player() {
         MovementModel::Cell,
         NavGrid::new(8, 8),
         vec![Some(CellPos::new(1, 2)), None, Some(CellPos::new(5, 6))],
-        &[],
     );
 
     assert_eq!(map.start_point(0), Some(CellPos::new(1, 2)));
@@ -58,7 +57,6 @@ fn contains_cells_inside_and_not_past_edges() {
         MovementModel::Cell,
         NavGrid::new(8, 6),
         Vec::new(),
-        &[],
     );
 
     assert!(map.contains(CellPos::new(0, 0)));
@@ -70,6 +68,77 @@ fn contains_cells_inside_and_not_past_edges() {
 //
 // ─── Hierarchy upkeep ─────────────────────────────────────────────────────────
 //
+
+#[test]
+fn new_map_serves_no_mover() {
+    let map = Map::new(
+        "test",
+        Projection::Isometric,
+        MovementModel::Cell,
+        NavGrid::new(8, 2),
+        vec![],
+    );
+    assert_eq!(map.hierarchy().shapes().count(), 0);
+}
+
+#[test]
+fn map_serves_each_mover_shape_once() {
+    let mut map = wall_test_map();
+    // Beside the 1×1 walker: a second 1×1 mover, which shares its shape, a
+    // 2×2 mover, and a 3×3 building, which plans nothing.
+    let mut registry = walker_registry();
+    registry.register(
+        EntityTypeDef::new("runner")
+            .with_location(GROUND_LAYER, CellSize::ONE, Solidity::Solid)
+            .with_movement(
+                utils::fixed("0.5"),
+                utils::fixed("0.5"),
+                FixedU64::ONE,
+                FixedU64::from_num(360),
+                FixedU64::from_num(360),
+            ),
+    );
+    registry.register(
+        EntityTypeDef::new("cart")
+            .with_location(GROUND_LAYER, CellSize::new(2, 2), Solidity::Solid)
+            .with_movement(
+                utils::fixed("0.5"),
+                utils::fixed("0.5"),
+                FixedU64::ONE,
+                FixedU64::from_num(360),
+                FixedU64::from_num(360),
+            ),
+    );
+    registry.register(EntityTypeDef::new("hut").with_location(
+        GROUND_LAYER,
+        CellSize::new(3, 3),
+        Solidity::Solid,
+    ));
+
+    map.serve_movers(&registry);
+
+    // In name order — cart, runner, walker — each shape kept the first time.
+    assert_eq!(
+        map.hierarchy().shapes().collect::<Vec<_>>(),
+        vec![
+            MoverShape::new(GROUND_LAYER, CellSize::new(2, 2)),
+            ground_shape(),
+        ]
+    );
+}
+
+#[test]
+#[should_panic(expected = "map 'test' serves no hierarchy for mover 'walker'")]
+fn map_serving_no_mover_refuses_content_that_moves() {
+    let map = Map::new(
+        "test",
+        Projection::Isometric,
+        MovementModel::Cell,
+        NavGrid::new(8, 2),
+        vec![],
+    );
+    map.assert_serves_movers(&walker_registry());
+}
 
 #[test]
 fn placed_footprint_reaches_hierarchy_after_refresh() {
@@ -738,14 +807,33 @@ fn ground_shape() -> MoverShape {
 fn wall_test_map() -> Map {
     let mut nav_grid = NavGrid::new(8, 2);
     nav_grid.add_layer(GROUND_LAYER);
-    Map::new(
+    let mut map = Map::new(
         "test",
         Projection::Isometric,
         MovementModel::Cell,
         nav_grid,
         vec![],
-        &[ground_shape()],
-    )
+    );
+    map.serve_movers(&walker_registry());
+    map
+}
+
+/// A registry whose one type is a single-cell ground mover.
+fn walker_registry() -> ContentRegistry {
+    let mut registry = ContentRegistry::default();
+    assert_eq!(registry.register_layer("ground"), GROUND_LAYER);
+    registry.register(
+        EntityTypeDef::new("walker")
+            .with_location(GROUND_LAYER, CellSize::ONE, Solidity::Solid)
+            .with_movement(
+                utils::fixed("0.5"),
+                utils::fixed("0.5"),
+                FixedU64::ONE,
+                FixedU64::from_num(360),
+                FixedU64::from_num(360),
+            ),
+    );
+    registry
 }
 
 /// An 8×2 map under the continuous model, whose claim plane is a rebuilt
@@ -759,7 +847,6 @@ fn continuous_test_map() -> Map {
         MovementModel::Continuous,
         nav_grid,
         vec![],
-        &[],
     )
 }
 

@@ -1309,7 +1309,7 @@ fn game_with_mid_game_drop_records_and_replays_identically() {
         registry.validate();
     }
     ferrets_bevy_plugin::replay::playback::install_per_game(playback.world_mut(), replay);
-    playback.world_mut().resource_mut::<GameSession>().start();
+    utils::start_game(&mut playback);
 
     for _ in 0..70 {
         playback.world_mut().run_schedule(FixedUpdate);
@@ -1409,7 +1409,7 @@ fn drop_decided_victory_replays_to_same_result() {
     }
     spawn_starting_units(&mut playback);
     ferrets_bevy_plugin::replay::playback::install_per_game(playback.world_mut(), replay);
-    playback.world_mut().resource_mut::<GameSession>().start();
+    utils::start_game(&mut playback);
 
     for _ in 0..70 {
         if playback
@@ -1519,7 +1519,7 @@ fn lone_winner_victory_past_drop_replays_to_same_result() {
     }
     spawn_lone_winner_lineup(&mut playback);
     ferrets_bevy_plugin::replay::playback::install_per_game(playback.world_mut(), replay);
-    playback.world_mut().resource_mut::<GameSession>().start();
+    utils::start_game(&mut playback);
 
     for _ in 0..90 {
         if playback
@@ -2145,7 +2145,7 @@ fn two_player_app() -> App {
     session.set_finish_policy(FinishPolicy::LastStanding {
         elimination: EliminationScope::Player,
     });
-    session.start();
+    utils::start_game(&mut app);
     app
 }
 
@@ -2301,7 +2301,7 @@ fn combat_victory_app() -> App {
     session.set_finish_policy(FinishPolicy::LastStanding {
         elimination: EliminationScope::Player,
     });
-    session.start();
+    utils::start_game(&mut app);
     app
 }
 
@@ -2321,7 +2321,7 @@ fn ffa_elimination_app() -> App {
     session.set_finish_policy(FinishPolicy::LastStanding {
         elimination: EliminationScope::Player,
     });
-    session.start();
+    utils::start_game(&mut app);
     app
 }
 

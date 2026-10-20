@@ -554,6 +554,6 @@ fn cadence_app() -> App {
     app.init_resource::<PeerCapacities>();
     // Only a running game is paced, so a pending one would report no throttle
     // whatever it was measuring.
-    app.world_mut().resource_mut::<GameSession>().start();
+    utils::start_game(&mut app);
     app
 }

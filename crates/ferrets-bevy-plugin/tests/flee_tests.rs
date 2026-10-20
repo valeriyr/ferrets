@@ -90,18 +90,19 @@ fn fleeing_soldier_runs_instead_of_fighting_back() {
         },
     );
 
-    utils::run_ticks(&mut app, 60);
+    // The enemy closes in and lands one blow: 30 − 10 leaves the runner 20.
+    utils::run_ticks(&mut app, 25);
+    assert_eq!(utils::health(&app, runner), FixedU64::from_num(20));
+    // Never struck back: the enemy keeps all 30 of its health.
+    assert_eq!(utils::health(&app, enemy), FixedU64::from_num(30));
     let world = app.world_mut();
-    // Both live — two defending sentries this close would have fought to a
-    // death by now, so survival on both sides is the fleeing itself.
-    assert!(world.get_entity(runner).is_ok(), "runner survived");
-    assert!(world.get_entity(enemy).is_ok(), "enemy was never engaged");
     assert_eq!(
         world.get::<StanceComponent>(runner).unwrap().0,
         Stance::Flee
     );
-    // And it ran: the runner is no longer on its starting cell.
-    assert_ne!(utils::cell_of(world, runner), CellPos::new(10, 10));
+    // And it ran: from (10,10) to (4,16), six cells down and to the left, the
+    // enemy coming from the right at (13,10).
+    assert_eq!(utils::cell_of(world, runner), CellPos::new(4, 16));
 }
 
 #[test]

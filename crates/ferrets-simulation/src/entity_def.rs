@@ -494,6 +494,11 @@ pub fn position(world: &World, entity: Entity) -> FixedUVec2 {
         .position
 }
 
+/// Whether `entity` is walking: a walk of its own is under way.
+pub fn walking(world: &World, entity: Entity) -> bool {
+    world.entity(entity).contains::<MoveComponent>()
+}
+
 /// Where `entity` is: its position while it stands on the map; off it, the
 /// whereabouts of what it is [`inside`]; waiting beside a container gone from
 /// the world, the footprint its return last searched; otherwise where it went

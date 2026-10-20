@@ -55,7 +55,7 @@ use ferrets_simulation::{
     movement_model::MovementModel,
     networks::NetworkScope,
     session::{
-        GameSession, ai_detection::AiDetection, ai_vision::AiVision, player_id::PlayerId,
+        ai_detection::AiDetection, ai_vision::AiVision, player_id::PlayerId,
         player_slot::PlayerSlot, player_type::PlayerType,
     },
     simulation_id::SimulationId,
@@ -1795,7 +1795,7 @@ fn seated_app(slots: Vec<PlayerSlot>, local: PlayerId) -> App {
     let mut app = utils::make_app_as(slots, local);
     register(&mut app);
     app.world_mut().resource::<ContentRegistry>().validate();
-    app.world_mut().resource_mut::<GameSession>().start();
+    utils::start_game(&mut app);
     app
 }
 

@@ -22,7 +22,6 @@ use ferrets_pathfinder::layer_mask::LayerMask;
 use super::{acquire, attack, chase, turn};
 use crate::{
     components::{
-        movement::MoveComponent,
         order_queue::{OrderQueueComponent, OrderState},
         stance::{Stance, StanceComponent},
         turret::{TurretState, TurretsComponent},
@@ -77,7 +76,7 @@ fn work_body(world: &mut World, entity: Entity, id: SimulationId) {
         .get::<StanceComponent>()
         .map_or(Stance::Defend, |StanceComponent(stance)| *stance)
         .auto_engages();
-    let walking = world.entity(entity).contains::<MoveComponent>();
+    let walking = entity_def::walking(world, entity);
     let due = acquire::due(id, world.resource::<GameSession>().tick());
 
     let conditions = Conditions {

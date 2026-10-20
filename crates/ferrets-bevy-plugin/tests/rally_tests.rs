@@ -17,7 +17,7 @@ use ferrets_simulation::{
         resource::ResourceSourceComponent,
     },
     resources::PlayerResources,
-    session::{GameSession, player_slot::PlayerSlot, player_type::PlayerType},
+    session::{player_slot::PlayerSlot, player_type::PlayerType},
     spawn,
 };
 
@@ -293,6 +293,6 @@ fn rally_app() -> App {
         );
     }
     utils::register_orders_content(&mut app);
-    app.world_mut().resource_mut::<GameSession>().start();
+    utils::start_game(&mut app);
     app
 }

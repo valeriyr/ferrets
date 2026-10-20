@@ -7,11 +7,14 @@
 
 mod utils;
 
+use bevy::prelude::App;
 use ferrets_geometry::cell_pos::CellPos;
+use ferrets_math::FixedU64;
 use ferrets_simulation::{
     command::{PlayerCommand, SelectMode},
     components::order_queue::OrderQueueComponent,
     map::Map,
+    order::AttackTarget,
 };
 
 #[test]
@@ -93,8 +96,8 @@ fn head_on_unequal_sizes_never_swap() {
     // A corridor exactly the wagon's height: the soldier cannot slip past,
     // and the swap rung is refused between unequal sizes — trading claims
     // with a body of another footprint would corrupt the one-claimant-per-
-    // cell contract. Nobody teleports through; the meeting ends with both
-    // giving up on their own side.
+    // cell contract. Nobody teleports through: the idle soldier is asked
+    // aside, and the only way aside is ahead of the wagon.
     {
         let world = app.world_mut();
         let mut map = world.resource_mut::<Map>();
@@ -124,13 +127,11 @@ fn head_on_unequal_sizes_never_swap() {
     let world = app.world_mut();
     let wagon_cell = utils::cell_of(world, wagon);
     let soldier_cell = utils::cell_of(world, soldier);
-    // The exact end state: the wagon walks up to the soldier — footprint
-    // cells 6..=7, abutting it — burns its escalations against a blocker it
-    // may neither swap with nor push planning through, and gives up in
-    // place. The soldier never moves: a corridor its own width leaves the
-    // yield rung nowhere to step either.
-    assert_eq!(wagon_cell, CellPos::new(6, 5));
-    assert_eq!(soldier_cell, CellPos::new(8, 5));
+    // The exact end state: the soldier, stepping aside down the only way
+    // open, keeps ahead of the wagon to (13,5), and the wagon covers its goal
+    // with footprint cells 11..=12. The soldier is still ahead: never swapped.
+    assert_eq!(wagon_cell, CellPos::new(11, 5));
+    assert_eq!(soldier_cell, CellPos::new(13, 5));
 }
 
 #[test]
@@ -197,12 +198,13 @@ fn crowd_ordered_to_one_point_settles() {
         cells.push(utils::cell_of(world, *soldier));
     }
     cells.sort_unstable();
-    // The exact settle: the goal taken, the rest ringed beside it.
+    // The exact settle: the goal taken, the rest ringed beside it — the cells
+    // the hierarchy's lanes lead them to, two rows of three around (5,7).
     assert_eq!(
         cells,
         vec![
-            CellPos::new(3, 7),
             CellPos::new(4, 6),
+            CellPos::new(4, 7),
             CellPos::new(5, 6),
             goal,
             CellPos::new(6, 6),
@@ -214,13 +216,6 @@ fn crowd_ordered_to_one_point_settles() {
 #[test]
 fn fanned_group_move_shares_one_corridor() {
     let mut app = utils::orders_app();
-    // Rebuild the map with a hierarchy for the ground mask, so the group
-    // plans hierarchically (the plain harness map carries no abstractions).
-    utils::install_map(
-        &mut app,
-        ferrets_geometry::projection::Projection::Isometric,
-        ferrets_simulation::movement_model::MovementModel::Cell,
-    );
 
     let soldiers = [
         utils::create_owned(&mut app, "soldier", 2, 2, 0),
@@ -272,4 +267,143 @@ fn fanned_group_move_shares_one_corridor() {
             CellPos::new(29, 29),
         ]
     );
+}
+
+#[test]
+fn attacker_takes_free_cell_beside_working_ally() {
+    let mut app = utils::orders_app();
+    let (depot, depot_id) = utils::create_owned(&mut app, "depot", 10, 10, 1);
+    let (_, first) = utils::create_owned(&mut app, "soldier", 8, 10, 0);
+    let (second, second_id) = utils::create_owned(&mut app, "soldier", 8, 11, 0);
+    for id in [first, second_id] {
+        utils::select(&mut app, id);
+        utils::push_command(
+            &mut app,
+            PlayerCommand::Attack {
+                target: AttackTarget::Entity(depot_id),
+                flush: true,
+            },
+        );
+    }
+
+    // Both plan the same reach cell, (9,10); the first takes it and strikes,
+    // and the second, finding it held by an ally at work, takes the free cell
+    // below it at once instead of waiting on it.
+    utils::run_ticks(&mut app, 7);
+    assert_eq!(utils::cell_of(app.world_mut(), second), CellPos::new(9, 11));
+    // Two blades from the start, each striking every fourth tick and the pair in
+    // turn: blows of 10 land on ticks 7, 9, … 25, and the tenth fells the
+    // depot's 100.
+    utils::run_ticks(&mut app, 18);
+    assert_eq!(utils::health(&app, depot), FixedU64::ZERO);
+}
+
+#[test]
+fn walk_onto_cell_held_by_enemy_ends_beside_it() {
+    let mut app = utils::orders_app();
+    utils::create_owned(&mut app, "wagon", 10, 10, 1);
+    let (walker, walker_id) = utils::create_owned(&mut app, "soldier", 4, 10, 0);
+    utils::select(&mut app, walker_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Move {
+            target: utils::pos(10, 10),
+            flush: true,
+        },
+    );
+
+    // At half a cell a tick the walk stands at (9,10) on the twelfth tick, and
+    // from the thirteenth the step into the idle enemy wagon's cell is
+    // refused. No other cell is the point, so no route leads elsewhere: the
+    // walk waits as on any held step, five ticks, and the escalation after
+    // them grows its acceptance to one cell, which ends it beside the wagon
+    // on the nineteenth. It stays ended until the soldier turns on the wagon
+    // on the twenty-third.
+    // Still waiting on the fourteenth, where giving the walk up at once would
+    // have ended it.
+    utils::run_ticks(&mut app, 14);
+    assert!(!utils::order_queue_is_empty(app.world_mut(), walker));
+    utils::run_ticks(&mut app, 4);
+    assert!(!utils::order_queue_is_empty(app.world_mut(), walker));
+    utils::run_ticks(&mut app, 1);
+    let world = app.world_mut();
+    assert_eq!(utils::cell_of(world, walker), CellPos::new(9, 10));
+    assert!(utils::order_queue_is_empty(world, walker));
+}
+
+#[test]
+fn walk_waits_on_held_cell_short_of_its_goal() {
+    let mut app = utils::orders_app();
+    corridor(&mut app);
+    utils::create_owned(&mut app, "ox", 6, 5, 1);
+    let (walker, walker_id) = utils::create_owned(&mut app, "soldier", 2, 5, 0);
+    utils::select(&mut app, walker_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Move {
+            target: utils::pos(10, 5),
+            flush: true,
+        },
+    );
+
+    // The idle enemy ox holds (6,5), short of the goal at (10,5). The walk
+    // reaches (5,5) and works through its wait and detour rungs before giving
+    // up on the twenty-first tick — where routing at once, as a held goal
+    // does, would end it on the tenth — and stays ended until it turns on the
+    // ox on the twenty-third.
+    utils::run_ticks(&mut app, 20);
+    let world = app.world_mut();
+    assert_eq!(utils::cell_of(world, walker), CellPos::new(5, 5));
+    assert!(!utils::order_queue_is_empty(world, walker));
+    utils::run_ticks(&mut app, 1);
+    assert!(utils::order_queue_is_empty(app.world_mut(), walker));
+}
+
+#[test]
+fn walk_waits_on_goal_held_by_walking_ally() {
+    let mut app = utils::orders_app();
+    corridor(&mut app);
+    utils::create_owned(&mut app, "ox", 9, 5, 1);
+    let (_, ally_id) = utils::create_owned(&mut app, "soldier", 8, 5, 0);
+    let (walker, walker_id) = utils::create_owned(&mut app, "soldier", 2, 5, 0);
+    // The ally on the goal is walking — its move to (12,5) waits behind the
+    // ox — so the walker waits on it rather than giving the goal up.
+    utils::select(&mut app, ally_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Move {
+            target: utils::pos(12, 5),
+            flush: true,
+        },
+    );
+    utils::select(&mut app, walker_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Move {
+            target: utils::pos(8, 5),
+            flush: true,
+        },
+    );
+
+    // Still waiting at (7,5) on the fourteenth tick, where giving the goal up
+    // at once would have ended the walk; it settles beside the ally on the
+    // fifteenth, once the ally's own walk has given up and it stands idle.
+    utils::run_ticks(&mut app, 14);
+    let world = app.world_mut();
+    assert_eq!(utils::cell_of(world, walker), CellPos::new(7, 5));
+    assert!(!utils::order_queue_is_empty(world, walker));
+    utils::run_ticks(&mut app, 1);
+    assert!(utils::order_queue_is_empty(app.world_mut(), walker));
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/// Walls rows 4 and 6 across the map, leaving row 5 a one-wide corridor.
+fn corridor(app: &mut App) {
+    let world = app.world_mut();
+    let mut map = world.resource_mut::<Map>();
+    for x in 0..32 {
+        map.set_static_occupied(utils::GROUND, CellPos::new(x, 4), true);
+        map.set_static_occupied(utils::GROUND, CellPos::new(x, 6), true);
+    }
 }
