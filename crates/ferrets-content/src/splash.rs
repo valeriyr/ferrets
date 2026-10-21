@@ -23,9 +23,9 @@ pub struct SplashDef {
     /// `(radius in cells, fraction of the hit's damage)`, in increasing radius
     /// order. A victim takes the fraction of the first band it falls inside.
     bands: Vec<(u32, FixedU64)>,
-    /// The navigation layers the blast reaches: a victim is caught only when its
-    /// occupation intersects this mask, so content decides whether a ground blast
-    /// touches what flies over it.
+    /// The navigation layers the blast reaches: a victim is caught only when the
+    /// layers it can be attacked on intersect this mask, so content decides
+    /// whether a ground blast touches what flies over it.
     layers: LayerMask,
     /// Whether the blast also damages the attacker's own and allied entities.
     friendly_fire: bool,

@@ -263,16 +263,19 @@ impl Ghosts {
         self.0.values().map(|ghost| (ghost.origin, ghost.size))
     }
 
-    /// The footprint each remembered building that claimed its cells covered,
-    /// with the layers it stood on.
-    pub(crate) fn remembered_footprints(&self) -> impl Iterator<Item = (LayerMask, CellRect)> + '_ {
+    /// The footprint each remembered building that held its ground covered,
+    /// with the layers it stood on and its solidity.
+    pub(crate) fn remembered_footprints(
+        &self,
+    ) -> impl Iterator<Item = (LayerMask, CellRect, Solidity)> + '_ {
         self.0
             .values()
-            .filter(|ghost| ghost.solidity.claims_cells())
+            .filter(|ghost| ghost.solidity.holds_ground())
             .map(|ghost| {
                 (
                     ghost.occupation,
                     CellRect::new(CellPos::new(ghost.origin.0, ghost.origin.1), ghost.size),
+                    ghost.solidity,
                 )
             })
     }

@@ -288,23 +288,8 @@ impl Map {
         &self.nav_grid
     }
 
-    /// Returns `true` if every cell in the entity's footprint is passable. The
-    /// footprint is anchored at the cell the position rounds to
-    /// ([`body::anchor`]), which is the position itself for an entity at
-    /// rest on the lattice.
-    pub fn can_place_entity(&self, loc: &LocationComponent, location_def: &LocationDef) -> bool {
-        self.nav_grid.is_footprint_passable_by(
-            location_def.occupation(),
-            body::anchor(loc.position),
-            location_def.size(),
-        )
-    }
-
     /// Returns `true` if every cell in a footprint of `to` at `placed` is free
-    /// but for what `lifted` marks there. With nothing lifted, this is
-    /// [`can_place_entity`].
-    ///
-    /// [`can_place_entity`]: Self::can_place_entity
+    /// but for what `lifted` marks there.
     pub fn can_place_entity_over_lifted(
         &self,
         placed: &LocationComponent,

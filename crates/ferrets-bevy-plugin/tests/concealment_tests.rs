@@ -359,6 +359,18 @@ fn detection_naming_ground_leaves_cloaked_flier_glimpsed() {
 }
 
 #[test]
+fn detection_finds_body_where_it_stands_not_where_it_is_attacked() {
+    let mut app = concealment_app(rivals());
+    utils::create_owned(&mut app, "ground_eye", 5, 5, 0);
+    let (skimmer, _) = utils::create_owned(&mut app, "skimmer", 5, 8, 1);
+    utils::run_ticks(&mut app, utils::APPLY);
+
+    // It is attacked only in the air, which the eye does not name, but stands
+    // on the ground, which it does.
+    assert_eq!(utils::sighting_of(&app, 0, skimmer), Sighting::Seen);
+}
+
+#[test]
 fn disabled_detector_detects_nothing() {
     let mut app = concealment_app(rivals());
     // The rival's tower names the local shade beside it, until the local
@@ -1849,6 +1861,12 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
                 .with_concealment(Concealment::Concealed),
         );
         registry.register(walker("phantom", air, 20, 3).with_concealment(Concealment::Concealed));
+        // Concealed on the ground, attacked only in the air.
+        registry.register(
+            walker("skimmer", utils::GROUND, 20, 3)
+                .with_targetable(air)
+                .with_concealment(Concealment::Concealed),
+        );
         registry.register(
             EntityTypeDef::new("dummy")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)

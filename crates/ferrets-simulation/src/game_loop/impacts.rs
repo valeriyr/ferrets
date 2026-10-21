@@ -278,12 +278,13 @@ fn blast_victims(
         {
             continue;
         }
-        // The blast only reaches the layers content gave it; a type with no
-        // location stands on none of them.
-        let Some(location) = entity_def::of(world, entity).location else {
+        // The blast only reaches the layers content gave it, met where the
+        // victim can be attacked; a type with no location stands nowhere.
+        let def = entity_def::of(world, entity);
+        let Some(location) = def.location else {
             continue;
         };
-        if location.occupation() & splash.layers() == LayerMask::EMPTY {
+        if targeting::targetable(def) & splash.layers() == LayerMask::EMPTY {
             continue;
         }
         // Without friendly fire the blast spares the attacker's own side. Neutrals

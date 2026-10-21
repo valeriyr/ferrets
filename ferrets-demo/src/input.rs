@@ -7,6 +7,7 @@ use ferrets_bevy_plugin::{NetworkActive, PauseIntent, PendingInput, SpeedIntent,
 use ferrets_content::{
     entity_type_def::EntityTypeDef,
     field::FieldPlacement,
+    location::Solidity,
     registry::ContentRegistry,
     skills::{EntityCastTarget, SkillCaster, SkillId},
 };
@@ -38,6 +39,7 @@ use ferrets_simulation::{
     input::SYNC_LATENCY,
     landing,
     map::Map,
+    occupancy::OccupancyClass,
     order::AttackTarget,
     selection::Selection,
     session::{GameSession, player_id::PlayerId},
@@ -1601,25 +1603,38 @@ pub struct GhostView<'a> {
     pub session: &'a GameSession,
     /// The player placing.
     pub player: PlayerId,
-    /// The footprints, with the layers they claim, of the entities the
-    /// player makes out or remembers.
-    pub made_out: &'a [(LayerMask, CellRect)],
+    /// The footprints, with the layers they stand on and how solid they are,
+    /// of the entities the player makes out or remembers that hold their
+    /// ground.
+    pub made_out: &'a [(LayerMask, CellRect, Solidity)],
 }
 
 impl GhostView<'_> {
     /// Whether the ghost of `def` anchored at `anchor` shows as fitting:
-    /// terrain that takes its footprint, clear of every footprint made out on
-    /// a layer it claims, and its type's field rules met.
+    /// terrain that takes its footprint, clear on a layer it claims of every
+    /// footprint made out that claims its cells — and, for a footprint on the
+    /// static plane, of every one that holds its ground — and its type's field
+    /// rules met.
     pub fn fits(&self, def: &EntityTypeDef, anchor: CellPos) -> bool {
         let location_def = def.location.expect("validated content defines a location");
         let occupation = location_def.occupation();
         let footprint = CellRect::new(anchor, location_def.size());
+        let refused_underfoot = match OccupancyClass::of(def) {
+            OccupancyClass::Static => true,
+            OccupancyClass::Claim => false,
+        };
         self.map.nav_grid().is_footprint_terrain_passable_by(
             occupation,
             anchor,
             location_def.size(),
-        ) && !self.made_out.iter().any(|&(layers, standing)| {
-            layers & occupation != LayerMask::EMPTY && standing.intersects(footprint)
+        ) && !self.made_out.iter().any(|&(layers, standing, solidity)| {
+            layers & occupation != LayerMask::EMPTY
+                && standing.intersects(footprint)
+                && match solidity {
+                    Solidity::Solid => true,
+                    Solidity::Underfoot => refused_underfoot,
+                    Solidity::Passable => unreachable!("a passable body holds no ground"),
+                }
         }) && self.allows(&def.field_placement, footprint)
     }
 
@@ -1690,8 +1705,8 @@ impl GhostView<'_> {
     }
 }
 
-/// The footprints, with the layers they claim, of every entity the
-/// perspective makes out whose footprint claims cells.
+/// The footprints, with the layers they stand on and their solidity, of every
+/// entity the perspective makes out whose footprint holds its ground.
 pub fn made_out_footprints<'a>(
     registry: &ContentRegistry,
     entities: impl Iterator<
@@ -1702,15 +1717,16 @@ pub fn made_out_footprints<'a>(
             Option<&'a render::Sighted>,
         ),
     >,
-) -> Vec<(LayerMask, CellRect)> {
+) -> Vec<(LayerMask, CellRect, Solidity)> {
     entities
         .filter(|&(_, _, visibility, sighted)| render::made_out(visibility, sighted))
         .filter_map(|(info, location, _, _)| {
             let location_def = registry.def(info.type_id()).location?;
-            location_def.solidity().claims_cells().then(|| {
+            location_def.solidity().holds_ground().then(|| {
                 (
                     location_def.occupation(),
                     CellRect::new(body::anchor(location.position), location_def.size()),
+                    location_def.solidity(),
                 )
             })
         })

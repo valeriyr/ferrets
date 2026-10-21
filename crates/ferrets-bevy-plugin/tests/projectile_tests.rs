@@ -90,6 +90,28 @@ fn blast_damages_bystanders_by_band() {
 }
 
 #[test]
+fn blast_spares_body_targetable_off_its_layers() {
+    let mut app = app();
+    let (_, gunner) = utils::create_entity(app.world_mut(), "gunner", utils::pos(5, 20), Some(0))
+        .expect("gunner spawns");
+    let (target, target_id) =
+        utils::create_entity(app.world_mut(), "dummy", utils::pos(9, 20), Some(1))
+            .expect("target spawns");
+    // Standing on the ground one cell from the impact, but attacked only in the
+    // air: the ground blast's half band passes it by.
+    let (skimmer, _) =
+        utils::create_entity(app.world_mut(), "skimmer", utils::pos(10, 20), Some(1))
+            .expect("skimmer spawns");
+
+    utils::attack(&mut app, gunner, target_id);
+    utils::run_ticks(&mut app, 14);
+
+    // The shell landed: the target took the full 20.
+    assert_eq!(utils::health_as_u32(&app, target), 80);
+    assert_eq!(utils::health_as_u32(&app, skimmer), 100);
+}
+
+#[test]
 fn shot_whose_target_died_in_flight_hits_nobody_directly() {
     let mut app = app();
     let (_, gunner) = utils::create_entity(app.world_mut(), "gunner", utils::pos(5, 20), Some(0))
@@ -343,8 +365,9 @@ fn shot_lands_after_its_attacker_dies() {
 // ─── Helpers ────────────────────────────────────────────────────────────────
 //
 
-/// Two players and a roster with a `gunner` firing slow bursting shells, and a
-/// stationary 100-hp `dummy` to catch them.
+/// Two players and a roster with a `gunner` firing slow bursting shells, a
+/// stationary 100-hp `dummy` to catch them, and a `skimmer` on the ground that
+/// is attacked only in the air.
 fn app() -> App {
     let mut app = utils::make_app(vec![
         PlayerSlot::occupied(0, PlayerType::Human, None, None),
@@ -423,6 +446,14 @@ fn app() -> App {
         registry.register(
             EntityTypeDef::new("dummy")
                 .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_pool(Pool::health(100)),
+        );
+        // On the ground, attacked only in the air.
+        assert_eq!(registry.register_layer(utils::AIR_LAYER), utils::AIR);
+        registry.register(
+            EntityTypeDef::new("skimmer")
+                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_targetable(utils::AIR)
                 .with_pool(Pool::health(100)),
         );
     }

@@ -7,6 +7,7 @@ use ferrets_bevy_plugin::PendingInput;
 use ferrets_content::{
     affiliation::Affiliation,
     field::{FieldCoverage, FieldPlacement},
+    location::Solidity,
     registry::ContentRegistry,
 };
 use ferrets_demo::{input, render::Sighted};
@@ -37,14 +38,11 @@ use ferrets_simulation::{
 //
 
 #[test]
-fn ghost_fits_over_burrowed_enemy_and_refuses_claimed_cell_made_out() {
+fn ghost_refuses_ground_held_by_what_side_makes_out_and_reveals_nothing_else() {
     let mut app = utils::demo_map_app(MovementModel::Continuous);
-    // A rival's burrowed swarmling at (22, 22) claims no cell, and the ghost
-    // never asks what stands underfoot: a barracks anchored at (20, 20), whose
-    // footprint reaches (22, 22), shows as fitting, and tells nothing of it.
-    // The raise refuses it when it starts. A rival's barracks at (25, 25),
-    // made out, claims its cells, and the ghost anchored there shows as
-    // refused.
+    // A rival's burrowed swarmling at (22, 22) claims no cell but holds its
+    // ground, which no building is raised over. A rival's barracks at
+    // (25, 25) claims its cells.
     let (swarmling, _) = utils::create_entity(
         app.world_mut(),
         "swarmling_burrowed",
@@ -56,14 +54,28 @@ fn ghost_fits_over_burrowed_enemy_and_refuses_claimed_cell_made_out() {
         utils::create_entity(app.world_mut(), "barracks", utils::at_cell(25, 25), Some(1))
             .expect("the demo content defines a barracks");
 
+    // A barracks anchored at (20, 20) reaches (22, 22).
     assert!(
-        fits(
+        !fits(
             &app,
             "barracks",
             CellPos::new(20, 20),
             &[swarmling, barracks]
         ),
-        "the ghost reveals no burrowed enemy"
+        "a building is refused over ground the side makes out as held"
+    );
+    assert!(
+        fits(&app, "barracks", CellPos::new(20, 20), &[barracks]),
+        "the ghost reveals no burrowed enemy the side does not make out"
+    );
+    assert!(
+        fits(
+            &app,
+            "swarmling",
+            CellPos::new(22, 22),
+            &[swarmling, barracks]
+        ),
+        "a mover stands over what is underfoot"
     );
     assert!(
         !fits(
@@ -505,7 +517,7 @@ fn with_view<R>(app: &App, made_out: &[Entity], judge: impl FnOnce(&input::Ghost
 /// only footprints it makes out.
 fn view_over<R>(
     app: &App,
-    made_out: &[(LayerMask, CellRect)],
+    made_out: &[(LayerMask, CellRect, Solidity)],
     judge: impl FnOnce(&input::GhostView) -> R,
 ) -> R {
     let world = app.world();
